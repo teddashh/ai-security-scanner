@@ -1,0 +1,79 @@
+---
+controls:
+version: "ai-security-scanner-snapshot"
+id: 4
+text: "Immutable worker-node configuration snapshot"
+type: "node"
+groups:
+  - id: 4.2
+    text: "Kubelet configuration"
+    checks:
+      - id: 4.2.1
+        text: "Ensure anonymous authentication is disabled"
+        audit: "/bin/true"
+        audit_config: "/bin/cat $kubeletconf"
+        tests:
+          test_items:
+            - path: '{.authentication.anonymous.enabled}'
+              compare:
+                op: eq
+                value: false
+        scored: true
+      - id: 4.2.2
+        text: "Ensure authorization mode is Webhook"
+        audit: "/bin/true"
+        audit_config: "/bin/cat $kubeletconf"
+        tests:
+          test_items:
+            - path: '{.authorization.mode}'
+              compare:
+                op: eq
+                value: Webhook
+        scored: true
+      - id: 4.2.4
+        text: "Ensure the read-only port is disabled"
+        audit: "/bin/true"
+        audit_config: "/bin/cat $kubeletconf"
+        tests:
+          test_items:
+            - path: '{.readOnlyPort}'
+              compare:
+                op: eq
+                value: 0
+        scored: true
+      - id: 4.2.6
+        text: "Ensure protectKernelDefaults is enabled"
+        audit: "/bin/true"
+        audit_config: "/bin/cat $kubeletconf"
+        tests:
+          test_items:
+            - path: '{.protectKernelDefaults}'
+              compare:
+                op: eq
+                value: true
+        scored: true
+      - id: 4.2.11
+        text: "Ensure certificate rotation is enabled"
+        audit: "/bin/true"
+        audit_config: "/bin/cat $kubeletconf"
+        tests:
+          test_items:
+            - path: '{.rotateCertificates}'
+              compare:
+                op: eq
+                value: true
+        scored: true
+  - id: 4.3
+    text: "Kube-proxy configuration"
+    checks:
+      - id: 4.3.1
+        text: "Ensure kube-proxy profiling is disabled"
+        audit: "/bin/true"
+        audit_config: "/bin/cat $proxyconf"
+        tests:
+          test_items:
+            - path: '{.enableProfiling}'
+              compare:
+                op: eq
+                value: false
+        scored: true

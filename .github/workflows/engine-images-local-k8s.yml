@@ -1,0 +1,243 @@
+name: Publish managed local and Kubernetes engine images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - engines/images/local-launcher/**
+      - engines/images/semgrep/**
+      - '!engines/images/semgrep/plan.json'
+      - engines/images/trufflehog/**
+      - '!engines/images/trufflehog/plan.json'
+      - engines/images/trivy/**
+      - '!engines/images/trivy/plan.json'
+      - engines/images/grype/**
+      - '!engines/images/grype/plan.json'
+      - engines/images/kubescape/**
+      - '!engines/images/kubescape/plan.json'
+      - engines/images/kube-bench/**
+      - '!engines/images/kube-bench/plan.json'
+      - scripts/prepare-offline-engine-data.mjs
+      - .github/workflows/engine-images-local-k8s.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: managed-local-k8s-engine-images
+  cancel-in-progress: false
+
+jobs:
+  launcher-tests:
+    name: Validate the managed-local capability boundary
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run formatting and unit tests in the pinned toolchain
+        run: |
+          docker run --rm \
+            -v "${PWD}/engines/images/local-launcher:/src:ro" \
+            -w /src \
+            golang:1.26.3-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d \
+            sh -ceu 'test -z "$(gofmt -d main.go main_test.go)"; go test ./...'
+
+  publish:
+    name: Publish ${{ matrix.engine }} for amd64 + arm64
+    needs: launcher-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: semgrep
+            tag: 1.174.0-1
+            version: 1.174.0
+            version_args: --version
+            dockerfile: engines/images/semgrep/Dockerfile
+            workspace: engines/images/semgrep/testdata
+            output_file: semgrep.json
+            output_kind: json
+            offline_data: semgrep
+          - engine: trufflehog
+            tag: 3.97.0-1
+            version: 3.97.0
+            version_args: --version
+            dockerfile: engines/images/trufflehog/Dockerfile
+            workspace: engines/images/trufflehog/testdata
+            output_file: trufflehog.jsonl
+            output_kind: jsonl
+            offline_data: none
+          - engine: trivy
+            tag: 0.74.0-1
+            version: 0.74.0
+            version_args: --version
+            dockerfile: engines/images/trivy/Dockerfile
+            workspace: engines/images/trivy/testdata
+            output_file: trivy.json
+            output_kind: json
+            offline_data: trivy
+          - engine: grype
+            tag: 0.117.0-1
+            version: 0.117.0
+            version_args: version
+            dockerfile: engines/images/grype/Dockerfile
+            workspace: engines/images/grype/testdata
+            output_file: grype.json
+            output_kind: json
+            offline_data: grype
+          - engine: kubescape
+            tag: 4.0.12-1
+            version: 4.0.12
+            version_args: version
+            dockerfile: engines/images/kubescape/Dockerfile
+            workspace: engines/images/kubescape/testdata
+            output_file: kubescape.json
+            output_kind: json
+            offline_data: none
+          - engine: kube-bench
+            tag: 0.16.0-1
+            version: 0.16.0
+            version_args: version
+            dockerfile: engines/images/kube-bench/Dockerfile
+            workspace: engines/images/kube-bench/testdata
+            output_file: kube-bench.json
+            output_kind: json
+            offline_data: none
+    env:
+      IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-${{ matrix.engine }}
+      IMAGE_TAG: ${{ matrix.tag }}
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Materialize the checksum-locked offline database
+        if: matrix.offline_data != 'none'
+        run: node scripts/prepare-offline-engine-data.mjs "${{ matrix.offline_data }}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.36.1
+          driver-opts: |
+            image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the immutable multi-platform image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=local-k8s-engine-${{ matrix.engine }}
+          cache-to: type=gha,mode=max,scope=local-k8s-engine-${{ matrix.engine }}
+
+      - name: Publish anonymous pull access
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="${IMAGE#ghcr.io/teddashh/}"
+          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
+
+      - name: Verify anonymous access, platforms, version, and managed scan
+        id: verify
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ENGINE: ${{ matrix.engine }}
+          EXPECTED_VERSION: ${{ matrix.version }}
+          OUTPUT_FILE: ${{ matrix.output_file }}
+          OUTPUT_KIND: ${{ matrix.output_kind }}
+          VERSION_ARGS: ${{ matrix.version_args }}
+          WORKSPACE: ${{ matrix.workspace }}
+        run: |
+          docker logout ghcr.io
+          raw_manifest="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}")"
+          amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' <<<"${raw_manifest}")"
+          arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' <<<"${raw_manifest}")"
+          test "${amd64_digest#sha256:}" != "${amd64_digest}"
+          test "${arm64_digest#sha256:}" != "${arm64_digest}"
+
+          docker run --platform linux/amd64 --rm \
+            --read-only --network none --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777,size=1024m \
+            --entrypoint "/usr/local/bin/${ENGINE}" \
+            "${IMAGE}@${DIGEST}" ${VERSION_ARGS} 2>&1 | grep -F "${EXPECTED_VERSION}"
+
+          output="$(mktemp -d)"
+          docker run --platform linux/amd64 --rm \
+            --read-only --network none --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --user "$(id -u):$(id -g)" \
+            --pids-limit 512 --memory 4g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777,size=1024m \
+            --mount "type=bind,src=${PWD}/${WORKSPACE},dst=/workspace,readonly" \
+            --mount "type=bind,src=${output},dst=/output" \
+            "${IMAGE}@${DIGEST}" \
+            --engine "${ENGINE}" --workspace /workspace --output /output
+
+          test -f "${output}/${OUTPUT_FILE}"
+          if [ "${OUTPUT_KIND}" = json ]; then
+            jq -e . "${output}/${OUTPUT_FILE}" >/dev/null
+          else
+            while IFS= read -r line; do
+              test -z "${line}" || jq -e . <<<"${line}" >/dev/null
+            done < "${output}/${OUTPUT_FILE}"
+          fi
+          evidence_sha256="sha256:$(sha256sum "${output}/${OUTPUT_FILE}" | cut -d ' ' -f 1)"
+          {
+            echo "amd64_digest=${amd64_digest}"
+            echo "arm64_digest=${arm64_digest}"
+            echo "evidence_sha256=${evidence_sha256}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Record the published index and platform digests
+        env:
+          AMD64_DIGEST: ${{ steps.verify.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.verify.outputs.arm64_digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EVIDENCE_SHA256: ${{ steps.verify.outputs.evidence_sha256 }}
+          REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p package-evidence
+          jq -n \
+            --arg engine "${{ matrix.engine }}" \
+            --arg image "${IMAGE}" \
+            --arg tag "${IMAGE_TAG}" \
+            --arg digest "${DIGEST}" \
+            --arg amd64Digest "${AMD64_DIGEST}" \
+            --arg arm64Digest "${ARM64_DIGEST}" \
+            --arg evidenceSha256 "${EVIDENCE_SHA256}" \
+            --arg revision "${REVISION}" \
+            '{schemaVersion: 1, engine: $engine, image: $image, tag: $tag, digest: $digest, platformDigests: {"linux/amd64": $amd64Digest, "linux/arm64": $arm64Digest}, sourceRevision: $revision, anonymousPullVerified: true, managedSmokeEvidenceSha256: $evidenceSha256}' \
+            > "package-evidence/${{ matrix.engine }}-image-manifest.json"
+          printf 'Published and anonymously verified `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Preserve publication evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.engine }}-image-manifest-${{ github.run_id }}
+          path: package-evidence/${{ matrix.engine }}-image-manifest.json
+          if-no-files-found: error
+          retention-days: 30

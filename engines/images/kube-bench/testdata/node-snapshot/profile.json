@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "profile": "cis-kubernetes-node-config",
+  "captured_at": "2026-08-24T12:00:00Z",
+  "files": [
+    {
+      "path": "kubelet-config.yaml",
+      "sha256": "sha256:a4a1cfc10efdc91e28a8ffb5b277d0006bfb942278ab2e9486ed22ec8f2fdcc3"
+    },
+    {
+      "path": "kubelet.service",
+      "sha256": "sha256:4252ada75a1879013381d921015ddd0c1aa326dc371721d1fae288ca0a828e7b"
+    },
+    {
+      "path": "kubelet.conf",
+      "sha256": "sha256:3b3c88bbf91d6bdc472fd864c6f1a0f79bb120fa41b749c4e440c0a90a3f89f7"
+    },
+    {
+      "path": "kube-proxy.yaml",
+      "sha256": "sha256:c5f901f9e5375689c062e698f9347841a33839d1459607ef1f6ac001fc8ecd79"
+    },
+    {
+      "path": "ca.crt",
+      "sha256": "sha256:840e59246d8371a9e208b2ccfb6bb3bd8719b492c8907de1769f3c7609cb09a4"
+    }
+  ]
+}

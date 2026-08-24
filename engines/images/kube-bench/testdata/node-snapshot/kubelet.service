@@ -1,0 +1,2 @@
+[Service]
+ExecStart=/usr/bin/kubelet --config=/var/lib/kubelet/config.yaml

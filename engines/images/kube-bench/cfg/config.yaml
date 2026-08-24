@@ -1,0 +1,30 @@
+---
+version_mapping: {}
+target_mapping:
+  ai-security-scanner-snapshot:
+    - node
+node:
+  components:
+    - kubelet
+    - proxy
+  kubelet:
+    bins:
+      - kubelet-snapshot-not-live
+    confs:
+      - /workspace/node-snapshot/kubelet-config.yaml
+    defaultconf: /workspace/node-snapshot/kubelet-config.yaml
+    svc:
+      - /workspace/node-snapshot/kubelet.service
+    defaultsvc: /workspace/node-snapshot/kubelet.service
+    kubeconfig:
+      - /workspace/node-snapshot/kubelet.conf
+    defaultkubeconfig: /workspace/node-snapshot/kubelet.conf
+    cafile:
+      - /workspace/node-snapshot/ca.crt
+    defaultcafile: /workspace/node-snapshot/ca.crt
+  proxy:
+    bins:
+      - kube-proxy-snapshot-not-live
+    confs:
+      - /workspace/node-snapshot/kube-proxy.yaml
+    defaultconf: /workspace/node-snapshot/kube-proxy.yaml
