@@ -35,6 +35,16 @@
       "required_outputs": [
         "bin/qemu-system-x86_64",
         "share/qemu"
+      ],
+      "excluded_foreign_firmware": [
+        "share/qemu/hppa-firmware.img",
+        "share/qemu/hppa-firmware64.img",
+        "share/qemu/openbios-ppc",
+        "share/qemu/openbios-sparc32",
+        "share/qemu/openbios-sparc64",
+        "share/qemu/palcode-clipper",
+        "share/qemu/s390-ccw.img",
+        "share/qemu/u-boot.e500"
       ]
     }
   },

@@ -141,6 +141,24 @@ function normalizeRelativePath(value, label) {
   return parts.join('/');
 }
 
+function excludedForeignQemuFirmware(lock) {
+  const qemu = requireObject(lock.linux_qemu, 'Linux QEMU lock');
+  const contract = requireObject(qemu.build_contract, 'Linux QEMU build contract');
+  const configured = contract.excluded_foreign_firmware;
+  if (!Array.isArray(configured) || configured.length === 0 || configured.length > 32) {
+    throw new Error('Linux QEMU excluded foreign firmware must be a bounded non-empty array');
+  }
+  const excluded = new Set();
+  configured.forEach((value, index) => {
+    const path = normalizeRelativePath(value, `excluded foreign QEMU firmware ${index}`);
+    if (!path.startsWith('share/qemu/') || excluded.has(path)) {
+      throw new Error('Linux QEMU excluded foreign firmware must contain unique share/qemu paths');
+    }
+    excluded.add(path);
+  });
+  return excluded;
+}
+
 function validateLock(lock, targetName) {
   requireObject(lock, 'upstream lock');
   if (lock.schema_version !== '1') throw new Error('upstream lock schema is unsupported');
@@ -178,6 +196,7 @@ function validateLock(lock, targetName) {
       requireSize(source.source_size_bytes, `${name} source size`);
       requireText(source.source_revision, `${name} source revision`);
     }
+    excludedForeignQemuFirmware(lock);
     const gvproxyAsset = requireObject(gvproxy.asset, 'gvproxy asset');
     assetUrl(gvproxy.release_base_url, gvproxyAsset.name, 'gvproxy');
     requireSha256(gvproxyAsset.sha256, 'gvproxy asset SHA-256');
@@ -385,6 +404,33 @@ async function walkRegularFiles(root, { rejectSymlinks = false, maximum = MAX_AR
   return files;
 }
 
+async function readElfIdentity(path) {
+  const handle = await open(path, 'r');
+  const header = Buffer.alloc(20);
+  let bytesRead;
+  try {
+    ({ bytesRead } = await handle.read(header, 0, header.length, 0));
+  } finally {
+    await handle.close();
+  }
+  const hasElfMagic =
+    bytesRead >= 4 && header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && header[3] === 0x46;
+  if (!hasElfMagic) return undefined;
+  if (bytesRead !== header.length || ![1, 2].includes(header[4]) || ![1, 2].includes(header[5])) {
+    throw new Error(`managed QEMU output contains a malformed ELF header: ${path}`);
+  }
+  const machine = header[5] === 1 ? header.readUInt16LE(18) : header.readUInt16BE(18);
+  return { class: header[4], data: header[5], machine };
+}
+
+function isNativeX86Elf(identity) {
+  return (
+    identity.data === 1 &&
+    ((identity.class === 1 && identity.machine === 3) ||
+      (identity.class === 2 && identity.machine === 62))
+  );
+}
+
 async function copyLockedClientFiles(extractedRoot, lockedFiles, stageRoot) {
   const candidates = await walkRegularFiles(extractedRoot);
   for (const locked of lockedFiles) {
@@ -406,17 +452,47 @@ async function copyLockedClientFiles(extractedRoot, lockedFiles, stageRoot) {
   }
 }
 
-async function copyQemuOutput(qemuOutput, stageRoot, expectedVersion) {
-  const files = await walkRegularFiles(qemuOutput, { rejectSymlinks: true, maximum: MAX_STAGED_FILES });
-  if (files.length === 0 || files.length >= MAX_STAGED_FILES) {
+async function copyQemuOutput(qemuOutput, stageRoot, expectedVersion, excludedFirmware) {
+  const sourceFiles = await walkRegularFiles(qemuOutput, {
+    rejectSymlinks: true,
+    maximum: MAX_STAGED_FILES,
+  });
+  if (sourceFiles.length === 0 || sourceFiles.length >= MAX_STAGED_FILES) {
     throw new Error('managed QEMU output has an invalid file count');
   }
+  const files = sourceFiles.map((file) => ({
+    ...file,
+    destinationRelative: relative(qemuOutput, file.path).split(sep).join('/'),
+  }));
+  const sourcePaths = new Set(files.map((file) => file.destinationRelative));
+  const discoveredForeignFirmware = new Set();
   for (const file of files) {
-    const destinationRelative = relative(qemuOutput, file.path).split(sep).join('/');
+    if (!file.destinationRelative.startsWith('share/qemu/')) continue;
+    const identity = await readElfIdentity(file.path);
+    if (identity && !isNativeX86Elf(identity)) {
+      discoveredForeignFirmware.add(file.destinationRelative);
+    }
+  }
+  for (const path of excludedFirmware) {
+    if (!sourcePaths.has(path)) {
+      throw new Error(`managed QEMU output omitted contracted foreign firmware ${path}`);
+    }
+    if (!discoveredForeignFirmware.has(path)) {
+      throw new Error(`contracted QEMU firmware is no longer a foreign ELF: ${path}`);
+    }
+  }
+  for (const path of discoveredForeignFirmware) {
+    if (!excludedFirmware.has(path)) {
+      throw new Error(`managed QEMU output contains uncontracted foreign ELF firmware ${path}`);
+    }
+  }
+  for (const file of files) {
+    const { destinationRelative } = file;
     normalizeRelativePath(destinationRelative, 'managed QEMU output path');
     if (!destinationRelative.startsWith('bin/') && !destinationRelative.startsWith('share/qemu/')) {
       throw new Error(`unexpected managed QEMU output ${destinationRelative}`);
     }
+    if (excludedFirmware.has(destinationRelative)) continue;
     const destination = join(stageRoot, ...destinationRelative.split('/'));
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
     await copyFile(file.path, destination, fsConstants.COPYFILE_EXCL);
@@ -477,7 +553,12 @@ async function buildLinuxQemu(lock, workRoot, stageRoot) {
     ],
     { timeout: 60 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 },
   );
-  await copyQemuOutput(output, stageRoot, requireText(qemu.version, 'QEMU version'));
+  await copyQemuOutput(
+    output,
+    stageRoot,
+    requireText(qemu.version, 'QEMU version'),
+    excludedForeignQemuFirmware(lock),
+  );
 }
 
 async function stageLinuxGvproxy(lock, workRoot, stageRoot) {
@@ -619,7 +700,7 @@ function componentInventory(lock, targetName, files, targets) {
     components.push(componentRecord(
       qemu,
       'qemu',
-      'Statically built system emulator; launcher source is runtime/qemu-launcher.c',
+      'Statically built x86_64 system emulator; foreign-architecture firmware is excluded and launcher source is runtime/qemu-launcher.c',
       qemuFiles.map(bundledArtifact),
       {
         url: approvedUrl(qemu.source_url, 'QEMU source URL').href,

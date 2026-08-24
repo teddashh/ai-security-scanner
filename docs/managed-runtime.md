@@ -100,7 +100,9 @@ The tool reads `runtime/upstreams.lock.json`, enforces approved HTTPS origins, v
 download by locked size and SHA-256, extracts without a shell, selects client files by exact content
 identity, and publishes the completed directory atomically. Linux QEMU is built from the locked QEMU
 and DTC sources in the pinned container builder; its native launcher probes KVM and changes only
-Podman's exact `-accel kvm -cpu host` arguments to `tcg/max` when KVM is unusable. Tauri maps the
+Podman's exact `-accel kvm -cpu host` arguments to `tcg/max` when KVM is unusable. The locked Linux
+build contract retains the x86_64 SeaBIOS, OVMF, and device firmware while excluding eight
+foreign-architecture firmware images that the x86_64-only emulator cannot use. Tauri maps the
 completed directory to `$RESOURCE/managed-runtime/`.
 
 The cheap lock-only validation used during development is:
