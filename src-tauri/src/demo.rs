@@ -1,3 +1,4 @@
+use crate::coverage::NOT_APPLICABLE_REASON_METADATA;
 use crate::domain::*;
 use chrono::{Duration, Utc};
 use sha2::{Digest, Sha256};
@@ -24,9 +25,15 @@ pub fn build_demo_case() -> AssessmentCase {
     case.is_demo = true;
     case.status = CaseStatus::ReadyForHandoff;
     case.knowledge_cutoff = Some(now - Duration::days(2));
+    case.requested_activities = vec![
+        AssessmentActivity::ConfigurationAssessment,
+        AssessmentActivity::LocalArtifactAnalysis,
+        AssessmentActivity::LowImpactExternalChecks,
+    ];
 
     let aws_source_id = new_id();
     let dns_source_id = new_id();
+    let azure_source_id = new_id();
     let gcp_source_id = new_id();
     case.data_sources = vec![
         DataSource {
@@ -48,6 +55,22 @@ pub fn build_demo_case() -> AssessmentCase {
             last_discovered_at: Some(now - Duration::days(2)),
             read_only: true,
             metadata: BTreeMap::new(),
+        },
+        DataSource {
+            id: azure_source_id,
+            kind: SourceKind::AzureTenant,
+            label: "Azure Tenant".into(),
+            status: SourceConnectionStatus::NotApplicable,
+            connected_at: None,
+            last_discovered_at: None,
+            read_only: true,
+            metadata: BTreeMap::from([(
+                NOT_APPLICABLE_REASON_METADATA.into(),
+                serde_json::Value::String(
+                    "The synthetic questionnaire states that Azure is not used in this case."
+                        .into(),
+                ),
+            )]),
         },
         DataSource {
             id: gcp_source_id,
@@ -154,6 +177,7 @@ pub fn build_demo_case() -> AssessmentCase {
         expires_at: Some(now + Duration::hours(1)),
         authorization_reference: Some("SYNTHETIC-DEMO".into()),
         notes: Some("Synthetic demonstration only".into()),
+        external_scope: None,
     }];
 
     let run_id = new_id();
@@ -166,7 +190,9 @@ pub fn build_demo_case() -> AssessmentCase {
         created_at: now - Duration::days(2),
         completed_at: Some(now - Duration::days(2) + Duration::minutes(18)),
         knowledge_cutoff: now - Duration::days(2),
+        verification_baseline_run_id: None,
         scope_grant_ids: vec![scope_id],
+        scope_grant_snapshots: case.scope_grants.clone(),
         engine_runs: vec![
             EngineRun {
                 id: prowler_run_id.clone(),
@@ -183,6 +209,23 @@ pub fn build_demo_case() -> AssessmentCase {
                 image_digest: Some("sha256:synthetic-demo-not-an-image".into()),
                 rule_version: Some("synthetic-demo".into()),
                 adapter_version: "0.1.0-demo".into(),
+                manifest_schema_version: Some("synthetic-demo".into()),
+                source_revision: Some("synthetic-demo".into()),
+                repository_url: None,
+                distribution_mode: None,
+                image_repository: None,
+                command_sha256: None,
+                knowledge_input: None,
+                scope_contract_sha256: None,
+                mapping_version: None,
+                fingerprint_schema_version: None,
+                runtime_provider: None,
+                runtime_version: None,
+                runtime_security_options: None,
+                exit_code: Some(0),
+                cleanup_removed: Some(true),
+                cleanup_detail: Some("Synthetic demonstration only".into()),
+                warnings: vec!["Synthetic demonstration data; no scanner was executed.".into()],
                 raw_artifact_ids: Vec::new(),
                 error_code: None,
                 error_message: None,
@@ -202,6 +245,23 @@ pub fn build_demo_case() -> AssessmentCase {
                 image_digest: None,
                 rule_version: None,
                 adapter_version: "0.1.0-demo".into(),
+                manifest_schema_version: Some("synthetic-demo".into()),
+                source_revision: Some("synthetic-demo".into()),
+                repository_url: None,
+                distribution_mode: None,
+                image_repository: None,
+                command_sha256: None,
+                knowledge_input: None,
+                scope_contract_sha256: None,
+                mapping_version: None,
+                fingerprint_schema_version: None,
+                runtime_provider: None,
+                runtime_version: None,
+                runtime_security_options: None,
+                exit_code: Some(2),
+                cleanup_removed: Some(true),
+                cleanup_detail: Some("Synthetic demonstration only".into()),
+                warnings: vec!["Synthetic demonstration data; no scanner was executed.".into()],
                 raw_artifact_ids: Vec::new(),
                 error_code: Some("TARGET_TIMEOUT".into()),
                 error_message: Some("One synthetic target timed out.".into()),
@@ -249,10 +309,11 @@ pub fn build_demo_case() -> AssessmentCase {
             label: "Azure Tenant".into(),
             source_kind: SourceKind::AzureTenant,
             asset_id: None,
-            status: CoverageStatus::SourceConnectedNothingDiscovered,
-            explanation: "展示資料假設來源已查詢，但未發現 Azure 訂閱。".into(),
-            last_run_id: Some(run_id.clone()),
-            observed_at: Some(now - Duration::days(2)),
+            status: CoverageStatus::NotApplicable,
+            explanation: "合成問卷明確記錄此案件不使用 Azure；這是適用性聲明，不是掃描成功。"
+                .into(),
+            last_run_id: None,
+            observed_at: None,
         },
         CoverageEntry {
             id: new_id(),
@@ -274,7 +335,7 @@ pub fn build_demo_case() -> AssessmentCase {
         id: artifact_id.clone(),
         case_id: case.id.clone(),
         run_id: run_id.clone(),
-        engine_run_id: prowler_run_id,
+        engine_run_id: prowler_run_id.clone(),
         relative_path: "raw/prowler/synthetic-demo.json".into(),
         media_type: "application/json".into(),
         sha256: artifact_hash(raw_content),
@@ -300,6 +361,7 @@ pub fn build_demo_case() -> AssessmentCase {
             id: new_id(),
             finding_id: finding_id.clone(),
             run_id: run_id.clone(),
+            engine_run_id: Some(prowler_run_id),
             kind: EvidenceKind::Configuration,
             engine_id: "prowler".into(),
             observed_at: now - Duration::days(2),
@@ -334,7 +396,7 @@ pub fn build_demo_case() -> AssessmentCase {
         rollback_considerations: Some("變更公開存取可能中斷既有資料交換；先確認使用者與服務。".into()),
         official_references: vec!["https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html".into()],
         recommended_expert_type: "AWS 雲端安全／IAM 專家".into(),
-        status: FindingStatus::SentForReview,
+        status: FindingStatus::ExpertReviewRequested,
         tags: vec!["synthetic-demo".into(), "data-exposure".into()],
     });
 
@@ -372,6 +434,33 @@ pub fn build_demo_case() -> AssessmentCase {
         recommended_expert_type: "Web 平台／TLS 專家".into(),
         status: FindingStatus::Unreviewed,
         tags: vec!["synthetic-demo".into(), "tls".into()],
+    });
+
+    let group_id = new_id();
+    let group_title = "對外資料傳輸面向需要一起檢視".to_owned();
+    let group_rationale = "兩項合成觀察都涉及公開服務與資料保護；群組只供人工交接，不會合併 finding、fingerprint 或證據。".to_owned();
+    let group_actor = "Synthetic demo builder".to_owned();
+    let group_created_at = now - Duration::days(1);
+    let grouped_finding_ids = vec![finding_id.clone(), second_finding_id.clone()];
+    case.finding_groups.push(FindingGroup {
+        id: group_id.clone(),
+        case_id: case.id.clone(),
+        title: group_title.clone(),
+        finding_ids: grouped_finding_ids.clone(),
+        rationale: group_rationale.clone(),
+        grouped_by: group_actor.clone(),
+        created_at: group_created_at,
+    });
+    case.finding_group_events.push(FindingGroupEvent {
+        id: new_id(),
+        case_id: case.id.clone(),
+        group_id,
+        action: FindingGroupAction::Created,
+        title: group_title,
+        finding_ids: grouped_finding_ids,
+        rationale: group_rationale,
+        actor: group_actor,
+        occurred_at: group_created_at,
     });
 
     case.finding_observations = case

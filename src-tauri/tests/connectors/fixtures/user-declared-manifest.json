@@ -1,0 +1,35 @@
+{
+  "assets": [
+    {
+      "key": "domain",
+      "kind": "domain",
+      "name": "app.example.com",
+      "provider": "internet",
+      "stable_identifier": { "namespace": "dns_name", "value": "app.example.com" },
+      "internet_exposed": true,
+      "environment": "production",
+      "metadata": { "password": "must-never-enter-canonical-metadata" }
+    },
+    {
+      "key": "service",
+      "kind": "web_service",
+      "name": "Public application",
+      "provider": "internet",
+      "stable_identifier": { "namespace": "service_id", "value": "public-app-1" },
+      "internet_exposed": true,
+      "additional_identifiers": [
+        { "namespace": "api_key", "value": "must-never-enter-canonical-metadata" },
+        { "namespace": "dns_name", "value": "app.example.com" }
+      ]
+    },
+    {
+      "key": "malformed",
+      "kind": "host",
+      "name": "No provider-native identity"
+    }
+  ],
+  "relations": [
+    { "from": "domain", "to": "service", "kind": "exposes" },
+    { "from": "missing", "to": "service", "kind": "related" }
+  ]
+}

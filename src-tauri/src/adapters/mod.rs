@@ -4,11 +4,15 @@
 //! fields into the case schema; they never execute, render, or follow text from
 //! a target or a scanner result.
 
+mod control_mapping;
+
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
 use crate::domain::{
     Confidence, Evidence, EvidenceKind, Finding, FindingStatus, RawArtifact, Severity,
 };
 use crate::error::AppResult;
+use quick_xml::Reader;
+use quick_xml::events::{BytesRef, BytesStart, Event};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +22,10 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 
 pub const ADAPTER_VERSION: &str = "0.1.0";
+/// Stable identity for the canonical finding fingerprint algorithm. Changing
+/// this value requires an explicit migration before cross-version diffs may be
+/// treated as comparable.
+pub const FINGERPRINT_SCHEMA_VERSION: &str = "v1";
 pub const BUILTIN_ENGINE_IDS: &[&str] = &[
     "cloudquery",
     "steampipe",
@@ -50,6 +58,8 @@ const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_WARNINGS: usize = 256;
 const MAX_SHORT_TEXT: usize = 512;
 const MAX_LONG_TEXT: usize = 2_048;
+const MAX_XML_DEPTH: usize = 64;
+const MAX_XML_EVENTS: usize = 200_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Profile {
@@ -139,15 +149,52 @@ macro_rules! record {
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XmlElement {
+    Results,
+    Result,
+    Name,
+    Nvt,
+    Host,
+    Port,
+    Severity,
+    Threat,
+    Qod,
+    Value,
+    AssetId,
+    Family,
+    Refs,
+    Ref,
+    Other,
+}
+
+#[derive(Debug, Default)]
+struct GreenboneXmlResult {
+    pointer: String,
+    result_id: Option<String>,
+    nvt_oid: Option<String>,
+    result_name: Option<String>,
+    nvt_name: Option<String>,
+    host: Option<String>,
+    port: Option<String>,
+    severity: Option<String>,
+    threat: Option<String>,
+    qod: Option<String>,
+    asset_id: Option<String>,
+    family: Option<String>,
+    cves: Vec<String>,
+}
+
 #[derive(Debug)]
 enum ParsedArtifact {
     Json(Value),
     JsonLines(Vec<(usize, Value)>),
-    Xml,
+    Xml(Vec<GreenboneXmlResult>),
 }
 
 /// Construct the adapter set matching the complete built-in engine catalog.
 pub fn builtin_adapter_registry() -> AppResult<AdapterRegistry> {
+    control_mapping::validate_catalog(BUILTIN_ENGINE_IDS)?;
     let definitions = [
         ("cloudquery", Profile::CloudQuery, "Cloud security engineer"),
         ("steampipe", Profile::Steampipe, "Cloud security engineer"),
@@ -211,6 +258,11 @@ pub fn builtin_adapter_registry() -> AppResult<AdapterRegistry> {
     Ok(registry)
 }
 
+/// Exact embedded mapping identity frozen into every planned engine run.
+pub(crate) fn control_mapping_version() -> AppResult<&'static str> {
+    control_mapping::catalog_version()
+}
+
 impl EngineAdapter for BuiltinAdapter {
     fn engine_id(&self) -> &str {
         self.id
@@ -267,14 +319,6 @@ fn normalize_artifacts(
             continue;
         };
         processed_bytes += bytes.len() as u64;
-
-        if adapter.profile == Profile::Greenbone {
-            push_warning(
-                &mut output.warnings,
-                "Greenbone XML was retained as hashed raw evidence, but this build has no bounded XML parser; no findings were inferred",
-            );
-            continue;
-        }
 
         let Some(parsed) = parse_artifact(&bytes, artifact, &mut output.warnings) else {
             continue;
@@ -414,13 +458,12 @@ fn parse_artifact(
     artifact: &RawArtifact,
     warnings: &mut Vec<String>,
 ) -> Option<ParsedArtifact> {
-    let trimmed = bytes
+    let first_non_whitespace = bytes
         .iter()
         .copied()
-        .skip_while(u8::is_ascii_whitespace)
-        .collect::<Vec<_>>();
-    if trimmed.first() == Some(&b'<') || artifact.media_type.contains("xml") {
-        return Some(ParsedArtifact::Xml);
+        .find(|byte| !byte.is_ascii_whitespace());
+    if first_non_whitespace == Some(b'<') || artifact.media_type.contains("xml") {
+        return parse_greenbone_xml(bytes, warnings).map(ParsedArtifact::Xml);
     }
 
     match serde_json::from_slice::<Value>(bytes) {
@@ -470,15 +513,380 @@ fn parse_artifact(
     }
 }
 
+fn parse_greenbone_xml(
+    bytes: &[u8],
+    warnings: &mut Vec<String>,
+) -> Option<Vec<GreenboneXmlResult>> {
+    let mut reader = Reader::from_reader(bytes);
+    reader.config_mut().trim_text(true);
+    reader.config_mut().check_end_names = true;
+    reader.config_mut().expand_empty_elements = true;
+
+    let mut buffer = Vec::new();
+    let mut stack = Vec::new();
+    let mut current: Option<GreenboneXmlResult> = None;
+    let mut records = Vec::new();
+    let mut event_count = 0_usize;
+    let mut result_index = 0_usize;
+
+    loop {
+        event_count += 1;
+        if event_count > MAX_XML_EVENTS {
+            push_warning(
+                warnings,
+                "Greenbone XML event limit reached; later results remain only as raw evidence",
+            );
+            break;
+        }
+
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Eof) => break,
+            Ok(Event::DocType(_)) => {
+                push_warning(
+                    warnings,
+                    "Greenbone XML containing a DTD or custom entity reference was rejected",
+                );
+                return None;
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                let Some(value) = safe_xml_reference(&reference) else {
+                    push_warning(
+                        warnings,
+                        "Greenbone XML containing a DTD or custom entity reference was rejected",
+                    );
+                    return None;
+                };
+                if is_greenbone_field(&stack)
+                    && let Some(record) = current.as_mut()
+                {
+                    let mut encoded = [0_u8; 4];
+                    apply_greenbone_text(record, &stack, value.encode_utf8(&mut encoded));
+                }
+            }
+            Ok(Event::Start(start)) => {
+                if stack.len() >= MAX_XML_DEPTH {
+                    push_warning(
+                        warnings,
+                        "Greenbone XML nesting limit was exceeded; no XML findings were normalized",
+                    );
+                    return None;
+                }
+                let element = xml_element(start.local_name().as_ref());
+                if element == XmlElement::Result && stack.last() == Some(&XmlElement::Results) {
+                    if current.is_some() {
+                        push_warning(warnings, "nested Greenbone result elements were rejected");
+                        return None;
+                    }
+                    if records.len() >= MAX_RECORDS {
+                        push_warning(
+                            warnings,
+                            "Greenbone result limit reached; later results remain only as raw evidence",
+                        );
+                        break;
+                    }
+                    result_index += 1;
+                    let mut record = GreenboneXmlResult {
+                        pointer: format!("/report/results/result[{result_index}]"),
+                        ..GreenboneXmlResult::default()
+                    };
+                    match xml_attribute(&start, reader.decoder(), b"id") {
+                        Ok(value) => record.result_id = value,
+                        Err(error) => {
+                            push_warning(warnings, error);
+                            return None;
+                        }
+                    }
+                    current = Some(record);
+                } else if element == XmlElement::Nvt && current.is_some() {
+                    match xml_attribute(&start, reader.decoder(), b"oid") {
+                        Ok(Some(value)) => {
+                            if let Some(oid) = normalize_greenbone_oid(&value) {
+                                if let Some(record) = current.as_mut() {
+                                    record.nvt_oid = Some(oid);
+                                }
+                            } else {
+                                push_warning(warnings, "Greenbone result had an invalid NVT OID");
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            push_warning(warnings, error);
+                            return None;
+                        }
+                    }
+                } else if element == XmlElement::Ref
+                    && stack.last() == Some(&XmlElement::Refs)
+                    && current.is_some()
+                {
+                    let reference_type = match xml_attribute(&start, reader.decoder(), b"type") {
+                        Ok(value) => value,
+                        Err(error) => {
+                            push_warning(warnings, error);
+                            return None;
+                        }
+                    };
+                    let reference_id = match xml_attribute(&start, reader.decoder(), b"id") {
+                        Ok(value) => value,
+                        Err(error) => {
+                            push_warning(warnings, error);
+                            return None;
+                        }
+                    };
+                    if reference_type
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case("cve"))
+                        && let Some(cve) = reference_id.and_then(|value| normalize_cve(&value))
+                        && let Some(record) = current.as_mut()
+                        && record.cves.len() < 32
+                        && !record.cves.contains(&cve)
+                    {
+                        record.cves.push(cve);
+                    }
+                }
+                stack.push(element);
+            }
+            Ok(Event::End(end)) => {
+                let element = xml_element(end.local_name().as_ref());
+                if element == XmlElement::Result
+                    && stack.last() == Some(&XmlElement::Result)
+                    && let Some(record) = current.take()
+                {
+                    records.push(record);
+                }
+                stack.pop();
+            }
+            Ok(Event::Text(text)) if current.is_some() && is_greenbone_field(&stack) => {
+                let raw_text: &[u8] = text.as_ref();
+                if raw_text.len() > MAX_LONG_TEXT * 4 {
+                    push_warning(warnings, "an oversized Greenbone XML field was ignored");
+                    buffer.clear();
+                    continue;
+                }
+                let decoded = match text.decode() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        push_warning(warnings, "a Greenbone XML text field could not be decoded");
+                        buffer.clear();
+                        continue;
+                    }
+                };
+                let unescaped = match quick_xml::escape::unescape(&decoded) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        push_warning(
+                            warnings,
+                            "a Greenbone XML field used an unsupported entity and was ignored",
+                        );
+                        buffer.clear();
+                        continue;
+                    }
+                };
+                apply_greenbone_text(current.as_mut().expect("checked above"), &stack, &unescaped);
+            }
+            Ok(Event::CData(text)) if current.is_some() && is_greenbone_field(&stack) => {
+                let raw_text: &[u8] = text.as_ref();
+                if raw_text.len() > MAX_LONG_TEXT * 4 {
+                    push_warning(warnings, "an oversized Greenbone XML field was ignored");
+                    buffer.clear();
+                    continue;
+                }
+                match text.decode() {
+                    Ok(value) => apply_greenbone_text(
+                        current.as_mut().expect("checked above"),
+                        &stack,
+                        &value,
+                    ),
+                    Err(_) => {
+                        push_warning(warnings, "a Greenbone XML CDATA field could not be decoded")
+                    }
+                }
+            }
+            Ok(Event::PI(_)) => {
+                push_warning(
+                    warnings,
+                    "a Greenbone XML processing instruction was ignored",
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Greenbone XML parsing stopped at byte {}: {}",
+                        reader.error_position(),
+                        safe_text(&error.to_string(), 240)
+                    ),
+                );
+                break;
+            }
+        }
+        buffer.clear();
+    }
+
+    if current.is_some() {
+        push_warning(
+            warnings,
+            "an incomplete Greenbone result was retained only as raw evidence",
+        );
+    }
+    if records.is_empty() {
+        push_warning(
+            warnings,
+            "Greenbone XML contained no complete bounded result records; no findings were inferred",
+        );
+    }
+    Some(records)
+}
+
+fn xml_attribute(
+    start: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    name: &[u8],
+) -> Result<Option<String>, String> {
+    for attribute in start.attributes().with_checks(true) {
+        let attribute =
+            attribute.map_err(|_| "Greenbone XML contained a malformed attribute".to_owned())?;
+        if attribute.key.as_ref() == name {
+            let value = attribute
+                .decode_and_unescape_value(decoder)
+                .map_err(|_| "Greenbone XML attribute could not be decoded safely".to_owned())?;
+            return Ok(Some(safe_text(&value, MAX_SHORT_TEXT)));
+        }
+    }
+    Ok(None)
+}
+
+fn safe_xml_reference(reference: &BytesRef<'_>) -> Option<char> {
+    let value = match reference.as_ref() {
+        b"amp" => '&',
+        b"apos" => '\'',
+        b"gt" => '>',
+        b"lt" => '<',
+        b"quot" => '"',
+        _ => reference.resolve_char_ref().ok().flatten()?,
+    };
+    matches!(
+        value,
+        '\u{9}' | '\u{A}' | '\u{D}'
+            | '\u{20}'..='\u{D7FF}'
+            | '\u{E000}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{10FFFF}'
+    )
+    .then_some(value)
+}
+
+fn xml_element(name: &[u8]) -> XmlElement {
+    match name {
+        b"results" => XmlElement::Results,
+        b"result" => XmlElement::Result,
+        b"name" => XmlElement::Name,
+        b"nvt" => XmlElement::Nvt,
+        b"host" => XmlElement::Host,
+        b"port" => XmlElement::Port,
+        b"severity" => XmlElement::Severity,
+        b"threat" => XmlElement::Threat,
+        b"qod" => XmlElement::Qod,
+        b"value" => XmlElement::Value,
+        b"asset_id" => XmlElement::AssetId,
+        b"family" => XmlElement::Family,
+        b"refs" => XmlElement::Refs,
+        b"ref" => XmlElement::Ref,
+        _ => XmlElement::Other,
+    }
+}
+
+fn is_greenbone_field(stack: &[XmlElement]) -> bool {
+    stack.ends_with(&[XmlElement::Result, XmlElement::Name])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Nvt, XmlElement::Name])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Host])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Port])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Severity])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Threat])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Qod, XmlElement::Value])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::AssetId])
+        || stack.ends_with(&[XmlElement::Result, XmlElement::Nvt, XmlElement::Family])
+}
+
+fn apply_greenbone_text(record: &mut GreenboneXmlResult, stack: &[XmlElement], value: &str) {
+    let value = value
+        .chars()
+        .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+        .take(MAX_LONG_TEXT)
+        .collect::<String>();
+    if value.is_empty() {
+        return;
+    }
+    let target = if stack.ends_with(&[XmlElement::Result, XmlElement::Name]) {
+        &mut record.result_name
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Nvt, XmlElement::Name]) {
+        &mut record.nvt_name
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Host]) {
+        &mut record.host
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Port]) {
+        &mut record.port
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Severity]) {
+        &mut record.severity
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Threat]) {
+        &mut record.threat
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Qod, XmlElement::Value]) {
+        &mut record.qod
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::AssetId]) {
+        &mut record.asset_id
+    } else if stack.ends_with(&[XmlElement::Result, XmlElement::Nvt, XmlElement::Family]) {
+        &mut record.family
+    } else {
+        return;
+    };
+    if let Some(target) = target.as_mut() {
+        let remaining = MAX_LONG_TEXT.saturating_sub(target.chars().count());
+        target.extend(value.chars().take(remaining));
+    } else {
+        let value = value.trim().to_owned();
+        if !value.is_empty() {
+            *target = Some(value);
+        }
+    }
+}
+
+fn normalize_greenbone_oid(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.len() < 3
+        || value.len() > 128
+        || value.starts_with('.')
+        || value.ends_with('.')
+        || value.split('.').any(|segment| {
+            segment.is_empty() || !segment.chars().all(|character| character.is_ascii_digit())
+        })
+    {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+fn normalize_cve(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_uppercase();
+    let mut segments = value.split('-');
+    let prefix = segments.next()?;
+    let year = segments.next()?;
+    let sequence = segments.next()?;
+    if segments.next().is_some()
+        || prefix != "CVE"
+        || year.len() != 4
+        || !year.chars().all(|character| character.is_ascii_digit())
+        || !(4..=12).contains(&sequence.len())
+        || !sequence.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(value)
+}
+
 fn extract_records(
     profile: Profile,
     parsed: &ParsedArtifact,
     warnings: &mut Vec<String>,
 ) -> Vec<SourceRecord> {
-    if matches!(
-        profile,
-        Profile::CloudQuery | Profile::Syft | Profile::Greenbone
-    ) {
+    if matches!(profile, Profile::CloudQuery | Profile::Syft) {
         return Vec::new();
     }
 
@@ -491,6 +899,7 @@ fn extract_records(
         Profile::Naabu => extract_naabu(parsed, warnings),
         Profile::Httpx => extract_httpx(parsed, warnings),
         Profile::Nuclei => extract_nuclei(parsed, warnings),
+        Profile::Greenbone => extract_greenbone(parsed, warnings),
         Profile::Semgrep => extract_semgrep(parsed, warnings),
         Profile::Gitleaks => extract_gitleaks(parsed, warnings),
         Profile::Trufflehog => extract_trufflehog(parsed, warnings),
@@ -501,7 +910,7 @@ fn extract_records(
         Profile::Kubescape => extract_kubescape(parsed, warnings),
         Profile::KubeBench => extract_kube_bench(parsed, warnings),
         Profile::Steampipe => extract_steampipe(parsed, warnings),
-        Profile::CloudQuery | Profile::Greenbone | Profile::Syft => Vec::new(),
+        Profile::CloudQuery | Profile::Syft => Vec::new(),
     }
 }
 
@@ -526,7 +935,7 @@ fn json_rows<'a>(
             .take(MAX_RECORDS)
             .map(|(line, value)| (format!("line:{line}"), value))
             .collect(),
-        ParsedArtifact::Xml => Vec::new(),
+        ParsedArtifact::Xml(_) => Vec::new(),
     }
 }
 
@@ -860,6 +1269,108 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
             ))
         })
         .collect()
+}
+
+fn extract_greenbone(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
+    let ParsedArtifact::Xml(results) = parsed else {
+        push_warning(warnings, "Greenbone expected a bounded XML report");
+        return Vec::new();
+    };
+
+    let mut records = Vec::new();
+    for result in results.iter().take(MAX_RECORDS) {
+        let numeric_severity = result
+            .severity
+            .as_deref()
+            .and_then(|value| value.parse::<f64>().ok());
+        let threat = result.threat.as_deref().unwrap_or("unknown");
+        if numeric_severity.is_some_and(|severity| severity <= 0.0)
+            || matches!(
+                threat.trim().to_ascii_lowercase().as_str(),
+                "log" | "false positive"
+            )
+        {
+            continue;
+        }
+        let source_severity = result
+            .severity
+            .clone()
+            .filter(|_| numeric_severity.is_some_and(|severity| severity > 0.0))
+            .or_else(|| result.threat.clone())
+            .unwrap_or_else(|| "unknown".into());
+
+        let Some(rule_id) = result
+            .nvt_oid
+            .clone()
+            .or_else(|| result.cves.first().cloned())
+        else {
+            push_warning(
+                warnings,
+                format!(
+                    "Greenbone result {} lacked a valid NVT OID or CVE and was not normalized",
+                    safe_text(result.result_id.as_deref().unwrap_or(&result.pointer), 120)
+                ),
+            );
+            continue;
+        };
+
+        let host = result.host.as_deref().unwrap_or("authorized-target");
+        let location = result
+            .port
+            .as_deref()
+            .filter(|port| !port.trim().is_empty())
+            .map(|port| format!("{host}:{port}"))
+            .unwrap_or_else(|| host.to_owned());
+        let qod = result
+            .qod
+            .as_deref()
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|value| *value <= 100);
+        let confidence = match qod {
+            Some(80..=100) => Confidence::High,
+            Some(50..=79) => Confidence::Medium,
+            Some(_) => Confidence::Low,
+            None => Confidence::Medium,
+        };
+        let mut references = result
+            .cves
+            .iter()
+            .map(|cve| format!("https://nvd.nist.gov/vuln/detail/{cve}"))
+            .collect::<Vec<_>>();
+        references.sort();
+        references.dedup();
+        references.truncate(12);
+        let mut tags = result
+            .cves
+            .iter()
+            .take(16)
+            .map(|cve| format!("cve:{}", safe_tag(cve)))
+            .collect::<Vec<_>>();
+        if let Some(family) = &result.family {
+            tags.push(format!("nvt-family:{}", safe_tag(family)));
+        }
+        if let Some(qod) = qod {
+            tags.push(format!("quality-of-detection:{qod}"));
+        }
+
+        records.push(record!(
+            result.pointer.clone(),
+            rule_id.clone(),
+            result
+                .nvt_name
+                .clone()
+                .or_else(|| result.result_name.clone())
+                .unwrap_or_else(|| format!("Greenbone NVT {rule_id}")),
+            source_severity,
+            location,
+            result.asset_id.clone(),
+            confidence,
+            EvidenceKind::ExternalValidation,
+            references,
+            tags,
+        ));
+    }
+    records
 }
 
 fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -1312,11 +1823,17 @@ fn merge_finding(
         "finding-{}",
         &fingerprint.rsplit(':').next().unwrap_or(&fingerprint)[..32]
     );
-    let evidence_id = stable_evidence_id(&fingerprint, &artifact.sha256, &record.pointer);
+    let evidence_id = stable_evidence_id(
+        &fingerprint,
+        &artifact.sha256,
+        &record.pointer,
+        input.engine_run_id,
+    );
     let evidence = Evidence {
         id: evidence_id,
         finding_id: finding_id.clone(),
         run_id: input.scan_run_id.to_owned(),
+        engine_run_id: Some(input.engine_run_id.to_owned()),
         kind: record.evidence_kind,
         engine_id: adapter.id.to_owned(),
         observed_at: artifact.created_at,
@@ -1396,7 +1913,7 @@ fn merge_finding(
             ],
             asset_ids: vec![asset_id],
             evidence: vec![evidence],
-            control_references: vec![],
+            control_references: control_mapping::lookup(adapter.id, &rule_id),
             recommendation: format!(
                 "Have a {} review the affected asset and the source rule's official guidance, then plan and approve a least-privilege configuration or code change.",
                 adapter.expert_type
@@ -1440,10 +1957,10 @@ fn resolve_asset(
     allowed_assets: &[String],
     warnings: &mut Vec<String>,
 ) -> Option<String> {
-    if let Some(hint) = &record.asset_hint {
-        if allowed_assets.iter().any(|asset| asset == hint) {
-            return Some(hint.clone());
-        }
+    if let Some(hint) = &record.asset_hint
+        && allowed_assets.iter().any(|asset| asset == hint)
+    {
+        return Some(hint.clone());
     }
     if allowed_assets.len() == 1 {
         return allowed_assets.first().cloned();
@@ -1460,16 +1977,21 @@ fn resolve_asset(
 
 fn stable_fingerprint(engine: &str, rule: &str, asset: &str, location: &str) -> String {
     let mut hasher = Sha256::new();
-    for component in ["v1", engine, rule, asset, location] {
+    for component in [FINGERPRINT_SCHEMA_VERSION, engine, rule, asset, location] {
         hasher.update(component.as_bytes());
         hasher.update([0]);
     }
     format!("{engine}:{}", hex::encode(hasher.finalize()))
 }
 
-fn stable_evidence_id(fingerprint: &str, artifact_hash: &str, pointer: &str) -> String {
+fn stable_evidence_id(
+    fingerprint: &str,
+    artifact_hash: &str,
+    pointer: &str,
+    engine_run_id: &str,
+) -> String {
     let mut hasher = Sha256::new();
-    for component in [fingerprint, artifact_hash, pointer] {
+    for component in [fingerprint, artifact_hash, pointer, engine_run_id] {
         hasher.update(component.as_bytes());
         hasher.update([0]);
     }
@@ -1791,6 +2313,17 @@ mod tests {
                 "asset",
                 &redact_location("https://example.test/a?token=secret")
             )
+        );
+    }
+
+    #[test]
+    fn evidence_identity_is_distinct_for_each_engine_execution() {
+        let first = stable_evidence_id("fingerprint", "artifact", "/result/0", "engine-run-1");
+        let second = stable_evidence_id("fingerprint", "artifact", "/result/0", "engine-run-2");
+        assert_ne!(first, second);
+        assert_eq!(
+            first,
+            stable_evidence_id("fingerprint", "artifact", "/result/0", "engine-run-1")
         );
     }
 

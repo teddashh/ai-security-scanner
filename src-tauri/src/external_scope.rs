@@ -3,8 +3,10 @@ use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use url::Url;
+
+const MAX_FROZEN_ADDRESSES: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -137,9 +139,23 @@ impl TemplatePolicy {
     }
 
     fn validate(&self, activity: ExternalActivity) -> AppResult<()> {
-        if self.revision.trim().is_empty() {
+        let revision = self.revision.trim();
+        if revision.is_empty() || revision.len() > 512 || revision.contains(['\n', '\r', '\0']) {
             return Err(AppError::InvalidRequest(
                 "external template policy must have a pinned revision".into(),
+            ));
+        }
+        if activity == ExternalActivity::ActiveExternal && !valid_pinned_revision(revision) {
+            return Err(AppError::InvalidRequest(
+                "active external template policy requires an exact git or sha256 revision".into(),
+            ));
+        }
+        if activity != ExternalActivity::ActiveExternal
+            && revision != "not_applicable"
+            && !valid_pinned_revision(revision)
+        {
+            return Err(AppError::InvalidRequest(
+                "external policy revision must be exact or explicitly not_applicable".into(),
             ));
         }
         if activity == ExternalActivity::ActiveExternal && self.allowed_template_ids.is_empty() {
@@ -147,22 +163,55 @@ impl TemplatePolicy {
                 "active external testing requires an explicit template allowlist".into(),
             ));
         }
-        if self
-            .allowed_template_ids
-            .iter()
-            .any(|id| id.trim().is_empty() || id == "*" || id.contains(['\n', '\r', '\0']))
+        if self.allowed_template_ids.len() > 1_000
+            || self.allowed_template_ids.iter().any(|id| {
+                let id = id.trim();
+                id.is_empty()
+                    || id.len() > 256
+                    || id == "*"
+                    || id.starts_with('-')
+                    || id.starts_with('/')
+                    || id.contains(['\n', '\r', '\0', '\\'])
+                    || id
+                        .split('/')
+                        .any(|component| matches!(component, "." | ".."))
+            })
+            || self
+                .allowed_template_ids
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != self.allowed_template_ids.len()
         {
             return Err(AppError::InvalidRequest(
                 "external template allowlist contains an invalid identifier".into(),
             ));
         }
-        if self.allow_denial_of_service || self.allow_credential_attacks {
+        if self.allow_headless
+            || self.allow_out_of_band
+            || self.allow_fuzzing
+            || self.allow_file_upload
+            || self.allow_denial_of_service
+            || self.allow_credential_attacks
+        {
             return Err(AppError::NotAuthorized(
-                "denial-of-service and credential-attack templates are prohibited".into(),
+                "headless, callback, fuzzing, upload, denial-of-service, and credential-attack template capabilities are prohibited"
+                    .into(),
             ));
         }
         Ok(())
     }
+}
+
+fn valid_pinned_revision(value: &str) -> bool {
+    let revision = value
+        .rsplit_once('@')
+        .map_or(value, |(_, revision)| revision);
+    let revision = revision.strip_prefix("sha256:").unwrap_or(revision);
+    matches!(revision.len(), 40 | 64)
+        && revision
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -180,6 +229,23 @@ pub struct ExternalScopeGrant {
     pub approved_by: String,
     pub approved_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub allow_sensitive_networks: bool,
+}
+
+/// User-confirmed external activity details before backend case/source/asset
+/// identity and approval timestamps are attached. The target remains a string
+/// at the IPC boundary and is canonicalized before it can become a grant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalScopeRequest {
+    pub target: String,
+    pub ports: BTreeSet<u16>,
+    pub protocol: TransportProtocol,
+    pub activity: ExternalActivity,
+    pub rate_policy: RatePolicy,
+    pub template_policy: TemplatePolicy,
+    pub asserted_authority: String,
+    #[serde(default)]
     pub allow_sensitive_networks: bool,
 }
 
@@ -252,6 +318,7 @@ pub struct ResolvedExternalPlan {
     pub template_policy: TemplatePolicy,
     pub frozen_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub allow_sensitive_networks: bool,
 }
 
 pub fn freeze_external_plan(
@@ -293,7 +360,53 @@ pub fn freeze_external_plan(
         template_policy: grant.template_policy.clone(),
         frozen_at: now,
         expires_at: grant.expires_at,
+        allow_sensitive_networks: grant.allow_sensitive_networks,
     })
+}
+
+/// Resolves only the already-authorized canonical target and freezes the exact
+/// address set before a managed network is created. Container engines never
+/// receive host DNS access; hostname requests are mapped to this set by the
+/// credential-free SOCKS gateway.
+pub fn resolve_external_plan(
+    grant: &ExternalScopeGrant,
+    now: DateTime<Utc>,
+) -> AppResult<ResolvedExternalPlan> {
+    grant.validate(now)?;
+    let addresses = match &grant.target {
+        CanonicalTarget::Address(address) => [*address].into_iter().collect(),
+        CanonicalTarget::Hostname(hostname) => {
+            let lookup_port = grant.ports.iter().next().copied().unwrap_or(443);
+            let resolved = (hostname.as_str(), lookup_port)
+                .to_socket_addrs()
+                .map_err(|error| {
+                    AppError::NotAvailable(format!(
+                        "authorized target DNS resolution failed: {error}"
+                    ))
+                })?
+                .map(|socket| socket.ip())
+                .collect::<BTreeSet<_>>();
+            if resolved.len() > MAX_FROZEN_ADDRESSES {
+                return Err(AppError::InvalidRequest(format!(
+                    "authorized hostname resolved to more than {MAX_FROZEN_ADDRESSES} addresses"
+                )));
+            }
+            resolved
+        }
+        CanonicalTarget::Network(network) => {
+            let addresses = network
+                .hosts()
+                .take(MAX_FROZEN_ADDRESSES + 1)
+                .collect::<BTreeSet<_>>();
+            if addresses.len() > MAX_FROZEN_ADDRESSES {
+                return Err(AppError::InvalidRequest(format!(
+                    "authorized network expands beyond the {MAX_FROZEN_ADDRESSES}-address execution limit"
+                )));
+            }
+            addresses
+        }
+    };
+    freeze_external_plan(grant, addresses, now)
 }
 
 impl ResolvedExternalPlan {
@@ -464,7 +577,7 @@ mod tests {
                 timeout_seconds: 300,
             },
             template_policy: TemplatePolicy::conservative(
-                "templates@sha256:0123456789abcdef",
+                "nuclei-templates@0123456789abcdef0123456789abcdef01234567",
                 vec!["http/misconfiguration/example".into()],
             ),
             asserted_authority: "ticket SEC-1042".into(),
@@ -506,6 +619,24 @@ mod tests {
     }
 
     #[test]
+    fn system_resolution_enumerates_only_bounded_authorized_networks() {
+        let now = Utc::now();
+        let plan = resolve_external_plan(
+            &grant("203.0.113.0/30", ExternalActivity::LowImpactExternal),
+            now,
+        )
+        .expect("bounded network");
+        assert_eq!(plan.resolution.addresses.len(), 2);
+
+        let error = resolve_external_plan(
+            &grant("203.0.0.0/16", ExternalActivity::LowImpactExternal),
+            now,
+        )
+        .expect_err("large network refused");
+        assert!(matches!(error, AppError::InvalidRequest(_)));
+    }
+
+    #[test]
     fn metadata_is_denied_even_with_internal_flag() {
         let now = Utc::now();
         let mut scope = grant("169.254.169.254", ExternalActivity::LowImpactExternal);
@@ -539,5 +670,17 @@ mod tests {
         let mut scope = grant("app.example.test", ExternalActivity::ActiveExternal);
         scope.template_policy.allow_denial_of_service = true;
         assert!(scope.validate(Utc::now()).is_err());
+
+        let mut headless = grant("app.example.test", ExternalActivity::ActiveExternal);
+        headless.template_policy.allow_headless = true;
+        assert!(headless.validate(Utc::now()).is_err());
+
+        let mut floating = grant("app.example.test", ExternalActivity::ActiveExternal);
+        floating.template_policy.revision = "latest".into();
+        assert!(floating.validate(Utc::now()).is_err());
+
+        let mut traversal = grant("app.example.test", ExternalActivity::ActiveExternal);
+        traversal.template_policy.allowed_template_ids = vec!["http/../unsafe".into()];
+        assert!(traversal.validate(Utc::now()).is_err());
     }
 }

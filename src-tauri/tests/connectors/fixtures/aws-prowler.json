@@ -1,0 +1,13 @@
+[
+  {
+    "category_name": "Findings",
+    "unmapped": { "AccountId": "123456789012" },
+    "resources": [
+      {
+        "uid": "arn:aws:s3:::example-evidence-bucket",
+        "name": "example-evidence-bucket",
+        "region": "us-east-1"
+      }
+    ]
+  }
+]

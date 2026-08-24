@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "gitleaks",
+  "plan_kind": "upstream_image",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "verified_upstream_artifact",
+  "source": {
+    "repository": "https://github.com/gitleaks/gitleaks",
+    "revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+    "acquisition_source": "https://github.com/gitleaks/gitleaks/commit/83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+    "local_research_checkout": ".upstreams/gitleaks/gitleaks"
+  },
+  "verified_upstream_artifact": {
+    "repository": "ghcr.io/gitleaks/gitleaks",
+    "tag": "v8.30.1",
+    "digest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+    "signature_identity": null,
+    "entrypoint": [
+      "gitleaks"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e"
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/gitleaks/gitleaks",
+    "tag": "v8.30.1",
+    "digest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+  },
+  "build_recipe": null,
+  "dockerfile": {
+    "emitted": false,
+    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+  },
+  "wrapper": {
+    "required": false,
+    "strategy": "The pinned image entrypoint is the gitleaks binary and accepts only the fixed workspace/output paths.",
+    "entrypoint": null
+  },
+  "command": [
+    "dir",
+    "/workspace",
+    "--report-format",
+    "json",
+    "--report-path",
+    "/output/gitleaks.json",
+    "--no-banner"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/gitleaks.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "MIT permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}

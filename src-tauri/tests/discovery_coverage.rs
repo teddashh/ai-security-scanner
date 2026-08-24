@@ -1,4 +1,6 @@
-use ai_security_scanner_lib::coverage::{assess_asset_coverage, compute_coverage_ledger};
+use ai_security_scanner_lib::coverage::{
+    NOT_APPLICABLE_REASON_METADATA, assess_asset_coverage, compute_coverage_ledger,
+};
 use ai_security_scanner_lib::discovery::{
     ConnectorDiscovery, DiscoveredAsset, DiscoveredRelation, DiscoveryAssetRef, DiscoveryBatch,
     DiscoveryConnector, DiscoveryError, reconcile_discovery, run_connector,
@@ -365,6 +367,7 @@ fn grant(id: &str, asset_id: &str) -> ScopeGrant {
         expires_at: Some(timestamp("2026-12-31T00:00:00Z")),
         authorization_reference: None,
         notes: None,
+        external_scope: None,
     }
 }
 
@@ -384,6 +387,7 @@ fn manifest() -> EngineManifest {
         engine_version: Some("1".into()),
         rule_version: None,
         adapter_version: "1".into(),
+        supported_providers: vec![],
         supported_asset_kinds: vec![AssetKind::CloudAccount],
         required_permissions: vec![ScanPermission::InventoryRead],
         active_external: false,
@@ -395,6 +399,11 @@ fn manifest() -> EngineManifest {
         command: vec!["inventory".into()],
         status: ManifestStatus::Integrated,
         notices: Vec::new(),
+        compatibility: EngineCompatibility {
+            runnable: true,
+            blocked_by: vec![],
+            ..EngineCompatibility::default()
+        },
     }
 }
 
@@ -414,6 +423,23 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
         image_digest: None,
         rule_version: None,
         adapter_version: "1".into(),
+        manifest_schema_version: None,
+        source_revision: None,
+        repository_url: None,
+        distribution_mode: None,
+        image_repository: None,
+        command_sha256: None,
+        knowledge_input: None,
+        scope_contract_sha256: None,
+        mapping_version: None,
+        fingerprint_schema_version: None,
+        runtime_provider: None,
+        runtime_version: None,
+        runtime_security_options: None,
+        exit_code: None,
+        cleanup_removed: None,
+        cleanup_detail: None,
+        warnings: vec![],
         raw_artifact_ids: Vec::new(),
         error_code: None,
         error_message: None,
@@ -421,7 +447,7 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
 }
 
 #[test]
-fn ledger_represents_all_five_states_without_using_findings() {
+fn ledger_represents_all_six_states_without_using_findings() {
     let as_of = timestamp("2026-02-01T00:00:00Z");
     let mut case = empty_case();
     let mut connected = source(
@@ -430,6 +456,15 @@ fn ledger_represents_all_five_states_without_using_findings() {
         SourceConnectionStatus::Connected,
     );
     connected.last_discovered_at = Some(timestamp("2026-01-02T00:00:00Z"));
+    let mut not_applicable = source(
+        "not-applicable",
+        SourceKind::GcpOrganization,
+        SourceConnectionStatus::NotApplicable,
+    );
+    not_applicable.metadata.insert(
+        NOT_APPLICABLE_REASON_METADATA.into(),
+        json!("The organization confirmed that it does not use Google Cloud."),
+    );
     case.data_sources = vec![
         connected,
         source("empty", SourceKind::Dns, SourceConnectionStatus::Connected),
@@ -438,6 +473,7 @@ fn ledger_represents_all_five_states_without_using_findings() {
             SourceKind::AzureTenant,
             SourceConnectionStatus::NotConnected,
         ),
+        not_applicable,
     ];
     case.assets = vec![
         asset("candidate", "connected", false),
@@ -449,6 +485,7 @@ fn ledger_represents_all_five_states_without_using_findings() {
         grant("grant-incomplete", "incomplete"),
         grant("grant-scanned", "scanned"),
     ];
+    let run_scope_snapshots = case.scope_grants[1..].to_vec();
     case.scan_runs.push(ScanRun {
         id: "run-1".into(),
         case_id: case.id.clone(),
@@ -456,7 +493,9 @@ fn ledger_represents_all_five_states_without_using_findings() {
         created_at: timestamp("2026-01-04T00:00:00Z"),
         completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
         knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
+        verification_baseline_run_id: None,
         scope_grant_ids: vec!["grant-incomplete".into(), "grant-scanned".into()],
+        scope_grant_snapshots: run_scope_snapshots,
         engine_runs: vec![engine_run("run-1", "scanned", EngineRunStatus::Completed)],
     });
     assert!(
@@ -491,8 +530,16 @@ fn ledger_represents_all_five_states_without_using_findings() {
         statuses["source:unknown"],
         CoverageStatus::SourceNotConnectedUnknown
     );
+    assert_eq!(
+        statuses["source:not-applicable"],
+        CoverageStatus::NotApplicable
+    );
     assert_ne!(statuses["source:empty"], statuses["asset:scanned"]);
     assert_ne!(statuses["source:unknown"], statuses["asset:scanned"]);
+    assert_ne!(
+        statuses["source:not-applicable"], statuses["asset:scanned"],
+        "an applicability declaration is never successful scan evidence"
+    );
 
     let missing_manifest = assess_asset_coverage(&case, &case.assets[2], &[], as_of);
     assert_eq!(
@@ -525,6 +572,7 @@ fn failed_partial_cancelled_and_not_executed_never_become_green() {
         let mut case = empty_case();
         case.assets.push(asset("target", "source", true));
         case.scope_grants.push(grant("grant-target", "target"));
+        let run_scope_snapshot = case.scope_grants[0].clone();
         case.scan_runs.push(ScanRun {
             id: "run".into(),
             case_id: case.id.clone(),
@@ -532,7 +580,9 @@ fn failed_partial_cancelled_and_not_executed_never_become_green() {
             created_at: timestamp("2026-01-04T00:00:00Z"),
             completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
             knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
+            verification_baseline_run_id: None,
             scope_grant_ids: vec!["grant-target".into()],
+            scope_grant_snapshots: vec![run_scope_snapshot],
             engine_runs: vec![engine_run("run", "target", status.clone())],
         });
 
@@ -543,6 +593,102 @@ fn failed_partial_cancelled_and_not_executed_never_become_green() {
             "{status:?} must remain non-green"
         );
     }
+}
+
+#[test]
+fn completed_provider_incompatible_run_never_becomes_green() {
+    let as_of = timestamp("2026-02-01T00:00:00Z");
+    let mut case = empty_case();
+    let mut target = asset("target", "source", true);
+    target.provider = Some("azure".into());
+    case.assets.push(target);
+    case.scope_grants.push(grant("grant-target", "target"));
+    let run_scope_snapshot = case.scope_grants[0].clone();
+    case.scan_runs.push(ScanRun {
+        id: "run".into(),
+        case_id: case.id.clone(),
+        sequence: 1,
+        created_at: timestamp("2026-01-04T00:00:00Z"),
+        completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+        knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
+        verification_baseline_run_id: None,
+        scope_grant_ids: vec!["grant-target".into()],
+        scope_grant_snapshots: vec![run_scope_snapshot],
+        engine_runs: vec![engine_run("run", "target", EngineRunStatus::Completed)],
+    });
+    let mut aws_manifest = manifest();
+    aws_manifest.supported_providers = vec!["aws".into()];
+
+    let incompatible =
+        assess_asset_coverage(&case, &case.assets[0], &[aws_manifest.clone()], as_of);
+    assert_eq!(
+        incompatible.status,
+        CoverageStatus::AuthorizedScanIncomplete
+    );
+    assert!(incompatible.explanation.contains("provider_incompatible"));
+
+    case.assets[0].provider = None;
+    let missing = assess_asset_coverage(&case, &case.assets[0], &[aws_manifest.clone()], as_of);
+    assert_eq!(missing.status, CoverageStatus::AuthorizedScanIncomplete);
+    assert!(missing.explanation.contains("provider_incompatible"));
+
+    case.assets[0].provider = Some("aws".into());
+    let compatible = assess_asset_coverage(&case, &case.assets[0], &[aws_manifest], as_of);
+    assert_eq!(
+        compatible.status,
+        CoverageStatus::DiscoveredAuthorizedScanned
+    );
+}
+
+#[test]
+fn coverage_uses_frozen_run_grants_and_never_backfills_legacy_runs() {
+    let as_of = timestamp("2026-02-01T00:00:00Z");
+    let mut case = empty_case();
+    case.assets.push(asset("target", "source", true));
+    case.scope_grants.push(grant("grant-target", "target"));
+    case.scan_runs.push(ScanRun {
+        id: "run".into(),
+        case_id: case.id.clone(),
+        sequence: 1,
+        created_at: timestamp("2026-01-04T00:00:00Z"),
+        completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+        knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
+        verification_baseline_run_id: None,
+        scope_grant_ids: vec!["grant-target".into()],
+        scope_grant_snapshots: vec![],
+        engine_runs: vec![engine_run("run", "target", EngineRunStatus::Completed)],
+    });
+
+    let legacy = assess_asset_coverage(&case, &case.assets[0], &[manifest()], as_of);
+    assert_eq!(legacy.status, CoverageStatus::AuthorizedScanIncomplete);
+    assert!(
+        legacy
+            .explanation
+            .contains("predates frozen scope-grant snapshots")
+    );
+    assert!(
+        legacy
+            .explanation
+            .contains("Live grants are never substituted")
+    );
+
+    case.scan_runs[0].scope_grant_snapshots = vec![case.scope_grants[0].clone()];
+    case.scope_grants[0].permission = ScanPermission::ConfigurationRead;
+    let historical = assess_asset_coverage(&case, &case.assets[0], &[manifest()], as_of);
+    assert_eq!(
+        historical.status,
+        CoverageStatus::DiscoveredAuthorizedScanned,
+        "a later live-grant edit must not rewrite the permission frozen into a completed run"
+    );
+
+    case.scope_grants[0].permission = ScanPermission::InventoryRead;
+    case.scan_runs[0].scope_grant_snapshots[0].permission = ScanPermission::ConfigurationRead;
+    let incompatible = assess_asset_coverage(&case, &case.assets[0], &[manifest()], as_of);
+    assert_eq!(
+        incompatible.status,
+        CoverageStatus::AuthorizedScanIncomplete
+    );
+    assert!(incompatible.explanation.contains("scope_incompatible"));
 }
 
 #[test]

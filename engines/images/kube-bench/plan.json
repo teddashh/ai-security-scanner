@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "kube-bench",
+  "plan_kind": "managed_build",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "managed_artifact_not_published",
+  "source": {
+    "repository": "https://github.com/aquasecurity/kube-bench",
+    "revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
+    "acquisition_source": "https://github.com/aquasecurity/kube-bench/commit/9f133cb7509ce1dbedfc860e94474588000e25ac",
+    "local_research_checkout": ".upstreams/aquasecurity/kube-bench"
+  },
+  "verified_upstream_artifact": {
+    "repository": "aquasec/kube-bench",
+    "tag": "v0.16.0",
+    "digest": "sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679",
+    "signature_identity": null,
+    "entrypoint": [
+      "./entrypoint.sh"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "release_tag_only",
+      "artifact_source_revision": null
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kube-bench",
+    "tag": null,
+    "digest": null
+  },
+  "build_recipe": {
+    "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
+    "upstream_build_file": "Dockerfile",
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "static_steps": [
+      [
+        "go",
+        "build",
+        "-trimpath",
+        "-o",
+        "/out/kube-bench",
+        "."
+      ]
+    ],
+    "base_images": [
+      {
+        "repository": "aquasec/kube-bench",
+        "tag": "v0.16.0",
+        "digest": "sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679",
+        "use": "reference_or_copy_source_only_after_license_and_entrypoint_review"
+      }
+    ]
+  },
+  "dockerfile": {
+    "emitted": false,
+    "reason": "A final digest-pinned base/dependency closure and managed wrapper release do not yet exist; emitting a Dockerfile now would require a floating or unverifiable input."
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Replace the upstream shell entrypoint and expose only a reviewed, read-only node-facts mount profile.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+  },
+  "command": [
+    "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "--engine",
+    "kube-bench",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/kube-bench.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "final_image_digest_not_published",
+    "managed_non_shell_image_not_published",
+    "required_host_mount_profile_not_implemented",
+    "execution_wrapper_not_implemented"
+  ]
+}

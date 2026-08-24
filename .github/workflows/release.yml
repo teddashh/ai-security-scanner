@@ -1,0 +1,625 @@
+name: Release desktop installers
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  validate:
+    name: Validate immutable release identity
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      commit: ${{ steps.identity.outputs.commit }}
+      source_date: ${{ steps.identity.outputs.source_date }}
+    steps:
+      - name: Check out the exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Set up Rust for exact updater signature verification
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # action commit, 2026-08-21
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked release tooling
+        run: npm ci --ignore-scripts
+
+      - name: Resolve source identity
+        id: identity
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [[ ! "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            printf 'Package version is not strict stable SemVer: %s\n' "${version}" >&2
+            exit 1
+          fi
+          candidate_tag="v${version}"
+          commit="$(git rev-parse HEAD)"
+          event_commit="$(git rev-parse "${EVENT_SHA}^{commit}")"
+          source_date="$(git show -s --format=%cI HEAD)"
+          if [[ "${commit}" != "${event_commit}" ]]; then
+            printf 'Checked-out commit %s differs from event commit %s.\n' "${commit}" "${event_commit}" >&2
+            exit 1
+          fi
+          case "${EVENT_NAME}" in
+            push)
+              if [[ "${EVENT_REF}" != "refs/tags/${candidate_tag}" ]]; then
+                printf 'Release tag %s does not exactly match candidate %s.\n' "${EVENT_REF}" "${candidate_tag}" >&2
+                exit 1
+              fi
+              ;;
+            workflow_dispatch)
+              if [[ "${EVENT_REF}" != "refs/heads/main" ]]; then
+                printf 'Release preflight must be dispatched from refs/heads/main, not %s.\n' "${EVENT_REF}" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              printf 'Unsupported release event: %s\n' "${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+          printf 'tag=%s\n' "${candidate_tag}" >> "${GITHUB_OUTPUT}"
+          printf 'commit=%s\n' "${commit}" >> "${GITHUB_OUTPUT}"
+          printf 'source_date=%s\n' "${source_date}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate versions, workflow syntax, and action pins
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+        run: node scripts/release/validate-release.mjs --tag "${RELEASE_TAG}"
+
+      - name: Exercise release collection and finalization tooling
+        run: npm run release:self-test
+
+  supply-chain:
+    name: Generate SBOMs and notices
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # action commit, 2026-08-21
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked dependency graph
+        run: npm ci --ignore-scripts
+
+      - name: Generate third-party and engine notices
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+          SOURCE_DATE: ${{ needs.validate.outputs.source_date }}
+        run: >-
+          node scripts/release/generate-notices.mjs
+          --out release-assets
+          --version "${RELEASE_VERSION}"
+          --tag "${RELEASE_TAG}"
+          --commit "${SOURCE_COMMIT}"
+          --source-date "${SOURCE_DATE}"
+          --repository "${GITHUB_REPOSITORY}"
+
+      - name: Generate CycloneDX JSON SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: release-assets/ai-security-scanner-${{ needs.validate.outputs.version }}.cyclonedx.json
+          syft-version: v1.51.0
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate SPDX JSON SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: release-assets/ai-security-scanner-${{ needs.validate.outputs.version }}.spdx.json
+          syft-version: v1.51.0
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate honest release metadata
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: >-
+          node scripts/release/validate-release.mjs
+          --tag "${RELEASE_TAG}"
+          --metadata release-assets/release-metadata.json
+
+      - name: Preserve supply-chain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-supply-chain
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    name: Build ${{ matrix.platform }} installers
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            rust_targets: x86_64-unknown-linux-gnu
+            managed_runtime_target: x86_64-unknown-linux-gnu
+            bundle_root: target/release/bundle
+            egress_sidecar_path: src-tauri/binaries/ai-security-scanner-egress-gateway-x86_64-unknown-linux-gnu
+            bootstrap_broker_path: src-tauri/binaries/ai-security-scanner-bootstrap-broker-x86_64-unknown-linux-gnu
+            casework_cli_path: src-tauri/binaries/ai-security-scanner-cli-x86_64-unknown-linux-gnu
+            expected: deb,rpm,appimage
+          - platform: macos-universal
+            runner: macos-14
+            rust_targets: x86_64-apple-darwin,aarch64-apple-darwin
+            managed_runtime_target: universal-apple-darwin
+            bundle_root: target/universal-apple-darwin/release/bundle
+            egress_sidecar_path: src-tauri/binaries/ai-security-scanner-egress-gateway-universal-apple-darwin
+            bootstrap_broker_path: src-tauri/binaries/ai-security-scanner-bootstrap-broker-universal-apple-darwin
+            casework_cli_path: src-tauri/binaries/ai-security-scanner-cli-universal-apple-darwin
+            expected: dmg
+          - platform: windows-x86_64
+            runner: windows-2022
+            rust_targets: x86_64-pc-windows-msvc
+            managed_runtime_target: x86_64-pc-windows-msvc
+            bundle_root: target/release/bundle
+            egress_sidecar_path: src-tauri/binaries/ai-security-scanner-egress-gateway-x86_64-pc-windows-msvc.exe
+            bootstrap_broker_path: src-tauri/binaries/ai-security-scanner-bootstrap-broker-x86_64-pc-windows-msvc.exe
+            casework_cli_path: src-tauri/binaries/ai-security-scanner-cli-x86_64-pc-windows-msvc.exe
+            expected: nsis,msi
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out the exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Set up Rust targets
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # action commit, 2026-08-21
+        with:
+          toolchain: 1.98.0
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: . -> target
+          key: release-${{ matrix.platform }}
+
+      - name: Install Linux bundler dependencies
+        if: matrix.platform == 'linux-x86_64'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          build-essential
+          curl
+          desktop-file-utils
+          file
+          libayatana-appindicator3-dev
+          libdbus-1-dev
+          libfuse2t64
+          librsvg2-dev
+          libssl-dev
+          libwebkit2gtk-4.1-dev
+          libxdo-dev
+          patchelf
+          pkg-config
+          rpm
+          wget
+          xvfb
+
+      - name: Install locked frontend dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build and stage the Linux managed egress sidecar
+        if: matrix.platform == 'linux-x86_64'
+        run: npm run desktop:prepare-sidecar -- --target x86_64-unknown-linux-gnu
+
+      - name: Build and stage the universal macOS managed egress sidecar
+        if: matrix.platform == 'macos-universal'
+        run: npm run desktop:prepare-sidecar -- --target universal-apple-darwin
+
+      - name: Build and stage the Windows managed egress sidecar
+        if: matrix.platform == 'windows-x86_64'
+        run: npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc
+
+      - name: Verify, build, and stage the release-managed local runtime
+        shell: bash
+        run: >-
+          node runtime/vendor-managed-runtime.mjs
+          --target "${{ matrix.managed_runtime_target }}"
+          --output runtime/staged/managed-runtime
+
+      - name: Build Linux installers
+        if: matrix.platform == 'linux-x86_64'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri build -- --ci --bundles deb,rpm,appimage -- --locked
+
+      - name: Sign Debian and RPM updater payloads
+        if: matrix.platform == 'linux-x86_64'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: >-
+          node scripts/release/sign-linux-installers.mjs
+          --bundle-root "${{ matrix.bundle_root }}"
+
+      - name: Build universal macOS installer
+        if: matrix.platform == 'macos-universal'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri build -- --ci --target universal-apple-darwin --bundles dmg -- --locked
+
+      - name: Build Windows installers
+        if: matrix.platform == 'windows-x86_64'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri build -- --ci --bundles nsis,msi -- --locked
+
+      - name: Install the Debian package and prove the desktop starts
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find "${{ matrix.bundle_root }}/deb" -maxdepth 1 -type f -name '*.deb' -print)
+          if [[ "${#packages[@]}" -ne 1 ]]; then
+            printf 'Expected exactly one Debian package, found %s.\n' "${#packages[@]}" >&2
+            exit 1
+          fi
+          sudo apt-get install -y "${packages[0]}"
+          for companion in ai-security-scanner-egress-gateway ai-security-scanner-bootstrap-broker ai-security-scanner-cli; do
+            if ! command -v "${companion}" >/dev/null 2>&1; then
+              printf 'Installed Debian package is missing companion executable %s.\n' "${companion}" >&2
+              exit 1
+            fi
+          done
+          ai-security-scanner-cli --help >/dev/null
+          set +e
+          timeout --signal=TERM 12s xvfb-run --auto-servernum ai-security-scanner
+          status=$?
+          set -e
+          if [[ "${status}" -ne 124 ]]; then
+            printf 'Installed desktop exited before the startup observation window (status %s).\n' "${status}" >&2
+            exit 1
+          fi
+
+      - name: Mount the DMG and prove the desktop starts
+        if: matrix.platform == 'macos-universal'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=("${{ matrix.bundle_root }}/dmg/"*.dmg)
+          if [[ "${#images[@]}" -ne 1 ]]; then
+            printf 'Expected exactly one DMG, found %s.\n' "${#images[@]}" >&2
+            exit 1
+          fi
+          mount_point="${RUNNER_TEMP}/ai-security-scanner-dmg"
+          installed_app="${RUNNER_TEMP}/ai-security-scanner-installed.app"
+          mkdir -p "${mount_point}"
+          hdiutil attach -nobrowse -readonly -mountpoint "${mount_point}" "${images[0]}"
+          applications=("${mount_point}/"*.app)
+          if [[ "${#applications[@]}" -ne 1 ]]; then
+            hdiutil detach "${mount_point}"
+            printf 'Expected exactly one application in the DMG, found %s.\n' "${#applications[@]}" >&2
+            exit 1
+          fi
+          ditto "${applications[0]}" "${installed_app}"
+          hdiutil detach "${mount_point}"
+          desktop="${installed_app}/Contents/MacOS/ai-security-scanner"
+          if [[ ! -f "${desktop}" || ! -x "${desktop}" ]]; then
+            printf 'Installed macOS app is missing its desktop executable.\n' >&2
+            exit 1
+          fi
+          for companion in ai-security-scanner-egress-gateway ai-security-scanner-bootstrap-broker ai-security-scanner-cli; do
+            candidate="${installed_app}/Contents/MacOS/${companion}"
+            if [[ ! -f "${candidate}" || ! -x "${candidate}" ]]; then
+              printf 'Installed macOS app is missing companion executable %s.\n' "${companion}" >&2
+              exit 1
+            fi
+          done
+          "${installed_app}/Contents/MacOS/ai-security-scanner-cli" --help >/dev/null
+          "${desktop}" >"${RUNNER_TEMP}/desktop-startup.log" 2>&1 &
+          desktop_pid=$!
+          sleep 12
+          if ! kill -0 "${desktop_pid}" 2>/dev/null; then
+            wait "${desktop_pid}" || true
+            cat "${RUNNER_TEMP}/desktop-startup.log" >&2
+            printf 'Installed macOS desktop exited before the startup observation window.\n' >&2
+            exit 1
+          fi
+          kill "${desktop_pid}"
+          wait "${desktop_pid}" || true
+
+      - name: Install the MSI and prove the desktop starts
+        if: matrix.platform == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packages = @(Get-ChildItem -LiteralPath "${{ matrix.bundle_root }}/msi" -Filter "*.msi" -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one MSI, found $($packages.Count)."
+          }
+          $installDirectory = Join-Path $env:RUNNER_TEMP "ai-security-scanner-installed"
+          $arguments = @(
+            "/i",
+            $packages[0].FullName,
+            "INSTALLDIR=$installDirectory",
+            "/qn",
+            "/norestart"
+          )
+          $installer = Start-Process -FilePath "msiexec.exe" -ArgumentList $arguments -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "MSI installation failed with status $($installer.ExitCode)."
+          }
+          $executables = @(
+            Get-ChildItem -LiteralPath $installDirectory -Filter "ai-security-scanner.exe" -File -Recurse |
+              Where-Object { $_.Name -notmatch "(?i)uninstall" }
+          )
+          if ($executables.Count -ne 1) {
+            throw "Expected exactly one installed desktop executable, found $($executables.Count)."
+          }
+          foreach ($companionName in @(
+            "ai-security-scanner-egress-gateway.exe",
+            "ai-security-scanner-bootstrap-broker.exe",
+            "ai-security-scanner-cli.exe"
+          )) {
+            $companions = @(
+              Get-ChildItem -LiteralPath $installDirectory -Filter $companionName -File -Recurse
+            )
+            if ($companions.Count -ne 1) {
+              throw "Expected exactly one installed $companionName, found $($companions.Count)."
+            }
+            if ($companionName -eq "ai-security-scanner-cli.exe") {
+              $cli = Start-Process -FilePath $companions[0].FullName -ArgumentList "--help" -Wait -PassThru
+              if ($cli.ExitCode -ne 0) {
+                throw "Installed casework CLI failed its help probe with status $($cli.ExitCode)."
+              }
+            }
+          }
+          $desktop = Start-Process -FilePath $executables[0].FullName -PassThru
+          Start-Sleep -Seconds 12
+          if ($desktop.HasExited) {
+            throw "Installed Windows desktop exited before the startup observation window with status $($desktop.ExitCode)."
+          }
+          Stop-Process -Id $desktop.Id -Force
+          $uninstaller = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
+            "/x",
+            $packages[0].FullName,
+            "/qn",
+            "/norestart"
+          ) -Wait -PassThru
+          if ($uninstaller.ExitCode -ne 0) {
+            throw "MSI cleanup failed with status $($uninstaller.ExitCode)."
+          }
+
+      - name: Collect installers and platform checksums
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+          BUNDLE_ROOT: ${{ matrix.bundle_root }}
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_BUNDLES: ${{ matrix.expected }}
+          EGRESS_SIDECAR_PATH: ${{ matrix.egress_sidecar_path }}
+          BOOTSTRAP_BROKER_PATH: ${{ matrix.bootstrap_broker_path }}
+          CASEWORK_CLI_PATH: ${{ matrix.casework_cli_path }}
+        run: >-
+          node scripts/release/collect-bundles.mjs
+          --bundle-root "${BUNDLE_ROOT}"
+          --out release-assets
+          --platform "${RELEASE_PLATFORM}"
+          --expect "${EXPECTED_BUNDLES}"
+          --egress-sidecar "${EGRESS_SIDECAR_PATH}"
+          --bootstrap-broker "${BOOTSTRAP_BROKER_PATH}"
+          --casework-cli "${CASEWORK_CLI_PATH}"
+          --version "${RELEASE_VERSION}"
+          --tag "${RELEASE_TAG}"
+          --commit "${SOURCE_COMMIT}"
+
+      - name: Generate exact managed runtime manifest, SBOM, notices, and source evidence
+        shell: bash
+        run: >-
+          node scripts/release/generate-runtime-evidence.mjs
+          --manifest runtime/staged/managed-runtime/manifest.json
+          --out release-assets
+          --platform "${{ matrix.platform }}"
+
+      - name: Preserve platform installers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.platform }}
+          path: release-assets
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  assemble:
+    name: Assemble and verify the release candidate
+    needs: [validate, supply-chain, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Set up Rust for exact updater signature verification
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # action commit, 2026-08-21
+        with:
+          toolchain: 1.98.0
+
+      - name: Install locked release tooling
+        run: npm ci --ignore-scripts
+
+      - name: Download supply-chain evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-supply-chain
+          path: release-assets
+
+      - name: Download Linux release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-linux-x86_64
+          path: release-assets
+
+      - name: Download macOS release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-macos-universal
+          path: release-assets
+
+      - name: Download Windows release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-windows-x86_64
+          path: release-assets
+
+      - name: Verify installers and create the release index
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: >-
+          node scripts/release/finalize-release.mjs
+          --dir release-assets
+          --version "${RELEASE_VERSION}"
+          --tag "${RELEASE_TAG}"
+          --commit "${SOURCE_COMMIT}"
+
+      - name: Verify finalized checksums and release index
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: >-
+          node scripts/release/verify-finalized-release.mjs
+          --dir release-assets
+          --version "${RELEASE_VERSION}"
+          --tag "${RELEASE_TAG}"
+          --commit "${SOURCE_COMMIT}"
+
+      - name: Preserve the finalized release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-finalized
+          path: release-assets
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Attest and publish GitHub Release
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == format('refs/tags/{0}', needs.validate.outputs.tag)
+    needs: [validate, assemble]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the exact tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+
+      - name: Download the finalized release candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-finalized
+          path: release-assets
+
+      - name: Reverify finalized checksums and release index
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: >-
+          node scripts/release/verify-finalized-release.mjs
+          --dir release-assets
+          --version "${RELEASE_VERSION}"
+          --tag "${RELEASE_TAG}"
+          --commit "${SOURCE_COMMIT}"
+
+      - name: Attest every published file
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-assets/**/*
+
+      - name: Publish the non-draft public release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          target_commitish: ${{ needs.validate.outputs.commit }}
+          name: ai-security-scanner ${{ needs.validate.outputs.version }}
+          body_path: release-assets/RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: release-assets/**/*

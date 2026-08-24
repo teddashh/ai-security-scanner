@@ -1,0 +1,19 @@
+{
+  "version": 4,
+  "terraform_version": "1.13.0",
+  "serial": 7,
+  "lineage": "44444444-4444-4444-8444-444444444444",
+  "name": "Production IaC",
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "evidence",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        { "attributes": { "bucket": "example-evidence-bucket", "secret": "raw-only" } }
+      ]
+    },
+    { "mode": "managed", "name": "malformed_missing_type" }
+  ]
+}

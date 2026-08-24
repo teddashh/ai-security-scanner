@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "grype",
+  "plan_kind": "upstream_image",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "verified_upstream_artifact",
+  "source": {
+    "repository": "https://github.com/anchore/grype",
+    "revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
+    "acquisition_source": "https://github.com/anchore/grype/commit/b5fa92bbcbef655497e3be840a2f718380e2cdd3",
+    "local_research_checkout": ".upstreams/anchore/grype"
+  },
+  "verified_upstream_artifact": {
+    "repository": "anchore/grype",
+    "tag": "v0.117.0",
+    "digest": "sha256:ddf9e9f204049f3a4a0955ef70873cabab6a31432125ad4f20a490b54950a253",
+    "signature_identity": null,
+    "entrypoint": [
+      "/grype"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3"
+    }
+  },
+  "final_artifact": {
+    "repository": "anchore/grype",
+    "tag": "v0.117.0",
+    "digest": "sha256:ddf9e9f204049f3a4a0955ef70873cabab6a31432125ad4f20a490b54950a253"
+  },
+  "build_recipe": null,
+  "dockerfile": {
+    "emitted": false,
+    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Materialize a separately checksum-pinned vulnerability database and disable automatic updates before scanning.",
+    "entrypoint": "dir:/workspace"
+  },
+  "command": [
+    "dir:/workspace",
+    "-o",
+    "json",
+    "--file",
+    "/output/grype.json"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/grype.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "vulnerability_database_digest_not_published",
+    "execution_wrapper_not_implemented"
+  ]
+}

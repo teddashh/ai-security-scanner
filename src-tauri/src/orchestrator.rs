@@ -2,12 +2,14 @@ use crate::adapter::{AdapterInput, AdapterRegistry};
 use crate::artifact_store::{ArtifactContext, ArtifactStore, RunDirectories};
 use crate::container_runtime::{
     CancellationToken, CleanupOutcome, ContainerPlanBuilder, ContainerRuntime, NetworkPolicy,
-    PinnedImage, ResourceLimits, RuntimePreflight, ScannerCredentialSet, planned_container_name,
+    PinnedImage, ResourceLimits, RuntimeCommandProvenance, RuntimePreflight, ScannerCredentialSet,
+    planned_container_name,
 };
 use crate::domain::{
     Asset, AssetIdentifier, EngineManifest, Finding, RawArtifact, ScanPermission, ScopeGrant,
 };
 use crate::error::{AppError, AppResult};
+use crate::managed_network::ManagedNetworkIdentity;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -52,6 +54,15 @@ pub struct ExecutionCheckpoint {
     pub artifact_ids: Vec<String>,
     pub cleanup_completed: bool,
     pub last_error: Option<String>,
+    /// Exact, non-secret runtime identity needed to recover this execution
+    /// after an application update. It is populated immediately after the
+    /// runtime preflight and is therefore mandatory for cleanup-pending work.
+    #[serde(default)]
+    pub runtime_command_provenance: Option<RuntimeCommandProvenance>,
+    #[serde(default)]
+    pub runtime_provider: Option<crate::container_runtime::RuntimeProvider>,
+    #[serde(default)]
+    pub managed_network: Option<ManagedNetworkIdentity>,
 }
 
 impl ExecutionCheckpoint {
@@ -87,6 +98,14 @@ impl ExecutionCheckpoint {
     }
 
     fn validate(&self) -> AppResult<()> {
+        if let Some(identity) = self.managed_network.as_ref() {
+            identity.validate()?;
+        }
+        if self.runtime_command_provenance.is_some() != self.runtime_provider.is_some() {
+            return Err(AppError::InvalidRequest(
+                "checkpoint runtime provider and provenance must be recorded together".into(),
+            ));
+        }
         let expected = planned_container_name(&self.engine_id, &self.engine_run_id, self.attempt)?;
         if self
             .container_name
@@ -97,10 +116,48 @@ impl ExecutionCheckpoint {
                 "checkpoint container name does not match its execution identity".into(),
             ));
         }
-        if self.stage == ExecutionStage::CleanupPending && self.container_name.is_none() {
+        if self.stage == ExecutionStage::CleanupPending
+            && self.container_name.is_none()
+            && self.managed_network.is_none()
+        {
             return Err(AppError::InvalidRequest(
-                "cleanup checkpoint has no container identity".into(),
+                "cleanup checkpoint has neither a container nor a managed-network identity".into(),
             ));
+        }
+        if self.stage == ExecutionStage::CleanupPending
+            && (self.runtime_command_provenance.is_none() || self.runtime_provider.is_none())
+        {
+            return Err(AppError::InvalidRequest(
+                "cleanup checkpoint has no exact runtime provider and provenance".into(),
+            ));
+        }
+        if let Some(identity) = self.managed_network.as_ref() {
+            let provenance = self.runtime_command_provenance.as_ref().ok_or_else(|| {
+                AppError::InvalidRequest(
+                    "managed-network checkpoint has no exact runtime provenance".into(),
+                )
+            })?;
+            if self.runtime_provider != Some(identity.provider) {
+                return Err(AppError::InvalidRequest(
+                    "managed-network provider conflicts with checkpoint runtime provider".into(),
+                ));
+            }
+            let provider_matches = matches!(
+                (identity.provider, provenance),
+                (
+                    crate::container_runtime::RuntimeProvider::ManagedLocal,
+                    RuntimeCommandProvenance::ManagedLocal { .. }
+                ) | (
+                    crate::container_runtime::RuntimeProvider::Docker
+                        | crate::container_runtime::RuntimeProvider::Podman,
+                    RuntimeCommandProvenance::Compatibility
+                )
+            );
+            if !provider_matches {
+                return Err(AppError::InvalidRequest(
+                    "managed-network provider conflicts with runtime provenance".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -183,6 +240,29 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         request: &EngineExecutionRequest<'_>,
         cancellation: &CancellationToken,
     ) -> AppResult<ExecutionReport> {
+        self.execute_with_observer(request, cancellation, |_| Ok(()))
+    }
+
+    /// Executes an engine while exposing non-terminal durable reports at safe
+    /// state boundaries. The observer runs before any container starts and
+    /// again after captured artifacts are safely closed and the container has
+    /// been cleaned. Terminal reconciliation remains the caller's
+    /// responsibility so findings and raw artifacts commit atomically.
+    pub fn execute_with_observer<F>(
+        &self,
+        request: &EngineExecutionRequest<'_>,
+        cancellation: &CancellationToken,
+        mut observer: F,
+    ) -> AppResult<ExecutionReport>
+    where
+        F: FnMut(&ExecutionReport) -> AppResult<()>,
+    {
+        if let Some(blocker) = request.manifest.release_blocker() {
+            return Err(AppError::EngineRegistry(format!(
+                "engine {} cannot be executed: {blocker}",
+                request.manifest.id
+            )));
+        }
         let validated_scope = validate_execution_scope(
             request.manifest,
             request.assets,
@@ -229,6 +309,8 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             request.resource_limits,
             request.network_policy,
             request.credentials,
+            request.case_id,
+            request.scan_run_id,
             request.engine_run_id,
             request.attempt,
         )
@@ -246,12 +328,16 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             artifact_ids: Vec::new(),
             cleanup_completed: false,
             last_error: None,
+            runtime_command_provenance: None,
+            runtime_provider: None,
+            managed_network: None,
         };
         let mut report = ExecutionReport::empty(
             checkpoint,
             self.artifacts.root().to_path_buf(),
             directories.output.clone(),
         );
+        observer(&report)?;
 
         if cancellation.is_cancelled() {
             report.checkpoint.stage = ExecutionStage::Cancelled;
@@ -260,6 +346,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         }
 
         report.checkpoint.stage = ExecutionStage::Preflight;
+        observer(&report)?;
         let preflight = match self.runtime.preflight() {
             Ok(preflight) => preflight,
             Err(error) => {
@@ -268,6 +355,8 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 return Ok(report);
             }
         };
+        report.checkpoint.runtime_command_provenance = Some(preflight.command_provenance.clone());
+        report.checkpoint.runtime_provider = Some(preflight.provider);
         report.runtime_preflight = Some(preflight);
         if let Err(error) = self.runtime.verify_network(request.network_policy) {
             report.checkpoint.cleanup_completed = true;
@@ -276,6 +365,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         }
 
         report.checkpoint.stage = ExecutionStage::PullingImage;
+        observer(&report)?;
         if let Err(error) = self.runtime.pull(&image) {
             report.checkpoint.cleanup_completed = true;
             report.fail(error.to_string());
@@ -289,6 +379,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
 
         let capture = self.artifacts.prepare_capture(&directories)?;
         report.checkpoint.stage = ExecutionStage::Running;
+        observer(&report)?;
         let runtime_result = self
             .runtime
             .run(&plan, request.credentials, cancellation, &capture);
@@ -351,6 +442,8 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             return Ok(report);
         }
 
+        report.checkpoint.stage = ExecutionStage::AdaptingArtifacts;
+        observer(&report)?;
         self.adapt_captured(request, &mut report);
         Ok(report)
     }
@@ -390,6 +483,12 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             ));
         }
         checkpoint.validate()?;
+        if checkpoint.managed_network.is_some() {
+            return Err(AppError::NotAvailable(
+                "container-only cleanup cannot close a managed egress obligation; reconcile the exact durable network identity first"
+                    .into(),
+            ));
+        }
         let container_name = checkpoint
             .container_name
             .as_deref()
@@ -421,7 +520,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         match self.adapters.normalize(&input) {
             Ok(Some(output)) => {
                 report.findings = output.findings;
-                report.warnings = output.warnings;
+                report.warnings.extend(output.warnings);
                 report.checkpoint.stage = ExecutionStage::Completed;
                 report.checkpoint.last_error = None;
             }
@@ -466,13 +565,15 @@ fn validate_execution_scope<'a>(
             manifest.id
         )));
     }
-    if manifest.active_external
-        && !manifest
-            .required_permissions
-            .contains(&ScanPermission::ActiveExternalTesting)
-    {
+    let direct_external = manifest.required_permissions.iter().any(|permission| {
+        matches!(
+            permission,
+            ScanPermission::LowImpactExternalConnection | ScanPermission::ActiveExternalTesting
+        )
+    });
+    if manifest.active_external && !direct_external {
         return Err(AppError::EngineRegistry(format!(
-            "active external engine {} must require active_external_testing permission",
+            "external target engine {} must require low-impact or active external permission",
             manifest.id
         )));
     }
@@ -504,7 +605,7 @@ fn validate_execution_scope<'a>(
                         && !grant.confirmed_by.trim().is_empty()
                         && grant.confirmed_at <= now
                         && grant.expires_at.is_none_or(|expires_at| expires_at > now)
-                        && (!manifest.active_external || grant.expires_at.is_some())
+                        && (!direct_external || grant.expires_at.is_some())
                 })
                 .ok_or_else(|| {
                     AppError::NotAuthorized(format!(
@@ -515,10 +616,10 @@ fn validate_execution_scope<'a>(
             matched.push(grant);
         }
 
-        let identifiers = if manifest.active_external {
+        let identifiers = if direct_external {
             if asset.candidate || !asset.owner_confirmed {
                 return Err(AppError::NotAuthorized(format!(
-                    "active external engine {} requires confirmed ownership for asset {}",
+                    "direct external engine {} requires confirmed ownership for asset {}",
                     manifest.id, asset.id
                 )));
             }
@@ -533,7 +634,7 @@ fn validate_execution_scope<'a>(
                 })
             {
                 return Err(AppError::NotAuthorized(format!(
-                    "active external engine {} requires a written authorization reference for every permission on asset {}",
+                    "direct external engine {} requires a written authorization reference for every permission on asset {}",
                     manifest.id, asset.id
                 )));
             }
@@ -542,10 +643,43 @@ fn validate_execution_scope<'a>(
                 .iter()
                 .map(String::as_str)
                 .collect();
+            let mut structured_targets = BTreeSet::new();
+            for grant in &matched {
+                let external = grant.external_scope.as_ref().ok_or_else(|| {
+                    AppError::NotAuthorized(format!(
+                        "direct external grant {} has no structured target policy",
+                        grant.id
+                    ))
+                })?;
+                external.validate(now)?;
+                if external.id != grant.id || external.asset_id != asset.id {
+                    return Err(AppError::NotAuthorized(
+                        "structured external policy does not match its grant and asset".into(),
+                    ));
+                }
+                let expected_activity = match grant.permission {
+                    ScanPermission::LowImpactExternalConnection => {
+                        crate::external_scope::ExternalActivity::LowImpactExternal
+                    }
+                    ScanPermission::ActiveExternalTesting => {
+                        crate::external_scope::ExternalActivity::ActiveExternal
+                    }
+                    _ => continue,
+                };
+                if external.activity != expected_activity
+                    || !external_destination_is_frozen(external, &allowed_targets)
+                {
+                    return Err(AppError::NotAuthorized(format!(
+                        "structured external policy {} is not represented by the frozen managed gateway",
+                        external.id
+                    )));
+                }
+                structured_targets.insert(external.target.canonical_text());
+            }
             let identifiers: Vec<&AssetIdentifier> = asset
                 .identifiers
                 .iter()
-                .filter(|identifier| allowed_targets.contains(identifier.value.as_str()))
+                .filter(|identifier| structured_targets.contains(identifier.value.as_str()))
                 .collect();
             if identifiers.is_empty() {
                 return Err(AppError::NotAuthorized(format!(
@@ -567,6 +701,38 @@ fn validate_execution_scope<'a>(
     Ok(validated)
 }
 
+fn external_destination_is_frozen(
+    grant: &crate::external_scope::ExternalScopeGrant,
+    destinations: &BTreeSet<&str>,
+) -> bool {
+    match &grant.target {
+        crate::external_scope::CanonicalTarget::Hostname(hostname) => grant
+            .ports
+            .iter()
+            .all(|port| destinations.contains(format!("{hostname}:{port}").as_str())),
+        crate::external_scope::CanonicalTarget::Address(address) => {
+            grant.ports.iter().all(|port| {
+                destinations.contains(
+                    std::net::SocketAddr::new(*address, *port)
+                        .to_string()
+                        .as_str(),
+                )
+            })
+        }
+        crate::external_scope::CanonicalTarget::Network(network) => {
+            grant.ports.iter().all(|port| {
+                destinations.iter().any(|destination| {
+                    destination
+                        .parse::<std::net::SocketAddr>()
+                        .is_ok_and(|socket| {
+                            socket.port() == *port && network.contains(&socket.ip())
+                        })
+                })
+            })
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ScopeDocument<'a> {
     schema_version: &'static str,
@@ -580,6 +746,8 @@ struct ScopeAssetDocument<'a> {
     id: &'a str,
     name: &'a str,
     kind: &'a crate::domain::AssetKind,
+    provider: Option<&'a str>,
+    region: Option<&'a str>,
     identifiers: Vec<&'a AssetIdentifier>,
     grants: Vec<ScopeGrantDocument<'a>>,
 }
@@ -592,6 +760,7 @@ struct ScopeGrantDocument<'a> {
     confirmed_at: String,
     expires_at: Option<String>,
     authorization_reference: Option<&'a str>,
+    external_scope: Option<&'a crate::external_scope::ExternalScopeGrant>,
 }
 
 impl<'a> ScopeDocument<'a> {
@@ -606,6 +775,8 @@ impl<'a> ScopeDocument<'a> {
                     id: &entry.asset.id,
                     name: &entry.asset.name,
                     kind: &entry.asset.kind,
+                    provider: entry.asset.provider.as_deref(),
+                    region: entry.asset.region.as_deref(),
                     identifiers: entry.identifiers.clone(),
                     grants: entry
                         .grants
@@ -617,6 +788,7 @@ impl<'a> ScopeDocument<'a> {
                             confirmed_at: grant.confirmed_at.to_rfc3339(),
                             expires_at: grant.expires_at.map(|value| value.to_rfc3339()),
                             authorization_reference: grant.authorization_reference.as_deref(),
+                            external_scope: grant.external_scope.as_ref(),
                         })
                         .collect(),
                 })
@@ -643,8 +815,12 @@ mod tests {
     use super::*;
     use crate::container_runtime::{FakeContainerRuntime, FakeRunBehavior, RuntimeCall};
     use crate::domain::{
-        AssetIdentifier, AssetKind, DistributionMode, EngineCategory, ImageReference,
-        ManifestStatus,
+        AssetIdentifier, AssetKind, DistributionMode, EngineCategory, EngineCompatibility,
+        ImageReference, ManifestStatus,
+    };
+    use crate::external_scope::{
+        CanonicalTarget, ExternalActivity, ExternalScopeGrant, RatePolicy, TemplatePolicy,
+        TransportProtocol,
     };
     use chrono::Duration;
     use std::collections::BTreeMap;
@@ -674,6 +850,7 @@ mod tests {
             engine_version: Some("1".into()),
             rule_version: Some("rules-1".into()),
             adapter_version: "adapter-1".into(),
+            supported_providers: vec![],
             supported_asset_kinds: vec![if active_external {
                 AssetKind::Domain
             } else {
@@ -695,8 +872,13 @@ mod tests {
             },
             output_formats: vec!["json".into()],
             command: vec!["scanner".into(), "--json".into()],
-            status: ManifestStatus::Experimental,
+            status: ManifestStatus::Integrated,
             notices: vec![],
+            compatibility: EngineCompatibility {
+                runnable: true,
+                blocked_by: vec![],
+                ..EngineCompatibility::default()
+            },
         }
     }
 
@@ -729,15 +911,55 @@ mod tests {
     }
 
     fn grant(asset_id: &str, permission: ScanPermission, external: bool) -> ScopeGrant {
+        let now = Utc::now();
+        let id = format!("grant-{asset_id}");
+        let external_scope = external.then(|| {
+            let activity = match permission {
+                ScanPermission::LowImpactExternalConnection => ExternalActivity::LowImpactExternal,
+                _ => ExternalActivity::ActiveExternal,
+            };
+            ExternalScopeGrant {
+                id: id.clone(),
+                case_id: "case-1".into(),
+                asset_id: asset_id.into(),
+                target: CanonicalTarget::Hostname(format!("{asset_id}.example")),
+                ports: [443].into_iter().collect(),
+                protocol: TransportProtocol::Https,
+                activity,
+                rate_policy: RatePolicy {
+                    requests_per_second: 2,
+                    concurrency: 1,
+                    timeout_seconds: 30,
+                },
+                template_policy: TemplatePolicy::conservative(
+                    if activity == ExternalActivity::ActiveExternal {
+                        "nuclei-templates@0123456789abcdef0123456789abcdef01234567"
+                    } else {
+                        "not_applicable"
+                    },
+                    if activity == ExternalActivity::ActiveExternal {
+                        vec!["http/misconfiguration/example".into()]
+                    } else {
+                        vec![]
+                    },
+                ),
+                asserted_authority: format!("AUTH-{asset_id}"),
+                approved_by: "operator".into(),
+                approved_at: now - Duration::minutes(1),
+                expires_at: now + Duration::hours(1),
+                allow_sensitive_networks: false,
+            }
+        });
         ScopeGrant {
-            id: format!("grant-{asset_id}"),
+            id,
             asset_id: asset_id.into(),
             permission,
             confirmed_by: "operator".into(),
-            confirmed_at: Utc::now(),
-            expires_at: Some(Utc::now() + Duration::hours(1)),
+            confirmed_at: now,
+            expires_at: Some(now + Duration::hours(1)),
             authorization_reference: external.then(|| format!("AUTH-{asset_id}")),
             notes: None,
+            external_scope,
         }
     }
 
@@ -749,7 +971,8 @@ mod tests {
         let policy = NetworkPolicy::managed(
             "ass-egress",
             "policy-1",
-            vec!["one.example".into(), "two.example".into()],
+            vec!["one.example:443".into(), "two.example:443".into()],
+            "socks5h://172.29.0.1:1080",
         )
         .expect("policy");
 
@@ -768,8 +991,13 @@ mod tests {
         });
         let assets = vec![selected];
         let grants = vec![grant("one", ScanPermission::ActiveExternalTesting, true)];
-        let policy = NetworkPolicy::managed("ass-egress", "policy-1", vec!["one.example".into()])
-            .expect("policy");
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("policy");
 
         let scope = validate_execution_scope(&manifest, &assets, &grants, &policy)
             .expect("authorized scope");
@@ -785,7 +1013,61 @@ mod tests {
     }
 
     #[test]
-    fn active_manifest_must_require_active_permission() {
+    fn scope_document_preserves_only_the_exact_structured_external_grant() {
+        let manifest = manifest(true);
+        let assets = vec![asset("one", true)];
+        let now = Utc::now();
+        let mut selected_grant = grant("one", ScanPermission::ActiveExternalTesting, true);
+        selected_grant.external_scope = Some(ExternalScopeGrant {
+            id: selected_grant.id.clone(),
+            case_id: "case-1".into(),
+            asset_id: "one".into(),
+            target: CanonicalTarget::Hostname("one.example".into()),
+            ports: [443].into_iter().collect(),
+            protocol: TransportProtocol::Https,
+            activity: ExternalActivity::ActiveExternal,
+            rate_policy: RatePolicy {
+                requests_per_second: 2,
+                concurrency: 1,
+                timeout_seconds: 30,
+            },
+            template_policy: TemplatePolicy::conservative(
+                "nuclei-templates@0123456789abcdef0123456789abcdef01234567",
+                vec!["http/misconfiguration/example".into()],
+            ),
+            asserted_authority: "AUTH-one".into(),
+            approved_by: "operator".into(),
+            approved_at: now - Duration::minutes(1),
+            expires_at: now + Duration::hours(1),
+            allow_sensitive_networks: false,
+        });
+        let grants = vec![selected_grant];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("policy");
+        let scope = validate_execution_scope(&manifest, &assets, &grants, &policy)
+            .expect("authorized scope");
+        let json = serde_json::to_value(ScopeDocument::new(&manifest, &scope)).expect("scope json");
+        let external = &json["assets"][0]["grants"][0]["external_scope"];
+
+        assert_eq!(external["target"]["kind"], "hostname");
+        assert_eq!(external["target"]["value"], "one.example");
+        assert_eq!(external["ports"], serde_json::json!([443]));
+        assert_eq!(external["protocol"], "https");
+        assert_eq!(external["rate_policy"]["requests_per_second"], 2);
+        assert_eq!(
+            external["template_policy"]["allowed_template_ids"],
+            serde_json::json!(["http/misconfiguration/example"])
+        );
+        assert!(!json.to_string().contains("not-authorized.example"));
+    }
+
+    #[test]
+    fn low_impact_external_manifest_uses_the_same_frozen_gateway_contract() {
         let mut manifest = manifest(true);
         manifest.required_permissions = vec![ScanPermission::LowImpactExternalConnection];
         let assets = vec![asset("one", true)];
@@ -794,12 +1076,17 @@ mod tests {
             ScanPermission::LowImpactExternalConnection,
             true,
         )];
-        let policy = NetworkPolicy::managed("ass-egress", "policy-1", vec!["one.example".into()])
-            .expect("policy");
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("policy");
 
-        let error = validate_execution_scope(&manifest, &assets, &grants, &policy)
-            .expect_err("misdeclared active engine rejected");
-        assert!(error.to_string().contains("active_external_testing"));
+        let scope = validate_execution_scope(&manifest, &assets, &grants, &policy)
+            .expect("low-impact target scope");
+        assert_eq!(scope.len(), 1);
     }
 
     #[test]
@@ -859,6 +1146,130 @@ mod tests {
                 )),
                 RuntimeCall::Run("ass-scanner-engine-run-1-a1".into()),
                 RuntimeCall::Cleanup("ass-scanner-engine-run-1-a1".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn observer_receives_durable_non_terminal_stages_and_captured_artifacts() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(0),
+            stdout: b"stdout".to_vec(),
+            stderr: vec![],
+            output_files: BTreeMap::from([("result.json".into(), b"{}".to_vec())]),
+        });
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            assets: &assets,
+            scope_grants: &grants,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+        let mut observed = Vec::new();
+        let report = orchestrator
+            .execute_with_observer(
+                &request,
+                &CancellationToken::default(),
+                |checkpoint_report| {
+                    observed.push((
+                        checkpoint_report.checkpoint.stage.clone(),
+                        checkpoint_report.raw_artifacts.len(),
+                        checkpoint_report.checkpoint.cleanup_completed,
+                    ));
+                    Ok(())
+                },
+            )
+            .expect("execution");
+
+        assert_eq!(
+            observed
+                .iter()
+                .map(|(stage, _, _)| stage)
+                .collect::<Vec<_>>(),
+            vec![
+                &ExecutionStage::Planned,
+                &ExecutionStage::Preflight,
+                &ExecutionStage::PullingImage,
+                &ExecutionStage::Running,
+                &ExecutionStage::AdaptingArtifacts,
+            ]
+        );
+        assert!(observed.last().is_some_and(|(_, count, cleaned)| {
+            *count == report.raw_artifacts.len() && *cleaned
+        }));
+    }
+
+    #[test]
+    fn failed_managed_network_proof_prevents_image_pull_and_container_run() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_fail_network(true);
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(true);
+        let assets = vec![asset("one", true)];
+        let grants = vec![grant("one", ScanPermission::ActiveExternalTesting, true)];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            assets: &assets,
+            scope_grants: &grants,
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("failure report");
+
+        assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
+        assert!(report.checkpoint.cleanup_completed);
+        assert!(
+            report
+                .checkpoint
+                .last_error
+                .as_deref()
+                .is_some_and(|message| message.contains("fake managed network rejected"))
+        );
+        assert_eq!(
+            runtime.calls(),
+            vec![
+                RuntimeCall::Preflight,
+                RuntimeCall::VerifyNetwork("policy-1".into()),
             ]
         );
     }
@@ -943,6 +1354,14 @@ mod tests {
             ResumeAction::CleanupContainer
         );
         assert!(!report.checkpoint.cleanup_completed);
+        assert_eq!(
+            report.checkpoint.runtime_command_provenance,
+            Some(RuntimeCommandProvenance::Compatibility)
+        );
+        assert_eq!(
+            report.checkpoint.runtime_provider,
+            Some(crate::container_runtime::RuntimeProvider::Docker)
+        );
     }
 
     #[test]
@@ -959,6 +1378,9 @@ mod tests {
             artifact_ids: vec!["artifact-1".into()],
             cleanup_completed: true,
             last_error: None,
+            runtime_command_provenance: None,
+            runtime_provider: None,
+            managed_network: None,
         };
 
         let token = checkpoint.resume_token().expect("token");
@@ -969,6 +1391,16 @@ mod tests {
             ResumeAction::AdaptCapturedArtifacts
         );
         assert!(!token.to_ascii_lowercase().contains("secret"));
+
+        let mut legacy = serde_json::to_value(&checkpoint).expect("legacy checkpoint");
+        legacy
+            .as_object_mut()
+            .expect("checkpoint object")
+            .remove("managed_network");
+        let legacy = ExecutionCheckpoint::from_resume_token(&legacy.to_string())
+            .expect("pre-managed-network checkpoint remains readable");
+        assert!(legacy.managed_network.is_none());
+        assert!(legacy.runtime_command_provenance.is_none());
     }
 
     #[test]
@@ -991,5 +1423,28 @@ mod tests {
         let error = ExecutionCheckpoint::from_resume_token(&token)
             .expect_err("forged container identity rejected");
         assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn cleanup_checkpoint_without_runtime_provenance_is_rejected() {
+        let token = serde_json::json!({
+            "case_id": "case-1",
+            "scan_run_id": "run-1",
+            "engine_run_id": "engine-run-1",
+            "engine_id": "scanner",
+            "attempt": 1,
+            "stage": "cleanup_pending",
+            "container_name": "ass-scanner-engine-run-1-a1",
+            "scope_sha256": "abc",
+            "artifact_ids": [],
+            "cleanup_completed": false,
+            "last_error": null,
+            "managed_network": null
+        })
+        .to_string();
+
+        let error = ExecutionCheckpoint::from_resume_token(&token)
+            .expect_err("cleanup without runtime provenance rejected");
+        assert!(error.to_string().contains("provider and provenance"));
     }
 }

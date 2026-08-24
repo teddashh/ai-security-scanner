@@ -5,6 +5,7 @@ import type {
   CoverageState,
   DiffState,
   EngineRunStatus,
+  ExecutionStage,
   FindingWorkflowState,
   RunStatus,
   Severity,
@@ -70,6 +71,12 @@ export const coverageMeta: Record<
     tone: "unknown",
     description: "沒有視野；絕對不能解讀為安全或沒有資產。",
   },
+  not_applicable: {
+    label: "本案件明確不適用",
+    shortLabel: "不適用",
+    tone: "neutral",
+    description: "使用者已記錄不適用理由；這不是掃描成功或安全結論。",
+  },
 };
 
 export const engineStatusMeta: Record<
@@ -84,6 +91,20 @@ export const engineStatusMeta: Record<
   failed: { label: "失敗", tone: "danger" },
   not_executed: { label: "未執行", tone: "unknown" },
   cancelled: { label: "已取消", tone: "neutral" },
+};
+
+export const executionStageMeta: Record<ExecutionStage, { label: string; description: string }> = {
+  planned: { label: "已規劃", description: "執行範圍已固定，尚未開始環境檢查。" },
+  preflight: { label: "環境檢查", description: "正在確認容器執行環境與唯讀輸入。" },
+  pulling_image: { label: "準備映像", description: "正在取得已釘選摘要的引擎映像。" },
+  running: { label: "引擎執行", description: "隔離的引擎工作正在執行。" },
+  capturing_artifacts: { label: "收集證據", description: "正在保存原始輸出與內容雜湊。" },
+  adapting_artifacts: { label: "正規化結果", description: "正在把引擎輸出轉為 canonical findings。" },
+  captured_awaiting_adapter: { label: "等待正規化", description: "原始證據已保存，可從 adapter 步驟恢復。" },
+  cleanup_pending: { label: "等待清理", description: "結果已保存，仍需清理隔離容器。" },
+  completed: { label: "完成檢查點", description: "證據、正規化與容器清理均已完成。" },
+  cancelled: { label: "取消檢查點", description: "使用者取消工作；保留取消前已持久化的狀態。" },
+  failed: { label: "失敗檢查點", description: "工作失敗；最後錯誤與可恢復位置已保存。" },
 };
 
 export const runStatusMeta: Record<RunStatus, { label: string; tone: string }> = {

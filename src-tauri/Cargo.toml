@@ -5,7 +5,11 @@ description = "Local-first, repeatable security assessment casework"
 authors = ["Ted Huang and ai-security-scanner contributors"]
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.85"
+rust-version = "1.98"
+repository = "https://github.com/teddashh/ai-security-scanner"
+homepage = "https://github.com/teddashh/ai-security-scanner"
+readme = "../README.md"
+publish = false
 
 [lib]
 name = "ai_security_scanner_lib"
@@ -13,10 +17,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-plugin-dialog"]
+desktop = [
+    "dep:tauri",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-process",
+    "dep:tauri-plugin-updater",
+]
 cli = ["dep:clap", "dep:directories"]
 broker = []
 adapter-launcher = []
+egress-gateway = []
+release-verifier = ["dep:minisign-verify"]
 
 [[bin]]
 name = "ai-security-scanner-cli"
@@ -38,6 +50,16 @@ name = "ai-security-scanner-adapter-launcher"
 path = "src/bin/adapter_launcher.rs"
 required-features = ["adapter-launcher"]
 
+[[bin]]
+name = "ai-security-scanner-egress-gateway"
+path = "src/bin/egress_gateway.rs"
+required-features = ["egress-gateway"]
+
+[[bin]]
+name = "ai-security-scanner-updater-verifier"
+path = "src/bin/updater_verifier.rs"
+required-features = ["release-verifier"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
@@ -48,20 +70,27 @@ clap = { version = "4.6.6", features = ["derive", "env"], optional = true }
 directories = { version = "6.0.0", optional = true }
 ed25519-dalek = "3.0.0"
 flate2 = "1.1.9"
+fs2 = "0.4.3"
 getrandom = "0.4.3"
 hex = "0.4.3"
 idna = "1.1.0"
 ipnet = { version = "2.12.0", features = ["serde"] }
 libc = "0.2.183"
+minisign-verify = { version = "0.2.5", optional = true }
+quick-xml = { version = "0.38.4", default-features = false }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 tar = "0.4.46"
 tauri = { version = "2.11.5", features = [], optional = true }
 tauri-plugin-dialog = { version = "2.7.2", optional = true }
+tauri-plugin-opener = { version = "=2.5.4", optional = true }
+tauri-plugin-process = { version = "=2.3.1", optional = true }
+tauri-plugin-updater = { version = "=2.10.1", optional = true }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["process", "rt-multi-thread", "sync", "time", "macros", "net"] }
+tokio = { version = "1.53.1", features = ["process", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "signal"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 url = { version = "2.5.8", features = ["serde"] }
@@ -70,3 +99,6 @@ zeroize = { version = "1.9.0", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }

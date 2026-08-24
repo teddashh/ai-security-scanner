@@ -13,11 +13,12 @@ on:
       - engines/images/nuclei/**
       - '!engines/images/nuclei/plan.json'
       - .github/workflows/engine-images-external.yml
+      - .github/actions/engine-image-evidence/**
+      - scripts/engine-image-evidence.mjs
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: managed-external-engine-images
@@ -42,6 +43,11 @@ jobs:
     name: Publish ${{ matrix.engine }} for amd64 + arm64
     needs: launcher-tests
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -136,9 +142,19 @@ jobs:
           printf 'Published `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Preserve publication evidence
+        uses: ./.github/actions/engine-image-evidence
+        with:
+          engine: ${{ matrix.engine }}
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.build.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload publication and signed supply-chain evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ matrix.engine }}-image-manifest-${{ github.run_id }}
-          path: package-evidence/${{ matrix.engine }}-image-manifest.json
+          name: ${{ matrix.engine }}-image-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-evidence
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90

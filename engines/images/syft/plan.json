@@ -1,0 +1,80 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "syft",
+  "plan_kind": "managed_rebase",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "published_managed_artifact",
+  "source": {
+    "repository": "https://github.com/anchore/syft",
+    "revision": "2293641e3bd628a01bb37639318d62c0ebe89b39",
+    "acquisition_source": "https://github.com/anchore/syft/commit/2293641e3bd628a01bb37639318d62c0ebe89b39",
+    "local_research_checkout": ".upstreams/anchore/syft"
+  },
+  "verified_upstream_artifact": {
+    "repository": "anchore/syft",
+    "tag": "v1.51.0",
+    "digest": "sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0",
+    "signature_identity": null,
+    "entrypoint": [
+      "/syft"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "2293641e3bd628a01bb37639318d62c0ebe89b39"
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-syft",
+    "tag": "1.51.0-1",
+    "digest": "sha256:805c9fe522113319f994f99cd68fcb5c18e322dd933e7d89f82cd91f5a5c8501"
+  },
+  "build_recipe": null,
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/syft/Dockerfile",
+    "sha256": "sha256:0d6741cdede8047c046c69d24f36e77bfd71f5aabf3c8f5d3d550fffc9add612",
+    "reason": null
+  },
+  "wrapper": {
+    "required": false,
+    "strategy": "A digest-pinned managed rebase preserves Syft's direct binary entrypoint while forcing a non-root user, a bounded tmpfs cache, and a disabled update check.",
+    "entrypoint": null
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "entrypoint": [
+      "/syft"
+    ],
+    "network_mode": "disabled",
+    "cache_path": "/tmp/ai-security-scanner-cache/syft",
+    "environment": {
+      "HOME": "/tmp/ai-security-scanner-home",
+      "XDG_CACHE_HOME": "/tmp/ai-security-scanner-cache",
+      "SYFT_CACHE_DIR": "/tmp/ai-security-scanner-cache/syft",
+      "SYFT_CHECK_FOR_APP_UPDATE": "false"
+    }
+  },
+  "command": [
+    "dir:/workspace",
+    "-o",
+    "syft-json=/output/syft.json",
+    "--quiet"
+  ],
+  "output": {
+    "primary_format": "syft-json",
+    "path": "/output/syft.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}

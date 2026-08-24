@@ -1,0 +1,96 @@
+diff --git a/rust/src/nasl/builtin/regex/mod.rs b/rust/src/nasl/builtin/regex/mod.rs
+index 6c47241..aea6424 100644
+--- a/rust/src/nasl/builtin/regex/mod.rs
++++ b/rust/src/nasl/builtin/regex/mod.rs
+@@ -37,6 +37,28 @@ fn make_regex(pattern: &str, icase: bool, multiline: bool) -> Result<Regex, Rege
+     }
+ }
+ 
++const MAX_SUBMATCHES: usize = 16;
++
++fn capture_values(
++    captures: regex::Captures<'_>,
++    stop_at_first_unmatched: bool,
++) -> Vec<NaslValue> {
++    let mut values = Vec::with_capacity(captures.len().min(MAX_SUBMATCHES));
++    for capture in captures.iter().take(MAX_SUBMATCHES) {
++        match capture {
++            Some(value) => values.push(NaslValue::String(value.as_str().to_string())),
++            None if stop_at_first_unmatched => break,
++            None => values.push(NaslValue::Null),
++        }
++    }
++    if !stop_at_first_unmatched {
++        while values.last() == Some(&NaslValue::Null) {
++            values.pop();
++        }
++    }
++    values
++}
++
+ /// Matches a string against a regular expression.
+ /// - string  String to search the pattern in
+ /// - pattern the pattern that should be matched
+@@ -150,15 +172,14 @@ fn eregmatch(
+     let string = parse_search_string(&string, rnul, true);
+     let re = make_regex(&pattern.to_string(), icase, true)?;
+ 
+-    let matches = match find_all {
+-        true => re
+-            .find_iter(string)
+-            .map(|m| NaslValue::String(m.as_str().to_string()))
+-            .collect(),
+-        false => match re.find(string) {
+-            Some(s) => vec![NaslValue::String(s.as_str().to_string())],
+-            None => vec![],
+-        },
++    let matches = if find_all {
++        re.captures_iter(string)
++            .flat_map(|captures| capture_values(captures, true))
++            .collect()
++    } else {
++        re.captures(string)
++            .map(|captures| capture_values(captures, false))
++            .unwrap_or_default()
+     };
+ 
+     Ok(NaslValue::Array(matches))
+diff --git a/rust/src/nasl/builtin/regex/tests.rs b/rust/src/nasl/builtin/regex/tests.rs
+index dea196b..7bbfbc6 100644
+--- a/rust/src/nasl/builtin/regex/tests.rs
++++ b/rust/src/nasl/builtin/regex/tests.rs
+@@ -146,3 +146,34 @@ fn eregmatch_first() {
+         vec!["Bar".to_string()],
+     );
+ }
++
++#[test]
++fn eregmatch_first_preserves_capture_indexes() {
++    let mut t = TestBuilder::default();
++    t.ok(
++        r#"eregmatch(
++            string: "Server: Apache/2.4.27",
++            pattern: "(Apache(-AdvancedExtranetServer)?/|Rapidsite/Apa-)([0-9.]+(-(alpha|beta))?)"
++        );"#,
++        NaslValue::Array(vec![
++            NaslValue::String("Apache/2.4.27".to_string()),
++            NaslValue::String("Apache/".to_string()),
++            NaslValue::Null,
++            NaslValue::String("2.4.27".to_string()),
++        ]),
++    );
++}
++
++#[test]
++fn eregmatch_all_flattens_each_match_until_its_first_unmatched_capture() {
++    let mut t = TestBuilder::default();
++    t.ok(
++        r#"eregmatch(string: "b ab", pattern: "(a)?(b)", find_all: TRUE);"#,
++        vec![
++            "b".to_string(),
++            "ab".to_string(),
++            "a".to_string(),
++            "b".to_string(),
++        ],
++    );
++}

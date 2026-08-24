@@ -5,6 +5,8 @@ on:
     branches:
       - main
     paths:
+      - .github/actions/engine-image-evidence/**
+      - .github/workflows/engine-images-local-k8s.yml
       - engines/images/local-launcher/**
       - engines/images/semgrep/**
       - '!engines/images/semgrep/plan.json'
@@ -18,13 +20,15 @@ on:
       - '!engines/images/kubescape/plan.json'
       - engines/images/kube-bench/**
       - '!engines/images/kube-bench/plan.json'
+      - scripts/engine-image-evidence.mjs
       - scripts/prepare-offline-engine-data.mjs
-      - .github/workflows/engine-images-local-k8s.yml
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: managed-local-k8s-engine-images
@@ -46,9 +50,53 @@ jobs:
             golang:1.26.3-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d \
             sh -ceu 'test -z "$(gofmt -d main.go main_test.go)"; go test ./...'
 
+  semgrep-native-cache:
+    name: Prime Semgrep ${{ matrix.arch }} cache on a native runner
+    needs: launcher-tests
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Materialize the checksum-locked Semgrep rules and source
+        run: node scripts/prepare-offline-engine-data.mjs semgrep
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.36.1
+          driver-opts: |
+            image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build Semgrep natively and export the complete platform cache
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: engines/images/semgrep/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: false
+          outputs: type=cacheonly
+          provenance: false
+          sbom: false
+          cache-from: |
+            type=gha,scope=local-k8s-engine-semgrep-${{ matrix.arch }}
+            type=gha,scope=local-k8s-engine-semgrep
+          cache-to: type=gha,mode=max,scope=local-k8s-engine-semgrep-${{ matrix.arch }}
+
   publish:
     name: Publish ${{ matrix.engine }} for amd64 + arm64
-    needs: launcher-tests
+    needs:
+      - launcher-tests
+      - semgrep-native-cache
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
@@ -150,15 +198,11 @@ jobs:
           tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=local-k8s-engine-${{ matrix.engine }}
+          cache-from: |
+            type=gha,scope=local-k8s-engine-${{ matrix.engine }}
+            type=gha,scope=local-k8s-engine-${{ matrix.engine }}-amd64
+            type=gha,scope=local-k8s-engine-${{ matrix.engine }}-arm64
           cache-to: type=gha,mode=max,scope=local-k8s-engine-${{ matrix.engine }}
-
-      - name: Publish anonymous pull access
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          package="${IMAGE#ghcr.io/teddashh/}"
-          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
 
       - name: Verify anonymous access, platforms, version, and managed scan
         id: verify
@@ -234,10 +278,20 @@ jobs:
             > "package-evidence/${{ matrix.engine }}-image-manifest.json"
           printf 'Published and anonymously verified `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Preserve publication evidence
+      - name: Preserve signed publication and per-platform SBOM evidence
+        uses: ./.github/actions/engine-image-evidence
+        with:
+          engine: ${{ matrix.engine }}
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.build.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload publication and signed supply-chain evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ matrix.engine }}-image-manifest-${{ github.run_id }}
-          path: package-evidence/${{ matrix.engine }}-image-manifest.json
+          name: ${{ matrix.engine }}-image-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-evidence
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90

@@ -196,15 +196,25 @@ fn oscal_observation(finding: &Finding, observation: &FindingObservation) -> Val
 }
 
 fn oscal_evidence(evidence: &Evidence) -> Value {
+    let mut props = vec![
+        property("canonical-evidence-id", &evidence.id),
+        property("source-engine-id", &evidence.engine_id),
+        property("canonical-scan-run-id", &evidence.run_id),
+        property("raw-artifact-id", &evidence.artifact_id),
+        property("sha-256", &evidence.artifact_sha256),
+        property("redacted", if evidence.redacted { "true" } else { "false" }),
+    ];
+    if let Some(engine_run_id) = &evidence.engine_run_id {
+        props.push(property("canonical-engine-run-id", engine_run_id));
+    } else {
+        props.push(property(
+            "canonical-engine-run-id-state",
+            "legacy-not-recorded",
+        ));
+    }
     json!({
         "description": evidence.summary,
-        "props": [
-            property("canonical-evidence-id", &evidence.id),
-            property("source-engine-id", &evidence.engine_id),
-            property("raw-artifact-id", &evidence.artifact_id),
-            property("sha-256", &evidence.artifact_sha256),
-            property("redacted", if evidence.redacted { "true" } else { "false" })
-        ]
+        "props": props
     })
 }
 
@@ -269,7 +279,9 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             knowledge_cutoff: time,
+            verification_baseline_run_id: None,
             scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
             engine_runs: vec![],
         });
         case.findings.push(Finding {

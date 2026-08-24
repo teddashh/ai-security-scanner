@@ -1,0 +1,145 @@
+index b1793a6..35f4195 100644
+--- a/rust/src/nasl/builtin/http/mod.rs
++++ b/rust/src/nasl/builtin/http/mod.rs
+@@ -509,7 +509,37 @@ async fn open_socket(
+ }
+ 
+ fn build_encode_url(keyword: Method, item: String, httpver: &str) -> String {
+-    format!("{keyword} {item} {httpver} ")
++    format!("{keyword} {item} {httpver}")
++}
++
++fn host_header(hostname: &str, port: u16) -> String {
++    match port {
++        80 | 443 => hostname.to_string(),
++        _ => format!("{hostname}:{port}"),
++    }
++}
++
++fn auth_value(items: &[KbItem]) -> Option<String> {
++    match items.first() {
++        Some(KbItem::String(value)) => Some(value.clone()),
++        Some(KbItem::Data(value)) => Some(String::from_utf8_lossy(value).into_owned()),
++        _ => None,
++    }
++}
++
++fn append_auth_and_data(request: &mut String, auth: Option<&str>, data: Option<&str>) {
++    if let Some(auth) = auth {
++        request.push_str(auth);
++        request.push_str("\r\n");
++    }
++
++    match data {
++        Some(data) => {
++            request.push_str(&format!("Content-Length: {}\r\n\r\n", data.len()));
++            request.push_str(data);
++        }
++        None => request.push_str("\r\n"),
++    }
+ }
+ 
+ async fn http_req_shared(
+@@ -527,10 +557,7 @@ async fn http_req_shared(
+             let hostname = ctx.target().ip_addr().to_string();
+ 
+             let user_agent = get_user_agent(ctx).await?;
+-            let hostreader = match p {
+-                80 | 443 => hostname,
+-                _ => format!("{hostname}/{p}"),
+-            };
++            let hostreader = host_header(&hostname, p);
+ 
+             let url = build_encode_url(keyword, item, "HTTP/1.1");
+             format!(
+@@ -545,22 +572,19 @@ async fn http_req_shared(
+                      Accept-Charset: iso-8859-1,*,utf-8\r\n"
+             )
+         }
+-        _ => build_encode_url(keyword, item, "HTTP/1.0"),
++        _ => format!("{}\r\n", build_encode_url(keyword, item, "HTTP/1.0")),
+     };
+ 
+     let tmp_key = format!("/tmp/http/auth/{p}");
+-    match ctx.get_kb_item(&KbKey::from(tmp_key)).await?.first() {
+-        Some(KbItem::String(a)) => request.push_str(a),
+-        _ => request.push_str("http/auth"),
+-    };
+-
+-    match data {
+-        Some(data) => {
+-            let content = format!("Content-Length: {}\r\n\r\n", data.len());
+-            request.push_str(&content);
++    let port_auth = ctx.get_kb_item(&KbKey::from(tmp_key)).await?;
++    let auth = match auth_value(&port_auth) {
++        Some(auth) => Some(auth),
++        None => {
++            let global_auth = ctx.get_kb_item(&KbKey::from("http/auth")).await?;
++            auth_value(&global_auth)
+         }
+-        None => request.push_str("\r\n"),
+     };
++    append_auth_and_data(&mut request, auth.as_deref(), data.as_deref());
+ 
+     Ok(NaslValue::Data(request.into()))
+ }
+@@ -630,3 +654,59 @@ function_set! {
+         (cgi_bin, "cgibin"),
+     )
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn request_line_and_non_default_host_match_legacy_http_format() {
++        assert_eq!(
++            build_encode_url(Method::GET, "/status".to_string(), "HTTP/1.0"),
++            "GET /status HTTP/1.0"
++        );
++        assert_eq!(host_header("192.0.2.10", 8080), "192.0.2.10:8080");
++        assert_eq!(host_header("192.0.2.10", 80), "192.0.2.10");
++    }
++
++    #[test]
++    fn request_without_auth_has_only_the_terminal_blank_line() {
++        let mut request = format!(
++            "{}\r\n",
++            build_encode_url(Method::GET, "/".to_string(), "HTTP/1.0")
++        );
++        append_auth_and_data(&mut request, None, None);
++        assert_eq!(request, "GET / HTTP/1.0\r\n\r\n");
++        assert!(!request.contains("http/auth"));
++    }
++
++    #[test]
++    fn authenticated_request_includes_the_complete_body() {
++        let mut request = format!(
++            "{}\r\n",
++            build_encode_url(Method::POST, "/submit".to_string(), "HTTP/1.0")
++        );
++        append_auth_and_data(
++            &mut request,
++            Some("Authorization: Basic dGVzdDp0ZXN0"),
++            Some("name=value"),
++        );
++        assert_eq!(
++            request,
++            "POST /submit HTTP/1.0\r\nAuthorization: Basic dGVzdDp0ZXN0\r\nContent-Length: 10\r\n\r\nname=value"
++        );
++    }
++
++    #[test]
++    fn auth_accepts_legacy_string_and_data_kb_values() {
++        assert_eq!(
++            auth_value(&[KbItem::String("Authorization: one".to_string())]),
++            Some("Authorization: one".to_string())
++        );
++        assert_eq!(
++            auth_value(&[KbItem::Data(b"Authorization: two".to_vec())]),
++            Some("Authorization: two".to_string())
++        );
++        assert_eq!(auth_value(&[]), None);
++    }
++}

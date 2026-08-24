@@ -1,0 +1,9 @@
+[
+  {
+    "entry_id": 42001,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "name_value": "app.example.com\n*.example.com",
+    "common_name": "app.example.com",
+    "log_name": "Example CT log"
+  }
+]

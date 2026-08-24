@@ -1,0 +1,17 @@
+{
+  "registry": {
+    "registry_id": "registry.example.com",
+    "hostname": "registry.example.com",
+    "provider": "oci",
+    "region": "us-east-1"
+  },
+  "images": [
+    {
+      "repository": "example/application",
+      "tag": "2026.08",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "registry_password": "must-never-enter-canonical-metadata"
+    },
+    { "repository": "example/mutable", "tag": "latest" }
+  ]
+}

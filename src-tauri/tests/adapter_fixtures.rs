@@ -196,7 +196,7 @@ fn registry_covers_exactly_the_twenty_one_catalog_engines() {
 
 #[test]
 fn native_fixtures_normalize_without_inventing_inventory_findings() {
-    let no_security_findings = BTreeSet::from(["cloudquery", "greenbone", "syft"]);
+    let no_security_findings = BTreeSet::from(["cloudquery", "syft"]);
     for engine_id in BUILTIN_ENGINE_IDS {
         let output = normalize_fixture(engine_id);
         if no_security_findings.contains(engine_id) {
@@ -276,6 +276,61 @@ fn fingerprints_are_stable_across_repeat_runs() {
 }
 
 #[test]
+fn versioned_control_references_are_allowlisted_relationships_not_assurance_claims() {
+    let mapped_engines = [
+        "steampipe",
+        "prowler",
+        "scoutsuite",
+        "cloudsplaining",
+        "scubagear",
+        "maester",
+        "nuclei",
+        "semgrep",
+        "gitleaks",
+        "trufflehog",
+        "checkov",
+        "kics",
+        "trivy",
+        "grype",
+        "kubescape",
+        "kube-bench",
+    ];
+    for engine_id in mapped_engines {
+        let output = normalize_fixture(engine_id);
+        let references = output
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.control_references)
+            .collect::<Vec<_>>();
+        assert!(
+            !references.is_empty(),
+            "fixture rule for {engine_id} should have an explicit mapping"
+        );
+        assert!(references.iter().all(|reference| {
+            reference.relationship == "related"
+                && reference.mapping_version == "2026-08-24.1"
+                && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
+        }));
+        let serialized = serde_json::to_string(&references)
+            .expect("serialize versioned control references")
+            .to_ascii_lowercase();
+        assert!(!serialized.contains("is compliant"));
+        assert!(!serialized.contains("is certified"));
+        assert!(!serialized.contains("passes the control"));
+    }
+
+    for engine_id in ["naabu", "httpx"] {
+        let output = normalize_fixture(engine_id);
+        assert!(
+            output
+                .findings
+                .iter()
+                .all(|finding| finding.control_references.is_empty())
+        );
+    }
+}
+
+#[test]
 fn malformed_jsonl_is_contained_while_valid_records_survive() {
     let bytes = include_bytes!("fixtures/adapters/malformed-nuclei.jsonl");
     let output = normalize_bytes(
@@ -313,12 +368,82 @@ fn secret_values_and_target_instructions_never_enter_findings() {
 }
 
 #[test]
-fn greenbone_xml_failure_is_explicit_and_conservative() {
+fn greenbone_xml_is_bounded_evidence_preserving_and_ignores_instruction_fields() {
     let output = normalize_fixture("greenbone");
+    assert_eq!(output.findings.len(), 1);
+    let finding = &output.findings[0];
+    assert!(finding.title.contains("Example network vulnerability"));
+    assert_eq!(
+        finding.evidence[0].kind,
+        ai_security_scanner_lib::domain::EvidenceKind::ExternalValidation
+    );
+    assert!(
+        finding
+            .official_references
+            .iter()
+            .any(|reference| reference.ends_with("CVE-2025-0003"))
+    );
+    let serialized = serde_json::to_string(finding).expect("serialize Greenbone finding");
+    assert!(!serialized.contains("SECRET_SENTINEL_MUST_NEVER_LEAK"));
+    assert!(!serialized.contains("target-controlled remediation command"));
+}
+
+#[test]
+fn greenbone_xml_with_a_doctype_is_rejected_without_inference() {
+    let xml = br#"<?xml version="1.0"?>
+<!DOCTYPE report [<!ENTITY secret SYSTEM "file:///etc/passwd">]>
+<get_reports_response><report><results><result id="example"><name>&secret;</name><severity>9.9</severity><nvt oid="1.3.6.1.4.1.25623.1.0.1"/></result></results></report></get_reports_response>"#;
+    let output = normalize_bytes(
+        "greenbone",
+        xml,
+        "greenbone.xml",
+        "application/xml",
+        "run-1",
+    );
     assert!(output.findings.is_empty());
-    assert!(output.warnings.iter().any(|warning| {
-        warning.contains("no bounded XML parser") && warning.contains("no findings were inferred")
-    }));
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("DTD"))
+    );
+}
+
+#[test]
+fn greenbone_xml_allows_only_predefined_and_numeric_character_references() {
+    let xml = br#"<?xml version="1.0"?>
+<get_reports_response><report><results><result id="example"><name>Example&amp;network&#x20;vulnerability</name><host>192.0.2.10</host><port>65535/tcp</port><severity>7.5</severity><threat>High</threat><asset_id>asset-1</asset_id><description>relay -&gt; target</description><nvt oid="1.3.6.1.4.1.25623.1.0.1"><name>Example&amp;NVT&#x20;reference</name><family>Web&#32;Servers</family></nvt></result></results></report></get_reports_response>"#;
+    let output = normalize_bytes(
+        "greenbone",
+        xml,
+        "greenbone.xml",
+        "application/xml",
+        "run-1",
+    );
+    assert_eq!(output.findings.len(), 1);
+    assert!(
+        output.findings[0].title.contains("Example&NVT reference"),
+        "unexpected title: {}",
+        output.findings[0].title
+    );
+    assert!(output.warnings.is_empty());
+
+    let custom = br#"<?xml version="1.0"?>
+<get_reports_response><report><results><result id="example"><name>Example&custom;network</name><severity>7.5</severity><nvt oid="1.3.6.1.4.1.25623.1.0.1"/></result></results></report></get_reports_response>"#;
+    let rejected = normalize_bytes(
+        "greenbone",
+        custom,
+        "greenbone.xml",
+        "application/xml",
+        "run-1",
+    );
+    assert!(rejected.findings.is_empty());
+    assert!(
+        rejected
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("custom entity"))
+    );
 }
 
 #[test]

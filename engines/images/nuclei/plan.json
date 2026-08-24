@@ -2,7 +2,10 @@
   "schema_version": "1.0.0",
   "engine_id": "nuclei",
   "plan_kind": "managed_source_image",
-  "support_date": "2026-08-24",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
   "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/projectdiscovery/nuclei",

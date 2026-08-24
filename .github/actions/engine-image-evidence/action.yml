@@ -1,0 +1,159 @@
+name: Preserve signed engine image evidence
+description: Generate exact per-platform SBOMs and external attestations without changing the published image digest.
+
+inputs:
+  engine:
+    description: Canonical engine id.
+    required: true
+  image:
+    description: Fully-qualified image name without tag or digest.
+    required: true
+  tag:
+    description: Published human-readable image tag.
+    required: true
+  digest:
+    description: Immutable multi-platform index digest from docker/build-push-action.
+    required: true
+  source-revision:
+    description: Exact repository revision which built the image.
+    required: true
+  github-token:
+    description: Repository token used to push GHCR referrers and GitHub attestations.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Re-authenticate for signed OCI referrers
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - name: Generate and validate exact per-platform SBOMs
+      id: evidence
+      shell: bash
+      env:
+        ENGINE: ${{ inputs.engine }}
+        IMAGE: ${{ inputs.image }}
+        IMAGE_TAG: ${{ inputs.tag }}
+        INDEX_DIGEST: ${{ inputs.digest }}
+        SOURCE_REVISION: ${{ inputs.source-revision }}
+      run: >-
+        node scripts/engine-image-evidence.mjs prepare
+        --engine "${ENGINE}"
+        --image "${IMAGE}"
+        --tag "${IMAGE_TAG}"
+        --digest "${INDEX_DIGEST}"
+        --source-revision "${SOURCE_REVISION}"
+        --out "package-evidence/${ENGINE}"
+
+    - name: Attest index build provenance
+      id: provenance
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ inputs.digest }}
+        push-to-registry: true
+        create-storage-record: false
+        github-token: ${{ inputs.github-token }}
+
+    - name: Attest amd64 SPDX SBOM
+      id: amd64-spdx
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.evidence.outputs.amd64_digest }}
+        sbom-path: ${{ steps.evidence.outputs.amd64_spdx }}
+        push-to-registry: true
+        create-storage-record: false
+        github-token: ${{ inputs.github-token }}
+
+    - name: Attest amd64 CycloneDX SBOM
+      id: amd64-cyclonedx
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.evidence.outputs.amd64_digest }}
+        sbom-path: ${{ steps.evidence.outputs.amd64_cyclonedx }}
+        push-to-registry: true
+        create-storage-record: false
+        github-token: ${{ inputs.github-token }}
+
+    - name: Attest arm64 SPDX SBOM
+      id: arm64-spdx
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.evidence.outputs.arm64_digest }}
+        sbom-path: ${{ steps.evidence.outputs.arm64_spdx }}
+        push-to-registry: true
+        create-storage-record: false
+        github-token: ${{ inputs.github-token }}
+
+    - name: Attest arm64 CycloneDX SBOM
+      id: arm64-cyclonedx
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.evidence.outputs.arm64_digest }}
+        sbom-path: ${{ steps.evidence.outputs.arm64_cyclonedx }}
+        push-to-registry: true
+        create-storage-record: false
+        github-token: ${{ inputs.github-token }}
+
+    - name: Bind downloadable evidence to signed statements
+      shell: bash
+      env:
+        MANIFEST: ${{ steps.evidence.outputs.manifest }}
+        PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        PROVENANCE_ID: ${{ steps.provenance.outputs.attestation-id }}
+        PROVENANCE_URL: ${{ steps.provenance.outputs.attestation-url }}
+        AMD64_SPDX_BUNDLE: ${{ steps.amd64-spdx.outputs.bundle-path }}
+        AMD64_SPDX_ID: ${{ steps.amd64-spdx.outputs.attestation-id }}
+        AMD64_SPDX_URL: ${{ steps.amd64-spdx.outputs.attestation-url }}
+        AMD64_CYCLONEDX_BUNDLE: ${{ steps.amd64-cyclonedx.outputs.bundle-path }}
+        AMD64_CYCLONEDX_ID: ${{ steps.amd64-cyclonedx.outputs.attestation-id }}
+        AMD64_CYCLONEDX_URL: ${{ steps.amd64-cyclonedx.outputs.attestation-url }}
+        ARM64_SPDX_BUNDLE: ${{ steps.arm64-spdx.outputs.bundle-path }}
+        ARM64_SPDX_ID: ${{ steps.arm64-spdx.outputs.attestation-id }}
+        ARM64_SPDX_URL: ${{ steps.arm64-spdx.outputs.attestation-url }}
+        ARM64_CYCLONEDX_BUNDLE: ${{ steps.arm64-cyclonedx.outputs.bundle-path }}
+        ARM64_CYCLONEDX_ID: ${{ steps.arm64-cyclonedx.outputs.attestation-id }}
+        ARM64_CYCLONEDX_URL: ${{ steps.arm64-cyclonedx.outputs.attestation-url }}
+      run: >-
+        node scripts/engine-image-evidence.mjs finalize
+        --manifest "${MANIFEST}"
+        --provenance-bundle "${PROVENANCE_BUNDLE}"
+        --provenance-id "${PROVENANCE_ID}"
+        --provenance-url "${PROVENANCE_URL}"
+        --amd64-spdx-bundle "${AMD64_SPDX_BUNDLE}"
+        --amd64-spdx-id "${AMD64_SPDX_ID}"
+        --amd64-spdx-url "${AMD64_SPDX_URL}"
+        --amd64-cyclonedx-bundle "${AMD64_CYCLONEDX_BUNDLE}"
+        --amd64-cyclonedx-id "${AMD64_CYCLONEDX_ID}"
+        --amd64-cyclonedx-url "${AMD64_CYCLONEDX_URL}"
+        --arm64-spdx-bundle "${ARM64_SPDX_BUNDLE}"
+        --arm64-spdx-id "${ARM64_SPDX_ID}"
+        --arm64-spdx-url "${ARM64_SPDX_URL}"
+        --arm64-cyclonedx-bundle "${ARM64_CYCLONEDX_BUNDLE}"
+        --arm64-cyclonedx-id "${ARM64_CYCLONEDX_ID}"
+        --arm64-cyclonedx-url "${ARM64_CYCLONEDX_URL}"
+
+    - name: Verify GitHub and registry attestation persistence
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        IMAGE: ${{ inputs.image }}
+        INDEX_DIGEST: ${{ inputs.digest }}
+        AMD64_DIGEST: ${{ steps.evidence.outputs.amd64_digest }}
+        ARM64_DIGEST: ${{ steps.evidence.outputs.arm64_digest }}
+      run: |
+        gh attestation verify "oci://${IMAGE}@${INDEX_DIGEST}" --repo "${GITHUB_REPOSITORY}"
+        for digest in "${AMD64_DIGEST}" "${ARM64_DIGEST}"; do
+          gh attestation verify "oci://${IMAGE}@${digest}" --repo "${GITHUB_REPOSITORY}" \
+            --predicate-type https://spdx.dev/Document/v2.3
+          gh attestation verify "oci://${IMAGE}@${digest}" --repo "${GITHUB_REPOSITORY}" \
+            --predicate-type https://cyclonedx.org/bom
+        done

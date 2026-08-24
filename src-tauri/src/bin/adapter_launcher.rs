@@ -18,6 +18,15 @@ const SAFE_ENVIRONMENT: &[&str] = &[
     "REQUESTS_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS",
     "POWERSHELL_TELEMETRY_OPTOUT",
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "AI_SECURITY_SCANNER_PROXY",
 ];
 const CREDENTIAL_KEYS: &[&str] = &[
     "AWS_ACCESS_KEY_ID",

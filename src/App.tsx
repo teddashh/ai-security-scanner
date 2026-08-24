@@ -10,14 +10,24 @@ import { ExportPage } from "./pages/ExportPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { ProgressPage } from "./pages/ProgressPage";
 import { VerificationPage } from "./pages/VerificationPage";
+import {
+  checkForAppUpdate,
+  installAppUpdate,
+  type AppUpdateState,
+} from "./services/appUpdater";
 import { EVENTS, scannerService, type ActionResponse } from "./services/scanner";
 import type {
   AppMode,
   AppSnapshot,
+  CaseArtifactCleanupResult,
+  CaseArtifactDeletionPlan,
   CaseWorkspace,
   CreateCaseInput,
+  ExportPreview,
   ExportFormat,
+  ManagedRuntimeSetupStatus,
   PageId,
+  ScanRun,
   ServiceResult,
   ToastMessage,
 } from "./types";
@@ -34,6 +44,9 @@ const describeError = (error: unknown): string => {
   return typeof error === "string" ? error : "本機核心未能完成這項工作。";
 };
 
+const isTerminalRun = (run: ScanRun): boolean =>
+  ["completed", "partial", "failed", "cancelled"].includes(run.status);
+
 export default function App() {
   const [page, setPage] = useState<PageId>(pageFromHash);
   const [snapshot, setSnapshot] = useState<AppSnapshot>();
@@ -42,6 +55,14 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string>();
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [artifactCleanupPlan, setArtifactCleanupPlan] = useState<CaseArtifactDeletionPlan>();
+  const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
+  const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
+  const [focusedFindingId, setFocusedFindingId] = useState<string>();
+  const [verificationBaselineRunId, setVerificationBaselineRunId] = useState<string>();
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
+    phase: scannerService.isNative() ? "checking" : "unavailable",
+  });
   const toastId = useRef(0);
 
   const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
@@ -60,12 +81,113 @@ export default function App() {
     const result = await scannerService.getSnapshot(caseId);
     applyServiceMeta(result);
     setSnapshot(result.data);
+    setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
     if (!quiet) setLoading(false);
   }, [applyServiceMeta]);
 
   useEffect(() => {
     void loadSnapshot();
   }, [loadSnapshot]);
+
+  useEffect(() => {
+    if (!scannerService.isNative()) return;
+    let disposed = false;
+    void scannerService.getManagedRuntimeSetupStatus().then((result) => {
+      if (!disposed) setRuntimeSetup(result.data);
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const runtimeSetupPolling = busyAction === "runtime-setup" || runtimeSetup?.active === true;
+
+  useEffect(() => {
+    if (!scannerService.isNative() || !runtimeSetupPolling) return;
+    let disposed = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const result = await scannerService.getManagedRuntimeSetupStatus();
+        if (disposed) return;
+        setRuntimeSetup(result.data);
+      } catch {
+        // The authoritative runtime status remains available through the next
+        // bounded poll; a transient IPC failure must not abandon setup UI.
+      } finally {
+        if (!disposed) timer = window.setTimeout(() => void poll(), 250);
+      }
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [runtimeSetupPolling]);
+
+  const checkAppUpdate = useCallback(async () => {
+    if (!scannerService.isNative()) return;
+    setAppUpdate((current) => ({ ...current, phase: "checking", message: undefined }));
+    setAppUpdate(await checkForAppUpdate());
+  }, []);
+
+  useEffect(() => {
+    void checkAppUpdate();
+  }, [checkAppUpdate]);
+
+  const installUpdate = useCallback(async (version: string) => {
+    try {
+      await installAppUpdate(version, setAppUpdate);
+    } catch (error) {
+      pushToast({
+        tone: "danger",
+        title: "應用程式更新未完成",
+        detail: describeError(error),
+      });
+    }
+  }, [pushToast]);
+
+  const setupManagedRuntime = async () => {
+    setBusyAction("runtime-setup");
+    try {
+      const result = await scannerService.setupManagedRuntime();
+      applyServiceMeta(result);
+      const setupResult = await scannerService.getManagedRuntimeSetupStatus();
+      setRuntimeSetup(setupResult.data);
+      await loadSnapshot(snapshot?.selectedCaseId, true);
+      const cancelled = setupResult.data.phase === "cancelled";
+      pushToast({
+        tone: result.data.accepted ? "success" : "warning",
+        title: result.data.accepted
+          ? "隔離執行環境已就緒"
+          : cancelled
+            ? "已取消隔離執行環境設定"
+            : "隔離執行環境尚未就緒，可再次重試",
+        detail: result.data.message,
+      });
+    } catch (error) {
+      pushToast({ tone: "danger", title: "隔離執行環境設定失敗，可再次重試", detail: describeError(error) });
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const cancelManagedRuntimeSetup = async () => {
+    try {
+      const result = await scannerService.cancelManagedRuntimeSetup();
+      applyServiceMeta(result);
+      setRuntimeSetup(result.data);
+      if (result.data.cancelRequested) {
+        pushToast({
+          tone: "info",
+          title: "正在取消隔離執行環境設定",
+          detail: "已送出取消要求；已下載的部分會保留，重試時可續傳。",
+        });
+      }
+    } catch (error) {
+      pushToast({ tone: "danger", title: "取消要求未送出", detail: describeError(error) });
+    }
+  };
 
   useEffect(() => {
     const onHashChange = () => setPage(pageFromHash());
@@ -95,6 +217,7 @@ export default function App() {
   }, [loadSnapshot, snapshot?.selectedCaseId]);
 
   const navigate = (target: PageId) => {
+    if (target !== "findings") setFocusedFindingId(undefined);
     window.location.hash = target;
     setPage(target);
     document.getElementById("main-content")?.focus();
@@ -136,16 +259,78 @@ export default function App() {
     action: () => Promise<ServiceResult<ActionResponse>>,
   ) => {
     setBusyAction(key);
-    const result = await action();
-    applyServiceMeta(result);
-    pushToast({
-      tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
-      title: result.data.accepted ? "已送出本機工作" : result.mode === "demo" ? "展示模式未執行" : "工作未啟動",
-      detail: result.data.message,
-    });
-    if (result.data.snapshot) setSnapshot(result.data.snapshot);
-    else if (result.mode === "native") await loadSnapshot(snapshot?.selectedCaseId, true);
-    setBusyAction(undefined);
+    try {
+      const result = await action();
+      applyServiceMeta(result);
+      pushToast({
+        tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
+        title: result.data.accepted ? "已送出本機工作" : result.mode === "demo" ? "展示模式未執行" : "工作未啟動",
+        detail: result.data.message,
+      });
+      if (result.data.snapshot) setSnapshot(result.data.snapshot);
+      else if (result.mode === "native") await loadSnapshot(snapshot?.selectedCaseId, true);
+    } catch (error) {
+      pushToast({ tone: "danger", title: "本機工作失敗", detail: describeError(error) });
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const deleteCase = async (caseId: string, confirmation: string): Promise<boolean> => {
+    setBusyAction("delete-case");
+    try {
+      const result = await scannerService.deleteCase(caseId, confirmation);
+      applyServiceMeta(result);
+      pushToast({
+        tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
+        title: result.data.accepted ? "案件紀錄已刪除" : result.mode === "demo" ? "展示模式未刪除" : "案件未刪除",
+        detail: result.data.message,
+      });
+      if (result.data.accepted) {
+        setArtifactCleanupPlan(result.data.artifacts);
+        setArtifactCleanupResult(undefined);
+        await loadSnapshot(undefined, true);
+      }
+      return result.data.accepted;
+    } catch (error) {
+      pushToast({ tone: "danger", title: "案件刪除失敗", detail: describeError(error) });
+      return false;
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const deleteCaseArtifacts = async (confirmation: string): Promise<boolean> => {
+    if (!artifactCleanupPlan?.exists) return false;
+    setBusyAction("delete-artifacts");
+    try {
+      const result = await scannerService.deleteCaseArtifacts({
+        caseId: artifactCleanupPlan.caseId,
+        exactPath: artifactCleanupPlan.exactPath,
+        confirmation,
+      });
+      applyServiceMeta(result);
+      setArtifactCleanupResult(result.data);
+      setArtifactCleanupPlan((current) => current ? { ...current, exists: false } : current);
+      pushToast({
+        tone: result.data.removed ? "warning" : "info",
+        title: result.data.removed ? "案件證據已永久移除" : "證據目錄未移除",
+        detail: result.data.removed
+          ? `${result.data.exactPath} 已刪除且不可復原。`
+          : `${result.data.exactPath} 已不存在或未被移除。`,
+      });
+      return result.data.removed;
+    } catch (error) {
+      pushToast({ tone: "danger", title: "證據清理失敗", detail: describeError(error) });
+      return false;
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const dismissArtifactCleanup = () => {
+    setArtifactCleanupPlan(undefined);
+    setArtifactCleanupResult(undefined);
   };
 
   const workspace = snapshot?.workspace;
@@ -153,6 +338,30 @@ export default function App() {
     () => snapshot?.cases.find((assessmentCase) => assessmentCase.id === snapshot.selectedCaseId) ?? workspace?.case,
     [snapshot, workspace],
   );
+  const terminalRuns = useMemo(
+    () => workspace?.runs.filter(isTerminalRun) ?? [],
+    [workspace?.runs],
+  );
+
+  useEffect(() => {
+    setVerificationBaselineRunId((current) =>
+      terminalRuns.some((run) => run.id === current) ? current : terminalRuns[0]?.id,
+    );
+  }, [workspace?.case.id, terminalRuns]);
+
+  const previewExport = useCallback(async (options: {
+    format: ExportFormat;
+    includeRawEvidence: boolean;
+    redactSensitiveValues: boolean;
+  }): Promise<ExportPreview | undefined> => {
+    if (!workspace) return undefined;
+    const result = await scannerService.previewExport(
+      { caseId: workspace.case.id, ...options },
+      workspace,
+    );
+    applyServiceMeta(result);
+    return result.data;
+  }, [applyServiceMeta, workspace]);
 
   const exportCase = async (options: {
     format: ExportFormat;
@@ -205,6 +414,11 @@ export default function App() {
     });
   };
 
+  const verifyReceivedExport = async () => {
+    const path = await scannerService.chooseCaseBundle();
+    if (path) await verifyExport(path);
+  };
+
   const currentCaseId = workspace?.case.id ?? selectedCase?.id;
   const currentRun = workspace?.runs[0];
 
@@ -227,10 +441,26 @@ export default function App() {
           assetCount={workspace?.assets.length ?? 0}
           findingCount={workspace?.findings.length ?? 0}
           unknownSourceCount={workspace?.coverage.filter((item) => item.state === "source_unavailable_unknown").length ?? 0}
-          busy={busyAction === "create"}
+          connectedNoAssetSourceCount={workspace?.coverage.filter((item) => item.state === "source_connected_none").length ?? 0}
+          latestRun={workspace?.runs[0]}
+          runs={workspace?.runs ?? []}
+          verificationBaselineRunId={verificationBaselineRunId}
+          busy={["create", "archive-case", "delete-case", "delete-artifacts", "rescan"].includes(busyAction ?? "")}
+          artifactCleanupPlan={artifactCleanupPlan}
+          artifactCleanupResult={artifactCleanupResult}
           onCreate={createCase}
+          onArchive={(caseId) => runAction("archive-case", () => scannerService.archiveCase(caseId))}
+          onDelete={deleteCase}
+          onDeleteArtifacts={deleteCaseArtifacts}
+          onDismissArtifactCleanup={dismissArtifactCleanup}
           onSelect={(caseId) => void selectCase(caseId)}
           onContinue={() => navigate("coverage")}
+          onOpenProgress={() => navigate("progress")}
+          onSelectVerificationBaseline={setVerificationBaselineRunId}
+          onStartRescan={(baselineRunId) => currentCaseId
+            ? runAction("rescan", () => scannerService.startRescan(currentCaseId, baselineRunId))
+            : Promise.resolve()}
+          onOpenVerification={() => navigate("verification")}
         />
       );
     }
@@ -250,15 +480,26 @@ export default function App() {
       case "coverage":
         return (
           <CoveragePage
+            caseId={currentCaseId}
+            requestedActivities={workspace.case.requestedActivities}
             coverage={workspace.coverage}
+            sources={workspace.sources}
             assets={workspace.assets}
-            busy={busyAction === "discovery" || busyAction === "scope"}
+            scopeGrants={workspace.scopeGrants}
+            nativeMode={mode === "native"}
+            busy={busyAction === "connect-source" || busyAction === "attach-workspace" || busyAction === "discovery" || busyAction === "scope"}
+            onChooseSnapshot={() => scannerService.chooseSourceSnapshot()}
+            onConnectSourceSnapshot={(input) => runAction("connect-source", () => scannerService.connectSourceSnapshot(input))}
+            onChooseWorkspace={() => scannerService.chooseWorkspaceDirectory()}
+            onAttachWorkspaceSnapshot={(input) => runAction("attach-workspace", () => scannerService.attachWorkspaceSnapshot(input))}
             onStartDiscovery={() => runAction("discovery", () => scannerService.startDiscovery(currentCaseId))}
-            onApprovePending={(assetIds) => runAction("scope", () => scannerService.approveScope({
+            onAuthorizationChanged={() => loadSnapshot(currentCaseId, true)}
+            onApprovePending={(assetIds, modes, confirmation, externalScope) => runAction("scope", () => scannerService.approveScope({
               caseId: currentCaseId,
               assetIds,
-              modes: ["public_data"],
-              confirmation: "使用者在本機介面選取候選資產；主動掃描仍需另外授權。",
+              modes,
+              confirmation,
+              externalScope,
             }))}
           />
         );
@@ -274,23 +515,59 @@ export default function App() {
           />
         );
       case "findings":
-        return <FindingsPage findings={workspace.findings} />;
+        return (
+          <FindingsPage
+            findings={workspace.findings}
+            findingGroups={workspace.findingGroups}
+            findingGroupEvents={workspace.findingGroupEvents}
+            workflowEvents={workspace.workflowEvents}
+            coverage={workspace.coverage}
+            runs={workspace.runs}
+            focusedFindingId={focusedFindingId}
+            busy={["finding-workflow", "finding-group", "finding-ungroup"].includes(busyAction ?? "")}
+            onUpdateWorkflow={(input) => runAction("finding-workflow", () => scannerService.updateFindingWorkflow({ caseId: currentCaseId, ...input }))}
+            onGroupFindings={(input) => runAction("finding-group", () => scannerService.groupFindings({
+              caseId: currentCaseId,
+              groupedBy: "本機使用者",
+              ...input,
+            }))}
+            onUngroupFindings={(groupId) => runAction("finding-ungroup", () => scannerService.ungroupFindings({
+              caseId: currentCaseId,
+              groupId,
+              removedBy: "本機使用者",
+              reason: "使用者從 Findings 畫面移除呈現群組；原始 findings 與證據完整保留。",
+            }))}
+            onOpenCoverage={() => navigate("coverage")}
+            onOpenProgress={() => navigate("progress")}
+          />
+        );
       case "export":
         return (
           <ExportPage
             workspace={workspace}
             exports={workspace.exports}
+            demoMode={mode === "demo" || Boolean(workspace.case.isDemo)}
             busy={busyAction === "export" || busyAction === "verify-export"}
+            onPreview={previewExport}
             onExport={exportCase}
             onVerify={verifyExport}
+            onVerifyReceived={verifyReceivedExport}
           />
         );
       case "verification":
         return (
           <VerificationPage
             verification={workspace.verification}
+            runs={workspace.runs}
+            findings={workspace.findings}
+            baselineRunId={verificationBaselineRunId}
             busy={busyAction === "rescan"}
-            onStartRescan={() => runAction("rescan", () => scannerService.startRescan(currentCaseId))}
+            onSelectBaseline={setVerificationBaselineRunId}
+            onStartRescan={(baselineRunId) => runAction("rescan", () => scannerService.startRescan(currentCaseId, baselineRunId))}
+            onOpenFinding={(findingId) => {
+              setFocusedFindingId(findingId);
+              navigate("findings");
+            }}
           />
         );
       default:
@@ -309,6 +586,14 @@ export default function App() {
         onNavigate={navigate}
         onSelectCase={(caseId) => void selectCase(caseId)}
         demoNotice={notice ?? DEMO_NOTICE}
+        appUpdate={appUpdate}
+        onCheckForUpdate={() => void checkAppUpdate()}
+        onInstallUpdate={(version) => void installUpdate(version)}
+        runtime={snapshot?.runtime}
+        runtimeSetup={runtimeSetup}
+        runtimeBusy={busyAction === "runtime-setup" || runtimeSetup?.active}
+        onSetupRuntime={() => void setupManagedRuntime()}
+        onCancelRuntime={() => void cancelManagedRuntimeSetup()}
       >
         {content}
       </AppShell>

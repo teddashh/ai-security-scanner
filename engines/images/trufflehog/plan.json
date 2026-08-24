@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "trufflehog",
+  "plan_kind": "managed_build",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "managed_artifact_not_published",
+  "source": {
+    "repository": "https://github.com/trufflesecurity/trufflehog",
+    "revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+    "acquisition_source": "https://github.com/trufflesecurity/trufflehog/commit/3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+    "local_research_checkout": ".upstreams/trufflesecurity/trufflehog"
+  },
+  "verified_upstream_artifact": {
+    "repository": "ghcr.io/trufflesecurity/trufflehog",
+    "tag": "3.97.0",
+    "digest": "sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33",
+    "signature_identity": null,
+    "entrypoint": [
+      "/etc/entrypoint.sh"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "bcfcf73aaf4759d4dadc2783177c245a02792318"
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trufflehog",
+    "tag": null,
+    "digest": null
+  },
+  "build_recipe": {
+    "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+    "upstream_build_file": "Dockerfile",
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "static_steps": [
+      [
+        "go",
+        "build",
+        "-trimpath",
+        "-o",
+        "/out/trufflehog",
+        "."
+      ]
+    ],
+    "base_images": [
+      {
+        "repository": "ghcr.io/trufflesecurity/trufflehog",
+        "tag": "3.97.0",
+        "digest": "sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33",
+        "use": "reference_or_copy_source_only_after_license_and_entrypoint_review"
+      }
+    ]
+  },
+  "dockerfile": {
+    "emitted": false,
+    "reason": "A final digest-pinned base/dependency closure and managed wrapper release do not yet exist; emitting a Dockerfile now would require a floating or unverifiable input."
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Replace the upstream shell entrypoint with a compiled launcher and keep credential verification disabled by policy.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+  },
+  "command": [
+    "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "--engine",
+    "trufflehog",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
+  ],
+  "output": {
+    "primary_format": "jsonl",
+    "path": "/output/trufflehog.jsonl",
+    "media_type": "application/x-ndjson",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "license_review",
+    "rationale": "AGPL-3.0 redistribution and the tool's optional credential verification behavior require release review.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "final_image_digest_not_published",
+    "managed_non_shell_image_not_published",
+    "license_review",
+    "execution_wrapper_not_implemented"
+  ]
+}

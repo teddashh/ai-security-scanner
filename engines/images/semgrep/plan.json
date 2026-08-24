@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "semgrep",
+  "plan_kind": "managed_build",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "managed_artifact_not_published",
+  "source": {
+    "repository": "https://github.com/semgrep/semgrep",
+    "revision": "a0c13f304151e531c7e7c00838076211a07a790c",
+    "acquisition_source": "https://github.com/semgrep/semgrep/commit/a0c13f304151e531c7e7c00838076211a07a790c",
+    "local_research_checkout": ".upstreams/semgrep/semgrep"
+  },
+  "verified_upstream_artifact": {
+    "repository": "semgrep/semgrep",
+    "tag": "1.174.0",
+    "digest": "sha256:f1f7b71861c7b28b6e0f661225a2c4f58a484f5d0f182465c6d6b3b22f972ade",
+    "signature_identity": null,
+    "entrypoint": [],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_mismatch",
+      "artifact_source_revision": "33bca4bcee88023b5ca72b287029bc50f59f1977"
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
+    "tag": null,
+    "digest": null
+  },
+  "build_recipe": {
+    "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
+    "upstream_build_file": "Dockerfile",
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "static_steps": [
+      [
+        "make",
+        "build-release"
+      ]
+    ],
+    "base_images": [
+      {
+        "repository": "semgrep/semgrep",
+        "tag": "1.174.0",
+        "digest": "sha256:f1f7b71861c7b28b6e0f661225a2c4f58a484f5d0f182465c6d6b3b22f972ade",
+        "use": "reference_or_copy_source_only_after_license_and_entrypoint_review"
+      }
+    ]
+  },
+  "dockerfile": {
+    "emitted": false,
+    "reason": "A final digest-pinned base/dependency closure and managed wrapper release do not yet exist; emitting a Dockerfile now would require a floating or unverifiable input."
+  },
+  "wrapper": {
+    "required": false,
+    "strategy": "The managed image can invoke semgrep directly against read-only /workspace once a rule pack is explicitly pinned.",
+    "entrypoint": null
+  },
+  "command": [
+    "semgrep",
+    "scan",
+    "--json",
+    "--output",
+    "/output/semgrep.json",
+    "--config",
+    "/workspace/semgrep-rules.yml",
+    "/workspace"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/semgrep.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "license_review",
+    "rationale": "The open repository is LGPL-2.1-or-later, while the verified Docker image identifies a different proprietary source revision; do not redistribute it without review.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "final_image_digest_not_published",
+    "managed_image_not_published",
+    "rule_pack_not_selected",
+    "license_review"
+  ]
+}

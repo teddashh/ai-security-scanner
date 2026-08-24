@@ -10,5 +10,11 @@ mod container_runtime;
 mod domain;
 #[path = "../src/error.rs"]
 mod error;
+#[path = "../src/external_scope.rs"]
+mod external_scope;
+#[path = "../src/managed_network.rs"]
+mod managed_network;
+#[path = "../src/managed_runtime.rs"]
+mod managed_runtime;
 #[path = "../src/orchestrator.rs"]
 mod orchestrator;

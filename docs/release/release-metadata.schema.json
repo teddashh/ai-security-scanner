@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/docs/release/release-metadata.schema.json",
+  "title": "ai-security-scanner release metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "product",
+    "version",
+    "tag",
+    "sourceRepository",
+    "sourceCommit",
+    "sourceDate",
+    "distribution",
+    "security",
+    "inventories"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "product": { "const": "ai-security-scanner" },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "tag": { "type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "sourceRepository": { "type": "string", "format": "uri", "pattern": "^https://github\\.com/" },
+    "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sourceDate": { "type": "string", "format": "date-time" },
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["desktopInstallers", "bundledEngines", "bundledAuxiliaryExecutables", "engineDelivery"],
+      "properties": {
+        "desktopInstallers": {
+          "type": "array",
+          "const": ["linux-x86_64", "macos-universal", "windows-x86_64"]
+        },
+        "bundledEngines": { "type": "array", "maxItems": 0 },
+        "bundledAuxiliaryExecutables": {
+          "type": "array",
+          "const": [
+            "ai-security-scanner-egress-gateway",
+            "ai-security-scanner-bootstrap-broker",
+            "ai-security-scanner-cli"
+          ]
+        },
+        "engineDelivery": { "const": "separate-artifacts-not-bundled-in-desktop-installers" }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operatingSystemCodeSigning",
+        "appleNotarization",
+        "updater",
+        "checksums",
+        "sboms",
+        "provenanceAttestation"
+      ],
+      "properties": {
+        "operatingSystemCodeSigning": { "$ref": "#/$defs/notConfigured" },
+        "appleNotarization": { "$ref": "#/$defs/notConfigured" },
+        "updater": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "artifactsGenerated", "signingConfigured"],
+          "properties": {
+            "state": { "const": "enabled-signed" },
+            "artifactsGenerated": { "const": true },
+            "signingConfigured": { "const": true }
+          }
+        },
+        "checksums": { "const": "SHA256SUMS.txt" },
+        "sboms": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "string" }
+        },
+        "provenanceAttestation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "provider"],
+          "properties": {
+            "state": { "const": "required-before-publication" },
+            "provider": { "const": "GitHub artifact attestations" }
+          }
+        }
+      }
+    },
+    "inventories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["npmPackageCount", "cargoPackageCount", "engineReferenceCount"],
+      "properties": {
+        "npmPackageCount": { "type": "integer", "minimum": 0 },
+        "cargoPackageCount": { "type": "integer", "minimum": 0 },
+        "engineReferenceCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "notConfigured": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "statement"],
+      "properties": {
+        "state": { "const": "not-configured" },
+        "statement": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

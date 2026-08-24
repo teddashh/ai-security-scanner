@@ -17,7 +17,9 @@ pub async fn detect_runtime() -> RuntimeHealth {
     RuntimeHealth {
         provider: "none".into(),
         available: false,
+        phase: "unavailable".into(),
         version: None,
+        prerequisite: None,
         detail: "No compatible Docker or Podman service was detected.".into(),
     }
 }
@@ -32,7 +34,9 @@ async fn command_health(program: &str, args: &[&str]) -> Option<RuntimeHealth> {
     Some(RuntimeHealth {
         provider: program.into(),
         available: true,
+        phase: "running".into(),
         version: (!version.is_empty()).then_some(version),
+        prerequisite: None,
         detail: format!("{program} service is available"),
     })
 }

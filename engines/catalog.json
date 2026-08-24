@@ -5,6 +5,7 @@
     "display_name": "CloudQuery",
     "category": "cloud_inventory",
     "description": "Collects a fixed seven-table AWS IAM inventory with the last fully public CloudQuery CLI and local provider-plugin source closure.",
+    "supported_providers": ["aws"],
     "repository_url": "https://github.com/cloudquery/cloudquery",
     "homepage_url": "https://www.cloudquery.io/",
     "license_spdx": "MPL-2.0",
@@ -87,7 +88,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2023-01-10",
+      "support_until": "2023-04-10",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -136,6 +140,7 @@
     "display_name": "Steampipe",
     "category": "cloud_inventory",
     "description": "Queries the AWS IAM inventory subset through a source-built, preseeded Steampipe plugin.",
+    "supported_providers": ["aws"],
     "repository_url": "https://github.com/turbot/steampipe",
     "homepage_url": "https://steampipe.io/",
     "license_spdx": "AGPL-3.0-only",
@@ -215,7 +220,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -263,6 +271,7 @@
     "display_name": "Prowler",
     "category": "cloud_configuration",
     "description": "Assesses AWS IAM configuration with the scanner-owned us-east-1 profile.",
+    "supported_providers": ["aws"],
     "repository_url": "https://github.com/prowler-cloud/prowler",
     "homepage_url": "https://prowler.com/",
     "license_spdx": "Apache-2.0",
@@ -345,7 +354,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -395,6 +407,7 @@
     "display_name": "ScoutSuite",
     "category": "cloud_configuration",
     "description": "Audits the AWS IAM configuration subset with a bounded JSON-only report.",
+    "supported_providers": ["aws"],
     "repository_url": "https://github.com/nccgroup/ScoutSuite",
     "homepage_url": null,
     "license_spdx": "GPL-2.0-only",
@@ -476,7 +489,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -525,6 +541,7 @@
     "display_name": "Cloudsplaining",
     "category": "identity_and_access",
     "description": "Downloads and analyzes AWS IAM authorization details for excessive privileges.",
+    "supported_providers": ["aws"],
     "repository_url": "https://github.com/salesforce/cloudsplaining",
     "homepage_url": null,
     "license_spdx": "BSD-3-Clause",
@@ -605,7 +622,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -653,6 +673,7 @@
     "display_name": "ScubaGear",
     "category": "microsoft365",
     "description": "Assesses Microsoft Entra ID against the pinned CISA ScubaGear AAD baseline through Microsoft Graph.",
+    "supported_providers": ["microsoft365"],
     "repository_url": "https://github.com/cisagov/ScubaGear",
     "homepage_url": "https://www.cisa.gov/resources-tools/services/secure-cloud-business-applications-scuba-project",
     "license_spdx": "CC0-1.0",
@@ -733,7 +754,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -780,6 +804,7 @@
     "display_name": "Maester",
     "category": "microsoft365",
     "description": "Runs the pinned Graph-only Maester Microsoft Entra test profile for one authorized tenant.",
+    "supported_providers": ["microsoft365"],
     "repository_url": "https://github.com/maester365/maester",
     "homepage_url": "https://maester.dev/",
     "license_spdx": "MIT",
@@ -861,7 +886,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -908,6 +936,7 @@
     "display_name": "Naabu",
     "category": "external_attack_surface",
     "description": "Discovers open TCP ports on explicitly authorized targets.",
+    "supported_providers": [],
     "repository_url": "https://github.com/projectdiscovery/naabu",
     "homepage_url": "https://projectdiscovery.io/",
     "license_spdx": "Apache-2.0 AND MIT",
@@ -989,7 +1018,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -1036,6 +1068,7 @@
     "display_name": "httpx",
     "category": "external_attack_surface",
     "description": "Collects HTTP metadata from explicitly authorized services.",
+    "supported_providers": [],
     "repository_url": "https://github.com/projectdiscovery/httpx",
     "homepage_url": "https://projectdiscovery.io/",
     "license_spdx": "Apache-2.0 AND MIT",
@@ -1118,7 +1151,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -1165,6 +1201,7 @@
     "display_name": "Nuclei",
     "category": "external_attack_surface",
     "description": "Runs selected vulnerability templates against explicitly authorized targets.",
+    "supported_providers": [],
     "repository_url": "https://github.com/projectdiscovery/nuclei",
     "homepage_url": "https://nuclei.projectdiscovery.io/",
     "license_spdx": "Apache-2.0 AND MIT",
@@ -1248,7 +1285,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -1295,6 +1335,7 @@
     "display_name": "Greenbone Community Edition",
     "category": "external_attack_surface",
     "description": "Performs network vulnerability assessment through the Greenbone stack.",
+    "supported_providers": [],
     "repository_url": "https://github.com/greenbone/openvas-scanner",
     "homepage_url": "https://greenbone.github.io/docs/latest/",
     "license_spdx": "GPL-2.0-only AND AGPL-3.0-or-later",
@@ -1374,7 +1415,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": false,
       "artifact_state": "multi_component_plan",
       "blocked_by": [
@@ -1428,6 +1472,7 @@
     "display_name": "Semgrep",
     "category": "code_and_secrets",
     "description": "Finds insecure code patterns in user-selected repositories.",
+    "supported_providers": [],
     "repository_url": "https://github.com/semgrep/semgrep",
     "homepage_url": "https://semgrep.dev/",
     "license_spdx": "LGPL-2.1-or-later",
@@ -1506,7 +1551,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": false,
       "artifact_state": "managed_build_plan",
       "blocked_by": [
@@ -1558,6 +1606,7 @@
     "display_name": "Gitleaks",
     "category": "code_and_secrets",
     "description": "Detects hard-coded credentials and secrets in selected repositories.",
+    "supported_providers": [],
     "repository_url": "https://github.com/gitleaks/gitleaks",
     "homepage_url": "https://gitleaks.io/",
     "license_spdx": "MIT",
@@ -1637,7 +1686,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "verified_upstream_image",
       "blocked_by": [],
@@ -1682,6 +1734,7 @@
     "display_name": "TruffleHog",
     "category": "code_and_secrets",
     "description": "Finds and optionally verifies exposed credentials in selected sources.",
+    "supported_providers": [],
     "repository_url": "https://github.com/trufflesecurity/trufflehog",
     "homepage_url": "https://trufflesecurity.com/trufflehog",
     "license_spdx": "AGPL-3.0",
@@ -1759,7 +1812,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": false,
       "artifact_state": "managed_build_plan",
       "blocked_by": [
@@ -1811,6 +1867,7 @@
     "display_name": "Checkov",
     "category": "infrastructure_as_code",
     "description": "Checks Terraform infrastructure-as-code in selected repository snapshots.",
+    "supported_providers": [],
     "repository_url": "https://github.com/bridgecrewio/checkov",
     "homepage_url": "https://www.checkov.io/",
     "license_spdx": "Apache-2.0",
@@ -1899,7 +1956,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -1944,6 +2004,7 @@
     "display_name": "KICS",
     "category": "infrastructure_as_code",
     "description": "Finds security misconfigurations in infrastructure-as-code.",
+    "supported_providers": [],
     "repository_url": "https://github.com/Checkmarx/kics",
     "homepage_url": "https://www.kics.io/",
     "license_spdx": "Apache-2.0",
@@ -2031,7 +2092,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "verified_upstream_image",
       "blocked_by": [],
@@ -2076,6 +2140,7 @@
     "display_name": "Trivy",
     "category": "container_and_sbom",
     "description": "Scans images, filesystems, repositories, IaC, and Kubernetes artifacts.",
+    "supported_providers": [],
     "repository_url": "https://github.com/aquasecurity/trivy",
     "homepage_url": "https://trivy.dev/",
     "license_spdx": "Apache-2.0",
@@ -2165,7 +2230,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": false,
       "artifact_state": "verified_upstream_image",
       "blocked_by": [
@@ -2216,6 +2284,7 @@
     "display_name": "Grype",
     "category": "container_and_sbom",
     "description": "Finds known vulnerabilities in images, filesystems, and SBOMs.",
+    "supported_providers": [],
     "repository_url": "https://github.com/anchore/grype",
     "homepage_url": "https://github.com/anchore/grype",
     "license_spdx": "Apache-2.0",
@@ -2299,7 +2368,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": false,
       "artifact_state": "verified_upstream_image",
       "blocked_by": [
@@ -2350,6 +2422,7 @@
     "display_name": "Syft",
     "category": "container_and_sbom",
     "description": "Produces software bills of materials for selected repository working-tree snapshots.",
+    "supported_providers": [],
     "repository_url": "https://github.com/anchore/syft",
     "homepage_url": "https://github.com/anchore/syft",
     "license_spdx": "Apache-2.0",
@@ -2428,7 +2501,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
       "artifact_state": "managed_build_plan",
       "blocked_by": [],
@@ -2473,6 +2549,7 @@
     "display_name": "Kubescape",
     "category": "kubernetes",
     "description": "Assesses Kubernetes resources and cluster configuration.",
+    "supported_providers": [],
     "repository_url": "https://github.com/kubescape/kubescape",
     "homepage_url": "https://kubescape.io/",
     "license_spdx": "Apache-2.0",
@@ -2557,7 +2634,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": false,
       "artifact_state": "verified_upstream_image",
       "blocked_by": [
@@ -2608,6 +2688,7 @@
     "display_name": "kube-bench",
     "category": "kubernetes",
     "description": "Checks Kubernetes nodes against CIS benchmark guidance.",
+    "supported_providers": [],
     "repository_url": "https://github.com/aquasecurity/kube-bench",
     "homepage_url": null,
     "license_spdx": "Apache-2.0",
@@ -2685,7 +2766,10 @@
       }
     },
     "compatibility": {
-      "support_date": "2026-08-24",
+      "knowledge_date": "2026-08-24",
+      "support_until": "2026-11-22",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "update_procedure": "docs/engine-maintenance.md",
       "runnable": false,
       "artifact_state": "managed_build_plan",
       "blocked_by": [

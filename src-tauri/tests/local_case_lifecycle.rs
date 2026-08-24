@@ -1,0 +1,560 @@
+use ai_security_scanner_lib::adapters::builtin_adapter_registry;
+use ai_security_scanner_lib::artifact_store::ArtifactStore;
+use ai_security_scanner_lib::case_service::{
+    CaseExportFormat, CaseService, DurableExecutionReport, PlannedEngineExecution, ScanPlanRequest,
+    ScopeApprovalRequest,
+};
+use ai_security_scanner_lib::container_runtime::{
+    CancellationToken, FakeContainerRuntime, FakeRunBehavior, NetworkPolicy, ResourceLimits,
+    ScannerCredentialSet,
+};
+use ai_security_scanner_lib::domain::{
+    Asset, CaseStatus, CoverageStatus, CreateCaseRequest, DataClass, EngineRunStatus,
+    FindingDiffStatus, ScanPermission, ScopeGrant,
+};
+use ai_security_scanner_lib::export::ExportOptions;
+use ai_security_scanner_lib::orchestrator::{
+    EngineExecutionRequest, ExecutionReport, ExecutionStage, Orchestrator,
+};
+use ai_security_scanner_lib::registry::EngineRegistry;
+use ai_security_scanner_lib::storage::Storage;
+use ai_security_scanner_lib::workspace_snapshot::{
+    WorkspaceSnapshotLimits, WorkspaceSnapshotReference, create_workspace_snapshot,
+    resolve_workspace_snapshot,
+};
+use chrono::Utc;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const GITLEAKS_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/gitleaks.json");
+const KICS_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kics.json");
+const CHECKOV_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/checkov.json");
+const SYFT_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/syft.json");
+
+fn output_filename(engine_id: &str) -> &'static str {
+    match engine_id {
+        "gitleaks" => "gitleaks.json",
+        "kics" => "kics.json",
+        "checkov" => "checkov.json",
+        "syft" => "syft.json",
+        other => panic!("no lifecycle fixture output for {other}"),
+    }
+}
+
+fn baseline_output(engine_id: &str) -> &'static [u8] {
+    match engine_id {
+        "gitleaks" => GITLEAKS_FIXTURE,
+        "kics" => KICS_FIXTURE,
+        "checkov" => CHECKOV_FIXTURE,
+        "syft" => SYFT_FIXTURE,
+        other => panic!("no lifecycle fixture bytes for {other}"),
+    }
+}
+
+fn execute_fixture(
+    orchestrator: &Orchestrator<'_, FakeContainerRuntime>,
+    runtime: &FakeContainerRuntime,
+    execution: &PlannedEngineExecution,
+    workspace: &Path,
+    output: Vec<u8>,
+) -> ExecutionReport {
+    runtime.set_behavior(FakeRunBehavior {
+        exit_code: Some(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        output_files: BTreeMap::from([(
+            output_filename(&execution.manifest.id).to_owned(),
+            output,
+        )]),
+    });
+    let network = NetworkPolicy::Disabled;
+    let resources = ResourceLimits::default();
+    let credentials = ScannerCredentialSet::default();
+    let request = EngineExecutionRequest {
+        case_id: &execution.case_id,
+        scan_run_id: &execution.scan_run_id,
+        engine_run_id: &execution.engine_run_id,
+        manifest: &execution.manifest,
+        assets: &execution.assets,
+        scope_grants: &execution.scope_grants,
+        workspace: Some(workspace),
+        network_policy: &network,
+        resource_limits: &resources,
+        credentials: &credentials,
+        attempt: execution.attempt,
+    };
+
+    orchestrator
+        .execute(&request, &CancellationToken::default())
+        .expect("representative scanner execution")
+}
+
+fn assert_report_provenance(
+    artifact_root: &Path,
+    execution: &PlannedEngineExecution,
+    report: &ExecutionReport,
+) {
+    assert_eq!(report.checkpoint.stage, ExecutionStage::Completed);
+    assert!(report.checkpoint.cleanup_completed);
+    assert_eq!(report.exit_code, Some(0));
+    assert_eq!(report.checkpoint.case_id, execution.case_id);
+    assert_eq!(report.checkpoint.scan_run_id, execution.scan_run_id);
+    assert_eq!(report.checkpoint.engine_run_id, execution.engine_run_id);
+    assert_eq!(report.checkpoint.engine_id, execution.manifest.id);
+    assert_eq!(report.raw_artifacts.len(), 3);
+    let expected_finding_count = usize::from(execution.manifest.id != "syft");
+    assert_eq!(report.findings.len(), expected_finding_count);
+
+    let artifact_ids = report
+        .raw_artifacts
+        .iter()
+        .map(|artifact| artifact.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for artifact in &report.raw_artifacts {
+        assert_eq!(artifact.case_id, execution.case_id);
+        assert_eq!(artifact.run_id, execution.scan_run_id);
+        assert_eq!(artifact.engine_run_id, execution.engine_run_id);
+        let bytes = fs::read(artifact_root.join(&artifact.relative_path))
+            .expect("durable raw artifact remains readable");
+        assert_eq!(artifact.byte_length, bytes.len() as u64);
+        assert_eq!(artifact.sha256, hex::encode(Sha256::digest(&bytes)));
+    }
+
+    if expected_finding_count == 0 {
+        return;
+    }
+    let finding = &report.findings[0];
+    assert_eq!(finding.case_id, execution.case_id);
+    assert_eq!(finding.first_seen_run_id, execution.scan_run_id);
+    assert_eq!(finding.last_seen_run_id, execution.scan_run_id);
+    assert_eq!(finding.asset_ids, [execution.assets[0].id.clone()]);
+    assert!(!finding.evidence.is_empty());
+    for evidence in &finding.evidence {
+        assert_eq!(evidence.run_id, execution.scan_run_id);
+        assert_eq!(evidence.engine_id, execution.manifest.id);
+        assert!(artifact_ids.contains(evidence.artifact_id.as_str()));
+        let artifact = report
+            .raw_artifacts
+            .iter()
+            .find(|artifact| artifact.id == evidence.artifact_id)
+            .expect("evidence artifact is part of the same execution report");
+        assert_eq!(evidence.artifact_sha256, artifact.sha256);
+    }
+    if execution.manifest.id == "gitleaks" {
+        assert!(finding.evidence.iter().all(|evidence| evidence.redacted));
+        assert!(
+            !serde_json::to_string(finding)
+                .expect("finding JSON")
+                .contains("SECRET_SENTINEL_MUST_NEVER_LEAK")
+        );
+    }
+}
+
+fn make_workspace(root: &Path, name: &str, marker: &str) -> PathBuf {
+    let workspace = root.join(name);
+    fs::create_dir_all(workspace.join("infra")).expect("working tree directories");
+    fs::write(
+        workspace.join("infra/storage.tf"),
+        format!("# {marker}\nresource \"example\" \"{marker}\" {{}}\n"),
+    )
+    .expect("working tree IaC file");
+    fs::write(
+        workspace.join("config.example.env"),
+        format!("WORKSPACE_MARKER={marker}\n"),
+    )
+    .expect("working tree source file");
+    workspace
+}
+
+#[test]
+fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
+    let temporary = tempfile::tempdir().expect("lifecycle temporary directory");
+    let storage = Storage::open(temporary.path().join("casework.db")).expect("private storage");
+    let engines = EngineRegistry::load_builtin().expect("supported built-in engine catalog");
+    let adapters = builtin_adapter_registry().expect("built-in adapters");
+    let artifacts =
+        ArtifactStore::open(temporary.path().join("artifacts")).expect("private artifact store");
+    let artifact_root = artifacts.root().to_path_buf();
+    let service = CaseService::new(
+        &storage,
+        &engines,
+        &adapters,
+        &artifact_root,
+        temporary.path().join("integrity-signing-key"),
+    );
+
+    let case = service
+        .create_case(&CreateCaseRequest {
+            title: "Local repository assessment".into(),
+            organization_name: "Example organization".into(),
+            employee_range: "1-10".into(),
+            data_classes: vec![DataClass::CredentialsAndSecrets],
+            requested_activities: vec![],
+            source_kinds: vec![],
+            not_applicable_source_kinds: vec![],
+            declared_assets: vec![],
+            notes: Some("Integration lifecycle fixture".into()),
+        })
+        .expect("case creation");
+
+    let source_root = temporary.path().join("selected-working-trees");
+    fs::create_dir(&source_root).expect("selected source root");
+    let selected_a = make_workspace(&source_root, "workspace-a", "alpha");
+    let selected_b = make_workspace(&source_root, "workspace-b", "bravo");
+    let mut references = BTreeMap::<String, WorkspaceSnapshotReference>::new();
+    for (source_id, label, selected) in [
+        ("workspace-source-a", "Working tree A", selected_a),
+        ("workspace-source-b", "Working tree B", selected_b),
+    ] {
+        let snapshot = create_workspace_snapshot(
+            &artifact_root,
+            &case.id,
+            source_id,
+            selected,
+            WorkspaceSnapshotLimits::default(),
+        )
+        .expect("immutable working-tree snapshot");
+        references.insert(snapshot.asset.id.clone(), snapshot.reference.clone());
+        service
+            .attach_workspace_snapshot(&case.id, label, snapshot)
+            .expect("source-grounded snapshot attachment");
+    }
+
+    let discovered = service.show_case(&case.id).expect("discovered case");
+    assert_eq!(discovered.assets.len(), 2);
+    let asset_coverage = discovered
+        .coverage
+        .iter()
+        .filter(|entry| entry.asset_id.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(asset_coverage.len(), 2);
+    assert!(
+        asset_coverage
+            .iter()
+            .all(|entry| entry.status == CoverageStatus::DiscoveredNotAuthorized)
+    );
+    assert!(
+        discovered
+            .assets
+            .iter()
+            .all(|asset| asset.candidate && !asset.owner_confirmed)
+    );
+
+    let asset_ids = discovered
+        .assets
+        .iter()
+        .map(|asset| asset.id.clone())
+        .collect::<Vec<_>>();
+    for asset_id in &asset_ids {
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: Some("Read-only immutable working-tree snapshot".into()),
+                    external_scope: None,
+                },
+            )
+            .expect("explicit local-artifact scope approval");
+    }
+
+    let lifecycle_engine_ids = ["checkov", "gitleaks", "kics", "syft"];
+    let plan = service
+        .plan_scan(
+            &case.id,
+            ScanPlanRequest {
+                engine_ids: lifecycle_engine_ids
+                    .iter()
+                    .map(|engine_id| (*engine_id).to_owned())
+                    .collect(),
+            },
+        )
+        .expect("fixture-backed local scan plan");
+    assert!(plan.not_executed.is_empty());
+    assert_eq!(plan.executable.len(), 8);
+    let planned_pairs = plan
+        .executable
+        .iter()
+        .map(|execution| {
+            assert!(execution.manifest.compatibility.runnable);
+            assert_eq!(execution.assets.len(), 1);
+            (
+                execution.manifest.id.clone(),
+                execution.assets[0].id.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let expected_pairs = lifecycle_engine_ids
+        .into_iter()
+        .flat_map(|engine_id| {
+            asset_ids
+                .iter()
+                .cloned()
+                .map(move |asset_id| (engine_id.to_owned(), asset_id))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(planned_pairs, expected_pairs);
+    for unavailable in engines
+        .manifests()
+        .iter()
+        .filter(|manifest| manifest.release_blocker().is_some())
+    {
+        assert!(
+            !plan
+                .executable
+                .iter()
+                .any(|execution| execution.manifest.id == unavailable.id)
+        );
+    }
+
+    let resolved_workspaces = references
+        .iter()
+        .map(|(asset_id, reference)| {
+            let resolved = resolve_workspace_snapshot(&artifact_root, &case.id, reference)
+                .expect("backend-derived immutable workspace resolution");
+            (asset_id.clone(), resolved.tree_path)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let runtime = FakeContainerRuntime::default();
+    let orchestrator = Orchestrator::new(&runtime, &artifacts, &adapters);
+    for execution in &plan.executable {
+        let workspace = resolved_workspaces
+            .get(&execution.assets[0].id)
+            .expect("execution has an attached workspace snapshot");
+        let report = execute_fixture(
+            &orchestrator,
+            &runtime,
+            execution,
+            workspace,
+            baseline_output(&execution.manifest.id).to_vec(),
+        );
+        assert_report_provenance(&artifact_root, execution, &report);
+        service
+            .apply_execution_report(&case.id, &DurableExecutionReport::from(&report))
+            .expect("durable execution reconciliation");
+    }
+
+    let baseline = service
+        .show_case(&case.id)
+        .expect("completed baseline case");
+    let baseline_run = baseline
+        .scan_runs
+        .iter()
+        .find(|run| run.id == plan.scan_run.id)
+        .expect("baseline run persisted");
+    assert!(baseline_run.completed_at.is_some());
+    assert!(
+        baseline_run
+            .engine_runs
+            .iter()
+            .all(|run| run.status == EngineRunStatus::Completed)
+    );
+    assert_eq!(baseline.status, CaseStatus::ReadyForHandoff);
+    assert_eq!(baseline.findings.len(), 6);
+    assert_eq!(baseline.finding_observations.len(), 6);
+    assert_eq!(baseline.raw_artifacts.len(), 24);
+    assert!(
+        baseline
+            .coverage
+            .iter()
+            .filter(|entry| entry.asset_id.is_some())
+            .all(|entry| entry.status == CoverageStatus::DiscoveredAuthorizedScanned)
+    );
+    for observation in &baseline.finding_observations {
+        assert_eq!(observation.run_id, plan.scan_run.id);
+        assert_eq!(observation.engine_ids.len(), 1);
+        assert_eq!(observation.asset_ids.len(), 1);
+        assert!(!observation.evidence_hashes.is_empty());
+        assert!(
+            observation
+                .evidence_hashes
+                .iter()
+                .all(|digest| digest.len() == 64)
+        );
+    }
+
+    let bundle_path = temporary.path().join("baseline.case.tar.gz");
+    let bundle = service
+        .export_case(
+            &case.id,
+            &plan.scan_run.id,
+            CaseExportFormat::CaseBundle,
+            &bundle_path,
+            ExportOptions::default(),
+        )
+        .expect("explicit case bundle export");
+    assert!(bundle.signature.is_some());
+    assert!(bundle.public_key.is_some());
+    let verified = service
+        .verify_stored_export(&case.id, &bundle.id)
+        .expect("stored bundle verification");
+    assert!(verified.valid);
+    let verified_bundle = verified.bundle.expect("signed bundle details");
+    assert!(verified_bundle.valid);
+    assert_eq!(verified_bundle.manifest.run_id, plan.scan_run.id);
+    assert_eq!(verified_bundle.manifest.raw_artifact_count, 24);
+    assert_eq!(verified_bundle.manifest.raw_artifacts_included, 0);
+
+    let rescan = service
+        .plan_rescan(
+            &case.id,
+            &plan.scan_run.id,
+            ScanPlanRequest {
+                engine_ids: vec!["gitleaks".into()],
+            },
+        )
+        .expect("comparable exact-scope rescan");
+    assert_eq!(rescan.plan.executable.len(), 2);
+    let changed_asset_id = asset_ids[0].clone();
+    let changed_output = String::from_utf8(GITLEAKS_FIXTURE.to_vec())
+        .expect("UTF-8 fixture")
+        .replace("Potential API key", "Potential rotated API key")
+        .into_bytes();
+    for execution in &rescan.plan.executable {
+        let output = if execution.assets[0].id == changed_asset_id {
+            changed_output.clone()
+        } else {
+            b"[]".to_vec()
+        };
+        let workspace = resolved_workspaces
+            .get(&execution.assets[0].id)
+            .expect("rescan workspace");
+        let report = execute_fixture(&orchestrator, &runtime, execution, workspace, output);
+        assert_eq!(report.checkpoint.stage, ExecutionStage::Completed);
+        if execution.assets[0].id == changed_asset_id {
+            assert_eq!(report.findings.len(), 1);
+        } else {
+            assert!(report.findings.is_empty());
+        }
+        service
+            .apply_execution_report(&case.id, &DurableExecutionReport::from(&report))
+            .expect("rescan execution reconciliation");
+    }
+    let current = service.show_case(&case.id).expect("completed rescan case");
+    let current_run = current
+        .scan_runs
+        .iter()
+        .find(|run| run.id == rescan.plan.scan_run.id)
+        .expect("current run persisted");
+    assert!(current_run.completed_at.is_some());
+    assert!(
+        current_run
+            .engine_runs
+            .iter()
+            .all(|run| run.status == EngineRunStatus::Completed)
+    );
+
+    let comparison = service
+        .compare_and_persist(&case.id, &plan.scan_run.id, &rescan.plan.scan_run.id)
+        .expect("coverage-aware comparison");
+    let gitleaks_statuses = comparison
+        .diffs
+        .iter()
+        .filter(|diff| diff.fingerprint.starts_with("gitleaks:"))
+        .map(|diff| &diff.status)
+        .collect::<Vec<_>>();
+    assert_eq!(gitleaks_statuses.len(), 2);
+    assert!(gitleaks_statuses.contains(&&FindingDiffStatus::Changed));
+    assert!(gitleaks_statuses.contains(&&FindingDiffStatus::Resolved));
+    let kics_diffs = comparison
+        .diffs
+        .iter()
+        .filter(|diff| diff.fingerprint.starts_with("kics:"))
+        .collect::<Vec<_>>();
+    assert_eq!(kics_diffs.len(), 2);
+    assert!(
+        kics_diffs
+            .iter()
+            .all(|diff| diff.status == FindingDiffStatus::UnableToVerify)
+    );
+    assert!(
+        kics_diffs
+            .iter()
+            .all(|diff| diff.explanation.contains("engine=kics"))
+    );
+
+    // A JSON-only repository asset carries no backend snapshot reference. Even
+    // with a forged grant, the public orchestrator boundary refuses to execute
+    // a local scanner without an explicitly resolved workspace path.
+    let mut json_asset_value = serde_json::to_value(&baseline.assets[0]).expect("asset JSON");
+    json_asset_value["id"] = serde_json::Value::String("json-only-repository".into());
+    json_asset_value["metadata"] = serde_json::json!({});
+    json_asset_value["discovered_from"] = serde_json::json!(["json-only-source"]);
+    let json_only_asset: Asset =
+        serde_json::from_value(json_asset_value).expect("JSON-only repository asset");
+    let forged_grant = ScopeGrant {
+        id: "json-only-grant".into(),
+        asset_id: json_only_asset.id.clone(),
+        permission: ScanPermission::LocalArtifactRead,
+        confirmed_by: "Untrusted JSON".into(),
+        confirmed_at: Utc::now(),
+        expires_at: None,
+        authorization_reference: None,
+        notes: None,
+        external_scope: None,
+    };
+    let gitleaks = engines.get("gitleaks").expect("Gitleaks manifest");
+    let no_workspace_assets = [json_only_asset];
+    let no_workspace_grants = [forged_grant];
+    let network = NetworkPolicy::Disabled;
+    let resources = ResourceLimits::default();
+    let credentials = ScannerCredentialSet::default();
+    let no_workspace_request = EngineExecutionRequest {
+        case_id: &case.id,
+        scan_run_id: "json-only-scan",
+        engine_run_id: "json-only-engine-run",
+        manifest: gitleaks,
+        assets: &no_workspace_assets,
+        scope_grants: &no_workspace_grants,
+        workspace: None,
+        network_policy: &network,
+        resource_limits: &resources,
+        credentials: &credentials,
+        attempt: 1,
+    };
+    let denied = orchestrator
+        .execute(&no_workspace_request, &CancellationToken::default())
+        .expect_err("JSON-only repository must not execute without a snapshot");
+    assert!(
+        denied
+            .to_string()
+            .contains("requires an explicitly selected local workspace")
+    );
+
+    // An explicitly requested engine that is absent from this exact release
+    // remains a durable terminal not-executed record. The assertion must not
+    // depend on a currently published catalog engine staying unreleased.
+    let unavailable_ids = vec!["fixture-engine-not-in-release".into()];
+    let unavailable = service
+        .plan_scan(
+            &case.id,
+            ScanPlanRequest {
+                engine_ids: unavailable_ids.clone(),
+            },
+        )
+        .expect("truthful unavailable-engine plan");
+    assert!(unavailable.executable.is_empty());
+    assert_eq!(unavailable.not_executed.len(), unavailable_ids.len());
+    assert!(unavailable.scan_run.completed_at.is_some());
+    assert!(
+        unavailable
+            .scan_run
+            .engine_runs
+            .iter()
+            .all(|run| run.status == EngineRunStatus::NotExecuted)
+    );
+    assert_eq!(
+        unavailable
+            .not_executed
+            .iter()
+            .map(|entry| entry.engine_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        unavailable_ids.iter().map(String::as_str).collect()
+    );
+}

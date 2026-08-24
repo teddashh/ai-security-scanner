@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/teddashh/ai-security-scanner/runtime/managed-runtime.schema.json",
+  "title": "ai-security-scanner managed runtime bundle manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bundle_id",
+    "runtime_version",
+    "driver_path",
+    "files",
+    "components",
+    "targets",
+    "resources",
+    "source"
+  ],
+  "properties": {
+    "schema_version": { "const": "2" },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "runtime_version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "driver_path": { "$ref": "#/$defs/relativePath" },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size_bytes", "executable"],
+        "properties": {
+          "path": { "$ref": "#/$defs/relativePath" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1073741824
+          },
+          "executable": { "type": "boolean" }
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "version",
+          "repository_url",
+          "source_revision",
+          "license_spdx",
+          "relationship",
+          "artifacts"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "version": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+          "repository_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "source_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "license_spdx": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "relationship": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "artifacts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 136,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["delivery", "locator", "sha256", "size_bytes"],
+              "properties": {
+                "delivery": { "enum": ["bundled_file", "runtime_download"] },
+                "locator": { "type": "string", "minLength": 1, "maxLength": 2048 },
+                "sha256": { "$ref": "#/$defs/sha256" },
+                "size_bytes": { "type": "integer", "minimum": 1, "maximum": 4294967296 }
+              }
+            }
+          },
+          "source_archive": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "sha256", "size_bytes"],
+            "properties": {
+              "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+              "sha256": { "$ref": "#/$defs/sha256" },
+              "size_bytes": { "type": "integer", "minimum": 1, "maximum": 4294967296 }
+            }
+          }
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operating_system",
+          "architecture",
+          "provider",
+          "machine_image"
+        ],
+        "properties": {
+          "operating_system": {
+            "enum": ["linux", "macos", "windows"]
+          },
+          "architecture": { "enum": ["x86_64", "aarch64"] },
+          "provider": { "enum": ["applehv", "qemu", "wsl"] },
+          "machine_image": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "sha256", "size_bytes"],
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https://github\\.com/podman-container-tools/podman-machine-os/releases/download/"
+              },
+              "sha256": { "$ref": "#/$defs/sha256" },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967296
+              }
+            }
+          },
+          "prerequisite": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpus", "memory_mb", "disk_size_gb"],
+      "properties": {
+        "cpus": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 2048,
+          "maximum": 65536
+        },
+        "disk_size_gb": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 1024
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_url", "source_revision", "license_spdx"],
+      "properties": {
+        "repository_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "source_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "license_spdx": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^\\u0000\\r\\n]+$"
+    }
+  }
+}

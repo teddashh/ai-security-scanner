@@ -1,0 +1,189 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "checkov",
+  "plan_kind": "managed_source_image",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "published_managed_artifact",
+  "source": {
+    "repository": "https://github.com/bridgecrewio/checkov",
+    "revision": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
+    "acquisition_source": "https://github.com/bridgecrewio/checkov/commit/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
+    "local_research_checkout": ".upstreams/bridgecrewio/checkov"
+  },
+  "verified_upstream_artifact": {
+    "repository": "bridgecrew/checkov",
+    "tag": "3.3.13",
+    "digest": "sha256:c5fb7154bed784fc19a69779c308fddba564f19a37c25d306c0e9765c4f0aa1d",
+    "signature_identity": null,
+    "entrypoint": [
+      "/entrypoint.sh"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_mismatch",
+      "artifact_source_revision": "e5745d49136248321e28bb5c949a7e71114f0e9c",
+      "disposition": "rejected_because_build_inputs_and_entrypoint_are_not_release_safe"
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-checkov",
+    "tag": "3.3.13-1",
+    "digest": "sha256:0ecc187b17faa9c538c9b1ecc08a4195283290222694d0f87d50016f2bb79b35"
+  },
+  "build_recipe": {
+    "source_revision": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
+    "source_archive": {
+      "url": "https://github.com/bridgecrewio/checkov/archive/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789.tar.gz",
+      "sha256": "sha256:2f69bad836b1c757849f904061b88fcb73cf46e10cdf8f3b4e277ac600a29edd"
+    },
+    "dependency_lock": {
+      "path": "Pipfile.lock",
+      "sha256": "sha256:f51eb3c9693670743a8be18191e44bcacf80f21e68cdfdb86dc00b0017df7995",
+      "records": 99,
+      "rendered_requirements_sha256": "sha256:ff6acf0461a6d007bb9da017975d77e2ebfad41ee90704db4246b50c2bc0c557",
+      "require_hashes": true,
+      "only_binary": true
+    },
+    "source_preparer": {
+      "path": "engines/images/checkov/prepare_source.py",
+      "sha256": "sha256:5eda2611880655006f0d6e9b2018023e3eeaa995abffe73a7910dd42415a8bd0"
+    },
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "python",
+        "tag": "3.11.16-slim",
+        "digest": "sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7",
+        "uses": [
+          "build",
+          "runtime"
+        ]
+      }
+    ],
+    "source_date_epoch": 1787218764,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "build_context": {
+      "dockerignore_path": "engines/images/checkov/.dockerignore",
+      "dockerignore_sha256": "sha256:f6bee790ed0f2c83c966dbe407a76d5ff3b2a4a14619621332d25bab8ed00d18"
+    },
+    "static_steps": [
+      [
+        "python",
+        "/usr/local/libexec/checkov-prepare-source",
+        "/tmp/checkov-source.tar.gz",
+        "/src",
+        "/tmp/requirements.lock"
+      ],
+      [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-compile",
+        "--only-binary=:all:",
+        "--require-hashes",
+        "--prefix=/install",
+        "--requirement=/tmp/requirements.lock"
+      ],
+      [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-compile",
+        "--no-build-isolation",
+        "--no-deps",
+        "--prefix=/install",
+        "/src"
+      ],
+      [
+        "tar",
+        "--create",
+        "--format=gnu",
+        "--sort=name",
+        "--mtime=@1787218764",
+        "--directory=/install",
+        "."
+      ]
+    ]
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/checkov/Dockerfile",
+    "sha256": "sha256:c4b996e2a874f9bd1a235647b6a0f350c1b0de240ca8aa95a43697d6c7ec160c",
+    "reason": null
+  },
+  "wrapper": {
+    "required": false,
+    "strategy": "The managed image builds Checkov from the exact release source and hashed dependency lock, then exposes its direct non-shell entrypoint with fixed offline Terraform arguments.",
+    "entrypoint": null
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "entrypoint": [
+      "/usr/local/bin/checkov"
+    ],
+    "network_mode": "disabled",
+    "cache_path": "/tmp/ai-security-scanner-cache",
+    "environment": {
+      "BC_ENABLE_PERSIST_GRAPHS": "false",
+      "CKV_BITBUCKET_CONFIG_FETCH_DATA": "false",
+      "CKV_GITHUB_CONFIG_FETCH_DATA": "false",
+      "CKV_GITLAB_CONFIG_FETCH_DATA": "false",
+      "CKV_SKIP_PACKAGE_UPDATE_CHECK": "true",
+      "HOME": "/tmp/ai-security-scanner-home",
+      "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONUNBUFFERED": "1",
+      "RUN_IN_DOCKER": "true",
+      "XDG_CACHE_HOME": "/tmp/ai-security-scanner-cache"
+    }
+  },
+  "publication_evidence": {
+    "workflow": ".github/workflows/engine-image-checkov.yml",
+    "run_url": "https://github.com/teddashh/ai-security-scanner/actions/runs/32713536164",
+    "source_revision": "8bdeb311b6485347846298bfcbda6fdfc9520056",
+    "anonymous_pull_verified": true,
+    "platform_manifests": {
+      "linux/amd64": "sha256:a61ea9064669f25e203d887a8559dde9d5cc01d2efe926e4de7435c31e0d18a3",
+      "linux/arm64": "sha256:b22966af844e9c00151238d478d5f8546b73e8bf6bef27aaca82e85b32fd59e9"
+    }
+  },
+  "command": [
+    "-d",
+    "/workspace",
+    "--framework",
+    "terraform",
+    "--output",
+    "json",
+    "--output-file-path",
+    "/output/checkov.json,",
+    "--skip-download",
+    "--compact",
+    "--quiet",
+    "--soft-fail"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/checkov.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices; dependency notices remain required.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}

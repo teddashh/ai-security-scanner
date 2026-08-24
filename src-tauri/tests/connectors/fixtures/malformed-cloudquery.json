@@ -1,0 +1,1 @@
+{ "rows": [ { "kind": "aws_s3_bucket", "name": "unterminated" } ]

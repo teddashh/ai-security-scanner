@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 
 const root = resolve(import.meta.dirname, "..");
 const catalogPath = resolve(root, "engines/catalog.json");
@@ -40,6 +41,108 @@ const managedCloudIds = new Set([
 ]);
 const managedExternalIds = new Set(["naabu", "httpx", "nuclei"]);
 const managedM365Ids = new Set(["scubagear", "maester"]);
+const managedImageRepositoryPrefix = "ghcr.io/teddashh/ai-security-scanner-engine-";
+const managedLocalK8sIds = ["semgrep", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"];
+const managedLocalK8sContracts = new Map([
+  ["semgrep", {
+    tag: "1.174.0-1",
+    planKind: "managed_build",
+    license: { disposition: "source_offer", sourceOfferPath: "engines/images/semgrep/SOURCE-OFFER.md" },
+    immutableDockerfileInputs: [
+      "COPY engines/images/semgrep/rules.yml /opt/ai-security-scanner/semgrep/rules.yml",
+      "COPY engines/images/semgrep/submodules.lock /usr/share/source/semgrep-submodules.lock",
+      "COPY engines/images/semgrep/SOURCE-OFFER.md /usr/share/source/SEMGREP-SOURCE-OFFER.md",
+      'SEMGREP_ENABLE_VERSION_CHECK="0"',
+      'SEMGREP_SEND_METRICS="off"',
+    ],
+  }],
+  ["trufflehog", {
+    tag: "3.97.0-1",
+    planKind: "managed_build",
+    license: { disposition: "source_offer", sourceOfferPath: "engines/images/trufflehog/SOURCE-OFFER.md" },
+    immutableDockerfileInputs: [
+      "go mod verify",
+      "go build -mod=readonly",
+      "COPY engines/images/trufflehog/SOURCE-OFFER.md /usr/share/source/TRUFFLEHOG-SOURCE-OFFER.md",
+    ],
+  }],
+  ["trivy", {
+    tag: "0.74.0-1",
+    planKind: "managed_build",
+    license: { disposition: "allow", sourceOfferPath: null },
+    immutableDockerfileInputs: [
+      "go mod verify",
+      "go build -mod=readonly",
+      "COPY .engine-cache/offline/trivy/db.tar.gz /tmp/trivy-db.tar.gz",
+      "COPY engines/images/trivy/DATABASE-NOTICE.md /usr/share/licenses/trivy/DATABASE-NOTICE.md",
+      'TRIVY_CACHE_DIR="/opt/ai-security-scanner/trivy-cache"',
+    ],
+  }],
+  ["grype", {
+    tag: "0.117.0-1",
+    planKind: "managed_build",
+    license: { disposition: "allow", sourceOfferPath: null },
+    immutableDockerfileInputs: [
+      "go mod verify",
+      "go build -mod=readonly",
+      "COPY .engine-cache/offline/grype/db.tar.zst /tmp/grype-db.tar.zst",
+      "COPY engines/images/grype/import.json /tmp/grype-import.json",
+      'GRYPE_CHECK_FOR_APP_UPDATE="false"',
+      'GRYPE_DB_AUTO_UPDATE="false"',
+    ],
+  }],
+  ["kubescape", {
+    tag: "4.0.12-1",
+    planKind: "managed_build",
+    license: { disposition: "allow", sourceOfferPath: null },
+    immutableDockerfileInputs: [
+      "go mod verify",
+      "go build -mod=readonly",
+      "https://github.com/kubescape/regolibrary/releases/download/v2/nsa",
+      "https://github.com/kubescape/regolibrary/releases/download/v2/default_config_inputs",
+      "https://github.com/kubescape/regolibrary/releases/download/v2/exceptions",
+      'KS_SUBMIT="false"',
+      'OTEL_SDK_DISABLED="true"',
+    ],
+  }],
+  ["kube-bench", {
+    tag: "0.16.0-1",
+    planKind: "managed_build",
+    license: { disposition: "allow", sourceOfferPath: null },
+    immutableDockerfileInputs: [
+      "go mod verify",
+      "go build -mod=readonly",
+      "COPY engines/images/kube-bench/cfg/config.yaml /opt/ai-security-scanner/kube-bench/cfg/config.yaml",
+      "COPY engines/images/kube-bench/cfg/ai-security-scanner-snapshot/config.yaml /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot/config.yaml",
+      "COPY engines/images/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml /opt/ai-security-scanner/kube-bench/cfg/ai-security-scanner-snapshot/node.yaml",
+      "COPY engines/images/kube-bench/SNAPSHOT-PROFILE.md /usr/share/doc/ai-security-scanner/kube-bench-snapshot-profile.md",
+    ],
+  }],
+]);
+const managedGreenboneContract = {
+  tag: "23.50.21-feed202608240615-1",
+  planKind: "multi_component_build",
+  license: { disposition: "source_offer", sourceOfferPath: "engines/images/greenbone/SOURCE-OFFER.md" },
+  scannerRevision: "c3ae607ef632393b7919fb179d30b940d929f713",
+  scannerArchiveSha256: "sha256:47cbc7fbff0e19c4533f48c6e7287298f1466d1556f0fc4a7177c37506a3d5e8",
+  feedVersion: "202608240615-community",
+  feedRevision: "b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
+  feedImageDigest: "sha256:419438986cc4bc88c9a9c7960b519033c9ef1827241457c9acaca3b497a0183c",
+  notusRevision: "4635b37aecd2d968680c7609a7fb61e5d780ce93",
+  notusImageDigest: "sha256:73a309ed3dab7a5646952664434b425e2162909c7f92ed55f0abcfc37e211def",
+  smokeOid: "1.3.6.1.4.1.25623.1.0.108252",
+};
+const managedEvidenceWorkflows = new Map([
+  [".github/workflows/engine-images-cloud.yml", ["cloudquery", "prowler", "cloudsplaining", "scoutsuite", "steampipe"]],
+  [".github/workflows/engine-images-external.yml", ["naabu", "httpx", "nuclei"]],
+  [".github/workflows/engine-images-m365.yml", ["scubagear", "maester"]],
+  [".github/workflows/engine-images-local-k8s.yml", managedLocalK8sIds],
+  [".github/workflows/engine-image-greenbone.yml", ["greenbone"]],
+  [".github/workflows/engine-image-checkov.yml", ["checkov"]],
+  [".github/workflows/engine-image-syft.yml", ["syft"]],
+]);
+const managedEvidenceEngineIds = [...managedEvidenceWorkflows.values()].flat();
+const upstreamImageOnlyIds = new Set(["gitleaks", "kics"]);
 const shellNames = new Set([
   "sh", "bash", "dash", "zsh", "fish", "cmd", "cmd.exe",
   "powershell", "powershell.exe", "pwsh", "pwsh.exe",
@@ -50,8 +153,20 @@ const floatingTags = new Set([
 ]);
 const digestPattern = /^sha256:[0-9a-f]{64}$/;
 const revisionPattern = /^[0-9a-f]{40}$/;
+const isoDatePattern = /^(\d{4})-(\d{2})-(\d{2})$/;
 const planKinds = new Set(["upstream_image", "managed_build", "managed_rebase", "managed_source_image", "multi_component_build"]);
 const errors = [];
+
+function isIsoDate(value) {
+  const match = typeof value === "string" ? isoDatePattern.exec(value) : null;
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1];
+}
 
 function parseJson(path) {
   try {
@@ -60,6 +175,209 @@ function parseJson(path) {
     errors.push(`${path}: invalid JSON (${error.message})`);
     return null;
   }
+}
+
+function sortedUnique(values) {
+  return [...new Set(values)].sort();
+}
+
+function validateExactIdSet(actual, expected, label) {
+  const actualIds = sortedUnique(actual);
+  const expectedIds = sortedUnique(expected);
+  if (deepEqual(actualIds, expectedIds)) return;
+  const actualSet = new Set(actualIds);
+  const expectedSet = new Set(expectedIds);
+  const missing = expectedIds.filter((id) => !actualSet.has(id));
+  const unexpected = actualIds.filter((id) => !expectedSet.has(id));
+  errors.push(`${label}: missing [${missing.join(", ") || "none"}]; unexpected [${unexpected.join(", ") || "none"}]`);
+}
+
+function parseWorkflow(relative) {
+  const absolute = resolve(root, relative);
+  if (!existsSync(absolute)) {
+    errors.push(`${relative}: managed image evidence workflow is missing`);
+    return null;
+  }
+  try {
+    const workflow = parseYaml(readFileSync(absolute, "utf8"));
+    if (!workflow || typeof workflow !== "object" || Array.isArray(workflow)) {
+      errors.push(`${relative}: workflow must be a YAML mapping`);
+      return null;
+    }
+    return workflow;
+  } catch (error) {
+    errors.push(`${relative}: invalid workflow YAML (${error.message})`);
+    return null;
+  }
+}
+
+function resolveEvidenceStepEngines(job, step, label) {
+  const configuredEngine = step?.with?.engine;
+  if (typeof configuredEngine !== "string") {
+    errors.push(`${label}: common evidence action requires an engine input`);
+    return [];
+  }
+  if (/^\$\{\{\s*matrix\.engine\s*\}\}$/.test(configuredEngine)) {
+    const include = job?.strategy?.matrix?.include;
+    const direct = job?.strategy?.matrix?.engine;
+    const matrixEngines = Array.isArray(include)
+      ? include.map((entry) => entry?.engine)
+      : Array.isArray(direct) ? direct : [];
+    if (matrixEngines.length === 0 || matrixEngines.some((id) => typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) {
+      errors.push(`${label}: matrix.engine must resolve to a non-empty static engine list`);
+      return [];
+    }
+    return matrixEngines;
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(configuredEngine)) {
+    errors.push(`${label}: evidence engine input must be a literal id or exactly \${{ matrix.engine }}`);
+    return [];
+  }
+  return [configuredEngine];
+}
+
+function validateManagedImageEvidence(catalogEntries) {
+  const expectedManagedIds = managedEvidenceEngineIds;
+  if (expectedManagedIds.length !== 19 || new Set(expectedManagedIds).size !== 19) {
+    errors.push("managed evidence contract must enumerate exactly 19 unique engines");
+  }
+  for (const id of upstreamImageOnlyIds) {
+    if (expectedManagedIds.includes(id)) errors.push(`managed evidence contract must not count upstream-only engine ${id}`);
+  }
+
+  const coveredIds = [];
+  for (const [relative, expectedWorkflowIds] of managedEvidenceWorkflows) {
+    const workflow = parseWorkflow(relative);
+    if (!workflow) continue;
+    const paths = workflow.on?.push?.paths;
+    if (!Array.isArray(paths)) {
+      errors.push(`${relative}: push.paths must be a static list`);
+    } else {
+      for (const requiredPath of [
+        ".github/actions/engine-image-evidence/**",
+        "scripts/engine-image-evidence.mjs",
+      ]) {
+        if (!paths.includes(requiredPath)) errors.push(`${relative}: push.paths must watch ${requiredPath}`);
+      }
+    }
+
+    const jobs = workflow.jobs;
+    if (!jobs || typeof jobs !== "object" || Array.isArray(jobs)) {
+      errors.push(`${relative}: jobs must be a YAML mapping`);
+      continue;
+    }
+    const workflowIds = [];
+    let evidenceStepCount = 0;
+    for (const [jobId, job] of Object.entries(jobs)) {
+      const steps = Array.isArray(job?.steps) ? job.steps : [];
+      const buildIndexes = steps
+        .map((step, index) => typeof step?.uses === "string" && step.uses.startsWith("docker/build-push-action@") ? index : -1)
+        .filter((index) => index >= 0);
+      for (const buildIndex of buildIndexes) {
+        const buildStep = steps[buildIndex];
+        const label = `${relative}:jobs.${jobId}.steps[${buildIndex}]`;
+        if (typeof buildStep?.with?.push !== "boolean") {
+          errors.push(`${label}: docker/build-push-action push must be an explicit boolean`);
+        }
+        if (buildStep?.with?.provenance !== false || buildStep?.with?.sbom !== false) {
+          errors.push(`${label}: docker/build-push-action must set provenance: false and sbom: false`);
+        }
+      }
+      const publishingBuildIndexes = buildIndexes.filter((index) => steps[index]?.with?.push === true);
+      const evidenceIndexes = steps
+        .map((step, index) => step?.uses === "./.github/actions/engine-image-evidence" ? index : -1)
+        .filter((index) => index >= 0);
+      if (publishingBuildIndexes.length > 0 && evidenceIndexes.length === 0) {
+        errors.push(`${relative}:jobs.${jobId}: every image publication job must invoke the common evidence action`);
+      }
+      for (const evidenceIndex of evidenceIndexes) {
+        evidenceStepCount += 1;
+        const label = `${relative}:jobs.${jobId}.steps[${evidenceIndex}]`;
+        const evidenceStep = steps[evidenceIndex];
+        if (Object.hasOwn(evidenceStep, "if")) {
+          errors.push(`${label}: common evidence action must not be conditionally skipped inside a publication job`);
+        }
+        for (const input of ["engine", "image", "tag", "digest", "source-revision", "github-token"]) {
+          if (typeof evidenceStep?.with?.[input] !== "string" || evidenceStep.with[input].length === 0) {
+            errors.push(`${label}: common evidence action requires non-empty ${input}`);
+          }
+        }
+        const evidenceEngineIds = resolveEvidenceStepEngines(job, evidenceStep, label);
+        workflowIds.push(...evidenceEngineIds);
+
+        const permissions = job?.permissions ?? workflow.permissions;
+        if (!permissions || typeof permissions !== "object" || Array.isArray(permissions) ||
+            permissions["id-token"] !== "write" || permissions.attestations !== "write") {
+          errors.push(`${label}: effective permissions must grant id-token: write and attestations: write`);
+        }
+
+        const precedingPublishingBuildIndexes = publishingBuildIndexes.filter((index) => index < evidenceIndex);
+        if (precedingPublishingBuildIndexes.length === 0) {
+          errors.push(`${label}: evidence action must follow a docker/build-push-action publication step in the same job`);
+        } else {
+          const expectedDigestInputs = precedingPublishingBuildIndexes
+            .map((index) => steps[index]?.id)
+            .filter((id) => typeof id === "string" && id.length > 0)
+            .map((id) => `\${{ steps.${id}.outputs.digest }}`);
+          if (!expectedDigestInputs.includes(evidenceStep?.with?.digest)) {
+            errors.push(`${label}: digest must reference a preceding publication step output`);
+          }
+        }
+
+        const evidenceUpload = steps.slice(evidenceIndex + 1).find((step) =>
+          typeof step?.uses === "string" && step.uses.startsWith("actions/upload-artifact@") &&
+          step?.with?.path === "package-evidence" && step?.with?.["retention-days"] === 90 &&
+          !Object.hasOwn(step, "if"));
+        if (!evidenceUpload) {
+          errors.push(`${label}: signed package-evidence must be uploaded after attestation with retention-days: 90`);
+        } else {
+          const matrixEngine = /^\$\{\{\s*matrix\.engine\s*\}\}$/.test(evidenceStep?.with?.engine ?? "");
+          const artifactSuffix = "-image-evidence-${{ github.run_id }}-${{ github.run_attempt }}";
+          const expectedArtifactName = matrixEngine
+            ? "${{ matrix.engine }}" + artifactSuffix
+            : `${evidenceEngineIds[0] ?? "__missing_engine__"}${artifactSuffix}`;
+          if (evidenceUpload.with.name !== expectedArtifactName || evidenceUpload.with["if-no-files-found"] !== "error") {
+            errors.push(`${label}: evidence upload must use ${expectedArtifactName} and fail when evidence is absent`);
+          }
+        }
+      }
+    }
+    if (evidenceStepCount === 0) errors.push(`${relative}: workflow does not invoke the common evidence action`);
+    if (workflowIds.length !== new Set(workflowIds).size) {
+      errors.push(`${relative}: common evidence action covers an engine more than once`);
+    }
+    validateExactIdSet(workflowIds, expectedWorkflowIds, `${relative}: common evidence engine coverage differs from contract`);
+    coveredIds.push(...workflowIds);
+  }
+
+  if (coveredIds.length !== new Set(coveredIds).size) {
+    errors.push("managed image evidence workflows cover an engine more than once");
+  }
+  validateExactIdSet(coveredIds, expectedManagedIds, "managed image evidence workflow coverage differs from the 19-engine contract");
+
+  const catalogManagedIds = [];
+  for (const engine of Array.isArray(catalogEntries) ? catalogEntries : []) {
+    const repository = engine?.image?.repository;
+    if (typeof repository !== "string" || !repository.startsWith(managedImageRepositoryPrefix)) continue;
+    catalogManagedIds.push(engine.id);
+    if (upstreamImageOnlyIds.has(engine.id)) {
+      errors.push(`catalog:${engine.id}.image.repository: upstream-only engine must not be counted as a project-managed image`);
+    }
+    const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+    if (repository !== expectedRepository) {
+      errors.push(`catalog:${engine.id}.image.repository: project-managed image must be exactly ${expectedRepository}`);
+    }
+  }
+  validateExactIdSet(
+    catalogManagedIds,
+    coveredIds,
+    "catalog project-managed GHCR images differ from signed workflow coverage",
+  );
+  validateExactIdSet(
+    catalogManagedIds,
+    expectedManagedIds,
+    "catalog project-managed GHCR images differ from the 19-engine contract",
+  );
 }
 
 function jsonType(value) {
@@ -117,7 +435,7 @@ function validateSchemaValue(value, rule, path, rootSchema, targetErrors) {
     if (rule.minLength !== undefined && value.length < rule.minLength) targetErrors.push(`${path}: string is too short`);
     if (rule.maxLength !== undefined && value.length > rule.maxLength) targetErrors.push(`${path}: string is too long`);
     if (rule.pattern && !new RegExp(rule.pattern).test(value)) targetErrors.push(`${path}: does not match ${rule.pattern}`);
-    if (rule.format === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(value)) targetErrors.push(`${path}: is not an ISO date`);
+    if (rule.format === "date" && !isIsoDate(value)) targetErrors.push(`${path}: is not a real ISO calendar date`);
   }
   if (typeof value === "number") {
     if (rule.minimum !== undefined && value < rule.minimum) targetErrors.push(`${path}: is below minimum ${rule.minimum}`);
@@ -207,6 +525,353 @@ function walkFiles(path) {
 
 function sha256File(path) {
   return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
+}
+
+function isManagedPublicationClaimed(engine, plan, expectedRepository) {
+  return engine.compatibility?.runnable === true ||
+    engine.status === "integrated" ||
+    engine.image?.repository === expectedRepository ||
+    plan.publish_state === "published_managed_artifact" ||
+    plan.dockerfile?.emitted === true ||
+    plan.publication !== null && plan.publication !== undefined;
+}
+
+function validatePublishedManagedEvidence(plan, planRelative, engine) {
+  const publication = plan.publication;
+  const runMatch = typeof publication?.workflow_run === "string"
+    ? /^https:\/\/github\.com\/teddashh\/ai-security-scanner\/actions\/runs\/([1-9][0-9]*)$/.exec(publication.workflow_run)
+    : null;
+  if (!runMatch) {
+    errors.push(`${planRelative}: publication.workflow_run must identify one exact ai-security-scanner Actions run`);
+  }
+  if (!deepEqual(publication?.platforms, ["linux/amd64", "linux/arm64"]) ||
+      !deepEqual(sortedUnique(Object.keys(publication?.platform_digests ?? {})), ["linux/amd64", "linux/arm64"]) ||
+      !Object.values(publication?.platform_digests ?? {}).every((digest) => digestPattern.test(digest))) {
+    errors.push(`${planRelative}: publication must contain the exact amd64 and arm64 platform digests`);
+  }
+  if (publication?.anonymous_pull_verified !== true) {
+    errors.push(`${planRelative}: publication must prove anonymous access to the immutable multi-platform index`);
+  }
+  const adapterRevision = engine.provenance?.adapter?.source_revision;
+  if (!revisionPattern.test(publication?.source_revision ?? "") || publication?.source_revision !== adapterRevision) {
+    errors.push(`${planRelative}: publication source revision must equal the released adapter provenance revision`);
+  }
+  const artifactMatch = typeof publication?.evidence_artifact === "string"
+    ? new RegExp(`^${engine.id}-image-evidence-([1-9][0-9]*)-([1-9][0-9]*)$`).exec(publication.evidence_artifact)
+    : null;
+  if (!artifactMatch || !runMatch || artifactMatch[1] !== runMatch[1]) {
+    errors.push(`${planRelative}: evidence artifact must be ${engine.id}-image-evidence-<workflow-run-id>-<positive-attempt> for the same run`);
+  }
+  if (!digestPattern.test(publication?.managed_smoke_evidence_sha256 ?? "")) {
+    errors.push(`${planRelative}: publication must bind the managed smoke evidence by sha256`);
+  }
+}
+
+function validatePublishedManagedDockerfile(plan, planRelative, engine, expectedTag) {
+  const dockerfileRelative = `engines/images/${engine.id}/Dockerfile`;
+  const dockerfilePath = resolve(root, dockerfileRelative);
+  if (plan.dockerfile?.emitted !== true || plan.dockerfile?.path !== dockerfileRelative || plan.dockerfile?.reason !== null) {
+    errors.push(`${planRelative}: published managed image must emit ${dockerfileRelative} with a null absence reason`);
+    return null;
+  }
+  if (!existsSync(dockerfilePath)) {
+    errors.push(`${planRelative}: published managed Dockerfile is missing`);
+    return null;
+  }
+  const dockerfileText = readFileSync(dockerfilePath, "utf8");
+  const actualDockerfileSha256 = sha256File(dockerfilePath);
+  if (plan.dockerfile.sha256 !== actualDockerfileSha256) {
+    errors.push(`${planRelative}: Dockerfile digest ${plan.dockerfile.sha256 ?? "missing"} does not match ${actualDockerfileSha256}`);
+  }
+  if (!/^# syntax=docker\/dockerfile:[^\s]+@sha256:[0-9a-f]{64}$/m.test(dockerfileText.split(/\r?\n/, 1)[0])) {
+    errors.push(`${planRelative}: published managed Dockerfile frontend must be digest-pinned`);
+  }
+  if (!dockerfileText.split(/\r?\n/).some((line) => line.trim() === "USER 65532:65532")) {
+    errors.push(`${planRelative}: published managed Dockerfile must select USER 65532:65532`);
+  }
+  const entrypoint = "/usr/local/bin/ai-security-scanner-engine-entrypoint";
+  if (!dockerfileText.split(/\r?\n/).some((line) => line.trim() === `ENTRYPOINT ${JSON.stringify([entrypoint])}`)) {
+    errors.push(`${planRelative}: published managed Dockerfile must use the direct project-owned entrypoint`);
+  }
+  if (!dockerfileText.includes(`org.opencontainers.image.version="${expectedTag}"`)) {
+    errors.push(`${planRelative}: Dockerfile OCI version label must equal the released tag ${expectedTag}`);
+  }
+  return dockerfileText;
+}
+
+function normalizedImageDigestReference(reference) {
+  const digestSeparator = typeof reference === "string" ? reference.lastIndexOf("@") : -1;
+  if (digestSeparator < 1) return reference;
+  const nameAndTag = reference.slice(0, digestSeparator);
+  const lastSlash = nameAndTag.lastIndexOf("/");
+  const tagSeparator = nameAndTag.lastIndexOf(":");
+  const repository = tagSeparator > lastSlash ? nameAndTag.slice(0, tagSeparator) : nameAndTag;
+  return `${repository}${reference.slice(digestSeparator)}`;
+}
+
+function externalDockerfileDigestReferences(dockerfileText) {
+  const stageAliases = new Set();
+  const references = [];
+  for (const line of dockerfileText.split(/\r?\n/)) {
+    const match = line.trim().match(/^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?$/i);
+    if (!match) continue;
+    const reference = match[1];
+    if (reference !== "scratch" && !stageAliases.has(reference.toLowerCase())) {
+      references.push(normalizedImageDigestReference(reference));
+    }
+    if (match[2]) stageAliases.add(match[2].toLowerCase());
+  }
+  return sortedUnique(references);
+}
+
+function validateExactDeclaredBaseImages(recipe, dockerfileText, planRelative) {
+  if (!Array.isArray(recipe?.base_images) || recipe.base_images.length === 0) {
+    errors.push(`${planRelative}: source build must enumerate every digest-pinned external base image`);
+    return;
+  }
+  const declaredReferences = [];
+  for (const [index, image] of recipe.base_images.entries()) {
+    validateImage(image, `${planRelative}.build_recipe.base_images[${index}]`, { allowDigestPinnedAlias: true });
+    const digestReference = `${image.repository}@${image.digest}`;
+    declaredReferences.push(digestReference);
+    if (!dockerfileText.includes(image.digest ?? "__missing_digest__")) {
+      errors.push(`${planRelative}: declared base image digest ${digestReference} is unused`);
+    }
+  }
+  const actualReferences = externalDockerfileDigestReferences(dockerfileText);
+  if (!deepEqual(sortedUnique(declaredReferences), actualReferences)) {
+    errors.push(`${planRelative}: declared base images must exactly equal Dockerfile external FROM digest closure`);
+  }
+}
+
+function validatePublishedManagedBasics(plan, planRelative, engine, contract, command, network) {
+  const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+  if (plan.plan_kind !== contract.planKind) {
+    errors.push(`${planRelative}: published ${engine.id} plan kind must be ${contract.planKind}`);
+  }
+  if (plan.publish_state !== "published_managed_artifact") {
+    errors.push(`${planRelative}: published ${engine.id} image must use publish_state published_managed_artifact`);
+  }
+  if (engine.distribution_mode !== "pull_pinned_image" ||
+      engine.image?.repository !== expectedRepository ||
+      engine.image?.tag !== contract.tag ||
+      !digestPattern.test(engine.image?.digest ?? "")) {
+    errors.push(`catalog:${engine.id}: released image must be ${expectedRepository}:${contract.tag} at an immutable digest`);
+  }
+  if (plan.final_artifact?.repository !== expectedRepository ||
+      plan.final_artifact?.tag !== contract.tag ||
+      plan.final_artifact?.digest !== engine.image?.digest) {
+    errors.push(`${planRelative}: final artifact must be the exact released catalog image`);
+  }
+  if (engine.status !== "integrated" || engine.compatibility?.runnable !== true ||
+      !deepEqual(engine.compatibility?.blocked_by, []) || !deepEqual(plan.blockers, [])) {
+    errors.push(`${planRelative}: published engine must be integrated, runnable, and blocker-free in catalog and plan`);
+  }
+  if (engine.license?.disposition !== contract.license.disposition ||
+      engine.license?.source_offer_path !== contract.license.sourceOfferPath) {
+    errors.push(`catalog:${engine.id}.license: published disposition/source offer does not match the fixed release contract`);
+  }
+  if (contract.license.sourceOfferPath !== null && !existsSync(resolve(root, contract.license.sourceOfferPath))) {
+    errors.push(`catalog:${engine.id}.license: required source offer ${contract.license.sourceOfferPath} is missing`);
+  }
+  if (!deepEqual(engine.command, command) || !deepEqual(plan.command, command)) {
+    errors.push(`${planRelative}: published engine command must equal the fixed non-shell launcher argv`);
+  }
+  if (engine.execution?.network?.required !== network.required ||
+      engine.execution?.network?.mode !== network.mode ||
+      !deepEqual(engine.execution?.network?.destinations, network.destinations) ||
+      !deepEqual(engine.network_destinations, network.destinations)) {
+    errors.push(`catalog:${engine.id}.execution.network: released network contract is not exact`);
+  }
+
+  const entrypoint = "/usr/local/bin/ai-security-scanner-engine-entrypoint";
+  const runtime = plan.managed_runtime;
+  if (runtime?.non_root_user !== "65532:65532" || runtime?.read_only_rootfs !== true ||
+      !deepEqual(runtime?.entrypoint, [entrypoint]) || runtime?.network_mode !== network.mode ||
+      !deepEqual(runtime?.network_destinations, network.destinations)) {
+    errors.push(`${planRelative}: managed runtime must preserve the non-root, read-only, direct-entrypoint network contract`);
+  }
+  const launcherRelative = engine.id === "greenbone"
+    ? "engines/images/greenbone-launcher/main.go"
+    : "engines/images/local-launcher/main.go";
+  const launcherPath = resolve(root, launcherRelative);
+  if (engine.compatibility?.wrapper?.required !== true || engine.compatibility?.wrapper?.entrypoint !== entrypoint ||
+      plan.wrapper?.required !== true || plan.wrapper?.entrypoint !== entrypoint ||
+      plan.wrapper?.launcher_sha256 !== sha256File(launcherPath)) {
+    errors.push(`${planRelative}: wrapper must bind the exact project-owned launcher source and entrypoint`);
+  }
+
+  validatePublishedManagedEvidence(plan, planRelative, engine);
+  return validatePublishedManagedDockerfile(plan, planRelative, engine, contract.tag);
+}
+
+function validatePublishedLocalK8sImage(plan, planRelative, engine, contract) {
+  const command = ["--engine", engine.id, "--workspace", "/workspace", "--output", "/output"];
+  const dockerfileText = validatePublishedManagedBasics(plan, planRelative, engine, contract, command, {
+    required: false,
+    mode: "disabled",
+    destinations: [],
+  });
+  if (dockerfileText === null) return;
+
+  const recipe = plan.build_recipe;
+  if (recipe?.source_revision !== engine.source_revision ||
+      !deepEqual(recipe?.target_platforms, ["linux/amd64", "linux/arm64"]) ||
+      !Number.isInteger(recipe?.source_date_epoch) || recipe.source_date_epoch < 1) {
+    errors.push(`${planRelative}: local/Kubernetes source build must lock its source, epoch, and publication platforms`);
+  }
+  const sourceArchive = recipe?.source_archive;
+  const sourceArchivePosition = typeof sourceArchive?.url === "string" ? dockerfileText.indexOf(sourceArchive.url) : -1;
+  const sourceArchivePrefix = sourceArchivePosition >= 0
+    ? dockerfileText.slice(Math.max(0, sourceArchivePosition - 180), sourceArchivePosition)
+    : "";
+  if (!sourceArchive?.url?.startsWith("https://github.com/") || !sourceArchive.url.includes(engine.source_revision) ||
+      !digestPattern.test(sourceArchive?.sha256 ?? "") || sourceArchivePosition < 0 ||
+      !sourceArchivePrefix.includes(`ADD --checksum=${sourceArchive.sha256}`)) {
+    errors.push(`${planRelative}: source archive must be an exact checksum-pinned GitHub artifact for the catalog revision`);
+  }
+  const frontend = recipe?.dockerfile_frontend;
+  validateImage(frontend, `${planRelative}.build_recipe.dockerfile_frontend`);
+  if (dockerfileText.split(/\r?\n/)[0] !== `# syntax=${frontend?.repository}:${frontend?.tag}@${frontend?.digest}`) {
+    errors.push(`${planRelative}: source build frontend must match the exact Dockerfile frontend`);
+  }
+  validateExactDeclaredBaseImages(recipe, dockerfileText, planRelative);
+  if (!dockerfileText.includes("COPY engines/images/local-launcher/go.mod engines/images/local-launcher/main.go engines/images/local-launcher/main_test.go ./") ||
+      !dockerfileText.includes("-buildvcs=false -trimpath") ||
+      !dockerfileText.includes(engine.source_revision)) {
+    errors.push(`${planRelative}: Dockerfile is not closed over the reviewed launcher and engine source revision`);
+  }
+  for (const required of contract.immutableDockerfileInputs) {
+    if (!dockerfileText.includes(required)) errors.push(`${planRelative}: Dockerfile lacks immutable release input ${required}`);
+  }
+}
+
+function validatePublishedGreenboneImage(plan, planRelative, engine) {
+  const command = ["--engine", "greenbone", "--scope", "/run/ai-security-scanner/scope.json", "--output", "/output"];
+  const dockerfileText = validatePublishedManagedBasics(plan, planRelative, engine, managedGreenboneContract, command, {
+    required: true,
+    mode: "managed_allowlist",
+    destinations: ["authorized target addresses"],
+  });
+  if (dockerfileText === null) return;
+
+  if (engine.engine_version !== "23.50.21" ||
+      engine.source_revision !== managedGreenboneContract.scannerRevision ||
+      engine.provenance?.engine?.artifact_source_revision !== managedGreenboneContract.scannerRevision ||
+      engine.rule_version !== managedGreenboneContract.feedRevision ||
+      engine.provenance?.rules?.mode !== "embedded" ||
+      engine.provenance?.rules?.revision !== managedGreenboneContract.feedRevision ||
+      engine.provenance?.data?.mode !== "embedded" ||
+      engine.provenance?.data?.revision !== managedGreenboneContract.feedRevision ||
+      engine.compatibility?.knowledge_input?.kind !== "embedded" ||
+      engine.compatibility?.knowledge_input?.version !== managedGreenboneContract.feedVersion ||
+      engine.compatibility?.knowledge_input?.pin_state !== "pinned_or_not_applicable") {
+    errors.push(`catalog:greenbone: scanner and Community Feed provenance must match the immutable release closure`);
+  }
+  const runtime = plan.managed_runtime;
+  if (runtime?.proxy !== "AI_SECURITY_SCANNER_PROXY" || runtime?.updates !== false || runtime?.telemetry !== false ||
+      runtime?.per_grant_target_execution !== true) {
+    errors.push(`${planRelative}: Greenbone runtime must require the managed proxy, disable updates/telemetry, and isolate each grant`);
+  }
+  const recipe = plan.build_recipe;
+  if (recipe?.source_revision !== managedGreenboneContract.scannerRevision ||
+      !deepEqual(recipe?.target_platforms, ["linux/amd64", "linux/arm64"]) ||
+      !Number.isInteger(recipe?.source_date_epoch) || recipe.source_date_epoch < 1) {
+    errors.push(`${planRelative}: Greenbone build must lock the scanner revision, epoch, and publication platforms`);
+  }
+  const sourceArchive = recipe?.source_archive;
+  if (sourceArchive?.url !== `https://github.com/greenbone/openvas-scanner/archive/${managedGreenboneContract.scannerRevision}.tar.gz` ||
+      sourceArchive?.sha256 !== managedGreenboneContract.scannerArchiveSha256) {
+    errors.push(`${planRelative}: Greenbone scanner source archive does not match the exact release closure`);
+  }
+  const frontend = recipe?.dockerfile_frontend;
+  validateImage(frontend, `${planRelative}.build_recipe.dockerfile_frontend`);
+  if (dockerfileText.split(/\r?\n/)[0] !== `# syntax=${frontend?.repository}:${frontend?.tag}@${frontend?.digest}`) {
+    errors.push(`${planRelative}: Greenbone Dockerfile frontend does not match its immutable build recipe`);
+  }
+  validateExactDeclaredBaseImages(recipe, dockerfileText, planRelative);
+
+  const requiredDockerfileInputs = [
+    `ADD --checksum=${managedGreenboneContract.scannerArchiveSha256}`,
+    `openvas-scanner/archive/${managedGreenboneContract.scannerRevision}.tar.gz`,
+    `community/vulnerability-tests@${managedGreenboneContract.feedImageDigest}`,
+    `community/notus-data@${managedGreenboneContract.notusImageDigest}`,
+    `io.ai-security-scanner.openvas-revision="${managedGreenboneContract.scannerRevision}"`,
+    `io.ai-security-scanner.openvas-source-sha256="${managedGreenboneContract.scannerArchiveSha256}"`,
+    `io.ai-security-scanner.feed-revision="${managedGreenboneContract.feedRevision}"`,
+    `io.ai-security-scanner.feed-version="${managedGreenboneContract.feedVersion}"`,
+    `io.ai-security-scanner.feed-image-digest="${managedGreenboneContract.feedImageDigest}"`,
+    `io.ai-security-scanner.notus-revision="${managedGreenboneContract.notusRevision}"`,
+    `io.ai-security-scanner.notus-image-digest="${managedGreenboneContract.notusImageDigest}"`,
+    "/var/lib/openvas/24.10/vt-data/nasl/sha256sums.asc",
+    "/prepared/advisories/sha256sums.asc",
+    "COPY --chmod=0444 engines/images/greenbone/SOURCE-OFFER.md /usr/share/source/greenbone/SOURCE-OFFER.md",
+    "COPY --chmod=0444 engines/images/greenbone/THIRD-PARTY-NOTICES.md /usr/share/licenses/greenbone/THIRD-PARTY-NOTICES.md",
+    "setcap -r /usr/bin/nmap",
+    "rm -f /usr/bin/nmap /usr/local/sbin/openvas",
+  ];
+  for (const required of requiredDockerfileInputs) {
+    if (!dockerfileText.includes(required)) errors.push(`${planRelative}: Greenbone Dockerfile lacks immutable component closure ${required}`);
+  }
+  for (const [name, relative] of [
+    ["rustls-provider", "engines/images/greenbone/openvasd-rustls-provider.patch"],
+    ["service-port", "engines/images/greenbone/openvasd-service-port.patch"],
+    ["http-compat", "engines/images/greenbone/openvasd-http-compat.patch"],
+    ["nasl-array-compat", "engines/images/greenbone/openvasd-nasl-array-compat.patch"],
+    ["eregmatch-captures", "engines/images/greenbone/openvasd-eregmatch-captures.patch"],
+    ["report-port", "engines/images/greenbone/openvasd-report-port.patch"],
+  ]) {
+    const patchPath = resolve(root, relative);
+    const patchDigest = existsSync(patchPath) ? sha256File(patchPath).slice("sha256:".length) : null;
+    if (!patchDigest || !dockerfileText.includes(`${name}:${patchDigest}`) || !dockerfileText.includes(`COPY ${relative}`)) {
+      errors.push(`${planRelative}: Greenbone patch ${relative} is absent or its actual digest is not recorded in the image`);
+    }
+  }
+
+  const launcherPath = resolve(root, "engines/images/greenbone-launcher/main.go");
+  const launcherText = readFileSync(launcherPath, "utf8");
+  for (const required of [
+    `feedRevision             = "${managedGreenboneContract.feedRevision}"`,
+    'managedProxy(os.Getenv("AI_SECURITY_SCANNER_PROXY"))',
+    'managedGatewayPort       = "1080"',
+    "byRelayPort",
+    "byOriginalPort",
+  ]) {
+    if (!launcherText.includes(required)) errors.push(`${planRelative}: Greenbone launcher lacks proxy/feed boundary ${required}`);
+  }
+
+  const smokeRelative = "engines/images/greenbone/managed-socks-smoke.sh";
+  const smokePath = resolve(root, smokeRelative);
+  const smokeText = existsSync(smokePath) ? readFileSync(smokePath, "utf8") : "";
+  for (const required of [
+    `selected_oid="${managedGreenboneContract.smokeOid}"`,
+    "internal-only bridge unexpectedly allowed direct target egress",
+    "managed SOCKS gateway unexpectedly allowed an unapproved target port",
+    "authorized vulnerable fixture produced no alarm",
+    "actionable_alarms=",
+  ]) {
+    if (!smokeText.includes(required)) errors.push(`${planRelative}: Greenbone real-alarm smoke contract lacks ${required}`);
+  }
+  const workflowPath = resolve(root, ".github/workflows/engine-image-greenbone.yml");
+  const workflowText = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") : "";
+  for (const required of [
+    smokeRelative,
+    "managedSmokeEvidenceSha256",
+    "nativeImageIdentityMatchesFinal: true",
+    "platformDigests:",
+    "greenbone-image-manifest.json",
+    `selectedOid: "${managedGreenboneContract.smokeOid}"`,
+    "actionableAlarms: 1",
+    "adapterFindings: 1",
+    "directEgressDenied: true",
+    "unauthorizedPortDenied: true",
+    "docker logout ghcr.io",
+  ]) {
+    if (!workflowText.includes(required)) errors.push(`${planRelative}: Greenbone workflow does not preserve ${required}`);
+  }
+  if ((workflowText.match(/managed-socks-smoke\.sh/g) ?? []).length < 2) {
+    errors.push(`${planRelative}: Greenbone workflow must real-smoke both native inputs and the final anonymously pulled index`);
+  }
 }
 
 function validateCloudManagedImage(plan, planRelative, engine) {
@@ -964,14 +1629,36 @@ if (!deepEqual(catalogIds, expectedIds)) {
   errors.push(`catalog ids/order must be exactly: ${expectedIds.join(", ")}`);
 }
 if (new Set(catalogIds).size !== catalogIds.length) errors.push("catalog engine ids must be unique");
+validateExactIdSet(
+  [...managedLocalK8sContracts.keys()],
+  managedLocalK8sIds,
+  "published local/Kubernetes validation contract differs from the exact six-engine set",
+);
+validateManagedImageEvidence(catalog);
 
 const lockedRepositories = new Map((upstreamLock?.repositories ?? []).map((entry) => [entry.remote.replace(/\.git$/, ""), entry]));
-const supportDates = new Set();
-
 for (const engine of Array.isArray(catalog) ? catalog : []) {
   const label = `catalog:${engine.id}`;
-  supportDates.add(engine.compatibility?.support_date);
   validateStaticCommand(engine);
+  const knowledgeDate = engine.compatibility?.knowledge_date;
+  const supportUntil = engine.compatibility?.support_until;
+  const maintenanceOwner = engine.compatibility?.maintenance_owner;
+  if (isIsoDate(knowledgeDate) && isIsoDate(supportUntil) && supportUntil < knowledgeDate) {
+    errors.push(`${label}: support_until must be on or after knowledge_date`);
+  }
+  if (typeof maintenanceOwner !== "string" || maintenanceOwner !== maintenanceOwner.trim() || maintenanceOwner.length === 0 || maintenanceOwner.length > 200 || /[\u0000-\u001f\u007f]/.test(maintenanceOwner)) {
+    errors.push(`${label}: maintenance_owner must be a non-empty, trimmed, printable owner of at most 200 characters`);
+  }
+  const updateProcedure = engine.compatibility?.update_procedure;
+  if (updateProcedure !== "docs/engine-maintenance.md" || !existsSync(resolve(root, updateProcedure ?? ""))) {
+    errors.push(`${label}: update_procedure must resolve to docs/engine-maintenance.md`);
+  }
+  const expectedProviders = managedCloudIds.has(engine.id)
+    ? ["aws"]
+    : managedM365Ids.has(engine.id) ? ["microsoft365"] : [];
+  if (!deepEqual(engine.supported_providers, expectedProviders)) {
+    errors.push(`${label}: supported_providers must disclose only providers consumed by this released image`);
+  }
   if (!revisionPattern.test(engine.source_revision ?? "")) errors.push(`${label}.source_revision: exact 40-character commit is required`);
   if (engine.source_revision !== engine.provenance?.engine?.source_revision) errors.push(`${label}: top-level and provenance source revisions differ`);
   if (engine.engine_version !== engine.provenance?.engine?.version) errors.push(`${label}: top-level and provenance engine versions differ`);
@@ -1031,7 +1718,10 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   if (!plan) continue;
   if (!planKinds.has(plan.plan_kind)) errors.push(`${planRelative}: unsupported plan kind ${plan.plan_kind}`);
   if (plan.engine_id !== engine.id) errors.push(`${planRelative}: engine id does not match catalog`);
-  if (plan.support_date !== engine.compatibility.support_date) errors.push(`${planRelative}: support date does not match catalog`);
+  for (const field of ["knowledge_date", "support_until", "maintenance_owner", "update_procedure"]) {
+    if (plan[field] !== engine.compatibility[field]) errors.push(`${planRelative}: ${field} does not match catalog`);
+  }
+  if (Object.hasOwn(plan, "support_date")) errors.push(`${planRelative}: retired support_date field must not be present`);
   if (plan.source?.revision !== engine.source_revision || plan.build_recipe?.source_revision && plan.build_recipe.source_revision !== engine.source_revision) {
     errors.push(`${planRelative}: source revision does not match catalog`);
   }
@@ -1071,7 +1761,13 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   } else if (plan.final_artifact?.digest !== null || plan.final_artifact?.tag !== null || plan.publish_state !== "managed_artifact_not_published") {
     errors.push(`${planRelative}: unpublished managed artifact must have null tag/digest and explicit publish state`);
   }
-  if (engine.id === "cloudquery") {
+  const localK8sContract = managedLocalK8sContracts.get(engine.id);
+  const expectedManagedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+  if (localK8sContract && isManagedPublicationClaimed(engine, plan, expectedManagedRepository)) {
+    validatePublishedLocalK8sImage(plan, planRelative, engine, localK8sContract);
+  } else if (engine.id === "greenbone" && isManagedPublicationClaimed(engine, plan, expectedManagedRepository)) {
+    validatePublishedGreenboneImage(plan, planRelative, engine);
+  } else if (engine.id === "cloudquery") {
     validateCloudManagedImage(plan, planRelative, engine);
     validateCloudQueryPlan(plan, planRelative, engine);
   } else if (managedCloudIds.has(engine.id)) {
@@ -1091,8 +1787,6 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   }
 }
 
-if (supportDates.size !== 1 || !/^\d{4}-\d{2}-\d{2}$/.test([...supportDates][0] ?? "")) errors.push("all engines must share one explicit ISO support date");
-
 const cloudWorkflowPath = resolve(root, ".github/workflows/engine-images-cloud.yml");
 if (!existsSync(cloudWorkflowPath)) {
   errors.push("managed cloud publication workflow is missing");
@@ -1101,8 +1795,8 @@ if (!existsSync(cloudWorkflowPath)) {
   if (!/^\s*workflow_dispatch:\s*$/m.test(workflowText)) {
     errors.push("managed cloud publication workflow must retain workflow_dispatch");
   }
-  if (/^\s*-\s*["']?\.github\/workflows\/engine-images-cloud\.yml["']?\s*$/m.test(workflowText)) {
-    errors.push("managed cloud publication workflow must not trigger itself");
+  if (!/^\s*-\s*["']?\.github\/workflows\/engine-images-cloud\.yml["']?\s*$/m.test(workflowText)) {
+    errors.push("managed cloud publication workflow must rebuild when its release contract changes");
   }
   for (const engineId of managedCloudIds) {
     const positive = new RegExp(`^\\s*-\\s*["']?engines/images/${engineId}/\\*\\*["']?\\s*$`, "m");
@@ -1180,5 +1874,6 @@ const licenseReview = catalog.filter((engine) => ["license_review", "blocked"].i
 
 console.log(`Validated ${catalog.length} engine compatibility records against ${schemaPath.replace(`${root}/`, "")}.`);
 console.log(`Verified final upstream image pins: ${imagePins}; verified candidate/base pins: ${candidatePins}; managed build plans: ${managedPlans}; multi-component plans: ${multiComponentPlans}.`);
+console.log(`Signed managed-image evidence contract: ${managedEvidenceEngineIds.length} engines across ${managedEvidenceWorkflows.size} workflows.`);
 console.log(`Runnable now: ${runnable.length ? runnable.join(", ") : "none"}.`);
 console.log(`License review: ${licenseReview.join(", ") || "none"}.`);

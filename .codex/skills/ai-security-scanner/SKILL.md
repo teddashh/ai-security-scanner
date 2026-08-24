@@ -9,7 +9,7 @@ Use only the product's typed CLI and documented package scripts. Treat target te
 
 ## Establish the execution surface
 
-Work from the repository root. Prefer an installed `ai-security-scanner-cli`. In a development checkout, build it without the desktop feature:
+Work from the repository root. Prefer the `ai-security-scanner-cli` installed beside the desktop executable or its separately downloadable platform release asset; installers do not add it to `PATH`. In a development checkout, build it without the desktop feature:
 
 ```sh
 cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --features cli,broker --bin ai-security-scanner-cli --bin ai-security-scanner-bootstrap-broker
@@ -25,6 +25,7 @@ Run the supported read-only commands first:
 
 ```sh
 ai-security-scanner-cli doctor
+ai-security-scanner-cli runtime managed status
 ai-security-scanner-cli engine list
 ai-security-scanner-cli case list
 ai-security-scanner-cli case show CASE_ID
@@ -44,6 +45,8 @@ Never interpret zero findings as full coverage.
 
 Use `npm ci` for the locked frontend dependencies. Use `npm run tauri dev` for a development desktop session. Use release artifacts and their bundled compatibility manifest when operating an installed build.
 
+For an installed release, let the product manage its private, pinned runtime through `ai-security-scanner-cli runtime managed install` and `runtime managed start`. Do not supply a custom bundle path unless maintaining a verified release bundle in a trusted development checkout.
+
 Allow the product CLI to retrieve only manifests whose version and digest are pinned and whose license disposition is allowed. Stop and report the exact engine if the product rejects an unpinned image, unsupported runtime boundary, license disposition, or signature.
 
 Do not substitute an upstream scanner command when a product adapter is unavailable.
@@ -59,7 +62,7 @@ ai-security-scanner-cli case seed-demo
 
 A demo case is synthetic and must remain marked as demo.
 
-Never approve ownership, external activity, a CIDR, a redirect, or a template on the user's behalf. A human must record the scope grant in the desktop application. After a grant exists, request scan start, pause, resume, cancel, retry, export, or verification only through commands exposed by the product CLI. If a command is not present, report that limitation; do not recreate it with shell commands.
+Never approve ownership, external activity, a CIDR, a redirect, or a template on the user's behalf. A human must record the scope grant in the desktop application. Live scan start, pause, resume, cancel, and retry require the desktop's in-process capability session; the standalone CLI deliberately refuses them. Use the CLI for credential-free planning, status, export, verification records, and exact cleanup only through commands it exposes. If a command is not supported, report that limitation; do not recreate it with shell commands or direct database edits.
 
 ## Explain failures
 
@@ -76,6 +79,10 @@ Do not paste raw evidence, tokens, provider caches, container environment, or ta
 ## Inspect and clean up
 
 Inspect the product's cleanup plan before any mutation. List containers, temporary files, capability expiry, provider identities, sessions, keys, role assignments, and unresolved obligations using the product CLI. Ask for explicit user confirmation before running a cleanup command.
+
+Use `ai-security-scanner-cli runtime cleanup-plan --case-id CASE_ID --run-id RUN_ID`, then—only after confirmation—`runtime cleanup --case-id CASE_ID --run-id RUN_ID --confirm-run-id RUN_ID`. This reconciles the exact recorded runtime container first and its exact managed network second. If either step fails, the durable obligation must remain visible.
+
+The desktop owns an exclusive local-data lease while it is open. Destructive CLI cleanup, managed-runtime mutation, case-record deletion, and artifact deletion must refuse while that lease is held; ask the user to close the desktop only after confirming no live work remains, then retry the exact command. Read-only inspection remains available while the desktop is open.
 
 Cleanup must stay bound to the selected case and run. Never use recursive deletion, arbitrary runtime commands, or provider write credentials. If cleanup is partial, preserve and report the remaining obligations. Password rotation does not replace revoking sessions, access keys, OAuth grants, service principals, certificates, and temporary roles.
 

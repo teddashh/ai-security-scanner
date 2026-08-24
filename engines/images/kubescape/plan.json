@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "kubescape",
+  "plan_kind": "upstream_image",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "verified_upstream_artifact",
+  "source": {
+    "repository": "https://github.com/kubescape/kubescape",
+    "revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
+    "acquisition_source": "https://github.com/kubescape/kubescape/commit/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
+    "local_research_checkout": ".upstreams/kubescape/kubescape"
+  },
+  "verified_upstream_artifact": {
+    "repository": "quay.io/kubescape/kubescape-cli",
+    "tag": "v4.0.12",
+    "digest": "sha256:c89e83131492a31cf48e11fa3572549b51a0fb0865c8be164f51849936767932",
+    "signature_identity": null,
+    "entrypoint": [
+      "kubescape"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed"
+    }
+  },
+  "final_artifact": {
+    "repository": "quay.io/kubescape/kubescape-cli",
+    "tag": "v4.0.12",
+    "digest": "sha256:c89e83131492a31cf48e11fa3572549b51a0fb0865c8be164f51849936767932"
+  },
+  "build_recipe": null,
+  "dockerfile": {
+    "emitted": false,
+    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Materialize a locked framework artifact and a minimal kubeconfig derived from the ephemeral credential channel.",
+    "entrypoint": "scan"
+  },
+  "command": [
+    "scan",
+    "framework",
+    "nsa",
+    "--format",
+    "json",
+    "--output",
+    "/output/kubescape.json"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/kubescape.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "framework_artifact_digest_not_published",
+    "execution_wrapper_not_implemented"
+  ]
+}

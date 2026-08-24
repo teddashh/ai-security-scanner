@@ -162,6 +162,18 @@
         },
         "pin_state": {
           "enum": ["awaiting_pin", "runtime_live", "runtime_bound", "pinned_or_not_applicable"]
+        },
+        "knowledge_date": {
+          "anyOf": [
+            { "type": "string", "format": "date" },
+            { "type": "null" }
+          ]
+        },
+        "support_until": {
+          "anyOf": [
+            { "type": "string", "format": "date" },
+            { "type": "null" }
+          ]
         }
       }
     },
@@ -185,11 +197,24 @@
     "compatibility": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["support_date", "runnable", "artifact_state", "blocked_by", "knowledge_input", "wrapper", "packaging_plan"],
+      "required": ["knowledge_date", "support_until", "maintenance_owner", "update_procedure", "runnable", "artifact_state", "blocked_by", "knowledge_input", "wrapper", "packaging_plan"],
       "properties": {
-        "support_date": {
+        "knowledge_date": {
           "type": "string",
           "format": "date"
+        },
+        "support_until": {
+          "type": "string",
+          "format": "date"
+        },
+        "maintenance_owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "update_procedure": {
+          "type": "string",
+          "pattern": "^docs/engine-maintenance\\.md$"
         },
         "runnable": {
           "type": "boolean"
@@ -283,7 +308,7 @@
         "schema_version", "id", "display_name", "category", "description",
         "repository_url", "homepage_url", "license_spdx", "distribution_mode",
         "image", "source_revision", "engine_version", "rule_version", "adapter_version",
-        "supported_asset_kinds", "required_permissions", "active_external",
+        "supported_providers", "supported_asset_kinds", "required_permissions", "active_external",
         "default_enabled", "estimated_memory_mb", "estimated_disk_mb",
         "network_destinations", "output_formats", "command", "status", "notices",
         "license", "provenance", "compatibility", "execution"
@@ -310,6 +335,13 @@
         "engine_version": { "type": "string", "minLength": 1 },
         "rule_version": { "$ref": "#/$defs/nullableString" },
         "adapter_version": { "type": "string", "minLength": 1 },
+        "supported_providers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["aws", "azure", "gcp", "microsoft365"]
+          }
+        },
         "supported_asset_kinds": {
           "type": "array",
           "minItems": 1,

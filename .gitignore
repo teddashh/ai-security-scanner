@@ -14,6 +14,7 @@ test-results/
 target/
 src-tauri/target/
 src-tauri/gen/
+src-tauri/binaries/
 
 # Local application state and sensitive case data
 .ai-security-scanner/
@@ -27,6 +28,8 @@ src-tauri/gen/
 .upstreams/
 .engine-cache/
 .runtime-cache/
+runtime/staged/managed-runtime/*
+!runtime/staged/managed-runtime/.gitkeep
 
 # Environment and credentials
 .env

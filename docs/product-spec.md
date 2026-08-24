@@ -90,6 +90,7 @@ The user creates a named case. The case questionnaire collects at least:
 - whether the user wants configuration assessment, local artifact analysis, low-impact external checks, or active external vulnerability tests.
 
 These answers select engines, influence plain-language impact and priority, and identify missing sources. They must not be converted into a compliance score.
+Known coordinates entered here are source-attributed candidates only. A requested activity is intent only, not a scope grant. An environment the user explicitly excludes becomes a reasoned `not_applicable` coverage row; it is neither silently omitted nor presented as a successful scan.
 
 ### 6.2 Connect data sources
 
@@ -125,6 +126,13 @@ Active engines such as Nuclei and Greenbone must not run against an external tar
 
 The orchestrator selects engines from the approved engine catalog based on the case's assets, data sources, and scope grants. Users do not need to choose between individual scanners unless they enter an advanced view.
 
+Provider applicability is an exact release contract. A provider-bound manifest lists its released
+`supported_providers`; planning, resume, and coverage require an exact `Asset.provider` match and
+never infer a provider from asset kind or upstream marketing. An empty provider list means the
+engine is genuinely provider-agnostic. In the current release, CloudQuery, Steampipe, Prowler,
+ScoutSuite, and Cloudsplaining images are AWS-only. Azure and GCP authorization currently support
+provider-native discovery only; they must not be presented as released scanner-image coverage.
+
 Each engine runs independently and reports one of:
 
 - `pending`;
@@ -152,7 +160,7 @@ Adapters preserve raw output and translate it into the canonical model described
 - potentially related NIST CSF and ISO 27001 controls;
 - plain-language risk, likely impact, suggested next step, official references, and recommended expert type.
 
-The home view may show the highest-priority items first. The complete list must remain available under categories such as `prioritize`, `needs_confirmation`, and `observe`.
+The home view may show the highest-priority items first. Internal priority uses higher values for earlier handling, but user-facing screens and reports show only relative list order and the recorded reasons—not a raw value that could be mistaken for a risk or compliance score. The complete list must remain available under categories such as `prioritize`, `needs_confirmation`, and `observe`.
 
 ### 6.7 Handoff
 
@@ -162,6 +170,7 @@ The user can export a portable case package. It must include:
 - scope grants and coverage ledger;
 - assets and asset relationships;
 - complete findings, not only prioritized findings;
+- active reversible finding groups and their immutable create/remove history;
 - raw evidence or explicit references to intentionally excluded evidence;
 - evidence hashes;
 - engine, rule, database, adapter, mapping, and digest versions;
@@ -181,6 +190,12 @@ The user can re-run an existing case using its previous scope as the starting po
 - `unverifiable`: comparison is invalid because scope, authorization, engine availability, or required evidence changed.
 
 The product must not label a finding resolved merely because the responsible engine did not run.
+
+The user explicitly selects a terminal baseline. The rescan `ScanRun` stores that baseline link in
+the same atomic case update that creates the planned run, before any engine is dispatched. When the
+run becomes terminal, comparison persistence is idempotent; desktop startup also reconciles any
+terminal linked run left without a comparison by a process crash. Older case files without the link
+remain valid ordinary scans.
 
 ## 7. Coverage ledger
 
@@ -221,6 +236,8 @@ A user-visible finding may have one of these handling states:
 
 Changing a workflow state does not alter the original evidence. A false-positive decision records who or what made the decision, when, why, and whether it expires.
 
+A reviewer may place two or more related canonical findings into a named handoff group. Grouping is manual presentation metadata, not automatic cross-engine deduplication: every finding, fingerprint, observation, evidence record, and raw artifact remains independently available. A finding belongs to at most one active group. Creating and removing a group append immutable events containing the member IDs, actor, time, and reason; removal only removes the active projection. Canonical JSON, the portable case bundle, and the HTML handoff disclose groups and history, and standard redaction masks human-entered group metadata.
+
 The product must not provide an “execute remediation,” “copy and run,” or equivalent control. Suggestions may explain impact, preconditions, verification, rollback considerations, official documentation, and the professional role needed to make the change.
 
 ## 10. Engine coverage required for the complete product
@@ -237,6 +254,10 @@ The complete product supports the engine families listed as `Required` in [engin
 - Kubernetes configuration and benchmark analysis.
 
 Support means the engine participates in the full case lifecycle: manifest, licensing decision, installation or retrieval, runtime isolation, progress reporting, normalized evidence, coverage accounting, export, and re-verification. Merely cloning a repository or exposing its raw report does not satisfy support.
+
+Support is provider-specific. An upstream engine's theoretical multi-cloud capability is not
+product support until the exact provider credential profile, wrapper, endpoint closure, fixtures,
+published artifact, and release evidence are complete and declared in `supported_providers`.
 
 ## 11. Local data and privacy requirements
 

@@ -144,10 +144,11 @@ pub fn validate_adapter_output(
         for evidence in &finding.evidence {
             if evidence.finding_id != finding.id
                 || evidence.run_id != input.scan_run_id
+                || evidence.engine_run_id.as_deref() != Some(input.engine_run_id)
                 || evidence.engine_id != input.manifest.id
             {
                 return Err(AppError::Runtime(format!(
-                    "finding {} has evidence with a mismatched finding or engine id",
+                    "finding {} has evidence with a mismatched finding, scan run, or engine execution",
                     finding.fingerprint
                 )));
             }
@@ -179,8 +180,8 @@ pub fn validate_adapter_output(
 mod tests {
     use super::*;
     use crate::domain::{
-        AssetKind, Confidence, DistributionMode, EngineCategory, Evidence, EvidenceKind,
-        FindingStatus, ImageReference, ManifestStatus, ScanPermission, Severity,
+        AssetKind, Confidence, DistributionMode, EngineCategory, EngineCompatibility, Evidence,
+        EvidenceKind, FindingStatus, ImageReference, ManifestStatus, ScanPermission, Severity,
     };
     use chrono::Utc;
 
@@ -223,6 +224,7 @@ mod tests {
             engine_version: Some("1".into()),
             rule_version: None,
             adapter_version: "1".into(),
+            supported_providers: vec![],
             supported_asset_kinds: vec![AssetKind::Repository],
             required_permissions: vec![ScanPermission::LocalArtifactRead],
             active_external: false,
@@ -234,6 +236,7 @@ mod tests {
             command: vec!["scanner".into()],
             status: ManifestStatus::Experimental,
             notices: vec![],
+            compatibility: EngineCompatibility::default(),
         }
     }
 
@@ -271,6 +274,7 @@ mod tests {
                 id: "evidence-1".into(),
                 finding_id: "finding-1".into(),
                 run_id: "run-1".into(),
+                engine_run_id: Some(artifact.engine_run_id.clone()),
                 kind: EvidenceKind::RawToolOutput,
                 engine_id: "scanner".into(),
                 observed_at: Utc::now(),
@@ -339,5 +343,34 @@ mod tests {
         let error = validate_adapter_output(&input, &adapter, &adapter.output)
             .expect_err("forged evidence rejected");
         assert!(error.to_string().contains("hash or execution context"));
+    }
+
+    #[test]
+    fn evidence_must_name_the_exact_producing_engine_run() {
+        let manifest = manifest();
+        let artifact = artifact();
+        let mut bad_finding = finding(&artifact);
+        bad_finding.evidence[0].engine_run_id = Some("another-engine-run".into());
+        let adapter = TestAdapter {
+            output: AdapterOutput {
+                findings: vec![bad_finding],
+                warnings: vec![],
+            },
+        };
+        let artifacts = vec![artifact];
+        let assets = vec!["asset-1".into()];
+        let input = AdapterInput {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            asset_ids: &assets,
+            artifact_root: Path::new("/tmp"),
+            raw_artifacts: &artifacts,
+        };
+
+        let error = validate_adapter_output(&input, &adapter, &adapter.output)
+            .expect_err("cross-run evidence rejected");
+        assert!(error.to_string().contains("mismatched finding, scan run"));
     }
 }

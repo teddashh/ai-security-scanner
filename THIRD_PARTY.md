@@ -1,55 +1,54 @@
 # Third-party inventory for ai-security-scanner
 
-Status: pre-release inventory; not a final NOTICE file
+Status: v0.1.0 source inventory; generated release evidence is artifact-specific
 
 Last updated: 2026-08-24
 
-`ai-security-scanner` is designed to orchestrate many independent upstream projects. This file records projects named by the product design and the license identifier observed from each upstream repository. It does **not** state that a component is currently compiled, installed, bundled, tested, supported, or legally approved for redistribution.
+`ai-security-scanner` orchestrates independent upstream projects. This file explains their v0.1.0 packaging relationships and also retains research projects that are not release dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that a GitHub Release or image was published.
 
-The exact license is the license attached to the pinned source revision and distributed artifact, including its dependencies, images, plugins, rules, templates, feeds, and databases. Every release must regenerate this inventory from its resolved engine manifests and SBOM.
+The applicable terms are those attached to each exact source revision and distributed artifact, including its dependencies, images, plugins, rules, templates, feeds, and databases. Every release generates locked dependency notices, engine notices, managed-runtime component inventories, and SPDX/CycloneDX SBOMs from the resolved artifacts. Those generated files describe the bytes in that release; this source inventory is not a substitute for them or for legal advice.
 
 The `ai-security-scanner` repository currently carries the Apache License 2.0 in the root `LICENSE` file. That license covers this project's own work only and does not replace, relicense, or override any third-party terms recorded here.
 
-## Review labels
+## Disposition labels
 
-- `PENDING`: known upstream license, but exact artifact and redistribution review is not complete.
+- `ALLOW`: the engineering release record marks the exact project-managed artifact for distribution with its required license texts, notices, and dependency obligations.
+- `SOURCE_OFFER`: the release record identifies a project-managed copyleft artifact and its corresponding-source or source-offer path.
+- `SOURCE_ARCHIVE`: a managed-runtime record binds a distributed copyleft binary to an exact corresponding-source archive URL, digest, and size.
+- `UPSTREAM_PINNED`: the product retrieves an exact verified upstream artifact by digest and does not republish it as a project-managed engine image.
+- `GENERATED_INVENTORY`: the resolved release graph, notices, and SBOM—not this row—enumerate the artifact-specific dependency terms.
+- `NOT_DISTRIBUTED`: tracked or referenced source that is not shipped by the described v0.1.0 component.
 - `MANUAL`: repository metadata did not provide an unambiguous SPDX identifier or the project has special terms requiring manual review.
-- `MULTI`: the named product is a stack with independently licensed components and data.
 - `RESEARCH`: tracked for evaluation; not a committed release dependency.
 - `ARCHIVED`: upstream is archived and requires a maintenance/replacement decision.
 
-No `PENDING`, `MANUAL`, `MULTI`, or `RESEARCH` entry may be interpreted as release approval.
+`ALLOW`, `SOURCE_OFFER`, and `SOURCE_ARCHIVE` apply only to the exact recorded artifact and are engineering dispositions rather than legal advice. `UPSTREAM_PINNED` is not a blanket permission or a statement that the artifact is inside the desktop installer. `MANUAL`, `RESEARCH`, `ARCHIVED`, and `NOT_DISTRIBUTED` never imply release approval.
 
 ## Required product engine inventory
 
-| Component | Official source | Observed license | Intended relationship | Review |
+| Component | Official source | Pinned license record | v0.1.0 relationship | Disposition |
 |---|---|---|---|---|
-| CloudQuery | [cloudquery/cloudquery](https://github.com/cloudquery/cloudquery) | MPL-2.0 | Separate CLI/OCI engine; provider plugins tracked separately | PENDING |
-| Steampipe | [turbot/steampipe](https://github.com/turbot/steampipe) | AGPL-3.0 | Separate CLI/OCI engine; plugins and mods tracked separately | PENDING |
-| Prowler | [prowler-cloud/prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Separate CLI/OCI engine | PENDING |
-| ScoutSuite | [nccgroup/ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Separate CLI/OCI engine | PENDING |
-| Cloudsplaining | [salesforce/cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Separate CLI/OCI engine | PENDING |
-| ScubaGear | [cisagov/ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 | Separate PowerShell/OCI engine | PENDING |
-| Maester | [maester365/maester](https://github.com/maester365/maester) | MIT | Separate PowerShell/OCI engine and test modules | PENDING |
-| Naabu | [projectdiscovery/naabu](https://github.com/projectdiscovery/naabu) | MIT | Separate binary/OCI engine | PENDING |
-| httpx | [projectdiscovery/httpx](https://github.com/projectdiscovery/httpx) | MIT | Separate binary/OCI engine | PENDING |
-| Nuclei | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei) | MIT | Separate binary/OCI engine | PENDING |
-| Nuclei Templates | [projectdiscovery/nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) | MIT | Separately pinned rules/template data | PENDING |
-| OpenVAS Scanner | [greenbone/openvas-scanner](https://github.com/greenbone/openvas-scanner) | GPL-2.0 | Greenbone multi-service engine component | MULTI |
-| Greenbone Vulnerability Manager | [greenbone/gvmd](https://github.com/greenbone/gvmd) | AGPL-3.0 | Greenbone multi-service engine component | MULTI |
-| Greenbone Security Assistant | [greenbone/gsa](https://github.com/greenbone/gsa) | AGPL-3.0 | Optional Greenbone UI/API component under evaluation | MULTI |
-| OSPd OpenVAS | [greenbone/ospd-openvas](https://github.com/greenbone/ospd-openvas) | AGPL-3.0 | Greenbone multi-service engine component | MULTI |
-| Greenbone Feed Sync | [greenbone/greenbone-feed-sync](https://github.com/greenbone/greenbone-feed-sync) | GPL-3.0 | Greenbone feed retrieval component; feed terms separate | MULTI |
-| Semgrep | [semgrep/semgrep](https://github.com/semgrep/semgrep) | LGPL-2.1-or-later | Separate CLI/OCI engine; rules tracked separately | PENDING |
-| Gitleaks | [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks) | MIT | Separate binary/OCI engine | PENDING |
-| TruffleHog | [trufflesecurity/trufflehog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0 | Separate CLI/OCI engine | PENDING |
-| Checkov | [bridgecrewio/checkov](https://github.com/bridgecrewio/checkov) | Apache-2.0 | Separate CLI/OCI engine; policies tracked separately | PENDING |
-| KICS | [Checkmarx/kics](https://github.com/Checkmarx/kics) | Apache-2.0 | Separate CLI/OCI engine; query packs tracked separately | PENDING |
-| Trivy | [aquasecurity/trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Separate CLI/OCI engine; vulnerability DB tracked separately | PENDING |
-| Grype | [anchore/grype](https://github.com/anchore/grype) | Apache-2.0 | Separate CLI/OCI engine; vulnerability DB tracked separately | PENDING |
-| Syft | [anchore/syft](https://github.com/anchore/syft) | Apache-2.0 | Separate CLI/OCI engine | PENDING |
-| Kubescape | [kubescape/kubescape](https://github.com/kubescape/kubescape) | Apache-2.0 | Separate CLI/OCI engine; framework data tracked separately | PENDING |
-| kube-bench | [aquasecurity/kube-bench](https://github.com/aquasecurity/kube-bench) | Apache-2.0 | Separate CLI/OCI engine; benchmark config tracked separately | PENDING |
+| CloudQuery | [cloudquery/cloudquery](https://github.com/cloudquery/cloudquery) | MPL-2.0 | Project-managed image with exact public CLI and provider-plugin source closure | SOURCE_OFFER |
+| Steampipe | [turbot/steampipe](https://github.com/turbot/steampipe) | AGPL-3.0-only plus separately pinned plugin/FDW terms | Project-managed image with source and build material | SOURCE_OFFER |
+| Prowler | [prowler-cloud/prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Project-managed AWS-only image with required notices | ALLOW |
+| ScoutSuite | [nccgroup/ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Project-managed image carrying exact source, patch, build recipe, and notices | SOURCE_OFFER |
+| Cloudsplaining | [salesforce/cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Project-managed image with the upstream notice | ALLOW |
+| ScubaGear | [cisagov/ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 plus pinned module terms | Project-managed image carrying module source and notices | ALLOW |
+| Maester | [maester365/maester](https://github.com/maester365/maester) | MIT plus pinned module terms | Project-managed image carrying module source and notices | ALLOW |
+| Naabu | [projectdiscovery/naabu](https://github.com/projectdiscovery/naabu) | MIT upstream; Apache-2.0 launcher | Project-managed image with fixed bounded launcher | ALLOW |
+| httpx | [projectdiscovery/httpx](https://github.com/projectdiscovery/httpx) | MIT upstream; Apache-2.0 launcher | Project-managed image with fixed bounded launcher | ALLOW |
+| Nuclei and selected templates | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei), [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) | MIT upstream; Apache-2.0 launcher | Project-managed image with one exact allowlisted template snapshot | ALLOW |
+| Greenbone scanner and feed | [greenbone/openvas-scanner](https://github.com/greenbone/openvas-scanner) | GPL-2.0-only scanner; pinned feed GPL/ODbL terms; Apache-2.0 launcher | Project-managed direct-`openvasd` image carrying exact scanner/feed source and notices; no gvmd, GSA, OSPd, or feed-sync runtime | SOURCE_OFFER |
+| Semgrep | [semgrep/semgrep](https://github.com/semgrep/semgrep) | LGPL-2.1-or-later scanner; Apache-2.0 project rules/launcher | Project-managed open-source build; no proprietary Semgrep image or Pro component | SOURCE_OFFER |
+| Gitleaks | [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks) | MIT | Exact verified upstream image acquired by digest | UPSTREAM_PINNED |
+| TruffleHog | [trufflesecurity/trufflehog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0; Apache-2.0 launcher | Project-managed source build restricted to offline filesystem scanning | SOURCE_OFFER |
+| Checkov | [bridgecrewio/checkov](https://github.com/bridgecrewio/checkov) | Apache-2.0 plus dependency/policy terms | Project-managed image with dependency notices | ALLOW |
+| KICS | [Checkmarx/kics](https://github.com/Checkmarx/kics) | Apache-2.0 | Exact verified upstream image acquired by digest | UPSTREAM_PINNED |
+| Trivy | [aquasecurity/trivy](https://github.com/aquasecurity/trivy) | Apache-2.0; advisory-provider terms remain applicable | Project-managed image with one immutable offline DB snapshot and notice | ALLOW |
+| Grype | [anchore/grype](https://github.com/anchore/grype) | Apache-2.0; advisory-provider terms remain applicable | Project-managed image with one checksum-pinned offline DB snapshot and notice | ALLOW |
+| Syft | [anchore/syft](https://github.com/anchore/syft) | Apache-2.0 | Project-managed image with required notices | ALLOW |
+| Kubescape | [kubescape/kubescape](https://github.com/kubescape/kubescape) | Apache-2.0 scanner and pinned regolibrary artifacts | Project-managed offline manifest scanner image | ALLOW |
+| kube-bench | [aquasecurity/kube-bench](https://github.com/aquasecurity/kube-bench) | Apache-2.0 | Project-managed source build with benchmark configuration over a bounded node snapshot | ALLOW |
 
 ## Research inventory
 
@@ -77,38 +76,40 @@ No `PENDING`, `MANUAL`, `MULTI`, or `RESEARCH` entry may be interpreted as relea
 
 ## Supporting standards and runtime inventory
 
-| Component | Official source | Observed license | Intended relationship | Review |
+The platform-specific managed-runtime manifest records every bundled file, first-setup download, source revision, license expression, size, and SHA-256. The release pipeline emits that manifest plus runtime notices and SPDX/CycloneDX SBOMs for Linux, macOS, and Windows. The relationships below summarize that generated evidence rather than claiming that every research repository is packaged.
+
+| Component | Official source | Pinned license record | v0.1.0 relationship | Disposition |
 |---|---|---|---|---|
-| OCSF schema | [ocsf/ocsf-schema](https://github.com/ocsf/ocsf-schema) | Apache-2.0 | Interchange/export schema | PENDING version and notice review |
-| OSCAL | [usnistgov/OSCAL](https://github.com/usnistgov/OSCAL) | NOASSERTION | Assessment/control exchange | MANUAL NIST terms review |
-| Tauri | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) | Apache-2.0 / MIT | Desktop framework | PENDING dependency SBOM review |
-| Moby | [moby/moby](https://github.com/moby/moby) | Apache-2.0 | Managed-runtime research | PENDING packaging review |
-| Podman | [containers/podman](https://github.com/containers/podman) | Apache-2.0 | Managed/compatibility runtime research | PENDING packaging review |
-| Docker CLI | [docker/cli](https://github.com/docker/cli) | Apache-2.0 | Compatibility runtime client | PENDING packaging review |
-| Docker Compose | [docker/compose](https://github.com/docker/compose) | Apache-2.0 | Multi-service engine orchestration | PENDING packaging review |
+| OCSF schema | [ocsf/ocsf-schema](https://github.com/ocsf/ocsf-schema) | Apache-2.0 | Versioned interchange reference implemented by project-owned export code; no upstream schema artifact is bundled | NOT_DISTRIBUTED |
+| OSCAL | [usnistgov/OSCAL](https://github.com/usnistgov/OSCAL) | NIST publication terms | Versioned exchange reference implemented by project-owned export code; no upstream repository artifact is bundled | NOT_DISTRIBUTED |
+| Tauri and resolved desktop dependencies | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) | Apache-2.0 OR MIT for Tauri; per-package terms in the resolved graph | Compiled desktop dependency; release notices and desktop SBOM enumerate the exact graph | GENERATED_INVENTORY |
+| Podman machine client | [containers/podman](https://github.com/containers/podman) | Apache-2.0 | Exact platform client files bundled in the desktop managed-runtime resource | ALLOW |
+| podman-machine-os | [containers/podman-machine-os](https://github.com/containers/podman-machine-os) | Apache-2.0 project; contained packages retain their own terms | Exact VM image downloaded on first managed-runtime setup by URL, size, and digest | UPSTREAM_PINNED |
+| gvisor-tap-vsock | [containers/gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock) | Apache-2.0 | Exact `gvproxy` and, on Windows, SSH proxy helpers bundled per platform | ALLOW |
+| QEMU system emulator | [qemu-project/qemu](https://gitlab.com/qemu-project/qemu) | GPL-2.0-only | Linux-only static system emulator built from a checksum-pinned source archive recorded in runtime evidence | SOURCE_ARCHIVE |
+| Device Tree Compiler | [qemu-project/dtc](https://gitlab.com/qemu-project/dtc) | GPL-2.0-or-later AND BSD-2-Clause | Exact source incorporated into the Linux QEMU build; source archive URL and digest recorded | SOURCE_ARCHIVE |
+| vfkit | [crc-org/vfkit](https://github.com/crc-org/vfkit) | Apache-2.0 | Exact macOS Apple Virtualization.framework helper bundled in the universal runtime | ALLOW |
+| Moby | [moby/moby](https://github.com/moby/moby) | Apache-2.0 | Architecture research only; not used by the packaged managed runtime | NOT_DISTRIBUTED |
+| Docker CLI and Compose | [docker/cli](https://github.com/docker/cli), [docker/compose](https://github.com/docker/compose) | Apache-2.0 | Optional user-installed compatibility provider; not bundled or required by the product | NOT_DISTRIBUTED |
 
 ## Docker Desktop is separate
 
 [Docker Desktop licensing](https://docs.docker.com/subscription/desktop-license/) is not the same as the Apache-2.0 licenses on Moby, Docker CLI, or Docker Compose. `ai-security-scanner` must not bundle, redistribute, or require an enterprise user to use Docker Desktop based only on those repository licenses.
 
-The runtime implementation for Windows and macOS also requires Linux virtualization and platform integration. A release must identify the exact runtime product and terms it distributes or invokes.
+The v0.1.0 packaged path uses a private, versioned Podman machine runtime: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and an existing WSL 2 capability on Windows. Docker or a user-installed Podman remains an optional compatibility provider and is never treated as part of the installer.
 
 ## Rules, feeds, plugins, and databases
 
-The following are separate third-party artifacts even when an engine downloads them automatically:
+Rules, feeds, plugins, and databases remain independently identified artifacts even when they share an engine image. The desktop installers contain none of them. The separately published v0.1.0 engine artifacts use only the exact data closure recorded by their plans and catalog:
 
-- Nuclei templates and any private/community template packs;
-- Steampipe and CloudQuery provider plugins;
-- Powerpipe or Steampipe compliance mods;
-- Greenbone Community Feed and related vulnerability/test data;
-- Trivy and Grype vulnerability databases;
-- Semgrep rules;
-- Checkov policies and KICS queries;
-- Kubescape framework/control data;
-- kube-bench benchmark configuration;
-- language package indexes and advisory databases used by any engine.
+- CloudQuery and Steampipe carry only their pinned provider/plugin closure; Powerpipe and other compliance mods are not shipped.
+- Nuclei carries one exact allowlisted template snapshot; private, live, destructive, and out-of-band template packs are not shipped or automatically enabled.
+- Greenbone carries one digest-pinned Community Feed snapshot, executable NASL source, data, declared license texts, revision, checksum manifest, and upstream detached signature; it performs no live feed synchronization.
+- Trivy and Grype each carry one immutable offline vulnerability database with its digest, timestamp, and attribution notice; automatic database updates are disabled.
+- Semgrep carries a small project-owned offline rule file; no registry rules, Pro component, or token-driven installer is included.
+- Checkov's packaged policies, the KICS upstream-image query pack, Kubescape's three checksum-pinned offline policy assets, and kube-bench's benchmark configuration stay bound to their exact engine artifacts.
 
-The engine manifest must record each artifact's source, license, version or date, digest, update method, redistribution decision, and support window. An engine's source license does not automatically license its downloaded data.
+No statement above claims that a newer feed, database, policy, plugin, user-supplied pack, or language advisory index is shipped. Replacing any one requires a new source, terms, version/date, digest, update method, disposition, evidence set, and support window. An engine's source license does not automatically license its data.
 
 ## General obligations by license family
 
@@ -144,16 +145,16 @@ AGPL includes GPL distribution obligations and a network-interaction source prov
 
 ## Release compliance requirements
 
-Before publishing any installer, image bundle, offline archive, or update pack:
+The release workflow enforces the mechanical evidence requirements below. They support license compliance work but do not replace qualified legal analysis:
 
 1. Resolve every included artifact to a source revision, version, and digest.
 2. Generate an SBOM for the desktop application, broker, runtime, images, adapters, and bundled data.
-3. Re-evaluate licenses from the pinned artifacts rather than copying this table unchanged.
+3. Re-evaluate licenses from the pinned artifacts rather than copying this narrative unchanged.
 4. Produce required license texts, attribution, NOTICE files, corresponding source, patches, and source offers.
 5. Verify trademarks and naming restrictions separately from copyright licenses.
 6. Confirm whether each artifact is bundled, built by the project, or downloaded on demand.
 7. Confirm that on-demand download terms allow the proposed use; downloading later is not a license bypass.
-8. Record the decision in the engine manifest and release evidence.
-9. Block release packaging for unresolved `MANUAL`, `MULTI`, or incompatible entries while allowing non-distributive adapter development to continue.
+8. Record the decision in the engine catalog, plan, generated notices, and release evidence.
+9. Reject a Required engine from a stable release when its catalog entry is non-runnable, blocked, lacks an immutable artifact digest, or lacks an `allow`/`source_offer` disposition.
 
 This file must be updated whenever a required engine, runtime component, ruleset, feed, database, plugin, or license changes.

@@ -1,0 +1,26 @@
+{
+  "rows": [
+    {
+      "provider": "aws",
+      "payer_account_id": "999999999999",
+      "account_id": "123456789012",
+      "account_name": "Production",
+      "billing_period": "2026-08"
+    },
+    {
+      "provider": "azure",
+      "billing_account_id": "billing-example",
+      "subscription_id": "22222222-2222-4222-8222-222222222222",
+      "subscription_name": "Production subscription"
+    },
+    {
+      "provider": "gcp",
+      "billing_account_id": "ABCDEF-123456-ABCDEF",
+      "project_id": "example-prod-123",
+      "project_name": "Production"
+    },
+    {
+      "description": "A charge mentioning AWS and GCP without an explicit provider"
+    }
+  ]
+}

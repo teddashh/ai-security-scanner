@@ -22,9 +22,33 @@ pub struct Storage {
 
 impl Storage {
     pub fn open(path: impl AsRef<Path>) -> AppResult<Self> {
-        let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
+        let requested_path = path.as_ref();
+        let parent = requested_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let explicit_private_parent = parent != Path::new(".");
+        if explicit_private_parent {
             fs::create_dir_all(parent)?;
+            let metadata = fs::symlink_metadata(parent)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(AppError::Storage(
+                    "case database parent must be a real directory, not a symlink".into(),
+                ));
+            }
+            restrict_directory(parent)?;
+        }
+        let parent = fs::canonicalize(parent)?;
+        let filename = requested_path.file_name().ok_or_else(|| {
+            AppError::Storage("case database path must include a filename".into())
+        })?;
+        let path = parent.join(filename);
+        if let Ok(metadata) = fs::symlink_metadata(&path)
+            && (metadata.file_type().is_symlink() || !metadata.is_file())
+        {
+            return Err(AppError::Storage(
+                "case database must be a regular non-symlink file".into(),
+            ));
         }
 
         let connection = Connection::open(&path)?;
@@ -40,6 +64,7 @@ impl Storage {
         };
         storage.migrate()?;
         storage.restrict_permissions()?;
+        storage.restrict_sidecar_permissions()?;
         Ok(storage)
     }
 
@@ -102,13 +127,23 @@ impl Storage {
 
     #[cfg(unix)]
     fn restrict_permissions(&self) -> AppResult<()> {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600))?;
-        Ok(())
+        restrict_file(&self.path)
     }
 
     #[cfg(not(unix))]
     fn restrict_permissions(&self) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn restrict_sidecar_permissions(&self) -> AppResult<()> {
+        for suffix in ["-wal", "-shm"] {
+            let mut sidecar = self.path.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            let sidecar = PathBuf::from(sidecar);
+            if fs::symlink_metadata(&sidecar).is_ok() {
+                restrict_file(&sidecar)?;
+            }
+        }
         Ok(())
     }
 
@@ -274,6 +309,30 @@ impl Storage {
     }
 }
 
+#[cfg(unix)]
+fn restrict_directory(path: &Path) -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_directory(_path: &Path) -> AppResult<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_file(path: &Path) -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_file(_path: &Path) -> AppResult<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +405,31 @@ mod tests {
             storage.delete_case(&first.id),
             Err(AppError::CaseNotFound(_))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_rejects_symlink_database_and_restricts_local_paths() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = tempfile::tempdir().expect("temp directory");
+        let private = directory.path().join("private");
+        let database = private.join("casework.db");
+        let storage = Storage::open(&database).expect("storage");
+        assert_eq!(
+            fs::metadata(&private).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(storage.path()).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        drop(storage);
+
+        let target = directory.path().join("target.db");
+        fs::write(&target, []).unwrap();
+        let linked = directory.path().join("linked.db");
+        symlink(&target, &linked).unwrap();
+        assert!(matches!(Storage::open(linked), Err(AppError::Storage(_))));
     }
 }

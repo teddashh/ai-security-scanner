@@ -1,0 +1,10 @@
+{
+  "Status": 0,
+  "Question": [{ "name": "app.example.com.", "type": 1 }],
+  "Answer": [
+    { "name": "app.example.com.", "type": 5, "data": "edge.example.net." },
+    { "name": "edge.example.net.", "type": 1, "data": "192.0.2.20" },
+    { "name": "broken.example.net.", "type": 1, "data": "not-an-ip" },
+    { "name": "example.com.", "type": 16, "data": "ignored TXT material" }
+  ]
+}

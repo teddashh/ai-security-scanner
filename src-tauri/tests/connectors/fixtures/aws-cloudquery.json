@@ -1,0 +1,20 @@
+{
+  "rows": [
+    {
+      "kind": "aws_organizations_organization",
+      "organization_id": "o-exampleorg1",
+      "organization_name": "Example organization",
+      "account_id": "123456789012",
+      "account_name": "Production"
+    },
+    {
+      "kind": "aws_s3_bucket",
+      "account_id": "123456789012",
+      "name": "example-evidence-bucket",
+      "arn": "arn:aws:s3:::example-evidence-bucket",
+      "region": "us-east-1",
+      "public": false,
+      "password": "must-never-enter-canonical-metadata"
+    }
+  ]
+}

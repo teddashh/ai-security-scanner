@@ -1,0 +1,12 @@
+{
+  "TenantId": "33333333-3333-4333-8333-333333333333",
+  "TenantName": "Example Microsoft 365",
+  "Results": [
+    {
+      "PolicyId": "MS.AAD.1.1v1",
+      "Requirement": "Legacy authentication is blocked",
+      "Result": "Failed",
+      "TenantId": "33333333-3333-4333-8333-333333333333"
+    }
+  ]
+}

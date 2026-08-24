@@ -1,0 +1,12 @@
+{
+  "roots": [
+    {
+      "filesystem_id": "volume-77777777",
+      "label": "Application checkout",
+      "filesystem_type": "ext4",
+      "contains_sensitive_data": true,
+      "path": "/not-used-as-identity-or-read-by-connector"
+    },
+    { "label": "mutable path only", "path": "/tmp/example" }
+  ]
+}

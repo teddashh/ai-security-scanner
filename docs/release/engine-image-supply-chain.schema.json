@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/docs/release/engine-image-supply-chain.schema.json",
+  "title": "ai-security-scanner managed engine image supply-chain evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "engine",
+    "image",
+    "tag",
+    "indexDigest",
+    "sourceRevision",
+    "public",
+    "generator",
+    "imageBuild",
+    "platforms",
+    "attestations",
+    "verification",
+    "checksumsFile"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "engine": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$" },
+    "image": { "type": "string", "pattern": "^[a-z0-9.-]+/[a-z0-9._/-]+$" },
+    "tag": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "indexDigest": { "$ref": "#/$defs/digest" },
+    "sourceRevision": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "public": { "const": true },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "image"],
+      "properties": {
+        "name": { "const": "anchore/syft" },
+        "version": { "const": "1.51.0" },
+        "image": {
+          "const": "anchore/syft@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0"
+        }
+      }
+    },
+    "imageBuild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inlineProvenance", "inlineSbom", "digestMutatedByEvidence"],
+      "properties": {
+        "inlineProvenance": { "const": false },
+        "inlineSbom": { "const": false },
+        "digestMutatedByEvidence": { "const": false }
+      }
+    },
+    "platforms": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        { "$ref": "#/$defs/amd64Platform" },
+        { "$ref": "#/$defs/arm64Platform" }
+      ],
+      "items": false
+    },
+    "attestations": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/attestation" }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "workflowRun",
+        "runAttempt",
+        "registryReferrers",
+        "githubAttestationApi",
+        "onlineVerificationRequiredBeforeUpload"
+      ],
+      "properties": {
+        "repository": { "type": ["string", "null"] },
+        "workflowRun": { "type": ["string", "null"], "format": "uri" },
+        "runAttempt": { "type": ["string", "null"] },
+        "registryReferrers": { "const": true },
+        "githubAttestationApi": { "const": true },
+        "onlineVerificationRequiredBeforeUpload": { "const": true }
+      }
+    },
+    "checksumsFile": { "const": "SHA256SUMS.txt" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "predicateType", "file", "sha256", "sizeBytes"],
+      "properties": {
+        "format": { "enum": ["spdx-json", "cyclonedx-json"] },
+        "predicateType": {
+          "enum": ["https://spdx.dev/Document/v2.3", "https://cyclonedx.org/bom"]
+        },
+        "file": { "type": "string", "pattern": "^[a-z0-9.-]+\\.(?:spdx|cyclonedx)\\.json$" },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 }
+      }
+    },
+    "platformBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "digest", "sboms"],
+      "properties": {
+        "platform": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "sboms": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/sbom" }
+        }
+      }
+    },
+    "amd64Platform": {
+      "allOf": [
+        { "$ref": "#/$defs/platformBase" },
+        { "properties": { "platform": { "const": "linux/amd64" } } }
+      ]
+    },
+    "arm64Platform": {
+      "allOf": [
+        { "$ref": "#/$defs/platformBase" },
+        { "properties": { "platform": { "const": "linux/arm64" } } }
+      ]
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "platform",
+        "predicateType",
+        "subject",
+        "bundleFile",
+        "bundleSha256",
+        "bundleSizeBytes",
+        "attestationId",
+        "attestationUrl",
+        "registryPushed",
+        "githubAttestationsApi"
+      ],
+      "properties": {
+        "kind": { "enum": ["build-provenance", "sbom"] },
+        "platform": { "type": ["string", "null"], "enum": [null, "linux/amd64", "linux/arm64"] },
+        "predicateType": {
+          "enum": [
+            "https://slsa.dev/provenance/v1",
+            "https://spdx.dev/Document/v2.3",
+            "https://cyclonedx.org/bom"
+          ]
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "digest"],
+          "properties": {
+            "name": { "type": "string" },
+            "digest": { "$ref": "#/$defs/digest" }
+          }
+        },
+        "bundleFile": { "type": "string", "pattern": "^[a-z0-9.-]+\\.sigstore\\.json$" },
+        "bundleSha256": { "$ref": "#/$defs/hash" },
+        "bundleSizeBytes": { "type": "integer", "minimum": 1 },
+        "attestationId": { "type": "string", "minLength": 1 },
+        "attestationUrl": { "type": "string", "format": "uri", "pattern": "^https://github\\.com/" },
+        "registryPushed": { "const": true },
+        "githubAttestationsApi": { "const": true }
+      }
+    }
+  }
+}

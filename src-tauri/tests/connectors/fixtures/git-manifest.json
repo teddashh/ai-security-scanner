@@ -1,0 +1,19 @@
+{
+  "schema_version": "ai-security-scanner.git-snapshot/v1",
+  "repositories": [
+    {
+      "key": "application",
+      "provider": "github",
+      "repository_id": "R_kgDOExample1",
+      "full_name": "example/application",
+      "default_branch": "main",
+      "remote_url": "https://example.invalid/example/application.git",
+      "api_token": "must-never-enter-canonical-metadata"
+    },
+    {
+      "key": "mutable-only",
+      "provider": "github",
+      "remote_url": "https://example.invalid/example/renamable.git"
+    }
+  ]
+}

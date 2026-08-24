@@ -1,0 +1,22 @@
+{
+  "cluster": {
+    "uid": "55555555-5555-4555-8555-555555555555",
+    "name": "production-cluster",
+    "provider": "eks",
+    "region": "us-east-1",
+    "version": "1.34"
+  },
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "uid": "66666666-6666-4666-8666-666666666666",
+        "namespace": "default",
+        "name": "web"
+      },
+      "spec": { "template": { "spec": { "imagePullSecrets": ["raw-only"] } } }
+    },
+    { "kind": "Service", "metadata": { "name": "missing-uid" } }
+  ]
+}

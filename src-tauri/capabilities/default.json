@@ -3,5 +3,27 @@
   "identifier": "default",
   "description": "Minimum permissions for the ai-security-scanner desktop window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-save"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://*.amazonaws.com/**" },
+        { "url": "https://*.awsapps.com/**" },
+        { "url": "https://microsoft.com/**" },
+        { "url": "https://*.microsoft.com/**" },
+        { "url": "https://microsoftonline.com/**" },
+        { "url": "https://*.microsoftonline.com/**" },
+        { "url": "https://google.com/**" },
+        { "url": "https://*.google.com/**" },
+        { "url": "https://googleusercontent.com/**" },
+        { "url": "https://*.googleusercontent.com/**" }
+      ]
+    },
+    "process:allow-restart",
+    "updater:allow-check",
+    "updater:allow-download-and-install"
+  ]
 }

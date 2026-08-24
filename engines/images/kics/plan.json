@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "kics",
+  "plan_kind": "upstream_image",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "verified_upstream_artifact",
+  "source": {
+    "repository": "https://github.com/Checkmarx/kics",
+    "revision": "e1f23cad9640f55b963f22a116b04906b8c16ac6",
+    "acquisition_source": "https://github.com/Checkmarx/kics/commit/e1f23cad9640f55b963f22a116b04906b8c16ac6",
+    "local_research_checkout": ".upstreams/Checkmarx/kics"
+  },
+  "verified_upstream_artifact": {
+    "repository": "checkmarx/kics",
+    "tag": "v2.1.20",
+    "digest": "sha256:3e5a268eb8adda2e5a483c9359ddfc4cd520ab856a7076dc0b1d8784a37e2602",
+    "signature_identity": null,
+    "entrypoint": [
+      "/app/bin/kics"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect_and_oci_labels",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "e1f23cad9640f55b963f22a116b04906b8c16ac6"
+    }
+  },
+  "final_artifact": {
+    "repository": "checkmarx/kics",
+    "tag": "v2.1.20",
+    "digest": "sha256:3e5a268eb8adda2e5a483c9359ddfc4cd520ab856a7076dc0b1d8784a37e2602"
+  },
+  "build_recipe": null,
+  "dockerfile": {
+    "emitted": false,
+    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+  },
+  "wrapper": {
+    "required": false,
+    "strategy": "The pinned upstream binary entrypoint accepts fixed local workspace and output paths without a scope-expanding wrapper.",
+    "entrypoint": null
+  },
+  "command": [
+    "scan",
+    "--path",
+    "/workspace",
+    "--report-formats",
+    "json",
+    "--output-path",
+    "/output",
+    "--output-name",
+    "kics",
+    "--no-progress",
+    "--silent",
+    "--no-color",
+    "--ignore-on-exit",
+    "results"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/kics.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}

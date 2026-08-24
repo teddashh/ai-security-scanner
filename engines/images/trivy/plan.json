@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "trivy",
+  "plan_kind": "upstream_image",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "verified_upstream_artifact",
+  "source": {
+    "repository": "https://github.com/aquasecurity/trivy",
+    "revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
+    "acquisition_source": "https://github.com/aquasecurity/trivy/commit/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
+    "local_research_checkout": ".upstreams/aquasecurity/trivy"
+  },
+  "verified_upstream_artifact": {
+    "repository": "aquasec/trivy",
+    "tag": "0.74.0",
+    "digest": "sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969",
+    "signature_identity": null,
+    "entrypoint": [
+      "trivy"
+    ],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994"
+    }
+  },
+  "final_artifact": {
+    "repository": "aquasec/trivy",
+    "tag": "0.74.0",
+    "digest": "sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+  },
+  "build_recipe": null,
+  "dockerfile": {
+    "emitted": false,
+    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Materialize a separately digest-pinned vulnerability database and force update checks off before scanning.",
+    "entrypoint": "filesystem"
+  },
+  "command": [
+    "filesystem",
+    "--format",
+    "json",
+    "--output",
+    "/output/trivy.json",
+    "--skip-db-update",
+    "/workspace"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/trivy.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "vulnerability_database_digest_not_published",
+    "execution_wrapper_not_implemented"
+  ]
+}

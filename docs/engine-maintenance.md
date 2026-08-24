@@ -1,0 +1,26 @@
+# Engine maintenance procedure
+
+This is the release-reviewed update procedure referenced by every engine compatibility record. The `maintenance_owner` named in the catalog owns the evidence for the steps below; an upstream project name is not a substitute for a product maintainer.
+
+## Date semantics
+
+- `knowledge_date` is the newest date represented by the exact engine, rules, templates, feed, database, or fixed provider-plugin closure shipped by that catalog entry. It is not the application build date unless those dates genuinely coincide.
+- `support_until` is the last date on which maintainers claim that exact pinned closure is supported. It must be a real calendar date on or after `knowledge_date` and is normally limited to a 90-day maintenance window.
+- Every new scan freezes both dates into each engine-run record. Historical records with no dates remain readable and are labeled as legacy records.
+- An expired closure remains attributable and reproducible. If execution is still available, the backend and UI emit an explicit stale-knowledge warning; completion never becomes a claim of current security.
+
+## Update procedure
+
+1. Resolve the exact upstream tag and 40-character source revision. Update `engines/upstreams.lock.json` and verify the local working copy and acquisition URL resolve to that revision.
+2. Review engine, dependency, image, rules, template, feed, database, trademark, and redistribution terms. Update `THIRD_PARTY.md`, notices, source offers, and the catalog license disposition before publishing an artifact.
+3. Pin every build input and base image. Builds may not use floating tags, runtime plugin downloads, mutable rule sources, or a shell-expanded target.
+4. Rebuild all supported architectures. Produce an SBOM, source archive or source offer where required, provenance attestation, and the immutable multi-architecture digest.
+5. Run the engine through its product wrapper with representative bounded fixtures. Exercise valid output, malformed output, output-size limits, cancellation, cleanup, and—where applicable—the exact managed-egress policy. A direct engine invocation is not integration evidence.
+6. Verify anonymous inspection and pull of every public image and feed artifact. Confirm its labels, entrypoint, non-root user, architecture manifests, embedded source association, and hardened smoke command.
+7. Update the adapter fixture and version when the output contract changes. Preserve old adapter provenance so existing cases remain explainable.
+8. Set the entry-specific `knowledge_date` from the verified knowledge closure and set `support_until` according to the maintained window. Copy both values into the corresponding packaging plan; never bulk-date an older closure merely because a new application release was built.
+9. Run catalog validation, implementation tests, release self-tests, and three-platform packaging. Attach the image, feed, SBOM, source, smoke, and attestation evidence to the release record.
+
+## Expiry and replacement
+
+The catalog keeps expired versions visible for historical provenance. A replacement gets a new immutable digest and dates; it never rewrites an existing case. If an update cannot satisfy licensing, source association, adapter, platform, or scope constraints, the engine stays `not_executed` with a concrete blocker rather than falling back to an unpinned or broader implementation.

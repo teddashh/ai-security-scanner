@@ -28,8 +28,33 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/ai-security-scanner-egress-gateway",
+      "binaries/ai-security-scanner-bootstrap-broker",
+      "binaries/ai-security-scanner-cli"
+    ],
+    "resources": {
+      "../runtime/staged/managed-runtime/": "managed-runtime/"
+    },
+    "createUpdaterArtifacts": true,
+    "publisher": "ai-security-scanner contributors",
+    "copyright": "Copyright 2026 Ted Huang and ai-security-scanner contributors",
+    "homepage": "https://github.com/teddashh/ai-security-scanner",
+    "license": "Apache-2.0",
+    "licenseFile": "../LICENSE",
     "category": "DeveloperTool",
     "shortDescription": "Local-first security assessment casework",
     "longDescription": "Discover assets, coordinate open-source security scanners, preserve evidence, hand off a case, and verify remediation without claiming a compliance audit."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIyQzI1RTVEMTJCMzJCRkUKUldUK0s3TVNYVjdDc3M2QU9nbGdqRTNQVStNR3hRQStuZEFQNStac2Y2U0FsQmZ5cjB5UTNHUmIK",
+      "endpoints": [
+        "https://github.com/teddashh/ai-security-scanner/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

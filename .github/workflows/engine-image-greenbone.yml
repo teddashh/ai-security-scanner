@@ -1,0 +1,337 @@
+name: Publish managed Greenbone engine image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/engine-image-greenbone.yml
+      - .github/actions/engine-image-evidence/**
+      - engines/images/greenbone/**
+      - engines/images/greenbone-launcher/**
+      - scripts/engine-image-evidence.mjs
+      - src-tauri/Cargo.toml
+      - src-tauri/examples/greenbone_adapter_smoke.rs
+      - src-tauri/src/adapters/**
+      - src-tauri/src/bin/egress_gateway.rs
+      - Cargo.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: engine-image-greenbone-23.50.21-feed202608240615-1
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-greenbone
+  IMAGE_TAG: 23.50.21-feed202608240615-1
+  SOURCE_DATE_EPOCH: "1787573675"
+  SCANNER_REVISION: c3ae607ef632393b7919fb179d30b940d929f713
+  FEED_REVISION: b26d7237d56b7cf85e6ace2b9351e7851461b3a8
+  NOTUS_REVISION: 4635b37aecd2d968680c7609a7fb61e5d780ce93
+
+jobs:
+  native:
+    name: Native build and real smoke (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify and reclaim ephemeral hosted-runner space
+        shell: bash
+        run: |
+          test "${GITHUB_ACTIONS}" = "true"
+          df -h /
+          available_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
+          if (( available_kib < 31457280 )); then
+            test "${RUNNER_ENVIRONMENT}" = "github-hosted"
+            for runner_path in /usr/local/lib/android/sdk /usr/share/dotnet /opt/ghc; do
+              if [[ -e "${runner_path}" ]]; then
+                sudo rm -rf -- "${runner_path}"
+              fi
+            done
+            sudo apt-get clean
+            docker system prune --all --force
+          fi
+          df -h /
+          test "$(df -Pk / | awk 'NR == 2 {print $4}')" -ge 15728640
+
+      - name: Install the pinned Rust toolchain for the managed gateway
+        shell: bash
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+          rustc --version | grep -Fq 'rustc 1.98.0'
+
+      - name: Build and test the managed egress gateway
+        shell: bash
+        run: >-
+          cargo build --locked --manifest-path src-tauri/Cargo.toml
+          --no-default-features --features egress-gateway
+          --bin ai-security-scanner-egress-gateway
+
+      - name: Set up Docker Buildx without emulation
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.36.1
+          driver-opts: |
+            image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build the native image and export its complete cache
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: engines/images/greenbone/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          push: false
+          load: true
+          tags: greenbone-native:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.architecture }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=engine-greenbone-${{ matrix.architecture }}
+          cache-to: type=gha,mode=max,scope=engine-greenbone-${{ matrix.architecture }}
+
+      - name: Inspect the locally loaded native image
+        shell: bash
+        run: |
+          native_image="greenbone-native:${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.architecture }}"
+          test "$(docker image inspect "${native_image}" --format '{{.Architecture}}')" = "${{ matrix.architecture }}"
+          test "$(docker image inspect "${native_image}" --format '{{.Os}}')" = linux
+          docker image inspect "${native_image}" > greenbone-native-inspect.json
+
+      - name: Run the real managed-SOCKS NVT and adapter smoke
+        id: smoke
+        shell: bash
+        run: |
+          native_image="greenbone-native:${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.architecture }}"
+          KEEP_GREENBONE_SMOKE=1 \
+            engines/images/greenbone/managed-socks-smoke.sh \
+            "${native_image}" \
+            "${GITHUB_WORKSPACE}/target/debug/ai-security-scanner-egress-gateway" \
+            adapter 2>&1 | tee greenbone-native-smoke.log
+          artifact_dir="$(sed -n 's/^preserved Greenbone smoke artifacts at //p' greenbone-native-smoke.log | tail -1)"
+          test -n "${artifact_dir}"
+          test -s "${artifact_dir}/output/greenbone.xml"
+          grep -Fq 'xml_results=5 actionable_alarms=1' greenbone-native-smoke.log
+          grep -Fq '"finding_count":1' greenbone-native-smoke.log
+          grep -Fq '"warnings":[]' greenbone-native-smoke.log
+          evidence_dir="package-evidence/native-${{ matrix.architecture }}"
+          mkdir -p "${evidence_dir}"
+          cp "${artifact_dir}/output/greenbone.xml" "${evidence_dir}/greenbone.xml"
+          cp "${artifact_dir}/gateway.log" "${evidence_dir}/gateway.log"
+          cp greenbone-native-smoke.log "${evidence_dir}/smoke.log"
+          xml_sha256="$(sha256sum "${evidence_dir}/greenbone.xml" | cut -d ' ' -f 1)"
+          jq -n \
+            --slurpfile inspect greenbone-native-inspect.json \
+            --arg platform "${{ matrix.platform }}" \
+            --arg xml_sha256 "sha256:${xml_sha256}" \
+            --arg source_revision "${GITHUB_SHA}" \
+            '($inspect[0][0]) as $image | {schemaVersion: 1, platform: $platform, sourceRevision: $source_revision, imageIdentity: {id: $image.Id, architecture: $image.Architecture, os: $image.Os, rootFsDiffIds: $image.RootFS.Layers, config: $image.Config}, realScan: {selectedOid: "1.3.6.1.4.1.25623.1.0.108252", xmlResults: 5, actionableAlarms: 1, adapterFindings: 1, xmlSha256: $xml_sha256, directEgressDenied: true, unauthorizedPortDenied: true}}' \
+            > "${evidence_dir}/native-digest.json"
+
+      - name: Upload native digest and smoke evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: greenbone-native-${{ matrix.architecture }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-evidence/native-${{ matrix.architecture }}
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    name: Publish pinned native manifests and preserve evidence
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download amd64 native evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: greenbone-native-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-evidence/amd64
+
+      - name: Download arm64 native evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: greenbone-native-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-evidence/arm64
+
+      - name: Verify native evidence identities
+        shell: bash
+        run: |
+          for architecture in amd64 arm64; do
+            evidence="native-evidence/${architecture}/native-digest.json"
+            jq -e --arg platform "linux/${architecture}" --arg revision "${GITHUB_SHA}" --arg architecture "${architecture}" \
+              '.schemaVersion == 1 and .platform == $platform and .sourceRevision == $revision and (.imageIdentity.id | test("^sha256:[0-9a-f]{64}$")) and .imageIdentity.architecture == $architecture and .imageIdentity.os == "linux" and (.imageIdentity.rootFsDiffIds | length > 0) and (.imageIdentity.config | type == "object") and .realScan.actionableAlarms == 1 and .realScan.adapterFindings == 1' \
+              "${evidence}"
+          done
+
+      - name: Verify and reclaim ephemeral hosted-runner space
+        shell: bash
+        run: |
+          test "${GITHUB_ACTIONS}" = "true"
+          df -h /
+          available_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
+          if (( available_kib < 20971520 )); then
+            test "${RUNNER_ENVIRONMENT}" = "github-hosted"
+            for runner_path in /usr/local/lib/android/sdk /usr/share/dotnet /opt/ghc; do
+              if [[ -e "${runner_path}" ]]; then
+                sudo rm -rf -- "${runner_path}"
+              fi
+            done
+            sudo apt-get clean
+            docker system prune --all --force
+          fi
+          df -h /
+          test "$(df -Pk / | awk 'NR == 2 {print $4}')" -ge 10485760
+
+      - name: Install the pinned Rust toolchain for final anonymous smoke
+        shell: bash
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+          cargo build --locked --manifest-path src-tauri/Cargo.toml \
+            --no-default-features --features egress-gateway \
+            --bin ai-security-scanner-egress-gateway
+
+      - name: Set up Docker Buildx without emulation
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.36.1
+          driver-opts: |
+            image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the immutable multi-platform image from native caches
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: engines/images/greenbone/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          provenance: false
+          sbom: false
+          cache-from: |
+            type=gha,scope=engine-greenbone-amd64
+            type=gha,scope=engine-greenbone-arm64
+            type=gha,scope=engine-greenbone-multiarch
+          cache-to: type=gha,mode=max,scope=engine-greenbone-multiarch
+
+      - name: Publish anonymous pull access
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="${IMAGE#ghcr.io/teddashh/}"
+          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
+
+      - name: Anonymously inspect, pull, and real-smoke the final digest
+        id: anonymous
+        shell: bash
+        env:
+          INDEX_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          [[ "${INDEX_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p package-evidence
+          docker logout ghcr.io
+          docker buildx imagetools inspect "${IMAGE}@${INDEX_DIGEST}"
+          docker buildx imagetools inspect "${IMAGE}@${INDEX_DIGEST}" --raw > package-evidence/greenbone-index.json
+          final_amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' package-evidence/greenbone-index.json)"
+          final_arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' package-evidence/greenbone-index.json)"
+          for platform in amd64 arm64; do
+            final_variable="final_${platform}_digest"
+            final_digest="${!final_variable}"
+            docker pull --platform "linux/${platform}" "${IMAGE}@${final_digest}"
+            docker image inspect "${IMAGE}@${final_digest}" > "${RUNNER_TEMP}/final-${platform}-inspect.json"
+            jq -e --slurpfile final "${RUNNER_TEMP}/final-${platform}-inspect.json" \
+              '($final[0][0]) as $image | .imageIdentity.id == $image.Id and .imageIdentity.architecture == $image.Architecture and .imageIdentity.os == $image.Os and .imageIdentity.rootFsDiffIds == $image.RootFS.Layers and .imageIdentity.config == $image.Config' \
+              "native-evidence/${platform}/native-digest.json"
+          done
+          test "$(docker image inspect "${IMAGE}@${final_amd64_digest}" --format '{{.Config.User}}')" = '65532:65532'
+          KEEP_GREENBONE_SMOKE=1 \
+            engines/images/greenbone/managed-socks-smoke.sh \
+            "${IMAGE}@${final_amd64_digest}" \
+            "${GITHUB_WORKSPACE}/target/debug/ai-security-scanner-egress-gateway" \
+            adapter 2>&1 | tee package-evidence/greenbone-anonymous-smoke.log
+          artifact_dir="$(sed -n 's/^preserved Greenbone smoke artifacts at //p' package-evidence/greenbone-anonymous-smoke.log | tail -1)"
+          test -n "${artifact_dir}"
+          cp "${artifact_dir}/output/greenbone.xml" package-evidence/greenbone-anonymous-smoke.xml
+          grep -Fq 'xml_results=5 actionable_alarms=1' package-evidence/greenbone-anonymous-smoke.log
+          grep -Fq '"finding_count":1' package-evidence/greenbone-anonymous-smoke.log
+          grep -Fq '"warnings":[]' package-evidence/greenbone-anonymous-smoke.log
+          xml_sha256="$(sha256sum package-evidence/greenbone-anonymous-smoke.xml | cut -d ' ' -f 1)"
+          jq -n \
+            --arg image "${IMAGE}" \
+            --arg tag "${IMAGE_TAG}" \
+            --arg index_digest "${INDEX_DIGEST}" \
+            --arg amd64_digest "${final_amd64_digest}" \
+            --arg arm64_digest "${final_arm64_digest}" \
+            --arg source_revision "${GITHUB_SHA}" \
+            --arg source_date_epoch "${SOURCE_DATE_EPOCH}" \
+            --arg scanner_revision "${SCANNER_REVISION}" \
+            --arg feed_revision "${FEED_REVISION}" \
+            --arg notus_revision "${NOTUS_REVISION}" \
+            --arg xml_sha256 "sha256:${xml_sha256}" \
+            '{schemaVersion: 1, engine: "greenbone", image: $image, tag: $tag, digest: $index_digest, indexDigest: $index_digest, platformDigests: {"linux/amd64": $amd64_digest, "linux/arm64": $arm64_digest}, sourceRevision: $source_revision, sourceDateEpoch: $source_date_epoch, public: true, anonymousPullVerified: true, managedSmokeEvidenceSha256: $xml_sha256, nativeImageIdentityMatchesFinal: true, upstream: {scannerRevision: $scanner_revision, scannerSourceSha256: "47cbc7fbff0e19c4533f48c6e7287298f1466d1556f0fc4a7177c37506a3d5e8", feedRevision: $feed_revision, feedVersion: "202608240615-community", notusRevision: $notus_revision}, managedProxy: {kind: "socks5h", directEgressDenied: true, unauthorizedPortDenied: true}, realScan: {selectedOid: "1.3.6.1.4.1.25623.1.0.108252", authorizedTarget: "172.29.251.10:8080/tcp", xmlResults: 5, actionableAlarms: 1, adapterFindings: 1, adapterWarnings: 0, xmlSha256: $xml_sha256}}' \
+            > package-evidence/greenbone-image-manifest.json
+          printf 'amd64_digest=%s\n' "${final_amd64_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'arm64_digest=%s\n' "${final_arm64_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'xml_sha256=sha256:%s\n' "${xml_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Preserve publication evidence
+        uses: ./.github/actions/engine-image-evidence
+        with:
+          engine: greenbone
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.publish.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record the released index and smoke evidence
+        shell: bash
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          XML_SHA256: ${{ steps.anonymous.outputs.xml_sha256 }}
+        run: |
+          printf 'Published `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
+          printf 'Anonymous real-scan XML: `%s`\n' "${XML_SHA256}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload publication and signed supply-chain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: greenbone-image-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-evidence
+          if-no-files-found: error
+          retention-days: 90

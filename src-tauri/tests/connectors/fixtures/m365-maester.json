@@ -1,0 +1,12 @@
+{
+  "TenantId": "33333333-3333-4333-8333-333333333333",
+  "TenantName": "Example Microsoft 365",
+  "Tests": [
+    {
+      "Id": "MT.1001",
+      "Name": "Privileged accounts use phishing-resistant MFA",
+      "Result": "Failed",
+      "TenantId": "33333333-3333-4333-8333-333333333333"
+    }
+  ]
+}

@@ -9,12 +9,13 @@ use crate::domain::{
     AssessmentCase, Asset, CoverageEntry, CoverageStatus, DataSource, EngineManifest,
     EngineRunStatus, Id, ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SOURCE_OBSERVATIONS_METADATA: &str = "ai_security_scanner.source_observations";
+pub const NOT_APPLICABLE_REASON_METADATA: &str = "ai_security_scanner.not_applicable_reason";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetCoverageAssessment {
@@ -47,14 +48,34 @@ pub fn compute_coverage_ledger(
     for source in sources {
         let (retained_asset_count, latest_asset_count) = source_asset_counts(case, source);
         match source.status {
+            SourceConnectionStatus::NotApplicable => {
+                let reason = source
+                    .metadata
+                    .get(NOT_APPLICABLE_REASON_METADATA)
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| {
+                        !value.trim().is_empty()
+                            && value.chars().count() <= 1_000
+                            && !value.chars().any(char::is_control)
+                    })
+                    .unwrap_or("The source was marked not applicable, but this legacy record has no retained reason.");
+                entries.push(source_entry(
+                    source,
+                    CoverageStatus::NotApplicable,
+                    &format!(
+                        "The source area is explicitly outside this case: {reason} This is a scoped applicability statement, not a successful scan result."
+                    ),
+                ));
+            }
             SourceConnectionStatus::Connected if latest_asset_count == 0 => {
-                let explanation = if source.last_discovered_at.is_some() {
+                let mut explanation = if source.last_discovered_at.is_some() {
                     format!(
                         "The source is connected and the latest attributable discovery returned no assets. This is not a successful scan result; {retained_asset_count} prior asset observation(s) remain retained."
                     )
                 } else {
                     "The source is connected, but no attributable discovery has completed and no assets are known. Coverage is not established.".into()
                 };
+                append_live_discovery_detail(source, &mut explanation);
                 entries.push(source_entry(
                     source,
                     CoverageStatus::SourceConnectedNothingDiscovered,
@@ -62,15 +83,19 @@ pub fn compute_coverage_ledger(
                 ));
             }
             SourceConnectionStatus::Connected => {}
-            _ => entries.push(source_entry(
-                source,
-                CoverageStatus::SourceNotConnectedUnknown,
-                &format!(
+            _ => {
+                let mut explanation = format!(
                     "The source is not currently connected (status: {}). Its present coverage is unknown; {} previously attributed asset(s) are retained but do not make the source green.",
                     enum_key(&source.status),
                     retained_asset_count
-                ),
-            )),
+                );
+                append_live_discovery_detail(source, &mut explanation);
+                entries.push(source_entry(
+                    source,
+                    CoverageStatus::SourceNotConnectedUnknown,
+                    &explanation,
+                ));
+            }
         }
     }
 
@@ -101,6 +126,34 @@ pub fn compute_coverage_ledger(
 
     entries.sort_by(|left, right| left.scope_key.cmp(&right.scope_key));
     entries
+}
+
+fn append_live_discovery_detail(source: &DataSource, explanation: &mut String) {
+    let Some(outcome) = source
+        .metadata
+        .get("ai_security_scanner.live_discovery_outcome")
+        .and_then(|value| value.as_object())
+    else {
+        return;
+    };
+    let code = outcome
+        .get("code")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let message = outcome
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if code.is_empty()
+        || code.len() > 128
+        || message.is_empty()
+        || message.len() > 1_024
+        || code.chars().any(char::is_control)
+        || message.chars().any(char::is_control)
+    {
+        return;
+    }
+    explanation.push_str(&format!(" Latest provider discovery: {code}: {message}"));
 }
 
 /// Replaces the case's current coverage snapshot with a deterministic ledger.
@@ -170,13 +223,60 @@ pub fn assess_asset_coverage(
         );
     };
 
-    let run_grants = effective_grants
+    let relevant_grant_ids = run
+        .scope_grant_ids
         .iter()
-        .copied()
-        .filter(|grant| {
-            run.scope_grant_ids.contains(&grant.id) && grant.confirmed_at <= run.created_at
-        })
-        .collect::<Vec<_>>();
+        .filter(|id| effective_grant_ids.contains(id.as_str()))
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if run.scope_grant_snapshots.is_empty() {
+        return incomplete(
+            Some(run.id.clone()),
+            run_observed_at(run),
+            "The scan predates frozen scope-grant snapshots, so its historical authorization and permission coverage are unknown. Live grants are never substituted for missing run evidence.",
+        );
+    }
+
+    let mut run_grants = Vec::new();
+    let mut snapshot_errors = Vec::new();
+    for grant_id in &relevant_grant_ids {
+        let matches = run
+            .scope_grant_snapshots
+            .iter()
+            .filter(|snapshot| {
+                snapshot.id == *grant_id
+                    && snapshot.asset_id == asset.id
+                    && run.scope_grant_ids.contains(&snapshot.id)
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [snapshot] if effective_grant(snapshot, run.created_at) => {
+                run_grants.push(*snapshot);
+            }
+            [snapshot] => snapshot_errors.push(format!(
+                "{}=historical_scope_not_effective_at_run({})",
+                grant_id,
+                enum_key(&snapshot.permission)
+            )),
+            [] => snapshot_errors.push(format!("{}=historical_scope_snapshot_missing", grant_id)),
+            _ => snapshot_errors.push(format!("{}=historical_scope_snapshot_ambiguous", grant_id)),
+        }
+    }
+    if relevant_grant_ids.is_empty() || !snapshot_errors.is_empty() {
+        snapshot_errors.sort();
+        let detail = if snapshot_errors.is_empty() {
+            "no current effective grant is represented by the selected run".into()
+        } else {
+            snapshot_errors.join(", ")
+        };
+        return incomplete(
+            Some(run.id.clone()),
+            run_observed_at(run),
+            &format!(
+                "The scan's frozen authorization evidence is incomplete: {detail}. Live grants are never used to reconstruct historical scan permission."
+            ),
+        );
+    }
     let planned_runs = run
         .engine_runs
         .iter()
@@ -194,6 +294,7 @@ pub fn assess_asset_coverage(
 
     let manifests_by_id = manifest_index(manifests);
     let mut incomplete_reasons = Vec::new();
+    let mut stale_knowledge = Vec::new();
     for engine_run in &planned_runs {
         let manifest_matches = manifests_by_id.get(engine_run.engine_id.as_str());
         let manifest = match manifest_matches {
@@ -212,6 +313,10 @@ pub fn assess_asset_coverage(
             incomplete_reasons.push(format!("{}=asset_kind_incompatible", engine_run.engine_id));
             continue;
         }
+        if !manifest.supports_provider(asset.provider.as_deref()) {
+            incomplete_reasons.push(format!("{}=provider_incompatible", engine_run.engine_id));
+            continue;
+        }
         if !permissions_cover_manifest(&run_grants, manifest) {
             incomplete_reasons.push(format!("{}=scope_incompatible", engine_run.engine_id));
             continue;
@@ -222,15 +327,38 @@ pub fn assess_asset_coverage(
                 engine_run.engine_id,
                 enum_key(&engine_run.status)
             ));
+        } else if let Some(input) = engine_run.knowledge_input.as_ref()
+            && let (Some(knowledge_date), Some(support_until)) = (
+                input.knowledge_date.as_deref(),
+                input.support_until.as_deref(),
+            )
+            && NaiveDate::parse_from_str(support_until, "%Y-%m-%d")
+                .ok()
+                .is_some_and(|date| date < as_of.date_naive())
+        {
+            stale_knowledge.push(format!(
+                "{} knowledge {} (support ended {})",
+                engine_run.engine_id, knowledge_date, support_until
+            ));
         }
     }
 
     if incomplete_reasons.is_empty() {
+        stale_knowledge.sort();
+        let freshness_notice = if stale_knowledge.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Explicit stale-knowledge warning: {}. Completion proves execution, not current knowledge.",
+                stale_knowledge.join(", ")
+            )
+        };
         AssetCoverageAssessment {
             status: CoverageStatus::DiscoveredAuthorizedScanned,
             explanation: format!(
-                "All {} compatible engine run(s) planned for this asset completed. This state is independent of how many findings were reported.",
-                planned_runs.len()
+                "All {} compatible engine run(s) planned for this asset completed. This state is independent of how many findings were reported.{}",
+                planned_runs.len(),
+                freshness_notice
             ),
             last_run_id: Some(run.id.clone()),
             observed_at,

@@ -1,64 +1,83 @@
 # ai-security-scanner engine catalog
 
-Status: target catalog and research inventory
+Status: v0.1.0 catalog companion and research inventory
 
 Last updated: 2026-08-24
 
-This catalog records the engines and supporting repositories named in the product design. It does not claim that an adapter exists, that an engine has been tested, or that redistribution is approved.
+This document explains the v0.1.0 engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. This prose never upgrades a non-runnable catalog entry or proves that an image or GitHub Release has been published.
 
-License identifiers below were observed from the upstream repository's default-branch license metadata on 2026-08-24. The exact pinned commit, subcomponents, plugins, rules, templates, feeds, databases, trademarks, images, and binary distribution terms must be reviewed before a release artifact is built. `Pending` is deliberately not an approval.
+Required-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting the v0.1.0 decision.
 
 ## 1. Catalog states
 
-- **Required:** the complete product must support this engine or engine family through the full case lifecycle.
-- **Research:** the repository was named in the design and should remain available for evaluation, but it is not a complete-product adapter commitment.
-- **Pending license review:** adapter research and local invocation may proceed, but the project has not approved bundling or redistribution.
-- **Blocked:** the project has identified a condition that prevents use in a release until resolved.
+- **Required:** v0.1.0 commits to this engine or engine family through the full case lifecycle.
+- **Integrated and runnable:** the catalog records `status: integrated`, `compatibility.runnable: true`, no blockers, an exact `sha256:` artifact digest, and a completed `allow` or `source_offer` disposition. Release validation rejects a Required engine that does not satisfy all of these conditions.
+- **ALLOW:** the engineering plan records `allow` for the exact project-managed artifact with its license texts, notices, and dependency obligations; this is not blanket legal advice.
+- **SOURCE_OFFER:** the engineering plan records copyleft corresponding-source material and a source-offer path for the exact project-managed artifact.
+- **UPSTREAM_PINNED:** the product retrieves an exact verified upstream image by digest rather than republishing it as a project-managed image. Its license and notices still apply.
+- **Research:** the repository remains available for evaluation but is not a v0.1.0 adapter commitment.
+- **Blocked or non-runnable:** the catalog condition prevents release use, regardless of any friendlier wording in this document.
 
 An upstream source checkout is research material. It does not make an engine installed, integrated, safe, supported, or redistributable.
 
+### Provider applicability disclosure
+
+The machine-readable `engines/catalog.json` field `supported_providers` is authoritative for this
+release line. A non-empty list requires an exact provider match on the asset; a missing provider is never
+guessed. An empty list means provider-agnostic, not “all cloud providers.”
+
+| v0.1.0 engine images | Declared providers |
+|---|---|
+| CloudQuery, Steampipe, Prowler, ScoutSuite, Cloudsplaining | AWS only |
+| ScubaGear, Maester | Microsoft 365 only |
+| Local artifact, external-target, container, and Kubernetes engines | Provider-agnostic |
+
+Azure and GCP provider authorization currently feeds bounded provider-native discovery only. No
+Azure or GCP scanner image is included in the v0.1.0 catalog. In particular, Prowler's upstream provider
+support does not become product coverage until an exact credential consumer, provider endpoint
+closure, fixtures, published image, and verifiable release evidence are present.
+
 ## 2. Required engine families
 
-Every Required entry must eventually provide a manifest, pinned artifact, runtime policy, adapter, raw-output retention, canonical normalization, coverage events, export provenance, re-verification behavior, and release license disposition.
+Every Required entry is admitted through the same manifest, pinned-artifact, runtime-policy, adapter, raw-output retention, canonical normalization, coverage-event, export-provenance, re-verification, and release-disposition contract. The final column below is a readable packaging summary; the current catalog record wins if source and prose ever differ.
 
-| Domain | Engine / repository | Known upstream license | Planned integration mode | Required authorization and boundary | Redistribution status |
+| Domain | Engine / repository | Pinned license record | v0.1.0 integration mode | Required authorization and boundary | Release disposition |
 |---|---|---|---|---|---|
-| Cloud inventory | [CloudQuery](https://github.com/cloudquery/cloudquery) | MPL-2.0 | Separate CLI/OCI adapter; pin core and every provider plugin independently | Short-lived provider read-only capability; provider API allowlist | Pending; plugins require separate review |
-| Cloud inventory | [Steampipe](https://github.com/turbot/steampipe) | AGPL-3.0 | Separate CLI/OCI adapter; query output converted to assets/evidence | Short-lived provider read-only capability; plugins and mods separately pinned | Pending AGPL, plugin, and mod review |
-| Cloud configuration | [Prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Separate CLI/OCI adapter with provider-specific run profiles | Short-lived read-only/security-audit role; no bootstrap credential | Pending image and rules review |
-| Cloud configuration | [ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Separate CLI/OCI adapter | Short-lived cloud read-only capability | Pending GPL distribution review |
-| AWS IAM | [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Separate CLI/OCI adapter over read-only IAM input or exported policies | AWS IAM read only or explicit local policy input | Pending artifact review |
-| Microsoft 365 | [ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 | PowerShell adapter in a constrained Windows or OCI runtime | Short-lived Microsoft Graph/service-specific read-only permission set | Pending dependency and trademark review |
-| Microsoft 365 | [Maester](https://github.com/maester365/maester) | MIT | PowerShell adapter in a constrained Windows or OCI runtime | Short-lived Microsoft Graph read-only permission set; test modules pinned | Pending dependency/module review |
-| External surface | [Naabu](https://github.com/projectdiscovery/naabu) | MIT | Standalone Go binary or OCI adapter | `low_impact_external` grant, concrete target allowlist, rate limits | Pending binary/image review |
-| External surface | [httpx](https://github.com/projectdiscovery/httpx) | MIT | Standalone Go binary or OCI adapter | `low_impact_external` grant, redirect and resolved-IP enforcement | Pending binary/image review |
-| Active external testing | [Nuclei](https://github.com/projectdiscovery/nuclei) | MIT | Standalone Go binary or OCI adapter; template policy supplied separately | `active_external` grant, target allowlist, rate/time limits, denied template classes | Pending binary/image review |
-| Active external rules | [Nuclei Templates](https://github.com/projectdiscovery/nuclei-templates) | MIT | Separately pinned data artifact selected by an allowlist policy | Same grant as Nuclei; no automatic enablement of destructive or out-of-band templates | Pending template-by-template policy review |
-| Network vulnerability | [OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) and Greenbone family | GPL-2.0 scanner; mixed GPL/AGPL family | Managed multi-service runtime; not a single-process adapter | `active_external` grant, dedicated data volumes, target/rate limits | Pending multi-component and feed review |
-| Source analysis | [Semgrep](https://github.com/semgrep/semgrep) | LGPL-2.1-or-later | Separate CLI/OCI adapter with read-only repository mount | Explicit local source scope; no network unless a reviewed rules source is enabled | Pending LGPL and rules review |
-| Secret scanning | [Gitleaks](https://github.com/gitleaks/gitleaks) | MIT | Standalone binary or OCI adapter with read-only repository mount | Explicit repository/path scope; findings marked highly sensitive | Pending binary/image and rule review |
-| Secret scanning | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0 | Separate CLI/OCI adapter with source-specific profile | Explicit source scope; verification network calls disabled unless separately approved | Pending AGPL and verification-mode review |
-| Infrastructure as code | [Checkov](https://github.com/bridgecrewio/checkov) | Apache-2.0 | Separate CLI/OCI adapter with read-only IaC mount | Explicit local/repository scope; external integrations disabled by default | Pending image, dependency, and policy review |
-| Infrastructure as code | [KICS](https://github.com/Checkmarx/kics) | Apache-2.0 | Separate CLI/OCI adapter with read-only IaC mount | Explicit local/repository scope | Pending image and query-pack review |
-| Container/package/SBOM | [Trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Separate CLI/OCI adapter; image, filesystem, package, and SBOM profiles | Explicit artifact scope; DB retrieval separately pinned and licensed | Pending image and database review |
-| Container vulnerability | [Grype](https://github.com/anchore/grype) | Apache-2.0 | Separate CLI/OCI adapter over image, directory, or Syft SBOM | Explicit artifact scope; vulnerability DB separately pinned | Pending image and database review |
-| SBOM | [Syft](https://github.com/anchore/syft) | Apache-2.0 | Separate CLI/OCI adapter producing a preserved SBOM artifact | Explicit artifact scope; read-only inputs | Pending image and cataloger review |
-| Kubernetes posture | [Kubescape](https://github.com/kubescape/kubescape) | Apache-2.0 | Separate CLI/OCI adapter; manifest-only and live-cluster profiles | Read-only cluster role or explicit local manifests; framework data pinned | Pending image/framework review |
-| Kubernetes CIS | [kube-bench](https://github.com/aquasecurity/kube-bench) | Apache-2.0 | Separate OCI adapter; configuration/remote-job profile preferred over broad host mounts | Explicit cluster/node scope; host-mount exceptions require threat review | Pending image/config review |
+| Cloud inventory | [CloudQuery](https://github.com/cloudquery/cloudquery) | MPL-2.0 | Managed OCI image with exact public CLI, AWS source plugin, and file destination source closure | Short-lived AWS read-only capability; fixed API and table allowlists | SOURCE_OFFER |
+| Cloud inventory | [Steampipe](https://github.com/turbot/steampipe) | AGPL-3.0-only | Managed OCI image with independently pinned AWS plugin/FDW components | Short-lived AWS read-only capability; fixed query and API allowlists | SOURCE_OFFER |
+| Cloud configuration | [Prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Managed OCI image with a fixed AWS profile | Short-lived AWS security-audit role; no bootstrap credential enters the engine | ALLOW |
+| Cloud configuration | [ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Managed OCI image built from pinned source | Short-lived AWS read-only capability and fixed endpoint closure | SOURCE_OFFER |
+| AWS IAM | [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Managed OCI image over bounded IAM evidence | AWS IAM read only or explicit local policy input | ALLOW |
+| Microsoft 365 | [ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 | Managed PowerShell/OCI image with pinned modules | Short-lived Microsoft Graph/service-specific read-only permission set | ALLOW |
+| Microsoft 365 | [Maester](https://github.com/maester365/maester) | MIT | Managed PowerShell/OCI image with pinned test modules | Short-lived Microsoft Graph read-only permission set | ALLOW |
+| External surface | [Naabu](https://github.com/projectdiscovery/naabu) | MIT | Managed OCI image with fixed launcher | `low_impact_external` grant, concrete target allowlist, and rate limits | ALLOW |
+| External surface | [httpx](https://github.com/projectdiscovery/httpx) | MIT | Managed OCI image with fixed launcher | `low_impact_external` grant plus redirect and resolved-IP enforcement | ALLOW |
+| Active external testing | [Nuclei](https://github.com/projectdiscovery/nuclei) | MIT | Managed OCI image with an exact allowlisted template snapshot | `active_external` grant, target allowlist, rate/time limits, and denied template classes | ALLOW |
+| Network vulnerability | [OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) and pinned Greenbone feed data | GPL-2.0-only plus feed GPL/ODbL terms | Managed `openvasd` OCI image with scanner source and a digest-pinned feed snapshot | `active_external` grant, exact per-target relay, and target/rate limits | SOURCE_OFFER |
+| Source analysis | [Semgrep](https://github.com/semgrep/semgrep) | LGPL-2.1-or-later | Managed OCI image built from the open source closure with a small offline project rule pack | Explicit read-only local source scope; no engine network path | SOURCE_OFFER |
+| Secret scanning | [Gitleaks](https://github.com/gitleaks/gitleaks) | MIT | Exact verified upstream OCI image pulled by digest | Explicit repository/path scope; findings marked highly sensitive | UPSTREAM_PINNED |
+| Secret scanning | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0 | Managed OCI image built from pinned source; filesystem mode only | Explicit source scope; verification, update, and engine network paths disabled | SOURCE_OFFER |
+| Infrastructure as code | [Checkov](https://github.com/bridgecrewio/checkov) | Apache-2.0 | Managed OCI image with read-only IaC mount | Explicit local/repository scope; external integrations disabled | ALLOW |
+| Infrastructure as code | [KICS](https://github.com/Checkmarx/kics) | Apache-2.0 | Exact verified upstream OCI image pulled by digest | Explicit local/repository scope | UPSTREAM_PINNED |
+| Container/package vulnerability | [Trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Managed OCI image with an immutable offline vulnerability database | Explicit artifact scope; automatic DB updates disabled | ALLOW |
+| Container vulnerability | [Grype](https://github.com/anchore/grype) | Apache-2.0 | Managed OCI image with a checksum-pinned offline vulnerability database | Explicit artifact or Syft SBOM scope; automatic DB updates disabled | ALLOW |
+| SBOM | [Syft](https://github.com/anchore/syft) | Apache-2.0 | Managed OCI image producing a preserved SBOM artifact | Explicit artifact scope and read-only inputs | ALLOW |
+| Kubernetes posture | [Kubescape](https://github.com/kubescape/kubescape) | Apache-2.0 | Managed OCI image with checksum-pinned offline framework inputs | Explicit local manifest scope; submission and host scanning disabled | ALLOW |
+| Kubernetes CIS | [kube-bench](https://github.com/aquasecurity/kube-bench) | Apache-2.0 | Managed OCI image over an immutable, digest-verified node configuration snapshot | Explicit snapshot scope; no privileged live-host mounts | ALLOW |
 
 ### 2.1 Greenbone components
 
-“Greenbone/OpenVAS” is not one redistributable image. At minimum, a supported design must evaluate and pin:
+The Greenbone upstream family contains independently licensed programs and data. The v0.1.0 managed image intentionally uses only the scanner and exact feed inputs listed here; naming the broader family does not pull its other services into the release:
 
 | Component | Official repository | Known license | Status |
 |---|---|---|---|
-| Scanner | [greenbone/openvas-scanner](https://github.com/greenbone/openvas-scanner) | GPL-2.0 | Required family; pending review |
-| Manager | [greenbone/gvmd](https://github.com/greenbone/gvmd) | AGPL-3.0 | Required family; pending review |
-| Web interface/API client | [greenbone/gsa](https://github.com/greenbone/gsa) | AGPL-3.0 | Evaluate whether the desktop app needs this component |
-| Scanner protocol daemon | [greenbone/ospd-openvas](https://github.com/greenbone/ospd-openvas) | AGPL-3.0 | Required if selected deployment architecture needs it |
-| Feed synchronization | [greenbone/greenbone-feed-sync](https://github.com/greenbone/greenbone-feed-sync) | GPL-3.0 | Required family; feed terms remain separate |
+| Scanner | [greenbone/openvas-scanner](https://github.com/greenbone/openvas-scanner) | GPL-2.0-only | Included as pinned `openvasd`; complete source and project patches ship in the image |
+| Manager | [greenbone/gvmd](https://github.com/greenbone/gvmd) | AGPL-3.0 | Not used or distributed by the v0.1.0 direct-scanner architecture |
+| Web interface/API client | [greenbone/gsa](https://github.com/greenbone/gsa) | AGPL-3.0 | Not used or distributed; the local desktop supplies the case interface |
+| Scanner protocol daemon | [greenbone/ospd-openvas](https://github.com/greenbone/ospd-openvas) | AGPL-3.0 | Not used or distributed by the direct `openvasd` integration |
+| Feed synchronization | [greenbone/greenbone-feed-sync](https://github.com/greenbone/greenbone-feed-sync) | GPL-3.0 | Not used or distributed at runtime; the build imports one digest-pinned feed artifact containing upstream checksum/signature files |
 
-The Greenbone Community Feed and other data feeds require an independent terms and redistribution review. Source-code license alone is not a feed-distribution decision.
+The v0.1.0 Greenbone image includes one digest-pinned Community Feed snapshot, its executable NASL source, data, declared GPL/ODbL license texts, exact revision, checksum manifest, and upstream detached signature. It performs no live feed download. A newer or different feed remains a new artifact and requires a fresh pin, terms decision, evidence set, and support window; source-code license alone never decides feed distribution.
 
 ## 3. Research repositories mentioned in the design
 
@@ -90,17 +109,18 @@ Research entries should be cloned or tracked for evaluation as requested, but mu
 
 These are not scanning engines but are part of the design or implementation research.
 
-| Project | Official repository | Known license | Intended use / caution |
+| Project | Official repository | Known license | v0.1.0 relationship / caution |
 |---|---|---|---|
-| OCSF schema | [ocsf/ocsf-schema](https://github.com/ocsf/ocsf-schema) | Apache-2.0 | Export/interchange mapping; not the only internal persistence model |
-| OSCAL | [usnistgov/OSCAL](https://github.com/usnistgov/OSCAL) | NOASSERTION in repository metadata | Assessment/control exchange; NIST terms need manual review |
-| Tauri | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) | Apache-2.0 / MIT dual licensing in upstream files | Desktop shell and command boundary |
-| Moby | [moby/moby](https://github.com/moby/moby) | Apache-2.0 | Candidate managed runtime component; does not grant Docker Desktop redistribution rights |
-| Podman | [containers/podman](https://github.com/containers/podman) | Apache-2.0 | Candidate managed or compatibility runtime provider |
-| Docker CLI | [docker/cli](https://github.com/docker/cli) | Apache-2.0 | Existing-engine compatibility provider only after runtime review |
-| Docker Compose | [docker/compose](https://github.com/docker/compose) | Apache-2.0 | Multi-service engine support where appropriate |
+| OCSF schema | [ocsf/ocsf-schema](https://github.com/ocsf/ocsf-schema) | Apache-2.0 | Export/interchange coordinate implemented by project-owned mapping code; not the internal persistence model and not a compliance conclusion |
+| OSCAL | [usnistgov/OSCAL](https://github.com/usnistgov/OSCAL) | NIST publication terms | Assessment/control exchange coordinate implemented by project-owned mapping code; no formal assessment plan or audit is inferred |
+| Tauri | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) | Apache-2.0 / MIT | Desktop shell and command boundary; exact dependencies appear in generated release notices/SBOMs |
+| Podman | [containers/podman](https://github.com/containers/podman) | Apache-2.0 | Packaged rootless managed-runtime client; first setup retrieves an exact pinned Podman machine image |
+| QEMU and DTC | [qemu-project/qemu](https://gitlab.com/qemu-project/qemu), [qemu-project/dtc](https://gitlab.com/qemu-project/dtc) | GPL-2.0-only; GPL-2.0-or-later AND BSD-2-Clause | Linux managed-runtime emulator built from checksum-pinned source with corresponding-source records |
+| gvisor-tap-vsock and vfkit | [containers/gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock), [crc-org/vfkit](https://github.com/crc-org/vfkit) | Apache-2.0 | Pinned platform helpers inventoried by file in the managed-runtime evidence |
+| Moby | [moby/moby](https://github.com/moby/moby) | Apache-2.0 | Research only; not used by the packaged runtime and does not grant Docker Desktop redistribution rights |
+| Docker CLI and Compose | [docker/cli](https://github.com/docker/cli), [docker/compose](https://github.com/docker/compose) | Apache-2.0 | Optional user-installed compatibility path; neither is bundled nor required |
 
-Docker Desktop is a separately licensed product. The project must not infer redistribution permission from the Moby, CLI, or Compose repositories. Windows and macOS also require a Linux virtualization strategy; copying container binaries into a Tauri bundle does not solve that requirement.
+Docker Desktop is a separately licensed product, is not bundled, and is not required. The packaged path uses a versioned private Podman machine: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and an existing WSL 2 capability on Windows. Exact per-platform files, first-setup downloads, source revisions, license expressions, sizes, and hashes are recorded in the managed-runtime manifest and generated release evidence.
 
 ## 5. Integration modes
 

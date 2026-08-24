@@ -1,10 +1,11 @@
 use crate::domain::{
-    AssessmentCase, CaseExport, DataSource, Finding, RawArtifact, ScanRun, new_id,
+    AssessmentCase, CaseExport, DataSource, Finding, RawArtifact, ScanRun, ScopeGrant, new_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::exporters::ocsf::OCSF_SCHEMA_VERSION;
 use crate::exporters::oscal::OSCAL_VERSION;
 use crate::exporters::{export_ocsf_finding_events_bytes, export_oscal_assessment_results_bytes};
+use crate::external_scope::CanonicalTarget;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
@@ -303,11 +304,18 @@ pub fn create_case_bundle_at(
         case_id: case.id.clone(),
         run_id: run_id.into(),
         created_at,
+        format: Some("case_bundle".into()),
         path: destination.display().to_string(),
         sha256: archive_sha256,
         signature: Some(envelope.signature_base64),
         public_key: Some(envelope.public_key_base64),
         redaction_profile: options.redaction.as_str().into(),
+        raw_artifacts_included: Some(manifest.raw_artifacts_included),
+        raw_artifacts_omitted: Some(
+            manifest
+                .raw_artifact_count
+                .saturating_sub(manifest.raw_artifacts_included),
+        ),
         integrity_only_notice: INTEGRITY_ONLY_NOTICE.into(),
     })
 }
@@ -347,12 +355,12 @@ pub fn verify_case_bundle_against(
 ) -> AppResult<BundleVerification> {
     let path = path.as_ref();
     let archive_sha256 = sha256_file(path)?;
-    if let Some(expected) = expected_archive_sha256 {
-        if !archive_sha256.eq_ignore_ascii_case(expected) {
-            return Err(AppError::InvalidRequest(format!(
-                "bundle archive hash mismatch: expected {expected}, observed {archive_sha256}"
-            )));
-        }
+    if let Some(expected) = expected_archive_sha256
+        && !archive_sha256.eq_ignore_ascii_case(expected)
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "bundle archive hash mismatch: expected {expected}, observed {archive_sha256}"
+        )));
     }
 
     let file = File::open(path)?;
@@ -444,12 +452,12 @@ pub fn verify_case_bundle_against(
     validate_manifest(&manifest, &observed)?;
     verify_signature(&manifest_bytes, &manifest, &envelope)?;
 
-    if let Some(expected_public_key) = expected_public_key_base64 {
-        if expected_public_key != envelope.public_key_base64 {
-            return Err(AppError::InvalidRequest(
-                "bundle signing key does not match the expected public key".into(),
-            ));
-        }
+    if let Some(expected_public_key) = expected_public_key_base64
+        && expected_public_key != envelope.public_key_base64
+    {
+        return Err(AppError::InvalidRequest(
+            "bundle signing key does not match the expected public key".into(),
+        ));
     }
 
     Ok(BundleVerification {
@@ -511,6 +519,7 @@ fn build_archive(
         PRELIMINARY_EVIDENCE_NOTICE.into(),
         INTEGRITY_ONLY_NOTICE.into(),
         "Raw artifact omission is recorded in raw-artifacts.json; omission is not evidence of a clean result.".into(),
+        "Finding groups are reversible presentation metadata; canonical findings and evidence remain independent, and create/remove history is retained.".into(),
     ];
     if case.is_demo {
         notices.push(
@@ -644,6 +653,7 @@ fn build_documents(
         "updated_at": case.updated_at,
         "knowledge_cutoff": case.knowledge_cutoff,
         "is_demo": case.is_demo,
+        "requested_activities": case.requested_activities,
         "data_sources": case.data_sources,
         "selected_run_id": run_id,
         "exported_at": created_at,
@@ -653,6 +663,9 @@ fn build_documents(
             "coverage_entries": case.coverage.len(),
             "scan_runs": case.scan_runs.len(),
             "findings": case.findings.len(),
+            "finding_groups": case.finding_groups.len(),
+            "finding_group_events": case.finding_group_events.len(),
+            "finding_workflow_events": case.finding_workflow_events.len(),
             "observations": case.finding_observations.len(),
             "raw_artifacts": artifact_records.len(),
             "comparisons": case.comparisons.len()
@@ -689,7 +702,26 @@ fn build_documents(
     insert_json(
         &mut documents,
         "findings.json",
-        &json!({ "findings": case.findings }),
+        &json!({
+            "findings": case.findings,
+            "active_groups": case.finding_groups
+        }),
+        true,
+    )?;
+    insert_json(
+        &mut documents,
+        "finding-grouping.json",
+        &json!({
+            "active_groups": case.finding_groups,
+            "finding_group_events": case.finding_group_events,
+            "notice": "Finding groups are reversible presentation metadata. Canonical findings, fingerprints, evidence, and raw artifacts remain independent; removal appends an event instead of deleting member records."
+        }),
+        true,
+    )?;
+    insert_json(
+        &mut documents,
+        "finding-workflow.json",
+        &json!({ "finding_workflow_events": case.finding_workflow_events }),
         true,
     )?;
     insert_json(
@@ -802,12 +834,16 @@ fn readme(
          Raw artifact option selected: {}\n\
          Raw artifacts included: {}\n\
          Raw artifacts omitted: {}\n\
+         Active finding groups: {}\n\
+         Immutable finding-group events: {}\n\
          {}\n\
          IMPORTANT LIMITATIONS\n\
          {}\n\
          {}\n\
          Control references in canonical, OCSF, and OSCAL files are related coordinates only.\n\
          Absence of a finding or omitted evidence is not a clean-result assertion.\n\
+         Finding groups are reversible presentation metadata; canonical findings and evidence remain independent.\n\
+         Review finding-grouping.json for active groups and their append-only create/remove history.\n\
          Review raw-artifacts.json for every included or intentionally omitted raw artifact.\n\
          manifest.json contains the SHA-256 hash and byte length of every payload file.\n\
          signature.json contains the public key and Ed25519 signature over manifest.json.\n",
@@ -819,6 +855,8 @@ fn readme(
         include_raw_artifacts,
         included,
         omitted,
+        case.finding_groups.len(),
+        case.finding_group_events.len(),
         demo_notice,
         PRELIMINARY_EVIDENCE_NOTICE,
         INTEGRITY_ONLY_NOTICE,
@@ -840,6 +878,20 @@ fn engine_version_records(case: &AssessmentCase) -> Vec<Value> {
                 "image_digest": engine_run.image_digest,
                 "rule_version": engine_run.rule_version,
                 "adapter_version": engine_run.adapter_version,
+                "manifest_schema_version": engine_run.manifest_schema_version,
+                "source_revision": engine_run.source_revision,
+                "repository_url": engine_run.repository_url,
+                "distribution_mode": engine_run.distribution_mode,
+                "image_repository": engine_run.image_repository,
+                "command_sha256": engine_run.command_sha256,
+                "knowledge_input": engine_run.knowledge_input,
+                "runtime_provider": engine_run.runtime_provider,
+                "runtime_version": engine_run.runtime_version,
+                "runtime_security_options": engine_run.runtime_security_options,
+                "exit_code": engine_run.exit_code,
+                "cleanup_removed": engine_run.cleanup_removed,
+                "cleanup_detail": engine_run.cleanup_detail,
+                "warnings": engine_run.warnings,
                 "error_code": engine_run.error_code,
                 "error_message": engine_run.error_message
             }));
@@ -862,7 +914,10 @@ fn selected_run<'a>(case: &'a AssessmentCase, run_id: &str) -> AppResult<&'a Sca
     Ok(run)
 }
 
-fn case_for_export(case: &AssessmentCase, redaction: RedactionProfile) -> AssessmentCase {
+pub(crate) fn case_for_export(
+    case: &AssessmentCase,
+    redaction: RedactionProfile,
+) -> AssessmentCase {
     let mut exported = case.clone();
     exported.exports.clear();
     sort_case(&mut exported);
@@ -882,9 +937,21 @@ fn case_for_export(case: &AssessmentCase, redaction: RedactionProfile) -> Assess
             asset.metadata.clear();
         }
         for grant in &mut exported.scope_grants {
-            grant.confirmed_by = "[redacted]".into();
-            grant.authorization_reference = None;
-            grant.notes = None;
+            redact_scope_grant(grant);
+        }
+        for event in &mut exported.finding_workflow_events {
+            event.decided_by = "[redacted]".into();
+            event.reason = "[redacted finding workflow reason]".into();
+        }
+        for group in &mut exported.finding_groups {
+            group.title = "[redacted finding group]".into();
+            group.rationale = "[redacted grouping rationale]".into();
+            group.grouped_by = "[redacted]".into();
+        }
+        for event in &mut exported.finding_group_events {
+            event.title = "[redacted finding group]".into();
+            event.rationale = "[redacted grouping rationale]".into();
+            event.actor = "[redacted]".into();
         }
         for coverage in &mut exported.coverage {
             coverage.scope_key = "[redacted]".into();
@@ -892,11 +959,24 @@ fn case_for_export(case: &AssessmentCase, redaction: RedactionProfile) -> Assess
             coverage.explanation = "[redacted coverage detail]".into();
         }
         for run in &mut exported.scan_runs {
+            for grant in &mut run.scope_grant_snapshots {
+                redact_scope_grant(grant);
+            }
             for engine_run in &mut run.engine_runs {
+                engine_run.resume_token = None;
                 engine_run.error_message = engine_run
                     .error_message
                     .as_ref()
                     .map(|_| "[redacted engine error detail]".into());
+                engine_run.cleanup_detail = engine_run
+                    .cleanup_detail
+                    .as_ref()
+                    .map(|_| "[redacted cleanup detail]".into());
+                engine_run.warnings = engine_run
+                    .warnings
+                    .iter()
+                    .map(|_| "[redacted engine warning]".into())
+                    .collect();
             }
         }
         for finding in &mut exported.findings {
@@ -908,10 +988,25 @@ fn case_for_export(case: &AssessmentCase, redaction: RedactionProfile) -> Assess
         for comparison in &mut exported.comparisons {
             for diff in &mut comparison.diffs {
                 diff.explanation = "[redacted comparison detail]".into();
+                for reason in &mut diff.reasons {
+                    reason.detail = "[redacted comparison reason]".into();
+                }
             }
         }
     }
     exported
+}
+
+fn redact_scope_grant(grant: &mut ScopeGrant) {
+    grant.confirmed_by = "[redacted]".into();
+    grant.authorization_reference = None;
+    grant.notes = None;
+    if let Some(external) = &mut grant.external_scope {
+        external.target = CanonicalTarget::Hostname("[redacted external target]".into());
+        external.ports.clear();
+        external.asserted_authority = "[redacted authority assertion]".into();
+        external.approved_by = "[redacted]".into();
+    }
 }
 
 fn redact_data_source(source: &mut DataSource) {
@@ -981,6 +1076,27 @@ fn sort_case(case: &mut AssessmentCase) {
         finding.priority_reasons.sort();
         finding.tags.sort();
     }
+    case.finding_groups.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for group in &mut case.finding_groups {
+        group.finding_ids.sort();
+    }
+    case.finding_group_events.sort_by(|left, right| {
+        left.occurred_at
+            .cmp(&right.occurred_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for event in &mut case.finding_group_events {
+        event.finding_ids.sort();
+    }
+    case.finding_workflow_events.sort_by(|left, right| {
+        left.decided_at
+            .cmp(&right.decided_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     case.finding_observations.sort_by(|left, right| {
         left.run_id
             .cmp(&right.run_id)
@@ -1029,6 +1145,7 @@ fn prepare_artifacts(
                 .map(|engine_run| engine_run.id.as_str())
         })
         .collect::<BTreeSet<_>>();
+    validate_evidence_references(case)?;
     let needs_artifact_root = include_raw_artifacts
         && case.raw_artifacts.iter().any(|artifact| {
             redaction != RedactionProfile::Standard || !artifact.contains_sensitive_data
@@ -1107,6 +1224,72 @@ fn prepare_artifacts(
         });
     }
     Ok((records, sources))
+}
+
+fn validate_evidence_references(case: &AssessmentCase) -> AppResult<()> {
+    let engine_runs = case
+        .scan_runs
+        .iter()
+        .flat_map(|run| {
+            run.engine_runs.iter().map(|engine_run| {
+                (
+                    engine_run.id.as_str(),
+                    (run.id.as_str(), engine_run.engine_id.as_str()),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let artifacts = case
+        .raw_artifacts
+        .iter()
+        .map(|artifact| (artifact.id.as_str(), artifact))
+        .collect::<BTreeMap<_, _>>();
+    let mut evidence_ids = BTreeSet::new();
+
+    for finding in &case.findings {
+        for evidence in &finding.evidence {
+            if !evidence_ids.insert(evidence.id.as_str()) {
+                return Err(AppError::InvalidRequest(format!(
+                    "duplicate evidence identifier in case export: {}",
+                    evidence.id
+                )));
+            }
+            let artifact = artifacts
+                .get(evidence.artifact_id.as_str())
+                .ok_or_else(|| {
+                    AppError::InvalidRequest(format!(
+                        "evidence {} references missing raw artifact {}",
+                        evidence.id, evidence.artifact_id
+                    ))
+                })?;
+            let (artifact_run_id, artifact_engine_id) = engine_runs
+                .get(artifact.engine_run_id.as_str())
+                .ok_or_else(|| {
+                    AppError::InvalidRequest(format!(
+                        "evidence {} resolves to missing engine run {}",
+                        evidence.id, artifact.engine_run_id
+                    ))
+                })?;
+            if evidence.finding_id != finding.id
+                || evidence.run_id != artifact.run_id
+                || evidence.run_id != *artifact_run_id
+                || evidence.engine_id != *artifact_engine_id
+                || !evidence
+                    .artifact_sha256
+                    .eq_ignore_ascii_case(&artifact.sha256)
+                || evidence
+                    .engine_run_id
+                    .as_deref()
+                    .is_some_and(|engine_run_id| engine_run_id != artifact.engine_run_id)
+            {
+                return Err(AppError::InvalidRequest(format!(
+                    "evidence {} does not match its finding, artifact, scan run, or engine run provenance",
+                    evidence.id
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_artifact_references(
@@ -1249,12 +1432,12 @@ fn validate_manifest(
                 "manifest payload list may not contain reserved signature files".into(),
             ));
         }
-        if let Some(previous) = previous_path {
-            if previous >= path.as_str() {
-                return Err(AppError::InvalidRequest(
-                    "manifest entries must be uniquely sorted by path".into(),
-                ));
-            }
+        if let Some(previous) = previous_path
+            && previous >= path.as_str()
+        {
+            return Err(AppError::InvalidRequest(
+                "manifest entries must be uniquely sorted by path".into(),
+            ));
         }
         previous_path = Some(&entry.path);
         normalized_sha256(&entry.sha256)?;
@@ -1513,6 +1696,9 @@ impl<R: Read> Read for HashingReader<R> {
 mod tests {
     use super::*;
     use crate::domain::*;
+    use crate::external_scope::{
+        ExternalActivity, ExternalScopeGrant, RatePolicy, TemplatePolicy, TransportProtocol,
+    };
     use chrono::TimeZone;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
@@ -1557,7 +1743,9 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             knowledge_cutoff: time,
+            verification_baseline_run_id: None,
             scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
             engine_runs: vec![EngineRun {
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),
@@ -1573,6 +1761,23 @@ mod tests {
                 image_digest: Some("sha256:abc".into()),
                 rule_version: Some("2026.08".into()),
                 adapter_version: "1".into(),
+                manifest_schema_version: None,
+                source_revision: None,
+                repository_url: None,
+                distribution_mode: None,
+                image_repository: None,
+                command_sha256: None,
+                knowledge_input: None,
+                scope_contract_sha256: None,
+                mapping_version: None,
+                fingerprint_schema_version: None,
+                runtime_provider: None,
+                runtime_version: None,
+                runtime_security_options: None,
+                exit_code: None,
+                cleanup_removed: None,
+                cleanup_detail: None,
+                warnings: vec![],
                 raw_artifact_ids: vec!["artifact-1".into()],
                 error_code: None,
                 error_message: None,
@@ -1591,6 +1796,98 @@ mod tests {
             contains_sensitive_data: sensitive,
         });
         case
+    }
+
+    fn add_reversible_grouping(case: &mut AssessmentCase) {
+        let time = Utc.with_ymd_and_hms(2026, 8, 24, 12, 30, 0).unwrap();
+        for (id, title) in [
+            ("finding-a", "Independent finding A"),
+            ("finding-b", "Independent finding B"),
+        ] {
+            case.findings.push(Finding {
+                id: id.into(),
+                case_id: case.id.clone(),
+                first_seen_run_id: "run-1".into(),
+                last_seen_run_id: "run-1".into(),
+                fingerprint: format!("engine:{id}"),
+                title: title.into(),
+                plain_language_summary: "Independent canonical finding".into(),
+                possible_impact: "Requires human review".into(),
+                severity: Severity::Medium,
+                confidence: Confidence::High,
+                priority: 50,
+                priority_reasons: vec![],
+                asset_ids: vec!["asset-1".into()],
+                evidence: vec![],
+                control_references: vec![],
+                recommendation: "Review without automatic remediation".into(),
+                verification_guidance: "Run the responsible engine again".into(),
+                rollback_considerations: None,
+                official_references: vec![],
+                recommended_expert_type: "Security reviewer".into(),
+                status: FindingStatus::Unreviewed,
+                tags: vec![],
+            });
+        }
+
+        let finding_ids = vec!["finding-a".into(), "finding-b".into()];
+        case.finding_group_events.push(FindingGroupEvent {
+            id: "event-old-created".into(),
+            case_id: case.id.clone(),
+            group_id: "group-old".into(),
+            action: FindingGroupAction::Created,
+            title: "Private old group title".into(),
+            finding_ids: finding_ids.clone(),
+            rationale: "Private old grouping rationale".into(),
+            actor: "Private old group creator".into(),
+            occurred_at: time - chrono::Duration::minutes(2),
+        });
+        case.finding_group_events.push(FindingGroupEvent {
+            id: "event-old-removed".into(),
+            case_id: case.id.clone(),
+            group_id: "group-old".into(),
+            action: FindingGroupAction::Removed,
+            title: "Private old group title".into(),
+            finding_ids: finding_ids.clone(),
+            rationale: "Private old group removal reason".into(),
+            actor: "Private old group remover".into(),
+            occurred_at: time - chrono::Duration::minutes(1),
+        });
+        case.finding_groups.push(FindingGroup {
+            id: "group-active".into(),
+            case_id: case.id.clone(),
+            title: "Private active group title".into(),
+            finding_ids: finding_ids.clone(),
+            rationale: "Private active grouping rationale".into(),
+            grouped_by: "Private active group creator".into(),
+            created_at: time,
+        });
+        case.finding_group_events.push(FindingGroupEvent {
+            id: "event-active-created".into(),
+            case_id: case.id.clone(),
+            group_id: "group-active".into(),
+            action: FindingGroupAction::Created,
+            title: "Private active group title".into(),
+            finding_ids,
+            rationale: "Private active grouping rationale".into(),
+            actor: "Private active group creator".into(),
+            occurred_at: time,
+        });
+    }
+
+    fn archive_entry(path: &Path, requested: &str) -> Vec<u8> {
+        let file = File::open(path).unwrap();
+        let decoder = GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            if entry.path().unwrap() == Path::new(requested) {
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).unwrap();
+                return bytes;
+            }
+        }
+        panic!("archive entry not found: {requested}");
     }
 
     #[test]
@@ -1648,6 +1945,68 @@ mod tests {
     }
 
     #[test]
+    fn bundle_evidence_must_match_the_exact_artifact_and_engine_execution() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        let artifact = case.raw_artifacts[0].clone();
+        let finding_id = "finding-1".to_owned();
+        case.findings.push(Finding {
+            id: finding_id.clone(),
+            case_id: case.id.clone(),
+            first_seen_run_id: "run-1".into(),
+            last_seen_run_id: "run-1".into(),
+            fingerprint: "engine-1:asset-1:rule-1".into(),
+            title: "Finding".into(),
+            plain_language_summary: "Summary".into(),
+            possible_impact: "Impact requires human review".into(),
+            severity: Severity::Medium,
+            confidence: Confidence::High,
+            priority: 50,
+            priority_reasons: vec![],
+            asset_ids: vec!["asset-1".into()],
+            evidence: vec![Evidence {
+                id: "evidence-1".into(),
+                finding_id,
+                run_id: "run-1".into(),
+                engine_run_id: Some("engine-run-1".into()),
+                kind: EvidenceKind::Observation,
+                engine_id: "engine-1".into(),
+                observed_at: artifact.created_at,
+                summary: "Observed".into(),
+                artifact_id: artifact.id.clone(),
+                artifact_sha256: artifact.sha256.clone(),
+                pointer: Some("/result/0".into()),
+                redacted: false,
+            }],
+            control_references: vec![],
+            recommendation: "Ask a qualified reviewer".into(),
+            verification_guidance: "Repeat the same pinned scan".into(),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![],
+        });
+
+        validate_evidence_references(&case).unwrap();
+        case.findings[0].evidence[0].engine_run_id = Some("another-engine-run".into());
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("engine run provenance")
+        );
+
+        // Missing engine_run_id is retained only for legacy cases. Validation
+        // checks its artifact's exact run without silently backfilling it.
+        case.findings[0].evidence[0].engine_run_id = None;
+        validate_evidence_references(&case).unwrap();
+        case.findings[0].evidence[0].artifact_sha256 = "f".repeat(64);
+        assert!(validate_evidence_references(&case).is_err());
+    }
+
+    #[test]
     fn standard_redaction_omits_sensitive_raw_artifacts() {
         let temp = tempdir().unwrap();
         let artifact_root = temp.path().join("artifacts");
@@ -1681,6 +2040,262 @@ mod tests {
                 .iter()
                 .any(|entry| entry.path.starts_with("artifacts/"))
         );
+    }
+
+    #[test]
+    fn standard_redaction_removes_sensitive_sentinels_from_every_bundle_document() {
+        const SENTINEL: &str = "SENSITIVE_SENTINEL_DO_NOT_EXPORT_8f7c2a";
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, true);
+        let time = Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap();
+        case.title = SENTINEL.into();
+        case.profile.organization_name = SENTINEL.into();
+        case.profile.notes = Some(SENTINEL.into());
+        case.data_sources.push(DataSource {
+            id: "source-1".into(),
+            kind: SourceKind::Dns,
+            label: SENTINEL.into(),
+            status: SourceConnectionStatus::Connected,
+            connected_at: Some(time),
+            last_discovered_at: Some(time),
+            read_only: true,
+            metadata: BTreeMap::from([("sensitive".into(), json!(SENTINEL))]),
+        });
+        case.assets[0].name = SENTINEL.into();
+        case.assets[0].provider = Some(SENTINEL.into());
+        case.assets[0].region = Some(SENTINEL.into());
+        case.assets[0].identifiers[0].value = SENTINEL.into();
+        case.assets[0]
+            .metadata
+            .insert("sensitive".into(), json!(SENTINEL));
+
+        let grant = ScopeGrant {
+            id: "grant-1".into(),
+            asset_id: "asset-1".into(),
+            permission: ScanPermission::ActiveExternalTesting,
+            confirmed_by: SENTINEL.into(),
+            confirmed_at: time,
+            expires_at: Some(time + chrono::Duration::hours(1)),
+            authorization_reference: Some(SENTINEL.into()),
+            notes: Some(SENTINEL.into()),
+            external_scope: Some(ExternalScopeGrant {
+                id: "external-1".into(),
+                case_id: case.id.clone(),
+                asset_id: "asset-1".into(),
+                target: CanonicalTarget::Hostname(SENTINEL.to_ascii_lowercase()),
+                ports: [8443].into_iter().collect(),
+                protocol: TransportProtocol::Https,
+                activity: ExternalActivity::ActiveExternal,
+                rate_policy: RatePolicy {
+                    requests_per_second: 1,
+                    concurrency: 1,
+                    timeout_seconds: 60,
+                },
+                template_policy: TemplatePolicy::conservative(
+                    "a".repeat(40),
+                    vec!["template-1".into()],
+                ),
+                asserted_authority: SENTINEL.into(),
+                approved_by: SENTINEL.into(),
+                approved_at: time,
+                expires_at: time + chrono::Duration::hours(1),
+                allow_sensitive_networks: false,
+            }),
+        };
+        case.scope_grants.push(grant.clone());
+        case.scan_runs[0].scope_grant_ids = vec![grant.id.clone()];
+        case.scan_runs[0].scope_grant_snapshots = vec![grant];
+        case.scan_runs[0].engine_runs[0].resume_token = Some(SENTINEL.into());
+        case.scan_runs[0].engine_runs[0].error_message = Some(SENTINEL.into());
+        case.scan_runs[0].engine_runs[0].cleanup_detail = Some(SENTINEL.into());
+        case.scan_runs[0].engine_runs[0].warnings = vec![SENTINEL.into()];
+        case.coverage.push(CoverageEntry {
+            id: "coverage-1".into(),
+            scope_key: SENTINEL.into(),
+            label: SENTINEL.into(),
+            source_kind: SourceKind::Dns,
+            asset_id: Some("asset-1".into()),
+            status: CoverageStatus::AuthorizedScanIncomplete,
+            explanation: SENTINEL.into(),
+            last_run_id: Some("run-1".into()),
+            observed_at: Some(time),
+        });
+        case.findings.push(Finding {
+            id: "finding-1".into(),
+            case_id: case.id.clone(),
+            first_seen_run_id: "run-1".into(),
+            last_seen_run_id: "run-1".into(),
+            fingerprint: "fingerprint-1".into(),
+            title: "Generic finding title".into(),
+            plain_language_summary: "Generic summary".into(),
+            possible_impact: "Generic impact".into(),
+            severity: Severity::High,
+            confidence: Confidence::High,
+            priority: 50,
+            priority_reasons: vec![],
+            asset_ids: vec!["asset-1".into()],
+            evidence: vec![Evidence {
+                id: "evidence-1".into(),
+                finding_id: "finding-1".into(),
+                run_id: "run-1".into(),
+                engine_run_id: Some("engine-run-1".into()),
+                kind: EvidenceKind::Observation,
+                engine_id: "engine-1".into(),
+                observed_at: time,
+                summary: SENTINEL.into(),
+                artifact_id: "artifact-1".into(),
+                artifact_sha256: case.raw_artifacts[0].sha256.clone(),
+                pointer: Some(SENTINEL.into()),
+                redacted: false,
+            }],
+            control_references: vec![],
+            recommendation: "Human review".into(),
+            verification_guidance: "Repeat the scan".into(),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![],
+        });
+        case.finding_observations.push(FindingObservation {
+            id: "observation-1".into(),
+            run_id: "run-1".into(),
+            finding_id: "finding-1".into(),
+            fingerprint: "fingerprint-1".into(),
+            asset_ids: vec!["asset-1".into()],
+            engine_ids: vec!["engine-1".into()],
+            severity: Severity::High,
+            confidence: Confidence::High,
+            evidence_hashes: vec![case.raw_artifacts[0].sha256.clone()],
+            observed_at: time,
+        });
+        case.comparisons.push(VerificationComparison {
+            id: "comparison-1".into(),
+            case_id: case.id.clone(),
+            baseline_run_id: "run-1".into(),
+            current_run_id: "run-1".into(),
+            created_at: time,
+            diffs: vec![FindingDiff {
+                fingerprint: "fingerprint-1".into(),
+                baseline_finding_id: Some("finding-1".into()),
+                current_finding_id: Some("finding-1".into()),
+                status: FindingDiffStatus::Changed,
+                explanation: SENTINEL.into(),
+                baseline_severity: Some(Severity::High),
+                current_severity: Some(Severity::High),
+                evidence_changed: true,
+                reasons: vec![FindingDiffReason {
+                    code: FindingDiffReasonCode::EvidenceChanged,
+                    engine_id: Some("engine-1".into()),
+                    asset_id: Some("asset-1".into()),
+                    detail: SENTINEL.into(),
+                }],
+            }],
+        });
+        case.raw_artifacts[0].relative_path = format!("raw/{SENTINEL}.txt");
+
+        let unredacted =
+            serde_json::to_string(&case_for_export(&case, RedactionProfile::None)).unwrap();
+        assert!(
+            unredacted.contains(SENTINEL),
+            "the sentinel fixture must be meaningful"
+        );
+        let redacted = case_for_export(&case, RedactionProfile::Standard);
+        assert!(!serde_json::to_string(&redacted).unwrap().contains(SENTINEL));
+        assert!(
+            !String::from_utf8(export_ocsf_finding_events_bytes(&redacted, "run-1").unwrap())
+                .unwrap()
+                .contains(SENTINEL)
+        );
+        assert!(
+            !String::from_utf8(export_oscal_assessment_results_bytes(&redacted, "run-1").unwrap())
+                .unwrap()
+                .contains(SENTINEL)
+        );
+
+        let destination = temp.path().join("sentinel-redacted.case.tar.gz");
+        create_case_bundle_at(
+            &case,
+            "run-1",
+            &artifact_root,
+            &destination,
+            temp.path().join("key"),
+            ExportOptions::default(),
+            time,
+        )
+        .unwrap();
+        let file = File::open(&destination).unwrap();
+        let mut archive = tar::Archive::new(GzDecoder::new(file));
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            assert!(
+                !bytes
+                    .windows(SENTINEL.len())
+                    .any(|window| window == SENTINEL.as_bytes()),
+                "standard-redacted bundle entry leaked the sentinel"
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_discloses_reversible_groups_and_redacts_their_metadata() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        add_reversible_grouping(&mut case);
+        let destination = temp.path().join("grouped.case.tar.gz");
+        create_case_bundle_at(
+            &case,
+            "run-1",
+            &artifact_root,
+            &destination,
+            temp.path().join("key"),
+            ExportOptions::default(),
+            Utc.with_ymd_and_hms(2026, 8, 24, 13, 0, 0).unwrap(),
+        )
+        .unwrap();
+
+        let grouping_bytes = archive_entry(&destination, "finding-grouping.json");
+        let grouping_text = String::from_utf8(grouping_bytes.clone()).unwrap();
+        for sensitive in [
+            "Private old group title",
+            "Private old grouping rationale",
+            "Private old group removal reason",
+            "Private old group creator",
+            "Private old group remover",
+            "Private active group title",
+            "Private active grouping rationale",
+            "Private active group creator",
+        ] {
+            assert!(!grouping_text.contains(sensitive));
+        }
+        let grouping: Value = serde_json::from_slice(&grouping_bytes).unwrap();
+        assert_eq!(grouping["active_groups"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            grouping["finding_group_events"].as_array().unwrap().len(),
+            3
+        );
+        assert_eq!(
+            grouping.pointer("/active_groups/0/title"),
+            Some(&Value::String("[redacted finding group]".into()))
+        );
+        assert_eq!(
+            grouping.pointer("/active_groups/0/finding_ids/0"),
+            Some(&Value::String("finding-a".into()))
+        );
+
+        let findings: Value =
+            serde_json::from_slice(&archive_entry(&destination, "findings.json")).unwrap();
+        assert_eq!(findings["findings"].as_array().unwrap().len(), 2);
+        assert_eq!(findings["active_groups"].as_array().unwrap().len(), 1);
+
+        let readme = String::from_utf8(archive_entry(&destination, "README.txt")).unwrap();
+        assert!(readme.contains("Active finding groups: 1"));
+        assert!(readme.contains("Immutable finding-group events: 3"));
+        assert!(readme.contains("reversible presentation metadata"));
     }
 
     #[test]

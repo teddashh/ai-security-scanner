@@ -198,6 +198,7 @@ CoverageRecord
 ```
 
 Coverage is stored independently from findings. Zero findings cannot manufacture a coverage record.
+Questionnaire applicability is equally explicit: selected environment families begin as unknown until a bounded source is connected, while excluded families retain a reasoned `not_applicable` record. `not_applicable` is a scoping statement and is never rendered as scanned/green. User-entered domains, addresses, repositories, IaC projects, exact image digests, and Kubernetes context names enter through an attributable `user_declared` source as untrusted candidates. Questionnaire assessment activities are persisted separately from permissions and can never create a scope grant.
 
 ### 5.6 EngineManifest and EngineRun
 
@@ -266,6 +267,30 @@ The stable fingerprint is adapter-versioned. It should combine engine-independen
 
 Related findings are grouped, not discarded. The original one-to-one mapping between engine output and evidence remains reconstructable.
 
+```text
+FindingGroup
+  id
+  case_id
+  title
+  finding_ids[]              # references canonical findings; never replaces them
+  rationale
+  grouped_by
+  created_at
+
+FindingGroupEvent
+  id
+  case_id
+  group_id
+  action: created | removed
+  title
+  finding_ids[]              # immutable membership snapshot
+  rationale                  # grouping rationale or explicit removal reason
+  actor
+  occurred_at
+```
+
+The active-group collection is a reversible presentation projection. Creating or removing a group appends an immutable event; removal only deletes the active projection. It cannot change a finding fingerprint, evidence, observation, raw artifact, workflow state, or comparison history. A finding belongs to at most one active presentation group, and automatic cross-engine merging remains out of scope.
+
 ### 5.8 ControlMapping
 
 ```text
@@ -306,6 +331,12 @@ An evidence or severity change on a reproduced issue is represented as `persiste
 
 Use SQLite in WAL mode for case metadata, durable job state, manifests resolved for a run, coverage, assets, findings, mappings, and workflow history. Migrations are transactional and versioned.
 
+SQLite write serialization is not sufficient for operations that also affect in-memory workers or
+credential capabilities. The desktop holds an exclusive, backend-created data-directory lease for
+its lifetime. Standalone CLI inspection remains available, but case/artifact deletion, exact runtime
+cleanup, and managed-runtime mutation must acquire that same lease and fail closed while the desktop
+is open. The lock file is a private regular file; Unix opens refuse symlink targets.
+
 ### 6.2 Evidence store
 
 Raw output and evidence live in a case-scoped content-addressed store keyed by SHA-256. Database rows reference blobs; adapters never return arbitrary host paths to the UI.
@@ -322,6 +353,11 @@ If an operating system or provider forces a disk-backed cache, that integration 
 
 The command boundary uses versioned request and response structures. Errors are typed as `validation`, `authorization`, `not_found`, `conflict`, `runtime_unavailable`, `engine_failure`, `storage`, `cancelled`, or `internal`, with a redacted user message and a stable diagnostic code.
 
+Every Tauri event uses the same `1.0.0` envelope with `schemaVersion`, `eventType`,
+`occurredAt`, and `payload`. Payload shapes may differ by the named event, but consumers never
+have to guess whether a raw string, run, or case was emitted at the top level; the current UI treats
+events as invalidation signals and reloads authoritative persisted state.
+
 The initial command surface is:
 
 | Command | Purpose |
@@ -331,8 +367,12 @@ The initial command surface is:
 | `select_case` | Select and load a case by identifier. |
 | `seed_demo_case` | Create explicitly marked synthetic data for development or demonstration. It must never look like a real scan. |
 | `list_engine_manifests` | Return installed/available engines, versions, licensing disposition, runtime needs, and implementation status. |
-| `start_discovery` | Start attributable candidate-asset discovery for a case. |
+| `start_discovery` | Capture bounded provider-native inventory or consume preserved snapshots, persist raw pages first, then run attributable candidate-asset discovery. |
+| `cancel_discovery` | Cancel the active case-bound provider capture while retaining already-preserved partial evidence. |
 | `approve_scope` | Store explicit scope grants and the resolved targets or selectors. |
+| `update_finding_workflow` | Append a human handling decision without altering scanner evidence. |
+| `group_findings` | Create one reversible presentation group for two or more case-owned canonical findings. |
+| `ungroup_findings` | Remove only the active group projection and append a removal event. |
 | `start_scan` | Validate grants, freeze a run plan, and start applicable engines. |
 | `pause_scan` | Request a safe checkpoint and pause where supported. |
 | `resume_scan` | Resume a paused or recoverable run. |
@@ -341,7 +381,7 @@ The initial command surface is:
 | `verify_case_export` | Recompute package hashes and signature integrity without asserting result correctness. |
 | `start_rescan` | Create a new run from an existing case and selected baseline. |
 
-Finding disposition and source-connection mutations require additional typed commands before those UI controls may be described as functional. They must not be simulated as successful frontend-only state.
+Frontend controls call these typed backend commands and reload the persisted case. They must not simulate a successful finding, grouping, scope, or source mutation in browser-only state.
 
 ### 7.1 Events
 
@@ -378,6 +418,7 @@ adapter:
   version: string
 capabilities: []
 credential_profiles: []
+supported_providers: []       # empty only for provider-agnostic engines
 target_kinds: []
 network_allowlist: []
 mounts: []
@@ -392,6 +433,12 @@ support:
 ```
 
 An entry without a license disposition or artifact digest may be retained for research but cannot enter a release plan as a distributable engine.
+
+`supported_providers` is a fail-closed release declaration, not a summary of upstream features.
+Provider-bound engines require an exact provider value on every target asset. Missing provider
+identity and non-matching providers are incompatible in planning, coverage recomputation, and
+resume. The current five cloud launcher images declare only `aws`; ScubaGear and Maester declare
+only `microsoft365`; provider-agnostic local and external engines declare an empty list.
 
 The catalog and current research status are in [engine-catalog.md](engine-catalog.md). License obligations are summarized in [../THIRD_PARTY.md](../THIRD_PARTY.md).
 
@@ -433,7 +480,15 @@ A scan run freezes:
 - adapter versions;
 - mapping and explanation versions.
 
+When the request does not name engines, the backend derives the set from the
+ownership-confirmed asset kinds and their unexpired grants. It records every
+applicable catalog entry: runnable engines become jobs and unavailable entries
+become explicit `not_executed` coverage. Naming exact engine IDs is an advanced
+override, not a prerequisite for ordinary use.
+
 The durable orchestrator schedules independent engine jobs with resource limits. Checkpoints are persisted after state changes and bounded result batches.
+
+Every checkpoint that can leave a container or managed egress resource behind also persists a typed, non-secret runtime provenance record. Compatibility providers record their exact provider; the managed-local provider additionally records the verified runtime version, release-manifest SHA-256, and machine-image SHA-256. Recovery reopens that exact private installation and reconciles the exact container and network identities. It never selects a runtime by a resource-name prefix or by whichever executable happens to be on `PATH`.
 
 Pause is cooperative. Cancel sends a graceful request, waits a bounded interval, terminates remaining engine processes, revokes capability handles, and asks the runtime provider to remove job containers and mounts. A cleanup failure becomes a visible diagnostic and retryable cleanup task.
 
@@ -462,6 +517,10 @@ An engine requiring a weaker boundary must declare the exception and remain bloc
 
 Discovery produces candidates plus provenance. It does not produce permission.
 
+AWS, Azure, GCP, and Microsoft 365 live discovery uses the verified process-memory source capability and a fixed internal engine binding. Each response page is durably synced to the case's content-addressed connector store before pagination inspection or asset parsing. A backend-created manifest binds the exact operation, HTTP status, parser profile, observation time, and SHA-256 reference for every page. The same connector registry used for imported snapshots reopens those references, verifies their hashes, parses provider-native records, and submits the normal reconciliation batch. Credentials and continuation tokens are neither case metadata nor connector inputs.
+
+Successful empty inventory, unavailable authorization, partial capture, parser failure, and completed asset discovery remain distinct durable states. Partial results may retain candidate observations but keep source coverage unknown. A process restart preserves artifacts and case state but intentionally loses the short-lived authorization capability.
+
 The plan builder intersects:
 
 ```text
@@ -469,12 +528,18 @@ connected source visibility
 ∩ confirmed assets
 ∩ active scope grants
 ∩ engine capabilities
+∩ exact released provider applicability
 ∩ credential capability
 ∩ platform/runtime availability
 = frozen engine run plan
 ```
 
 The plan records why an engine was included or excluded. Exclusion contributes to coverage, not a pass result.
+
+Provider-native discovery is independently released from scanner images. Azure and GCP access
+tokens currently bind only `provider-native-discovery`; they cannot be checked out by the AWS-only
+CloudQuery, Steampipe, Prowler, ScoutSuite, or Cloudsplaining images. Upstream multi-provider
+support does not widen this binding without provider-specific wrapper and release evidence.
 
 Public-data-only discovery and direct network contact are separate capabilities. DNS and certificate transparency queries may be permitted without contacting a target; port probing, header retrieval, and vulnerability templates require the corresponding direct-contact grant.
 
@@ -500,7 +565,9 @@ Prioritization may consider:
 - confidence and corroboration;
 - remediation disruption.
 
-The explanation stores the factors, not only a mysterious score. The UI may avoid exposing a numeric priority entirely.
+The canonical internal priority uses a single direction: a higher value sorts earlier. The explanation stores the factors, not only a mysterious number. User-facing lists and HTML show a relative handoff ordinal rather than exposing the internal value as a risk or compliance score.
+
+Questionnaire context can add only bounded, named ordering factors. An internet-exposure factor requires the affected asset itself to carry source-derived `internet_exposed=true`; a sensitive-data factor requires both a source-derived `contains_sensitive_data=true` asset attribute and a matching case data context. Questionnaire answers alone never create a finding, asset attribute, scope grant, severity, confidence, or evidence claim. Applying the projection is idempotent and preserves the scanner report and observation fingerprint. Requested activities may preselect an applicable mode in the scope UI, but ownership confirmation and every backend grant check remain mandatory.
 
 Grouping joins related findings under a user-facing issue while retaining all source findings and evidence. Cross-engine corroboration raises confidence or priority; it does not duplicate a control failure or erase distinct technical problems.
 
@@ -515,6 +582,7 @@ scope.json
 coverage.json
 assets.json
 findings.json
+finding-grouping.json         # active reversible groups plus immutable create/remove history
 runs.json
 mappings.json
 evidence/<sha256>
@@ -525,7 +593,7 @@ integrity/signature.json     # optional local key
 licenses/
 ```
 
-The manifest lists redactions and excluded blobs. Verification checks archive structure, hashes, and signature consistency. It returns `integrity_valid`, `integrity_invalid`, or `unverifiable`; it never returns “scan valid.”
+The manifest lists redactions and excluded blobs. Standard redaction covers group titles, rationales, and actors while retaining technical IDs needed to link the history back to independently preserved findings. The canonical document, portable bundle, and HTML handoff disclose active groups and grouping history. Verification checks archive structure, hashes, and signature consistency. It returns `integrity_valid`, `integrity_invalid`, or `unverifiable`; it never returns “scan valid.”
 
 ## 16. Re-verification comparability
 
@@ -540,6 +608,17 @@ A baseline and candidate run are comparable at finding level only when:
 If those conditions fail, the result is `unverifiable`, not `resolved`.
 
 Differences caused by an engine, ruleset, mapping, or adapter update are labeled separately from observed environment changes wherever the evidence permits.
+
+### Signed application updates
+
+Desktop releases use Tauri's signed updater artifacts and one fixed HTTPS GitHub Release endpoint.
+The updater public key is compiled into the application configuration; its private key exists only
+as a GitHub Actions secret. The release finalizer refuses partial platform coverage, embeds each
+detached signature into `latest.json`, and includes updater payloads, signatures, and the manifest
+in checksums and build-provenance attestations. The UI distinguishes an available application
+update from case validity: an older case remains readable and keeps the exact provenance captured
+when its runs were planned. Updater signing is not represented as Apple notarization, Apple
+Developer ID, or Windows Authenticode signing.
 
 ## 17. Demo data
 

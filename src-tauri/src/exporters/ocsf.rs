@@ -254,6 +254,8 @@ fn evidence_value(evidence: &Evidence) -> Value {
         "data": {
             "summary": evidence.summary,
             "engine_id": evidence.engine_id,
+            "scan_run_id": evidence.run_id,
+            "engine_run_id": evidence.engine_run_id,
             "artifact_uid": evidence.artifact_id,
             "artifact_sha256": evidence.artifact_sha256,
             "pointer": evidence.pointer,
@@ -293,12 +295,11 @@ fn confidence_name(confidence: &Confidence) -> &'static str {
 fn ocsf_status(status: &FindingStatus) -> (u8, &'static str) {
     match status {
         FindingStatus::Unreviewed => (1, "New"),
-        FindingStatus::SentForReview
+        FindingStatus::ExpertReviewRequested
         | FindingStatus::Confirmed
-        | FindingStatus::RemediationPlanned
-        | FindingStatus::RemediatedPendingVerification => (2, "In Progress"),
+        | FindingStatus::RemediationReported => (2, "In Progress"),
         FindingStatus::FalsePositive => (3, "Suppressed"),
-        FindingStatus::Closed => (4, "Resolved"),
+        FindingStatus::VerifiedResolved => (4, "Resolved"),
     }
 }
 
@@ -342,7 +343,9 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             knowledge_cutoff: time,
+            verification_baseline_run_id: None,
             scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
             engine_runs: vec![],
         });
         case.findings.push(Finding {

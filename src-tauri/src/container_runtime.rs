@@ -1,17 +1,18 @@
 use crate::artifact_store::{CapturePaths, RunDirectories};
-use crate::domain::EngineManifest;
+use crate::domain::{EngineManifest, ScanPermission};
 use crate::error::{AppError, AppResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration as StdDuration;
@@ -23,10 +24,29 @@ const CONTAINER_WORKSPACE_PATH: &str = "/workspace";
 const CONTAINER_OUTPUT_PATH: &str = "/output";
 const MAX_SCOPE_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CREDENTIAL_DOCUMENT_BYTES: u64 = 256 * 1024;
+const MAX_NETWORK_INSPECT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CONTAINER_INSPECT_BYTES: usize = 2 * 1024 * 1024;
+const MIN_OUTPUT_BYTES: u64 = 1024 * 1024;
+const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const DEFAULT_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_OUTPUT_ENTRIES: usize = 10_000;
+const MAX_OUTPUT_DEPTH: usize = 32;
+const MAX_RUNTIME_COMMAND_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
+const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+const MANAGED_NETWORK_LABEL_KEY: &str = "ai.security-scanner.managed";
+const NETWORK_POLICY_LABEL_KEY: &str = "ai.security-scanner.policy-id";
+const CONTAINER_MANAGED_LABEL_KEY: &str = "ai.security-scanner.managed";
+const CONTAINER_CASE_LABEL_KEY: &str = "ai.security-scanner.case";
+const CONTAINER_SCAN_RUN_LABEL_KEY: &str = "ai.security-scanner.scan-run";
+const CONTAINER_ENGINE_LABEL_KEY: &str = "ai.security-scanner.engine";
+const CONTAINER_ENGINE_RUN_LABEL_KEY: &str = "ai.security-scanner.engine-run";
+const CONTAINER_ATTEMPT_LABEL_KEY: &str = "ai.security-scanner.attempt";
+const CONTAINER_SCOPE_LABEL_KEY: &str = "ai.security-scanner.scope-sha256";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeProvider {
+    ManagedLocal,
     Docker,
     Podman,
 }
@@ -34,8 +54,126 @@ pub enum RuntimeProvider {
 impl RuntimeProvider {
     fn program_name(self) -> &'static str {
         match self {
+            Self::ManagedLocal => "managed-local",
             Self::Docker => "docker",
             Self::Podman => "podman",
+        }
+    }
+
+    fn uses_podman_dialect(self) -> bool {
+        matches!(self, Self::ManagedLocal | Self::Podman)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeCommandProvenance {
+    #[default]
+    Compatibility,
+    ManagedLocal {
+        runtime_version: String,
+        manifest_sha256: String,
+        machine_image_sha256: String,
+    },
+}
+
+impl RuntimeCommandProvenance {
+    /// Returns the immutable managed-runtime manifest identity, when this
+    /// command was resolved from a verified managed installation.
+    pub fn managed_manifest_sha256(&self) -> Option<&str> {
+        match self {
+            Self::Compatibility => None,
+            Self::ManagedLocal {
+                manifest_sha256, ..
+            } => Some(manifest_sha256),
+        }
+    }
+}
+
+/// An already-resolved, typed command context. Managed-local contexts can only
+/// be created from the verified lifecycle manager; durable records persist the
+/// provider/provenance, never an arbitrary binary or environment map.
+#[derive(Debug, Clone)]
+pub struct RuntimeCommandContext {
+    provider: RuntimeProvider,
+    binary: PathBuf,
+    environment: BTreeMap<OsString, OsString>,
+    working_directory: Option<PathBuf>,
+    clear_environment: bool,
+    provenance: RuntimeCommandProvenance,
+}
+
+impl RuntimeCommandContext {
+    pub(crate) fn compatibility(provider: RuntimeProvider, binary: PathBuf) -> Self {
+        debug_assert!(matches!(
+            provider,
+            RuntimeProvider::Docker | RuntimeProvider::Podman
+        ));
+        Self {
+            provider,
+            binary,
+            environment: BTreeMap::new(),
+            working_directory: None,
+            clear_environment: false,
+            provenance: RuntimeCommandProvenance::Compatibility,
+        }
+    }
+
+    fn managed(command: crate::managed_runtime::ManagedRuntimeCommand) -> AppResult<Self> {
+        if !command.binary().is_absolute() {
+            return Err(AppError::NotAuthorized(
+                "managed runtime driver must have an absolute verified path".into(),
+            ));
+        }
+        validate_mount_file(command.binary(), "managed runtime driver")?;
+        validate_mount_directory(command.working_directory(), "managed runtime home")?;
+        Ok(Self {
+            provider: RuntimeProvider::ManagedLocal,
+            binary: command.binary().to_path_buf(),
+            environment: command.environment().clone(),
+            working_directory: Some(command.working_directory().to_path_buf()),
+            clear_environment: true,
+            provenance: RuntimeCommandProvenance::ManagedLocal {
+                runtime_version: command.runtime_version().to_owned(),
+                manifest_sha256: command.manifest_sha256().to_owned(),
+                machine_image_sha256: command.machine_image_sha256().to_owned(),
+            },
+        })
+    }
+
+    pub fn provider(&self) -> RuntimeProvider {
+        self.provider
+    }
+
+    pub fn binary(&self) -> &Path {
+        &self.binary
+    }
+
+    pub fn provenance(&self) -> &RuntimeCommandProvenance {
+        &self.provenance
+    }
+
+    pub(crate) fn output(
+        &self,
+        args: &[OsString],
+        maximum: u64,
+        timeout: StdDuration,
+    ) -> io::Result<std::process::Output> {
+        let mut command = Command::new(&self.binary);
+        command.args(args);
+        self.apply(&mut command);
+        bounded_command_output(&mut command, maximum, timeout)
+    }
+
+    fn apply(&self, command: &mut Command) {
+        if self.clear_environment {
+            command.env_clear();
+            command.envs(self.environment.iter());
+            if let Some(directory) = &self.working_directory {
+                command.current_dir(directory);
+            }
+        } else {
+            apply_runtime_environment(command);
         }
     }
 }
@@ -45,6 +183,10 @@ pub struct RuntimePreflight {
     pub provider: RuntimeProvider,
     pub server_version: String,
     pub security_options: String,
+    /// Durable, typed identity for the exact command source used by this run.
+    /// Older records deserialize as `Compatibility`.
+    #[serde(default)]
+    pub command_provenance: RuntimeCommandProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +197,12 @@ pub struct PinnedImage {
 
 impl PinnedImage {
     pub fn from_manifest(manifest: &EngineManifest) -> AppResult<Self> {
+        if let Some(blocker) = manifest.release_blocker() {
+            return Err(AppError::EngineRegistry(format!(
+                "engine {} cannot be executed: {blocker}",
+                manifest.id
+            )));
+        }
         let image = manifest.image.as_ref().ok_or_else(|| {
             AppError::Runtime(format!(
                 "engine {} has no container image configured",
@@ -110,6 +258,7 @@ pub struct ResourceLimits {
     pub pids: u32,
     pub cpu_millis: u32,
     pub tmpfs_mb: u32,
+    pub output_bytes: u64,
 }
 
 impl Default for ResourceLimits {
@@ -119,6 +268,7 @@ impl Default for ResourceLimits {
             pids: 256,
             cpu_millis: 1000,
             tmpfs_mb: 64,
+            output_bytes: DEFAULT_OUTPUT_BYTES,
         }
     }
 }
@@ -145,6 +295,11 @@ impl ResourceLimits {
                 "container tmpfs limit must be between 16 MiB and 4 GiB".into(),
             ));
         }
+        if !(MIN_OUTPUT_BYTES..=MAX_OUTPUT_BYTES).contains(&self.output_bytes) {
+            return Err(AppError::InvalidRequest(
+                "container aggregate output limit must be between 1 MiB and 64 GiB".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -157,6 +312,7 @@ pub enum NetworkPolicy {
         network_name: String,
         policy_id: String,
         allowed_destinations: Vec<String>,
+        gateway_endpoint: String,
     },
 }
 
@@ -165,11 +321,13 @@ impl NetworkPolicy {
         network_name: impl Into<String>,
         policy_id: impl Into<String>,
         allowed_destinations: Vec<String>,
+        gateway_endpoint: impl Into<String>,
     ) -> AppResult<Self> {
         let policy = Self::Managed {
             network_name: network_name.into(),
             policy_id: policy_id.into(),
             allowed_destinations,
+            gateway_endpoint: gateway_endpoint.into(),
         };
         policy.validate()?;
         Ok(policy)
@@ -192,11 +350,21 @@ impl NetworkPolicy {
         }
     }
 
+    pub fn gateway_endpoint(&self) -> Option<&str> {
+        match self {
+            Self::Disabled => None,
+            Self::Managed {
+                gateway_endpoint, ..
+            } => Some(gateway_endpoint),
+        }
+    }
+
     fn validate(&self) -> AppResult<()> {
         let Self::Managed {
             network_name,
             policy_id,
             allowed_destinations,
+            gateway_endpoint,
         } = self
         else {
             return Ok(());
@@ -233,6 +401,7 @@ impl NetworkPolicy {
                 )));
             }
         }
+        validate_gateway_endpoint(gateway_endpoint)?;
         Ok(())
     }
 }
@@ -375,6 +544,16 @@ impl ScannerCredentialSet {
         self.credentials
             .iter()
             .map(ScannerCredential::environment_key)
+    }
+
+    /// Backend-only access for an in-process provider client. This deliberately
+    /// does not return an owned value and is never exposed through serde, CLI
+    /// arguments, process environment, or logging.
+    pub(crate) fn provider_secret(&self, environment_key: &str) -> Option<&str> {
+        self.credentials
+            .iter()
+            .find(|credential| credential.environment_key == environment_key)
+            .map(ScannerCredential::expose_value)
     }
 
     fn validate_fresh(&self) -> AppResult<()> {
@@ -521,6 +700,7 @@ pub struct ContainerRunPlan {
     scope_sha256: String,
     credential_control_dir: PathBuf,
     network_policy: NetworkPolicy,
+    output_bytes: u64,
 }
 
 impl ContainerRunPlan {
@@ -563,6 +743,10 @@ impl ContainerRunPlan {
     pub fn network_policy(&self) -> &NetworkPolicy {
         &self.network_policy
     }
+
+    pub fn output_bytes(&self) -> u64 {
+        self.output_bytes
+    }
 }
 
 pub struct ContainerPlanBuilder<'a> {
@@ -573,6 +757,8 @@ pub struct ContainerPlanBuilder<'a> {
     limits: &'a ResourceLimits,
     network_policy: &'a NetworkPolicy,
     credential_set: &'a ScannerCredentialSet,
+    case_id: &'a str,
+    scan_run_id: &'a str,
     engine_run_id: &'a str,
     attempt: u32,
 }
@@ -587,6 +773,8 @@ impl<'a> ContainerPlanBuilder<'a> {
         limits: &'a ResourceLimits,
         network_policy: &'a NetworkPolicy,
         credential_set: &'a ScannerCredentialSet,
+        case_id: &'a str,
+        scan_run_id: &'a str,
         engine_run_id: &'a str,
         attempt: u32,
     ) -> Self {
@@ -598,6 +786,8 @@ impl<'a> ContainerPlanBuilder<'a> {
             limits,
             network_policy,
             credential_set,
+            case_id,
+            scan_run_id,
             engine_run_id,
             attempt,
         }
@@ -614,13 +804,23 @@ impl<'a> ContainerPlanBuilder<'a> {
         self.limits.validate()?;
         self.network_policy.validate()?;
         self.credential_set.validate_fresh()?;
+        validate_container_owner_id(self.case_id, "case id")?;
+        validate_container_owner_id(self.scan_run_id, "scan run id")?;
+        validate_container_owner_id(self.engine_run_id, "engine run id")?;
         validate_static_manifest_command(&self.manifest.command)?;
         validate_mount_directory(&self.directories.workspace, "workspace")?;
         validate_mount_directory(&self.directories.output, "output")?;
         validate_mount_directory(&self.directories.control, "control")?;
         validate_mount_file(self.scope_file, "scope document")?;
-        let manifest_requires_network =
-            self.manifest.active_external || !self.manifest.network_destinations.is_empty();
+        let manifest_requires_network = self.manifest.active_external
+            || !self.manifest.network_destinations.is_empty()
+            || self.manifest.required_permissions.iter().any(|permission| {
+                matches!(
+                    permission,
+                    ScanPermission::LowImpactExternalConnection
+                        | ScanPermission::ActiveExternalTesting
+                )
+            });
         match (manifest_requires_network, self.network_policy) {
             (true, NetworkPolicy::Disabled) => {
                 return Err(AppError::NotAuthorized(format!(
@@ -644,6 +844,7 @@ impl<'a> ContainerPlanBuilder<'a> {
         let credential_control_dir = canonical_mount_path(&self.directories.control, "control")?;
         let scope_file = canonical_mount_path(self.scope_file, "scope document")?;
         let scope_sha256 = hash_control_file(&scope_file)?;
+        let runtime_user = runtime_user_spec()?;
         let mut runtime_args = vec![
             "run".into(),
             "--name".into(),
@@ -651,15 +852,21 @@ impl<'a> ContainerPlanBuilder<'a> {
             "--read-only".into(),
             "--cap-drop=ALL".into(),
             "--security-opt=no-new-privileges:true".into(),
-            "--user=65532:65532".into(),
+            format!("--user={runtime_user}"),
             "--pids-limit".into(),
             self.limits.pids.to_string(),
             "--memory".into(),
             format!("{}m", self.limits.memory_mb),
             "--cpus".into(),
             format!("{:.3}", self.limits.cpu_millis as f64 / 1000.0),
+            "--ulimit".into(),
+            format!("fsize={0}:{0}", self.limits.output_bytes),
+            "--log-driver=none".into(),
             "--tmpfs".into(),
-            format!("/tmp:rw,noexec,nosuid,nodev,size={}m", self.limits.tmpfs_mb),
+            format!(
+                "/tmp:rw,noexec,nosuid,nodev,mode=1777,size={}m",
+                self.limits.tmpfs_mb
+            ),
             "--workdir".into(),
             CONTAINER_WORKSPACE_PATH.into(),
             "--mount".into(),
@@ -669,9 +876,19 @@ impl<'a> ContainerPlanBuilder<'a> {
             "--mount".into(),
             bind_mount(&scope_file, CONTAINER_SCOPE_PATH, true)?,
             "--label".into(),
-            format!("ai.security-scanner.engine={}", self.manifest.id),
+            format!("{CONTAINER_MANAGED_LABEL_KEY}=true"),
             "--label".into(),
-            format!("ai.security-scanner.engine-run={}", self.engine_run_id),
+            format!("{CONTAINER_CASE_LABEL_KEY}={}", self.case_id),
+            "--label".into(),
+            format!("{CONTAINER_SCAN_RUN_LABEL_KEY}={}", self.scan_run_id),
+            "--label".into(),
+            format!("{CONTAINER_ENGINE_LABEL_KEY}={}", self.manifest.id),
+            "--label".into(),
+            format!("{CONTAINER_ENGINE_RUN_LABEL_KEY}={}", self.engine_run_id),
+            "--label".into(),
+            format!("{CONTAINER_ATTEMPT_LABEL_KEY}={}", self.attempt),
+            "--label".into(),
+            format!("{CONTAINER_SCOPE_LABEL_KEY}={scope_sha256}"),
         ];
 
         match self.network_policy {
@@ -681,12 +898,30 @@ impl<'a> ContainerPlanBuilder<'a> {
             NetworkPolicy::Managed {
                 network_name,
                 policy_id,
+                gateway_endpoint,
                 ..
             } => {
                 runtime_args.extend(["--network".into(), network_name.clone()]);
                 runtime_args.extend([
                     "--label".into(),
                     format!("ai.security-scanner.network-policy={policy_id}"),
+                ]);
+                for key in [
+                    "ALL_PROXY",
+                    "all_proxy",
+                    "HTTP_PROXY",
+                    "http_proxy",
+                    "HTTPS_PROXY",
+                    "https_proxy",
+                    "AI_SECURITY_SCANNER_PROXY",
+                ] {
+                    runtime_args.extend(["--env".into(), format!("{key}={gateway_endpoint}")]);
+                }
+                runtime_args.extend([
+                    "--env".into(),
+                    "NO_PROXY=".into(),
+                    "--env".into(),
+                    "no_proxy=".into(),
                 ]);
             }
         }
@@ -705,6 +940,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             scope_sha256,
             credential_control_dir,
             network_policy: self.network_policy.clone(),
+            output_bytes: self.limits.output_bytes,
         })
     }
 }
@@ -715,15 +951,75 @@ pub struct RuntimeOutcome {
     pub cancelled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CleanupOutcome {
     pub removed: bool,
     pub detail: String,
 }
 
+/// Exact, non-secret ownership proof required before crash recovery may remove
+/// a container. Runtime provenance is resolved separately by `AppState`; this
+/// value binds the runtime object to one persisted execution and pinned image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedContainerCleanupRequest {
+    pub case_id: String,
+    pub scan_run_id: String,
+    pub engine_run_id: String,
+    pub engine_id: String,
+    pub attempt: u32,
+    pub scope_sha256: String,
+    pub image: PinnedImage,
+}
+
+impl OwnedContainerCleanupRequest {
+    pub fn container_name(&self) -> AppResult<String> {
+        self.validate()?;
+        planned_container_name(&self.engine_id, &self.engine_run_id, self.attempt)
+    }
+
+    fn validate(&self) -> AppResult<()> {
+        validate_container_owner_id(&self.case_id, "case id")?;
+        validate_container_owner_id(&self.scan_run_id, "scan run id")?;
+        validate_container_owner_id(&self.engine_run_id, "engine run id")?;
+        if !valid_runtime_name(&self.engine_id) || self.attempt == 0 {
+            return Err(AppError::InvalidRequest(
+                "engine identity is invalid for owned container cleanup".into(),
+            ));
+        }
+        if self.scope_sha256.len() != 64
+            || !self
+                .scope_sha256
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            return Err(AppError::InvalidRequest(
+                "scope digest is invalid for owned container cleanup".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn expected_labels(&self) -> BTreeMap<&'static str, String> {
+        BTreeMap::from([
+            (CONTAINER_MANAGED_LABEL_KEY, "true".into()),
+            (CONTAINER_CASE_LABEL_KEY, self.case_id.clone()),
+            (CONTAINER_SCAN_RUN_LABEL_KEY, self.scan_run_id.clone()),
+            (CONTAINER_ENGINE_LABEL_KEY, self.engine_id.clone()),
+            (CONTAINER_ENGINE_RUN_LABEL_KEY, self.engine_run_id.clone()),
+            (CONTAINER_ATTEMPT_LABEL_KEY, self.attempt.to_string()),
+            (
+                CONTAINER_SCOPE_LABEL_KEY,
+                self.scope_sha256.to_ascii_lowercase(),
+            ),
+        ])
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    pause_requested: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 }
 
 impl CancellationToken {
@@ -733,6 +1029,48 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Requests a cooperative pause. The request is distinct from an
+    /// acknowledged pause so callers never report a container as paused before
+    /// the runtime has successfully issued its pause operation.
+    pub fn request_pause(&self) {
+        if !self.is_cancelled() {
+            self.pause_requested.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Clears a cooperative pause request. A currently paused runtime remains
+    /// acknowledged as paused until its unpause operation succeeds.
+    pub fn resume(&self) {
+        self.pause_requested.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_pause_requested(&self) -> bool {
+        self.pause_requested.load(Ordering::SeqCst)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    fn acknowledge_paused(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    fn acknowledge_resumed(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+}
+
+impl fmt::Debug for CancellationToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CancellationToken")
+            .field("cancelled", &self.is_cancelled())
+            .field("pause_requested", &self.is_pause_requested())
+            .field("paused", &self.is_paused())
+            .finish()
     }
 }
 
@@ -752,16 +1090,527 @@ pub trait ContainerRuntime: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub struct ProcessContainerRuntime {
+    context: RuntimeCommandContext,
+}
+
+#[derive(Debug, Deserialize)]
+struct OwnedContainerInspect {
+    #[serde(rename = "Id", alias = "ID")]
+    id: String,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "ImageName", default)]
+    image_name: Option<String>,
+    #[serde(rename = "Config")]
+    config: OwnedContainerInspectConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct OwnedContainerInspectConfig {
+    #[serde(rename = "Image", default)]
+    image: Option<String>,
+    #[serde(rename = "Labels", default)]
+    labels: BTreeMap<String, String>,
+}
+
+fn prove_owned_container(
+    document: &[u8],
+    request: &OwnedContainerCleanupRequest,
+) -> AppResult<String> {
+    request.validate()?;
+    if document.is_empty() || document.len() > MAX_CONTAINER_INSPECT_BYTES {
+        return Err(AppError::NotAuthorized(
+            "owned container inspection was empty or oversized".into(),
+        ));
+    }
+    let inspected = serde_json::from_slice::<Vec<OwnedContainerInspect>>(document)
+        .map_err(|_| AppError::NotAuthorized("owned container inspection was malformed".into()))?;
+    if inspected.len() != 1 {
+        return Err(AppError::NotAuthorized(
+            "owned container inspection did not identify exactly one object".into(),
+        ));
+    }
+    let inspected = &inspected[0];
+    let expected_name = request.container_name()?;
+    if inspected.name.trim_start_matches('/') != expected_name {
+        return Err(AppError::NotAuthorized(
+            "container name does not match the persisted execution identity".into(),
+        ));
+    }
+    if inspected.id.len() < 12
+        || inspected.id.len() > 128
+        || !inspected
+            .id
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(AppError::NotAuthorized(
+            "container runtime returned an invalid immutable object ID".into(),
+        ));
+    }
+    for (key, expected) in request.expected_labels() {
+        if inspected.config.labels.get(key) != Some(&expected) {
+            return Err(AppError::NotAuthorized(format!(
+                "container ownership label {key} does not match the persisted execution"
+            )));
+        }
+    }
+    let expected_image = request.image.reference();
+    let image_matches = inspected.config.image.as_deref() == Some(expected_image.as_str())
+        || inspected.image_name.as_deref() == Some(expected_image.as_str());
+    if !image_matches {
+        return Err(AppError::NotAuthorized(
+            "container image does not match the persisted pinned image".into(),
+        ));
+    }
+    Ok(inspected.id.clone())
+}
+
+#[derive(Debug, Deserialize)]
+struct DockerRuntimeNetworkInspect {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Id")]
+    id: String,
+    #[serde(rename = "Driver")]
+    driver: String,
+    #[serde(rename = "Internal")]
+    internal: bool,
+    #[serde(rename = "Labels")]
+    labels: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PodmanRuntimeNetworkInspect {
+    name: String,
+    id: String,
+    driver: String,
+    internal: bool,
+    labels: BTreeMap<String, String>,
+}
+
+fn prove_managed_internal_network(
     provider: RuntimeProvider,
-    binary: PathBuf,
+    document: &[u8],
+    expected_name: &str,
+    expected_policy_id: &str,
+) -> AppResult<()> {
+    debug_assert!(provider == RuntimeProvider::Docker || provider.uses_podman_dialect());
+    if document.is_empty() || document.len() > MAX_NETWORK_INSPECT_BYTES {
+        return Err(AppError::Runtime(
+            "container network inspection was empty or oversized".into(),
+        ));
+    }
+
+    let (name, id, driver, internal, labels) = match provider {
+        RuntimeProvider::Docker => {
+            let mut networks: Vec<DockerRuntimeNetworkInspect> = serde_json::from_slice(document)
+                .map_err(|_| {
+                AppError::Runtime("Docker network inspection was malformed".into())
+            })?;
+            if networks.len() != 1 {
+                return Err(AppError::Runtime(
+                    "Docker must return exactly one inspected network".into(),
+                ));
+            }
+            let network = networks.pop().expect("one Docker network");
+            (
+                network.name,
+                network.id,
+                network.driver,
+                network.internal,
+                network.labels,
+            )
+        }
+        RuntimeProvider::ManagedLocal | RuntimeProvider::Podman => {
+            let mut networks: Vec<PodmanRuntimeNetworkInspect> = serde_json::from_slice(document)
+                .map_err(|_| {
+                AppError::Runtime("Podman network inspection was malformed".into())
+            })?;
+            if networks.len() != 1 {
+                return Err(AppError::Runtime(
+                    "Podman must return exactly one inspected network".into(),
+                ));
+            }
+            let network = networks.pop().expect("one Podman network");
+            (
+                network.name,
+                network.id,
+                network.driver,
+                network.internal,
+                network.labels,
+            )
+        }
+    };
+
+    let expected_labels = BTreeMap::from([
+        (MANAGED_NETWORK_LABEL_KEY.to_owned(), "true".to_owned()),
+        (
+            NETWORK_POLICY_LABEL_KEY.to_owned(),
+            expected_policy_id.to_owned(),
+        ),
+    ]);
+    if name != expected_name
+        || id.trim().is_empty()
+        || id.len() > 256
+        || id.contains(['\n', '\r', '\0'])
+        || driver != "bridge"
+        || !internal
+        || labels != expected_labels
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "container runtime did not prove managed network {expected_name} is the exact internal bridge for policy {expected_policy_id}"
+        )));
+    }
+    Ok(())
+}
+
+fn bounded_command_output(
+    command: &mut Command,
+    maximum: u64,
+    timeout: StdDuration,
+) -> io::Result<std::process::Output> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("runtime stdout pipe was unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("runtime stderr pipe was unavailable"))?;
+    let captured = Arc::new(AtomicU64::new(0));
+    let oversized = Arc::new(AtomicBool::new(false));
+    let stdout_capture = spawn_memory_capture(stdout, captured.clone(), oversized.clone(), maximum);
+    let stderr_capture = spawn_memory_capture(stderr, captured, oversized.clone(), maximum);
+    let deadline = std::time::Instant::now() + timeout;
+    let process_result = loop {
+        if let Some(status) = child.try_wait()? {
+            break Ok(status);
+        }
+        if oversized.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "runtime command output exceeded its aggregate limit",
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "runtime command exceeded its deadline",
+            ));
+        }
+        thread::sleep(StdDuration::from_millis(25));
+    };
+    let stdout = join_memory_capture(stdout_capture)?;
+    let stderr = join_memory_capture(stderr_capture)?;
+    let status = process_result?;
+    if oversized.load(Ordering::Acquire) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "runtime command output exceeded its aggregate limit",
+        ));
+    }
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn spawn_memory_capture<R>(
+    mut reader: R,
+    captured: Arc<AtomicU64>,
+    oversized: Arc<AtomicBool>,
+    maximum: u64,
+) -> thread::JoinHandle<io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            let previous = captured.fetch_add(read as u64, Ordering::AcqRel);
+            let remaining = maximum.saturating_sub(previous) as usize;
+            output.extend_from_slice(&buffer[..read.min(remaining)]);
+            if read > remaining {
+                oversized.store(true, Ordering::Release);
+            }
+        }
+        Ok(output)
+    })
+}
+
+fn join_memory_capture(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| io::Error::other("runtime output capture thread failed"))?
+}
+
+#[derive(Clone)]
+struct OutputBudget {
+    maximum: u64,
+    stream_bytes: Arc<AtomicU64>,
+    oversized: Arc<AtomicBool>,
+    capture_failed: Arc<AtomicBool>,
+}
+
+impl OutputBudget {
+    fn new(maximum: u64) -> Self {
+        Self {
+            maximum,
+            stream_bytes: Arc::new(AtomicU64::new(0)),
+            oversized: Arc::new(AtomicBool::new(false)),
+            capture_failed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn check(&self, output_root: &Path) -> AppResult<()> {
+        if self.capture_failed.load(Ordering::Acquire) {
+            return Err(AppError::Runtime(
+                "engine output capture failed; scan coverage is incomplete".into(),
+            ));
+        }
+        if self.oversized.load(Ordering::Acquire) {
+            return Err(output_limit_error(self.maximum));
+        }
+        let mut entries = 0_usize;
+        let files = measure_output_tree(output_root, 0, &mut entries, self.maximum)?;
+        let streams = self.stream_bytes.load(Ordering::Acquire);
+        if files
+            .checked_add(streams)
+            .is_none_or(|total| total > self.maximum)
+        {
+            self.oversized.store(true, Ordering::Release);
+            return Err(output_limit_error(self.maximum));
+        }
+        Ok(())
+    }
+}
+
+struct OutputCaptureWorkers {
+    stdout: thread::JoinHandle<io::Result<()>>,
+    stderr: thread::JoinHandle<io::Result<()>>,
+}
+
+impl OutputCaptureWorkers {
+    fn start(child: &mut Child, capture: &CapturePaths, budget: &OutputBudget) -> AppResult<Self> {
+        let stdout_pipe = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::Runtime("container stdout pipe was unavailable".into()))?;
+        let stderr_pipe = child
+            .stderr
+            .take()
+            .ok_or_else(|| AppError::Runtime("container stderr pipe was unavailable".into()))?;
+        let stdout_file = open_runtime_capture_file(&capture.stdout)?;
+        let stderr_file = open_runtime_capture_file(&capture.stderr)?;
+        Ok(Self {
+            stdout: spawn_file_capture(stdout_pipe, stdout_file, budget.clone()),
+            stderr: spawn_file_capture(stderr_pipe, stderr_file, budget.clone()),
+        })
+    }
+
+    fn finish(self) -> AppResult<()> {
+        // Join both pipe readers before propagating either failure so a
+        // detached reader can never outlive the bounded run operation.
+        let stdout = self.stdout.join();
+        let stderr = self.stderr.join();
+        let stdout =
+            stdout.map_err(|_| AppError::Runtime("stdout capture thread failed".into()))?;
+        let stderr =
+            stderr.map_err(|_| AppError::Runtime("stderr capture thread failed".into()))?;
+        stdout.map_err(AppError::from)?;
+        stderr.map_err(AppError::from)?;
+        Ok(())
+    }
+}
+
+fn spawn_file_capture<R>(
+    mut reader: R,
+    mut file: File,
+    budget: OutputBudget,
+) -> thread::JoinHandle<io::Result<()>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let result = (|| {
+            let mut buffer = [0_u8; 16 * 1024];
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                let previous = budget.stream_bytes.fetch_add(read as u64, Ordering::AcqRel);
+                let remaining = budget.maximum.saturating_sub(previous) as usize;
+                file.write_all(&buffer[..read.min(remaining)])?;
+                if read > remaining {
+                    budget.oversized.store(true, Ordering::Release);
+                }
+            }
+            file.flush()?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            budget.capture_failed.store(true, Ordering::Release);
+        }
+        result
+    })
+}
+
+fn open_runtime_capture_file(path: &Path) -> AppResult<File> {
+    validate_mount_file(path, "runtime capture")?;
+    let mut options = OpenOptions::new();
+    options.write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(AppError::NotAuthorized(
+            "runtime capture must remain a regular file".into(),
+        ));
+    }
+    Ok(file)
+}
+
+fn measure_output_tree(
+    directory: &Path,
+    depth: usize,
+    entries: &mut usize,
+    maximum: u64,
+) -> AppResult<u64> {
+    if depth > MAX_OUTPUT_DEPTH {
+        return Err(AppError::Runtime(
+            "engine output exceeded the directory-depth limit; scan coverage is incomplete".into(),
+        ));
+    }
+    let metadata = fs::symlink_metadata(directory)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "engine output directory changed type; scan coverage is incomplete".into(),
+        ));
+    }
+    let mut total = 0_u64;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        *entries = entries
+            .checked_add(1)
+            .ok_or_else(|| AppError::Runtime("engine output entry count overflowed".into()))?;
+        if *entries > MAX_OUTPUT_ENTRIES {
+            return Err(AppError::Runtime(
+                "engine output exceeded the file-count limit; scan coverage is incomplete".into(),
+            ));
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::NotAuthorized(
+                "engine output contains a symlink; scan coverage is incomplete".into(),
+            ));
+        }
+        let length = if metadata.is_dir() {
+            measure_output_tree(&path, depth + 1, entries, maximum)?
+        } else if metadata.is_file() {
+            metadata.len()
+        } else {
+            return Err(AppError::NotAuthorized(
+                "engine output contains a non-regular filesystem object; scan coverage is incomplete"
+                    .into(),
+            ));
+        };
+        total = total
+            .checked_add(length)
+            .ok_or_else(|| output_limit_error(maximum))?;
+        if total > maximum {
+            return Err(output_limit_error(maximum));
+        }
+    }
+    Ok(total)
+}
+
+fn output_limit_error(maximum: u64) -> AppError {
+    AppError::Runtime(format!(
+        "engine output exceeded the {maximum}-byte aggregate stdout/stderr/artifact limit; scan coverage is incomplete"
+    ))
 }
 
 impl ProcessContainerRuntime {
     pub fn new(provider: RuntimeProvider, binary: impl Into<PathBuf>) -> Self {
         Self {
-            provider,
-            binary: binary.into(),
+            context: RuntimeCommandContext::compatibility(provider, binary.into()),
         }
+    }
+
+    pub fn from_managed(command: crate::managed_runtime::ManagedRuntimeCommand) -> AppResult<Self> {
+        Ok(Self {
+            context: RuntimeCommandContext::managed(command)?,
+        })
+    }
+
+    pub fn from_command_context(context: RuntimeCommandContext) -> Self {
+        Self { context }
+    }
+
+    pub fn command_context(&self) -> RuntimeCommandContext {
+        self.context.clone()
+    }
+
+    pub fn provider(&self) -> RuntimeProvider {
+        self.context.provider
+    }
+
+    /// Removes a crash-left container only after proving its immutable object
+    /// ID, complete execution ownership labels, deterministic name, and pinned
+    /// image. The final removal targets the inspected object ID so a name swap
+    /// between inspection and deletion cannot redirect cleanup.
+    pub fn cleanup_owned_container(
+        &self,
+        request: &OwnedContainerCleanupRequest,
+    ) -> AppResult<CleanupOutcome> {
+        let container_name = request.container_name()?;
+        let inspection = self.direct_output(["container", "inspect", container_name.as_str()])?;
+        if !inspection.status.success() {
+            if runtime_object_is_absent(&inspection.stderr) {
+                return Ok(CleanupOutcome {
+                    removed: false,
+                    detail: "owned container was already absent".into(),
+                });
+            }
+            return Err(process_failure("owned container inspection", &inspection));
+        }
+        let immutable_id = prove_owned_container(&inspection.stdout, request)?;
+        let removal = self.direct_output(["rm", "--force", immutable_id.as_str()])?;
+        if removal.status.success() {
+            return Ok(CleanupOutcome {
+                removed: true,
+                detail: "ownership-proven interrupted container removed".into(),
+            });
+        }
+        if runtime_object_is_absent(&removal.stderr) {
+            return Ok(CleanupOutcome {
+                removed: false,
+                detail: "ownership-proven container disappeared before removal".into(),
+            });
+        }
+        Err(process_failure("owned container cleanup", &removal))
     }
 
     pub fn detect() -> AppResult<Self> {
@@ -784,16 +1633,140 @@ impl ProcessContainerRuntime {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut command = Command::new(&self.binary);
-        command.args(args);
-        apply_runtime_environment(&mut command);
-        command.output().map_err(|error| {
-            AppError::Runtime(format!(
-                "{} could not be executed directly: {error}",
-                self.binary.display()
-            ))
-        })
+        let args = args
+            .into_iter()
+            .map(|value| value.as_ref().to_os_string())
+            .collect::<Vec<_>>();
+        self.context
+            .output(
+                &args,
+                MAX_RUNTIME_COMMAND_OUTPUT_BYTES,
+                RUNTIME_COMMAND_TIMEOUT,
+            )
+            .map_err(|error| {
+                AppError::Runtime(format!(
+                    "{} could not be executed directly: {error}",
+                    self.context.binary.display()
+                ))
+            })
     }
+
+    fn container_control(&self, operation: &'static str, container_name: &str) -> AppResult<()> {
+        debug_assert!(matches!(operation, "pause" | "unpause"));
+        let output = self.direct_output([operation, container_name])?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(process_failure(&format!("container {operation}"), &output))
+        }
+    }
+
+    fn stop_container(&self, container_name: &str) -> AppResult<()> {
+        let output = self.direct_output(["stop", "--time", "5", container_name])?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(process_failure("container stop", &output))
+        }
+    }
+
+    fn wait_for_container(
+        &self,
+        child: &mut Child,
+        plan: &ContainerRunPlan,
+        cancellation: &CancellationToken,
+        budget: &OutputBudget,
+    ) -> AppResult<RuntimeOutcome> {
+        let mut runtime_paused = false;
+        loop {
+            if let Err(output_error) = budget.check(plan.output()) {
+                let stop_error = self.stop_container(plan.container_name()).err();
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::Runtime(match stop_error {
+                    Some(stop_error) => format!(
+                        "{output_error}; fail-closed container stop also failed: {stop_error}"
+                    ),
+                    None => output_error.to_string(),
+                }));
+            }
+            if cancellation.is_cancelled() {
+                if runtime_paused {
+                    if let Err(unpause_error) =
+                        self.container_control("unpause", plan.container_name())
+                    {
+                        let stop_error = self.stop_container(plan.container_name()).err();
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(AppError::Runtime(match stop_error {
+                            Some(stop_error) => format!(
+                                "{unpause_error}; fail-closed container stop also failed: {stop_error}"
+                            ),
+                            None => format!("{unpause_error}; container was stopped fail-closed"),
+                        }));
+                    }
+                    cancellation.acknowledge_resumed();
+                }
+                let stop_result = self.stop_container(plan.container_name());
+                let _ = child.kill();
+                let _ = child.wait();
+                stop_result?;
+                return Ok(RuntimeOutcome {
+                    exit_code: None,
+                    cancelled: true,
+                });
+            }
+            if let Some(status) = child.try_wait().map_err(|error| {
+                AppError::Runtime(format!("container process could not be observed: {error}"))
+            })? {
+                cancellation.acknowledge_resumed();
+                return Ok(RuntimeOutcome {
+                    exit_code: status.code(),
+                    cancelled: false,
+                });
+            }
+
+            let pause_requested = cancellation.is_pause_requested();
+            if pause_requested && !runtime_paused {
+                if let Err(pause_error) = self.container_control("pause", plan.container_name()) {
+                    let stop_error = self.stop_container(plan.container_name()).err();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(AppError::Runtime(match stop_error {
+                        Some(stop_error) => format!(
+                            "{pause_error}; fail-closed container stop also failed: {stop_error}"
+                        ),
+                        None => format!("{pause_error}; container was stopped fail-closed"),
+                    }));
+                }
+                runtime_paused = true;
+                cancellation.acknowledge_paused();
+            } else if !pause_requested && runtime_paused {
+                if let Err(unpause_error) = self.container_control("unpause", plan.container_name())
+                {
+                    let stop_error = self.stop_container(plan.container_name()).err();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(AppError::Runtime(match stop_error {
+                        Some(stop_error) => format!(
+                            "{unpause_error}; fail-closed container stop also failed: {stop_error}"
+                        ),
+                        None => format!("{unpause_error}; container was stopped fail-closed"),
+                    }));
+                }
+                runtime_paused = false;
+                cancellation.acknowledge_resumed();
+            }
+            thread::sleep(StdDuration::from_millis(25));
+        }
+    }
+}
+
+fn runtime_object_is_absent(stderr: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    stderr.contains("no such container")
+        || stderr.contains("no container with name")
+        || stderr.contains("no such object")
 }
 
 impl ContainerRuntime for ProcessContainerRuntime {
@@ -814,9 +1787,10 @@ impl ContainerRuntime for ProcessContainerRuntime {
             return Err(process_failure("runtime security preflight", &info));
         }
         Ok(RuntimePreflight {
-            provider: self.provider,
+            provider: self.context.provider,
             server_version,
             security_options: String::from_utf8_lossy(&info.stdout).trim().to_owned(),
+            command_provenance: self.context.provenance.clone(),
         })
     }
 
@@ -830,23 +1804,16 @@ impl ContainerRuntime for ProcessContainerRuntime {
             return Ok(());
         };
         policy.validate()?;
-        let output = self.direct_output([
-            "network",
-            "inspect",
-            "--format",
-            "{{ index .Labels \"ai.security-scanner.policy-id\" }}",
-            network_name,
-        ])?;
+        let output = self.direct_output(["network", "inspect", network_name])?;
         if !output.status.success() {
             return Err(process_failure("managed network preflight", &output));
         }
-        let actual = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if actual != *policy_id {
-            return Err(AppError::NotAuthorized(format!(
-                "container network {network_name} is not bound to policy {policy_id}"
-            )));
-        }
-        Ok(())
+        prove_managed_internal_network(
+            self.context.provider,
+            &output.stdout,
+            network_name,
+            policy_id,
+        )
     }
 
     fn pull(&self, image: &PinnedImage) -> AppResult<()> {
@@ -872,46 +1839,47 @@ impl ContainerRuntime for ProcessContainerRuntime {
                 cancelled: true,
             });
         }
+        // Keep the proof adjacent to process creation as well as the
+        // orchestrator preflight. This prevents direct runtime callers, or a
+        // network replaced while a pinned image is pulled, from bypassing the
+        // internal-network invariant.
+        self.verify_network(plan.network_policy())?;
         let mut secret = SecretFileGuard::create(plan.credential_control_dir(), credentials)?;
         let runtime_args = runtime_args_with_secret(plan, secret.as_ref())?;
         let execution = (|| -> AppResult<RuntimeOutcome> {
-            let stdout = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&capture.stdout)?;
-            let stderr = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&capture.stderr)?;
-            let mut command = Command::new(&self.binary);
+            let mut command = Command::new(&self.context.binary);
             command.args(&runtime_args);
-            apply_runtime_environment(&mut command);
-            command.stdout(Stdio::from(stdout));
-            command.stderr(Stdio::from(stderr));
+            self.context.apply(&mut command);
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
             let mut child = command.spawn().map_err(|error| {
                 AppError::Runtime(format!("container run could not start: {error}"))
             })?;
-
-            loop {
-                if cancellation.is_cancelled() {
-                    let _ =
-                        self.direct_output(["stop", "--time", "5", plan.container_name.as_str()]);
+            let budget = OutputBudget::new(plan.output_bytes());
+            let capture_workers = match OutputCaptureWorkers::start(&mut child, capture, &budget) {
+                Ok(workers) => workers,
+                Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Ok(RuntimeOutcome {
-                        exit_code: None,
-                        cancelled: true,
-                    });
+                    return Err(error);
                 }
-                if let Some(status) = child.try_wait().map_err(|error| {
-                    AppError::Runtime(format!("container process could not be observed: {error}"))
-                })? {
-                    return Ok(RuntimeOutcome {
-                        exit_code: status.code(),
-                        cancelled: false,
-                    });
-                }
-                thread::sleep(StdDuration::from_millis(50));
+            };
+            let outcome = self.wait_for_container(&mut child, plan, cancellation, &budget);
+            if outcome.is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let capture_result = capture_workers.finish();
+            let budget_result = budget.check(plan.output());
+            match (outcome, capture_result, budget_result) {
+                (Ok(outcome), Ok(()), Ok(())) => Ok(outcome),
+                (Err(error), _, _) => Err(error),
+                (Ok(_), Err(error), _) => Err(AppError::Runtime(format!(
+                    "{error}; scan coverage is incomplete"
+                ))),
+                (Ok(_), Ok(()), Err(error)) => Err(error),
             }
         })();
         let secret_cleanup = secret.as_mut().map_or(Ok(()), SecretFileGuard::cleanup);
@@ -1026,6 +1994,7 @@ impl ContainerRuntime for FakeContainerRuntime {
             provider: RuntimeProvider::Docker,
             server_version: "fake-1.0".into(),
             security_options: "fake-seccomp".into(),
+            command_provenance: RuntimeCommandProvenance::Compatibility,
         })
     }
 
@@ -1075,6 +2044,33 @@ impl ContainerRuntime for FakeContainerRuntime {
             });
         }
         let behavior = self.behavior.lock().expect("fake behavior lock").clone();
+        let mut bytes = behavior
+            .stdout
+            .len()
+            .checked_add(behavior.stderr.len())
+            .ok_or_else(|| output_limit_error(plan.output_bytes()))? as u64;
+        if behavior.output_files.len() > MAX_OUTPUT_ENTRIES {
+            return Err(AppError::Runtime(
+                "engine output exceeded the file-count limit; scan coverage is incomplete".into(),
+            ));
+        }
+        for output in behavior.output_files.values() {
+            bytes = bytes
+                .checked_add(output.len() as u64)
+                .ok_or_else(|| output_limit_error(plan.output_bytes()))?;
+        }
+        let mut existing_entries = 0_usize;
+        bytes = bytes
+            .checked_add(measure_output_tree(
+                plan.output(),
+                0,
+                &mut existing_entries,
+                plan.output_bytes(),
+            )?)
+            .ok_or_else(|| output_limit_error(plan.output_bytes()))?;
+        if bytes > plan.output_bytes() {
+            return Err(output_limit_error(plan.output_bytes()));
+        }
         fs::write(&capture.stdout, &behavior.stdout)?;
         fs::write(&capture.stderr, &behavior.stderr)?;
         for (relative, bytes) in behavior.output_files {
@@ -1209,11 +2205,83 @@ fn validate_run_plan_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
     validate_mount_directory(&plan.output, "output")?;
     validate_mount_directory(&plan.credential_control_dir, "credential control")?;
     validate_mount_file(&plan.scope_file, "scope document")?;
+    validate_run_plan_network_integrity(plan)?;
+    validate_run_plan_output_integrity(plan)?;
     let current_scope_sha256 = hash_control_file(&plan.scope_file)?;
     if current_scope_sha256 != plan.scope_sha256 {
         return Err(AppError::NotAuthorized(
             "scope document changed after the immutable run plan was built".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_run_plan_output_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
+    let image_reference = plan.image.reference();
+    let image_index = plan
+        .runtime_args
+        .iter()
+        .position(|argument| argument == &image_reference)
+        .ok_or_else(|| {
+            AppError::Runtime("container run plan lost its pinned image reference".into())
+        })?;
+    let launch_arguments = &plan.runtime_args[..image_index];
+    let expected = format!("fsize={0}:{0}", plan.output_bytes);
+    let values = launch_arguments
+        .windows(2)
+        .filter_map(|arguments| (arguments[0] == "--ulimit").then_some(arguments[1].as_str()))
+        .collect::<Vec<_>>();
+    let ulimit_count = launch_arguments
+        .iter()
+        .filter(|argument| argument.as_str() == "--ulimit")
+        .count();
+    let log_driver_count = launch_arguments
+        .iter()
+        .filter(|argument| argument.as_str() == "--log-driver=none")
+        .count();
+    if ulimit_count != 1 || values != [expected.as_str()] || log_driver_count != 1 {
+        return Err(AppError::NotAuthorized(
+            "container run plan did not preserve its output-size and runtime-log limits".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_run_plan_network_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
+    plan.network_policy.validate()?;
+    let image_reference = plan.image.reference();
+    let image_index = plan
+        .runtime_args
+        .iter()
+        .position(|argument| argument == &image_reference)
+        .ok_or_else(|| {
+            AppError::Runtime("container run plan lost its pinned image reference".into())
+        })?;
+    let launch_arguments = &plan.runtime_args[..image_index];
+    if launch_arguments
+        .iter()
+        .any(|argument| argument.starts_with("--network="))
+    {
+        return Err(AppError::NotAuthorized(
+            "container run plan contains an unverified network option".into(),
+        ));
+    }
+    let network_values: Vec<&str> = launch_arguments
+        .windows(2)
+        .filter_map(|arguments| (arguments[0] == "--network").then_some(arguments[1].as_str()))
+        .collect();
+    let network_option_count = launch_arguments
+        .iter()
+        .filter(|argument| argument.as_str() == "--network")
+        .count();
+    let expected_network = match &plan.network_policy {
+        NetworkPolicy::Disabled => "none",
+        NetworkPolicy::Managed { network_name, .. } => network_name,
+    };
+    if network_option_count != 1 || network_values != [expected_network] {
+        return Err(AppError::NotAuthorized(format!(
+            "container run plan did not preserve the exact {expected_network} network isolation"
+        )));
     }
     Ok(())
 }
@@ -1297,6 +2365,83 @@ fn secure_remove_secret_file(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Zeroizes credential envelopes left by an abrupt desktop/process exit. The
+/// caller must first reconcile the exact owned container, so no running engine
+/// loses its credential channel. This function never follows symlinks and only
+/// touches the bounded credential filename inside one persisted attempt.
+pub fn cleanup_orphaned_credentials(
+    artifact_root: &Path,
+    request: &OwnedContainerCleanupRequest,
+) -> AppResult<usize> {
+    request.validate()?;
+    let root_metadata = fs::symlink_metadata(artifact_root)?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "artifact root is not a regular private directory".into(),
+        ));
+    }
+    let root = fs::canonicalize(artifact_root)?;
+    let components = [
+        request.case_id.clone(),
+        request.scan_run_id.clone(),
+        request.engine_run_id.clone(),
+        format!("attempt-{}", request.attempt),
+        "control".into(),
+    ];
+    let mut control = root.clone();
+    for component in components {
+        control.push(component);
+        let metadata = match fs::symlink_metadata(&control) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(AppError::NotAuthorized(
+                "credential cleanup path contains a symlink or non-directory".into(),
+            ));
+        }
+    }
+    let canonical_control = fs::canonicalize(&control)?;
+    if !canonical_control.starts_with(&root) {
+        return Err(AppError::NotAuthorized(
+            "credential cleanup path escaped the artifact root".into(),
+        ));
+    }
+    let mut removed = 0_usize;
+    for entry in fs::read_dir(&canonical_control)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| AppError::NotAuthorized("credential filename is not UTF-8".into()))?;
+        if !is_credential_envelope_name(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_CREDENTIAL_DOCUMENT_BYTES
+        {
+            return Err(AppError::NotAuthorized(
+                "orphan credential envelope is not a bounded regular file".into(),
+            ));
+        }
+        secure_remove_secret_file(&path)?;
+        removed = removed.saturating_add(1);
+    }
+    Ok(removed)
+}
+
+fn is_credential_envelope_name(name: &str) -> bool {
+    name.strip_prefix("credentials-")
+        .and_then(|suffix| suffix.strip_suffix(".json"))
+        .is_some_and(|nonce| {
+            nonce.len() == 32 && nonce.chars().all(|character| character.is_ascii_hexdigit())
+        })
+}
+
 #[cfg(unix)]
 fn restrict_secret_file(path: &Path, readonly: bool) -> AppResult<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -1349,6 +2494,20 @@ fn valid_runtime_name(value: &str) -> bool {
         })
 }
 
+fn validate_container_owner_id(value: &str, label: &str) -> AppResult<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "{label} is invalid for container ownership"
+        )));
+    }
+    Ok(())
+}
+
 fn valid_environment_key(value: &str) -> bool {
     let mut characters = value.chars();
     matches!(characters.next(), Some(first) if first == '_' || first.is_ascii_uppercase())
@@ -1361,6 +2520,70 @@ fn valid_sha256_digest(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64 && hex.chars().all(|character| character.is_ascii_hexdigit())
     })
+}
+
+#[cfg(unix)]
+fn runtime_user_spec() -> AppResult<String> {
+    // The case artifact tree is private to the desktop user. Running as that
+    // same non-root uid/gid lets the container read the explicit workspace and
+    // write only its case-scoped output without broadening host permissions.
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+    if uid == 0 {
+        return Err(AppError::NotAuthorized(
+            "scanner containers cannot be launched from a root-owned desktop process".into(),
+        ));
+    }
+    Ok(format!("{uid}:{gid}"))
+}
+
+#[cfg(not(unix))]
+fn runtime_user_spec() -> AppResult<String> {
+    Ok("65532:65532".into())
+}
+
+fn validate_gateway_endpoint(value: &str) -> AppResult<()> {
+    let endpoint = url::Url::parse(value).map_err(|_| {
+        AppError::InvalidRequest("managed network gateway endpoint is malformed".into())
+    })?;
+    if endpoint.scheme() != "socks5h"
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || !matches!(endpoint.path(), "" | "/")
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+        || endpoint.port().is_none()
+    {
+        return Err(AppError::InvalidRequest(
+            "managed network gateway must be a credential-free socks5h IP endpoint".into(),
+        ));
+    }
+    let address = endpoint
+        .host_str()
+        .and_then(|host| host.parse::<IpAddr>().ok())
+        .ok_or_else(|| {
+            AppError::InvalidRequest(
+                "managed network gateway must use the private bridge IP directly".into(),
+            )
+        })?;
+    let private = match address {
+        IpAddr::V4(address) => {
+            address.is_private()
+                && address != Ipv4Addr::new(169, 254, 169, 254)
+                && address != Ipv4Addr::new(169, 254, 170, 2)
+                && address != Ipv4Addr::new(100, 100, 100, 200)
+        }
+        IpAddr::V6(address) => {
+            (address.segments()[0] & 0xfe00) == 0xfc00
+                && address != "fd00:ec2::254".parse::<Ipv6Addr>().expect("literal")
+        }
+    };
+    if !private {
+        return Err(AppError::InvalidRequest(
+            "managed network gateway is outside a private container bridge".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn apply_runtime_environment(command: &mut Command) {
@@ -1411,9 +2634,14 @@ mod tests {
     use super::*;
     use crate::artifact_store::{ArtifactContext, ArtifactStore};
     use crate::domain::{
-        AssetKind, DistributionMode, EngineCategory, ImageReference, ManifestStatus, ScanPermission,
+        AssetKind, DistributionMode, EngineCategory, EngineCompatibility, ImageReference,
+        ManifestStatus, ScanPermission,
     };
     use chrono::Duration;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::time::Instant;
 
     fn manifest(command: Vec<String>) -> EngineManifest {
         EngineManifest {
@@ -1436,6 +2664,7 @@ mod tests {
             engine_version: Some("1.0".into()),
             rule_version: Some("1".into()),
             adapter_version: "1".into(),
+            supported_providers: vec![],
             supported_asset_kinds: vec![AssetKind::Repository],
             required_permissions: vec![ScanPermission::LocalArtifactRead],
             active_external: false,
@@ -1445,8 +2674,13 @@ mod tests {
             network_destinations: vec![],
             output_formats: vec!["json".into()],
             command,
-            status: ManifestStatus::Experimental,
+            status: ManifestStatus::Integrated,
             notices: vec![],
+            compatibility: EngineCompatibility {
+                runnable: true,
+                blocked_by: vec![],
+                ..EngineCompatibility::default()
+            },
         }
     }
 
@@ -1485,6 +2719,124 @@ mod tests {
         (temp, store, directories, scope, manifest, image)
     }
 
+    fn owned_cleanup_request(scope: &Path, image: &PinnedImage) -> OwnedContainerCleanupRequest {
+        OwnedContainerCleanupRequest {
+            case_id: "case-1".into(),
+            scan_run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            engine_id: "scanner".into(),
+            attempt: 1,
+            scope_sha256: hash_control_file(scope).expect("scope digest"),
+            image: image.clone(),
+        }
+    }
+
+    fn docker_network_inspect(internal: bool, policy_id: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!([{
+            "Name": "ass-egress",
+            "Id": "docker-network-id",
+            "Driver": "bridge",
+            "Internal": internal,
+            "Labels": {
+                (MANAGED_NETWORK_LABEL_KEY): "true",
+                (NETWORK_POLICY_LABEL_KEY): policy_id,
+            }
+        }]))
+        .expect("Docker network inspection JSON")
+    }
+
+    fn podman_network_inspect(internal: bool, policy_id: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!([{
+            "name": "ass-egress",
+            "id": "podman-network-id",
+            "driver": "bridge",
+            "internal": internal,
+            "labels": {
+                (MANAGED_NETWORK_LABEL_KEY): "true",
+                (NETWORK_POLICY_LABEL_KEY): policy_id,
+            }
+        }]))
+        .expect("Podman network inspection JSON")
+    }
+
+    #[cfg(unix)]
+    fn fake_runtime(temp: &tempfile::TempDir, fail_pause: bool) -> (PathBuf, PathBuf) {
+        let binary = temp.path().join("fake-container-runtime");
+        let log = temp.path().join("fake-container-runtime.log");
+        let pause_exit = if fail_pause { "exit 23" } else { "exit 0" };
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'
+case \"$1\" in
+  run) exec /bin/sleep 30 ;;
+  pause) {pause_exit} ;;
+  *) exit 0 ;;
+esac\n",
+            log.display()
+        );
+        fs::write(&binary, script).expect("fake runtime script");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake runtime executable");
+        (binary, log)
+    }
+
+    #[cfg(unix)]
+    fn fake_output_flood_runtime(temp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
+        let binary = temp.path().join("fake-output-flood-runtime");
+        let log = temp.path().join("fake-output-flood-runtime.log");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  run) exec /bin/dd if=/dev/zero bs=65536 count=1024 2>/dev/null ;;\n  stop) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            log.display()
+        );
+        fs::write(&binary, script).expect("fake output flood runtime script");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake output flood runtime executable");
+        (binary, log)
+    }
+
+    #[cfg(unix)]
+    fn fake_network_inspect_runtime(temp: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
+        let binary = temp.path().join("fake-network-runtime");
+        let log = temp.path().join("fake-network-runtime.log");
+        let response = temp.path().join("network-inspect.json");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = network ] && [ \"$2\" = inspect ] && [ \"$3\" = ass-egress ]; then\n  /bin/cat '{}'\n  exit 0\nfi\nexit 29\n",
+            log.display(),
+            response.display()
+        );
+        fs::write(&binary, script).expect("fake network runtime script");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake network runtime executable");
+        (binary, log, response)
+    }
+
+    #[cfg(unix)]
+    fn fake_owned_cleanup_runtime(temp: &tempfile::TempDir) -> (PathBuf, PathBuf, PathBuf) {
+        let binary = temp.path().join("fake-owned-cleanup-runtime");
+        let log = temp.path().join("fake-owned-cleanup-runtime.log");
+        let response = temp.path().join("container-inspect.json");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = container ] && [ \"$2\" = inspect ]; then\n  /bin/cat '{}'\n  exit 0\nfi\nif [ \"$1\" = rm ] && [ \"$2\" = --force ]; then\n  exit 0\nfi\nexit 29\n",
+            log.display(),
+            response.display()
+        );
+        fs::write(&binary, script).expect("fake owned cleanup runtime script");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake owned cleanup runtime executable");
+        (binary, log, response)
+    }
+
+    #[cfg(unix)]
+    fn wait_until(mut predicate: impl FnMut() -> bool) {
+        let deadline = Instant::now() + StdDuration::from_secs(5);
+        while !predicate() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for runtime state"
+            );
+            thread::sleep(StdDuration::from_millis(5));
+        }
+    }
+
     #[test]
     fn image_digest_is_mandatory() {
         let mut manifest = manifest(vec!["scanner".into()]);
@@ -1504,6 +2856,99 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_container_requires_complete_ownership_proof() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let request = owned_cleanup_request(&scope, &image);
+        let labels = request
+            .expected_labels()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let document = serde_json::to_vec(&serde_json::json!([{
+            "Id": "b".repeat(64),
+            "Name": format!("/{}", request.container_name().expect("name")),
+            "Config": {
+                "Image": request.image.reference(),
+                "Labels": labels,
+            }
+        }]))
+        .expect("inspect document");
+        assert_eq!(
+            prove_owned_container(&document, &request).unwrap(),
+            "b".repeat(64)
+        );
+
+        let mut mismatched: serde_json::Value =
+            serde_json::from_slice(&document).expect("inspect value");
+        mismatched[0]["Config"]["Labels"][CONTAINER_CASE_LABEL_KEY] =
+            serde_json::Value::String("other-case".into());
+        let error = prove_owned_container(
+            &serde_json::to_vec(&mismatched).expect("mismatch document"),
+            &request,
+        )
+        .expect_err("foreign container rejected");
+        assert!(error.to_string().contains(CONTAINER_CASE_LABEL_KEY));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_cleanup_removes_the_inspected_immutable_object_id() {
+        let (temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let request = owned_cleanup_request(&scope, &image);
+        let immutable_id = "d".repeat(64);
+        let labels = request
+            .expected_labels()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let (binary, log, response) = fake_owned_cleanup_runtime(&temp);
+        fs::write(
+            response,
+            serde_json::to_vec(&serde_json::json!([{
+                "Id": immutable_id,
+                "Name": request.container_name().expect("name"),
+                "Config": {
+                    "Image": request.image.reference(),
+                    "Labels": labels,
+                }
+            }]))
+            .expect("inspect document"),
+        )
+        .expect("inspect fixture");
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        assert!(runtime.cleanup_owned_container(&request).unwrap().removed);
+        let commands = fs::read_to_string(log).expect("runtime log");
+        assert!(commands.lines().any(|line| {
+            line == format!(
+                "container inspect {}",
+                request.container_name().expect("name")
+            )
+        }));
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("rm --force {}", "d".repeat(64)))
+        );
+    }
+
+    #[test]
+    fn crash_left_credential_envelopes_are_bounded_and_zeroized() {
+        let (_temp, store, directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let credential = directories
+            .control
+            .join(format!("credentials-{}.json", "c".repeat(32)));
+        fs::write(&credential, b"highly-sensitive-test-value").expect("orphan credential");
+        let request = owned_cleanup_request(&scope, &image);
+        assert_eq!(
+            cleanup_orphaned_credentials(store.root(), &request).expect("credential cleanup"),
+            1
+        );
+        assert!(!credential.exists());
+        assert!(scope.exists(), "non-credential control files remain intact");
+    }
+
+    #[test]
     fn plan_image_must_match_the_manifest_digest() {
         let (_temp, _store, directories, scope, manifest, _image) =
             plan_fixture(vec!["scanner".into()]);
@@ -1520,6 +2965,8 @@ mod tests {
             &ResourceLimits::default(),
             &NetworkPolicy::Disabled,
             &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
             "engine-run-1",
             1,
         )
@@ -1550,6 +2997,8 @@ mod tests {
             &ResourceLimits::default(),
             &NetworkPolicy::Disabled,
             &credentials,
+            "case-1",
+            "run-1",
             "engine-run-1",
             1,
         )
@@ -1565,6 +3014,21 @@ mod tests {
         assert!(plan.runtime_args.contains(&"--pids-limit".into()));
         assert!(plan.runtime_args.contains(&"--memory".into()));
         assert!(plan.runtime_args.contains(&"--cpus".into()));
+        assert!(plan.runtime_args.windows(2).any(|arguments| {
+            arguments[0] == "--ulimit"
+                && arguments[1] == format!("fsize={0}:{0}", ResourceLimits::default().output_bytes)
+        }));
+        assert_eq!(
+            plan.runtime_args
+                .iter()
+                .filter(|argument| argument.as_str() == "--log-driver=none")
+                .count(),
+            1
+        );
+        assert!(plan.runtime_args.windows(2).any(|arguments| {
+            arguments[0] == "--tmpfs"
+                && arguments[1] == "/tmp:rw,noexec,nosuid,nodev,mode=1777,size=64m"
+        }));
         assert_eq!(
             plan.runtime_args
                 .iter()
@@ -1602,6 +3066,8 @@ mod tests {
             &ResourceLimits::default(),
             &NetworkPolicy::Disabled,
             &credentials,
+            "case-1",
+            "run-1",
             "engine-run-1",
             1,
         )
@@ -1657,6 +3123,8 @@ mod tests {
             &ResourceLimits::default(),
             &NetworkPolicy::Disabled,
             &credentials,
+            "case-1",
+            "run-1",
             "engine-run-1",
             1,
         )
@@ -1687,12 +3155,220 @@ mod tests {
             &ResourceLimits::default(),
             &NetworkPolicy::Disabled,
             &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
             "engine-run-1",
             1,
         )
         .build()
         .expect_err("shell rejected");
         assert!(error.to_string().contains("may not invoke a shell"));
+    }
+
+    #[test]
+    fn docker_and_podman_must_prove_the_exact_internal_managed_bridge() {
+        prove_managed_internal_network(
+            RuntimeProvider::Docker,
+            &docker_network_inspect(true, "policy-1"),
+            "ass-egress",
+            "policy-1",
+        )
+        .expect("Docker internal bridge proof");
+        prove_managed_internal_network(
+            RuntimeProvider::Podman,
+            &podman_network_inspect(true, "policy-1"),
+            "ass-egress",
+            "policy-1",
+        )
+        .expect("Podman internal bridge proof");
+
+        for (provider, document) in [
+            (
+                RuntimeProvider::Docker,
+                docker_network_inspect(false, "policy-1"),
+            ),
+            (
+                RuntimeProvider::Podman,
+                podman_network_inspect(false, "policy-1"),
+            ),
+            (
+                RuntimeProvider::Docker,
+                docker_network_inspect(true, "other-policy"),
+            ),
+            (
+                RuntimeProvider::Podman,
+                podman_network_inspect(true, "other-policy"),
+            ),
+        ] {
+            let error =
+                prove_managed_internal_network(provider, &document, "ass-egress", "policy-1")
+                    .expect_err("unproven network rejected");
+            assert!(error.to_string().contains("exact internal bridge"));
+        }
+    }
+
+    #[test]
+    fn malformed_empty_or_ambiguous_network_inspection_is_rejected() {
+        for document in [
+            Vec::new(),
+            b"not JSON".to_vec(),
+            serde_json::to_vec(&serde_json::json!([])).expect("empty JSON array"),
+            serde_json::to_vec(&serde_json::json!([
+                {
+                    "Name": "ass-egress",
+                    "Id": "one",
+                    "Driver": "bridge",
+                    "Internal": true,
+                    "Labels": {
+                        (MANAGED_NETWORK_LABEL_KEY): "true",
+                        (NETWORK_POLICY_LABEL_KEY): "policy-1",
+                    }
+                },
+                {
+                    "Name": "ass-egress",
+                    "Id": "two",
+                    "Driver": "bridge",
+                    "Internal": true,
+                    "Labels": {
+                        (MANAGED_NETWORK_LABEL_KEY): "true",
+                        (NETWORK_POLICY_LABEL_KEY): "policy-1",
+                    }
+                }
+            ]))
+            .expect("ambiguous JSON array"),
+        ] {
+            assert!(
+                prove_managed_internal_network(
+                    RuntimeProvider::Docker,
+                    &document,
+                    "ass-egress",
+                    "policy-1"
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_plan_network_is_revalidated_fail_closed_before_run() {
+        let (_temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let credentials = ScannerCredentialSet::default();
+        let mut plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &credentials,
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("disabled plan");
+        let network_value = plan
+            .runtime_args
+            .windows(2)
+            .position(|arguments| arguments[0] == "--network")
+            .map(|index| index + 1)
+            .expect("network option");
+        assert_eq!(plan.runtime_args[network_value], "none");
+        plan.runtime_args[network_value] = "bridge".into();
+        let capture = store.prepare_capture(&directories).expect("capture");
+
+        let error = FakeContainerRuntime::default()
+            .run(&plan, &credentials, &CancellationToken::default(), &capture)
+            .expect_err("weakened network isolation rejected");
+        assert!(error.to_string().contains("exact none network isolation"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_runtime_inspects_full_network_state_and_disabled_needs_no_runtime_call() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let (binary, log, response) = fake_network_inspect_runtime(&temp);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["target.example".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        fs::write(&response, docker_network_inspect(true, "policy-1"))
+            .expect("valid inspect response");
+
+        runtime.verify_network(&policy).expect("verified network");
+        assert_eq!(
+            fs::read_to_string(&log).expect("runtime log"),
+            "network inspect ass-egress\n"
+        );
+
+        fs::write(&response, docker_network_inspect(false, "policy-1"))
+            .expect("non-internal inspect response");
+        let error = runtime
+            .verify_network(&policy)
+            .expect_err("non-internal network rejected");
+        assert!(error.to_string().contains("exact internal bridge"));
+
+        let calls_before_disabled = fs::read_to_string(&log).expect("runtime log");
+        runtime
+            .verify_network(&NetworkPolicy::Disabled)
+            .expect("disabled policy needs no runtime network");
+        assert_eq!(
+            fs::read_to_string(&log).expect("runtime log"),
+            calls_before_disabled
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_run_cannot_bypass_the_managed_internal_network_proof() {
+        let (temp, store, directories, scope, mut manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        manifest.active_external = true;
+        manifest.network_destinations = vec!["authorized target".into()];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["target.example".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        let credentials = ScannerCredentialSet::default();
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &policy,
+            &credentials,
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("managed plan");
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log, response) = fake_network_inspect_runtime(&temp);
+        fs::write(&response, docker_network_inspect(false, "policy-1"))
+            .expect("non-internal inspect response");
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+
+        let error = runtime
+            .run(&plan, &credentials, &CancellationToken::default(), &capture)
+            .expect_err("direct process run rejected");
+
+        assert!(error.to_string().contains("exact internal bridge"));
+        assert_eq!(
+            fs::read_to_string(log).expect("runtime log"),
+            "network inspect ass-egress\n"
+        );
     }
 
     #[test]
@@ -1709,6 +3385,8 @@ mod tests {
             &ResourceLimits::default(),
             &NetworkPolicy::Disabled,
             &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
             "engine-run-1",
             1,
         )
@@ -1718,12 +3396,137 @@ mod tests {
     }
 
     #[test]
+    fn low_impact_external_permission_requires_managed_policy() {
+        let (_temp, _store, directories, scope, mut manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        manifest.required_permissions = vec![ScanPermission::LowImpactExternalConnection];
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect_err("network-capable permission rejected without policy");
+        assert!(error.to_string().contains("managed network policy"));
+    }
+
+    #[test]
+    fn fake_runtime_rejects_aggregate_output_before_writing_any_bytes() {
+        let (_temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let limits = ResourceLimits {
+            output_bytes: MIN_OUTPUT_BYTES,
+            ..ResourceLimits::default()
+        };
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &limits,
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("bounded plan");
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let runtime = FakeContainerRuntime::default();
+        let mut behavior = FakeRunBehavior {
+            stdout: vec![0_u8; 700 * 1024],
+            ..FakeRunBehavior::default()
+        };
+        behavior
+            .output_files
+            .insert("report.bin".into(), vec![0_u8; 400 * 1024]);
+        runtime.set_behavior(behavior);
+
+        let error = runtime
+            .run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &CancellationToken::default(),
+                &capture,
+            )
+            .expect_err("aggregate output must be rejected");
+        assert!(error.to_string().contains("scan coverage is incomplete"));
+        assert_eq!(fs::metadata(&capture.stdout).expect("stdout").len(), 0);
+        assert_eq!(fs::metadata(&capture.stderr).expect("stderr").len(), 0);
+        assert_eq!(fs::read_dir(plan.output()).expect("output").count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_runtime_stops_a_stdout_flood_and_bounds_capture_size() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let limits = ResourceLimits {
+            output_bytes: MIN_OUTPUT_BYTES,
+            ..ResourceLimits::default()
+        };
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &limits,
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("bounded plan");
+        let container_name = plan.container_name().to_owned();
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log) = fake_output_flood_runtime(&temp);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+
+        let error = runtime
+            .run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &CancellationToken::default(),
+                &capture,
+            )
+            .expect_err("stdout flood must terminate the run");
+        assert!(error.to_string().contains("scan coverage is incomplete"));
+        assert!(
+            fs::metadata(&capture.stdout).expect("stdout").len() <= MIN_OUTPUT_BYTES,
+            "captured stdout must remain within the aggregate cap"
+        );
+        assert!(
+            fs::read_to_string(log)
+                .expect("runtime log")
+                .lines()
+                .any(|line| line == format!("stop --time 5 {container_name}"))
+        );
+    }
+
+    #[test]
     fn offline_engine_cannot_be_given_extra_network_access() {
         let (_temp, _store, directories, scope, manifest, image) =
             plan_fixture(vec!["scanner".into()]);
-        let policy =
-            NetworkPolicy::managed("ass-egress", "policy-1", vec!["unexpected.example".into()])
-                .expect("policy syntax");
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["unexpected.example".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("policy syntax");
         let error = ContainerPlanBuilder::new(
             &manifest,
             &image,
@@ -1732,6 +3535,8 @@ mod tests {
             &ResourceLimits::default(),
             &policy,
             &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
             "engine-run-1",
             1,
         )
@@ -1753,6 +3558,197 @@ mod tests {
             error
                 .to_string()
                 .contains("cannot enter a scanner container")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_runtime_pauses_and_unpauses_exactly_once_per_request() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("plan");
+        let container_name = plan.container_name().to_owned();
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log) = fake_runtime(&temp, false);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let cancellation = CancellationToken::default();
+        let worker_token = cancellation.clone();
+        let worker = thread::spawn(move || {
+            runtime.run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &worker_token,
+                &capture,
+            )
+        });
+        wait_until(|| {
+            fs::read_to_string(&log)
+                .is_ok_and(|contents| contents.lines().any(|line| line.starts_with("run ")))
+        });
+
+        cancellation.request_pause();
+        wait_until(|| cancellation.is_paused());
+        cancellation.resume();
+        wait_until(|| !cancellation.is_paused());
+        cancellation.cancel();
+
+        let outcome = worker
+            .join()
+            .expect("runtime thread")
+            .expect("runtime outcome");
+        assert!(outcome.cancelled);
+        let commands = fs::read_to_string(log).expect("runtime log");
+        assert_eq!(
+            commands
+                .lines()
+                .filter(|line| *line == format!("pause {container_name}"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            commands
+                .lines()
+                .filter(|line| *line == format!("unpause {container_name}"))
+                .count(),
+            1
+        );
+        assert!(
+            commands
+                .lines()
+                .any(|line| { line == format!("stop --time 5 {container_name}") })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_a_paused_container_unpauses_before_stopping() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("plan");
+        let container_name = plan.container_name().to_owned();
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log) = fake_runtime(&temp, false);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary);
+        let cancellation = CancellationToken::default();
+        let worker_token = cancellation.clone();
+        let worker = thread::spawn(move || {
+            runtime.run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &worker_token,
+                &capture,
+            )
+        });
+        wait_until(|| {
+            fs::read_to_string(&log)
+                .is_ok_and(|contents| contents.lines().any(|line| line.starts_with("run ")))
+        });
+
+        cancellation.request_pause();
+        wait_until(|| cancellation.is_paused());
+        cancellation.cancel();
+        let outcome = worker
+            .join()
+            .expect("runtime thread")
+            .expect("runtime outcome");
+        assert!(outcome.cancelled);
+        assert!(!cancellation.is_paused());
+
+        let commands = fs::read_to_string(log).expect("runtime log");
+        let unpause = commands
+            .lines()
+            .position(|line| line == format!("unpause {container_name}"))
+            .expect("unpause command");
+        let stop = commands
+            .lines()
+            .position(|line| line == format!("stop --time 5 {container_name}"))
+            .expect("stop command");
+        assert!(
+            unpause < stop,
+            "paused cancellation must unpause before stop"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pause_failure_stops_the_container_fail_closed() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("plan");
+        let container_name = plan.container_name().to_owned();
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log) = fake_runtime(&temp, true);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let cancellation = CancellationToken::default();
+        let worker_token = cancellation.clone();
+        let worker = thread::spawn(move || {
+            runtime.run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &worker_token,
+                &capture,
+            )
+        });
+        wait_until(|| {
+            fs::read_to_string(&log)
+                .is_ok_and(|contents| contents.lines().any(|line| line.starts_with("run ")))
+        });
+
+        cancellation.request_pause();
+        let error = worker
+            .join()
+            .expect("runtime thread")
+            .expect_err("pause failure is terminal");
+        assert!(error.to_string().contains("container pause"));
+        assert!(error.to_string().contains("stopped fail-closed"));
+        assert!(!cancellation.is_paused());
+        let commands = fs::read_to_string(log).expect("runtime log");
+        assert!(
+            commands
+                .lines()
+                .any(|line| { line == format!("stop --time 5 {container_name}") })
         );
     }
 }

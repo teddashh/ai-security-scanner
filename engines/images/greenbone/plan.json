@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "greenbone",
+  "plan_kind": "multi_component_build",
+  "knowledge_date": "2026-08-24",
+  "support_until": "2026-11-22",
+  "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+  "update_procedure": "docs/engine-maintenance.md",
+  "publish_state": "managed_artifact_not_published",
+  "source": {
+    "repository": "https://github.com/greenbone/openvas-scanner",
+    "revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
+    "acquisition_source": "https://github.com/greenbone/openvas-scanner/commit/dcd2be55045b6b63b4f954504d76cc26a09b583e",
+    "local_research_checkout": ".upstreams/greenbone/openvas-scanner"
+  },
+  "verified_upstream_artifact": {
+    "repository": "ghcr.io/greenbone/openvas-scanner",
+    "tag": "23.50.20",
+    "digest": "sha256:f045254d796b1a8553168b9a04c01b366b859e368c16fc48dc63eff3293d95db",
+    "signature_identity": null,
+    "entrypoint": [],
+    "verification": {
+      "method": "docker_buildx_imagetools_inspect",
+      "verified_at": "2026-08-24",
+      "source_association": "attested_match",
+      "artifact_source_revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e"
+    }
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
+    "tag": null,
+    "digest": null
+  },
+  "build_recipe": {
+    "source_revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
+    "upstream_build_file": ".docker/prod.Dockerfile",
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "static_steps": [
+      [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "/build/openvas"
+      ],
+      [
+        "cmake",
+        "--build",
+        "/build/openvas"
+      ]
+    ],
+    "base_images": [
+      {
+        "repository": "ghcr.io/greenbone/openvas-scanner",
+        "tag": "23.50.20",
+        "digest": "sha256:f045254d796b1a8553168b9a04c01b366b859e368c16fc48dc63eff3293d95db",
+        "use": "reference_or_copy_source_only_after_license_and_entrypoint_review"
+      }
+    ]
+  },
+  "dockerfile": {
+    "emitted": false,
+    "reason": "A final digest-pinned base/dependency closure and managed wrapper release do not yet exist; emitting a Dockerfile now would require a floating or unverifiable input."
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Broker work to an isolated, version-locked GVM service profile; a single openvas-scanner image is not a complete runnable engine.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+  },
+  "command": [
+    "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "--engine",
+    "greenbone",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
+  ],
+  "output": {
+    "primary_format": "xml",
+    "path": "/output/greenbone.xml",
+    "media_type": "application/xml",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "license_review",
+    "rationale": "The GVM/OpenVAS multi-component GPL/AGPL distribution and feed terms require release review.",
+    "source_offer_path": null
+  },
+  "blockers": [
+    "final_image_digest_not_published",
+    "multi_container_profile_not_published",
+    "feed_snapshot_not_pinned",
+    "license_review",
+    "execution_wrapper_not_implemented"
+  ]
+}
