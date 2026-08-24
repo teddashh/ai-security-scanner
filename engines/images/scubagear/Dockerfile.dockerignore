@@ -1,0 +1,11 @@
+*
+!engines/
+!engines/images/
+!engines/images/m365-launcher/
+!engines/images/m365-launcher/go.mod
+!engines/images/m365-launcher/main.go
+!engines/images/m365-launcher/prepare_source.py
+!engines/images/scubagear/
+!engines/images/scubagear/dependencies.lock.json
+!engines/images/scubagear/run-scubagear.ps1
+!engines/images/scubagear/THIRD-PARTY-NOTICES.md

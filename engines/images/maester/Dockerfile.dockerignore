@@ -1,0 +1,11 @@
+*
+!engines/
+!engines/images/
+!engines/images/m365-launcher/
+!engines/images/m365-launcher/go.mod
+!engines/images/m365-launcher/main.go
+!engines/images/m365-launcher/prepare_source.py
+!engines/images/maester/
+!engines/images/maester/dependencies.lock.json
+!engines/images/maester/run-maester.ps1
+!engines/images/maester/THIRD-PARTY-NOTICES.md

@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "maester",
+  "source": {
+    "repository": "https://github.com/maester365/maester",
+    "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+    "archive_url": "https://github.com/maester365/maester/archive/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3.tar.gz",
+    "archive_sha256": "sha256:e634e9bc5521e27adf2fd766ddf34f993a492e5ab8a5c49499c76d7bac69e43f",
+    "module_version": "2.0.0",
+    "license": "MIT"
+  },
+  "runtime": {
+    "powershell_version": "7.5.0",
+    "source_repository": "https://github.com/PowerShell/PowerShell-Docker",
+    "source_revision": "e3f885c3eb5033f54ed2ebdf4218fddf51e27192",
+    "images": {
+      "linux/amd64": "mcr.microsoft.com/powershell:7.5-azurelinux-3.0@sha256:74b9b9d43da4d04c349bd358dd2db14ee01f0ab17769e402cf0ae4bd9fdd2f2b",
+      "linux/arm64": "mcr.microsoft.com/powershell:7.5-azurelinux-3.0-arm64@sha256:60d31793816646c4dd80b719b350ca68c8a53c000cbb2740655ddafe5e127903"
+    }
+  },
+  "powershell_modules": [
+    {
+      "name": "Microsoft.Graph.Authentication",
+      "version": "2.27.0",
+      "package_url": "https://www.powershellgallery.com/api/v2/package/Microsoft.Graph.Authentication/2.27.0",
+      "package_sha256": "sha256:7ac68868f2e12afb6c35df19542b1dfdd07b848bc69f6b45eca3a618e2143f78",
+      "source_repository": "https://github.com/microsoftgraph/msgraph-sdk-powershell",
+      "source_revision": "b339b370f7b3b23fe7a0e359f029ca68ab1ebdb1",
+      "license": "MIT",
+      "license_url": "https://raw.githubusercontent.com/microsoftgraph/msgraph-sdk-powershell/b339b370f7b3b23fe7a0e359f029ca68ab1ebdb1/LICENSE.txt",
+      "license_sha256": "sha256:4a8c3c98b9976aad4fd04308c7b1711ce6578a6a8be2ef172b0f28d79d7e62f7"
+    },
+    {
+      "name": "Pester",
+      "version": "5.7.1",
+      "package_url": "https://www.powershellgallery.com/api/v2/package/Pester/5.7.1",
+      "package_sha256": "sha256:4a27904c6814a5fbe4758f8e49861f6a1994aee77b71165a5c43c0371ba6c580",
+      "source_repository": "https://github.com/Pester/Pester",
+      "source_revision": "dc45b7481fffc4f6c2ff1a74edebaad03ce1efcb",
+      "license": "Apache-2.0",
+      "license_url": "https://raw.githubusercontent.com/Pester/Pester/dc45b7481fffc4f6c2ff1a74edebaad03ce1efcb/LICENSE",
+      "license_sha256": "sha256:6a2fc73db70e674162600052e12a6537e93b51d5dfcf2340c4ed08cdb174debb"
+    }
+  ],
+  "test_profile": {
+    "path": "/opt/ai-security-scanner/maester-tests/Maester/Entra",
+    "exclude_tags": ["MT.1182"],
+    "excluded_reason": "MT.1182 performs a DNS DMARC lookup outside the Graph-only managed network closure.",
+    "include_long_running": false,
+    "include_preview": false,
+    "version_check": false,
+    "telemetry": false,
+    "network_destinations": ["graph.microsoft.com:443"]
+  }
+}

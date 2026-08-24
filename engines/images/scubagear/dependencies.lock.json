@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "scubagear",
+  "source": {
+    "repository": "https://github.com/cisagov/ScubaGear",
+    "revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
+    "archive_url": "https://github.com/cisagov/ScubaGear/archive/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2.tar.gz",
+    "archive_sha256": "sha256:8b1f109d65bf145d7d36370e1ca6db841e82208776a04d79855d33b960d3c444",
+    "module_version": "1.8.0",
+    "license": "CC0-1.0"
+  },
+  "runtime": {
+    "powershell_version": "7.5.0",
+    "source_repository": "https://github.com/PowerShell/PowerShell-Docker",
+    "source_revision": "e3f885c3eb5033f54ed2ebdf4218fddf51e27192",
+    "images": {
+      "linux/amd64": "mcr.microsoft.com/powershell:7.5-azurelinux-3.0@sha256:74b9b9d43da4d04c349bd358dd2db14ee01f0ab17769e402cf0ae4bd9fdd2f2b",
+      "linux/arm64": "mcr.microsoft.com/powershell:7.5-azurelinux-3.0-arm64@sha256:60d31793816646c4dd80b719b350ca68c8a53c000cbb2740655ddafe5e127903"
+    }
+  },
+  "powershell_modules": [
+    {
+      "name": "Microsoft.Graph.Authentication",
+      "version": "2.25.0",
+      "package_url": "https://www.powershellgallery.com/api/v2/package/Microsoft.Graph.Authentication/2.25.0",
+      "package_sha256": "sha256:c9596cd06539ea898d8f0bc3569bdd2fdbab931390fc5747548cfed75b10cc9d",
+      "source_repository": "https://github.com/microsoftgraph/msgraph-sdk-powershell",
+      "source_revision": "eedb5e8e801bb4263630d2bef3194907655e2838",
+      "license": "MIT",
+      "license_url": "https://raw.githubusercontent.com/microsoftgraph/msgraph-sdk-powershell/eedb5e8e801bb4263630d2bef3194907655e2838/LICENSE.txt",
+      "license_sha256": "sha256:4a8c3c98b9976aad4fd04308c7b1711ce6578a6a8be2ef172b0f28d79d7e62f7"
+    },
+    {
+      "name": "powershell-yaml",
+      "version": "0.4.12",
+      "package_url": "https://www.powershellgallery.com/api/v2/package/powershell-yaml/0.4.12",
+      "package_sha256": "sha256:d4602bc7a4a093766520422d53ca8b09acde162286fae11e2ee6c8edfea07810",
+      "source_repository": "https://github.com/cloudbase/powershell-yaml",
+      "source_revision": "ff33210a3edebda27cedcbab40d4524a11d5e199",
+      "license": "Apache-2.0",
+      "license_path_in_package": "LICENSE",
+      "license_sha256": "sha256:929f1557083885c9ea16be5ef9112b55c415e6b3867279b996ed4abc5d93b271"
+    }
+  ],
+  "native_dependencies": [
+    {
+      "name": "Open Policy Agent",
+      "version": "1.19.0",
+      "source_repository": "https://github.com/open-policy-agent/opa",
+      "source_revision": "1e32c796e8979b1bda2f768138500b1deb95ff24",
+      "license": "Apache-2.0",
+      "license_url": "https://raw.githubusercontent.com/open-policy-agent/opa/1e32c796e8979b1bda2f768138500b1deb95ff24/LICENSE",
+      "license_sha256": "sha256:c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+      "artifacts": {
+        "linux/amd64": {
+          "url": "https://github.com/open-policy-agent/opa/releases/download/v1.19.0/opa_linux_amd64_static",
+          "sha256": "sha256:1dd5c5591ff856f5e20a1d66bafae9511ddf3c5552ed3b5070c70b2b6580ee3f"
+        },
+        "linux/arm64": {
+          "url": "https://github.com/open-policy-agent/opa/releases/download/v1.19.0/opa_linux_arm64_static",
+          "sha256": "sha256:06680087ed236c8c6aaa021660d83178db829a2ad30bdb3482481fada6791b2a"
+        }
+      }
+    }
+  ],
+  "product_profile": {
+    "products": ["aad"],
+    "environment": "commercial",
+    "login": false,
+    "skip_dns_over_https": true,
+    "version_check": false,
+    "telemetry": false,
+    "network_destinations": ["graph.microsoft.com:443"]
+  }
+}
