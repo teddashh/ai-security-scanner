@@ -160,7 +160,7 @@ ARG SOURCE_DATE_EPOCH
 
 LABEL org.opencontainers.image.title="ai-security-scanner Greenbone engine" \
       org.opencontainers.image.description="Signed-feed Greenbone scanner with exact per-grant loopback relays to the managed SOCKS gateway" \
-      org.opencontainers.image.source="https://github.com/teddashh/ai-security-scanner" \
+      org.opencontainers.image.source="https://github.com/greenbone/openvas-scanner" \
       org.opencontainers.image.revision="c3ae607ef632393b7919fb179d30b940d929f713" \
       org.opencontainers.image.version="23.50.21-feed202608240615-1" \
       org.opencontainers.image.licenses="GPL-2.0 AND ODbL-1.0 AND Apache-2.0" \
