@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "maester",
+  "plan_kind": "managed_build",
+  "support_date": "2026-08-24",
+  "publish_state": "published_managed_artifact",
+  "source": {
+    "repository": "https://github.com/maester365/maester",
+    "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+    "acquisition_source": "https://github.com/maester365/maester/commit/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+    "local_research_checkout": ".upstreams/maester365/maester"
+  },
+  "verified_upstream_artifact": null,
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
+    "tag": "2.0.0-1",
+    "digest": "sha256:c280e7438d88b83ff15b7dcd6bbafdd9fce6ca37053f3cd1198d6ab0a5f656d9"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32727238385",
+    "source_revision": "d92c22f1bdd39d858a17933e9046cdf8a4558a1a",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:7074f8919e8090d64df148e2b4d9955ab009f05d339303ee88dc34f096d5445a",
+      "linux/arm64": "sha256:027a07767fb2bb886a0bac2c9c25945f16517eb7d34ad7c52b984d2d60c7b3ce"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "maester-image-manifest-32727238385"
+  },
+  "build_recipe": {
+    "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+    "source_archive": {
+      "url": "https://github.com/maester365/maester/archive/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3.tar.gz",
+      "sha256": "sha256:e634e9bc5521e27adf2fd766ddf34f993a492e5ab8a5c49499c76d7bac69e43f"
+    },
+    "dependency_lock": {
+      "path": "engines/images/maester/dependencies.lock.json",
+      "sha256": "sha256:9e473a8b22eb627ec4a8d5c8165d4f329bb177a5b848c47121f607358360653a",
+      "powershell_modules": 2,
+      "native_dependencies": 0
+    },
+    "source_preparer": {
+      "path": "engines/images/m365-launcher/prepare_source.py",
+      "sha256": "sha256:8786bdbdb40142e3b25ce463eb1e65aaef95efef40b5f33edf7bb80c03be8415"
+    },
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.25.0-alpine3.22",
+        "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"
+      },
+      {
+        "repository": "python",
+        "tag": "3.11.13-slim-bookworm",
+        "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"
+      },
+      {
+        "repository": "mcr.microsoft.com/powershell",
+        "tag": "7.5-azurelinux-3.0",
+        "digest": "sha256:74b9b9d43da4d04c349bd358dd2db14ee01f0ab17769e402cf0ae4bd9fdd2f2b"
+      },
+      {
+        "repository": "mcr.microsoft.com/powershell",
+        "tag": "7.5-azurelinux-3.0-arm64",
+        "digest": "sha256:60d31793816646c4dd80b719b350ca68c8a53c000cbb2740655ddafe5e127903"
+      }
+    ],
+    "source_date_epoch": 1787030409,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "profile": {
+      "test_path": "/opt/ai-security-scanner/maester-tests/Maester/Entra",
+      "exclude_tags": ["MT.1025", "MT.1026", "MT.1027", "MT.1028", "MT.1030", "MT.1031", "MT.1182"],
+      "include_long_running": false,
+      "include_preview": false,
+      "version_check": false,
+      "telemetry": false
+    }
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/maester/Dockerfile",
+    "sha256": "sha256:a7e8090e62af4a83f83b10960e2d34096b6a11238bf15be5617c124930319c17",
+    "reason": null
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token, then invoke the fixed Graph-only Entra test profile without a shell.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-m365-launcher",
+    "launcher_sha256": "sha256:9db814b18999c58a9ebe2c62aa5e7fc33606e2f96547cb2141b4d1cbb76b9222",
+    "script": {
+      "path": "engines/images/maester/run-maester.ps1",
+      "sha256": "sha256:0388a130a71b5152efca5cf123f4e8cc863861b52ab98518c2be2c364eee3ccc"
+    }
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "network_mode": "managed_allowlist",
+    "network_destinations": ["graph.microsoft.com:443"],
+    "proxy": "AI_SECURITY_SCANNER_PROXY",
+    "updates": false,
+    "telemetry": false,
+    "stdin": false,
+    "credentials_path": "/run/ai-security-scanner/credentials.json",
+    "credential_key": "MSGRAPH_ACCESS_TOKEN",
+    "credential_max_lifetime_minutes": 65
+  },
+  "command": [
+    "--engine",
+    "maester",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/maester.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "MIT engine and Graph authentication source plus Apache-2.0 Pester notices are embedded in the managed image.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}
