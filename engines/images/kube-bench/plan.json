@@ -6,39 +6,53 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "managed_artifact_not_published",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/aquasecurity/kube-bench",
     "revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
     "acquisition_source": "https://github.com/aquasecurity/kube-bench/commit/9f133cb7509ce1dbedfc860e94474588000e25ac",
     "local_research_checkout": ".upstreams/aquasecurity/kube-bench"
   },
-  "verified_upstream_artifact": {
-    "repository": "aquasec/kube-bench",
-    "tag": "v0.16.0",
-    "digest": "sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679",
-    "signature_identity": null,
-    "entrypoint": [
-      "./entrypoint.sh"
-    ],
-    "verification": {
-      "method": "docker_buildx_imagetools_inspect",
-      "verified_at": "2026-08-24",
-      "source_association": "release_tag_only",
-      "artifact_source_revision": null
-    }
-  },
+  "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kube-bench",
-    "tag": null,
-    "digest": null
+    "tag": "0.16.0-1",
+    "digest": "sha256:3e2488cb42b3c0e4fbd9067faa4227526a3938980d36c5aaba7c4a699cea0295"
   },
   "build_recipe": {
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
-    "upstream_build_file": "Dockerfile",
+    "source_archive": {
+      "url": "https://github.com/aquasecurity/kube-bench/archive/9f133cb7509ce1dbedfc860e94474588000e25ac.tar.gz",
+      "sha256": "sha256:086873d32ee5b72f28d799df5310a8e8968dfb93df560462605ec49938af7da1"
+    },
+    "source_date_epoch": 1787042782,
     "target_platforms": [
       "linux/amd64",
       "linux/arm64"
+    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.3-alpine",
+        "digest": "sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d",
+        "uses": [
+          "build"
+        ]
+      },
+      {
+        "repository": "alpine",
+        "tag": "3.23",
+        "digest": "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+        "uses": [
+          "build",
+          "runtime"
+        ]
+      }
     ],
     "static_steps": [
       [
@@ -49,31 +63,25 @@
         "/out/kube-bench",
         "."
       ]
-    ],
-    "base_images": [
-      {
-        "repository": "aquasec/kube-bench",
-        "tag": "v0.16.0",
-        "digest": "sha256:75506f222d1eb6ce2a751a5533bdc0a3b54c898e2e49e7751d0ee22cfb862679",
-        "use": "reference_or_copy_source_only_after_license_and_entrypoint_review"
-      }
     ]
   },
   "dockerfile": {
-    "emitted": false,
-    "reason": "A final digest-pinned base/dependency closure and managed wrapper release do not yet exist; emitting a Dockerfile now would require a floating or unverifiable input."
+    "emitted": true,
+    "path": "engines/images/kube-bench/Dockerfile",
+    "sha256": "sha256:343005ba179affff94305a1e238122264bd5d05adec804c155f7d9869377e3cb",
+    "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Replace the upstream shell entrypoint and expose only a reviewed, read-only node-facts mount profile.",
-    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+    "strategy": "Accept only the reviewed immutable node-facts snapshot profile through the project-owned launcher.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
   },
   "command": [
-    "/usr/local/bin/ai-security-scanner-engine-entrypoint",
     "--engine",
     "kube-bench",
-    "--scope",
-    "/run/ai-security-scanner/scope.json",
+    "--workspace",
+    "/workspace",
     "--output",
     "/output"
   ],
@@ -85,13 +93,35 @@
   },
   "license": {
     "disposition": "allow",
-    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "rationale": "Apache-2.0 permits redistribution with notices; the immutable snapshot benchmark profile is included.",
     "source_offer_path": null
   },
-  "blockers": [
-    "final_image_digest_not_published",
-    "managed_non_shell_image_not_published",
-    "required_host_mount_profile_not_implemented",
-    "execution_wrapper_not_implemented"
-  ]
+  "blockers": [],
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+    ],
+    "network_mode": "disabled",
+    "network_destinations": [],
+    "cache_path": "/tmp/ai-security-scanner-cache",
+    "updates": false,
+    "telemetry": false
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:87d6c46342dd5d9da910d612fa39c43bce197ab41ebbdeabfa248a5a0d879173",
+      "linux/arm64": "sha256:0bffa921777da0c923ea555fb5ab6a7cdfb2676c635648298b52c4fe900e5ed2"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "kube-bench-image-evidence-32754480430-1",
+    "managed_smoke_evidence_sha256": "sha256:20bb64e12bb9ca4e5d57b6d9a93db12f5751ee5ba2f52982fac8aaf3a6d14afb"
+  }
 }

@@ -6,71 +6,88 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "managed_artifact_not_published",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/semgrep/semgrep",
     "revision": "a0c13f304151e531c7e7c00838076211a07a790c",
     "acquisition_source": "https://github.com/semgrep/semgrep/commit/a0c13f304151e531c7e7c00838076211a07a790c",
     "local_research_checkout": ".upstreams/semgrep/semgrep"
   },
-  "verified_upstream_artifact": {
-    "repository": "semgrep/semgrep",
-    "tag": "1.174.0",
-    "digest": "sha256:f1f7b71861c7b28b6e0f661225a2c4f58a484f5d0f182465c6d6b3b22f972ade",
-    "signature_identity": null,
-    "entrypoint": [],
-    "verification": {
-      "method": "docker_buildx_imagetools_inspect",
-      "verified_at": "2026-08-24",
-      "source_association": "attested_mismatch",
-      "artifact_source_revision": "33bca4bcee88023b5ca72b287029bc50f59f1977"
-    }
-  },
+  "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
-    "tag": null,
-    "digest": null
+    "tag": "1.174.0-1",
+    "digest": "sha256:7f95f2da43b4b2bf2611840456c04e0119332f812523e5a20fd442bc43643e89"
   },
   "build_recipe": {
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
-    "upstream_build_file": "Dockerfile",
+    "source_archive": {
+      "url": "https://github.com/semgrep/semgrep/archive/a0c13f304151e531c7e7c00838076211a07a790c.tar.gz",
+      "sha256": "sha256:7c5c5fe27b3b65ba1ac77f121c5d3df4398a1c06ab3d7e39fdef8884ca8494b5"
+    },
+    "source_date_epoch": 1787250577,
     "target_platforms": [
       "linux/amd64",
       "linux/arm64"
+    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "ghcr.io/astral-sh/uv",
+        "tag": "0.10.9",
+        "digest": "sha256:10902f58a1606787602f303954cea099626a4adb02acbac4c69920fe9d278f82",
+        "uses": [
+          "build"
+        ]
+      },
+      {
+        "repository": "golang",
+        "tag": "1.25.10-alpine",
+        "digest": "sha256:8d22e29d960bc50cd025d93d5b7c7d220b1ee9aa7a239b3c8f55a57e987e8d45",
+        "uses": [
+          "build"
+        ]
+      },
+      {
+        "repository": "alpine",
+        "tag": "3.23",
+        "digest": "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+        "uses": [
+          "build",
+          "runtime"
+        ]
+      }
     ],
     "static_steps": [
       [
         "make",
         "build-release"
       ]
-    ],
-    "base_images": [
-      {
-        "repository": "semgrep/semgrep",
-        "tag": "1.174.0",
-        "digest": "sha256:f1f7b71861c7b28b6e0f661225a2c4f58a484f5d0f182465c6d6b3b22f972ade",
-        "use": "reference_or_copy_source_only_after_license_and_entrypoint_review"
-      }
     ]
   },
   "dockerfile": {
-    "emitted": false,
-    "reason": "A final digest-pinned base/dependency closure and managed wrapper release do not yet exist; emitting a Dockerfile now would require a floating or unverifiable input."
+    "emitted": true,
+    "path": "engines/images/semgrep/Dockerfile",
+    "sha256": "sha256:b7fba636793a050fb87318e81891d088fc22d8c5f74da252b511369e950d751a",
+    "reason": null
   },
   "wrapper": {
-    "required": false,
-    "strategy": "The managed image can invoke semgrep directly against read-only /workspace once a rule pack is explicitly pinned.",
-    "entrypoint": null
+    "required": true,
+    "strategy": "Invoke the pinned source build through the project-owned launcher against only the read-only case workspace and embedded rule pack.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
   },
   "command": [
+    "--engine",
     "semgrep",
-    "scan",
-    "--json",
+    "--workspace",
+    "/workspace",
     "--output",
-    "/output/semgrep.json",
-    "--config",
-    "/workspace/semgrep-rules.yml",
-    "/workspace"
+    "/output"
   ],
   "output": {
     "primary_format": "json",
@@ -79,14 +96,36 @@
     "adapter_state": "released"
   },
   "license": {
-    "disposition": "license_review",
-    "rationale": "The open repository is LGPL-2.1-or-later, while the verified Docker image identifies a different proprietary source revision; do not redistribute it without review.",
-    "source_offer_path": null
+    "disposition": "source_offer",
+    "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source plus the project source offer.",
+    "source_offer_path": "engines/images/semgrep/SOURCE-OFFER.md"
   },
-  "blockers": [
-    "final_image_digest_not_published",
-    "managed_image_not_published",
-    "rule_pack_not_selected",
-    "license_review"
-  ]
+  "blockers": [],
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+    ],
+    "network_mode": "disabled",
+    "network_destinations": [],
+    "cache_path": "/tmp/ai-security-scanner-cache",
+    "updates": false,
+    "telemetry": false
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:2ea154a1e7b76bba672ae254e313582c6ee3a56bf03068c02923114504d0c794",
+      "linux/arm64": "sha256:9b9826bfed267d16091f6c5857e89a1158fefdaab3dc9582161f3456867ccb59"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "semgrep-image-evidence-32754480430-1",
+    "managed_smoke_evidence_sha256": "sha256:66c269fd590998aaf6a51c2431717df6bd30f686b14d325185b63fadda9c52bd"
+  }
 }

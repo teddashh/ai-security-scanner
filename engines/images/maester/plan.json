@@ -17,21 +17,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
     "tag": "2.0.0-1",
-    "digest": "sha256:c280e7438d88b83ff15b7dcd6bbafdd9fce6ca37053f3cd1198d6ab0a5f656d9"
+    "digest": "sha256:c3f080f60ac6c900ad87a673b1b8d14e87667017c71bb4f5dfdf77eabf1c4bcd"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32727238385",
-    "source_revision": "d92c22f1bdd39d858a17933e9046cdf8a4558a1a",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480491",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:7074f8919e8090d64df148e2b4d9955ab009f05d339303ee88dc34f096d5445a",
-      "linux/arm64": "sha256:027a07767fb2bb886a0bac2c9c25945f16517eb7d34ad7c52b984d2d60c7b3ce"
+      "linux/amd64": "sha256:dfb051235ed5072103e0152623f4e4fa7e057bb6f8770e1a17679827deaa259d",
+      "linux/arm64": "sha256:33a2b1f16ec54ded3b05220d00b95043adec229d0fd331cbb01b4d483aa5e4ea"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "maester-image-manifest-32727238385"
+    "evidence_artifact": "maester-image-evidence-32754480491-1"
   },
   "build_recipe": {
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -83,7 +83,15 @@
     ],
     "profile": {
       "test_path": "/opt/ai-security-scanner/maester-tests/Maester/Entra",
-      "exclude_tags": ["MT.1025", "MT.1026", "MT.1027", "MT.1028", "MT.1030", "MT.1031", "MT.1182"],
+      "exclude_tags": [
+        "MT.1025",
+        "MT.1026",
+        "MT.1027",
+        "MT.1028",
+        "MT.1030",
+        "MT.1031",
+        "MT.1182"
+      ],
       "include_long_running": false,
       "include_preview": false,
       "version_check": false,
@@ -110,7 +118,9 @@
     "non_root_user": "65532:65532",
     "read_only_rootfs": true,
     "network_mode": "managed_allowlist",
-    "network_destinations": ["graph.microsoft.com:443"],
+    "network_destinations": [
+      "graph.microsoft.com:443"
+    ],
     "proxy": "AI_SECURITY_SCANNER_PROXY",
     "updates": false,
     "telemetry": false,

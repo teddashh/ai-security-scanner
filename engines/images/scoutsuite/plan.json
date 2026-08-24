@@ -16,18 +16,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
     "tag": "5.14.0-1",
-    "digest": "sha256:248107a1675fd254de7ee0cbc52039c70adfc81ce9e2721f6ed5080581816c59"
+    "digest": "sha256:2035fadb2a4fc4bddd55b772c11ef0f0485ccbf855c20f1a7894b1f85b12e7df"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
-    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
-    "platforms": ["linux/amd64", "linux/arm64"],
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
+    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "platform_digests": {
-      "linux/amd64": "sha256:243d783c031ca9c14abb6f1baf918e0aad37d5298a86638c8f7583557f419ab8",
-      "linux/arm64": "sha256:fb73b12ab9bd4f3053b07e1073be364d4bfd7e93e4e3d6beb7319dfc3752aec0"
+      "linux/amd64": "sha256:711ed867650ce47b808084f09d9522e3020c9138cb128d9dc54d34b39bfe9894",
+      "linux/arm64": "sha256:b92c16f2d9022431b2b37796c2339dd3106e86e0c0fa2c7fe6a5b00eead5746a"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "scoutsuite-image-manifest-32729714389"
+    "evidence_artifact": "scoutsuite-image-evidence-32756618412-1"
   },
   "build_recipe": {
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -46,11 +49,26 @@
       "sha256": "sha256:4f13f6754931203b4564ab6f7e7480428c713315bc05a99eddea4733aff8413b"
     },
     "source_date_epoch": 1715333097,
-    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "base_images": [
-      {"repository": "golang", "tag": "1.25.0-alpine3.22", "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"},
-      {"repository": "ghcr.io/astral-sh/uv", "tag": "0.11.0", "digest": "sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b73d0e6db83ef82ff99969baf"},
-      {"repository": "python", "tag": "3.11.13-slim-bookworm", "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"}
+      {
+        "repository": "golang",
+        "tag": "1.25.0-alpine3.22",
+        "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"
+      },
+      {
+        "repository": "ghcr.io/astral-sh/uv",
+        "tag": "0.11.0",
+        "digest": "sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b73d0e6db83ef82ff99969baf"
+      },
+      {
+        "repository": "python",
+        "tag": "3.11.13-slim-bookworm",
+        "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"
+      }
     ]
   },
   "dockerfile": {
@@ -77,9 +95,12 @@
     "telemetry": false
   },
   "command": [
-    "--engine", "scoutsuite",
-    "--scope", "/run/ai-security-scanner/scope.json",
-    "--output", "/output"
+    "--engine",
+    "scoutsuite",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
   ],
   "output": {
     "primary_format": "json",

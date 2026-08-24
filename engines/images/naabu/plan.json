@@ -16,21 +16,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
     "tag": "2.6.1-2",
-    "digest": "sha256:327640113baa306b574bcc81e092636a6621757a0c55f8850de5735ade2021f6"
+    "digest": "sha256:eb61839a467209042792b1c0c5621abbd582b819523568bc4ac0cf24edc23050"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32725003555",
-    "source_revision": "ba2e679e9d6736353bfc8a55ffbf0f81fd911bc5",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480535",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:a864c52d302787919a42753b45eb0738fa44b08cc94b2d9c933c9868da094149",
-      "linux/arm64": "sha256:a478273684d4145f05b1ef4e550563f4803671de5c4d22b9a8bf3474f176e79d"
+      "linux/amd64": "sha256:a1b3568caf16cf4433b5f732c25709f8850bc39d2484460d6db1fda12eed3d1f",
+      "linux/arm64": "sha256:a9014c650763f9fafe3f732a87c0a0a933dd3aab293a1bd22a7e116674a63cc2"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "naabu-image-manifest-32725003555"
+    "evidence_artifact": "naabu-image-evidence-32754480535-1"
   },
   "build_recipe": {
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",

@@ -16,21 +16,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
     "tag": "3.11.1-2",
-    "digest": "sha256:960b8633464dea20202d21a0a431524f4ae67437fa66ef55bfc19e0b99cc564a"
+    "digest": "sha256:efa5a2e40fc4a6063faf69c941a9be4b0ebf7d1595f07941a9c9020924b3daac"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32725003555",
-    "source_revision": "ba2e679e9d6736353bfc8a55ffbf0f81fd911bc5",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480535",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:21bd66c3ee019de7e341c452451d9337f5916aac6a656c193a8acde14e827d74",
-      "linux/arm64": "sha256:9aa461e1b1a7a7b9d680d4f5c1ff47da637afd08b5eb9a17ec29d54622493796"
+      "linux/amd64": "sha256:370ebb4b284b479bdd6ec3c5dda2bc56abbb514dfb64cc6b06e2484942e84db2",
+      "linux/arm64": "sha256:fd72e465688d8ef7dc0c3a435ce904ea92584a4284421bd05c48de3848b27414"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "nuclei-image-manifest-32725003555"
+    "evidence_artifact": "nuclei-image-evidence-32754480535-1"
   },
   "build_recipe": {
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",

@@ -1,56 +1,78 @@
 {
   "schema_version": "1.0.0",
   "engine_id": "trivy",
-  "plan_kind": "upstream_image",
+  "plan_kind": "managed_build",
   "knowledge_date": "2026-08-24",
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "verified_upstream_artifact",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/aquasecurity/trivy",
     "revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
     "acquisition_source": "https://github.com/aquasecurity/trivy/commit/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
     "local_research_checkout": ".upstreams/aquasecurity/trivy"
   },
-  "verified_upstream_artifact": {
-    "repository": "aquasec/trivy",
-    "tag": "0.74.0",
-    "digest": "sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969",
-    "signature_identity": null,
-    "entrypoint": [
-      "trivy"
-    ],
-    "verification": {
-      "method": "docker_buildx_imagetools_inspect",
-      "verified_at": "2026-08-24",
-      "source_association": "attested_match",
-      "artifact_source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994"
-    }
-  },
+  "verified_upstream_artifact": null,
   "final_artifact": {
-    "repository": "aquasec/trivy",
-    "tag": "0.74.0",
-    "digest": "sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trivy",
+    "tag": "0.74.0-1",
+    "digest": "sha256:9c44e2e9730e5f167991e13f67a6f75a671e04b391c037420597032b84f60826"
   },
-  "build_recipe": null,
+  "build_recipe": {
+    "source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
+    "source_archive": {
+      "url": "https://github.com/aquasecurity/trivy/archive/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994.tar.gz",
+      "sha256": "sha256:285594b257470eb444fd2836be95a835565ee600382320c977b3993d8efbb767"
+    },
+    "source_date_epoch": 1786703098,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.3-alpine",
+        "digest": "sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d",
+        "uses": [
+          "build"
+        ]
+      }
+    ],
+    "static_steps": [
+      [
+        "go",
+        "build",
+        "-mod=readonly",
+        "-trimpath"
+      ]
+    ]
+  },
   "dockerfile": {
-    "emitted": false,
-    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+    "emitted": true,
+    "path": "engines/images/trivy/Dockerfile",
+    "sha256": "sha256:3e03375b703a23f8af59f4f9709072ffdd50f79502bbe91d03decfe91b571c2c",
+    "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Materialize a separately digest-pinned vulnerability database and force update checks off before scanning.",
-    "entrypoint": "filesystem"
+    "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
   },
   "command": [
-    "filesystem",
-    "--format",
-    "json",
+    "--engine",
+    "trivy",
+    "--workspace",
+    "/workspace",
     "--output",
-    "/output/trivy.json",
-    "--skip-db-update",
-    "/workspace"
+    "/output"
   ],
   "output": {
     "primary_format": "json",
@@ -60,11 +82,35 @@
   },
   "license": {
     "disposition": "allow",
-    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "rationale": "Apache-2.0 permits redistribution with notices; the embedded database notice and immutable manifest are included.",
     "source_offer_path": null
   },
-  "blockers": [
-    "vulnerability_database_digest_not_published",
-    "execution_wrapper_not_implemented"
-  ]
+  "blockers": [],
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+    ],
+    "network_mode": "disabled",
+    "network_destinations": [],
+    "cache_path": "/tmp/ai-security-scanner-cache",
+    "updates": false,
+    "telemetry": false
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:cb5569464486b34be1b5e8cf1ba5fec7195a0d3c38457c8085b527bbe7e83332",
+      "linux/arm64": "sha256:4bad61c98caa4648a164c0142e94cd59c2b26fb71aebf5c5bdff614f5c8b71cd"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "trivy-image-evidence-32754480430-1",
+    "managed_smoke_evidence_sha256": "sha256:43d785f905deb088f350b89b3ec506154824109ea957b281e23da9f278e95466"
+  }
 }

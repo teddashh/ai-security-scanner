@@ -6,72 +6,101 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "managed_artifact_not_published",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/greenbone/openvas-scanner",
-    "revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
-    "acquisition_source": "https://github.com/greenbone/openvas-scanner/commit/dcd2be55045b6b63b4f954504d76cc26a09b583e",
-    "local_research_checkout": ".upstreams/greenbone/openvas-scanner"
+    "revision": "c3ae607ef632393b7919fb179d30b940d929f713",
+    "acquisition_source": "https://github.com/greenbone/openvas-scanner/commit/c3ae607ef632393b7919fb179d30b940d929f713",
+    "local_research_checkout": ".upstreams/greenbone/openvas-scanner-23.50.21"
   },
-  "verified_upstream_artifact": {
-    "repository": "ghcr.io/greenbone/openvas-scanner",
-    "tag": "23.50.20",
-    "digest": "sha256:f045254d796b1a8553168b9a04c01b366b859e368c16fc48dc63eff3293d95db",
-    "signature_identity": null,
-    "entrypoint": [],
-    "verification": {
-      "method": "docker_buildx_imagetools_inspect",
-      "verified_at": "2026-08-24",
-      "source_association": "attested_match",
-      "artifact_source_revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e"
-    }
-  },
+  "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
-    "tag": null,
-    "digest": null
+    "tag": "23.50.21-feed202608240615-1",
+    "digest": "sha256:35404e619a14027291e73f9048c3b3a3d070ca42aae0fe3a24ce86087a7ce381"
   },
   "build_recipe": {
-    "source_revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
-    "upstream_build_file": ".docker/prod.Dockerfile",
+    "source_revision": "c3ae607ef632393b7919fb179d30b940d929f713",
+    "source_archive": {
+      "url": "https://github.com/greenbone/openvas-scanner/archive/c3ae607ef632393b7919fb179d30b940d929f713.tar.gz",
+      "sha256": "sha256:47cbc7fbff0e19c4533f48c6e7287298f1466d1556f0fc4a7177c37506a3d5e8"
+    },
+    "source_date_epoch": 1787573675,
     "target_platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
-    "static_steps": [
-      [
-        "cmake",
-        "-S",
-        ".",
-        "-B",
-        "/build/openvas"
-      ],
-      [
-        "cmake",
-        "--build",
-        "/build/openvas"
-      ]
-    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
     "base_images": [
       {
-        "repository": "ghcr.io/greenbone/openvas-scanner",
-        "tag": "23.50.20",
-        "digest": "sha256:f045254d796b1a8553168b9a04c01b366b859e368c16fc48dc63eff3293d95db",
-        "use": "reference_or_copy_source_only_after_license_and_entrypoint_review"
+        "repository": "golang",
+        "tag": "1.26.0-alpine",
+        "digest": "sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5",
+        "uses": [
+          "build"
+        ]
+      },
+      {
+        "repository": "registry.community.greenbone.net/community/vulnerability-tests",
+        "tag": "b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
+        "digest": "sha256:419438986cc4bc88c9a9c7960b519033c9ef1827241457c9acaca3b497a0183c",
+        "uses": [
+          "feed"
+        ]
+      },
+      {
+        "repository": "registry.community.greenbone.net/community/notus-data",
+        "tag": "4635b37aecd2d968680c7609a7fb61e5d780ce93",
+        "digest": "sha256:73a309ed3dab7a5646952664434b425e2162909c7f92ed55f0abcfc37e211def",
+        "uses": [
+          "notus"
+        ]
+      },
+      {
+        "repository": "rust",
+        "tag": "1.98.0-bookworm",
+        "digest": "sha256:94e9efa4033213dbb70d4f665527e7ece3944ddb7ba1dd2e43f6fd6e2490af58",
+        "uses": [
+          "build"
+        ]
+      },
+      {
+        "repository": "registry.community.greenbone.net/community/openvas-scanner",
+        "tag": "23.50.21",
+        "digest": "sha256:ff7a14572583cc0e83ae0398a6c462f0c6d180c1bae6d54acbdd0df94f5446c6",
+        "uses": [
+          "runtime"
+        ]
       }
+    ],
+    "static_steps": [
+      [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--bin",
+        "openvasd"
+      ]
     ]
   },
   "dockerfile": {
-    "emitted": false,
-    "reason": "A final digest-pinned base/dependency closure and managed wrapper release do not yet exist; emitting a Dockerfile now would require a floating or unverifiable input."
+    "emitted": true,
+    "path": "engines/images/greenbone/Dockerfile",
+    "sha256": "sha256:29fa5ad7a36fdf225c7e0aa59d22f1506f64665993208c8417477fbcc31ee51f",
+    "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Broker work to an isolated, version-locked GVM service profile; a single openvas-scanner image is not a complete runnable engine.",
-    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+    "strategy": "Run the direct scanner once per exact grant and relay only the authorized original target through the managed SOCKS gateway.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:8bb128bbaabb90f6ebe21447e70c538b9ff232ce5bc45848f0e2015e6fe46ed5"
   },
   "command": [
-    "/usr/local/bin/ai-security-scanner-engine-entrypoint",
     "--engine",
     "greenbone",
     "--scope",
@@ -86,15 +115,39 @@
     "adapter_state": "released"
   },
   "license": {
-    "disposition": "license_review",
-    "rationale": "The GVM/OpenVAS multi-component GPL/AGPL distribution and feed terms require release review.",
-    "source_offer_path": null
+    "disposition": "source_offer",
+    "rationale": "The image carries the exact GPL-covered scanner source, source-form signed feed snapshot, license notices, project patches, and a three-year corresponding-source offer.",
+    "source_offer_path": "engines/images/greenbone/SOURCE-OFFER.md"
   },
-  "blockers": [
-    "final_image_digest_not_published",
-    "multi_container_profile_not_published",
-    "feed_snapshot_not_pinned",
-    "license_review",
-    "execution_wrapper_not_implemented"
-  ]
+  "blockers": [],
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+    ],
+    "network_mode": "managed_allowlist",
+    "network_destinations": [
+      "authorized target addresses"
+    ],
+    "proxy": "AI_SECURITY_SCANNER_PROXY",
+    "updates": false,
+    "telemetry": false,
+    "per_grant_target_execution": true
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32763152941",
+    "source_revision": "69f05d86d5002782196f8e161edbaa300e03bd0c",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:83302a06b50e02b28cc046702b36de743a906548cb73a7e7e18fe8db31b573bd",
+      "linux/arm64": "sha256:1bf516fcf263836e80ccfb0ef20978d3d1f3a21cbad843bdc30a371507f83072"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "greenbone-image-evidence-32763152941-1",
+    "managed_smoke_evidence_sha256": "sha256:fb603d0ff5af51568d14b90b44b8fe693d5a841784e055a17443f6f13c8eddc4"
+  }
 }

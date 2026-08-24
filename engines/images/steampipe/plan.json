@@ -16,18 +16,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
     "tag": "2.4.5-1",
-    "digest": "sha256:5992ff9ec73745938bbea55a65670298c2d4de7d00ede0c783a44f6f35f1c8fd"
+    "digest": "sha256:e5bb87994921c23d5fb2771b779a7dff1c2e3fa822ac99bc6f9b48a80f680d9d"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
-    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
-    "platforms": ["linux/amd64", "linux/arm64"],
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
+    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "platform_digests": {
-      "linux/amd64": "sha256:34956323d7c16be6f9c35d32c2f88e976a7f5e840cadd570b68664de8832a1c1",
-      "linux/arm64": "sha256:443580ec472f77152d1ad0c38235da2eb9bd0f33d2194de1ada30b3374ecd9d7"
+      "linux/amd64": "sha256:cd0091a789c807fe257dc9b56ff843e33e6951fc52eba6be461b0ca9d7ebf115",
+      "linux/arm64": "sha256:c61126e79f7958e7ec545d2c70fc9e76b84c664cf5b7bebcbbfe1d0762e1dd38"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "steampipe-image-manifest-32729714389"
+    "evidence_artifact": "steampipe-image-evidence-32756618412-1"
   },
   "build_recipe": {
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -52,10 +55,21 @@
       "oci_digest": "sha256:62b654db44ca6f7f6894e8f53e5dcad9530d356253273ebf05f92109d5ca7457"
     },
     "source_date_epoch": 1786368462,
-    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "base_images": [
-      {"repository": "golang", "tag": "1.26.5-alpine3.23", "digest": "sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc"},
-      {"repository": "debian", "tag": "bookworm-slim", "digest": "sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"}
+      {
+        "repository": "golang",
+        "tag": "1.26.5-alpine3.23",
+        "digest": "sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc"
+      },
+      {
+        "repository": "debian",
+        "tag": "bookworm-slim",
+        "digest": "sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"
+      }
     ]
   },
   "dockerfile": {
@@ -75,14 +89,20 @@
     "read_only_rootfs": true,
     "tmpfs_noexec": true,
     "network_mode": "managed_allowlist",
-    "network_destinations": ["iam.amazonaws.com:443", "sts.us-east-1.amazonaws.com:443"],
+    "network_destinations": [
+      "iam.amazonaws.com:443",
+      "sts.us-east-1.amazonaws.com:443"
+    ],
     "updates": false,
     "telemetry": false
   },
   "command": [
-    "--engine", "steampipe",
-    "--scope", "/run/ai-security-scanner/scope.json",
-    "--output", "/output"
+    "--engine",
+    "steampipe",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
   ],
   "output": {
     "primary_format": "json",

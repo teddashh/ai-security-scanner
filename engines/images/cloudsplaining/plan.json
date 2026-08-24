@@ -16,18 +16,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
     "tag": "0.9.1-1",
-    "digest": "sha256:3bd74803510a3c5a3e0ec1534f2f9539d3a509c0c0ec85ba5f1aee9036580752"
+    "digest": "sha256:f7d6185a45559619350728c09c6410435c4a117c35dd2a6ee4605421fc0364fb"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
-    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
-    "platforms": ["linux/amd64", "linux/arm64"],
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
+    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "platform_digests": {
-      "linux/amd64": "sha256:ab4934cec7fe35fe2cc73c8baa56522c516e254537ba43dea87983f24094c457",
-      "linux/arm64": "sha256:901ad68171b1b91f31062510bca7a653b41dbcc15760f9bc43436f1ce3290214"
+      "linux/amd64": "sha256:851e6644787c902a616c7115a069d522f7ab7e9add5caa7f0fcb72a72cb35fb0",
+      "linux/arm64": "sha256:b2ca4faa472390762b68dbd993079572403863c75ef5080ea922e26f1523ede0"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "cloudsplaining-image-manifest-32729714389"
+    "evidence_artifact": "cloudsplaining-image-evidence-32756618412-1"
   },
   "build_recipe": {
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
@@ -40,11 +43,26 @@
       "sha256": "sha256:2405aeed08011b0662a08248079be8be71a3b0025fc141fba603de309c821261"
     },
     "source_date_epoch": 1781480779,
-    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "base_images": [
-      {"repository": "golang", "tag": "1.25.0-alpine3.22", "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"},
-      {"repository": "ghcr.io/astral-sh/uv", "tag": "0.11.0", "digest": "sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b73d0e6db83ef82ff99969baf"},
-      {"repository": "python", "tag": "3.11.13-slim-bookworm", "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"}
+      {
+        "repository": "golang",
+        "tag": "1.25.0-alpine3.22",
+        "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"
+      },
+      {
+        "repository": "ghcr.io/astral-sh/uv",
+        "tag": "0.11.0",
+        "digest": "sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b73d0e6db83ef82ff99969baf"
+      },
+      {
+        "repository": "python",
+        "tag": "3.11.13-slim-bookworm",
+        "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"
+      }
     ]
   },
   "dockerfile": {
@@ -62,14 +80,20 @@
     "non_root_user": "65532:65532",
     "read_only_rootfs": true,
     "network_mode": "managed_allowlist",
-    "network_destinations": ["iam.amazonaws.com:443", "sts.amazonaws.com:443"],
+    "network_destinations": [
+      "iam.amazonaws.com:443",
+      "sts.amazonaws.com:443"
+    ],
     "updates": false,
     "telemetry": false
   },
   "command": [
-    "--engine", "cloudsplaining",
-    "--scope", "/run/ai-security-scanner/scope.json",
-    "--output", "/output"
+    "--engine",
+    "cloudsplaining",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
   ],
   "output": {
     "primary_format": "json",

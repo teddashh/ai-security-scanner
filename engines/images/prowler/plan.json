@@ -17,24 +17,29 @@
     "repository": "public.ecr.aws/prowler-cloud/prowler",
     "tag": "5.39.1",
     "digest": "sha256:5752ad690fa6ab32c9f2c9031db29d45af111459373d70212638d00efd4834e0",
-    "entrypoint": ["/home/prowler/.venv/bin/prowler"],
+    "entrypoint": [
+      "/home/prowler/.venv/bin/prowler"
+    ],
     "source_association": "attested_match"
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
     "tag": "5.39.1-1",
-    "digest": "sha256:892e432630bd5ff2470175a30e5dbb932d02419e7a7f8fb2a60d658ca8a826b0"
+    "digest": "sha256:4f90d576cae9190924f736a68775fade2563151980eff88281fa179714514664"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
-    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
-    "platforms": ["linux/amd64", "linux/arm64"],
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
+    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "platform_digests": {
-      "linux/amd64": "sha256:12025cecd9ce622f1ed8fe728378e49c0fd1200b4ce3be708938ac9cc0cc6c63",
-      "linux/arm64": "sha256:1df3499357bafd7fe3aeff67901fc165e34687c39063f750d45679a54878f005"
+      "linux/amd64": "sha256:a2d27de1ee3d1bd21b2816fb83a386578209319d52f4a9b3d722899ec2bccb49",
+      "linux/arm64": "sha256:af1febcce1950ca1cb086e13698f9b2406ac75549b91b983a50dc60447849688"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "prowler-image-manifest-32729714389"
+    "evidence_artifact": "prowler-image-evidence-32756618412-1"
   },
   "dockerfile": {
     "emitted": true,
@@ -61,9 +66,12 @@
     "telemetry": false
   },
   "command": [
-    "--engine", "prowler",
-    "--scope", "/run/ai-security-scanner/scope.json",
-    "--output", "/output"
+    "--engine",
+    "prowler",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
   ],
   "output": {
     "primary_format": "ocsf-json",

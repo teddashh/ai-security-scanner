@@ -16,18 +16,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
     "tag": "2.0.31-aws9.2.0-1",
-    "digest": "sha256:93f89b96b3a123a1055e5f11a1cce6412404c5e4115cceb6ef5b7aa16c54c488"
+    "digest": "sha256:329b662714311d83dfccd460bbb0b4efa61b02a90c3efdabddfb320970d967fe"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
-    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
-    "platforms": ["linux/amd64", "linux/arm64"],
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
+    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "platform_digests": {
-      "linux/amd64": "sha256:a59cf1a86b1ac09a0d571a34158ec612cf407fd3de50b4a6557f05740d4a5365",
-      "linux/arm64": "sha256:c1b05bc61c2aebd17a42e2039f1037178eee7ec59dd61c95e0e297690e0ce68a"
+      "linux/amd64": "sha256:f57bdd98b7c09952b5b34019f2a4aa896431a8df3b3fd97780f2f08b807b00ee",
+      "linux/arm64": "sha256:c9cf53268fafe48dcfd9652234da2a37dc7af72cad5fda6fa7f5aa2974b94049"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "cloudquery-image-manifest-32729714389"
+    "evidence_artifact": "cloudquery-image-evidence-32756618412-1"
   },
   "build_recipe": {
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
@@ -54,7 +57,10 @@
       "sha256": "sha256:853f96af454192c83954d774f04eb569e7eff2d94cb948afd8fe29df207d27a2"
     },
     "source_date_epoch": 1672928198,
-    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
     "base_images": [
       {
         "repository": "golang",
@@ -123,9 +129,12 @@
     "telemetry": false
   },
   "command": [
-    "--engine", "cloudquery",
-    "--scope", "/run/ai-security-scanner/scope.json",
-    "--output", "/output"
+    "--engine",
+    "cloudquery",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
   ],
   "output": {
     "primary_format": "jsonl",

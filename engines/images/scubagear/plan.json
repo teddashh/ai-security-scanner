@@ -17,21 +17,21 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
     "tag": "1.8.0-1",
-    "digest": "sha256:88d2af500b725b4c06586a2d4f0b152833e1b006e88b0617ae1e43c176a81a25"
+    "digest": "sha256:0d43f9e053021c1853fc06ea1dd3c962cd02c023e81a02edef56269cedfb0e33"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32727238385",
-    "source_revision": "d92c22f1bdd39d858a17933e9046cdf8a4558a1a",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480491",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:b60be3f840a731e63c4c5cec7ccf65b6bf81e27d8625887d952322d9626750ad",
-      "linux/arm64": "sha256:138098cb013e283babf00464b1ec7df4c7df7914da6799d80eb50174ecd5bb00"
+      "linux/amd64": "sha256:067ea5452b5db34cf057a7fab329a629673d2369a29819cc5c75c7a6ce908f2e",
+      "linux/arm64": "sha256:901184fedcd066316bf0769b86fe0e46f9af1a5a16f37d3b7eb7196c1cb0bb5d"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "scubagear-image-manifest-32727238385"
+    "evidence_artifact": "scubagear-image-evidence-32754480491-1"
   },
   "build_recipe": {
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -82,7 +82,9 @@
       "linux/arm64"
     ],
     "profile": {
-      "products": ["aad"],
+      "products": [
+        "aad"
+      ],
       "environment": "commercial",
       "login": false,
       "skip_dns_over_https": true,
@@ -110,7 +112,9 @@
     "non_root_user": "65532:65532",
     "read_only_rootfs": true,
     "network_mode": "managed_allowlist",
-    "network_destinations": ["graph.microsoft.com:443"],
+    "network_destinations": [
+      "graph.microsoft.com:443"
+    ],
     "proxy": "AI_SECURITY_SCANNER_PROXY",
     "updates": false,
     "telemetry": false,

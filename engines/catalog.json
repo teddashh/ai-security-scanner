@@ -5,7 +5,9 @@
     "display_name": "CloudQuery",
     "category": "cloud_inventory",
     "description": "Collects a fixed seven-table AWS IAM inventory with the last fully public CloudQuery CLI and local provider-plugin source closure.",
-    "supported_providers": ["aws"],
+    "supported_providers": [
+      "aws"
+    ],
     "repository_url": "https://github.com/cloudquery/cloudquery",
     "homepage_url": "https://www.cloudquery.io/",
     "license_spdx": "MPL-2.0",
@@ -13,7 +15,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
       "tag": "2.0.31-aws9.2.0-1",
-      "digest": "sha256:93f89b96b3a123a1055e5f11a1cce6412404c5e4115cceb6ef5b7aa16c54c488",
+      "digest": "sha256:329b662714311d83dfccd460bbb0b4efa61b02a90c3efdabddfb320970d967fe",
       "signature_identity": null
     },
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
@@ -83,7 +85,7 @@
         "id": "ai-security-scanner:cloudquery",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
         "release_state": "released"
       }
     },
@@ -140,7 +142,9 @@
     "display_name": "Steampipe",
     "category": "cloud_inventory",
     "description": "Queries the AWS IAM inventory subset through a source-built, preseeded Steampipe plugin.",
-    "supported_providers": ["aws"],
+    "supported_providers": [
+      "aws"
+    ],
     "repository_url": "https://github.com/turbot/steampipe",
     "homepage_url": "https://steampipe.io/",
     "license_spdx": "AGPL-3.0-only",
@@ -148,7 +152,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
       "tag": "2.4.5-1",
-      "digest": "sha256:5992ff9ec73745938bbea55a65670298c2d4de7d00ede0c783a44f6f35f1c8fd",
+      "digest": "sha256:e5bb87994921c23d5fb2771b779a7dff1c2e3fa822ac99bc6f9b48a80f680d9d",
       "signature_identity": null
     },
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -215,7 +219,7 @@
         "id": "ai-security-scanner:steampipe",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
         "release_state": "released"
       }
     },
@@ -271,7 +275,9 @@
     "display_name": "Prowler",
     "category": "cloud_configuration",
     "description": "Assesses AWS IAM configuration with the scanner-owned us-east-1 profile.",
-    "supported_providers": ["aws"],
+    "supported_providers": [
+      "aws"
+    ],
     "repository_url": "https://github.com/prowler-cloud/prowler",
     "homepage_url": "https://prowler.com/",
     "license_spdx": "Apache-2.0",
@@ -279,7 +285,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
       "tag": "5.39.1-1",
-      "digest": "sha256:892e432630bd5ff2470175a30e5dbb932d02419e7a7f8fb2a60d658ca8a826b0",
+      "digest": "sha256:4f90d576cae9190924f736a68775fade2563151980eff88281fa179714514664",
       "signature_identity": null
     },
     "source_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
@@ -349,7 +355,7 @@
         "id": "ai-security-scanner:prowler",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
         "release_state": "released"
       }
     },
@@ -407,7 +413,9 @@
     "display_name": "ScoutSuite",
     "category": "cloud_configuration",
     "description": "Audits the AWS IAM configuration subset with a bounded JSON-only report.",
-    "supported_providers": ["aws"],
+    "supported_providers": [
+      "aws"
+    ],
     "repository_url": "https://github.com/nccgroup/ScoutSuite",
     "homepage_url": null,
     "license_spdx": "GPL-2.0-only",
@@ -415,7 +423,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
       "tag": "5.14.0-1",
-      "digest": "sha256:248107a1675fd254de7ee0cbc52039c70adfc81ce9e2721f6ed5080581816c59",
+      "digest": "sha256:2035fadb2a4fc4bddd55b772c11ef0f0485ccbf855c20f1a7894b1f85b12e7df",
       "signature_identity": null
     },
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -484,7 +492,7 @@
         "id": "ai-security-scanner:scoutsuite",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
         "release_state": "released"
       }
     },
@@ -541,7 +549,9 @@
     "display_name": "Cloudsplaining",
     "category": "identity_and_access",
     "description": "Downloads and analyzes AWS IAM authorization details for excessive privileges.",
-    "supported_providers": ["aws"],
+    "supported_providers": [
+      "aws"
+    ],
     "repository_url": "https://github.com/salesforce/cloudsplaining",
     "homepage_url": null,
     "license_spdx": "BSD-3-Clause",
@@ -549,7 +559,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
       "tag": "0.9.1-1",
-      "digest": "sha256:3bd74803510a3c5a3e0ec1534f2f9539d3a509c0c0ec85ba5f1aee9036580752",
+      "digest": "sha256:f7d6185a45559619350728c09c6410435c4a117c35dd2a6ee4605421fc0364fb",
       "signature_identity": null
     },
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
@@ -617,7 +627,7 @@
         "id": "ai-security-scanner:cloudsplaining",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
         "release_state": "released"
       }
     },
@@ -673,7 +683,9 @@
     "display_name": "ScubaGear",
     "category": "microsoft365",
     "description": "Assesses Microsoft Entra ID against the pinned CISA ScubaGear AAD baseline through Microsoft Graph.",
-    "supported_providers": ["microsoft365"],
+    "supported_providers": [
+      "microsoft365"
+    ],
     "repository_url": "https://github.com/cisagov/ScubaGear",
     "homepage_url": "https://www.cisa.gov/resources-tools/services/secure-cloud-business-applications-scuba-project",
     "license_spdx": "CC0-1.0",
@@ -681,7 +693,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
       "tag": "1.8.0-1",
-      "digest": "sha256:88d2af500b725b4c06586a2d4f0b152833e1b006e88b0617ae1e43c176a81a25",
+      "digest": "sha256:0d43f9e053021c1853fc06ea1dd3c962cd02c023e81a02edef56269cedfb0e33",
       "signature_identity": null
     },
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -749,7 +761,7 @@
         "id": "ai-security-scanner:scubagear",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -804,7 +816,9 @@
     "display_name": "Maester",
     "category": "microsoft365",
     "description": "Runs the pinned Graph-only Maester Microsoft Entra test profile for one authorized tenant.",
-    "supported_providers": ["microsoft365"],
+    "supported_providers": [
+      "microsoft365"
+    ],
     "repository_url": "https://github.com/maester365/maester",
     "homepage_url": "https://maester.dev/",
     "license_spdx": "MIT",
@@ -812,7 +826,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
       "tag": "2.0.0-1",
-      "digest": "sha256:c280e7438d88b83ff15b7dcd6bbafdd9fce6ca37053f3cd1198d6ab0a5f656d9",
+      "digest": "sha256:c3f080f60ac6c900ad87a673b1b8d14e87667017c71bb4f5dfdf77eabf1c4bcd",
       "signature_identity": null
     },
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -881,7 +895,7 @@
         "id": "ai-security-scanner:maester",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -944,7 +958,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
       "tag": "2.6.1-2",
-      "digest": "sha256:327640113baa306b574bcc81e092636a6621757a0c55f8850de5735ade2021f6",
+      "digest": "sha256:eb61839a467209042792b1c0c5621abbd582b819523568bc4ac0cf24edc23050",
       "signature_identity": null
     },
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
@@ -1013,7 +1027,7 @@
         "id": "ai-security-scanner:naabu",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -1076,7 +1090,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
       "tag": "1.10.0-2",
-      "digest": "sha256:0f847437080a6af86c3adab078f5937da1dc9c29027e1fd0eccf32004c7d8d0b",
+      "digest": "sha256:4428ff0a76d8cc13c1afd4930c98ea3b5f764800f86072f430eceb60afe672f8",
       "signature_identity": null
     },
     "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
@@ -1146,7 +1160,7 @@
         "id": "ai-security-scanner:httpx",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -1209,7 +1223,7 @@
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
       "tag": "3.11.1-2",
-      "digest": "sha256:960b8633464dea20202d21a0a431524f4ae67437fa66ef55bfc19e0b99cc564a",
+      "digest": "sha256:efa5a2e40fc4a6063faf69c941a9be4b0ebf7d1595f07941a9c9020924b3daac",
       "signature_identity": null
     },
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
@@ -1280,7 +1294,7 @@
         "id": "ai-security-scanner:nuclei",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -1338,12 +1352,17 @@
     "supported_providers": [],
     "repository_url": "https://github.com/greenbone/openvas-scanner",
     "homepage_url": "https://greenbone.github.io/docs/latest/",
-    "license_spdx": "GPL-2.0-only AND AGPL-3.0-or-later",
-    "distribution_mode": "build_from_pinned_source",
-    "image": null,
-    "source_revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
-    "engine_version": "23.50.20",
-    "rule_version": null,
+    "license_spdx": "GPL-2.0-only AND ODbL-1.0 AND Apache-2.0",
+    "distribution_mode": "pull_pinned_image",
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
+      "tag": "23.50.21-feed202608240615-1",
+      "digest": "sha256:35404e619a14027291e73f9048c3b3a3d070ca42aae0fe3a24ce86087a7ce381",
+      "signature_identity": null
+    },
+    "source_revision": "c3ae607ef632393b7919fb179d30b940d929f713",
+    "engine_version": "23.50.21",
+    "rule_version": "b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
     "adapter_version": "0.1.0",
     "supported_asset_kinds": [
       "ip_address",
@@ -1358,14 +1377,12 @@
     "estimated_memory_mb": 8192,
     "estimated_disk_mb": 30000,
     "network_destinations": [
-      "authorized target addresses",
-      "Greenbone Community Feed"
+      "authorized target addresses"
     ],
     "output_formats": [
       "xml"
     ],
     "command": [
-      "/usr/local/bin/ai-security-scanner-engine-entrypoint",
       "--engine",
       "greenbone",
       "--scope",
@@ -1373,44 +1390,44 @@
       "--output",
       "/output"
     ],
-    "status": "license_review",
+    "status": "integrated",
     "notices": [
-      "The complete stack includes multiple repositories and separately licensed feed data.",
-      "The GVM/OpenVAS multi-component GPL/AGPL distribution and feed terms require release review.",
-      "Not executable until compatibility.runnable is true and status is integrated."
+      "Active external scanning requires an exact case grant and is relayed only through the managed SOCKS boundary.",
+      "The signed Community Feed snapshot is embedded and immutable; no live feed synchronization occurs.",
+      "Corresponding scanner source, patches, feed source/data, notices, and the source offer ship with the image."
     ],
     "license": {
-      "disposition": "license_review",
-      "rationale": "The GVM/OpenVAS multi-component GPL/AGPL distribution and feed terms require release review.",
-      "source_offer_path": null
+      "disposition": "source_offer",
+      "rationale": "The image carries the exact GPL-covered scanner source, source-form signed feed snapshot, license notices, project patches, and a three-year corresponding-source offer.",
+      "source_offer_path": "engines/images/greenbone/SOURCE-OFFER.md"
     },
     "provenance": {
       "engine": {
-        "version": "23.50.20",
+        "version": "23.50.21",
         "source_repository": "https://github.com/greenbone/openvas-scanner",
-        "source_revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
-        "source_ref": "v23.50.20",
-        "acquisition_source": "https://github.com/greenbone/openvas-scanner/commit/dcd2be55045b6b63b4f954504d76cc26a09b583e",
-        "artifact_source_revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
+        "source_revision": "c3ae607ef632393b7919fb179d30b940d929f713",
+        "source_ref": "v23.50.21",
+        "acquisition_source": "https://github.com/greenbone/openvas-scanner/commit/c3ae607ef632393b7919fb179d30b940d929f713",
+        "artifact_source_revision": "c3ae607ef632393b7919fb179d30b940d929f713",
         "source_association": "attested_match"
       },
       "rules": {
-        "mode": "external_pin_required",
-        "identifier": "Greenbone Community Feed",
-        "revision": null,
-        "acquisition_source": "https://greenbone.github.io/docs/latest/22.4/container/index.html"
+        "mode": "embedded",
+        "identifier": "Greenbone Community Feed vulnerability tests",
+        "revision": "b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:419438986cc4bc88c9a9c7960b519033c9ef1827241457c9acaca3b497a0183c"
       },
       "data": {
-        "mode": "external_pin_required",
-        "identifier": "Greenbone Community Feed snapshot",
-        "revision": null,
-        "acquisition_source": "https://feed.community.greenbone.net/"
+        "mode": "embedded",
+        "identifier": "Greenbone Community Feed and Notus snapshot",
+        "revision": "b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:419438986cc4bc88c9a9c7960b519033c9ef1827241457c9acaca3b497a0183c"
       },
       "adapter": {
         "id": "ai-security-scanner:greenbone",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "69f05d86d5002782196f8e161edbaa300e03bd0c",
         "release_state": "released"
       }
     },
@@ -1419,25 +1436,19 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "multi_component_plan",
-      "blocked_by": [
-        "final_image_digest_not_published",
-        "multi_container_profile_not_published",
-        "feed_snapshot_not_pinned",
-        "license_review",
-        "execution_wrapper_not_implemented"
-      ],
+      "blocked_by": [],
       "knowledge_input": {
-        "kind": "external_pin_required",
+        "kind": "embedded",
         "identifier": "Greenbone Community Feed snapshot",
-        "version": null,
-        "acquisition_source": "https://feed.community.greenbone.net/",
-        "pin_state": "awaiting_pin"
+        "version": "202608240615-community",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:419438986cc4bc88c9a9c7960b519033c9ef1827241457c9acaca3b497a0183c",
+        "pin_state": "pinned_or_not_applicable"
       },
       "wrapper": {
         "required": true,
-        "strategy": "Broker work to an isolated, version-locked GVM service profile; a single openvas-scanner image is not a complete runnable engine.",
+        "strategy": "Run the direct scanner once per exact grant and relay only the authorized original target through the managed SOCKS gateway.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/greenbone/plan.json"
@@ -1460,8 +1471,7 @@
         "required": true,
         "mode": "managed_allowlist",
         "destinations": [
-          "authorized target addresses",
-          "Greenbone Community Feed"
+          "authorized target addresses"
         ]
       }
     }
@@ -1476,11 +1486,16 @@
     "repository_url": "https://github.com/semgrep/semgrep",
     "homepage_url": "https://semgrep.dev/",
     "license_spdx": "LGPL-2.1-or-later",
-    "distribution_mode": "build_from_pinned_source",
-    "image": null,
+    "distribution_mode": "pull_pinned_image",
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
+      "tag": "1.174.0-1",
+      "digest": "sha256:7f95f2da43b4b2bf2611840456c04e0119332f812523e5a20fd442bc43643e89",
+      "signature_identity": null
+    },
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
     "engine_version": "source@a0c13f304151e531c7e7c00838076211a07a790c",
-    "rule_version": null,
+    "rule_version": "sha256:2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3",
     "adapter_version": "0.1.0",
     "supported_asset_kinds": [
       "repository"
@@ -1489,36 +1504,32 @@
       "local_artifact_read"
     ],
     "active_external": false,
-    "default_enabled": false,
+    "default_enabled": true,
     "estimated_memory_mb": 2048,
     "estimated_disk_mb": 2048,
-    "network_destinations": [
-      "configured rule sources"
-    ],
+    "network_destinations": [],
     "output_formats": [
       "json",
       "sarif"
     ],
     "command": [
+      "--engine",
       "semgrep",
-      "scan",
-      "--json",
+      "--workspace",
+      "/workspace",
       "--output",
-      "/output/semgrep.json",
-      "--config",
-      "/workspace/semgrep-rules.yml",
-      "/workspace"
+      "/output"
     ],
-    "status": "license_review",
+    "status": "integrated",
     "notices": [
-      "Rule licenses and product tiers are tracked independently from the engine.",
-      "The open repository is LGPL-2.1-or-later, while the verified Docker image identifies a different proprietary source revision; do not redistribute it without review.",
-      "Not executable until compatibility.runnable is true and status is integrated."
+      "Built from the exact open-source Semgrep revision with a checksum-bound project rule pack.",
+      "Runs against the read-only case workspace with engine networking disabled.",
+      "Corresponding source and notices are carried in the image and repository."
     ],
     "license": {
-      "disposition": "license_review",
-      "rationale": "The open repository is LGPL-2.1-or-later, while the verified Docker image identifies a different proprietary source revision; do not redistribute it without review.",
-      "source_offer_path": null
+      "disposition": "source_offer",
+      "rationale": "The managed image is built from the pinned LGPL-2.1-or-later source closure and carries corresponding source plus the project source offer.",
+      "source_offer_path": "engines/images/semgrep/SOURCE-OFFER.md"
     },
     "provenance": {
       "engine": {
@@ -1527,14 +1538,14 @@
         "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
         "source_ref": "develop",
         "acquisition_source": "https://github.com/semgrep/semgrep/commit/a0c13f304151e531c7e7c00838076211a07a790c",
-        "artifact_source_revision": "33bca4bcee88023b5ca72b287029bc50f59f1977",
-        "source_association": "attested_mismatch"
+        "artifact_source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
+        "source_association": "attested_match"
       },
       "rules": {
-        "mode": "external_pin_required",
-        "identifier": "user-selected Semgrep rules",
-        "revision": null,
-        "acquisition_source": "assessment-case://rule-selection"
+        "mode": "embedded",
+        "identifier": "ai-security-scanner Semgrep rule pack",
+        "revision": "sha256:2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3",
+        "acquisition_source": "workspace://engines/images/semgrep/rules.yml"
       },
       "data": {
         "mode": "runtime_bound",
@@ -1546,7 +1557,7 @@
         "id": "ai-security-scanner:semgrep",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -1555,14 +1566,9 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "final_image_digest_not_published",
-        "managed_image_not_published",
-        "rule_pack_not_selected",
-        "license_review"
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_bound",
         "identifier": "repository or filesystem snapshot",
@@ -1571,9 +1577,9 @@
         "pin_state": "runtime_bound"
       },
       "wrapper": {
-        "required": false,
-        "strategy": "The managed image can invoke semgrep directly against read-only /workspace once a rule pack is explicitly pinned.",
-        "entrypoint": null
+        "required": true,
+        "strategy": "Invoke the pinned source build through the project-owned launcher against only the read-only case workspace and embedded rule pack.",
+        "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/semgrep/plan.json"
     },
@@ -1592,11 +1598,9 @@
         "timeout_seconds": 3600
       },
       "network": {
-        "required": true,
-        "mode": "managed_allowlist",
-        "destinations": [
-          "configured rule sources"
-        ]
+        "required": false,
+        "mode": "disabled",
+        "destinations": []
       }
     }
   },
@@ -1738,8 +1742,13 @@
     "repository_url": "https://github.com/trufflesecurity/trufflehog",
     "homepage_url": "https://trufflesecurity.com/trufflehog",
     "license_spdx": "AGPL-3.0",
-    "distribution_mode": "build_from_pinned_source",
-    "image": null,
+    "distribution_mode": "pull_pinned_image",
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trufflehog",
+      "tag": "3.97.0-1",
+      "digest": "sha256:d25dabbc3b78280d12de70e695c5a55325a8de148448d64249e922eba0794ce4",
+      "signature_identity": null
+    },
     "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "engine_version": "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "rule_version": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
@@ -1752,34 +1761,30 @@
       "local_artifact_read"
     ],
     "active_external": false,
-    "default_enabled": false,
+    "default_enabled": true,
     "estimated_memory_mb": 1024,
     "estimated_disk_mb": 1024,
-    "network_destinations": [
-      "credential verification endpoints when explicitly enabled"
-    ],
+    "network_destinations": [],
     "output_formats": [
       "jsonl"
     ],
     "command": [
-      "/usr/local/bin/ai-security-scanner-engine-entrypoint",
       "--engine",
       "trufflehog",
-      "--scope",
-      "/run/ai-security-scanner/scope.json",
+      "--workspace",
+      "/workspace",
       "--output",
       "/output"
     ],
-    "status": "license_review",
+    "status": "integrated",
     "notices": [
-      "Online verification is disabled unless separately authorized.",
-      "AGPL-3.0 redistribution and the tool's optional credential verification behavior require release review.",
-      "Not executable until compatibility.runnable is true and status is integrated."
+      "Filesystem scanning only; credential verification, update checks, and engine networking are disabled.",
+      "The image is built from the exact source revision and carries the applicable source offer."
     ],
     "license": {
-      "disposition": "license_review",
-      "rationale": "AGPL-3.0 redistribution and the tool's optional credential verification behavior require release review.",
-      "source_offer_path": null
+      "disposition": "source_offer",
+      "rationale": "The managed filesystem-only image is built from the pinned AGPL-3.0 source and carries corresponding source plus the project source offer.",
+      "source_offer_path": "engines/images/trufflehog/SOURCE-OFFER.md"
     },
     "provenance": {
       "engine": {
@@ -1788,7 +1793,7 @@
         "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
         "source_ref": "main",
         "acquisition_source": "https://github.com/trufflesecurity/trufflehog/commit/3ab759fef4bb5935d4fe9ac68b503d05346b8364",
-        "artifact_source_revision": "bcfcf73aaf4759d4dadc2783177c245a02792318",
+        "artifact_source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
         "source_association": "attested_match"
       },
       "rules": {
@@ -1807,7 +1812,7 @@
         "id": "ai-security-scanner:trufflehog",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -1816,14 +1821,9 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "final_image_digest_not_published",
-        "managed_non_shell_image_not_published",
-        "license_review",
-        "execution_wrapper_not_implemented"
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_bound",
         "identifier": "repository or filesystem snapshot",
@@ -1833,7 +1833,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Replace the upstream shell entrypoint with a compiled launcher and keep credential verification disabled by policy.",
+        "strategy": "Accept only a fixed filesystem scan contract through the project-owned launcher; credential verification and network access remain disabled.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/trufflehog/plan.json"
@@ -1853,11 +1853,9 @@
         "timeout_seconds": 3600
       },
       "network": {
-        "required": true,
-        "mode": "managed_allowlist",
-        "destinations": [
-          "credential verification endpoints when explicitly enabled"
-        ]
+        "required": false,
+        "mode": "disabled",
+        "destinations": []
       }
     }
   },
@@ -1951,7 +1949,7 @@
         "id": "ai-security-scanner:checkov",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -2146,9 +2144,9 @@
     "license_spdx": "Apache-2.0",
     "distribution_mode": "pull_pinned_image",
     "image": {
-      "repository": "aquasec/trivy",
-      "tag": "0.74.0",
-      "digest": "sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969",
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trivy",
+      "tag": "0.74.0-1",
+      "digest": "sha256:9c44e2e9730e5f167991e13f67a6f75a671e04b391c037420597032b84f60826",
       "signature_identity": null
     },
     "source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
@@ -2166,13 +2164,10 @@
       "local_artifact_read"
     ],
     "active_external": false,
-    "default_enabled": false,
+    "default_enabled": true,
     "estimated_memory_mb": 2048,
     "estimated_disk_mb": 5000,
-    "network_destinations": [
-      "Trivy vulnerability databases",
-      "configured container registries"
-    ],
+    "network_destinations": [],
     "output_formats": [
       "json",
       "sarif",
@@ -2180,23 +2175,21 @@
       "spdx-json"
     ],
     "command": [
-      "filesystem",
-      "--format",
-      "json",
+      "--engine",
+      "trivy",
+      "--workspace",
+      "/workspace",
       "--output",
-      "/output/trivy.json",
-      "--skip-db-update",
-      "/workspace"
+      "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
-      "Vulnerability database revision and license are recorded per run.",
-      "Apache-2.0 permits redistribution with notices.",
-      "Not executable until compatibility.runnable is true and status is integrated."
+      "The vulnerability database snapshot is embedded and digest-recorded; update checks are disabled.",
+      "Runs against the read-only case workspace with engine networking disabled."
     ],
     "license": {
       "disposition": "allow",
-      "rationale": "Apache-2.0 permits redistribution with notices.",
+      "rationale": "Apache-2.0 permits redistribution with notices; the embedded database notice and immutable manifest are included.",
       "source_offer_path": null
     },
     "provenance": {
@@ -2216,16 +2209,16 @@
         "acquisition_source": "https://github.com/aquasecurity/trivy/commit/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994"
       },
       "data": {
-        "mode": "external_pin_required",
+        "mode": "embedded",
         "identifier": "Trivy vulnerability database snapshot",
-        "revision": null,
+        "revision": "sha256:a61aa42edc534843230ca24ef72ef322a2da18d717c3de4b6277f4aac43926a1",
         "acquisition_source": "oci://ghcr.io/aquasecurity/trivy-db"
       },
       "adapter": {
         "id": "ai-security-scanner:trivy",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -2234,23 +2227,20 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
-      "artifact_state": "verified_upstream_image",
-      "blocked_by": [
-        "vulnerability_database_digest_not_published",
-        "execution_wrapper_not_implemented"
-      ],
+      "runnable": true,
+      "artifact_state": "managed_build_plan",
+      "blocked_by": [],
       "knowledge_input": {
-        "kind": "external_pin_required",
+        "kind": "embedded",
         "identifier": "Trivy vulnerability database snapshot",
-        "version": null,
+        "version": "sha256:a61aa42edc534843230ca24ef72ef322a2da18d717c3de4b6277f4aac43926a1",
         "acquisition_source": "oci://ghcr.io/aquasecurity/trivy-db",
-        "pin_state": "awaiting_pin"
+        "pin_state": "pinned_or_not_applicable"
       },
       "wrapper": {
         "required": true,
-        "strategy": "Materialize a separately digest-pinned vulnerability database and force update checks off before scanning.",
-        "entrypoint": "filesystem"
+        "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
+        "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/trivy/plan.json"
     },
@@ -2269,12 +2259,9 @@
         "timeout_seconds": 3600
       },
       "network": {
-        "required": true,
-        "mode": "managed_allowlist",
-        "destinations": [
-          "Trivy vulnerability databases",
-          "configured container registries"
-        ]
+        "required": false,
+        "mode": "disabled",
+        "destinations": []
       }
     }
   },
@@ -2290,9 +2277,9 @@
     "license_spdx": "Apache-2.0",
     "distribution_mode": "pull_pinned_image",
     "image": {
-      "repository": "anchore/grype",
-      "tag": "v0.117.0",
-      "digest": "sha256:ddf9e9f204049f3a4a0955ef70873cabab6a31432125ad4f20a490b54950a253",
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-grype",
+      "tag": "0.117.0-1",
+      "digest": "sha256:40e14b19a119301a7cf6f7aef1ff17799ca8b2cc2e82e1959062ca7ffb243b76",
       "signature_identity": null
     },
     "source_revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
@@ -2307,34 +2294,31 @@
       "local_artifact_read"
     ],
     "active_external": false,
-    "default_enabled": false,
+    "default_enabled": true,
     "estimated_memory_mb": 1024,
     "estimated_disk_mb": 3000,
-    "network_destinations": [
-      "Grype vulnerability database",
-      "configured container registries"
-    ],
+    "network_destinations": [],
     "output_formats": [
       "json",
       "cyclonedx",
       "sarif"
     ],
     "command": [
-      "dir:/workspace",
-      "-o",
-      "json",
-      "--file",
-      "/output/grype.json"
+      "--engine",
+      "grype",
+      "--workspace",
+      "/workspace",
+      "--output",
+      "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
-      "Vulnerability database revision and license are recorded per run.",
-      "Apache-2.0 permits redistribution with notices.",
-      "Not executable until compatibility.runnable is true and status is integrated."
+      "The vulnerability database archive and extracted database are checksum-bound; automatic updates are disabled.",
+      "Runs against the read-only case workspace with engine networking disabled."
     ],
     "license": {
       "disposition": "allow",
-      "rationale": "Apache-2.0 permits redistribution with notices.",
+      "rationale": "Apache-2.0 permits redistribution with notices; the embedded database notice and exact archive/database digests are included.",
       "source_offer_path": null
     },
     "provenance": {
@@ -2354,16 +2338,16 @@
         "acquisition_source": "https://github.com/anchore/grype/commit/b5fa92bbcbef655497e3be840a2f718380e2cdd3"
       },
       "data": {
-        "mode": "external_pin_required",
+        "mode": "embedded",
         "identifier": "Grype vulnerability database snapshot",
-        "revision": null,
+        "revision": "sha256:db6f590412955f6b58cec12bfa4b712b2626eef9a030bffd8f32b9ebce074ff8",
         "acquisition_source": "https://toolbox-data.anchore.io/grype/databases/listing.json"
       },
       "adapter": {
         "id": "ai-security-scanner:grype",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -2372,23 +2356,20 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
-      "artifact_state": "verified_upstream_image",
-      "blocked_by": [
-        "vulnerability_database_digest_not_published",
-        "execution_wrapper_not_implemented"
-      ],
+      "runnable": true,
+      "artifact_state": "managed_build_plan",
+      "blocked_by": [],
       "knowledge_input": {
-        "kind": "external_pin_required",
+        "kind": "embedded",
         "identifier": "Grype vulnerability database snapshot",
-        "version": null,
+        "version": "sha256:db6f590412955f6b58cec12bfa4b712b2626eef9a030bffd8f32b9ebce074ff8",
         "acquisition_source": "https://toolbox-data.anchore.io/grype/databases/listing.json",
-        "pin_state": "awaiting_pin"
+        "pin_state": "pinned_or_not_applicable"
       },
       "wrapper": {
         "required": true,
-        "strategy": "Materialize a separately checksum-pinned vulnerability database and disable automatic updates before scanning.",
-        "entrypoint": "dir:/workspace"
+        "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
+        "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/grype/plan.json"
     },
@@ -2407,12 +2388,9 @@
         "timeout_seconds": 3600
       },
       "network": {
-        "required": true,
-        "mode": "managed_allowlist",
-        "destinations": [
-          "Grype vulnerability database",
-          "configured container registries"
-        ]
+        "required": false,
+        "mode": "disabled",
+        "destinations": []
       }
     }
   },
@@ -2496,7 +2474,7 @@
         "id": "ai-security-scanner:syft",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -2555,14 +2533,14 @@
     "license_spdx": "Apache-2.0",
     "distribution_mode": "pull_pinned_image",
     "image": {
-      "repository": "quay.io/kubescape/kubescape-cli",
-      "tag": "v4.0.12",
-      "digest": "sha256:c89e83131492a31cf48e11fa3572549b51a0fb0865c8be164f51849936767932",
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kubescape",
+      "tag": "4.0.12-1",
+      "digest": "sha256:9b7b152974d24f2032d6325008af7337defec3733652b7d69aac9d147b8d8ae5",
       "signature_identity": null
     },
     "source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
     "engine_version": "4.0.12",
-    "rule_version": null,
+    "rule_version": "a12188c49147bb6ec379b42a4159d3d5852634b8",
     "adapter_version": "0.1.0",
     "supported_asset_kinds": [
       "kubernetes_cluster",
@@ -2573,34 +2551,30 @@
       "configuration_read"
     ],
     "active_external": false,
-    "default_enabled": false,
+    "default_enabled": true,
     "estimated_memory_mb": 2048,
     "estimated_disk_mb": 2048,
-    "network_destinations": [
-      "Kubernetes API",
-      "Kubescape artifacts"
-    ],
+    "network_destinations": [],
     "output_formats": [
       "json",
       "sarif"
     ],
     "command": [
-      "scan",
-      "framework",
-      "nsa",
-      "--format",
-      "json",
+      "--engine",
+      "kubescape",
+      "--workspace",
+      "/workspace",
       "--output",
-      "/output/kubescape.json"
+      "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
-      "Apache-2.0 permits redistribution with notices.",
-      "Not executable until compatibility.runnable is true and status is integrated."
+      "The pinned NSA framework artifacts are embedded; scan input is an immutable case workspace snapshot.",
+      "Submission, telemetry, updates, and engine networking are disabled."
     ],
     "license": {
       "disposition": "allow",
-      "rationale": "Apache-2.0 permits redistribution with notices.",
+      "rationale": "Apache-2.0 permits redistribution with notices; the immutable framework artifacts and notices are embedded.",
       "source_offer_path": null
     },
     "provenance": {
@@ -2614,22 +2588,22 @@
         "source_association": "attested_match"
       },
       "rules": {
-        "mode": "external_pin_required",
-        "identifier": "Kubescape frameworks and controls",
-        "revision": null,
-        "acquisition_source": "https://github.com/kubescape/regolibrary"
+        "mode": "embedded",
+        "identifier": "Kubescape NSA framework and control artifacts",
+        "revision": "a12188c49147bb6ec379b42a4159d3d5852634b8",
+        "acquisition_source": "https://github.com/kubescape/regolibrary/tree/a12188c49147bb6ec379b42a4159d3d5852634b8"
       },
       "data": {
-        "mode": "runtime_live",
-        "identifier": "Kubernetes configuration",
-        "revision": null,
-        "acquisition_source": "Kubernetes API authorized by the case"
+        "mode": "runtime_bound",
+        "identifier": "Kubernetes manifest snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
       },
       "adapter": {
         "id": "ai-security-scanner:kubescape",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -2638,23 +2612,20 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
-      "artifact_state": "verified_upstream_image",
-      "blocked_by": [
-        "framework_artifact_digest_not_published",
-        "execution_wrapper_not_implemented"
-      ],
+      "runnable": true,
+      "artifact_state": "managed_build_plan",
+      "blocked_by": [],
       "knowledge_input": {
-        "kind": "runtime_live",
-        "identifier": "Kubernetes configuration",
-        "version": null,
-        "acquisition_source": "Kubernetes API authorized by the case",
-        "pin_state": "runtime_live"
+        "kind": "runtime_bound",
+        "identifier": "Kubernetes manifest snapshot",
+        "version": "case_artifact_sha256",
+        "acquisition_source": "assessment_case",
+        "pin_state": "runtime_bound"
       },
       "wrapper": {
         "required": true,
-        "strategy": "Materialize a locked framework artifact and a minimal kubeconfig derived from the ephemeral credential channel.",
-        "entrypoint": "scan"
+        "strategy": "Invoke the pinned source build through the project-owned launcher against explicit local manifests and embedded framework artifacts.",
+        "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/kubescape/plan.json"
     },
@@ -2673,12 +2644,9 @@
         "timeout_seconds": 3600
       },
       "network": {
-        "required": true,
-        "mode": "managed_allowlist",
-        "destinations": [
-          "Kubernetes API",
-          "Kubescape artifacts"
-        ]
+        "required": false,
+        "mode": "disabled",
+        "destinations": []
       }
     }
   },
@@ -2692,8 +2660,13 @@
     "repository_url": "https://github.com/aquasecurity/kube-bench",
     "homepage_url": null,
     "license_spdx": "Apache-2.0",
-    "distribution_mode": "build_from_pinned_source",
-    "image": null,
+    "distribution_mode": "pull_pinned_image",
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kube-bench",
+      "tag": "0.16.0-1",
+      "digest": "sha256:3e2488cb42b3c0e4fbd9067faa4227526a3938980d36c5aaba7c4a699cea0295",
+      "signature_identity": null
+    },
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
     "engine_version": "source@9f133cb7509ce1dbedfc860e94474588000e25ac",
     "rule_version": "9f133cb7509ce1dbedfc860e94474588000e25ac",
@@ -2706,33 +2679,29 @@
       "configuration_read"
     ],
     "active_external": false,
-    "default_enabled": false,
+    "default_enabled": true,
     "estimated_memory_mb": 512,
     "estimated_disk_mb": 512,
-    "network_destinations": [
-      "Kubernetes API"
-    ],
+    "network_destinations": [],
     "output_formats": [
       "json"
     ],
     "command": [
-      "/usr/local/bin/ai-security-scanner-engine-entrypoint",
       "--engine",
       "kube-bench",
-      "--scope",
-      "/run/ai-security-scanner/scope.json",
+      "--workspace",
+      "/workspace",
       "--output",
       "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
-      "Host mounts are constrained to the minimum benchmark inputs.",
-      "Apache-2.0 permits redistribution with notices.",
-      "Not executable until compatibility.runnable is true and status is integrated."
+      "Runs only against an immutable case-provided node configuration snapshot; no host filesystem mount or live cluster access is accepted.",
+      "Engine networking is disabled."
     ],
     "license": {
       "disposition": "allow",
-      "rationale": "Apache-2.0 permits redistribution with notices.",
+      "rationale": "Apache-2.0 permits redistribution with notices; the immutable snapshot benchmark profile is included.",
       "source_offer_path": null
     },
     "provenance": {
@@ -2742,8 +2711,8 @@
         "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
         "source_ref": "main",
         "acquisition_source": "https://github.com/aquasecurity/kube-bench/commit/9f133cb7509ce1dbedfc860e94474588000e25ac",
-        "artifact_source_revision": null,
-        "source_association": "release_tag_only"
+        "artifact_source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "embedded",
@@ -2752,16 +2721,16 @@
         "acquisition_source": "https://github.com/aquasecurity/kube-bench/commit/9f133cb7509ce1dbedfc860e94474588000e25ac"
       },
       "data": {
-        "mode": "runtime_live",
-        "identifier": "Kubernetes node configuration",
-        "revision": null,
-        "acquisition_source": "explicitly mounted node facts authorized by the case"
+        "mode": "runtime_bound",
+        "identifier": "Kubernetes node configuration snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
       },
       "adapter": {
         "id": "ai-security-scanner:kube-bench",
         "version": "0.1.0",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "6718c03b7f2e0925625ad9605ca8a39aa9bd1b43",
+        "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
         "release_state": "released"
       }
     },
@@ -2770,24 +2739,19 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "final_image_digest_not_published",
-        "managed_non_shell_image_not_published",
-        "required_host_mount_profile_not_implemented",
-        "execution_wrapper_not_implemented"
-      ],
+      "blocked_by": [],
       "knowledge_input": {
-        "kind": "runtime_live",
-        "identifier": "Kubernetes node configuration",
-        "version": null,
-        "acquisition_source": "explicitly mounted node facts authorized by the case",
-        "pin_state": "runtime_live"
+        "kind": "runtime_bound",
+        "identifier": "Kubernetes node configuration snapshot",
+        "version": "case_artifact_sha256",
+        "acquisition_source": "assessment_case",
+        "pin_state": "runtime_bound"
       },
       "wrapper": {
         "required": true,
-        "strategy": "Replace the upstream shell entrypoint and expose only a reviewed, read-only node-facts mount profile.",
+        "strategy": "Accept only the reviewed immutable node-facts snapshot profile through the project-owned launcher.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/kube-bench/plan.json"
@@ -2807,11 +2771,9 @@
         "timeout_seconds": 3600
       },
       "network": {
-        "required": true,
-        "mode": "managed_allowlist",
-        "destinations": [
-          "Kubernetes API"
-        ]
+        "required": false,
+        "mode": "disabled",
+        "destinations": []
       }
     }
   }

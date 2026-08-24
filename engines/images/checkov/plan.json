@@ -185,5 +185,19 @@
     "rationale": "Apache-2.0 permits redistribution with notices; dependency notices remain required.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [],
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480450",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:a61ea9064669f25e203d887a8559dde9d5cc01d2efe926e4de7435c31e0d18a3",
+      "linux/arm64": "sha256:b22966af844e9c00151238d478d5f8546b73e8bf6bef27aaca82e85b32fd59e9"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "checkov-image-evidence-32754480450-1"
+  }
 }

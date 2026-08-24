@@ -1,56 +1,78 @@
 {
   "schema_version": "1.0.0",
   "engine_id": "kubescape",
-  "plan_kind": "upstream_image",
+  "plan_kind": "managed_build",
   "knowledge_date": "2026-08-24",
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "verified_upstream_artifact",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/kubescape/kubescape",
     "revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
     "acquisition_source": "https://github.com/kubescape/kubescape/commit/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
     "local_research_checkout": ".upstreams/kubescape/kubescape"
   },
-  "verified_upstream_artifact": {
-    "repository": "quay.io/kubescape/kubescape-cli",
-    "tag": "v4.0.12",
-    "digest": "sha256:c89e83131492a31cf48e11fa3572549b51a0fb0865c8be164f51849936767932",
-    "signature_identity": null,
-    "entrypoint": [
-      "kubescape"
-    ],
-    "verification": {
-      "method": "docker_buildx_imagetools_inspect",
-      "verified_at": "2026-08-24",
-      "source_association": "attested_match",
-      "artifact_source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed"
-    }
-  },
+  "verified_upstream_artifact": null,
   "final_artifact": {
-    "repository": "quay.io/kubescape/kubescape-cli",
-    "tag": "v4.0.12",
-    "digest": "sha256:c89e83131492a31cf48e11fa3572549b51a0fb0865c8be164f51849936767932"
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kubescape",
+    "tag": "4.0.12-1",
+    "digest": "sha256:9b7b152974d24f2032d6325008af7337defec3733652b7d69aac9d147b8d8ae5"
   },
-  "build_recipe": null,
+  "build_recipe": {
+    "source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
+    "source_archive": {
+      "url": "https://github.com/kubescape/kubescape/archive/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed.tar.gz",
+      "sha256": "sha256:d2844a14352bdeacd6f70edd5acaddfdb0bf388ccc78c5ef1dacea2095bdd090"
+    },
+    "source_date_epoch": 1786522719,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.3-alpine",
+        "digest": "sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d",
+        "uses": [
+          "build"
+        ]
+      }
+    ],
+    "static_steps": [
+      [
+        "go",
+        "build",
+        "-mod=readonly",
+        "-trimpath"
+      ]
+    ]
+  },
   "dockerfile": {
-    "emitted": false,
-    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+    "emitted": true,
+    "path": "engines/images/kubescape/Dockerfile",
+    "sha256": "sha256:804d2c95952fb03f150d7a33c0d35d05890aba57d745975246f42ec47556f97d",
+    "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Materialize a locked framework artifact and a minimal kubeconfig derived from the ephemeral credential channel.",
-    "entrypoint": "scan"
+    "strategy": "Invoke the pinned source build through the project-owned launcher against explicit local manifests and embedded framework artifacts.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
   },
   "command": [
-    "scan",
-    "framework",
-    "nsa",
-    "--format",
-    "json",
+    "--engine",
+    "kubescape",
+    "--workspace",
+    "/workspace",
     "--output",
-    "/output/kubescape.json"
+    "/output"
   ],
   "output": {
     "primary_format": "json",
@@ -60,11 +82,35 @@
   },
   "license": {
     "disposition": "allow",
-    "rationale": "Apache-2.0 permits redistribution with notices.",
+    "rationale": "Apache-2.0 permits redistribution with notices; the immutable framework artifacts and notices are embedded.",
     "source_offer_path": null
   },
-  "blockers": [
-    "framework_artifact_digest_not_published",
-    "execution_wrapper_not_implemented"
-  ]
+  "blockers": [],
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/ai-security-scanner-engine-entrypoint"
+    ],
+    "network_mode": "disabled",
+    "network_destinations": [],
+    "cache_path": "/tmp/ai-security-scanner-cache",
+    "updates": false,
+    "telemetry": false
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
+    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:e394c57cb28b358b6e8f9f0e3ea4c6f572269f2760244f9644dba2ea27e92b12",
+      "linux/arm64": "sha256:d47bf43e43e7778247db426b47bb656228a07d45f97ed80e45a8d784d8467bdc"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "kubescape-image-evidence-32754480430-1",
+    "managed_smoke_evidence_sha256": "sha256:f0a99d7136250b924ff64e503002e152c2930c03422142340f380bca5e4673b7"
+  }
 }

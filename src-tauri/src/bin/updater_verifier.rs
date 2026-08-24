@@ -28,9 +28,11 @@ fn run() -> Result<(), String> {
     let public_key = PublicKey::decode(&public_key_document)
         .map_err(|error| format!("public key document is invalid: {error}"))?;
 
-    for pair in remaining.chunks_exact(2) {
-        let payload_path = Path::new(&pair[0]);
-        let signature_path = Path::new(&pair[1]);
+    let (pairs, remainder) = remaining.as_slice().as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    for [payload, signature] in pairs {
+        let payload_path = Path::new(payload);
+        let signature_path = Path::new(signature);
         let payload = fs::read(payload_path).map_err(|error| {
             format!(
                 "could not read updater payload {}: {error}",

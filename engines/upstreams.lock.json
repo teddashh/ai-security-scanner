@@ -221,10 +221,10 @@
     },
     {
       "id": "greenbone/openvas-scanner",
-      "path": ".upstreams/greenbone/openvas-scanner",
+      "path": ".upstreams/greenbone/openvas-scanner-23.50.21",
       "remote": "https://github.com/greenbone/openvas-scanner",
       "branch": "main",
-      "revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
+      "revision": "c3ae607ef632393b7919fb179d30b940d929f713",
       "shallow": true
     },
     {
