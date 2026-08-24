@@ -315,7 +315,12 @@ jobs:
             printf 'Expected exactly one Debian package, found %s.\n' "${#packages[@]}" >&2
             exit 1
           fi
-          sudo apt-get install -y "${packages[0]}"
+          package_path="$(realpath -- "${packages[0]}")"
+          if [[ ! -f "${package_path}" ]]; then
+            printf 'Debian package does not exist at %s.\n' "${package_path}" >&2
+            exit 1
+          fi
+          sudo apt-get install -y "${package_path}"
           for companion in ai-security-scanner-egress-gateway ai-security-scanner-bootstrap-broker ai-security-scanner-cli; do
             if ! command -v "${companion}" >/dev/null 2>&1; then
               printf 'Installed Debian package is missing companion executable %s.\n' "${companion}" >&2

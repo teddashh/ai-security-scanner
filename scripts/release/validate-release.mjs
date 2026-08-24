@@ -165,6 +165,15 @@ function validateReleaseWorkflow(workflow) {
     typeof macosBuild?.run === "string" && macosBuild.run.includes("--bundles app,dmg"),
     "macOS release build must create both the signed app updater payload and DMG installer",
   );
+  const debianSmoke = build.steps?.find(
+    (step) => step.name === "Install the Debian package and prove the desktop starts",
+  );
+  assert(
+    typeof debianSmoke?.run === "string" &&
+      debianSmoke.run.includes('realpath -- "${packages[0]}"') &&
+      debianSmoke.run.includes('apt-get install -y "${package_path}"'),
+    "Debian release smoke test must install the local package through an absolute path",
+  );
   const validate = workflow.jobs?.validate;
   assert(validate, "release workflow has no identity validation job");
   assert(
