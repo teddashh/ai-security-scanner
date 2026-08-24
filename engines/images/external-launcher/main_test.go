@@ -108,6 +108,37 @@ func TestStaticInvocationsCarryEveryFrozenLimit(t *testing.T) {
 		}
 	}
 
+	nucleiProxy := nucleiCompatibleProxy("socks5h://172.30.0.1:1080")
+	if nucleiProxy != "socks5://172.30.0.1:1080" {
+		t.Fatalf("Nuclei proxy compatibility spelling changed: %s", nucleiProxy)
+	}
+	nucleiDocument := fixtureDocument("nuclei", now)
+	nucleiUnits, err := validateAndPlan(nucleiDocument, "nuclei", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nucleiEnvironment := childEnvironment(nucleiProxy, "/tmp/private")
+	nuclei, err := nucleiInvocation(
+		nucleiUnits[0], nucleiProxy, "/tmp/out", nucleiEnvironment, t.TempDir(), 0,
+		[]string{"/opt/nuclei-templates/http/safe-template.yaml"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = " " + strings.Join(nuclei.Args, " ") + " "
+	for _, exact := range []string{
+		" -target https://a.example.test:443 ", " -proxy socks5://172.30.0.1:1080 ",
+		" -rate-limit 2 ", " -bulk-size 2 ", " -concurrency 2 ", " -timeout 30 ",
+		" -no-httpx ", " -no-interactsh ", " -disable-redirects ", " -no-stdin ",
+	} {
+		if !strings.Contains(joined, exact) {
+			t.Fatalf("Nuclei invocation lacks %q: %s", exact, joined)
+		}
+	}
+	if strings.Contains(strings.Join(nuclei.Env, "\n"), "socks5h://") {
+		t.Fatal("Nuclei child environment retained a proxy spelling its parser rejects")
+	}
+
 	naabuDocument := fixtureDocument("naabu", now)
 	naabuUnits, err := validateAndPlan(naabuDocument, "naabu", now)
 	if err != nil {

@@ -222,6 +222,13 @@ func run(arguments []string, now time.Time) error {
 	writer := bufio.NewWriterSize(final, 64*1024)
 	written := int64(0)
 	environment := childEnvironment(proxy, temporaryRoot)
+	nucleiProxy := nucleiCompatibleProxy(proxy)
+	if *engineID == "nuclei" {
+		// Nuclei v3.11.1 calls the same remote-name SOCKS5 protocol "socks5";
+		// its parser rejects the conventional socks5h URL spelling. The endpoint
+		// was already reduced above to the runtime-owned literal bridge IP:1080.
+		environment = childEnvironment(nucleiProxy, temporaryRoot)
+	}
 
 	for index, unit := range units {
 		if !now.Before(unit.Grant.ExpiresAt) || !time.Now().UTC().Before(unit.Grant.ExpiresAt) {
@@ -238,7 +245,7 @@ func run(arguments []string, now time.Time) error {
 			var templatePaths []string
 			templatePaths, err = selectedTemplatePaths(unit.Grant.TemplatePolicy, templates)
 			if err == nil {
-				command, err = nucleiInvocation(unit, proxy, temporaryOutput, environment, temporaryRoot, index, templatePaths)
+				command, err = nucleiInvocation(unit, nucleiProxy, temporaryOutput, environment, temporaryRoot, index, templatePaths)
 			}
 		}
 		if err != nil {
@@ -506,6 +513,10 @@ func managedProxy(raw string) (string, string, error) {
 	}
 	canonical := "socks5h://" + net.JoinHostPort(parsed.Hostname(), parsed.Port())
 	return canonical, net.JoinHostPort(parsed.Hostname(), parsed.Port()), nil
+}
+
+func nucleiCompatibleProxy(managed string) string {
+	return "socks5://" + strings.TrimPrefix(managed, "socks5h://")
 }
 
 func childEnvironment(proxy, temporaryRoot string) []string {
