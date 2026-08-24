@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { save } from "@tauri-apps/plugin-dialog";
 
 import {
   createStoredDemoCase,
@@ -121,6 +122,14 @@ const nativeDataClasses: Record<CreateCaseInput["dataClasses"][number], string> 
   none: "general",
 };
 
+const exportFileTypes: Record<ExportCaseInput["format"], { suffix: string; extensions: string[]; label: string }> = {
+  case_bundle: { suffix: "aisscase", extensions: ["aisscase"], label: "ai-security-scanner case bundle" },
+  json: { suffix: "json", extensions: ["json"], label: "Canonical JSON" },
+  ocsf: { suffix: "ocsf.json", extensions: ["json"], label: "OCSF JSON" },
+  oscal: { suffix: "oscal.json", extensions: ["json"], label: "OSCAL JSON" },
+  html: { suffix: "html", extensions: ["html"], label: "HTML report" },
+};
+
 export interface ActionResponse {
   accepted: boolean;
   message: string;
@@ -237,9 +246,23 @@ export const scannerService = {
     return actionResult(COMMANDS.startRescan, { caseId }, "複驗工作已建立。", "展示模式不會執行複驗；目前差異均為明確標記的樣本資料。");
   },
 
-  async exportCase(input: ExportCaseInput, workspace: CaseWorkspace): Promise<ServiceResult<CaseExport>> {
+  async exportCase(input: ExportCaseInput, workspace: CaseWorkspace): Promise<ServiceResult<CaseExport | null>> {
     if (hasTauriRuntime()) {
-      const exported = await invoke<NativeCaseExport>(COMMANDS.exportCase, { input });
+      const fileType = exportFileTypes[input.format];
+      const safeName = workspace.case.name
+        .normalize("NFKC")
+        .replace(/[^\p{L}\p{N}-]+/gu, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 80) || "assessment-case";
+      const destination = await save({
+        title: "匯出 ai-security-scanner 案件",
+        defaultPath: `${safeName}.${fileType.suffix}`,
+        filters: [{ name: fileType.label, extensions: fileType.extensions }],
+      });
+      if (!destination) return nativeResult(null);
+      const exported = await invoke<NativeCaseExport>(COMMANDS.exportCase, {
+        input: { ...input, destination },
+      });
       return nativeResult(adaptNativeExport(exported, input.includeRawEvidence));
     }
 

@@ -44,6 +44,7 @@ pub fn run() {
         .ok();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&app_data)?;

@@ -167,18 +167,23 @@ export default function App() {
         workspace,
       );
       applyServiceMeta(result);
+      if (!result.data) {
+        pushToast({ tone: "info", title: "已取消匯出", detail: "沒有建立或寫出任何檔案。" });
+        return;
+      }
+      const exported = result.data;
       setSnapshot((current) => current?.workspace ? {
         ...current,
         workspace: {
           ...current.workspace,
-          exports: [result.data, ...current.workspace.exports],
+          exports: [exported, ...current.workspace.exports],
         },
       } : current);
       pushToast({
         tone: result.mode === "native" ? "success" : "info",
         title: result.mode === "native" ? "案件已匯出" : "已下載展示檔",
         detail: result.mode === "native"
-          ? `${result.data.fileName} 已寫入本機選擇的位置。`
+          ? `${exported.fileName} 已寫入本機選擇的位置。`
           : "檔案開頭明確標示 DEMO_ONLY_NOT_A_SCAN，不能當成掃描報告。",
       });
     } catch (error) {

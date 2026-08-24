@@ -328,6 +328,7 @@ export interface ExportCaseInput {
   format: ExportFormat;
   includeRawEvidence: boolean;
   redactSensitiveValues: boolean;
+  destination?: string;
 }
 
 export interface ToastMessage {

@@ -98,6 +98,47 @@ struct SourceRecord {
     tags: Vec<String>,
 }
 
+struct RecordDraft {
+    pointer: String,
+    rule_id: String,
+    title: String,
+    source_severity: String,
+    location: String,
+    asset_hint: Option<String>,
+    confidence: Confidence,
+    evidence_kind: EvidenceKind,
+    references: Vec<String>,
+    tags: Vec<String>,
+}
+
+macro_rules! record {
+    (
+        $pointer:expr,
+        $rule_id:expr,
+        $title:expr,
+        $source_severity:expr,
+        $location:expr,
+        $asset_hint:expr,
+        $confidence:expr,
+        $evidence_kind:expr,
+        $references:expr,
+        $tags:expr $(,)?
+    ) => {
+        record_from_draft(RecordDraft {
+            pointer: $pointer,
+            rule_id: $rule_id,
+            title: $title,
+            source_severity: $source_severity,
+            location: $location,
+            asset_hint: $asset_hint,
+            confidence: $confidence,
+            evidence_kind: $evidence_kind,
+            references: $references,
+            tags: $tags,
+        })
+    };
+}
+
 #[derive(Debug)]
 enum ParsedArtifact {
     Json(Value),
@@ -531,7 +572,7 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         let location = first_resource_location(value)
             .or_else(|| nested_string(value, &["unmapped", "ResourceId"]))
             .unwrap_or_else(|| "cloud-resource".into());
-        records.push(record(
+        records.push(record!(
             pointer,
             rule_id,
             title,
@@ -574,7 +615,7 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
             let rule_id = string_any(object, &["id", "rule_id", "key"])?;
             let title = string_any(object, &["description", "title", "name"])
                 .unwrap_or_else(|| format!("ScoutSuite rule {rule_id}"));
-            Some(record(
+            Some(record!(
                 pointer,
                 rule_id,
                 title,
@@ -637,7 +678,7 @@ fn cloudsplaining_record(value: &Value, pointer: String, risk: &str) -> Option<S
     let identity = string_any(object, &["arn", "principal", "name", "resource"])?;
     let rule_id = string_any(object, &["finding_id", "rule_id"])
         .unwrap_or_else(|| format!("cloudsplaining:{risk}"));
-    Some(record(
+    Some(record!(
         pointer,
         rule_id,
         format!("IAM privilege risk: {}", humanize_identifier(risk)),
@@ -710,7 +751,7 @@ fn extract_m365(
         if !seen.insert(dedup) {
             continue;
         }
-        records.push(record(
+        records.push(record!(
             pointer,
             rule_id.clone(),
             string_any(object, &["Name", "Title", "Requirement", "Description"])
@@ -739,7 +780,7 @@ fn extract_naabu(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
             let host = string_any(object, &["host", "ip"])?;
             let port = scalar_string(object.get("port")?)?;
             let protocol = string_any(object, &["protocol"]).unwrap_or_else(|| "tcp".into());
-            Some(record(
+            Some(record!(
                 pointer,
                 format!("open-{protocol}-port"),
                 "Externally reachable network service".into(),
@@ -769,7 +810,7 @@ fn extract_httpx(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                     .get("status_code")
                     .or_else(|| object.get("status-code"))?,
             )?;
-            Some(record(
+            Some(record!(
                 pointer,
                 "http-service-observed".into(),
                 "Externally reachable HTTP service".into(),
@@ -805,7 +846,7 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
             if let Some(matcher) = string_any(object, &["matcher-name", "matcher_name"]) {
                 tags.push(format!("matcher:{}", safe_tag(&matcher)));
             }
-            Some(record(
+            Some(record!(
                 pointer,
                 rule_id,
                 title,
@@ -840,7 +881,7 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             let path = string_any(object, &["path"]).unwrap_or_else(|| "source-file".into());
             let line = nested_string(value, &["start", "line"]);
             let pointer = format!("/results/{index}");
-            Some(record(
+            Some(record!(
                 pointer,
                 rule_id.clone(),
                 nested_string(value, &["extra", "metadata", "shortlink"])
@@ -866,7 +907,7 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
             let object = value.as_object()?;
             let rule_id = string_any(object, &["RuleID", "rule_id"])?;
             let file = string_any(object, &["File", "file"]).unwrap_or_else(|| "repository".into());
-            Some(record(
+            Some(record!(
                 pointer,
                 rule_id.clone(),
                 string_any(object, &["Description", "description"])
@@ -896,7 +937,7 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
             let source = nested_string(value, &["SourceMetadata", "Data", "Filesystem", "file"])
                 .or_else(|| nested_string(value, &["SourceMetadata", "Data", "Git", "file"]))
                 .unwrap_or_else(|| "repository".into());
-            Some(record(
+            Some(record!(
                 pointer,
                 format!("trufflehog:{detector}"),
                 format!("Potential {detector} secret detected"),
@@ -941,7 +982,7 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         .filter_map(|(index, value)| {
             let object = value.as_object()?;
             let rule_id = string_any(object, &["check_id"])?;
-            Some(record(
+            Some(record!(
                 format!("/results/failed_checks/{index}"),
                 rule_id.clone(),
                 string_any(object, &["check_name"])
@@ -985,7 +1026,7 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
             let Some(file_object) = file.as_object() else {
                 continue;
             };
-            records.push(record(
+            records.push(record!(
                 format!("/queries/{query_index}/files/{file_index}"),
                 rule_id.clone(),
                 title.clone(),
@@ -1056,7 +1097,7 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 if field == "Secrets" {
                     tags.push("secret-value:redacted".into());
                 }
-                records.push(record(
+                records.push(record!(
                     format!("/Results/{result_index}/{field}/{item_index}"),
                     rule_id,
                     title,
@@ -1095,7 +1136,7 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 nested_string(value, &["artifact", "name"]).unwrap_or_else(|| "package".into());
             let location = nested_string(value, &["artifact", "locations", "0", "path"])
                 .unwrap_or_else(|| package.clone());
-            Some(record(
+            Some(record!(
                 format!("/matches/{index}"),
                 rule_id.clone(),
                 format!("Vulnerable package {package} ({rule_id})"),
@@ -1133,7 +1174,7 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
         else {
             continue;
         };
-        records.push(record(
+        records.push(record!(
             pointer,
             rule_id.clone(),
             string_any(object, &["name", "title", "controlName"])
@@ -1190,7 +1231,7 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 let Some(rule_id) = string_any(object, &["test_number", "id"]) else {
                     continue;
                 };
-                records.push(record(
+                records.push(record!(
                     format!("/Controls/{control_index}/tests/{test_index}/results/{result_index}"),
                     rule_id.clone(),
                     string_any(object, &["test_desc", "desc"])
@@ -1237,7 +1278,7 @@ fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             let Some(rule_id) = string_any(object, &["control_id", "reason", "id"]) else {
                 continue;
             };
-            records.push(record(
+            records.push(record!(
                 format!("{pointer}rows/{index}"),
                 rule_id.clone(),
                 string_any(object, &["title", "reason"])
@@ -1376,30 +1417,21 @@ fn merge_finding(
     );
 }
 
-fn record(
-    pointer: String,
-    rule_id: String,
-    title: String,
-    source_severity: String,
-    location: String,
-    asset_hint: Option<String>,
-    confidence: Confidence,
-    evidence_kind: EvidenceKind,
-    references: Vec<String>,
-    tags: Vec<String>,
-) -> SourceRecord {
+fn record_from_draft(draft: RecordDraft) -> SourceRecord {
     SourceRecord {
-        pointer: safe_text(&pointer, MAX_SHORT_TEXT),
-        rule_id: safe_text(&rule_id, MAX_SHORT_TEXT),
-        title: safe_text(&title, MAX_SHORT_TEXT),
-        severity: parse_severity(&source_severity),
-        source_severity: safe_text(&source_severity, 80),
-        location: redact_location(&location),
-        asset_hint: asset_hint.map(|value| safe_text(&value, MAX_SHORT_TEXT)),
-        confidence,
-        evidence_kind,
-        references,
-        tags,
+        pointer: safe_text(&draft.pointer, MAX_SHORT_TEXT),
+        rule_id: safe_text(&draft.rule_id, MAX_SHORT_TEXT),
+        title: safe_text(&draft.title, MAX_SHORT_TEXT),
+        severity: parse_severity(&draft.source_severity),
+        source_severity: safe_text(&draft.source_severity, 80),
+        location: redact_location(&draft.location),
+        asset_hint: draft
+            .asset_hint
+            .map(|value| safe_text(&value, MAX_SHORT_TEXT)),
+        confidence: draft.confidence,
+        evidence_kind: draft.evidence_kind,
+        references: draft.references,
+        tags: draft.tags,
     }
 }
 

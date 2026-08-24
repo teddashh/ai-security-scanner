@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Minimum permissions for the ai-security-scanner desktop window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-save"]
 }
