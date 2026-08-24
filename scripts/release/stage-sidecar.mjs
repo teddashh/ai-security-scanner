@@ -73,7 +73,7 @@ async function main() {
     await verifyExecutable(x86, "mach-o");
     await verifyExecutable(arm, "mach-o");
     execFileSync("lipo", ["-create", x86, arm, "-output", output], { stdio: "inherit" });
-    execFileSync("lipo", ["-verify_arch", "x86_64", "arm64", output], { stdio: "inherit" });
+    execFileSync("lipo", [output, "-verify_arch", "x86_64", "arm64"], { stdio: "inherit" });
   } else {
     const source = path.resolve(requireString(args, "source"));
     await verifyExecutable(source, target.magic);

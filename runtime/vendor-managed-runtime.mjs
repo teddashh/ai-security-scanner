@@ -325,13 +325,24 @@ function validateArchiveMember(member, label) {
 
 async function extractWithTar(archive, destination, program = 'tar') {
   await mkdir(destination, { recursive: false, mode: 0o700 });
-  const listing = await run(program, ['-tf', archive], { maxBuffer: 64 * 1024 * 1024 });
+  const archiveDirectory = dirname(archive);
+  const archiveArgument = normalizeRelativePath(basename(archive), 'archive filename');
+  const destinationArgument = normalizeRelativePath(
+    relative(archiveDirectory, destination).split(sep).join('/'),
+    'archive extraction destination',
+  );
+  const listing = await run(program, ['-tf', archiveArgument], {
+    cwd: archiveDirectory,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   const members = listing.stdout.split(/\r?\n/).filter(Boolean);
   if (members.length === 0 || members.length > MAX_ARCHIVE_ENTRIES) {
     throw new Error('archive has an invalid entry count');
   }
   for (const member of members) validateArchiveMember(member, 'locked upstream archive');
-  await run(program, ['-xf', archive, '-C', destination]);
+  await run(program, ['-xf', archiveArgument, '-C', destinationArgument], {
+    cwd: archiveDirectory,
+  });
 }
 
 async function singleDirectory(root, label) {
