@@ -277,9 +277,10 @@ jobs:
       - name: Build Linux installers
         if: matrix.platform == 'linux-x86_64'
         env:
+          NO_STRIP: "true"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: npm run tauri build -- --ci --bundles deb,rpm,appimage -- --locked
+        run: npm run tauri build -- --ci --verbose --bundles deb,rpm,appimage -- --locked
 
       - name: Sign Debian and RPM updater payloads
         if: matrix.platform == 'linux-x86_64'
@@ -345,7 +346,7 @@ jobs:
           mount_point="${RUNNER_TEMP}/ai-security-scanner-dmg"
           installed_app="${RUNNER_TEMP}/ai-security-scanner-installed.app"
           mkdir -p "${mount_point}"
-          hdiutil attach -nobrowse -readonly -mountpoint "${mount_point}" "${images[0]}"
+          hdiutil attach -acceptlicense -nobrowse -readonly -mountpoint "${mount_point}" "${images[0]}"
           applications=("${mount_point}/"*.app)
           if [[ "${#applications[@]}" -ne 1 ]]; then
             hdiutil detach "${mount_point}"
