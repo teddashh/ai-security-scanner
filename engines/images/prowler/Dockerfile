@@ -20,7 +20,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Prowler engine" \
 COPY --from=launcher --chmod=0555 /out/ai-security-scanner-cloud-launcher /usr/local/bin/ai-security-scanner-cloud-launcher
 
 USER root
-RUN chmod 0711 /home/prowler
+RUN chmod 0755 /home/prowler
 
 ENV AWS_EC2_METADATA_DISABLED="true" \
     AWS_DEFAULT_REGION="us-east-1" \
