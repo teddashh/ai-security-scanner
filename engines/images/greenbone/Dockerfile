@@ -189,7 +189,7 @@ COPY --chmod=0444 LICENSE /usr/share/licenses/ai-security-scanner/LICENSE
 COPY --chmod=0444 engines/images/greenbone/SOURCE-OFFER.md /usr/share/source/greenbone/SOURCE-OFFER.md
 COPY --chmod=0444 engines/images/greenbone/THIRD-PARTY-NOTICES.md /usr/share/licenses/greenbone/THIRD-PARTY-NOTICES.md
 COPY --from=source --chmod=0444 /openvas-scanner-c3ae607ef632393b7919fb179d30b940d929f713.tar.gz /usr/share/source/openvas-scanner/openvas-scanner-c3ae607ef632393b7919fb179d30b940d929f713.tar.gz
-COPY --chmod=0444 engines/images/greenbone/Dockerfile engines/images/greenbone/plan.json /usr/share/source/ai-security-scanner-greenbone/build/
+COPY --chmod=0444 engines/images/greenbone/Dockerfile /usr/share/source/ai-security-scanner-greenbone/build/Dockerfile
 COPY --chmod=0444 engines/images/greenbone/openvasd-rustls-provider.patch /usr/share/source/ai-security-scanner-greenbone/patches/openvasd-rustls-provider.patch
 COPY --chmod=0444 engines/images/greenbone/openvasd-service-port.patch /usr/share/source/ai-security-scanner-greenbone/patches/openvasd-service-port.patch
 COPY --chmod=0444 engines/images/greenbone/openvasd-http-compat.patch /usr/share/source/ai-security-scanner-greenbone/patches/openvasd-http-compat.patch

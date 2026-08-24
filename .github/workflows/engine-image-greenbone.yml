@@ -8,6 +8,7 @@ on:
       - .github/workflows/engine-image-greenbone.yml
       - .github/actions/engine-image-evidence/**
       - engines/images/greenbone/**
+      - '!engines/images/greenbone/plan.json'
       - engines/images/greenbone-launcher/**
       - scripts/engine-image-evidence.mjs
       - src-tauri/Cargo.toml

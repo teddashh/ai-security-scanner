@@ -855,6 +855,7 @@ function validatePublishedGreenboneImage(plan, planRelative, engine) {
   const workflowPath = resolve(root, ".github/workflows/engine-image-greenbone.yml");
   const workflowText = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") : "";
   for (const required of [
+    "!engines/images/greenbone/plan.json",
     smokeRelative,
     "managedSmokeEvidenceSha256",
     "nativeImageIdentityMatchesFinal: true",
