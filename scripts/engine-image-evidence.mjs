@@ -448,7 +448,7 @@ async function selfTest() {
       image,
       tag: "1.0.0-1",
       indexDigest,
-      sourceRevision: "ab".repeat(20),
+      sourceRevision: process.env.GITHUB_SHA ?? "ab".repeat(20),
       outputRoot: root,
       platformDigests,
       runSyftScan: null,
