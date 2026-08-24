@@ -323,6 +323,14 @@ function validateArchiveMember(member, label) {
   }
 }
 
+function windowsSystemTar() {
+  const systemRoot = process.env.SystemRoot;
+  if (process.platform !== 'win32' || !systemRoot || !isAbsolute(systemRoot) || systemRoot.includes('\0')) {
+    throw new Error('Windows system archive extractor is unavailable');
+  }
+  return join(systemRoot, 'System32', 'tar.exe');
+}
+
 async function extractWithTar(archive, destination, program = 'tar') {
   await mkdir(destination, { recursive: false, mode: 0o700 });
   const archiveDirectory = dirname(archive);
@@ -677,7 +685,7 @@ async function stageClient(lock, targetName, target, workRoot, stageRoot) {
     await extractWithTar(
       archive,
       extracted,
-      targetName === 'x86_64-pc-windows-msvc' ? 'tar.exe' : 'tar',
+      targetName === 'x86_64-pc-windows-msvc' ? windowsSystemTar() : 'tar',
     );
   }
   await copyLockedClientFiles(extracted, lockedClientFiles(target), stageRoot);
