@@ -3,7 +3,7 @@
   "engine_id": "prowler",
   "plan_kind": "managed_rebase",
   "support_date": "2026-08-24",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/prowler-cloud/prowler",
     "revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
@@ -20,7 +20,18 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
     "tag": "5.39.1-1",
-    "digest": null
+    "digest": "sha256:892e432630bd5ff2470175a30e5dbb932d02419e7a7f8fb2a60d658ca8a826b0"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
+    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "platform_digests": {
+      "linux/amd64": "sha256:12025cecd9ce622f1ed8fe728378e49c0fd1200b4ce3be708938ac9cc0cc6c63",
+      "linux/arm64": "sha256:1df3499357bafd7fe3aeff67901fc165e34687c39063f750d45679a54878f005"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "prowler-image-manifest-32729714389"
   },
   "dockerfile": {
     "emitted": true,
@@ -31,7 +42,7 @@
     "required": true,
     "strategy": "Validate an AWS-only immutable scope and ephemeral session credential closure, then invoke the fixed IAM profile without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -62,5 +73,5 @@
     "rationale": "Apache-2.0 permits redistribution with required notices.",
     "source_offer_path": null
   },
-  "blockers": ["final_image_digest_not_published"]
+  "blockers": []
 }

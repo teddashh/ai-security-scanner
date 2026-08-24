@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/engines/compatibility.schema.json",
+  "title": "ai-security-scanner engine compatibility catalog",
+  "description": "Release, provenance, safety, and runtime compatibility contract for the fixed 21-engine catalog.",
+  "type": "array",
+  "minItems": 21,
+  "maxItems": 21,
+  "items": {
+    "$ref": "#/$defs/engine"
+  },
+  "$defs": {
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nullableString": {
+      "type": ["string", "null"]
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "digest", "signature_identity"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signature_identity": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "provenanceInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "identifier", "revision", "acquisition_source"],
+      "properties": {
+        "mode": {
+          "enum": ["embedded", "external_pinned", "external_pin_required", "not_applicable", "runtime_live", "runtime_bound"]
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "acquisition_source": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "engineProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "source_repository", "source_revision", "source_ref", "acquisition_source", "artifact_source_revision", "source_association"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_repository": {
+          "type": "string",
+          "pattern": "^https://github\\.com/"
+        },
+        "source_revision": {
+          "$ref": "#/$defs/sha1"
+        },
+        "source_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "acquisition_source": {
+          "type": "string",
+          "pattern": "/commit/[0-9a-f]{40}$"
+        },
+        "artifact_source_revision": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha1" },
+            { "type": "null" }
+          ]
+        },
+        "source_association": {
+          "enum": ["attested_match", "attested_mismatch", "release_tag_only", "source_build_required"]
+        }
+      }
+    },
+    "adapterProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "acquisition_source", "source_revision", "release_state"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^ai-security-scanner:"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "acquisition_source": {
+          "type": "string",
+          "pattern": "^workspace://"
+        },
+        "source_revision": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha1" },
+            { "type": "null" }
+          ]
+        },
+        "release_state": {
+          "enum": ["not_implemented", "workspace_unreleased", "released"]
+        }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "rationale", "source_offer_path"],
+      "properties": {
+        "disposition": {
+          "enum": ["allow", "source_offer", "license_review", "blocked"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_offer_path": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "knowledgeInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identifier", "version", "acquisition_source", "pin_state"],
+      "properties": {
+        "kind": {
+          "enum": ["embedded", "external_pinned", "external_pin_required", "not_applicable", "runtime_live", "runtime_bound"]
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "acquisition_source": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "pin_state": {
+          "enum": ["awaiting_pin", "runtime_live", "runtime_bound", "pinned_or_not_applicable"]
+        }
+      }
+    },
+    "wrapper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "strategy", "entrypoint"],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "strategy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entrypoint": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["support_date", "runnable", "artifact_state", "blocked_by", "knowledge_input", "wrapper", "packaging_plan"],
+      "properties": {
+        "support_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "runnable": {
+          "type": "boolean"
+        },
+        "artifact_state": {
+          "enum": ["verified_upstream_image", "managed_build_plan", "multi_component_plan"]
+        },
+        "blocked_by": {
+          "type": "array",
+          "minItems": 0,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "knowledge_input": {
+          "$ref": "#/$defs/knowledgeInput"
+        },
+        "wrapper": {
+          "$ref": "#/$defs/wrapper"
+        },
+        "packaging_plan": {
+          "type": "string",
+          "pattern": "^engines/images/[a-z0-9-]+/plan\\.json$"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_format", "path", "media_type", "adapter_state"],
+      "properties": {
+        "primary_format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/output(?:/|$)"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_state": {
+          "enum": ["not_implemented", "workspace_unreleased", "released"]
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memory_mb", "disk_mb", "cpu_millis", "pids", "timeout_seconds"],
+      "properties": {
+        "memory_mb": { "type": "integer", "minimum": 128, "maximum": 32768 },
+        "disk_mb": { "type": "integer", "minimum": 128, "maximum": 131072 },
+        "cpu_millis": { "type": "integer", "minimum": 100, "maximum": 16000 },
+        "pids": { "type": "integer", "minimum": 16, "maximum": 4096 },
+        "timeout_seconds": { "type": "integer", "minimum": 30, "maximum": 86400 }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "mode", "destinations"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "mode": { "enum": ["disabled", "managed_allowlist"] },
+        "destinations": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output", "resources", "network"],
+      "properties": {
+        "output": { "$ref": "#/$defs/output" },
+        "resources": { "$ref": "#/$defs/resources" },
+        "network": { "$ref": "#/$defs/network" }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "id", "display_name", "category", "description",
+        "repository_url", "homepage_url", "license_spdx", "distribution_mode",
+        "image", "source_revision", "engine_version", "rule_version", "adapter_version",
+        "supported_asset_kinds", "required_permissions", "active_external",
+        "default_enabled", "estimated_memory_mb", "estimated_disk_mb",
+        "network_destinations", "output_formats", "command", "status", "notices",
+        "license", "provenance", "compatibility", "execution"
+      ],
+      "properties": {
+        "schema_version": { "const": "2.0.0" },
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "display_name": { "type": "string", "minLength": 1 },
+        "category": {
+          "enum": ["cloud_inventory", "cloud_configuration", "identity_and_access", "microsoft365", "external_attack_surface", "code_and_secrets", "infrastructure_as_code", "container_and_sbom", "kubernetes", "host", "schema_and_export"]
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "repository_url": { "type": "string", "pattern": "^https://github\\.com/" },
+        "homepage_url": { "$ref": "#/$defs/nullableString" },
+        "license_spdx": { "type": "string", "minLength": 1 },
+        "distribution_mode": { "enum": ["bundled_image", "pull_pinned_image", "build_from_pinned_source", "external_executable"] },
+        "image": {
+          "anyOf": [
+            { "$ref": "#/$defs/image" },
+            { "type": "null" }
+          ]
+        },
+        "source_revision": { "$ref": "#/$defs/sha1" },
+        "engine_version": { "type": "string", "minLength": 1 },
+        "rule_version": { "$ref": "#/$defs/nullableString" },
+        "adapter_version": { "type": "string", "minLength": 1 },
+        "supported_asset_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["cloud_organization", "cloud_account", "subscription", "project", "tenant", "domain", "ip_address", "host", "web_service", "cloud_resource", "identity", "repository", "file_system", "iac_project", "container_image", "container_registry", "kubernetes_cluster", "other"]
+          }
+        },
+        "required_permissions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["inventory_read", "configuration_read", "local_artifact_read", "passive_external_discovery", "low_impact_external_connection", "active_external_testing"]
+          }
+        },
+        "active_external": { "type": "boolean" },
+        "default_enabled": { "type": "boolean" },
+        "estimated_memory_mb": { "type": "integer", "minimum": 128 },
+        "estimated_disk_mb": { "type": "integer", "minimum": 128 },
+        "network_destinations": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "output_formats": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+        },
+        "status": { "enum": ["integrated", "experimental", "research_only", "deprecated", "license_review"] },
+        "notices": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "license": { "$ref": "#/$defs/license" },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["engine", "rules", "data", "adapter"],
+          "properties": {
+            "engine": { "$ref": "#/$defs/engineProvenance" },
+            "rules": { "$ref": "#/$defs/provenanceInput" },
+            "data": { "$ref": "#/$defs/provenanceInput" },
+            "adapter": { "$ref": "#/$defs/adapterProvenance" }
+          }
+        },
+        "compatibility": { "$ref": "#/$defs/compatibility" },
+        "execution": { "$ref": "#/$defs/execution" }
+      }
+    }
+  }
+}

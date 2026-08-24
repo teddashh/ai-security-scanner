@@ -1,41 +1,124 @@
 {
   "schema_version": "1.0.0",
   "engine_id": "cloudquery",
-  "plan_kind": "upstream_image",
+  "plan_kind": "managed_source_image",
   "support_date": "2026-08-24",
-  "publish_state": "verified_upstream_artifact_not_runnable",
+  "knowledge_date": "2023-01-10",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/cloudquery/cloudquery",
-    "revision": "2af7b44c162d075bad4b73af04ab31655af5c72c",
-    "acquisition_source": "https://github.com/cloudquery/cloudquery/commit/2af7b44c162d075bad4b73af04ab31655af5c72c",
+    "revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
+    "acquisition_source": "https://github.com/cloudquery/cloudquery/commit/e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
     "local_research_checkout": ".upstreams/cloudquery/cloudquery"
   },
-  "verified_upstream_artifact": {
-    "repository": "ghcr.io/cloudquery/cloudquery",
-    "tag": "6.41.1",
-    "digest": "sha256:dfe1d65f7ca20721820faaa762206714ca57431b5c4397404602359cc15fda85",
-    "entrypoint": ["/app/cloudquery"]
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
+    "tag": "2.0.31-aws9.2.0-1",
+    "digest": "sha256:93f89b96b3a123a1055e5f11a1cce6412404c5e4115cceb6ef5b7aa16c54c488"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
+    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "platform_digests": {
+      "linux/amd64": "sha256:a59cf1a86b1ac09a0d571a34158ec612cf407fd3de50b4a6557f05740d4a5365",
+      "linux/arm64": "sha256:c1b05bc61c2aebd17a42e2039f1037178eee7ec59dd61c95e0e297690e0ce68a"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "cloudquery-image-manifest-32729714389"
+  },
+  "build_recipe": {
+    "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
+    "source_archive": {
+      "url": "https://github.com/cloudquery/cloudquery/archive/e27e4ab61ad85479a5d53dae9b08440bc63e72b3.tar.gz",
+      "sha256": "sha256:21e18c3d1348243273231e72a39febd9d7429ac4f1ec36c5bf18c32d509e5996"
+    },
+    "component_source_archives": [
+      {
+        "component": "cloudquery-source-aws",
+        "revision": "804be3a90d6f15d3e6c662c0eb7afa88a9596180",
+        "url": "https://github.com/cloudquery/cloudquery/archive/804be3a90d6f15d3e6c662c0eb7afa88a9596180.tar.gz",
+        "sha256": "sha256:a4788989f99ab02144605539ab552e86c076405ac7516fb673e73ba6bda40c6b"
+      },
+      {
+        "component": "cloudquery-destination-file",
+        "revision": "05f02334b9d6ed5de344fd9a9cf7ddead31ce453",
+        "url": "https://github.com/cloudquery/cloudquery/archive/05f02334b9d6ed5de344fd9a9cf7ddead31ce453.tar.gz",
+        "sha256": "sha256:21f4b826b9ad4830854130674023b97e443abba17b66a3557cd0805b3083b2d1"
+      }
+    ],
+    "dependency_lock": {
+      "path": "engines/images/cloudquery/dependencies.lock.json",
+      "sha256": "sha256:853f96af454192c83954d774f04eb569e7eff2d94cb948afd8fe29df207d27a2"
+    },
+    "source_date_epoch": 1672928198,
+    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.25.0-alpine3.22",
+        "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"
+      },
+      {
+        "repository": "alpine",
+        "tag": "3.23",
+        "digest": "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
+      }
+    ]
   },
   "provider_plugins": [
-    {"name": "cloudquery/aws", "version": "v34.4.0"},
-    {"name": "cloudquery/file", "version": "v5.5.10"}
+    {
+      "name": "cloudquery-source-aws",
+      "version": "9.2.0",
+      "release_ref": "plugins-source-aws-v9.2.0",
+      "source_revision": "804be3a90d6f15d3e6c662c0eb7afa88a9596180",
+      "path": "/usr/local/libexec/cloudquery-source-aws",
+      "registry": "local"
+    },
+    {
+      "name": "cloudquery-destination-file",
+      "version": "1.0.2",
+      "release_ref": "plugins-destination-file-v1.0.2",
+      "source_revision": "05f02334b9d6ed5de344fd9a9cf7ddead31ce453",
+      "path": "/usr/local/libexec/cloudquery-destination-file",
+      "registry": "local"
+    }
   ],
   "provider_lock": {
-    "path": "engines/images/cloudquery/plugins.yml",
-    "sha256": "sha256:271b145150f791027fb4ad1d0d90803d4c65fef6d4d78dac095e753f7d50453c",
-    "install_result": "authenticated_entitlement_required",
-    "source_closure": "incomplete"
+    "path": "engines/images/cloudquery/dependencies.lock.json",
+    "sha256": "sha256:853f96af454192c83954d774f04eb569e7eff2d94cb948afd8fe29df207d27a2",
+    "install_result": "anonymous_public_release_artifacts",
+    "source_closure": "complete",
+    "registry": "local"
   },
-  "final_artifact": null,
+  "configuration_lock": {
+    "path": "engines/images/cloudquery/plugins.yml",
+    "sha256": "sha256:ddd27d4846713e68aef77f3512198999ce32e10916d3d85462e9a218d5a09ba8"
+  },
   "dockerfile": {
-    "emitted": false,
-    "reason": "The required AWS plugin is neither anonymously installable nor available as a complete buildable source closure."
+    "emitted": true,
+    "path": "engines/images/cloudquery/Dockerfile",
+    "sha256": "sha256:0e46ebf3226541ed11c1871084b0087fa737c7d749d39566e4a6725d838102c7"
   },
   "wrapper": {
     "required": true,
-    "implemented": true,
+    "strategy": "Materialize only the fixed seven-table AWS IAM profile, execute embedded local plugins with no registry access, and retain bounded per-table NDJSON evidence without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "desktop_uid_compatible": true,
+    "read_only_rootfs": true,
+    "tmpfs_noexec": true,
+    "network_mode": "managed_allowlist",
+    "network_destinations": [
+      "ec2.us-east-1.amazonaws.com:443",
+      "iam.amazonaws.com:443",
+      "sts.us-east-1.amazonaws.com:443"
+    ],
+    "updates": false,
+    "telemetry": false
   },
   "command": [
     "--engine", "cloudquery",
@@ -43,18 +126,15 @@
     "--output", "/output"
   ],
   "output": {
-    "primary_format": "json",
-    "path": "/output/cloudquery.json",
-    "media_type": "application/json",
+    "primary_format": "jsonl",
+    "path": "/output",
+    "media_type": "application/x-ndjson",
     "adapter_state": "released"
   },
   "license": {
     "disposition": "source_offer",
-    "rationale": "A managed redistribution requires the complete MPL-2.0 plugin source closure and notices.",
+    "rationale": "The image embeds the exact MPL-2.0 CLI, AWS and file source archives, dependency locks, local-plugin configuration, build recipe, launcher source, and license notice.",
     "source_offer_path": "engines/images/cloudquery/SOURCE-OFFER.md"
   },
-  "blockers": [
-    "authenticated_plugin_entitlement_required",
-    "complete_plugin_source_closure_unavailable"
-  ]
+  "blockers": []
 }

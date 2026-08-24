@@ -3,7 +3,7 @@
   "engine_id": "scoutsuite",
   "plan_kind": "managed_source_image",
   "support_date": "2026-08-24",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/nccgroup/ScoutSuite",
     "revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -13,7 +13,18 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
     "tag": "5.14.0-1",
-    "digest": null
+    "digest": "sha256:248107a1675fd254de7ee0cbc52039c70adfc81ce9e2721f6ed5080581816c59"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
+    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "platform_digests": {
+      "linux/amd64": "sha256:243d783c031ca9c14abb6f1baf918e0aad37d5298a86638c8f7583557f419ab8",
+      "linux/arm64": "sha256:fb73b12ab9bd4f3053b07e1073be364d4bfd7e93e4e3d6beb7319dfc3752aec0"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "scoutsuite-image-manifest-32729714389"
   },
   "build_recipe": {
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -48,7 +59,7 @@
     "required": true,
     "strategy": "Validate an AWS-only scope, invoke the reduced IAM JSON profile without a shell, strip the report prefix, and bound the final JSON artifact.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -78,5 +89,5 @@
     "rationale": "The image embeds the exact GPL-2.0-only source, scanner patch, build scripts, launcher source, and notices.",
     "source_offer_path": "engines/images/scoutsuite/SOURCE-OFFER.md"
   },
-  "blockers": ["final_image_digest_not_published"]
+  "blockers": []
 }

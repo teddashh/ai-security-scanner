@@ -3,7 +3,7 @@
   "engine_id": "cloudsplaining",
   "plan_kind": "managed_source_image",
   "support_date": "2026-08-24",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/salesforce/cloudsplaining",
     "revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
@@ -13,7 +13,18 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
     "tag": "0.9.1-1",
-    "digest": null
+    "digest": "sha256:3bd74803510a3c5a3e0ec1534f2f9539d3a509c0c0ec85ba5f1aee9036580752"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
+    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "platform_digests": {
+      "linux/amd64": "sha256:ab4934cec7fe35fe2cc73c8baa56522c516e254537ba43dea87983f24094c457",
+      "linux/arm64": "sha256:901ad68171b1b91f31062510bca7a653b41dbcc15760f9bc43436f1ce3290214"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "cloudsplaining-image-manifest-32729714389"
   },
   "build_recipe": {
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
@@ -42,7 +53,7 @@
     "required": true,
     "strategy": "Download AWS IAM authorization details with ephemeral session credentials and scan only that bounded local JSON without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -68,5 +79,5 @@
     "rationale": "BSD-3-Clause permits redistribution with its notice.",
     "source_offer_path": null
   },
-  "blockers": ["final_image_digest_not_published"]
+  "blockers": []
 }

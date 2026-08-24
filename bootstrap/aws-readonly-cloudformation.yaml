@@ -33,6 +33,50 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/SecurityAudit
         - arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+      Policies:
+        - PolicyName: ai-security-scanner-verification
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PermitNonMutatingSelfPolicyVerification
+                Effect: Allow
+                Action:
+                  - iam:SimulatePrincipalPolicy
+                Resource: "*"
+        - PolicyName: ai-security-scanner-cloudquery-iam-inventory
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PermitPinnedCloudQueryIamInventory
+                Effect: Allow
+                Action:
+                  - ec2:DescribeRegions
+                  - iam:GenerateCredentialReport
+                  - iam:GetAccessKeyLastUsed
+                  - iam:GetAccountAuthorizationDetails
+                  - iam:GetAccountPasswordPolicy
+                  - iam:GetAccountSummary
+                  - iam:GetCredentialReport
+                  - iam:GetGroupPolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:GetUser
+                  - iam:GetUserPolicy
+                  - iam:ListAccessKeys
+                  - iam:ListAccountAliases
+                  - iam:ListAttachedGroupPolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListAttachedUserPolicies
+                  - iam:ListGroupPolicies
+                  - iam:ListGroups
+                  - iam:ListGroupsForUser
+                  - iam:ListPolicyTags
+                  - iam:ListRolePolicies
+                  - iam:ListRoles
+                  - iam:ListSSHPublicKeys
+                  - iam:ListUserPolicies
+                  - iam:ListUsers
+                Resource: "*"
 Outputs:
   ScanRoleArn:
     Value: !GetAtt ReadOnlyScanRole.Arn

@@ -3,7 +3,7 @@
   "engine_id": "steampipe",
   "plan_kind": "managed_source_image",
   "support_date": "2026-08-24",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/turbot/steampipe",
     "revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -13,7 +13,18 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
     "tag": "2.4.5-1",
-    "digest": null
+    "digest": "sha256:5992ff9ec73745938bbea55a65670298c2d4de7d00ede0c783a44f6f35f1c8fd"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32729714389",
+    "source_revision": "e57629ea650f55bbb20c0781f8ec7ef6d9bf3141",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "platform_digests": {
+      "linux/amd64": "sha256:34956323d7c16be6f9c35d32c2f88e976a7f5e840cadd570b68664de8832a1c1",
+      "linux/arm64": "sha256:443580ec472f77152d1ad0c38235da2eb9bd0f33d2194de1ada30b3374ecd9d7"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "steampipe-image-manifest-32729714389"
   },
   "build_recipe": {
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -53,7 +64,7 @@
     "required": true,
     "strategy": "Copy the preseeded executable closure to one case-owned transient directory, write a fixed AWS IAM query/config, capture bounded JSON without a shell, and remove all runtime database state on exit.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -81,5 +92,5 @@
     "rationale": "The image embeds exact AGPL-3.0-only Steampipe source and build scripts, Apache-2.0 plugin/FDW source, and the PostgreSQL notice.",
     "source_offer_path": "engines/images/steampipe/SOURCE-OFFER.md"
   },
-  "blockers": ["final_image_digest_not_published"]
+  "blockers": []
 }
