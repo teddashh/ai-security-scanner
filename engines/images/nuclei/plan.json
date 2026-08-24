@@ -1,0 +1,122 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "nuclei",
+  "plan_kind": "managed_source_image",
+  "support_date": "2026-08-24",
+  "publish_state": "published_managed_artifact",
+  "source": {
+    "repository": "https://github.com/projectdiscovery/nuclei",
+    "revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+    "acquisition_source": "https://github.com/projectdiscovery/nuclei/commit/a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+    "local_research_checkout": ".upstreams/projectdiscovery/nuclei"
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
+    "tag": "3.11.1-2",
+    "digest": "sha256:960b8633464dea20202d21a0a431524f4ae67437fa66ef55bfc19e0b99cc564a"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32725003555",
+    "source_revision": "ba2e679e9d6736353bfc8a55ffbf0f81fd911bc5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:21bd66c3ee019de7e341c452451d9337f5916aac6a656c193a8acde14e827d74",
+      "linux/arm64": "sha256:9aa461e1b1a7a7b9d680d4f5c1ff47da637afd08b5eb9a17ec29d54622493796"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "nuclei-image-manifest-32725003555"
+  },
+  "build_recipe": {
+    "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+    "source_archive": {
+      "url": "https://github.com/projectdiscovery/nuclei/archive/a8c88feb4a1c8e961b7902534ce3af97e9d524a4.tar.gz",
+      "sha256": "sha256:233fd559f0f2287310709ed0f19613a9e298dbff03ee7f9e0905a0709e8537e4"
+    },
+    "dependency_lock": {
+      "path": "go.sum",
+      "sha256": "sha256:c9be45a7baa2b3fda7d9ecdea91865b9caf78a733c70d1133d346bcc7dba501b"
+    },
+    "templates": {
+      "repository": "https://github.com/projectdiscovery/nuclei-templates",
+      "revision": "24858b4bfabfa86f0bcfd36aea24fb535152b012",
+      "acquisition_source": "https://github.com/projectdiscovery/nuclei-templates/commit/24858b4bfabfa86f0bcfd36aea24fb535152b012",
+      "source_archive": {
+        "url": "https://github.com/projectdiscovery/nuclei-templates/archive/24858b4bfabfa86f0bcfd36aea24fb535152b012.tar.gz",
+        "sha256": "sha256:1c651703d2fcd3e4134c548b49576db1e5c95e9522ce01246259b3aa2a50813b"
+      }
+    },
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.0-alpine",
+        "digest": "sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5"
+      }
+    ],
+    "source_date_epoch": 1787553065,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/nuclei/Dockerfile",
+    "sha256": "sha256:545d0fa16329bb34d6e869181e47041beedda68c06d8c3855ff0dd22dbdda00a"
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Validate each FrozenExternalScope grant, its exact template allowlist, and each read-only HTTP template before invoking one bounded scan per exact grant port.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:794e38a5793e8b90b86504258326a9bbfa57f369db4aae99f1e2c42745a9b303"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "network_mode": "managed_allowlist",
+    "proxy": "AI_SECURITY_SCANNER_PROXY",
+    "per_grant_target_execution": true,
+    "updates": false,
+    "stdin": false,
+    "redirects": false,
+    "template_policy": {
+      "revision": "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012",
+      "exact_allowlist": true,
+      "denied_capabilities": [
+        "headless",
+        "out_of_band",
+        "fuzzing",
+        "file_upload",
+        "denial_of_service",
+        "credential_attacks"
+      ]
+    }
+  },
+  "command": [
+    "--engine",
+    "nuclei",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
+  ],
+  "output": {
+    "primary_format": "jsonl",
+    "path": "/output/nuclei.jsonl",
+    "media_type": "application/x-ndjson",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "MIT upstream code/templates and the Apache-2.0 project launcher permit redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}

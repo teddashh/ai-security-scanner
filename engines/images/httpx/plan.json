@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "httpx",
+  "plan_kind": "managed_source_image",
+  "support_date": "2026-08-24",
+  "publish_state": "published_managed_artifact",
+  "source": {
+    "repository": "https://github.com/projectdiscovery/httpx",
+    "revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
+    "acquisition_source": "https://github.com/projectdiscovery/httpx/commit/13037dd08b9715cfbd960a70ae1edfef6686a857",
+    "local_research_checkout": ".upstreams/projectdiscovery/httpx"
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
+    "tag": "1.10.0-2",
+    "digest": "sha256:0f847437080a6af86c3adab078f5937da1dc9c29027e1fd0eccf32004c7d8d0b"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32725003555",
+    "source_revision": "ba2e679e9d6736353bfc8a55ffbf0f81fd911bc5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:ae13c77d04480bb0b4d1ad4f20a8ca808e0f3183698a06638ef1fa30e4ee9a61",
+      "linux/arm64": "sha256:938a2edb1519409c0df734705ea3f39154b1e8c52d380ec74744a60d4c5f50ad"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "httpx-image-manifest-32725003555"
+  },
+  "build_recipe": {
+    "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
+    "source_archive": {
+      "url": "https://github.com/projectdiscovery/httpx/archive/13037dd08b9715cfbd960a70ae1edfef6686a857.tar.gz",
+      "sha256": "sha256:94ae90ef3a2551bbc81c0814bd157387ab9c9bda54d1f5e38aaa708b95570946"
+    },
+    "dependency_lock": {
+      "path": "go.sum",
+      "sha256": "sha256:97ea2eed27767ae6d1e31b4d56b1e2c9a69235cdc76f89cdb79c199e621029b5"
+    },
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.0-alpine",
+        "digest": "sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5"
+      }
+    ],
+    "source_date_epoch": 1783613511,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/httpx/Dockerfile",
+    "sha256": "sha256:989a2f143db288316ccfd8ae09d1875c069022630ce8df4dca867619fbf00c32"
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Validate each FrozenExternalScope grant and invoke one bounded URL probe per exact grant port without accepting arbitrary scanner arguments.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:794e38a5793e8b90b86504258326a9bbfa57f369db4aae99f1e2c42745a9b303"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "network_mode": "managed_allowlist",
+    "proxy": "AI_SECURITY_SCANNER_PROXY",
+    "per_grant_target_execution": true,
+    "updates": false,
+    "stdin": false,
+    "redirects": false
+  },
+  "command": [
+    "--engine",
+    "httpx",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
+  ],
+  "output": {
+    "primary_format": "jsonl",
+    "path": "/output/httpx.jsonl",
+    "media_type": "application/x-ndjson",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "MIT upstream code and the Apache-2.0 project launcher permit redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}

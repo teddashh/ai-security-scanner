@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "naabu",
+  "plan_kind": "managed_source_image",
+  "support_date": "2026-08-24",
+  "publish_state": "published_managed_artifact",
+  "source": {
+    "repository": "https://github.com/projectdiscovery/naabu",
+    "revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
+    "acquisition_source": "https://github.com/projectdiscovery/naabu/commit/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
+    "local_research_checkout": ".upstreams/projectdiscovery/naabu"
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
+    "tag": "2.6.1-2",
+    "digest": "sha256:327640113baa306b574bcc81e092636a6621757a0c55f8850de5735ade2021f6"
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32725003555",
+    "source_revision": "ba2e679e9d6736353bfc8a55ffbf0f81fd911bc5",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:a864c52d302787919a42753b45eb0738fa44b08cc94b2d9c933c9868da094149",
+      "linux/arm64": "sha256:a478273684d4145f05b1ef4e550563f4803671de5c4d22b9a8bf3474f176e79d"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "naabu-image-manifest-32725003555"
+  },
+  "build_recipe": {
+    "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
+    "source_archive": {
+      "url": "https://github.com/projectdiscovery/naabu/archive/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8.tar.gz",
+      "sha256": "sha256:0f2dd95b86692513d0c9a077f8332b33d52e6aba2e5955257aa0b2c74aae1e8b"
+    },
+    "dependency_lock": {
+      "path": "go.sum",
+      "sha256": "sha256:7b7604e76aa7692564fb95b76368de214189facb7e8bdd51f3f210531afd46a6"
+    },
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.0-alpine",
+        "digest": "sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5"
+      }
+    ],
+    "source_date_epoch": 1777994963,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/naabu/Dockerfile",
+    "sha256": "sha256:eae77d0e94c80f6dcf553ac2f7c0dfab914627dc149630e1ccee4ee42cac9bab"
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Validate each FrozenExternalScope grant and invoke one bounded TCP connect scan per grant without accepting arbitrary scanner arguments.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
+    "launcher_sha256": "sha256:794e38a5793e8b90b86504258326a9bbfa57f369db4aae99f1e2c42745a9b303"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "network_mode": "managed_allowlist",
+    "proxy": "AI_SECURITY_SCANNER_PROXY",
+    "per_grant_target_execution": true,
+    "updates": false,
+    "stdin": false,
+    "redirects": false
+  },
+  "command": [
+    "--engine",
+    "naabu",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output"
+  ],
+  "output": {
+    "primary_format": "jsonl",
+    "path": "/output/naabu.jsonl",
+    "media_type": "application/x-ndjson",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "MIT upstream code and the Apache-2.0 project launcher permit redistribution with notices.",
+    "source_offer_path": null
+  },
+  "blockers": []
+}
