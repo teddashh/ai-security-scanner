@@ -106,7 +106,7 @@ try {
     Import-Module '/opt/ai-security-scanner/Maester/Maester.psd1' -Force -ErrorAction Stop
     Invoke-Maester `
         -Path '/opt/ai-security-scanner/maester-tests/Maester/Entra' `
-        -ExcludeTag @('MT.1182') `
+        -ExcludeTag @('MT.1025', 'MT.1026', 'MT.1027', 'MT.1028', 'MT.1030', 'MT.1031', 'MT.1182') `
         -OutputJsonFile $rawResultPath `
         -NonInteractive `
         -NoLogo `
@@ -155,7 +155,7 @@ try {
             source_revision = '6bf1d98f094fc7a68e449d2f40f73ef820b72ee3'
             profile = 'entra-graph-token'
             test_path = '/opt/ai-security-scanner/maester-tests/Maester/Entra'
-            excluded_tags = @('MT.1182')
+            excluded_tags = @('MT.1025', 'MT.1026', 'MT.1027', 'MT.1028', 'MT.1030', 'MT.1031', 'MT.1182')
             include_long_running = $false
             include_preview = $false
             telemetry = $false

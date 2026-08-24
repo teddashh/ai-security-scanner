@@ -44,8 +44,8 @@
   ],
   "test_profile": {
     "path": "/opt/ai-security-scanner/maester-tests/Maester/Entra",
-    "exclude_tags": ["MT.1182"],
-    "excluded_reason": "MT.1182 performs a DNS DMARC lookup outside the Graph-only managed network closure.",
+    "exclude_tags": ["MT.1025", "MT.1026", "MT.1027", "MT.1028", "MT.1030", "MT.1031", "MT.1182"],
+    "excluded_reason": "MT.1025-MT.1028 and MT.1030-MT.1031 fetch a mutable role-classification file from raw.githubusercontent.com; MT.1182 performs a DNS DMARC lookup. All are excluded from the Graph-only managed network closure.",
     "include_long_running": false,
     "include_preview": false,
     "version_check": false,
