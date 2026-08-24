@@ -1,1 +1,58 @@
-{"Tests":[{"Id":"MT.1001","Name":"Privileged accounts use phishing-resistant MFA","Result":"Failed","Severity":"high","Product":"Microsoft Entra","asset_id":"asset-1","HelpUrl":"https://maester.dev/docs/tests/"}]}
+{
+  "schema_version": "1.0.0",
+  "Engine": "Maester",
+  "Product": "Microsoft Entra ID",
+  "asset_id": "asset-1",
+  "Provenance": {
+    "engine_version": "2.0.0",
+    "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+    "profile": "entra-graph-token",
+    "test_path": "/opt/ai-security-scanner/maester-tests/Maester/Entra",
+    "excluded_tags": [
+      "MT.1025",
+      "MT.1026",
+      "MT.1027",
+      "MT.1028",
+      "MT.1030",
+      "MT.1031",
+      "MT.1182"
+    ],
+    "include_long_running": false,
+    "include_preview": false,
+    "telemetry": false,
+    "version_check": false,
+    "raw_report": "upstream/maester-raw.json"
+  },
+  "Diagnostics": {
+    "passes": 1,
+    "failures": 1,
+    "investigate": 0,
+    "errors": 0,
+    "skipped": 7,
+    "not_run": 0,
+    "total": 2,
+    "normalized_results": 2
+  },
+  "Results": [
+    {
+      "Id": "MT.1001",
+      "Title": "Privileged accounts use phishing-resistant MFA",
+      "Result": "Failed",
+      "SourceResult": "Failed",
+      "Severity": "high",
+      "Service": "Microsoft Entra ID",
+      "asset_id": "asset-1",
+      "HelpUrl": "https://maester.dev/docs/tests/MT.1001"
+    },
+    {
+      "Id": "MT.1002",
+      "Title": "Emergency access accounts are monitored",
+      "Result": "Pass",
+      "SourceResult": "Passed",
+      "Severity": "medium",
+      "Service": "Microsoft Entra ID",
+      "asset_id": "asset-1",
+      "HelpUrl": "https://maester.dev/docs/tests/MT.1002"
+    }
+  ]
+}
