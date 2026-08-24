@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Read-only Microsoft Graph application permissions used by the ScubaGear and Maester assessment profiles. Grant through Microsoft Entra, use a short-lived certificate, and remove consent, credentials, sessions, and the service principal after the assessment.",
+  "application_permissions": [
+    "AdministrativeUnit.Read.All",
+    "Application.Read.All",
+    "AuditLog.Read.All",
+    "Directory.Read.All",
+    "Domain.Read.All",
+    "Group.Read.All",
+    "IdentityRiskEvent.Read.All",
+    "Organization.Read.All",
+    "Policy.Read.All",
+    "Reports.Read.All",
+    "RoleManagement.Read.Directory",
+    "SecurityEvents.Read.All",
+    "User.Read.All"
+  ],
+  "delegated_permissions": [],
+  "write_permissions": []
+}

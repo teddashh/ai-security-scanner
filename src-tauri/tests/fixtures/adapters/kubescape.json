@@ -1,0 +1,1 @@
+{"results":[{"controlID":"C-0002","name":"Privileged container","status":"failed","severity":"high","resourceID":"default/Deployment/example","asset_id":"asset-1","references":["https://hub.armosec.io/docs/c-0002"]}]}

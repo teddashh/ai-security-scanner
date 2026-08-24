@@ -1,0 +1,1 @@
+{"check_type":"terraform","results":{"passed_checks":[],"failed_checks":[{"check_id":"CKV_AWS_18","check_name":"Ensure S3 access logging is enabled","file_path":"infra/storage.tf","file_line_range":[1,10],"severity":"MEDIUM","guideline":"https://www.checkov.io/5.Policy%20Index/terraform.html","asset_id":"asset-1"}]}}

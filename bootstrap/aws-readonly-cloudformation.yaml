@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  ai-security-scanner short-lived read-only assessment role. Delete this stack
+  after the assessment and review all sessions and access keys separately.
+Parameters:
+  ScanRoleName:
+    Type: String
+    AllowedPattern: "^ai-security-scanner-[a-z0-9-]{1,40}$"
+  TrustedPrincipalArn:
+    Type: String
+    Description: ARN of the identity allowed to assume the scan role.
+  ExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 20
+Resources:
+  ReadOnlyScanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref ScanRoleName
+      Description: Temporary read-only role for ai-security-scanner assessment
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref TrustedPrincipalArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+Outputs:
+  ScanRoleArn:
+    Value: !GetAtt ReadOnlyScanRole.Arn
+  CleanupStackId:
+    Value: !Ref AWS::StackId

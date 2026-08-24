@@ -1,0 +1,1 @@
+[{"category_name":"Findings","class_name":"Compliance Finding","finding_info":{"title":"S3 bucket public access is not blocked","uid":"prowler-uid-1"},"resources":[{"uid":"arn:aws:s3:::example-bucket","name":"example-bucket"}],"severity":"High","unmapped":{"CheckID":"s3_bucket_level_public_access_block","Status":"FAIL","Severity":"high","AccountId":"asset-1"}}]

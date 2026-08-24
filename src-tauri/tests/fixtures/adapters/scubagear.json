@@ -1,0 +1,1 @@
+{"Results":[{"PolicyId":"MS.AAD.1.1v1","Requirement":"Legacy authentication is blocked","Result":"Failed","Severity":"high","Service":"Entra ID","asset_id":"asset-1","HelpUrl":"https://github.com/cisagov/ScubaGear"}]}

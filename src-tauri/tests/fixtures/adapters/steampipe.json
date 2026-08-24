@@ -1,0 +1,1 @@
+{"rows":[{"control_id":"aws_s3_bucket_public_access_blocked","title":"S3 public access should be blocked","status":"alarm","severity":"high","resource":"arn:aws:s3:::example-bucket","asset_id":"asset-1"}]}

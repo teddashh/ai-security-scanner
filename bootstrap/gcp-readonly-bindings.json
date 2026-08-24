@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Bounded read-only roles for a dedicated ai-security-scanner service account. Apply through the Google Cloud provider surface, then remove the bindings and service account after the assessment.",
+  "roles": [
+    "roles/browser",
+    "roles/iam.securityReviewer",
+    "roles/cloudasset.viewer",
+    "roles/logging.viewer",
+    "roles/monitoring.viewer",
+    "roles/serviceusage.serviceUsageViewer"
+  ],
+  "prohibited_permissions": [
+    "*.create",
+    "*.delete",
+    "*.setIamPolicy",
+    "*.update"
+  ],
+  "maximum_token_lifetime_seconds": 3600
+}

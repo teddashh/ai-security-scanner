@@ -1,0 +1,1 @@
+{"matches":[{"vulnerability":{"id":"CVE-2025-0002","severity":"Critical","dataSource":"https://nvd.nist.gov/vuln/detail/CVE-2025-0002","urls":["https://github.com/anchore/grype"]},"artifact":{"name":"example-package","version":"1.0","locations":[{"path":"/usr/lib/example"}]},"asset_id":"asset-1"}]}

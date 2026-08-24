@@ -1,0 +1,1 @@
+{"Tests":[{"Id":"MT.1001","Name":"Privileged accounts use phishing-resistant MFA","Result":"Failed","Severity":"high","Product":"Microsoft Entra","asset_id":"asset-1","HelpUrl":"https://maester.dev/docs/tests/"}]}

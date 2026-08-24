@@ -1,0 +1,1 @@
+[{"RuleID":"generic-api-key","Description":"Potential API key","File":"config/example.env","StartLine":3,"Secret":"SECRET_SENTINEL_MUST_NEVER_LEAK","Fingerprint":"example:3","asset_id":"asset-1"}]

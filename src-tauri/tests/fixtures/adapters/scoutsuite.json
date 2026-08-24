@@ -1,0 +1,1 @@
+{"services":{"s3":{"findings":{"s3-bucket-public-access":{"id":"s3-bucket-public-access","description":"S3 bucket permits public access","level":"danger","flagged_items":1,"resource":"arn:aws:s3:::example-bucket","asset_id":"asset-1"}}}}}

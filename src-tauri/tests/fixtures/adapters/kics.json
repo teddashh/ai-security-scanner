@@ -1,0 +1,1 @@
+{"queries":[{"query_name":"S3 Bucket Without Server-side-encryption","query_id":"e24efb0e","severity":"HIGH","files":[{"file_name":"infra/storage.tf","line":4,"similarity_id":"example","asset_id":"asset-1"}]}]}

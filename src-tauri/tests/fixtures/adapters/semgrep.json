@@ -1,0 +1,1 @@
+{"version":"1.0","results":[{"check_id":"python.lang.security.audit.exec-detected","path":"src/example.py","start":{"line":7,"col":1},"end":{"line":7,"col":12},"extra":{"message":"Dynamic execution detected","severity":"ERROR","metadata":{"references":["https://semgrep.dev/docs/semgrep-code/overview/"]}},"asset_id":"asset-1"}],"errors":[]}

@@ -1,0 +1,447 @@
+{
+  "schema_version": "1.0.0",
+  "generated_by": "scripts/lock-upstreams.mjs",
+  "note": "Research/source checkout lock only. Engine release manifests independently pin tested tags, images, rule databases, and adapters.",
+  "repositories": [
+    {
+      "id": "CISOfy/lynis",
+      "path": ".upstreams/CISOfy/lynis",
+      "remote": "https://github.com/CISOfy/lynis",
+      "branch": "master",
+      "revision": "f1926dd4aed7e3885a99ffd05f4cd72d276a6607",
+      "shallow": true
+    },
+    {
+      "id": "Checkmarx/kics",
+      "path": ".upstreams/Checkmarx/kics",
+      "remote": "https://github.com/Checkmarx/kics",
+      "branch": "master",
+      "revision": "015905d9dcc2456ce41269b4cea45cb2858d9f5a",
+      "shallow": true
+    },
+    {
+      "id": "DefectDojo/django-DefectDojo",
+      "path": ".upstreams/DefectDojo/django-DefectDojo",
+      "remote": "https://github.com/DefectDojo/django-DefectDojo",
+      "branch": "master",
+      "revision": "28ca51e66d8436a10a31c4f093c2b4a1efff899d",
+      "shallow": true
+    },
+    {
+      "id": "OpenSCAP/openscap",
+      "path": ".upstreams/OpenSCAP/openscap",
+      "remote": "https://github.com/OpenSCAP/openscap",
+      "branch": "main",
+      "revision": "c09abc323ef1ebfc6d34945256689848208bf425",
+      "shallow": true
+    },
+    {
+      "id": "Shopify/kubeaudit",
+      "path": ".upstreams/Shopify/kubeaudit",
+      "remote": "https://github.com/Shopify/kubeaudit",
+      "branch": "main",
+      "revision": "92c3147139a73eab8f6c9cbf9a1ee4d9c4196bd8",
+      "shallow": true
+    },
+    {
+      "id": "SpecterOps/BloodHound",
+      "path": ".upstreams/SpecterOps/BloodHound",
+      "remote": "https://github.com/SpecterOps/BloodHound",
+      "branch": "main",
+      "revision": "336bfbc1667fafa057671d9ccb815e5684b57761",
+      "shallow": true
+    },
+    {
+      "id": "anchore/grype",
+      "path": ".upstreams/anchore/grype",
+      "remote": "https://github.com/anchore/grype",
+      "branch": "main",
+      "revision": "ab6707d1d575c9183f6292de275f6b4aaced924e",
+      "shallow": true
+    },
+    {
+      "id": "anchore/syft",
+      "path": ".upstreams/anchore/syft",
+      "remote": "https://github.com/anchore/syft",
+      "branch": "main",
+      "revision": "bf82010f3c38508e30dd01ed8053f158513c0c9d",
+      "shallow": true
+    },
+    {
+      "id": "aquasecurity/kube-bench",
+      "path": ".upstreams/aquasecurity/kube-bench",
+      "remote": "https://github.com/aquasecurity/kube-bench",
+      "branch": "main",
+      "revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
+      "shallow": true
+    },
+    {
+      "id": "aquasecurity/tfsec",
+      "path": ".upstreams/aquasecurity/tfsec",
+      "remote": "https://github.com/aquasecurity/tfsec",
+      "branch": "master",
+      "revision": "b692c20b68c0121346b7b34e81d6b1867ca8e1a8",
+      "shallow": true
+    },
+    {
+      "id": "aquasecurity/trivy",
+      "path": ".upstreams/aquasecurity/trivy",
+      "remote": "https://github.com/aquasecurity/trivy",
+      "branch": "main",
+      "revision": "dc3c56eed58ab21c7e08d26757c517bc946a86c5",
+      "shallow": true
+    },
+    {
+      "id": "bridgecrewio/checkov",
+      "path": ".upstreams/bridgecrewio/checkov",
+      "remote": "https://github.com/bridgecrewio/checkov",
+      "branch": "main",
+      "revision": "03d5fdad8d6154b1565799a7b1fb8070c158866f",
+      "shallow": true
+    },
+    {
+      "id": "cartography-cncf/cartography",
+      "path": ".upstreams/cartography-cncf/cartography",
+      "remote": "https://github.com/cartography-cncf/cartography",
+      "branch": "master",
+      "revision": "2b68f0250ce10635bc2c475f0a840a3b4359854c",
+      "shallow": true
+    },
+    {
+      "id": "cisagov/ScubaGear",
+      "path": ".upstreams/cisagov/ScubaGear",
+      "remote": "https://github.com/cisagov/ScubaGear",
+      "branch": "main",
+      "revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
+      "shallow": true
+    },
+    {
+      "id": "cloudquery/cloudquery",
+      "path": ".upstreams/cloudquery/cloudquery",
+      "remote": "https://github.com/cloudquery/cloudquery",
+      "branch": "main",
+      "revision": "db391adb6f7282196d1848541ab29297cffc6058",
+      "shallow": true
+    },
+    {
+      "id": "containers/podman",
+      "path": ".upstreams/containers/podman",
+      "remote": "https://github.com/containers/podman",
+      "branch": "main",
+      "revision": "e14fafc21edcbd691ffbb5cab2d541d18de43838",
+      "shallow": true
+    },
+    {
+      "id": "dirkjanm/ROADtools",
+      "path": ".upstreams/dirkjanm/ROADtools",
+      "remote": "https://github.com/dirkjanm/ROADtools",
+      "branch": "master",
+      "revision": "f72a752700ff5142cc9bfd4cc90391ce5653415d",
+      "shallow": true
+    },
+    {
+      "id": "docker/cli",
+      "path": ".upstreams/docker/cli",
+      "remote": "https://github.com/docker/cli",
+      "branch": "master",
+      "revision": "28f756087eea5fa301f3fbf12b01ae62f91521c2",
+      "shallow": true
+    },
+    {
+      "id": "docker/compose",
+      "path": ".upstreams/docker/compose",
+      "remote": "https://github.com/docker/compose",
+      "branch": "main",
+      "revision": "f72979427042620a94dd52ce78b39c68cb02c085",
+      "shallow": true
+    },
+    {
+      "id": "falcosecurity/falco",
+      "path": ".upstreams/falcosecurity/falco",
+      "remote": "https://github.com/falcosecurity/falco",
+      "branch": "master",
+      "revision": "130747499bb831ff8212af4da13c3fa9ffd7328b",
+      "shallow": true
+    },
+    {
+      "id": "gitleaks/gitleaks",
+      "path": ".upstreams/gitleaks/gitleaks",
+      "remote": "https://github.com/gitleaks/gitleaks",
+      "branch": "master",
+      "revision": "b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b",
+      "shallow": true
+    },
+    {
+      "id": "google/osv-scanner",
+      "path": ".upstreams/google/osv-scanner",
+      "remote": "https://github.com/google/osv-scanner",
+      "branch": "main",
+      "revision": "7898d8dc34ad9a6b09e7063f93fb253e792f3e68",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/greenbone-container-images",
+      "path": ".upstreams/greenbone/greenbone-container-images",
+      "remote": "https://github.com/greenbone/greenbone-container-images",
+      "branch": "main",
+      "revision": "17294427cafae1e38e35dc56e41c1be9c8d6d902",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/greenbone-feed-sync",
+      "path": ".upstreams/greenbone/greenbone-feed-sync",
+      "remote": "https://github.com/greenbone/greenbone-feed-sync",
+      "branch": "main",
+      "revision": "84cc452fa0876a9a6a0971ee9bfe6a027aca7374",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/gsa",
+      "path": ".upstreams/greenbone/gsa",
+      "remote": "https://github.com/greenbone/gsa",
+      "branch": "main",
+      "revision": "bc507ec04e4f4debad3c705379beb3dfada2cf48",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/gvmd",
+      "path": ".upstreams/greenbone/gvmd",
+      "remote": "https://github.com/greenbone/gvmd",
+      "branch": "main",
+      "revision": "16c99dea6d17e59bd3b9b6a4773611f24ba051ca",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/openvas-compose",
+      "path": ".upstreams/greenbone/openvas-compose",
+      "remote": "https://github.com/greenbone/openvas-compose",
+      "branch": "main",
+      "revision": "99ed1dc18af1eb7f3a2968273d0a6cdddd6db835",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/openvas-scanner",
+      "path": ".upstreams/greenbone/openvas-scanner",
+      "remote": "https://github.com/greenbone/openvas-scanner",
+      "branch": "main",
+      "revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/ospd-openvas",
+      "path": ".upstreams/greenbone/ospd-openvas",
+      "remote": "https://github.com/greenbone/ospd-openvas",
+      "branch": "main",
+      "revision": "ac545a15d5a6f4df687f144090e9b6ff2fd660a2",
+      "shallow": true
+    },
+    {
+      "id": "kubescape/kubescape",
+      "path": ".upstreams/kubescape/kubescape",
+      "remote": "https://github.com/kubescape/kubescape",
+      "branch": "master",
+      "revision": "fdd64f4358c66d66165397175c7c498104fa237a",
+      "shallow": true
+    },
+    {
+      "id": "maester365/maester",
+      "path": ".upstreams/maester365/maester",
+      "remote": "https://github.com/maester365/maester",
+      "branch": "main",
+      "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+      "shallow": true
+    },
+    {
+      "id": "moby/moby",
+      "path": ".upstreams/moby/moby",
+      "remote": "https://github.com/moby/moby",
+      "branch": "master",
+      "revision": "b985e2313a8676e18072b442911fc8f64f17d440",
+      "shallow": true
+    },
+    {
+      "id": "nccgroup/PMapper",
+      "path": ".upstreams/nccgroup/PMapper",
+      "remote": "https://github.com/nccgroup/PMapper",
+      "branch": "master",
+      "revision": "91d2e60102bdadf346d77b60d90ddaa4a678f037",
+      "shallow": true
+    },
+    {
+      "id": "nccgroup/ScoutSuite",
+      "path": ".upstreams/nccgroup/ScoutSuite",
+      "remote": "https://github.com/nccgroup/ScoutSuite",
+      "branch": "master",
+      "revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+      "shallow": true
+    },
+    {
+      "id": "ocsf/ocsf-schema",
+      "path": ".upstreams/ocsf/ocsf-schema",
+      "remote": "https://github.com/ocsf/ocsf-schema",
+      "branch": "main",
+      "revision": "40a1511e014da94d2d7a2ff964089425d0d479dd",
+      "shallow": true
+    },
+    {
+      "id": "owasp-amass/amass",
+      "path": ".upstreams/owasp-amass/amass",
+      "remote": "https://github.com/owasp-amass/amass",
+      "branch": "main",
+      "revision": "79299dce87b0085db0f2f4ef3e9c52cccb49f514",
+      "shallow": true
+    },
+    {
+      "id": "projectdiscovery/httpx",
+      "path": ".upstreams/projectdiscovery/httpx",
+      "remote": "https://github.com/projectdiscovery/httpx",
+      "branch": "dev",
+      "revision": "50b901aeec5736a785f2ad155d998eeca67a42f3",
+      "shallow": true
+    },
+    {
+      "id": "projectdiscovery/naabu",
+      "path": ".upstreams/projectdiscovery/naabu",
+      "remote": "https://github.com/projectdiscovery/naabu",
+      "branch": "dev",
+      "revision": "ed04418a5b6602adb9c9f23e50b0317fde639bb7",
+      "shallow": true
+    },
+    {
+      "id": "projectdiscovery/nuclei",
+      "path": ".upstreams/projectdiscovery/nuclei",
+      "remote": "https://github.com/projectdiscovery/nuclei",
+      "branch": "dev",
+      "revision": "84b464e6bdc2e9e964d4be19b1a603b2483f79fb",
+      "shallow": true
+    },
+    {
+      "id": "projectdiscovery/nuclei-templates",
+      "path": ".upstreams/projectdiscovery/nuclei-templates",
+      "remote": "https://github.com/projectdiscovery/nuclei-templates",
+      "branch": "main",
+      "revision": "24858b4bfabfa86f0bcfd36aea24fb535152b012",
+      "shallow": true
+    },
+    {
+      "id": "projectdiscovery/subfinder",
+      "path": ".upstreams/projectdiscovery/subfinder",
+      "remote": "https://github.com/projectdiscovery/subfinder",
+      "branch": "dev",
+      "revision": "51e9b9065e6afb66d3bca3705b21d84bb40354c4",
+      "shallow": true
+    },
+    {
+      "id": "prowler-cloud/prowler",
+      "path": ".upstreams/prowler-cloud/prowler",
+      "remote": "https://github.com/prowler-cloud/prowler",
+      "branch": "master",
+      "revision": "e3a3acc799c5a1612f24ed88d41bfa2d0c0a4c49",
+      "shallow": true
+    },
+    {
+      "id": "salesforce/cloudsplaining",
+      "path": ".upstreams/salesforce/cloudsplaining",
+      "remote": "https://github.com/salesforce/cloudsplaining",
+      "branch": "master",
+      "revision": "5012eab1f7429ef3702e8f8379ed0a207ba77804",
+      "shallow": true
+    },
+    {
+      "id": "semgrep/semgrep",
+      "path": ".upstreams/semgrep/semgrep",
+      "remote": "https://github.com/semgrep/semgrep",
+      "branch": "develop",
+      "revision": "a0c13f304151e531c7e7c00838076211a07a790c",
+      "shallow": true
+    },
+    {
+      "id": "silverhack/monkey365",
+      "path": ".upstreams/silverhack/monkey365",
+      "remote": "https://github.com/silverhack/monkey365",
+      "branch": "main",
+      "revision": "7cfa39019496eb18ab920d6876e69e0b111613bf",
+      "shallow": true
+    },
+    {
+      "id": "sullo/nikto",
+      "path": ".upstreams/sullo/nikto",
+      "remote": "https://github.com/sullo/nikto",
+      "branch": "main",
+      "revision": "312645d873478a77986627ab1fc8cffe595e85d4",
+      "shallow": true
+    },
+    {
+      "id": "tauri-apps/tauri",
+      "path": ".upstreams/tauri-apps/tauri",
+      "remote": "https://github.com/tauri-apps/tauri",
+      "branch": "dev",
+      "revision": "56d19c39e457b528433dc546106cd0bff4066bc2",
+      "shallow": true
+    },
+    {
+      "id": "testssl/testssl.sh",
+      "path": ".upstreams/testssl/testssl.sh",
+      "remote": "https://github.com/testssl/testssl.sh",
+      "branch": "3.3dev",
+      "revision": "1283aff3d49763dffe20bd47c664308c6ec076cf",
+      "shallow": true
+    },
+    {
+      "id": "trufflesecurity/trufflehog",
+      "path": ".upstreams/trufflesecurity/trufflehog",
+      "remote": "https://github.com/trufflesecurity/trufflehog",
+      "branch": "main",
+      "revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+      "shallow": true
+    },
+    {
+      "id": "turbot/powerpipe",
+      "path": ".upstreams/turbot/powerpipe",
+      "remote": "https://github.com/turbot/powerpipe",
+      "branch": "develop",
+      "revision": "d549272fc8b872b27cbbe72cf1ae1abbcc77b1b1",
+      "shallow": true
+    },
+    {
+      "id": "turbot/steampipe",
+      "path": ".upstreams/turbot/steampipe",
+      "remote": "https://github.com/turbot/steampipe",
+      "branch": "develop",
+      "revision": "d897d7c3dba88ba6b5078f25022f41610036ba03",
+      "shallow": true
+    },
+    {
+      "id": "usnistgov/OSCAL",
+      "path": ".upstreams/usnistgov/OSCAL",
+      "remote": "https://github.com/usnistgov/OSCAL",
+      "branch": "main",
+      "revision": "e061961c7702afeabffdf5e59894d35e748dade1",
+      "shallow": true
+    },
+    {
+      "id": "usnistgov/oscal-content",
+      "path": ".upstreams/usnistgov/oscal-content",
+      "remote": "https://github.com/usnistgov/oscal-content",
+      "branch": "main",
+      "revision": "78650f02ad9321bb7b817846f8fbd4f2bcd620de",
+      "shallow": true
+    },
+    {
+      "id": "wazuh/wazuh",
+      "path": ".upstreams/wazuh/wazuh",
+      "remote": "https://github.com/wazuh/wazuh",
+      "branch": "main",
+      "revision": "f83861461173de20da5e569229113687a495ffce",
+      "shallow": true
+    },
+    {
+      "id": "zaproxy/zaproxy",
+      "path": ".upstreams/zaproxy/zaproxy",
+      "remote": "https://github.com/zaproxy/zaproxy",
+      "branch": "main",
+      "revision": "90068415b4ffb7b457fe4ecd816cc8369a85366b",
+      "shallow": true
+    }
+  ]
+}

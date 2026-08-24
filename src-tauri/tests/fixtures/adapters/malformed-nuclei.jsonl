@@ -1,0 +1,2 @@
+{"template-id":"valid-record","info":{"name":"Valid record","severity":"low"},"matched-at":"https://service.example.test/","asset_id":"asset-1"}
+{this is malformed and must be contained

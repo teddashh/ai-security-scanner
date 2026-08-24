@@ -1,0 +1,1 @@
+{"Controls":[{"id":"1","tests":[{"section":"API Server","results":[{"test_number":"1.2.1","test_desc":"Ensure anonymous authentication is disabled","status":"FAIL","remediation":"Do not execute this target-controlled command","asset_id":"asset-1"}]}]}]}

@@ -1,0 +1,1 @@
+{"template-id":"exposed-panel","info":{"name":"Exposed administrative panel","severity":"medium","reference":["https://nuclei.projectdiscovery.io/"]},"matched-at":"https://service.example.test/admin?token=must-not-appear","matcher-name":"panel","asset_id":"asset-1"}

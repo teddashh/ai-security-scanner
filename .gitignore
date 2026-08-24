@@ -1,0 +1,42 @@
+.DS_Store
+.idea/
+.vscode/
+
+# JavaScript
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Rust / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Local application state and sensitive case data
+.ai-security-scanner/
+*.db
+*.db-shm
+*.db-wal
+*.case.zip
+*.case.tar.zst
+
+# Downloaded third-party source trees and engine artifacts
+.upstreams/
+.engine-cache/
+.runtime-cache/
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Logs and temporary output
+*.log
+tmp/
+temp/
