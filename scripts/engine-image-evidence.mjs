@@ -432,6 +432,7 @@ async function selfTest() {
   try {
     const engine = "fixture-engine";
     const image = "ghcr.io/example/fixture-engine";
+    const repository = process.env.GITHUB_REPOSITORY ?? "example/repository";
     const indexDigest = `sha256:${"11".repeat(32)}`;
     const platformDigests = new Map([
       ["linux/amd64", `sha256:${"22".repeat(32)}`],
@@ -467,7 +468,7 @@ async function selfTest() {
       await fakeBundle(bundle, image, digest, predicateType, predicate);
       finalArgs.set(`${key}-bundle`, bundle);
       finalArgs.set(`${key}-id`, `fixture-${key}`);
-      finalArgs.set(`${key}-url`, `https://github.com/example/repository/attestations/fixture-${key}`);
+      finalArgs.set(`${key}-url`, `https://github.com/${repository}/attestations/fixture-${key}`);
     }
     await finalizeEvidence(finalArgs);
     const finalized = await readJson(manifest);
