@@ -442,14 +442,27 @@ func runScoutSuite(environment []string, temporaryRoot, output string) error {
 
 func runCloudQuery(environment []string, temporaryRoot string) error {
 	configPath := filepath.Join(temporaryRoot, "cloudquery.yml")
-	config := `kind: source
+	if err := writeExclusive(configPath, cloudQueryConfiguration(), 0o600); err != nil {
+		return fmt.Errorf("write fixed CloudQuery config: %w", err)
+	}
+	return runCommand(invocation{
+		Program: "/app/cloudquery",
+		Args: []string{
+			"sync", configPath, "--cq-dir", filepath.Join(temporaryRoot, "cq"),
+			"--no-log-file", "--log-console", "--telemetry-level", "none",
+		},
+		Env: environment,
+	})
+}
+
+func cloudQueryConfiguration() []byte {
+	return []byte(`kind: source
 spec:
   name: aws
   path: /usr/local/libexec/cloudquery-source-aws
   registry: local
   destinations: [file]
   tables:
-    - aws_iam_account_authorization_details
     - aws_iam_accounts
     - aws_iam_credential_reports
     - aws_iam_groups
@@ -466,23 +479,11 @@ spec:
   path: /usr/local/libexec/cloudquery-destination-file
   registry: local
   write_mode: append
-  send_sync_summary: false
   spec:
-    path: /output/{{TABLE}}-{{UUID}}.json
+    directory: /output
     format: json
     no_rotate: true
-`
-	if err := writeExclusive(configPath, []byte(config), 0o600); err != nil {
-		return fmt.Errorf("write fixed CloudQuery config: %w", err)
-	}
-	return runCommand(invocation{
-		Program: "/app/cloudquery",
-		Args: []string{
-			"sync", configPath, "--cq-dir", filepath.Join(temporaryRoot, "cq"),
-			"--no-log-file", "--log-console", "--telemetry-level", "none",
-		},
-		Env: environment,
-	})
+`)
 }
 
 func runSteampipe(environment []string, temporaryRoot, output string) (result error) {

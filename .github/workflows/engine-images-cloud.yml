@@ -5,12 +5,17 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/engine-images-cloud.yml
       - engines/images/cloud-launcher/**
+      - engines/images/cloudquery/**
+      - '!engines/images/cloudquery/plan.json'
       - engines/images/cloudsplaining/**
+      - '!engines/images/cloudsplaining/plan.json'
       - engines/images/prowler/**
+      - '!engines/images/prowler/plan.json'
       - engines/images/scoutsuite/**
+      - '!engines/images/scoutsuite/plan.json'
       - engines/images/steampipe/**
+      - '!engines/images/steampipe/plan.json'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +34,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - engine: cloudquery
+            tag: 2.0.31-aws9.2.0-1
+            dockerfile: engines/images/cloudquery/Dockerfile
           - engine: prowler
             tag: 5.39.1-1
             dockerfile: engines/images/prowler/Dockerfile
@@ -96,12 +104,49 @@ jobs:
           docker logout ghcr.io
           docker buildx imagetools inspect "${IMAGE}@${DIGEST}"
 
+      - name: Run the anonymous CloudQuery amd64 smoke contract
+        if: matrix.engine == 'cloudquery'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          reference="${IMAGE}@${DIGEST}"
+          docker logout ghcr.io
+          docker pull --platform linux/amd64 "${reference}"
+          test "$(docker image inspect "${reference}" --format '{{.Config.User}}')" = "65532:65532"
+          test "$(docker image inspect "${reference}" --format '{{json .Config.Entrypoint}}')" = '["/usr/local/bin/ai-security-scanner-cloud-launcher"]'
+          test "$(docker image inspect "${reference}" --format '{{index .Config.Labels "io.ai-security-scanner.profile"}}')" = "aws-iam-us-east-1"
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --entrypoint /app/cloudquery "${reference}" --version | grep -F 'cloudquery version 2.0.31'
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --entrypoint /usr/local/libexec/cloudquery-source-aws "${reference}" --help >/dev/null
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --entrypoint /usr/local/libexec/cloudquery-destination-file "${reference}" --help >/dev/null
+          if docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            "${reference}" --engine cloudquery --scope /run/ai-security-scanner/scope.json --output /output; then
+            echo 'CloudQuery launcher accepted missing protected mounts' >&2
+            exit 1
+          fi
+          evidence="$(mktemp -d)"
+          container="$(docker create --platform linux/amd64 "${reference}")"
+          trap 'docker rm -f "${container}" >/dev/null 2>&1 || true; rm -rf "${evidence}"' EXIT
+          docker cp "${container}:/usr/share/source/cloudquery/." "${evidence}/"
+          printf '%s  %s\n' \
+            21e18c3d1348243273231e72a39febd9d7429ac4f1ec36c5bf18c32d509e5996 "${evidence}/cli-e27e4ab.tar.gz" \
+            a4788989f99ab02144605539ab552e86c076405ac7516fb673e73ba6bda40c6b "${evidence}/aws-804be3a.tar.gz" \
+            21f4b826b9ad4830854130674023b97e443abba17b66a3557cd0805b3083b2d1 "${evidence}/file-05f0233.tar.gz" \
+            | sha256sum --check --strict
+          jq -e '.registry == {mode:"local", authenticated:false, runtime_downloads:false}' \
+            "${evidence}/build/dependencies.lock.json" >/dev/null
+
       - name: Record the published index digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           REVISION: ${{ github.sha }}
         run: |
           test "${DIGEST#sha256:}" != "${DIGEST}"
+          manifest="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}")"
+          amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' <<<"${manifest}")"
+          arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' <<<"${manifest}")"
           mkdir -p package-evidence
           jq -n \
             --arg engine "${{ matrix.engine }}" \
@@ -109,7 +154,9 @@ jobs:
             --arg tag "${IMAGE_TAG}" \
             --arg digest "${DIGEST}" \
             --arg revision "${REVISION}" \
-            '{schemaVersion: 1, engine: $engine, image: $image, tag: $tag, digest: $digest, platforms: ["linux/amd64", "linux/arm64"], sourceRevision: $revision, public: true}' \
+            --arg amd64Digest "${amd64_digest}" \
+            --arg arm64Digest "${arm64_digest}" \
+            '{schemaVersion: 1, engine: $engine, image: $image, tag: $tag, digest: $digest, platforms: ["linux/amd64", "linux/arm64"], platformDigests: {"linux/amd64": $amd64Digest, "linux/arm64": $arm64Digest}, sourceRevision: $revision, public: true}' \
             > "package-evidence/${{ matrix.engine }}-image-manifest.json"
           printf 'Published `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
 

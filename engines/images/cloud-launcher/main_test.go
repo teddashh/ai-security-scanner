@@ -137,3 +137,50 @@ func TestReleasedScopeFixturesMatchLauncherContract(t *testing.T) {
 		})
 	}
 }
+
+func TestCloudQueryConfigurationIsExactLocalSourceClosure(t *testing.T) {
+	config := string(cloudQueryConfiguration())
+	tables := []string{
+		"aws_iam_accounts",
+		"aws_iam_credential_reports",
+		"aws_iam_groups",
+		"aws_iam_password_policies",
+		"aws_iam_policies",
+		"aws_iam_roles",
+		"aws_iam_users",
+	}
+	for _, table := range tables {
+		if strings.Count(config, "\n    - "+table+"\n") != 1 {
+			t.Fatalf("fixed CloudQuery table %s is missing or duplicated", table)
+		}
+	}
+	if strings.Count(config, "\n    - aws_") != len(tables) {
+		t.Fatal("CloudQuery profile contains a table outside the exact allowlist")
+	}
+	for _, required := range []string{
+		"path: /usr/local/libexec/cloudquery-source-aws",
+		"path: /usr/local/libexec/cloudquery-destination-file",
+		"registry: local",
+		"regions: [us-east-1]",
+		"directory: /output",
+		"format: json",
+	} {
+		if !strings.Contains(config, required) {
+			t.Fatalf("CloudQuery config lacks %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"aws_iam_account_authorization_details",
+		"cloudquery/aws",
+		"cloudquery/file",
+		"registry: grpc",
+		"registry: github",
+		"registry: cloudquery",
+		"{{TABLE}}",
+		"{{UUID}}",
+	} {
+		if strings.Contains(config, forbidden) {
+			t.Fatalf("CloudQuery config contains forbidden registry or schema value %q", forbidden)
+		}
+	}
+}

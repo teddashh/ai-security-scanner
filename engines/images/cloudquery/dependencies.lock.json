@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.0.0",
+  "profile": "aws-iam-us-east-1",
+  "knowledge_date": "2023-01-10",
+  "source_repository": "https://github.com/cloudquery/cloudquery",
+  "registry": {
+    "mode": "local",
+    "authenticated": false,
+    "runtime_downloads": false
+  },
+  "components": [
+    {
+      "name": "cloudquery-cli",
+      "version": "2.0.31",
+      "release_ref": "cli-v2.0.31",
+      "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
+      "source_archive": {
+        "url": "https://github.com/cloudquery/cloudquery/archive/e27e4ab61ad85479a5d53dae9b08440bc63e72b3.tar.gz",
+        "sha256": "sha256:21e18c3d1348243273231e72a39febd9d7429ac4f1ec36c5bf18c32d509e5996"
+      },
+      "artifacts": {
+        "linux/amd64": {
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/cli-v2.0.31/cloudquery_linux_amd64",
+          "sha256": "sha256:61d8304180f2cd1139d74db4185a5b1c99437cceb97bdb8acf0d1abd875106b1"
+        },
+        "linux/arm64": {
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/cli-v2.0.31/cloudquery_linux_arm64",
+          "sha256": "sha256:51f1e24bc05fbae03ebd45f55c456a522d62d55413ebd0a4d728cf1b36ec938d"
+        }
+      }
+    },
+    {
+      "name": "cloudquery-source-aws",
+      "version": "9.2.0",
+      "release_ref": "plugins-source-aws-v9.2.0",
+      "source_revision": "804be3a90d6f15d3e6c662c0eb7afa88a9596180",
+      "source_archive": {
+        "url": "https://github.com/cloudquery/cloudquery/archive/804be3a90d6f15d3e6c662c0eb7afa88a9596180.tar.gz",
+        "sha256": "sha256:a4788989f99ab02144605539ab552e86c076405ac7516fb673e73ba6bda40c6b"
+      },
+      "artifacts": {
+        "linux/amd64": {
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-source-aws-v9.2.0/aws_linux_amd64.zip",
+          "archive_sha256": "sha256:138cb293cc691725914bd59ab452fb29b13b32e1c92f3da1410720349ba9004d",
+          "binary_sha256": "sha256:c7460b15d200d606e1d339889acb5482c15cbf6346e278943492808a4b2cbc90"
+        },
+        "linux/arm64": {
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-source-aws-v9.2.0/aws_linux_arm64.zip",
+          "archive_sha256": "sha256:d9dd75752cf6f2f7cd5d9ba9639927e4ce00ddce3acb2af4d05dd2af6fa9fc9c",
+          "binary_sha256": "sha256:5d1b00b1dac8701d9ace39ed21bd927e6fe499637df09b0635405a58c578e998"
+        }
+      }
+    },
+    {
+      "name": "cloudquery-destination-file",
+      "version": "1.0.2",
+      "release_ref": "plugins-destination-file-v1.0.2",
+      "source_revision": "05f02334b9d6ed5de344fd9a9cf7ddead31ce453",
+      "source_archive": {
+        "url": "https://github.com/cloudquery/cloudquery/archive/05f02334b9d6ed5de344fd9a9cf7ddead31ce453.tar.gz",
+        "sha256": "sha256:21f4b826b9ad4830854130674023b97e443abba17b66a3557cd0805b3083b2d1"
+      },
+      "artifacts": {
+        "linux/amd64": {
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-destination-file-v1.0.2/file_linux_amd64.zip",
+          "archive_sha256": "sha256:10c7278be4e365e7b6263fd3c2fef871d1559f3c65f6115728d8d5d13e307257",
+          "binary_sha256": "sha256:73f24531aeb686db87e38624f71fa8e0e5ce876d5dc36458dcb554d400f17387"
+        },
+        "linux/arm64": {
+          "url": "https://github.com/cloudquery/cloudquery/releases/download/plugins-destination-file-v1.0.2/file_linux_arm64.zip",
+          "archive_sha256": "sha256:68688cd89c3a8c8fd0332463c7039a9a14443d382a01ee7cb74e57d0234a8b85",
+          "binary_sha256": "sha256:e3708d162c6dbb429185d5295edcfd1324ed459252f794eca5a805e1ab5d3122"
+        }
+      }
+    }
+  ],
+  "tables": [
+    "aws_iam_accounts",
+    "aws_iam_credential_reports",
+    "aws_iam_groups",
+    "aws_iam_password_policies",
+    "aws_iam_policies",
+    "aws_iam_roles",
+    "aws_iam_users"
+  ],
+  "network_destinations": [
+    "ec2.us-east-1.amazonaws.com:443",
+    "iam.amazonaws.com:443",
+    "sts.us-east-1.amazonaws.com:443"
+  ],
+  "output": {
+    "directory": "/output",
+    "format": "ndjson-per-table",
+    "file_suffix": ".json"
+  }
+}

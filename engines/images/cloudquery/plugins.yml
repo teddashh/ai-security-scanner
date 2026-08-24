@@ -1,11 +1,10 @@
 kind: source
 spec:
   name: aws
-  path: cloudquery/aws
-  version: v34.4.0
+  path: /usr/local/libexec/cloudquery-source-aws
+  registry: local
   destinations: [file]
   tables:
-    - aws_iam_account_authorization_details
     - aws_iam_accounts
     - aws_iam_credential_reports
     - aws_iam_groups
@@ -19,11 +18,10 @@ spec:
 kind: destination
 spec:
   name: file
-  path: cloudquery/file
-  version: v5.5.10
+  path: /usr/local/libexec/cloudquery-destination-file
+  registry: local
   write_mode: append
-  send_sync_summary: false
   spec:
-    path: /output/{{TABLE}}-{{UUID}}.json
+    directory: /output
     format: json
     no_rotate: true
