@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "steampipe",
+  "plan_kind": "managed_source_image",
+  "support_date": "2026-08-24",
+  "publish_state": "publication_in_progress",
+  "source": {
+    "repository": "https://github.com/turbot/steampipe",
+    "revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
+    "acquisition_source": "https://github.com/turbot/steampipe/commit/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
+    "local_research_checkout": ".upstreams/turbot/steampipe"
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
+    "tag": "2.4.5-1",
+    "digest": null
+  },
+  "build_recipe": {
+    "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
+    "source_archive": {
+      "url": "https://github.com/turbot/steampipe/archive/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf.tar.gz",
+      "sha256": "sha256:e5d2d970380e5338a0104419599dbf785ef4fe22ad844d954b9e73b56661dec5"
+    },
+    "aws_plugin": {
+      "version": "1.32.0",
+      "revision": "6e79b2dece502bc198310b39bd54bc95d2842c99",
+      "archive_sha256": "sha256:a8a876ed355cca40f8232d9b4c287d20f68ade4b3231ccd69487fcfef0fdaea8",
+      "build_mode": "pinned_source"
+    },
+    "embedded_database": {
+      "version": "14.19.0",
+      "oci_digest": "sha256:84264ef41853178707bccb091f5450c22e835f8a98f9961592c75690321093d9"
+    },
+    "postgres_fdw": {
+      "version": "2.2.5",
+      "revision": "6d1d957d1330582b7af34064eaa9f8fa196d2918",
+      "archive_sha256": "sha256:c1a05303d5d11317ed59326aae85d9485e7efa8923ca38d60b05a19ddb0d6349",
+      "oci_digest": "sha256:62b654db44ca6f7f6894e8f53e5dcad9530d356253273ebf05f92109d5ca7457"
+    },
+    "source_date_epoch": 1786368462,
+    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "base_images": [
+      {"repository": "golang", "tag": "1.26.5-alpine3.23", "digest": "sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc"},
+      {"repository": "debian", "tag": "bookworm-slim", "digest": "sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"}
+    ]
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/steampipe/Dockerfile",
+    "sha256": "sha256:388669ff8ff60b40cdec6d84645bd95077c1a944c2fe009929146e92e3b8cbea"
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Copy the preseeded executable closure to one case-owned transient directory, write a fixed AWS IAM query/config, capture bounded JSON without a shell, and remove all runtime database state on exit.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
+    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "desktop_uid_compatible": true,
+    "read_only_rootfs": true,
+    "tmpfs_noexec": true,
+    "network_mode": "managed_allowlist",
+    "network_destinations": ["iam.amazonaws.com:443", "sts.us-east-1.amazonaws.com:443"],
+    "updates": false,
+    "telemetry": false
+  },
+  "command": [
+    "--engine", "steampipe",
+    "--scope", "/run/ai-security-scanner/scope.json",
+    "--output", "/output"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/steampipe.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "source_offer",
+    "rationale": "The image embeds exact AGPL-3.0-only Steampipe source and build scripts, Apache-2.0 plugin/FDW source, and the PostgreSQL notice.",
+    "source_offer_path": "engines/images/steampipe/SOURCE-OFFER.md"
+  },
+  "blockers": ["final_image_digest_not_published"]
+}

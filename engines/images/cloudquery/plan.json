@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "cloudquery",
+  "plan_kind": "upstream_image",
+  "support_date": "2026-08-24",
+  "publish_state": "verified_upstream_artifact_not_runnable",
+  "source": {
+    "repository": "https://github.com/cloudquery/cloudquery",
+    "revision": "2af7b44c162d075bad4b73af04ab31655af5c72c",
+    "acquisition_source": "https://github.com/cloudquery/cloudquery/commit/2af7b44c162d075bad4b73af04ab31655af5c72c",
+    "local_research_checkout": ".upstreams/cloudquery/cloudquery"
+  },
+  "verified_upstream_artifact": {
+    "repository": "ghcr.io/cloudquery/cloudquery",
+    "tag": "6.41.1",
+    "digest": "sha256:dfe1d65f7ca20721820faaa762206714ca57431b5c4397404602359cc15fda85",
+    "entrypoint": ["/app/cloudquery"]
+  },
+  "provider_plugins": [
+    {"name": "cloudquery/aws", "version": "v34.4.0"},
+    {"name": "cloudquery/file", "version": "v5.5.10"}
+  ],
+  "provider_lock": {
+    "path": "engines/images/cloudquery/plugins.yml",
+    "sha256": "sha256:271b145150f791027fb4ad1d0d90803d4c65fef6d4d78dac095e753f7d50453c",
+    "install_result": "authenticated_entitlement_required",
+    "source_closure": "incomplete"
+  },
+  "final_artifact": null,
+  "dockerfile": {
+    "emitted": false,
+    "reason": "The required AWS plugin is neither anonymously installable nor available as a complete buildable source closure."
+  },
+  "wrapper": {
+    "required": true,
+    "implemented": true,
+    "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
+    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+  },
+  "command": [
+    "--engine", "cloudquery",
+    "--scope", "/run/ai-security-scanner/scope.json",
+    "--output", "/output"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/cloudquery.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "source_offer",
+    "rationale": "A managed redistribution requires the complete MPL-2.0 plugin source closure and notices.",
+    "source_offer_path": "engines/images/cloudquery/SOURCE-OFFER.md"
+  },
+  "blockers": [
+    "authenticated_plugin_entitlement_required",
+    "complete_plugin_source_closure_unavailable"
+  ]
+}

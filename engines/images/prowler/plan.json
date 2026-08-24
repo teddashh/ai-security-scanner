@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "prowler",
+  "plan_kind": "managed_rebase",
+  "support_date": "2026-08-24",
+  "publish_state": "publication_in_progress",
+  "source": {
+    "repository": "https://github.com/prowler-cloud/prowler",
+    "revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
+    "acquisition_source": "https://github.com/prowler-cloud/prowler/commit/40ecbd035e5541bf099917c5033cceb8959c4737",
+    "local_research_checkout": ".upstreams/prowler-cloud/prowler"
+  },
+  "verified_upstream_artifact": {
+    "repository": "public.ecr.aws/prowler-cloud/prowler",
+    "tag": "5.39.1",
+    "digest": "sha256:5752ad690fa6ab32c9f2c9031db29d45af111459373d70212638d00efd4834e0",
+    "entrypoint": ["/home/prowler/.venv/bin/prowler"],
+    "source_association": "attested_match"
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
+    "tag": "5.39.1-1",
+    "digest": null
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/prowler/Dockerfile",
+    "sha256": "sha256:4ea2b3e768832aceeb73e7d322fcff69c37188ca34931ad888f644153fe7c8ac"
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Validate an AWS-only immutable scope and ephemeral session credential closure, then invoke the fixed IAM profile without a shell.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
+    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "network_mode": "managed_allowlist",
+    "network_destinations": [
+      "iam.amazonaws.com:443",
+      "sts.us-east-1.amazonaws.com:443",
+      "ec2.us-east-1.amazonaws.com:443",
+      "organizations.us-east-1.amazonaws.com:443"
+    ],
+    "updates": false,
+    "telemetry": false
+  },
+  "command": [
+    "--engine", "prowler",
+    "--scope", "/run/ai-security-scanner/scope.json",
+    "--output", "/output"
+  ],
+  "output": {
+    "primary_format": "ocsf-json",
+    "path": "/output/prowler.ocsf.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "Apache-2.0 permits redistribution with required notices.",
+    "source_offer_path": null
+  },
+  "blockers": ["final_image_digest_not_published"]
+}

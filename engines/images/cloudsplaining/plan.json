@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "cloudsplaining",
+  "plan_kind": "managed_source_image",
+  "support_date": "2026-08-24",
+  "publish_state": "publication_in_progress",
+  "source": {
+    "repository": "https://github.com/salesforce/cloudsplaining",
+    "revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
+    "acquisition_source": "https://github.com/salesforce/cloudsplaining/commit/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
+    "local_research_checkout": ".upstreams/salesforce/cloudsplaining"
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
+    "tag": "0.9.1-1",
+    "digest": null
+  },
+  "build_recipe": {
+    "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
+    "source_archive": {
+      "url": "https://github.com/salesforce/cloudsplaining/archive/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7.tar.gz",
+      "sha256": "sha256:2bf9b7ae71b39ca597c164bd42c8bb3e1a68e4fb5a6e44bdbca9e5cd959b1f5c"
+    },
+    "dependency_lock": {
+      "path": "uv.lock",
+      "sha256": "sha256:2405aeed08011b0662a08248079be8be71a3b0025fc141fba603de309c821261"
+    },
+    "source_date_epoch": 1781480779,
+    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "base_images": [
+      {"repository": "golang", "tag": "1.25.0-alpine3.22", "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"},
+      {"repository": "ghcr.io/astral-sh/uv", "tag": "0.11.0", "digest": "sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b73d0e6db83ef82ff99969baf"},
+      {"repository": "python", "tag": "3.11.13-slim-bookworm", "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"}
+    ]
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/cloudsplaining/Dockerfile",
+    "sha256": "sha256:31ee2838a9e40f2619d357b9693db2f346b0b3fe1257611c947517da9758af8e"
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Download AWS IAM authorization details with ephemeral session credentials and scan only that bounded local JSON without a shell.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
+    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "network_mode": "managed_allowlist",
+    "network_destinations": ["iam.amazonaws.com:443", "sts.amazonaws.com:443"],
+    "updates": false,
+    "telemetry": false
+  },
+  "command": [
+    "--engine", "cloudsplaining",
+    "--scope", "/run/ai-security-scanner/scope.json",
+    "--output", "/output"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/cloudsplaining.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "allow",
+    "rationale": "BSD-3-Clause permits redistribution with its notice.",
+    "source_offer_path": null
+  },
+  "blockers": ["final_image_digest_not_published"]
+}

@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0.0",
+  "engine_id": "scoutsuite",
+  "plan_kind": "managed_source_image",
+  "support_date": "2026-08-24",
+  "publish_state": "publication_in_progress",
+  "source": {
+    "repository": "https://github.com/nccgroup/ScoutSuite",
+    "revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+    "acquisition_source": "https://github.com/nccgroup/ScoutSuite/commit/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+    "local_research_checkout": ".upstreams/nccgroup/ScoutSuite"
+  },
+  "final_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
+    "tag": "5.14.0-1",
+    "digest": null
+  },
+  "build_recipe": {
+    "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+    "source_archive": {
+      "url": "https://github.com/nccgroup/ScoutSuite/archive/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d.tar.gz",
+      "sha256": "sha256:f263c09a56f255b55c42dfde4ee4a3e371d121f22e9c9942ff9661a009004bb3"
+    },
+    "dependency_lock": {
+      "path": "engines/images/scoutsuite/requirements.lock",
+      "sha256": "sha256:a5b6365421108d786a563c543375a87979210035a1fa793849840ca2f9fd94c7",
+      "require_hashes": true,
+      "no_build": true
+    },
+    "source_patch": {
+      "path": "engines/images/scoutsuite/scoutsuite-json-only.patch",
+      "sha256": "sha256:4f13f6754931203b4564ab6f7e7480428c713315bc05a99eddea4733aff8413b"
+    },
+    "source_date_epoch": 1715333097,
+    "target_platforms": ["linux/amd64", "linux/arm64"],
+    "base_images": [
+      {"repository": "golang", "tag": "1.25.0-alpine3.22", "digest": "sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440"},
+      {"repository": "ghcr.io/astral-sh/uv", "tag": "0.11.0", "digest": "sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b73d0e6db83ef82ff99969baf"},
+      {"repository": "python", "tag": "3.11.13-slim-bookworm", "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"}
+    ]
+  },
+  "dockerfile": {
+    "emitted": true,
+    "path": "engines/images/scoutsuite/Dockerfile",
+    "sha256": "sha256:152a67f85cbc717e4c2eb0a138f202197c16e57982e883332c6c42baa82d4771"
+  },
+  "wrapper": {
+    "required": true,
+    "strategy": "Validate an AWS-only scope, invoke the reduced IAM JSON profile without a shell, strip the report prefix, and bound the final JSON artifact.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
+    "launcher_sha256": "sha256:69666be14d345165783aac1f714f5c5a3084c8a5909b38d4af3b4bc9dcf608ae"
+  },
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "network_mode": "managed_allowlist",
+    "network_destinations": [
+      "iam.amazonaws.com:443",
+      "sts.us-east-1.amazonaws.com:443",
+      "ec2.us-east-1.amazonaws.com:443"
+    ],
+    "updates": false,
+    "telemetry": false
+  },
+  "command": [
+    "--engine", "scoutsuite",
+    "--scope", "/run/ai-security-scanner/scope.json",
+    "--output", "/output"
+  ],
+  "output": {
+    "primary_format": "json",
+    "path": "/output/scoutsuite.json",
+    "media_type": "application/json",
+    "adapter_state": "released"
+  },
+  "license": {
+    "disposition": "source_offer",
+    "rationale": "The image embeds the exact GPL-2.0-only source, scanner patch, build scripts, launcher source, and notices.",
+    "source_offer_path": "engines/images/scoutsuite/SOURCE-OFFER.md"
+  },
+  "blockers": ["final_image_digest_not_published"]
+}

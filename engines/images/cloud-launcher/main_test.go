@@ -79,6 +79,46 @@ func TestChildEnvironmentDropsAmbientSecrets(t *testing.T) {
 	if !strings.Contains(joined, "\nHTTPS_PROXY=socks5h://gateway:1080\n") {
 		t.Fatal("managed proxy was not preserved")
 	}
+	if !strings.Contains(joined, "\nAWS_MAX_ATTEMPTS=2\n") ||
+		!strings.Contains(joined, "\nAWS_RETRY_MODE=standard\n") {
+		t.Fatal("AWS retries are not statically bounded")
+	}
+}
+
+func TestRunCommandToFileBoundsAndCleansOutput(t *testing.T) {
+	directory := t.TempDir()
+	success := filepath.Join(directory, "success.json")
+	if err := runCommandToFile(invocation{Program: "/bin/echo", Args: []string{"evidence"}}, success); err != nil {
+		t.Fatalf("capture successful output: %v", err)
+	}
+	content, err := os.ReadFile(success)
+	if err != nil || string(content) != "evidence\n" {
+		t.Fatalf("unexpected captured output %q: %v", content, err)
+	}
+
+	failure := filepath.Join(directory, "failure.json")
+	if err := runCommandToFile(invocation{Program: "/bin/false"}, failure); err == nil {
+		t.Fatal("failed child process was accepted")
+	}
+	if _, err := os.Lstat(failure); !os.IsNotExist(err) {
+		t.Fatal("incomplete evidence file was not removed")
+	}
+
+	boundedPath := filepath.Join(directory, "bounded")
+	file, err := os.OpenFile(boundedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &boundedOutputWriter{file: file, remaining: 3}
+	if _, err := writer.Write([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("d")); err == nil || !writer.exceeded {
+		t.Fatal("bounded writer accepted excess output")
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReleasedScopeFixturesMatchLauncherContract(t *testing.T) {

@@ -157,7 +157,7 @@ func run(arguments []string) error {
 			Env: environment,
 		})
 	case "scoutsuite":
-		return runScoutSuite(environment, *outputPath)
+		return runScoutSuite(environment, temporaryRoot, *outputPath)
 	case "cloudquery":
 		return runCloudQuery(environment, temporaryRoot)
 	case "steampipe":
@@ -389,14 +389,18 @@ func runCloudsplaining(environment []string, temporaryRoot, output string) error
 	if _, err := readBoundedRegularFile(input, maxOutputFileSize); err != nil {
 		return errors.New("Cloudsplaining did not produce bounded authorization details")
 	}
+	reportDirectory := filepath.Join(temporaryRoot, "report")
+	if err := os.Mkdir(reportDirectory, 0o700); err != nil {
+		return fmt.Errorf("create Cloudsplaining report directory: %w", err)
+	}
 	if err := runCommand(invocation{
 		Program: "/opt/cloudsplaining/bin/cloudsplaining",
-		Args:    []string{"scan", "--input-file", input, "--output", output, "--skip-open-report"},
+		Args:    []string{"scan", "--input-file", input, "--output", reportDirectory, "--skip-open-report"},
 		Env:     environment,
 	}); err != nil {
 		return err
 	}
-	source := filepath.Join(output, "iam-findings-default.json")
+	source := filepath.Join(reportDirectory, "iam-findings-default.json")
 	destination := filepath.Join(output, "cloudsplaining.json")
 	if err := moveBoundedRegularFile(source, destination); err != nil {
 		return fmt.Errorf("normalize Cloudsplaining findings: %w", err)
@@ -404,19 +408,23 @@ func runCloudsplaining(environment []string, temporaryRoot, output string) error
 	return nil
 }
 
-func runScoutSuite(environment []string, output string) error {
+func runScoutSuite(environment []string, temporaryRoot, output string) error {
+	reportDirectory := filepath.Join(temporaryRoot, "scoutsuite-report")
+	if err := os.Mkdir(reportDirectory, 0o700); err != nil {
+		return fmt.Errorf("create ScoutSuite report directory: %w", err)
+	}
 	if err := runCommand(invocation{
 		Program: "/opt/scoutsuite/bin/scout",
 		Args: []string{
 			"aws", "--services", "iam", "--no-browser", "--force",
-			"--report-dir", output, "--report-name", "scoutsuite",
+			"--report-dir", reportDirectory, "--report-name", "scoutsuite",
 			"--result-format", "json", "--max-workers", "4",
 		},
 		Env: environment,
 	}); err != nil {
 		return err
 	}
-	source := filepath.Join(output, "scoutsuite-results", "scoutsuite_results_scoutsuite.js")
+	source := filepath.Join(reportDirectory, "scoutsuite-results", "scoutsuite_results_scoutsuite.js")
 	payload, err := readBoundedRegularFile(source, maxOutputFileSize)
 	if err != nil {
 		return errors.New("ScoutSuite did not produce its bounded result document")

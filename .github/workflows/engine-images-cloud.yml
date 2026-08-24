@@ -82,6 +82,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=engine-${{ matrix.engine }}
 
       - name: Publish anonymous pull access
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
