@@ -80,9 +80,19 @@ ENV HOME=/opt/seed-home \
 USER 65532:65532
 
 FROM seed-input AS seed
-RUN steampipe query --output json "select 1 as seed_ready" \
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) database_port=19193 ;; \
+      arm64) database_port=19194 ;; \
+      *) exit 64 ;; \
+    esac \
+    && mkdir -p "${STEAMPIPE_INSTALL_DIR}/config" \
+    && printf 'options "database" {\n  port = %s\n  listen = "local"\n}\n' "${database_port}" \
+       > "${STEAMPIPE_INSTALL_DIR}/config/ai-security-scanner-build.spc" \
+    && steampipe query --output json "select 1 as seed_ready" \
     && ai-security-scanner-steampipe-installprep \
-         /opt/seed /opt/input/steampipe-plugin-aws.plugin "${SOURCE_DATE_EPOCH}"
+         /opt/seed /opt/input/steampipe-plugin-aws.plugin "${SOURCE_DATE_EPOCH}" \
+    && rm -f "${STEAMPIPE_INSTALL_DIR}/config/ai-security-scanner-build.spc"
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 ARG SOURCE_DATE_EPOCH

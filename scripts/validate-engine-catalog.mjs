@@ -1011,6 +1011,16 @@ function validateCloudManagedImage(plan, planRelative, engine) {
     }
   }
   if (engine.id === "steampipe") {
+    for (const required of [
+      'amd64) database_port=19193',
+      'arm64) database_port=19194',
+      'ai-security-scanner-build.spc',
+      'rm -f "${STEAMPIPE_INSTALL_DIR}/config/ai-security-scanner-build.spc"',
+    ]) {
+      if (!dockerfileText.includes(required)) {
+        errors.push(`${planRelative}: Steampipe multi-platform seed must preserve isolated build ports and remove its build-only config`);
+      }
+    }
     for (const [label, value] of [
       ["AWS plugin archive", recipe.aws_plugin?.archive_sha256],
       ["embedded database OCI artifact", recipe.embedded_database?.oci_digest],

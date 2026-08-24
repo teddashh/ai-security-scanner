@@ -61,7 +61,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/steampipe/Dockerfile",
-    "sha256": "sha256:388669ff8ff60b40cdec6d84645bd95077c1a944c2fe009929146e92e3b8cbea"
+    "sha256": "sha256:b3f59d6092455c3c7f625812866ae8132ea62d4a010c4ea2bb6ac6ad286e5348"
   },
   "wrapper": {
     "required": true,
