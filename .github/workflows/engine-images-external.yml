@@ -1,0 +1,144 @@
+name: Publish managed external engine images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - engines/images/external-launcher/**
+      - engines/images/naabu/**
+      - '!engines/images/naabu/plan.json'
+      - engines/images/httpx/**
+      - '!engines/images/httpx/plan.json'
+      - engines/images/nuclei/**
+      - '!engines/images/nuclei/plan.json'
+      - .github/workflows/engine-images-external.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: managed-external-engine-images
+  cancel-in-progress: false
+
+jobs:
+  launcher-tests:
+    name: Validate the capability-boundary launcher
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run formatting and unit tests in the pinned toolchain
+        run: |
+          docker run --rm \
+            -v "${PWD}/engines/images/external-launcher:/src:ro" \
+            -w /src \
+            golang:1.26.0-alpine@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 \
+            sh -ceu 'test -z "$(gofmt -d main.go main_test.go)"; go test ./...'
+
+  publish:
+    name: Publish ${{ matrix.engine }} for amd64 + arm64
+    needs: launcher-tests
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: naabu
+            tag: 2.6.1-1
+            version: 2.6.1
+            dockerfile: engines/images/naabu/Dockerfile
+          - engine: httpx
+            tag: 1.10.0-1
+            version: 1.10.0
+            dockerfile: engines/images/httpx/Dockerfile
+          - engine: nuclei
+            tag: 3.11.1-1
+            version: 3.11.1
+            dockerfile: engines/images/nuclei/Dockerfile
+    env:
+      IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-${{ matrix.engine }}
+      IMAGE_TAG: ${{ matrix.tag }}
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.36.1
+          driver-opts: |
+            image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the immutable multi-platform image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=external-engine-${{ matrix.engine }}
+          cache-to: type=gha,mode=max,scope=external-engine-${{ matrix.engine }}
+
+      - name: Publish anonymous pull access
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="${IMAGE#ghcr.io/teddashh/}"
+          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
+
+      - name: Verify anonymous access and real scanner version
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_VERSION: ${{ matrix.version }}
+        run: |
+          docker logout ghcr.io
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}"
+          docker run --platform linux/amd64 --rm \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+            --entrypoint "/usr/local/bin/${{ matrix.engine }}" \
+            "${IMAGE}@${DIGEST}" -version 2>&1 | grep -F "${EXPECTED_VERSION}"
+
+      - name: Record the published index digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REVISION: ${{ github.sha }}
+        run: |
+          test "${DIGEST#sha256:}" != "${DIGEST}"
+          mkdir -p package-evidence
+          jq -n \
+            --arg engine "${{ matrix.engine }}" \
+            --arg image "${IMAGE}" \
+            --arg tag "${IMAGE_TAG}" \
+            --arg digest "${DIGEST}" \
+            --arg revision "${REVISION}" \
+            '{schemaVersion: 1, engine: $engine, image: $image, tag: $tag, digest: $digest, platforms: ["linux/amd64", "linux/arm64"], sourceRevision: $revision, public: true}' \
+            > "package-evidence/${{ matrix.engine }}-image-manifest.json"
+          printf 'Published `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Preserve publication evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.engine }}-image-manifest-${{ github.run_id }}
+          path: package-evidence/${{ matrix.engine }}-image-manifest.json
+          if-no-files-found: error
+          retention-days: 30
