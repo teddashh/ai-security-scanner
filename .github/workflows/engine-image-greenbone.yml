@@ -309,8 +309,12 @@ jobs:
             final_digest="${!final_variable}"
             docker pull --platform "linux/${platform}" "${IMAGE}@${final_digest}"
             docker image inspect "${IMAGE}@${final_digest}" > "${RUNNER_TEMP}/final-${platform}-inspect.json"
-            jq -e --slurpfile final "${RUNNER_TEMP}/final-${platform}-inspect.json" \
-              '($final[0][0]) as $image | .imageIdentity.id == $image.Id and .imageIdentity.architecture == $image.Architecture and .imageIdentity.os == $image.Os and .imageIdentity.rootFsDiffIds == $image.RootFS.Layers and .imageIdentity.config == $image.Config' \
+            docker buildx imagetools inspect "${IMAGE}@${final_digest}" --raw > "${RUNNER_TEMP}/final-${platform}-manifest.json"
+            jq -e \
+              --arg final_digest "${final_digest}" \
+              --slurpfile final "${RUNNER_TEMP}/final-${platform}-inspect.json" \
+              --slurpfile manifest "${RUNNER_TEMP}/final-${platform}-manifest.json" \
+              '($final[0][0]) as $image | ($manifest[0]) as $registry | .publishedImage.digest == $final_digest and .imageIdentity.id == $registry.config.digest and .imageIdentity.architecture == $image.Architecture and .imageIdentity.os == $image.Os and .imageIdentity.rootFsDiffIds == $image.RootFS.Layers and (.imageIdentity.config | {User, Env, Cmd, ArgsEscaped, Volumes, WorkingDir, Entrypoint, Labels}) == ($image.Config | {User, Env, Cmd, ArgsEscaped, Volumes, WorkingDir, Entrypoint, Labels})' \
               "native-evidence/${platform}/native-digest.json"
           done
           test "$(docker image inspect "${IMAGE}@${final_amd64_digest}" --format '{{.Config.User}}')" = '65532:65532'
