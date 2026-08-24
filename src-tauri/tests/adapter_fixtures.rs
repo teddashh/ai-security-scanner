@@ -412,7 +412,7 @@ fn greenbone_xml_with_a_doctype_is_rejected_without_inference() {
 #[test]
 fn greenbone_xml_allows_only_predefined_and_numeric_character_references() {
     let xml = br#"<?xml version="1.0"?>
-<get_reports_response><report><results><result id="example"><name>Example&amp;network&#x20;vulnerability</name><host>192.0.2.10</host><port>65535/tcp</port><severity>7.5</severity><threat>High</threat><asset_id>asset-1</asset_id><description>relay -&gt; target</description><nvt oid="1.3.6.1.4.1.25623.1.0.1"><name>Example&amp;NVT&#x20;reference</name><family>Web&#32;Servers</family></nvt></result></results></report></get_reports_response>"#;
+<get_reports_response><report><results><result id="example"><name>Example&amp;network&#x20;vulnerability</name><host>192.0.2.10</host><port>65535/tcp</port><severity>7.5</severity><threat>High</threat><asset_id>asset-1</asset_id><description>relay -&gt; target</description><nvt oid="1.3.6.1.4.1.25623.1.0.1"><name>Example&amp;NVT&apos;&quot;&lt;&gt;&#x20;reference</name><family>Web&#32;Servers</family></nvt></result></results></report></get_reports_response>"#;
     let output = normalize_bytes(
         "greenbone",
         xml,
@@ -422,7 +422,9 @@ fn greenbone_xml_allows_only_predefined_and_numeric_character_references() {
     );
     assert_eq!(output.findings.len(), 1);
     assert!(
-        output.findings[0].title.contains("Example&NVT reference"),
+        output.findings[0]
+            .title
+            .contains("Example&NVT'\"<> reference"),
         "unexpected title: {}",
         output.findings[0].title
     );

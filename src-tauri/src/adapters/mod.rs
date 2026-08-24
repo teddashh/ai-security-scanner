@@ -757,7 +757,8 @@ fn xml_attribute(
 }
 
 fn safe_xml_reference(reference: &BytesRef<'_>) -> Option<char> {
-    let value = match reference.as_ref() {
+    let reference_bytes: &[u8] = reference.as_ref();
+    let value = match reference_bytes {
         b"amp" => '&',
         b"apos" => '\'',
         b"gt" => '>',

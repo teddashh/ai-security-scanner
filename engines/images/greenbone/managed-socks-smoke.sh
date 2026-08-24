@@ -259,11 +259,15 @@ print(f"xml_results={len(results)} actionable_alarms={len(alarms)}")
 ' /evidence/greenbone.xml "${selected_oid}" "${target_address}" "${target_port}"
 
 if [[ "${adapter_mode}" == "adapter" ]]; then
+  mkdir -p "${scratch}/cargo-home" "${scratch}/cargo-target"
+  chmod 0777 "${scratch}/cargo-home" "${scratch}/cargo-target"
   docker run --rm --user 1000:1000 \
-    -e CARGO_HOME=/tmp/cargo \
-    -e CARGO_TARGET_DIR=/workspace/target \
-    -v "${PWD}:/workspace" \
-    -v "${scratch}/output:/evidence:ro" \
+    -e CARGO_HOME=/tmp/cargo-home \
+    -e CARGO_TARGET_DIR=/tmp/cargo-target \
+    --mount "type=bind,src=${PWD},dst=/workspace,readonly" \
+    --mount "type=bind,src=${scratch}/cargo-home,dst=/tmp/cargo-home" \
+    --mount "type=bind,src=${scratch}/cargo-target,dst=/tmp/cargo-target" \
+    --mount "type=bind,src=${scratch}/output,dst=/evidence,readonly" \
     -w /workspace \
     rust@sha256:94e9efa4033213dbb70d4f665527e7ece3944ddb7ba1dd2e43f6fd6e2490af58 \
     cargo run --locked --no-default-features --example greenbone_adapter_smoke -- /evidence/greenbone.xml

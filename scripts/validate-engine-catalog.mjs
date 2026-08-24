@@ -536,7 +536,12 @@ function isManagedPublicationClaimed(engine, plan, expectedRepository) {
     plan.publication !== null && plan.publication !== undefined;
 }
 
-function validatePublishedManagedEvidence(plan, planRelative, engine) {
+function validatePublishedManagedEvidence(
+  plan,
+  planRelative,
+  engine,
+  { requireManagedSmoke = false } = {},
+) {
   const publication = plan.publication;
   const runMatch = typeof publication?.workflow_run === "string"
     ? /^https:\/\/github\.com\/teddashh\/ai-security-scanner\/actions\/runs\/([1-9][0-9]*)$/.exec(publication.workflow_run)
@@ -562,8 +567,13 @@ function validatePublishedManagedEvidence(plan, planRelative, engine) {
   if (!artifactMatch || !runMatch || artifactMatch[1] !== runMatch[1]) {
     errors.push(`${planRelative}: evidence artifact must be ${engine.id}-image-evidence-<workflow-run-id>-<positive-attempt> for the same run`);
   }
-  if (!digestPattern.test(publication?.managed_smoke_evidence_sha256 ?? "")) {
+  const hasManagedSmokeEvidence = publication !== null &&
+    typeof publication === "object" &&
+    Object.hasOwn(publication, "managed_smoke_evidence_sha256");
+  if (requireManagedSmoke && !digestPattern.test(publication?.managed_smoke_evidence_sha256 ?? "")) {
     errors.push(`${planRelative}: publication must bind the managed smoke evidence by sha256`);
+  } else if (hasManagedSmokeEvidence && !digestPattern.test(publication.managed_smoke_evidence_sha256 ?? "")) {
+    errors.push(`${planRelative}: publication managed smoke evidence must be sha256 when present`);
   }
 }
 
@@ -701,7 +711,7 @@ function validatePublishedManagedBasics(plan, planRelative, engine, contract, co
     errors.push(`${planRelative}: wrapper must bind the exact project-owned launcher source and entrypoint`);
   }
 
-  validatePublishedManagedEvidence(plan, planRelative, engine);
+  validatePublishedManagedEvidence(plan, planRelative, engine, { requireManagedSmoke: true });
   return validatePublishedManagedDockerfile(plan, planRelative, engine, contract.tag);
 }
 
@@ -851,6 +861,9 @@ function validatePublishedGreenboneImage(plan, planRelative, engine) {
     "managed SOCKS gateway unexpectedly allowed an unapproved target port",
     "authorized vulnerable fixture produced no alarm",
     "actionable_alarms=",
+    "CARGO_HOME=/tmp/cargo-home",
+    "CARGO_TARGET_DIR=/tmp/cargo-target",
+    "dst=/workspace,readonly",
   ]) {
     if (!smokeText.includes(required)) errors.push(`${planRelative}: Greenbone real-alarm smoke contract lacks ${required}`);
   }
@@ -878,6 +891,15 @@ function validatePublishedGreenboneImage(plan, planRelative, engine) {
 }
 
 function validateCloudManagedImage(plan, planRelative, engine) {
+  if (engine.image) {
+    if (plan.publish_state !== "published_managed_artifact") {
+      errors.push(`${planRelative}: runnable cloud image must be marked as a published managed artifact`);
+    }
+    validatePublishedManagedEvidence(plan, planRelative, engine);
+  } else if (plan.publication !== undefined) {
+    errors.push(`${planRelative}: unpublished cloud image must not claim publication evidence`);
+  }
+
   const expectedPath = `engines/images/${engine.id}/Dockerfile`;
   const dockerfile = plan.dockerfile;
   if (dockerfile?.emitted !== true || dockerfile?.path !== expectedPath) {
@@ -896,28 +918,6 @@ function validateCloudManagedImage(plan, planRelative, engine) {
   }
   if (!/^# syntax=[^\s]+@sha256:[0-9a-f]{64}$/m.test(dockerfileText.split(/\r?\n/, 1)[0])) {
     errors.push(`${planRelative}: managed cloud Dockerfile frontend must be digest-pinned`);
-  }
-
-  if (engine.image) {
-    const publication = plan.publication;
-    if (plan.publish_state !== "published_managed_artifact") {
-      errors.push(`${planRelative}: runnable cloud image must be marked as a published managed artifact`);
-    }
-    if (!publication || publication.anonymous_pull_verified !== true || !deepEqual(publication.platforms, ["linux/amd64", "linux/arm64"])) {
-      errors.push(`${planRelative}: runnable cloud image requires anonymous multi-platform publication evidence`);
-    }
-    if (!deepEqual(Object.keys(publication?.platform_digests ?? {}), ["linux/amd64", "linux/arm64"]) ||
-        !Object.values(publication.platform_digests).every((digest) => digestPattern.test(digest))) {
-      errors.push(`${planRelative}: cloud publication evidence requires exact amd64 and arm64 manifest digests`);
-    }
-    if (!revisionPattern.test(publication?.source_revision ?? "") || !/^https:\/\/github\.com\/teddashh\/ai-security-scanner\/actions\/runs\/[1-9][0-9]*$/.test(publication?.workflow_run ?? "")) {
-      errors.push(`${planRelative}: cloud publication evidence must identify an exact repository revision and workflow run`);
-    }
-    if (!new RegExp(`^${engine.id}-image-manifest-[1-9][0-9]*$`).test(publication?.evidence_artifact ?? "")) {
-      errors.push(`${planRelative}: cloud publication evidence artifact name is invalid`);
-    }
-  } else if (plan.publication !== undefined) {
-    errors.push(`${planRelative}: unpublished cloud image must not claim publication evidence`);
   }
 
   const launcherPath = resolve(root, "engines/images/cloud-launcher/main.go");
@@ -1188,6 +1188,11 @@ function validateCloudQueryPlan(plan, planRelative, engine) {
 }
 
 function validateManagedRebase(plan, planRelative, engine) {
+  if (plan.publish_state !== "published_managed_artifact") {
+    errors.push(`${planRelative}: managed rebase must be a published managed artifact`);
+  }
+  validatePublishedManagedEvidence(plan, planRelative, engine);
+
   if (!plan.verified_upstream_artifact) {
     errors.push(`${planRelative}: managed rebase requires an immutable verified upstream artifact`);
   }
@@ -1255,6 +1260,11 @@ function validateManagedRebase(plan, planRelative, engine) {
 }
 
 function validateManagedSourceImage(plan, planRelative, engine) {
+  if (plan.publish_state !== "published_managed_artifact") {
+    errors.push(`${planRelative}: managed source image must be a published managed artifact`);
+  }
+  validatePublishedManagedEvidence(plan, planRelative, engine);
+
   const recipe = plan.build_recipe;
   if (!recipe || typeof recipe !== "object") {
     errors.push(`${planRelative}: managed source image requires a build recipe`);
@@ -1433,6 +1443,11 @@ function validateManagedSourceImage(plan, planRelative, engine) {
 }
 
 function validateManagedExternalImage(plan, planRelative, engine) {
+  if (plan.publish_state !== "published_managed_artifact") {
+    errors.push(`${planRelative}: managed external image must be a published managed artifact`);
+  }
+  validatePublishedManagedEvidence(plan, planRelative, engine);
+
   const dockerfilePath = resolve(root, `engines/images/${engine.id}/Dockerfile`);
   if (plan.dockerfile?.emitted !== true || plan.dockerfile?.path !== `engines/images/${engine.id}/Dockerfile` || !existsSync(dockerfilePath)) {
     errors.push(`${planRelative}: managed external image must emit its engine Dockerfile`);
@@ -1505,6 +1520,11 @@ function validateManagedExternalImage(plan, planRelative, engine) {
 }
 
 function validateManagedM365Image(plan, planRelative, engine) {
+  if (plan.publish_state !== "published_managed_artifact") {
+    errors.push(`${planRelative}: managed Microsoft 365 image must be a published managed artifact`);
+  }
+  validatePublishedManagedEvidence(plan, planRelative, engine);
+
   const engineRoot = `engines/images/${engine.id}`;
   const dockerfileRelative = `${engineRoot}/Dockerfile`;
   const dockerfilePath = resolve(root, dockerfileRelative);
@@ -1520,18 +1540,6 @@ function validateManagedM365Image(plan, planRelative, engine) {
   validateImage(frontend, `${planRelative}.build_recipe.dockerfile_frontend`);
   if (dockerfileText.split(/\r?\n/)[0] !== `# syntax=${frontend?.repository}:${frontend?.tag}@${frontend?.digest}`) {
     errors.push(`${planRelative}: Microsoft 365 Dockerfile frontend is not the declared immutable frontend`);
-  }
-
-  const publication = plan.publication;
-  if (plan.publish_state !== "published_managed_artifact" ||
-      publication?.anonymous_pull_verified !== true ||
-      !deepEqual(publication?.platforms, ["linux/amd64", "linux/arm64"]) ||
-      !deepEqual(Object.keys(publication?.platform_digests ?? {}), ["linux/amd64", "linux/arm64"]) ||
-      !Object.values(publication?.platform_digests ?? {}).every((digest) => digestPattern.test(digest)) ||
-      !revisionPattern.test(publication?.source_revision ?? "") ||
-      !/^https:\/\/github\.com\/teddashh\/ai-security-scanner\/actions\/runs\/[1-9][0-9]*$/.test(publication?.workflow_run ?? "") ||
-      !new RegExp(`^${engine.id}-image-manifest-[1-9][0-9]*$`).test(publication?.evidence_artifact ?? "")) {
-    errors.push(`${planRelative}: managed Microsoft 365 image lacks exact anonymous multi-platform publication evidence`);
   }
 
   const recipe = plan.build_recipe;
