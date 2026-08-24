@@ -77,13 +77,6 @@ jobs:
           cache-from: type=gha,scope=engine-${{ matrix.engine }}
           cache-to: type=gha,mode=max,scope=engine-${{ matrix.engine }}
 
-      - name: Publish anonymous pull access
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          package="${IMAGE#ghcr.io/teddashh/}"
-          gh api --method PATCH "/user/packages/container/${package}/visibility" -f visibility=public
-
       - name: Verify anonymous multi-platform access
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
