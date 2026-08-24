@@ -795,6 +795,7 @@ function validatePublishedGreenboneImage(plan, planRelative, engine) {
     `ADD --checksum=${managedGreenboneContract.scannerArchiveSha256}`,
     `openvas-scanner/archive/${managedGreenboneContract.scannerRevision}.tar.gz`,
     'org.opencontainers.image.source="https://github.com/greenbone/openvas-scanner"',
+    'org.opencontainers.image.licenses="GPL-2.0-only AND ODbL-1.0 AND Apache-2.0"',
     `community/vulnerability-tests@${managedGreenboneContract.feedImageDigest}`,
     `community/notus-data@${managedGreenboneContract.notusImageDigest}`,
     `io.ai-security-scanner.openvas-revision="${managedGreenboneContract.scannerRevision}"`,
