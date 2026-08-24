@@ -39,7 +39,7 @@ const AUXILIARY_LAYOUTS = Object.freeze([
   }),
 ]);
 
-async function filesBelow(directory) {
+async function regularFilesDirectlyBelow(directory) {
   const output = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const candidate = path.join(directory, entry.name);
@@ -48,7 +48,10 @@ async function filesBelow(directory) {
       throw new Error(`bundle output contains a symlink: ${candidate}`);
     }
     if (metadata.isDirectory()) {
-      output.push(...(await filesBelow(candidate)));
+      // Tauri keeps non-publishable staging trees beside the final artifacts
+      // (for example, an AppDir and a macOS .app). Their internal symlinks are
+      // valid bundle structure; only direct, regular files can be released.
+      continue;
     } else if (metadata.isFile()) {
       output.push(candidate);
     } else {
@@ -60,7 +63,7 @@ async function filesBelow(directory) {
 
 async function collectUpdater(bundleRoot, output, platform, version, names, layout) {
   const directory = path.join(bundleRoot, layout.directory);
-  const signatures = (await filesBelow(directory))
+  const signatures = (await regularFilesDirectlyBelow(directory))
     .filter((file) => file.endsWith(layout.signatureSuffix))
     .sort();
   if (signatures.length !== 1) {
@@ -185,7 +188,9 @@ async function main() {
   for (const kind of expected) {
     const typeDirectory = path.join(bundleRoot, kind);
     const extension = BUNDLE_EXTENSIONS.get(kind);
-    const matches = (await filesBelow(typeDirectory)).filter((file) => file.endsWith(extension));
+    const matches = (await regularFilesDirectlyBelow(typeDirectory)).filter((file) =>
+      file.endsWith(extension),
+    );
     if (matches.length === 0) {
       throw new Error(`no ${kind} installer was produced below ${typeDirectory}`);
     }

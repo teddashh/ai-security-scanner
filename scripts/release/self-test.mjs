@@ -1,5 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PROJECT_ROOT, readJson, runMain, sha256File } from "./lib.mjs";
@@ -40,6 +50,7 @@ async function createPlatformFixture(
   kinds,
   signingKey,
   macUpdaterName = "ai-security-scanner.app.tar.gz",
+  replaceInstallerWithSymlink = false,
 ) {
   const bundleRoot = path.join(root, `bundle-${platform}`);
   for (const [kind, filename] of kinds) {
@@ -71,6 +82,17 @@ async function createPlatformFixture(
     await writeFile(updaterPayload, Buffer.alloc(4096, "macos-universal-updater"));
     updaterPayloads = [updaterPayload];
   }
+  const stagingDirectory =
+    platform === "linux-x86_64"
+      ? path.join(bundleRoot, "appimage", "ai-security-scanner.AppDir")
+      : platform === "macos-universal"
+        ? path.join(bundleRoot, "macos", "ai-security-scanner.app", "Contents", "Resources")
+        : null;
+  if (stagingDirectory) {
+    await mkdir(stagingDirectory, { recursive: true });
+    await writeFile(path.join(stagingDirectory, "application-icon.png"), Buffer.alloc(2048, "icon"));
+    await symlink("application-icon.png", path.join(stagingDirectory, ".DirIcon"));
+  }
   for (const updaterPayload of updaterPayloads) {
     tauriSigner([
       "sign",
@@ -80,6 +102,13 @@ async function createPlatformFixture(
       TEST_KEY_PASSWORD,
       updaterPayload,
     ]);
+  }
+  if (replaceInstallerWithSymlink) {
+    const [kind, filename] = kinds[0];
+    const installer = path.join(bundleRoot, kind, filename);
+    const regularTarget = `${installer}.regular`;
+    await rename(installer, regularTarget);
+    await symlink(path.basename(regularTarget), installer);
   }
   const sidecarExtension = platform === "windows-x86_64" ? ".exe" : "";
   const magic =
@@ -282,6 +311,27 @@ async function main() {
     }
     if (!rejectedUnexpectedMacUpdaterName) {
       throw new Error("unexpected unversioned macOS updater payload name was accepted");
+    }
+
+    let rejectedSymlinkInstaller = false;
+    try {
+      await createPlatformFixture(
+        path.join(temporary, "negative-symlink-installer"),
+        "linux-x86_64",
+        [
+          ["deb", `ai-security-scanner_${VERSION}_amd64.deb`],
+          ["rpm", `ai-security-scanner-${VERSION}-1.x86_64.rpm`],
+          ["appimage", `ai-security-scanner_${VERSION}_amd64.AppImage`],
+        ],
+        signingKey,
+        undefined,
+        true,
+      );
+    } catch {
+      rejectedSymlinkInstaller = true;
+    }
+    if (!rejectedSymlinkInstaller) {
+      throw new Error("top-level symlink installer was accepted");
     }
 
     const outputs = [
