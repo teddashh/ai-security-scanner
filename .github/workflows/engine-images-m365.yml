@@ -82,7 +82,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           package="${IMAGE#ghcr.io/teddashh/}"
-          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
+          gh api --method PATCH "/user/packages/container/${package}/visibility" -f visibility=public
 
       - name: Verify anonymous multi-platform access
         env:
