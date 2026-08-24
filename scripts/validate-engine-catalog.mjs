@@ -313,7 +313,21 @@ function validateManagedImageEvidence(catalogEntries) {
 
         const precedingPublishingBuildIndexes = publishingBuildIndexes.filter((index) => index < evidenceIndex);
         if (precedingPublishingBuildIndexes.length === 0) {
-          errors.push(`${label}: evidence action must follow a docker/build-push-action publication step in the same job`);
+          const nativePromotionIndex = steps.findIndex((candidate, index) =>
+            index < evidenceIndex &&
+            evidenceEngineIds.length === 1 && evidenceEngineIds[0] === "greenbone" &&
+            candidate?.id === "publish" &&
+            candidate?.shell === "bash" &&
+            typeof candidate?.run === "string" &&
+            candidate.run.includes("docker buildx imagetools create") &&
+            candidate.run.includes('native-evidence/amd64/native-digest.json') &&
+            candidate.run.includes('native-evidence/arm64/native-digest.json') &&
+            candidate.run.includes('printf \'digest=%s\\n\' "${index_digest}" >> "${GITHUB_OUTPUT}"'));
+          if (nativePromotionIndex < 0) {
+            errors.push(`${label}: evidence action must follow a docker/build-push-action publication or the exact Greenbone native-manifest promotion step`);
+          } else if (evidenceStep?.with?.digest !== "${{ steps.publish.outputs.digest }}") {
+            errors.push(`${label}: Greenbone evidence digest must reference the promoted index output`);
+          }
         } else {
           const expectedDigestInputs = precedingPublishingBuildIndexes
             .map((index) => steps[index]?.id)
@@ -874,6 +888,11 @@ function validatePublishedGreenboneImage(plan, planRelative, engine) {
     smokeRelative,
     "managedSmokeEvidenceSha256",
     "nativeImageIdentityMatchesFinal: true",
+    "Push the exact smoke-tested native image",
+    "Promote the exact smoke-tested native manifests",
+    ".publishedImage.digest",
+    "docker buildx imagetools create",
+    "(.manifests | length == 2)",
     "platformDigests:",
     "greenbone-image-manifest.json",
     `selectedOid: "${managedGreenboneContract.smokeOid}"`,

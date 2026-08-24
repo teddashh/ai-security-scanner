@@ -149,6 +149,35 @@ jobs:
             '($inspect[0][0]) as $image | {schemaVersion: 1, platform: $platform, sourceRevision: $source_revision, imageIdentity: {id: $image.Id, architecture: $image.Architecture, os: $image.Os, rootFsDiffIds: $image.RootFS.Layers, config: $image.Config}, realScan: {selectedOid: "1.3.6.1.4.1.25623.1.0.108252", xmlResults: 5, actionableAlarms: 1, adapterFindings: 1, xmlSha256: $xml_sha256, directEgressDenied: true, unauthorizedPortDenied: true}}' \
             > "${evidence_dir}/native-digest.json"
 
+      - name: Authenticate the smoke-tested native publisher
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the exact smoke-tested native image
+        shell: bash
+        run: |
+          architecture="${{ matrix.architecture }}"
+          native_image="greenbone-native:${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${architecture}"
+          staging_tag="native-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${architecture}"
+          staging_ref="${IMAGE}:${staging_tag}"
+          docker tag "${native_image}" "${staging_ref}"
+          docker push "${staging_ref}"
+          published_digest="$(
+            docker buildx imagetools inspect "${staging_ref}" --format '{{json .Manifest.Digest}}' |
+              jq -er 'select(test("^sha256:[0-9a-f]{64}$"))'
+          )"
+          evidence="package-evidence/native-${architecture}/native-digest.json"
+          jq \
+            --arg repository "${IMAGE}" \
+            --arg tag "${staging_tag}" \
+            --arg digest "${published_digest}" \
+            '.publishedImage = {repository: $repository, tag: $tag, digest: $digest}' \
+            "${evidence}" > "${evidence}.tmp"
+          mv "${evidence}.tmp" "${evidence}"
+
       - name: Upload native digest and smoke evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -182,8 +211,9 @@ jobs:
         run: |
           for architecture in amd64 arm64; do
             evidence="native-evidence/${architecture}/native-digest.json"
-            jq -e --arg platform "linux/${architecture}" --arg revision "${GITHUB_SHA}" --arg architecture "${architecture}" \
-              '.schemaVersion == 1 and .platform == $platform and .sourceRevision == $revision and (.imageIdentity.id | test("^sha256:[0-9a-f]{64}$")) and .imageIdentity.architecture == $architecture and .imageIdentity.os == "linux" and (.imageIdentity.rootFsDiffIds | length > 0) and (.imageIdentity.config | type == "object") and .realScan.actionableAlarms == 1 and .realScan.adapterFindings == 1' \
+            expected_tag="native-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${architecture}"
+            jq -e --arg platform "linux/${architecture}" --arg revision "${GITHUB_SHA}" --arg architecture "${architecture}" --arg tag "${expected_tag}" \
+              '.schemaVersion == 1 and .platform == $platform and .sourceRevision == $revision and (.imageIdentity.id | test("^sha256:[0-9a-f]{64}$")) and .imageIdentity.architecture == $architecture and .imageIdentity.os == "linux" and (.imageIdentity.rootFsDiffIds | length > 0) and (.imageIdentity.config | type == "object") and .publishedImage.repository == "ghcr.io/teddashh/ai-security-scanner-engine-greenbone" and .publishedImage.tag == $tag and (.publishedImage.digest | test("^sha256:[0-9a-f]{64}$")) and .realScan.actionableAlarms == 1 and .realScan.adapterFindings == 1' \
               "${evidence}"
           done
 
@@ -229,24 +259,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish the immutable multi-platform image from native caches
+      - name: Promote the exact smoke-tested native manifests
         id: publish
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: engines/images/greenbone/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
-          push: true
-          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
-          provenance: false
-          sbom: false
-          cache-from: |
-            type=gha,scope=engine-greenbone-amd64
-            type=gha,scope=engine-greenbone-arm64
-            type=gha,scope=engine-greenbone-multiarch
-          cache-to: type=gha,mode=max,scope=engine-greenbone-multiarch
+        shell: bash
+        run: |
+          amd64_digest="$(jq -er '.publishedImage.digest | select(test("^sha256:[0-9a-f]{64}$"))' native-evidence/amd64/native-digest.json)"
+          arm64_digest="$(jq -er '.publishedImage.digest | select(test("^sha256:[0-9a-f]{64}$"))' native-evidence/arm64/native-digest.json)"
+          test "${amd64_digest}" != "${arm64_digest}"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${IMAGE_TAG}" \
+            "${IMAGE}@${amd64_digest}" \
+            "${IMAGE}@${arm64_digest}"
+          index_digest="$(
+            docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{json .Manifest.Digest}}' |
+              jq -er 'select(test("^sha256:[0-9a-f]{64}$"))'
+          )"
+          docker buildx imagetools inspect "${IMAGE}@${index_digest}" --raw > promoted-index.json
+          jq -e \
+            --arg amd64 "${amd64_digest}" \
+            --arg arm64 "${arm64_digest}" \
+            '([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest] == [$amd64]) and ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest] == [$arm64]) and (.manifests | length == 2)' \
+            promoted-index.json
+          printf 'digest=%s\n' "${index_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish anonymous pull access
         continue-on-error: true
