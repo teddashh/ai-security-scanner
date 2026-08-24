@@ -10,7 +10,8 @@ the HTTP subtree of the exact Nuclei templates commit
 - Nuclei `go.sum` SHA-256: `c9be45a7baa2b3fda7d9ecdea91865b9caf78a733c70d1133d346bcc7dba501b`
 - Template repository: <https://github.com/projectdiscovery/nuclei-templates>
 - Template source archive SHA-256: `1c651703d2fcd3e4134c548b49576db1e5c95e9522ce01246259b3aa2a50813b`
-- Licenses: MIT; both upstream license texts are carried below `/usr/share/licenses`.
+- Licenses: Nuclei/templates are MIT and the project launcher is Apache-2.0;
+  all license texts are carried below `/usr/share/licenses`.
 
 The project-owned launcher source is in `engines/images/external-launcher`. It
 validates every selected template against the conservative read-only HTTP

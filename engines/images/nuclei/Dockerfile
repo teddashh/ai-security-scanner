@@ -51,7 +51,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Nuclei engine" \
       org.opencontainers.image.source="https://github.com/projectdiscovery/nuclei" \
       org.opencontainers.image.revision="a8c88feb4a1c8e961b7902534ce3af97e9d524a4" \
       org.opencontainers.image.version="3.11.1-2" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="Apache-2.0 AND MIT" \
       io.ai-security-scanner.source-archive-sha256="233fd559f0f2287310709ed0f19613a9e298dbff03ee7f9e0905a0709e8537e4" \
       io.ai-security-scanner.templates-revision="24858b4bfabfa86f0bcfd36aea24fb535152b012" \
       io.ai-security-scanner.templates-archive-sha256="1c651703d2fcd3e4134c548b49576db1e5c95e9522ce01246259b3aa2a50813b"
@@ -65,6 +65,7 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 COPY --from=build /lib/ld-musl-*.so.1 /lib/
 COPY --from=build /out/nuclei /usr/local/bin/nuclei
 COPY --from=build /out/ai-security-scanner-engine-entrypoint /usr/local/bin/ai-security-scanner-engine-entrypoint
+COPY LICENSE /usr/share/licenses/ai-security-scanner/LICENSE
 COPY --from=build /src/nuclei/LICENSE.md /usr/share/licenses/nuclei/LICENSE.md
 COPY --from=build /src/nuclei-templates/LICENSE.md /usr/share/licenses/nuclei-templates/LICENSE.md
 COPY --from=build /src/nuclei-templates/http /opt/nuclei-templates/http

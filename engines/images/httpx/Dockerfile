@@ -46,7 +46,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner httpx engine" \
       org.opencontainers.image.source="https://github.com/projectdiscovery/httpx" \
       org.opencontainers.image.revision="13037dd08b9715cfbd960a70ae1edfef6686a857" \
       org.opencontainers.image.version="1.10.0-2" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="Apache-2.0 AND MIT" \
       io.ai-security-scanner.source-archive-sha256="94ae90ef3a2551bbc81c0814bd157387ab9c9bda54d1f5e38aaa708b95570946"
 
 ENV HOME="/tmp" \
@@ -58,6 +58,7 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 COPY --from=build /lib/ld-musl-*.so.1 /lib/
 COPY --from=build /out/httpx /usr/local/bin/httpx
 COPY --from=build /out/ai-security-scanner-engine-entrypoint /usr/local/bin/ai-security-scanner-engine-entrypoint
+COPY LICENSE /usr/share/licenses/ai-security-scanner/LICENSE
 COPY --from=build /src/httpx/LICENSE.md /usr/share/licenses/httpx/LICENSE.md
 COPY --from=build /rootfs /
 

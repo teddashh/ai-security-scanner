@@ -46,7 +46,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Naabu engine" \
       org.opencontainers.image.source="https://github.com/projectdiscovery/naabu" \
       org.opencontainers.image.revision="5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8" \
       org.opencontainers.image.version="2.6.1-2" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="Apache-2.0 AND MIT" \
       io.ai-security-scanner.source-archive-sha256="0f2dd95b86692513d0c9a077f8332b33d52e6aba2e5955257aa0b2c74aae1e8b"
 
 ENV HOME="/tmp" \
@@ -58,6 +58,7 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 COPY --from=build /lib/ld-musl-*.so.1 /lib/
 COPY --from=build /out/naabu /usr/local/bin/naabu
 COPY --from=build /out/ai-security-scanner-engine-entrypoint /usr/local/bin/ai-security-scanner-engine-entrypoint
+COPY LICENSE /usr/share/licenses/ai-security-scanner/LICENSE
 COPY --from=build /src/naabu/LICENSE.md /usr/share/licenses/naabu/LICENSE.md
 COPY --from=build /rootfs /
 
