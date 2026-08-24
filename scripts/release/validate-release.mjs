@@ -158,6 +158,13 @@ function validateReleaseWorkflow(workflow) {
   );
   assert(!trigger.push.branches, "release workflow must not publish from branch pushes");
   assert(workflow.permissions?.contents === "read", "release workflow default contents permission must be read");
+  const build = workflow.jobs?.build;
+  assert(build, "release workflow has no platform build job");
+  const macosBuild = build.steps?.find((step) => step.name === "Build universal macOS installer");
+  assert(
+    typeof macosBuild?.run === "string" && macosBuild.run.includes("--bundles app,dmg"),
+    "macOS release build must create both the signed app updater payload and DMG installer",
+  );
   const validate = workflow.jobs?.validate;
   assert(validate, "release workflow has no identity validation job");
   assert(

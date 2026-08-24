@@ -296,7 +296,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: npm run tauri build -- --ci --target universal-apple-darwin --bundles dmg -- --locked
+        run: npm run tauri build -- --ci --target universal-apple-darwin --bundles app,dmg -- --locked
 
       - name: Build Windows installers
         if: matrix.platform == 'windows-x86_64'
