@@ -1,0 +1,29 @@
+kind: source
+spec:
+  name: aws
+  path: cloudquery/aws
+  version: v34.4.0
+  destinations: [file]
+  tables:
+    - aws_iam_account_authorization_details
+    - aws_iam_accounts
+    - aws_iam_credential_reports
+    - aws_iam_groups
+    - aws_iam_password_policies
+    - aws_iam_policies
+    - aws_iam_roles
+    - aws_iam_users
+  spec:
+    regions: [us-east-1]
+---
+kind: destination
+spec:
+  name: file
+  path: cloudquery/file
+  version: v5.5.10
+  write_mode: append
+  send_sync_summary: false
+  spec:
+    path: /output/{{TABLE}}-{{UUID}}.json
+    format: json
+    no_rotate: true

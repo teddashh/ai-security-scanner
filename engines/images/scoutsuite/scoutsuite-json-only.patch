@@ -1,0 +1,57 @@
+diff --git a/ScoutSuite/output/result_encoder.py b/ScoutSuite/output/result_encoder.py
+--- a/ScoutSuite/output/result_encoder.py
++++ b/ScoutSuite/output/result_encoder.py
+@@ -4,6 +4,5 @@
+ 
+ import dateutil
+-from sqlitedict import SqliteDict
+ 
+ from ScoutSuite import DEFAULT_REPORT_DIRECTORY
+ from ScoutSuite.core.console import print_exception, print_info
+@@ -52,6 +51,7 @@ class SqlLiteEncoder(ScoutResultEncoder):
+     def load_from_file(self, config_type, config_path=None):
+         if not config_path:
+             config_path, _ = get_filename(config_type, self.report_name, self.report_dir)
++        from sqlitedict import SqliteDict
+         return SqliteDict(config_path, autocommit=True).data
+ 
+     def save_to_file(self, config, config_type, force_write, _debug):
+@@ -82,6 +82,7 @@ class SqlLiteEncoder(ScoutResultEncoder):
+                     os.makedirs(config_dirname)
+                 if os.path.exists(config_filename):
+                     os.remove(config_filename)
++                from sqlitedict import SqliteDict
+                 return SqliteDict(config_filename)
+             except Exception as e:
+                 print_exception(e)
+diff --git a/requirements.txt b/requirements.txt
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,8 +1,5 @@
+ # Core
+ python-dateutil<2.8.1,>=2.1
+ netaddr>=0.8.0
+-sqlitedict>=1.6.0
+-cherrypy>=18.1.0
+-cherrypy-cors>=1.6
+ coloredlogs<=10.0
+ asyncio-throttle==0.1.1
+diff --git a/ScoutSuite/__main__.py b/ScoutSuite/__main__.py
+--- a/ScoutSuite/__main__.py
++++ b/ScoutSuite/__main__.py
+@@ -12,7 +12,6 @@ from ScoutSuite.core.console import set_logger_configuration, print_info, print_
+ from ScoutSuite.core.exceptions import RuleExceptions
+ from ScoutSuite.core.processingengine import ProcessingEngine
+ from ScoutSuite.core.ruleset import Ruleset
+-from ScoutSuite.core.server import Server
+ from ScoutSuite.output.html import ScoutReport
+ from ScoutSuite.output.utils import get_filename
+ from ScoutSuite.providers import get_provider
+@@ -290,6 +289,7 @@ async def run(provider,
+                              result_format=result_format)
+ 
+         if database_name:
++            from ScoutSuite.core.server import Server
+             database_file, _ = get_filename('RESULTS', report_name, report_dir, file_extension="db")
+             Server.init(database_file, host_ip, host_port)
+             return

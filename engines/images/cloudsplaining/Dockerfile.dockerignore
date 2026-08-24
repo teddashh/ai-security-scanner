@@ -1,0 +1,8 @@
+*
+!engines/
+!engines/images/
+!engines/images/cloud-launcher/
+!engines/images/cloud-launcher/go.mod
+!engines/images/cloud-launcher/main.go
+!engines/images/cloudsplaining/
+!engines/images/cloudsplaining/Dockerfile

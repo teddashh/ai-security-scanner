@@ -1,0 +1,4 @@
+root:x:0:
+desktop:x:1000:
+scanner:x:65532:
+nogroup:x:65534:

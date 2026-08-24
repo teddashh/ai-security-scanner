@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+FROM golang:1.25.0-alpine3.22@sha256:f18a072054848d87a8077455f0ac8a25886f2397f88bfdd222d6fafbb5bba440 AS launcher
+WORKDIR /src
+COPY engines/images/cloud-launcher/go.mod engines/images/cloud-launcher/main.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -trimpath \
+      -ldflags='-s -w -buildid=' -o /out/ai-security-scanner-cloud-launcher .
+
+FROM public.ecr.aws/prowler-cloud/prowler@sha256:5752ad690fa6ab32c9f2c9031db29d45af111459373d70212638d00efd4834e0
+
+LABEL org.opencontainers.image.title="ai-security-scanner Prowler engine" \
+      org.opencontainers.image.description="Pinned Prowler AWS IAM assessment with a scanner-owned credential and scope launcher" \
+      org.opencontainers.image.source="https://github.com/teddashh/ai-security-scanner" \
+      org.opencontainers.image.revision="40ecbd035e5541bf099917c5033cceb8959c4737" \
+      org.opencontainers.image.version="5.39.1-1" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      io.ai-security-scanner.upstream.image="public.ecr.aws/prowler-cloud/prowler@sha256:5752ad690fa6ab32c9f2c9031db29d45af111459373d70212638d00efd4834e0" \
+      io.ai-security-scanner.profile="aws-iam-us-east-1"
+
+COPY --from=launcher --chmod=0555 /out/ai-security-scanner-cloud-launcher /usr/local/bin/ai-security-scanner-cloud-launcher
+
+USER root
+RUN chmod 0711 /home/prowler
+
+ENV AWS_EC2_METADATA_DISABLED="true" \
+    AWS_DEFAULT_REGION="us-east-1" \
+    AWS_REGION="us-east-1" \
+    AWS_STS_REGIONAL_ENDPOINTS="regional" \
+    HOME="/tmp/ai-security-scanner-home" \
+    POWERSHELL_TELEMETRY_OPTOUT="1" \
+    PYTHONDONTWRITEBYTECODE="1" \
+    PYTHONUNBUFFERED="1" \
+    XDG_CACHE_HOME="/tmp/ai-security-scanner-cache"
+
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/ai-security-scanner-cloud-launcher"]

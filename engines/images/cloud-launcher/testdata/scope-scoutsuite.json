@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "engine_id": "scoutsuite",
+  "generated_at": "2026-08-24T00:00:00Z",
+  "assets": [{
+    "id": "test-aws-account",
+    "name": "Test AWS account",
+    "kind": "cloud_account",
+    "provider": "aws",
+    "region": null,
+    "identifiers": [{"namespace": "aws_account_id", "value": "000000000000"}],
+    "grants": [
+      {
+        "id": "test-inventory-grant",
+        "permission": "inventory_read",
+        "confirmed_by": "fixture",
+        "confirmed_at": "2026-08-24T00:00:00Z",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "authorization_reference": "fixture-only",
+        "external_scope": null
+      },
+      {
+        "id": "test-configuration-grant",
+        "permission": "configuration_read",
+        "confirmed_by": "fixture",
+        "confirmed_at": "2026-08-24T00:00:00Z",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "authorization_reference": "fixture-only",
+        "external_scope": null
+      }
+    ]
+  }]
+}
