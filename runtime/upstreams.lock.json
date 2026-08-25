@@ -27,13 +27,24 @@
     "source_sha256": "da5fcffc32762820568b828ed430a728864d34d50b6d2f30358597760cbb0523",
     "source_size_bytes": 141366336,
     "build_contract": {
+      "build_platform": "linux/amd64",
       "target_list": "x86_64-softmmu",
       "static": true,
-      "system_emulator_only": true,
+      "explicit_build_targets": [
+        "qemu-img",
+        "qemu-system-x86_64"
+      ],
       "graphical_frontends": false,
       "network_backend": "socket supplied by Podman/gvproxy",
-      "required_outputs": [
+      "exported_executables": [
+        "bin/qemu-img",
         "bin/qemu-system-x86_64",
+        "bin/qemu-system-x86_64.real"
+      ],
+      "required_outputs": [
+        "bin/qemu-img",
+        "bin/qemu-system-x86_64",
+        "bin/qemu-system-x86_64.real",
         "share/qemu"
       ],
       "excluded_foreign_firmware": [

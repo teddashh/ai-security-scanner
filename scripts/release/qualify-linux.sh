@@ -63,6 +63,67 @@ mapfile -t runtime_manifests < <(dpkg -L "${package_name}" | grep -E '/managed-r
 runtime_manifest="$(realpath -- "${runtime_manifests[0]}")"
 [[ -f "${runtime_manifest}" ]]
 cp -- "${runtime_manifest}" "${work_directory}/installed-runtime-manifest.json"
+runtime_root="$(dirname -- "${runtime_manifest}")"
+manifest_sha256="$(sha256sum -- "${runtime_manifest}" | cut -d ' ' -f 1)"
+[[ "${manifest_sha256}" =~ ^[0-9a-f]{64}$ ]]
+provider_release_home="${data_directory}/managed-runtime/provider-home/${manifest_sha256:0:16}"
+
+# Exercise the installed, manifest-bound image utility by its absolute path.
+# This cannot fall back to a qemu-img that happens to be installed on the host.
+node -e '
+  const crypto = require("crypto");
+  const fs = require("fs");
+  const path = require("path");
+  const { execFileSync } = require("child_process");
+  const [manifestPath, runtimeRoot, workRoot] = process.argv.slice(1);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const records = manifest.files.filter((item) => item.path === "bin/qemu-img");
+  if (records.length !== 1) throw new Error("Installed managed runtime has no exact bundled qemu-img file.");
+  const record = records[0];
+  if (record.executable !== true || !Number.isSafeInteger(record.size_bytes) || record.size_bytes <= 0 ||
+      !/^[0-9a-f]{64}$/.test(record.sha256)) {
+    throw new Error("Installed qemu-img manifest record is malformed.");
+  }
+  const components = manifest.components.filter((item) => item.id === "qemu");
+  if (components.length !== 1 || typeof components[0].version !== "string" ||
+      !/^[A-Za-z0-9._-]{1,64}$/.test(components[0].version)) {
+    throw new Error("Installed runtime has no exact QEMU component identity.");
+  }
+  const artifacts = components[0].artifacts.filter((item) => item.delivery === "bundled_file" &&
+    item.locator === record.path && item.sha256 === record.sha256 && item.size_bytes === record.size_bytes);
+  if (artifacts.length !== 1) throw new Error("QEMU component does not bind the installed qemu-img file.");
+  const binary = path.join(runtimeRoot, "bin", "qemu-img");
+  const metadata = fs.lstatSync(binary);
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size !== record.size_bytes ||
+      (metadata.mode & 0o111) === 0 || fs.realpathSync(binary) !== binary) {
+    throw new Error("Installed qemu-img is not the exact executable regular file.");
+  }
+  const digest = crypto.createHash("sha256").update(fs.readFileSync(binary)).digest("hex");
+  if (digest !== record.sha256) throw new Error("Installed qemu-img differs from its runtime manifest.");
+  const run = (args) => execFileSync(binary, args, {
+    cwd: workRoot,
+    encoding: "utf8",
+    env: { LANG: "C.UTF-8", LC_ALL: "C.UTF-8", PATH: "/usr/bin:/bin" },
+    timeout: 30_000,
+    maxBuffer: 1024 * 1024,
+  });
+  const version = run(["--version"]);
+  if (!version.includes(`qemu-img version ${components[0].version}`)) {
+    throw new Error("Installed qemu-img version differs from the exact QEMU component.");
+  }
+  const probeRoot = fs.mkdtempSync(path.join(workRoot, "qemu-img-probe-"));
+  const probe = path.join(probeRoot, "qualification.qcow2");
+  try {
+    run(["create", "-f", "qcow2", probe, "1G"]);
+    run(["resize", probe, "40G"]);
+    const information = JSON.parse(run(["info", "--output=json", probe]));
+    if (information.format !== "qcow2" || information["virtual-size"] !== 40 * 1024 * 1024 * 1024) {
+      throw new Error("Installed qemu-img failed the exact qcow2 create, resize, and inspect contract.");
+    }
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true });
+  }
+' "${runtime_manifest}" "${runtime_root}" "${work_directory}"
 
 "${cli}" --help >/dev/null
 set +e
@@ -83,18 +144,59 @@ run_managed() {
   node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "${work_directory}/${output_name}.json"
 }
 
+assert_managed_ssh_identity() {
+  node -e '
+    const fs = require("fs");
+    const [privateKey, publicKey, privateStaging, publicStaging] = process.argv.slice(1);
+    const absent = (entry) => {
+      try { fs.lstatSync(entry); return false; }
+      catch (error) { if (error.code === "ENOENT") return true; throw error; }
+    };
+    const verify = (entry, maximum, modes, label) => {
+      const metadata = fs.lstatSync(entry);
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1 ||
+          metadata.uid !== process.geteuid() || metadata.size <= 0 || metadata.size > maximum ||
+          !modes.includes(metadata.mode & 0o777)) {
+        throw new Error(`${label} is not an exact current-user single-link private file.`);
+      }
+      return fs.readFileSync(entry, "utf8");
+    };
+    const privateText = verify(privateKey, 16 * 1024, [0o400, 0o600], "Managed SSH private key");
+    const publicText = verify(publicKey, 4 * 1024, [0o400, 0o444, 0o600, 0o644], "Managed SSH public key");
+    if (!privateText.startsWith("-----BEGIN OPENSSH PRIVATE KEY-----\n") ||
+        !privateText.trimEnd().endsWith("-----END OPENSSH PRIVATE KEY-----")) {
+      throw new Error("Managed SSH private key is not an OpenSSH private key.");
+    }
+    if (!/^ssh-ed25519 [A-Za-z0-9+/]+={0,2} ai-security-scanner-managed-runtime\n?$/.test(publicText)) {
+      throw new Error("Managed SSH public key does not have the exact Ed25519 identity format.");
+    }
+    if (!absent(privateStaging) || !absent(publicStaging)) {
+      throw new Error("Managed SSH identity staging entries remain after start.");
+    }
+  ' \
+    "${provider_release_home}/data/containers/podman/machine/machine" \
+    "${provider_release_home}/data/containers/podman/machine/machine.pub" \
+    "${provider_release_home}/data/containers/podman/machine/.machine.private-key-new" \
+    "${provider_release_home}/data/containers/podman/machine/.machine.public-key-new"
+}
+
 run_managed initial-status status
 run_managed install install
 run_managed installed-status status
 run_managed start start
+assert_managed_ssh_identity
 run_managed running-status status
 run_managed container-qualification qualify
 run_managed stop stop
 run_managed stopped-status status
 run_managed uninstall-purge uninstall --force --purge-image-cache
+if [[ -e "${provider_release_home}" || -L "${provider_release_home}" ]]; then
+  printf 'Managed runtime uninstall left its exact release provider home behind.\n' >&2
+  exit 1
+fi
 run_managed final-status status
 
-for private_root in "${data_directory}/managed-runtime/versions" "${data_directory}/managed-runtime/machine-images"; do
+for private_root in "${data_directory}/managed-runtime/versions" "${data_directory}/managed-runtime/machine-images" "${data_directory}/managed-runtime/provider-home"; do
   if [[ -d "${private_root}" ]] && find "${private_root}" -mindepth 1 -print -quit | grep -q .; then
     printf 'Managed runtime cleanup left private entries below %s.\n' "${private_root}" >&2
     exit 1

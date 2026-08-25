@@ -12,18 +12,20 @@ use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, RANGE};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use ssh_key::{Algorithm, LineEnding, PrivateKey, PublicKey, rand_core::OsRng};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use url::Url;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const MANIFEST_SCHEMA_VERSION: &str = "2";
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
@@ -34,7 +36,8 @@ const MAX_BUNDLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_MACHINE_IMAGE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES: u64 = 1024 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(180);
+const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
@@ -42,6 +45,22 @@ const DOWNLOAD_CHUNK_BYTES: usize = 128 * 1024;
 const MACHINE_PREFIX: &str = "assm1";
 const MAX_MACHINE_NAME_BYTES: usize = 30;
 const MACHINE_IMAGE_ID_HEX_CHARS: usize = 12;
+const MAX_WSL_DISTRIBUTIONS: usize = 1024;
+const MAX_WSL_DISTRIBUTION_NAME_BYTES: usize = 256;
+const MAX_SSH_PRIVATE_KEY_BYTES: u64 = 16 * 1024;
+const MAX_SSH_PUBLIC_KEY_BYTES: u64 = 4 * 1024;
+const PODMAN_MACHINE_IDENTITY_NAME: &str = "machine";
+const MANAGED_SSH_KEY_COMMENT: &str = "ai-security-scanner-managed-runtime";
+#[cfg(unix)]
+const MACOS_SHORT_HOME_BASE: &str = "/tmp";
+#[cfg(unix)]
+const MACOS_SHORT_HOME_PREFIX: &str = "assm1-";
+#[cfg(unix)]
+const MACOS_SHORT_HOME_DIGEST_HEX_CHARS: usize = 32;
+#[cfg(unix)]
+const PODMAN_MACOS_MAX_SOCKET_PATH_BYTES: usize = 103;
+#[cfg(unix)]
+const PODMAN_IGNITION_SOCKET_SUFFIX: &str = "-ignition.sock";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -626,6 +645,35 @@ struct ManagedCommandOutput {
     stderr: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedCommandOperation {
+    MachineInitialization,
+    MachineInventory,
+    MachineStart,
+    MachineStop,
+    MachineRemoval,
+    WslDistributionInventory,
+    WslDistributionRemoval,
+    ActiveContainerInventory,
+    VersionPreflight,
+}
+
+impl ManagedCommandOperation {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MachineInitialization => "managed runtime machine initialization",
+            Self::MachineInventory => "managed runtime machine inventory",
+            Self::MachineStart => "managed runtime machine start",
+            Self::MachineStop => "managed runtime machine stop",
+            Self::MachineRemoval => "managed runtime machine removal",
+            Self::WslDistributionInventory => "managed Windows WSL distribution inventory",
+            Self::WslDistributionRemoval => "managed Windows WSL distribution removal",
+            Self::ActiveContainerInventory => "managed runtime active-container inventory",
+            Self::VersionPreflight => "managed runtime version preflight",
+        }
+    }
+}
+
 trait ManagedCommandRunner: Send + Sync {
     fn output(
         &self,
@@ -638,6 +686,8 @@ trait ManagedCommandRunner: Send + Sync {
 #[derive(Debug, Default)]
 struct DirectManagedCommandRunner;
 
+const MANAGED_COMMAND_PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
 impl ManagedCommandRunner for DirectManagedCommandRunner {
     fn output(
         &self,
@@ -645,6 +695,12 @@ impl ManagedCommandRunner for DirectManagedCommandRunner {
         args: &[OsString],
         timeout: Duration,
     ) -> io::Result<ManagedCommandOutput> {
+        let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "managed runtime command deadline exceeded the platform range",
+            )
+        })?;
         let mut process = Command::new(&command.binary);
         process
             .args(args)
@@ -654,12 +710,32 @@ impl ManagedCommandRunner for DirectManagedCommandRunner {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            process.creation_flags(0x0800_0000);
-        }
+        let mut process_tree = ManagedCommandProcessTree::prepare(&mut process)?;
         let mut child = process.spawn()?;
+        if let Err(error) = process_tree.attach(&child) {
+            return Err(managed_command_error_with_cleanup(
+                error,
+                process_tree.terminate_and_wait(&mut child),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(managed_command_error_with_cleanup(
+                managed_command_deadline_error(),
+                process_tree.terminate_and_wait(&mut child),
+            ));
+        }
+        if let Err(error) = process_tree.start(&child) {
+            return Err(managed_command_error_with_cleanup(
+                error,
+                process_tree.terminate_and_wait(&mut child),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(managed_command_error_with_cleanup(
+                managed_command_deadline_error(),
+                process_tree.terminate_and_wait(&mut child),
+            ));
+        }
         let stdout = child
             .stdout
             .take()
@@ -670,49 +746,137 @@ impl ManagedCommandRunner for DirectManagedCommandRunner {
             .ok_or_else(|| io::Error::other("managed runtime stderr pipe was unavailable"))?;
         let captured = Arc::new(AtomicU64::new(0));
         let oversized = Arc::new(AtomicBool::new(false));
-        let stdout_capture = spawn_bounded_capture(
+        let mut stdout_capture = spawn_bounded_capture(
             stdout,
             captured.clone(),
             oversized.clone(),
             MAX_COMMAND_OUTPUT_BYTES,
         );
-        let stderr_capture = spawn_bounded_capture(
+        let mut stderr_capture = spawn_bounded_capture(
             stderr,
             captured,
             oversized.clone(),
             MAX_COMMAND_OUTPUT_BYTES,
         );
 
-        let deadline = Instant::now() + timeout;
+        let mut terminated = false;
         let process_result = loop {
-            if let Some(status) = child.try_wait()? {
-                break Ok(status);
-            }
             if oversized.load(Ordering::Acquire) {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "managed runtime command output exceeded its aggregate limit",
+                terminated = true;
+                break Err(managed_command_error_with_cleanup(
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "managed runtime command output exceeded its aggregate limit",
+                    ),
+                    process_tree.terminate_and_wait(&mut child),
                 ));
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "managed runtime command exceeded its deadline",
+                terminated = true;
+                break Err(managed_command_error_with_cleanup(
+                    managed_command_deadline_error(),
+                    process_tree.terminate_and_wait(&mut child),
                 ));
             }
-            thread::sleep(Duration::from_millis(25));
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if Instant::now() >= deadline {
+                        terminated = true;
+                        break Err(managed_command_error_with_cleanup(
+                            managed_command_deadline_error(),
+                            process_tree.terminate_and_wait(&mut child),
+                        ));
+                    }
+                    if !status.success() {
+                        terminated = true;
+                        if let Err(error) = process_tree.terminate_and_wait(&mut child) {
+                            break Err(io::Error::new(
+                                error.kind(),
+                                format!(
+                                    "managed runtime command exited unsuccessfully and its process tree could not be cleaned up: {error}"
+                                ),
+                            ));
+                        }
+                    }
+                    break Ok(status);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    terminated = true;
+                    break Err(managed_command_error_with_cleanup(
+                        error,
+                        process_tree.terminate_and_wait(&mut child),
+                    ));
+                }
+            }
+            thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(25)),
+            );
         };
-        let stdout = join_bounded_capture(stdout_capture)?;
-        let stderr = join_bounded_capture(stderr_capture)?;
-        let status = process_result?;
+        let drain_deadline = if terminated {
+            Instant::now() + MANAGED_COMMAND_PIPE_DRAIN_TIMEOUT
+        } else {
+            deadline
+        };
+        let capture_result = finish_managed_command_captures(
+            &mut stdout_capture,
+            &mut stderr_capture,
+            drain_deadline,
+            &mut terminated,
+            oversized.as_ref(),
+            &process_tree,
+            &mut child,
+        );
         if oversized.load(Ordering::Acquire) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "managed runtime command output exceeded its aggregate limit",
+            let mut error = if terminated {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "managed runtime command output exceeded its aggregate limit",
+                )
+            } else {
+                managed_command_error_with_cleanup(
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "managed runtime command output exceeded its aggregate limit",
+                    ),
+                    process_tree.terminate_and_wait(&mut child),
+                )
+            };
+            if let Err(process_error) = &process_result {
+                error = io::Error::new(
+                    error.kind(),
+                    format!("{error}; command completion diagnostic: {process_error}"),
+                );
+            }
+            if let Err(capture_error) = &capture_result {
+                error = io::Error::new(
+                    error.kind(),
+                    format!("{error}; output-capture diagnostic: {capture_error}"),
+                );
+            }
+            return Err(error);
+        }
+        let (status, stdout, stderr) = match (process_result, capture_result) {
+            (Err(process_error), Err(capture_error)) => {
+                return Err(io::Error::new(
+                    process_error.kind(),
+                    format!(
+                        "{process_error}; managed runtime output capture also failed: {capture_error}"
+                    ),
+                ));
+            }
+            (Err(process_error), Ok(_)) => return Err(process_error),
+            (Ok(_), Err(capture_error)) => return Err(capture_error),
+            (Ok(status), Ok((stdout, stderr))) => (status, stdout, stderr),
+        };
+        if status.success()
+            && let Err(error) = process_tree.preserve_descendants()
+        {
+            return Err(managed_command_error_with_cleanup(
+                error,
+                process_tree.terminate_and_wait(&mut child),
             ));
         }
         Ok(ManagedCommandOutput {
@@ -723,38 +887,516 @@ impl ManagedCommandRunner for DirectManagedCommandRunner {
     }
 }
 
+fn managed_command_deadline_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        "managed runtime command exceeded its deadline",
+    )
+}
+
+fn managed_command_error_with_cleanup(primary: io::Error, cleanup: io::Result<()>) -> io::Error {
+    managed_command_error_with_optional_cleanup(primary, cleanup.err())
+}
+
+fn managed_command_error_with_optional_cleanup(
+    primary: io::Error,
+    cleanup: Option<io::Error>,
+) -> io::Error {
+    match cleanup {
+        Some(cleanup) => io::Error::new(
+            primary.kind(),
+            format!("{primary}; managed runtime process-tree cleanup also failed: {cleanup}"),
+        ),
+        None => primary,
+    }
+}
+
+struct ManagedMemoryCapture {
+    result: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl ManagedMemoryCapture {
+    #[cfg(all(test, unix))]
+    fn finish_by(&mut self, deadline: Instant) -> io::Result<Vec<u8>> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match self.result.recv_timeout(remaining) {
+            Ok(result) => self.finish_received(result),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "managed runtime output pipes did not close before the bounded drain deadline",
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => self.finish_disconnected(),
+        }
+    }
+
+    fn try_finish(&mut self) -> Option<io::Result<Vec<u8>>> {
+        match self.result.try_recv() {
+            Ok(result) => Some(self.finish_received(result)),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(self.finish_disconnected()),
+        }
+    }
+
+    fn finish_received(&mut self, result: io::Result<Vec<u8>>) -> io::Result<Vec<u8>> {
+        let worker = self.worker.take().ok_or_else(|| {
+            io::Error::other("managed runtime output capture worker was already consumed")
+        })?;
+        match worker.join() {
+            Ok(()) => result,
+            Err(_) => match result {
+                Ok(_) => Err(io::Error::other(
+                    "managed runtime output capture thread failed",
+                )),
+                Err(error) => Err(io::Error::new(
+                    error.kind(),
+                    format!("{error}; managed runtime output capture thread also failed"),
+                )),
+            },
+        }
+    }
+
+    fn finish_disconnected(&mut self) -> io::Result<Vec<u8>> {
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+        Err(io::Error::other(
+            "managed runtime output capture thread failed",
+        ))
+    }
+}
+
+fn record_managed_capture_error(primary: &mut Option<io::Error>, stream: &str, error: io::Error) {
+    let error = io::Error::new(
+        error.kind(),
+        format!("managed runtime {stream} capture failed: {error}"),
+    );
+    *primary = Some(match primary.take() {
+        Some(primary) => io::Error::new(
+            primary.kind(),
+            format!("{primary}; additional capture failure: {error}"),
+        ),
+        None => error,
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_managed_command_captures(
+    stdout_capture: &mut ManagedMemoryCapture,
+    stderr_capture: &mut ManagedMemoryCapture,
+    initial_deadline: Instant,
+    process_tree_terminated: &mut bool,
+    oversized: &AtomicBool,
+    process_tree: &ManagedCommandProcessTree,
+    child: &mut Child,
+) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    let mut stdout = None;
+    let mut stderr = None;
+    let mut stdout_complete = false;
+    let mut stderr_complete = false;
+    let mut primary_error = None;
+    let mut drain_deadline = initial_deadline;
+    let mut post_kill = *process_tree_terminated;
+
+    loop {
+        let mut stdout_failed = false;
+        if !stdout_complete && let Some(result) = stdout_capture.try_finish() {
+            stdout_complete = true;
+            match result {
+                Ok(output) => stdout = Some(output),
+                Err(error) => {
+                    record_managed_capture_error(&mut primary_error, "stdout", error);
+                    stdout_failed = true;
+                }
+            }
+        }
+        if stdout_failed && !post_kill {
+            let cleanup = process_tree.terminate_and_wait(child);
+            *process_tree_terminated = true;
+            post_kill = true;
+            drain_deadline = Instant::now() + MANAGED_COMMAND_PIPE_DRAIN_TIMEOUT;
+            if let Some(error) = primary_error.take() {
+                primary_error = Some(managed_command_error_with_cleanup(error, cleanup));
+            }
+        }
+
+        let mut stderr_failed = false;
+        if !stderr_complete && let Some(result) = stderr_capture.try_finish() {
+            stderr_complete = true;
+            match result {
+                Ok(output) => stderr = Some(output),
+                Err(error) => {
+                    record_managed_capture_error(&mut primary_error, "stderr", error);
+                    stderr_failed = true;
+                }
+            }
+        }
+        if stderr_failed && !post_kill {
+            let cleanup = process_tree.terminate_and_wait(child);
+            *process_tree_terminated = true;
+            post_kill = true;
+            drain_deadline = Instant::now() + MANAGED_COMMAND_PIPE_DRAIN_TIMEOUT;
+            if let Some(error) = primary_error.take() {
+                primary_error = Some(managed_command_error_with_cleanup(error, cleanup));
+            }
+        }
+
+        if oversized.load(Ordering::Acquire) && !post_kill {
+            if let Err(error) = process_tree.terminate_and_wait(child) {
+                record_managed_capture_error(&mut primary_error, "output-limit cleanup", error);
+            }
+            *process_tree_terminated = true;
+            post_kill = true;
+            drain_deadline = Instant::now() + MANAGED_COMMAND_PIPE_DRAIN_TIMEOUT;
+        }
+
+        if stdout_complete && stderr_complete {
+            break;
+        }
+
+        let now = Instant::now();
+        if now >= drain_deadline {
+            let timeout = || {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "managed runtime output pipes did not close before the bounded drain deadline",
+                )
+            };
+            if !post_kill {
+                if !stdout_complete {
+                    record_managed_capture_error(&mut primary_error, "stdout", timeout());
+                }
+                if !stderr_complete {
+                    record_managed_capture_error(&mut primary_error, "stderr", timeout());
+                }
+                let cleanup = process_tree.terminate_and_wait(child);
+                *process_tree_terminated = true;
+                post_kill = true;
+                drain_deadline = Instant::now() + MANAGED_COMMAND_PIPE_DRAIN_TIMEOUT;
+                if let Some(error) = primary_error.take() {
+                    primary_error = Some(managed_command_error_with_cleanup(error, cleanup));
+                }
+                continue;
+            }
+            if !stdout_complete {
+                record_managed_capture_error(
+                    &mut primary_error,
+                    "stdout post-termination drain",
+                    timeout(),
+                );
+            }
+            if !stderr_complete {
+                record_managed_capture_error(
+                    &mut primary_error,
+                    "stderr post-termination drain",
+                    timeout(),
+                );
+            }
+            break;
+        }
+        thread::sleep(
+            drain_deadline
+                .saturating_duration_since(now)
+                .min(Duration::from_millis(5)),
+        );
+    }
+
+    match primary_error {
+        Some(error) => Err(error),
+        None => Ok((
+            stdout.ok_or_else(|| io::Error::other("managed runtime stdout capture was empty"))?,
+            stderr.ok_or_else(|| io::Error::other("managed runtime stderr capture was empty"))?,
+        )),
+    }
+}
+
 fn spawn_bounded_capture<R>(
     mut reader: R,
     captured: Arc<AtomicU64>,
     oversized: Arc<AtomicBool>,
     maximum: u64,
-) -> thread::JoinHandle<io::Result<Vec<u8>>>
+) -> ManagedMemoryCapture
 where
     R: Read + Send + 'static,
 {
-    thread::spawn(move || {
+    let (sender, result) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
         let mut output = Vec::new();
         let mut buffer = [0_u8; 16 * 1024];
-        loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
-                break;
+        let capture = (|| {
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                let previous = captured.fetch_add(read as u64, Ordering::AcqRel);
+                let remaining = maximum.saturating_sub(previous) as usize;
+                output.extend_from_slice(&buffer[..read.min(remaining)]);
+                if read > remaining {
+                    oversized.store(true, Ordering::Release);
+                }
             }
-            let previous = captured.fetch_add(read as u64, Ordering::AcqRel);
-            let remaining = maximum.saturating_sub(previous) as usize;
-            output.extend_from_slice(&buffer[..read.min(remaining)]);
-            if read > remaining {
-                oversized.store(true, Ordering::Release);
-            }
-        }
-        Ok(output)
-    })
+            Ok(output)
+        })();
+        let _ = sender.send(capture);
+    });
+    ManagedMemoryCapture {
+        result,
+        worker: Some(worker),
+    }
 }
 
-fn join_bounded_capture(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
-    handle
-        .join()
-        .map_err(|_| io::Error::other("managed runtime output capture thread failed"))?
+struct ManagedCommandProcessTree {
+    #[cfg(unix)]
+    process_group: Option<i32>,
+    #[cfg(windows)]
+    job: std::os::windows::io::OwnedHandle,
+    preserved: bool,
+}
+
+impl ManagedCommandProcessTree {
+    fn prepare(command: &mut Command) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+            Ok(Self {
+                process_group: None,
+                preserved: false,
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::{FromRawHandle, OwnedHandle};
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::JobObjects::{
+                CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+            use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+
+            command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+            let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if raw_job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let job = unsafe { OwnedHandle::from_raw_handle(raw_job.cast()) };
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = unsafe {
+                SetInformationJobObject(
+                    std::os::windows::io::AsRawHandle::as_raw_handle(&job).cast(),
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::addr_of!(limits).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if configured == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self {
+                job,
+                preserved: false,
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = command;
+            Ok(Self { preserved: false })
+        }
+    }
+
+    fn attach(&mut self, child: &Child) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.process_group = Some(i32::try_from(child.id()).map_err(|_| {
+                io::Error::other("managed runtime child process ID exceeded the platform range")
+            })?);
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+            let assigned = unsafe {
+                AssignProcessToJobObject(
+                    self.job.as_raw_handle().cast(),
+                    child.as_raw_handle().cast(),
+                )
+            };
+            if assigned == 0 {
+                let error = io::Error::last_os_error();
+                Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "managed runtime child could not join its containment job, possibly because of an incompatible outer job: {error}"
+                    ),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = child;
+            Ok(())
+        }
+    }
+
+    fn start(&self, child: &Child) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+            use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE};
+            use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First,
+                Thread32Next,
+            };
+            use windows_sys::Win32::System::Threading::{
+                OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+            };
+
+            let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+            if raw_snapshot == INVALID_HANDLE_VALUE {
+                return Err(io::Error::last_os_error());
+            }
+            let snapshot = unsafe { OwnedHandle::from_raw_handle(raw_snapshot.cast()) };
+            let mut entry = THREADENTRY32 {
+                dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+                ..THREADENTRY32::default()
+            };
+            if unsafe { Thread32First(snapshot.as_raw_handle().cast(), &mut entry) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut primary_thread = None;
+            loop {
+                if entry.th32OwnerProcessID == child.id() {
+                    if primary_thread.replace(entry.th32ThreadID).is_some() {
+                        return Err(io::Error::other(
+                            "managed runtime suspended child had more than one initial thread",
+                        ));
+                    }
+                }
+                if unsafe { Thread32Next(snapshot.as_raw_handle().cast(), &mut entry) } == 0 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
+                        break;
+                    }
+                    return Err(error);
+                }
+            }
+            let primary_thread = primary_thread.ok_or_else(|| {
+                io::Error::other("managed runtime suspended child primary thread was unavailable")
+            })?;
+            let raw_thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, primary_thread) };
+            if raw_thread.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let thread = unsafe { OwnedHandle::from_raw_handle(raw_thread.cast()) };
+            let previous_suspend_count = unsafe { ResumeThread(thread.as_raw_handle().cast()) };
+            if previous_suspend_count == u32::MAX {
+                return Err(io::Error::last_os_error());
+            }
+            if previous_suspend_count != 1 {
+                return Err(io::Error::other(format!(
+                    "managed runtime child had unexpected suspend count {previous_suspend_count}"
+                )));
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = child;
+        Ok(())
+    }
+
+    fn terminate_and_wait(&self, child: &mut Child) -> io::Result<()> {
+        let mut cleanup_errors = Vec::new();
+        let mut cleanup_error_kind = None;
+        #[cfg(unix)]
+        if let Some(process_group) = self.process_group
+            && unsafe { libc::kill(-process_group, libc::SIGKILL) } != 0
+        {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                cleanup_error_kind.get_or_insert(error.kind());
+                cleanup_errors.push(format!("process-group termination failed: {error}"));
+            }
+        }
+        #[cfg(windows)]
+        if unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(
+                std::os::windows::io::AsRawHandle::as_raw_handle(&self.job).cast(),
+                1,
+            )
+        } == 0
+        {
+            let error = io::Error::last_os_error();
+            cleanup_error_kind.get_or_insert(error.kind());
+            cleanup_errors.push(format!("containment-job termination failed: {error}"));
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                if let Err(error) = child.kill() {
+                    cleanup_error_kind.get_or_insert(error.kind());
+                    cleanup_errors.push(format!("direct-child termination failed: {error}"));
+                }
+            }
+            Err(error) => {
+                cleanup_error_kind.get_or_insert(error.kind());
+                cleanup_errors.push(format!("direct-child status check failed: {error}"));
+                if let Err(error) = child.kill() {
+                    cleanup_error_kind.get_or_insert(error.kind());
+                    cleanup_errors.push(format!("direct-child termination failed: {error}"));
+                }
+            }
+        }
+        if let Err(error) = child.wait() {
+            cleanup_error_kind.get_or_insert(error.kind());
+            cleanup_errors.push(format!("direct-child wait failed: {error}"));
+        }
+        match cleanup_error_kind {
+            Some(kind) => Err(io::Error::new(kind, cleanup_errors.join("; "))),
+            None => Ok(()),
+        }
+    }
+
+    fn preserve_descendants(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::JobObjects::{
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+            let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            let configured = unsafe {
+                SetInformationJobObject(
+                    std::os::windows::io::AsRawHandle::as_raw_handle(&self.job).cast(),
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::addr_of!(limits).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if configured == 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        self.preserved = true;
+        Ok(())
+    }
+}
+
+impl Drop for ManagedCommandProcessTree {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if !self.preserved
+            && let Some(process_group) = self.process_group
+        {
+            unsafe {
+                libc::kill(-process_group, libc::SIGKILL);
+            }
+        }
+    }
 }
 
 trait ManagedArtifactDownloader: Send + Sync {
@@ -954,6 +1596,11 @@ fn write_download_body<R: Read>(
 
 pub struct ManagedRuntimeManager {
     state_root: PathBuf,
+    /// Pins the verified state-root directory name for the manager lifetime.
+    /// Its Windows share mode intentionally excludes delete, preventing a
+    /// permissive caller-owned parent from replacing this namespace by name.
+    #[cfg(windows)]
+    _state_root_guard: File,
     resource_root: PathBuf,
     loaded: LoadedManagedRuntimeManifest,
     commands: Arc<dyn ManagedCommandRunner>,
@@ -979,7 +1626,10 @@ impl ManagedRuntimeManager {
     ) -> AppResult<Self> {
         let state_root = app_local_data_directory.join("managed-runtime");
         ensure_private_directory(app_local_data_directory)?;
-        ensure_private_directory(&state_root)?;
+        #[cfg(windows)]
+        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)?;
+        #[cfg(not(windows))]
+        ensure_managed_private_directory(&state_root)?;
         let resource_root = canonical_real_directory(resource_root, "managed runtime resource")?;
         verify_regular_file(manifest_path, "managed runtime release manifest")?;
         let canonical_manifest = manifest_path.canonicalize()?;
@@ -993,6 +1643,8 @@ impl ManagedRuntimeManager {
         let downloader = Arc::new(HttpsManagedArtifactDownloader::new()?);
         let manager = Self {
             state_root,
+            #[cfg(windows)]
+            _state_root_guard: state_root_guard,
             resource_root,
             loaded,
             commands: Arc::new(DirectManagedCommandRunner),
@@ -1014,6 +1666,10 @@ impl ManagedRuntimeManager {
             validate_sha256(expected, "managed runtime expected manifest digest")?;
         }
         let state_root = app_local_data_directory.join("managed-runtime");
+        #[cfg(windows)]
+        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)?;
+        #[cfg(not(windows))]
+        ensure_managed_private_directory(&state_root)?;
         let versions_root =
             canonical_real_directory(&state_root.join("versions"), "managed runtime versions")?;
         let mut entries = fs::read_dir(&versions_root)?.collect::<Result<Vec<_>, _>>()?;
@@ -1074,6 +1730,8 @@ impl ManagedRuntimeManager {
         let downloader = Arc::new(HttpsManagedArtifactDownloader::new()?);
         let manager = Self {
             state_root,
+            #[cfg(windows)]
+            _state_root_guard: state_root_guard,
             resource_root: canonical_real_directory(
                 &resource_root,
                 "managed runtime installed resource",
@@ -1094,10 +1752,15 @@ impl ManagedRuntimeManager {
         commands: Arc<dyn ManagedCommandRunner>,
         downloader: Arc<dyn ManagedArtifactDownloader>,
     ) -> AppResult<Self> {
-        ensure_private_directory(&state_root)?;
+        #[cfg(windows)]
+        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)?;
+        #[cfg(not(windows))]
+        ensure_managed_private_directory(&state_root)?;
         let resource_root = canonical_real_directory(&resource_root, "managed runtime resource")?;
         let manager = Self {
             state_root,
+            #[cfg(windows)]
+            _state_root_guard: state_root_guard,
             resource_root,
             loaded,
             commands,
@@ -1205,8 +1868,10 @@ impl ManagedRuntimeManager {
         let machine_name = machine_name(target);
         let machines = self.list_machines(&command)?;
         if let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) {
+            self.require_existing_machine_ssh_identity_locked()?;
             self.prove_machine(machine, target)?;
         } else {
+            self.prepare_machine_ssh_identity_locked()?;
             self.initialize_machine(&command, &image, &machine_name)?;
         }
         if let Some(setup) = setup {
@@ -1231,6 +1896,7 @@ impl ManagedRuntimeManager {
         }
         if !machine.running {
             let output = self.run_command(
+                ManagedCommandOperation::MachineStart,
                 &command,
                 ["machine", "start", "--quiet", machine_name.as_str()],
                 MACHINE_START_TIMEOUT,
@@ -1277,6 +1943,7 @@ impl ManagedRuntimeManager {
                 }
             }
             let output = self.run_command(
+                ManagedCommandOperation::MachineStop,
                 &command,
                 ["machine", "stop", machine_name.as_str()],
                 MACHINE_STOP_TIMEOUT,
@@ -1294,15 +1961,24 @@ impl ManagedRuntimeManager {
 
     pub fn uninstall(&self, options: ManagedUninstallOptions) -> AppResult<ManagedRuntimeStatus> {
         let _lock = self.lock()?;
-        if private_entry_exists(&self.install_directory())? {
+        let target = self.loaded.target()?;
+        let install = self.install_directory();
+        let provider_home = self.provider_home();
+        if private_entry_exists(&install)? || private_entry_exists(&provider_home)? {
             // Repair a corrupted release payload from the verified application
-            // resources before invoking it for owned-machine cleanup. A damaged
-            // client must not permanently wedge either retry or uninstall.
+            // resources before invoking it for owned-machine cleanup. This also
+            // lets a retry safely prove and remove provider state left by an
+            // interrupted older uninstall after its client was deleted.
             self.install_locked()?;
-            let target = self.loaded.target()?;
             let command = self.runtime_command(target)?;
             let machine_name = machine_name(target);
             let machines = self.list_machines(&command)?;
+            if machines.len() > 1 || machines.iter().any(|machine| machine.name != machine_name) {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime release-private provider reported an unexpected machine; refusing to remove its state"
+                        .into(),
+                ));
+            }
             if let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) {
                 self.prove_machine(machine, target)?;
                 if machine.running {
@@ -1315,6 +1991,7 @@ impl ManagedRuntimeManager {
                         ));
                     }
                     let output = self.run_command(
+                        ManagedCommandOperation::MachineStop,
                         &command,
                         ["machine", "stop", machine_name.as_str()],
                         MACHINE_STOP_TIMEOUT,
@@ -1322,18 +1999,24 @@ impl ManagedRuntimeManager {
                     require_success("managed runtime machine stop", &output)?;
                 }
                 let output = self.run_command(
+                    ManagedCommandOperation::MachineRemoval,
                     &command,
                     ["machine", "rm", "--force", machine_name.as_str()],
                     MACHINE_STOP_TIMEOUT,
                 )?;
                 require_success("managed runtime machine removal", &output)?;
             }
-            remove_private_tree(&self.install_directory(), &self.versions_root())?;
-            if options.remove_machine_image_cache {
-                let image = self.machine_image_path(target);
-                if private_entry_exists(&image)? {
-                    remove_private_tree(&image, &self.image_cache_root())?;
-                }
+            self.prove_windows_wsl_distribution_absent_locked(target, &command, &machine_name)?;
+            self.remove_command_home_after_machine_removal_locked(target)?;
+            if private_entry_exists(&provider_home)? {
+                remove_private_tree(&provider_home, &self.state_root.join("provider-home"))?;
+            }
+            remove_private_tree(&install, &self.versions_root())?;
+        }
+        if options.remove_machine_image_cache {
+            let image = self.machine_image_path(target);
+            if private_entry_exists(&image)? {
+                remove_private_tree(&image, &self.image_cache_root())?;
             }
         }
         self.status_locked()
@@ -1487,7 +2170,7 @@ impl ManagedRuntimeManager {
     fn install_locked(&self) -> AppResult<()> {
         self.loaded.target()?;
         self.verify_resource_bundle()?;
-        ensure_private_directory(&self.versions_root())?;
+        ensure_managed_private_directory(&self.versions_root())?;
         let destination = self.install_directory();
         if private_entry_exists(&destination)? {
             match self.verify_installation() {
@@ -1501,7 +2184,7 @@ impl ManagedRuntimeManager {
         let staging = self
             .versions_root()
             .join(format!(".installing-{}", Uuid::new_v4()));
-        ensure_private_directory(&staging)?;
+        ensure_managed_private_directory(&staging)?;
         let result = (|| {
             for entry in &self.loaded.manifest.files {
                 let source = safe_join(&self.resource_root, &entry.path)?;
@@ -1558,21 +2241,27 @@ impl ManagedRuntimeManager {
         let binary = safe_join(&install, &self.loaded.manifest.driver_path)?;
         verify_regular_file(&binary, "managed runtime driver")?;
         let provider_root = self.state_root.join("provider-home");
-        ensure_private_directory(&provider_root)?;
-        let home = provider_root.join(&self.loaded.sha256[..16]);
-        let config = home.join("config");
-        let data = home.join("data");
-        let cache = home.join("cache");
-        let run = home.join("run");
-        for directory in [&home, &config, &data, &cache, &run] {
-            ensure_private_directory(directory)?;
+        ensure_managed_private_directory(&provider_root)?;
+        let provider_home = self.provider_home();
+        let config = provider_home.join("config");
+        let data = provider_home.join("data");
+        let cache = provider_home.join("cache");
+        let run = provider_home.join("run");
+        for directory in [&provider_home, &config, &data, &cache, &run] {
+            ensure_managed_private_directory(directory)?;
         }
         let containers = config.join("containers");
-        ensure_private_directory(&containers)?;
+        ensure_managed_private_directory(&containers)?;
         self.write_containers_config(&containers.join("containers.conf"), &install, target)?;
 
+        let command_home = self.command_home(target)?;
+        let windows_directories = if target.operating_system == ManagedOperatingSystem::Windows {
+            Some(windows_system_directories()?)
+        } else {
+            None
+        };
         let mut environment = BTreeMap::new();
-        let home_value = home.as_os_str().to_owned();
+        let home_value = command_home.as_os_str().to_owned();
         environment.insert(OsString::from("HOME"), home_value.clone());
         environment.insert(OsString::from("USERPROFILE"), home_value);
         environment.insert(
@@ -1598,21 +2287,205 @@ impl ManagedRuntimeManager {
             OsString::from("CONTAINERS_MACHINE_PROVIDER"),
             OsString::from(target.provider.argument()),
         );
-        environment.insert(OsString::from("PATH"), managed_path(&install, target)?);
-        if let Some(system_root) = std::env::var_os("SystemRoot") {
-            environment.insert(OsString::from("SystemRoot"), system_root);
+        environment.insert(
+            OsString::from("PATH"),
+            managed_path(&install, target, windows_directories.as_ref())?,
+        );
+        if let Some(directories) = &windows_directories {
+            let system_root = directories.system_root.as_os_str().to_owned();
+            environment.insert(OsString::from("SystemRoot"), system_root.clone());
+            environment.insert(OsString::from("WINDIR"), system_root);
         }
         environment.insert(OsString::from("LANG"), OsString::from("C.UTF-8"));
         environment.insert(OsString::from("LC_ALL"), OsString::from("C.UTF-8"));
+        apply_platform_command_environment(&mut environment, target.operating_system);
 
         Ok(ManagedRuntimeCommand {
             binary,
             environment,
-            working_directory: home,
+            working_directory: command_home,
             runtime_version: self.loaded.manifest.runtime_version.clone(),
             manifest_sha256: self.loaded.sha256.clone(),
             machine_image_sha256: target.machine_image.sha256.clone(),
         })
+    }
+
+    fn prove_windows_wsl_distribution_absent_locked(
+        &self,
+        target: &ManagedTarget,
+        managed_command: &ManagedRuntimeCommand,
+        machine_name: &str,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(());
+        }
+        if target.provider != ManagedMachineProvider::Wsl {
+            return Err(AppError::NotAuthorized(
+                "managed Windows runtime target did not use the WSL provider".into(),
+            ));
+        }
+        let command = windows_wsl_inventory_command(managed_command)?;
+        let output = self.run_command(
+            ManagedCommandOperation::WslDistributionInventory,
+            &command,
+            ["--list", "--quiet"],
+            COMMAND_TIMEOUT,
+        )?;
+        require_success("managed Windows WSL distribution inventory", &output)?;
+        let expected = format!("podman-{machine_name}");
+        let mut distributions = parse_windows_wsl_distribution_inventory(&output.stdout)?;
+        if distributions
+            .iter()
+            .any(|distribution| distribution.eq_ignore_ascii_case(&expected))
+        {
+            let output = self.run_command(
+                ManagedCommandOperation::WslDistributionRemoval,
+                &command,
+                ["--unregister", expected.as_str()],
+                MACHINE_STOP_TIMEOUT,
+            )?;
+            require_success("managed Windows WSL distribution removal", &output)?;
+            let output = self.run_command(
+                ManagedCommandOperation::WslDistributionInventory,
+                &command,
+                ["--list", "--quiet"],
+                COMMAND_TIMEOUT,
+            )?;
+            require_success("managed Windows WSL distribution inventory", &output)?;
+            distributions = parse_windows_wsl_distribution_inventory(&output.stdout)?;
+        }
+        if distributions
+            .iter()
+            .any(|distribution| distribution.eq_ignore_ascii_case(&expected))
+        {
+            return Err(AppError::Runtime(
+                "managed Windows WSL distribution remained registered after machine removal; retaining provider, installation, and image-cache state"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn provider_home(&self) -> PathBuf {
+        self.state_root
+            .join("provider-home")
+            .join(&self.loaded.sha256[..16])
+    }
+
+    fn command_home(&self, target: &ManagedTarget) -> AppResult<PathBuf> {
+        if target.operating_system != ManagedOperatingSystem::Macos {
+            return Ok(self.provider_home());
+        }
+        #[cfg(unix)]
+        {
+            let state_root = canonical_real_directory(&self.state_root, "managed runtime state")?;
+            // SAFETY: geteuid has no preconditions and does not dereference memory.
+            let effective_uid = unsafe { libc::geteuid() };
+            let home = macos_short_home_path(
+                Path::new(MACOS_SHORT_HOME_BASE),
+                &state_root,
+                &self.loaded.sha256,
+                effective_uid,
+            );
+            ensure_macos_short_home_directory(&home, effective_uid)?;
+            let socket_alias = macos_podman_ignition_socket_alias(&home, &machine_name(target));
+            use std::os::unix::ffi::OsStrExt;
+            if socket_alias.as_os_str().as_bytes().len() > PODMAN_MACOS_MAX_SOCKET_PATH_BYTES {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime macOS socket alias exceeds Podman's safe path budget".into(),
+                ));
+            }
+            Ok(home)
+        }
+        #[cfg(not(unix))]
+        Err(AppError::NotAvailable(
+            "managed runtime macOS command isolation is unavailable on this host".into(),
+        ))
+    }
+
+    fn remove_command_home_after_machine_removal_locked(
+        &self,
+        target: &ManagedTarget,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Macos {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            let state_root = canonical_real_directory(&self.state_root, "managed runtime state")?;
+            // SAFETY: geteuid has no preconditions and does not dereference memory.
+            let effective_uid = unsafe { libc::geteuid() };
+            let home = macos_short_home_path(
+                Path::new(MACOS_SHORT_HOME_BASE),
+                &state_root,
+                &self.loaded.sha256,
+                effective_uid,
+            );
+            remove_macos_short_home_directory(&home, effective_uid)
+        }
+        #[cfg(not(unix))]
+        Err(AppError::NotAvailable(
+            "managed runtime macOS command cleanup is unavailable on this host".into(),
+        ))
+    }
+
+    /// Podman 5.8.2 resolves `define.DefaultIdentityName` beneath its XDG data
+    /// home as `containers/podman/machine/machine`. The managed command sets
+    /// that XDG root to this release-private provider home.
+    fn machine_ssh_identity_path(&self) -> PathBuf {
+        self.provider_home()
+            .join("data")
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join(PODMAN_MACHINE_IDENTITY_NAME)
+    }
+
+    /// Called only while the manager's lifecycle lock is held. An existing VM
+    /// already trusts this exact public key, so a missing or inconsistent pair
+    /// must fail closed instead of silently rotating the identity.
+    fn require_existing_machine_ssh_identity_locked(&self) -> AppResult<()> {
+        match inspect_managed_ssh_identity(&self.machine_ssh_identity_path())? {
+            ManagedSshIdentityState::Valid => Ok(()),
+            ManagedSshIdentityState::Absent | ManagedSshIdentityState::Invalid => {
+                Err(AppError::NotAuthorized(
+                    "managed runtime machine SSH identity is missing or inconsistent; refusing to rotate the key of an initialized machine"
+                        .into(),
+                ))
+            }
+        }
+    }
+
+    /// Called only while the manager's lifecycle lock is held and before
+    /// `podman machine init`. Regular partial/corrupt files are safe to repair
+    /// because no exact managed machine exists yet; non-regular entries always
+    /// fail closed.
+    fn prepare_machine_ssh_identity_locked(&self) -> AppResult<()> {
+        let identity = self.machine_ssh_identity_path();
+        let parent = identity.parent().ok_or_else(|| {
+            AppError::Internal("managed runtime SSH identity has no parent".into())
+        })?;
+        let data_root = self.provider_home().join("data");
+        ensure_private_directory_tree(&data_root, parent)?;
+        cleanup_managed_ssh_identity_temporaries(&identity)?;
+
+        match inspect_managed_ssh_identity(&identity)? {
+            ManagedSshIdentityState::Valid => return Ok(()),
+            ManagedSshIdentityState::Absent => {}
+            ManagedSshIdentityState::Invalid => {
+                remove_repairable_managed_ssh_identity(&identity)?;
+            }
+        }
+
+        generate_managed_ssh_identity(&identity)?;
+        match inspect_managed_ssh_identity(&identity)? {
+            ManagedSshIdentityState::Valid => Ok(()),
+            ManagedSshIdentityState::Absent | ManagedSshIdentityState::Invalid => {
+                Err(AppError::Runtime(
+                    "managed runtime SSH identity did not verify after atomic publication".into(),
+                ))
+            }
+        }
     }
 
     fn write_containers_config(
@@ -1638,7 +2511,7 @@ impl ManagedRuntimeManager {
         target: &ManagedTarget,
         setup: Option<&ManagedRuntimeSetupController>,
     ) -> AppResult<PathBuf> {
-        ensure_private_directory(&self.image_cache_root())?;
+        ensure_managed_private_directory(&self.image_cache_root())?;
         let destination = self.machine_image_path(target);
         if private_entry_exists(&destination)? {
             if verify_file_hash_size(
@@ -1741,19 +2614,18 @@ impl ManagedRuntimeManager {
             OsString::from(image),
             OsString::from(machine_name),
         ];
-        let output = self
-            .commands
-            .output(command, &args, MACHINE_START_TIMEOUT)
-            .map_err(|error| {
-                AppError::Runtime(format!(
-                    "managed runtime machine initialization could not execute: {error}"
-                ))
-            })?;
+        let output = self.run_command_args(
+            ManagedCommandOperation::MachineInitialization,
+            command,
+            &args,
+            MACHINE_INIT_TIMEOUT,
+        )?;
         require_success("managed runtime machine initialization", &output)
     }
 
     fn list_machines(&self, command: &ManagedRuntimeCommand) -> AppResult<Vec<MachineListEntry>> {
         let output = self.run_command(
+            ManagedCommandOperation::MachineInventory,
             command,
             ["machine", "list", "--format", "json"],
             COMMAND_TIMEOUT,
@@ -1784,8 +2656,12 @@ impl ManagedRuntimeManager {
     }
 
     fn running_containers(&self, command: &ManagedRuntimeCommand) -> AppResult<Vec<String>> {
-        let output =
-            self.run_command(command, ["ps", "--format", "{{.Names}}"], COMMAND_TIMEOUT)?;
+        let output = self.run_command(
+            ManagedCommandOperation::ActiveContainerInventory,
+            command,
+            ["ps", "--format", "{{.Names}}"],
+            COMMAND_TIMEOUT,
+        )?;
         require_success("managed runtime active-container inventory", &output)?;
         let text = bounded_utf8(&output.stdout, "managed runtime container inventory")?;
         let mut containers = Vec::new();
@@ -1825,6 +2701,7 @@ impl ManagedRuntimeManager {
 
     fn server_version(&self, command: &ManagedRuntimeCommand) -> AppResult<String> {
         let output = self.run_command(
+            ManagedCommandOperation::VersionPreflight,
             command,
             ["version", "--format", "{{.Server.Version}}"],
             COMMAND_TIMEOUT,
@@ -1863,22 +2740,31 @@ impl ManagedRuntimeManager {
 
     fn run_command<const N: usize>(
         &self,
+        operation: ManagedCommandOperation,
         command: &ManagedRuntimeCommand,
         args: [&str; N],
         timeout: Duration,
     ) -> AppResult<ManagedCommandOutput> {
         let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+        self.run_command_args(operation, command, &args, timeout)
+    }
+
+    fn run_command_args(
+        &self,
+        operation: ManagedCommandOperation,
+        command: &ManagedRuntimeCommand,
+        args: &[OsString],
+        timeout: Duration,
+    ) -> AppResult<ManagedCommandOutput> {
         self.commands
-            .output(command, &args, timeout)
+            .output(command, args, timeout)
             .map_err(|error| {
-                AppError::Runtime(format!(
-                    "managed runtime command could not execute: {error}"
-                ))
+                AppError::Runtime(format!("{} could not execute: {error}", operation.label()))
             })
     }
 
     fn lock(&self) -> AppResult<ManagedRuntimeLock> {
-        ensure_private_directory(&self.state_root)?;
+        ensure_managed_private_directory(&self.state_root)?;
         ManagedRuntimeLock::acquire(&self.state_root.join("lifecycle.lock"))
     }
 
@@ -2417,6 +3303,9 @@ fn copy_verified_file(
             entry.path
         )));
     }
+    // FILE_SHARE_NONE keeps a Windows private file unavailable while it is
+    // populated. Close that handle before updating path-based attributes.
+    drop(output);
     set_installed_permissions(destination, entry.executable)?;
     Ok(())
 }
@@ -2474,6 +3363,1125 @@ fn verify_regular_file(path: &Path, label: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedSshIdentityState {
+    Absent,
+    Valid,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedSshIdentityFileState {
+    Absent,
+    Bounded(ManagedSshIdentityFileSnapshot),
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedSshIdentityFileKind {
+    Private,
+    Public,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ManagedSshIdentityFileSnapshot {
+    size: u64,
+    #[cfg(windows)]
+    identity: WindowsFileIdentity,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsFileIdentity {
+    volume_serial_number: u32,
+    file_index: u64,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsFileInformation {
+    identity: WindowsFileIdentity,
+    size: u64,
+    number_of_links: u32,
+    attributes: u32,
+}
+
+#[cfg(windows)]
+struct WindowsCurrentUserSid {
+    storage: Vec<u32>,
+}
+
+#[cfg(windows)]
+impl WindowsCurrentUserSid {
+    fn as_ptr(&self) -> windows_sys::Win32::Security::PSID {
+        self.storage.as_ptr().cast_mut().cast()
+    }
+}
+
+#[cfg(windows)]
+fn windows_current_user_sid() -> io::Result<WindowsCurrentUserSid> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::Security::{
+        CopySid, GetLengthSid, GetTokenInformation, IsValidSid, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut raw_token = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a process pseudo-handle and raw_token
+    // points to writable storage for the newly opened token handle.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut raw_token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: OpenProcessToken returned a uniquely owned kernel handle.
+    let token = unsafe { OwnedHandle::from_raw_handle(raw_token) };
+
+    let mut required = 0_u32;
+    // SAFETY: the null/zero probe is the documented way to obtain the required
+    // TOKEN_USER buffer size; required points to initialized writable storage.
+    let probe = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &raw mut required,
+        )
+    };
+    let probe_error = io::Error::last_os_error();
+    if probe != 0
+        || required < std::mem::size_of::<TOKEN_USER>() as u32
+        || probe_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
+    {
+        return Err(if probe_error.raw_os_error().is_some() {
+            probe_error
+        } else {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Windows returned an invalid current-user token size",
+            )
+        });
+    }
+    let mut token_information =
+        vec![0_usize; (required as usize).div_ceil(std::mem::size_of::<usize>())];
+    // SAFETY: token_information is pointer-aligned and has at least required
+    // writable bytes; the token handle remains valid for the call.
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            token_information.as_mut_ptr().cast(),
+            required,
+            &raw mut required,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a successful TokenUser query initialized a TOKEN_USER at the
+    // start of the suitably aligned buffer.
+    let token_user = unsafe { &*token_information.as_ptr().cast::<TOKEN_USER>() };
+    // SAFETY: the SID pointer belongs to the live token-information buffer.
+    if token_user.User.Sid.is_null() || unsafe { IsValidSid(token_user.User.Sid) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid current-user SID",
+        ));
+    }
+    // SAFETY: IsValidSid established that the SID pointer is valid.
+    let sid_length = unsafe { GetLengthSid(token_user.User.Sid) };
+    if sid_length == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an empty current-user SID",
+        ));
+    }
+    let mut storage = vec![0_u32; (sid_length as usize).div_ceil(std::mem::size_of::<u32>())];
+    // SAFETY: storage is DWORD-aligned and contains at least sid_length bytes;
+    // the source SID remains live in token_information for the call.
+    if unsafe { CopySid(sid_length, storage.as_mut_ptr().cast(), token_user.User.Sid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(WindowsCurrentUserSid { storage })
+}
+
+#[cfg(windows)]
+fn windows_file_information(file: &File) -> io::Result<WindowsFileInformation> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: file owns a valid handle and information is a correctly sized,
+    // writable BY_HANDLE_FILE_INFORMATION output buffer.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut information) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(WindowsFileInformation {
+        identity: WindowsFileIdentity {
+            volume_serial_number: information.dwVolumeSerialNumber,
+            file_index: (u64::from(information.nFileIndexHigh) << 32)
+                | u64::from(information.nFileIndexLow),
+        },
+        size: (u64::from(information.nFileSizeHigh) << 32) | u64::from(information.nFileSizeLow),
+        number_of_links: information.nNumberOfLinks,
+        attributes: information.dwFileAttributes,
+    })
+}
+
+#[cfg(windows)]
+fn verify_windows_current_user_only_dacl(file: &File) -> io::Result<()> {
+    verify_windows_current_user_only_dacl_with_ace_flags(file, 0)
+}
+
+#[cfg(windows)]
+fn verify_windows_current_user_only_dacl_with_ace_flags(
+    file: &File,
+    expected_ace_flags: u8,
+) -> io::Result<()> {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+        DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetKernelObjectSecurity,
+        GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+        GetSecurityDescriptorOwner, IsValidAcl, IsValidSid, OWNER_SECURITY_INFORMATION, PSID,
+        SE_DACL_PROTECTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::SystemServices::{
+        ACCESS_ALLOWED_ACE_TYPE, SECURITY_DESCRIPTOR_REVISION,
+    };
+
+    let user = windows_current_user_sid()?;
+    let requested = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let mut required = 0_u32;
+    // SAFETY: the null/zero probe is documented for obtaining the security
+    // descriptor size; required is valid writable storage.
+    let probe = unsafe {
+        GetKernelObjectSecurity(
+            file.as_raw_handle(),
+            requested,
+            std::ptr::null_mut(),
+            0,
+            &raw mut required,
+        )
+    };
+    let probe_error = io::Error::last_os_error();
+    if probe != 0
+        || required == 0
+        || probe_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
+    {
+        return Err(if probe_error.raw_os_error().is_some() {
+            probe_error
+        } else {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Windows returned an invalid file security descriptor size",
+            )
+        });
+    }
+    let mut descriptor = vec![0_usize; (required as usize).div_ceil(std::mem::size_of::<usize>())];
+    // SAFETY: descriptor is pointer-aligned and provides at least required
+    // writable bytes; the file handle has READ_CONTROL through FILE_GENERIC_READ.
+    if unsafe {
+        GetKernelObjectSecurity(
+            file.as_raw_handle(),
+            requested,
+            descriptor.as_mut_ptr().cast(),
+            required,
+            &raw mut required,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let security_descriptor = descriptor.as_mut_ptr().cast::<c_void>();
+
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    // SAFETY: security_descriptor contains the valid descriptor returned by
+    // GetKernelObjectSecurity and the output pointers are writable.
+    if unsafe {
+        GetSecurityDescriptorOwner(
+            security_descriptor,
+            &raw mut owner,
+            &raw mut owner_defaulted,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: owner is either null or points inside the live descriptor buffer;
+    // user points to the live aligned SID copy.
+    if owner.is_null()
+        || owner_defaulted != 0
+        || unsafe { IsValidSid(owner) } == 0
+        || unsafe { EqualSid(owner, user.as_ptr()) } == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file owner is not the current Windows user",
+        ));
+    }
+
+    let mut control = 0_u16;
+    let mut revision = 0_u32;
+    // SAFETY: security_descriptor is valid and both output pointers are writable.
+    if unsafe {
+        GetSecurityDescriptorControl(security_descriptor, &raw mut control, &raw mut revision)
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if revision != SECURITY_DESCRIPTOR_REVISION || control & SE_DACL_PROTECTED == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file DACL is not a protected revision-1 descriptor",
+        ));
+    }
+
+    let mut dacl_present = 0;
+    let mut dacl_defaulted = 0;
+    let mut dacl = std::ptr::null_mut::<ACL>();
+    // SAFETY: security_descriptor is valid and all output pointers are writable.
+    if unsafe {
+        GetSecurityDescriptorDacl(
+            security_descriptor,
+            &raw mut dacl_present,
+            &raw mut dacl,
+            &raw mut dacl_defaulted,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a non-null DACL returned from the valid descriptor may be passed
+    // to IsValidAcl.
+    if dacl_present == 0
+        || dacl_defaulted != 0
+        || dacl.is_null()
+        || unsafe { IsValidAcl(dacl) } == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file does not have an explicit valid DACL",
+        ));
+    }
+
+    let mut acl_information = ACL_SIZE_INFORMATION::default();
+    // SAFETY: dacl is valid and acl_information is a correctly sized writable
+    // ACL_SIZE_INFORMATION output buffer.
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut acl_information).cast(),
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if acl_information.AceCount != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file DACL must contain exactly one access rule",
+        ));
+    }
+
+    let mut raw_ace = std::ptr::null_mut::<c_void>();
+    // SAFETY: the valid DACL reports one ACE, so index zero exists and raw_ace
+    // is writable output storage.
+    if unsafe { GetAce(dacl, 0, &raw mut raw_ace) } == 0 || raw_ace.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: GetAce returned a pointer to at least an ACE_HEADER in the live DACL.
+    let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
+    if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE
+        || header.AceFlags != expected_ace_flags
+        || usize::from(header.AceSize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file DACL contains an unexpected access rule",
+        ));
+    }
+    // SAFETY: the ACE type and minimum size establish the ACCESS_ALLOWED_ACE
+    // fixed prefix, which is contained in the valid DACL.
+    let allowed = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
+    let ace_sid: PSID = std::ptr::addr_of!(allowed.SidStart).cast_mut().cast();
+    // SAFETY: ace_sid points to the SID payload of a valid, sufficiently large ACE.
+    if allowed.Mask != FILE_ALL_ACCESS || unsafe { IsValidSid(ace_sid) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file DACL does not grant only the expected private access",
+        ));
+    }
+    // SAFETY: IsValidSid established both SID pointers as valid.
+    let sid_length = unsafe { GetLengthSid(ace_sid) } as usize;
+    let expected_ace_size = std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+        .checked_sub(std::mem::size_of::<u32>())
+        .and_then(|prefix| prefix.checked_add(sid_length))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACE size overflowed"))?;
+    // SAFETY: IsValidSid established both SID pointers as valid.
+    if usize::from(header.AceSize) != expected_ace_size
+        || unsafe { EqualSid(ace_sid, user.as_ptr()) } == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file DACL is not restricted to the current Windows user",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_windows_managed_ssh_identity_file(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn open_windows_managed_ssh_cleanup_file(path: &Path, delete_access: bool) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    };
+
+    let mut options = OpenOptions::new();
+    let access = if delete_access {
+        FILE_GENERIC_READ | DELETE
+    } else {
+        FILE_GENERIC_READ
+    };
+    // The staging handle denies new delete/write opens. The destination handle
+    // shares delete so it remains compatible with the already-open staging
+    // handle when both names refer to the same hard-linked file object.
+    let sharing = if delete_access {
+        FILE_SHARE_READ
+    } else {
+        FILE_SHARE_READ | FILE_SHARE_DELETE
+    };
+    options
+        .read(true)
+        .access_mode(access)
+        .share_mode(sharing)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn mark_windows_managed_ssh_staging_handle_for_deletion(file: &File) -> AppResult<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle,
+    };
+
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: file was opened through the exact staging name with DELETE
+    // access; disposition is a fully initialized input buffer of the declared
+    // size. Deletion is applied to that opened link when the handle closes.
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            std::ptr::addr_of!(disposition).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_managed_ssh_identity_handle_information(
+    file: &File,
+    label: &str,
+) -> AppResult<WindowsFileInformation> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let information = windows_file_information(file).map_err(|error| {
+        AppError::NotAuthorized(format!("{label} could not be verified by handle: {error}"))
+    })?;
+    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} must be a real regular file"
+        )));
+    }
+    Ok(information)
+}
+
+#[cfg(windows)]
+fn verify_windows_managed_ssh_identity_handle(
+    file: &File,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<ManagedSshIdentityFileSnapshot> {
+    let information = windows_managed_ssh_identity_handle_information(file, label)?;
+    if information.number_of_links != 1 {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} must not be hard-linked"
+        )));
+    }
+    if kind == ManagedSshIdentityFileKind::Private {
+        verify_windows_current_user_only_dacl(file).map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "{label} has unsafe Windows ownership or permissions: {error}"
+            ))
+        })?;
+    }
+    Ok(ManagedSshIdentityFileSnapshot {
+        size: information.size,
+        identity: information.identity,
+    })
+}
+
+#[cfg(unix)]
+fn managed_ssh_identity_mode_is_safe(kind: ManagedSshIdentityFileKind, mode: u32) -> bool {
+    match kind {
+        ManagedSshIdentityFileKind::Private => matches!(mode, 0o400 | 0o600),
+        ManagedSshIdentityFileKind::Public => matches!(mode, 0o400 | 0o444 | 0o600 | 0o644),
+    }
+}
+
+fn managed_ssh_public_key_path(private_key_path: &Path) -> PathBuf {
+    let mut path = private_key_path.as_os_str().to_os_string();
+    path.push(".pub");
+    PathBuf::from(path)
+}
+
+fn managed_ssh_identity_temporary_paths(private_key_path: &Path) -> AppResult<(PathBuf, PathBuf)> {
+    let parent = private_key_path
+        .parent()
+        .ok_or_else(|| AppError::Internal("managed runtime SSH identity has no parent".into()))?;
+    Ok((
+        parent.join(".machine.private-key-new"),
+        parent.join(".machine.public-key-new"),
+    ))
+}
+
+fn inspect_managed_ssh_identity_file(
+    path: &Path,
+    maximum: u64,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<ManagedSshIdentityFileState> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(AppError::NotAuthorized(format!(
+                    "{label} must be a real regular file"
+                )));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{MetadataExt, PermissionsExt};
+                // SAFETY: geteuid has no preconditions and does not dereference memory.
+                let effective_uid = unsafe { libc::geteuid() };
+                if metadata.uid() != effective_uid || metadata.nlink() != 1 {
+                    return Err(AppError::NotAuthorized(format!(
+                        "{label} must be owned by the current user and must not be hard-linked"
+                    )));
+                }
+                let mode = metadata.permissions().mode() & 0o777;
+                if !managed_ssh_identity_mode_is_safe(kind, mode) {
+                    return Err(AppError::NotAuthorized(format!(
+                        "{label} has unsafe permissions"
+                    )));
+                }
+            }
+            #[cfg(windows)]
+            let snapshot = {
+                let file = open_windows_managed_ssh_identity_file(path).map_err(|error| {
+                    AppError::NotAuthorized(format!(
+                        "{label} could not be opened without following links: {error}"
+                    ))
+                })?;
+                verify_windows_managed_ssh_identity_handle(&file, label, kind)?
+            };
+            #[cfg(not(windows))]
+            let snapshot = ManagedSshIdentityFileSnapshot {
+                size: metadata.len(),
+            };
+            if snapshot.size == 0 || snapshot.size > maximum {
+                return Ok(ManagedSshIdentityFileState::Invalid);
+            }
+            Ok(ManagedSshIdentityFileState::Bounded(snapshot))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(ManagedSshIdentityFileState::Absent)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn read_managed_ssh_identity_file(
+    path: &Path,
+    expected: ManagedSshIdentityFileSnapshot,
+    maximum: u64,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<Zeroizing<Vec<u8>>> {
+    #[cfg(not(windows))]
+    let mut options = OpenOptions::new();
+    #[cfg(not(windows))]
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    let mut file = open_windows_managed_ssh_identity_file(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "{label} could not be opened without following links: {error}"
+        ))
+    })?;
+    #[cfg(not(windows))]
+    let mut file = options.open(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "{label} could not be opened without following links: {error}"
+        ))
+    })?;
+    let expected_size = expected.size;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.len() != expected_size
+        || metadata.len() == 0
+        || metadata.len() > maximum
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed while it was being verified"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // SAFETY: geteuid has no preconditions and does not dereference memory.
+        let effective_uid = unsafe { libc::geteuid() };
+        if metadata.uid() != effective_uid || metadata.nlink() != 1 {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} ownership or link count changed while it was being verified"
+            )));
+        }
+        let mode = metadata.permissions().mode() & 0o777;
+        if !managed_ssh_identity_mode_is_safe(kind, mode) {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} permissions changed or are unsafe"
+            )));
+        }
+    }
+    #[cfg(windows)]
+    let windows_before = {
+        let snapshot = verify_windows_managed_ssh_identity_handle(&file, label, kind)?;
+        if snapshot != expected {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} changed while it was being verified"
+            )));
+        }
+        snapshot
+    };
+    let mut bytes = Zeroizing::new(Vec::with_capacity(metadata.len() as usize));
+    (&mut file).take(maximum + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != expected_size || bytes.len() as u64 > maximum {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed while it was being read"
+        )));
+    }
+    let after = file.metadata()?;
+    if !after.is_file() || after.len() != expected_size || after.len() != metadata.len() {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed while it was being read"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // SAFETY: geteuid has no preconditions and does not dereference memory.
+        let effective_uid = unsafe { libc::geteuid() };
+        let mode = after.permissions().mode() & 0o777;
+        if after.dev() != metadata.dev()
+            || after.ino() != metadata.ino()
+            || after.uid() != effective_uid
+            || after.nlink() != 1
+            || !managed_ssh_identity_mode_is_safe(kind, mode)
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} changed while it was being read"
+            )));
+        }
+    }
+    #[cfg(windows)]
+    {
+        let windows_after = verify_windows_managed_ssh_identity_handle(&file, label, kind)?;
+        if windows_after != windows_before {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} changed while it was being read"
+            )));
+        }
+    }
+    Ok(bytes)
+}
+
+fn inspect_managed_ssh_identity(private_key_path: &Path) -> AppResult<ManagedSshIdentityState> {
+    let public_key_path = managed_ssh_public_key_path(private_key_path);
+    let private_state = inspect_managed_ssh_identity_file(
+        private_key_path,
+        MAX_SSH_PRIVATE_KEY_BYTES,
+        "managed runtime SSH private key",
+        ManagedSshIdentityFileKind::Private,
+    )?;
+    let public_state = inspect_managed_ssh_identity_file(
+        &public_key_path,
+        MAX_SSH_PUBLIC_KEY_BYTES,
+        "managed runtime SSH public key",
+        ManagedSshIdentityFileKind::Public,
+    )?;
+    let (private_snapshot, public_snapshot) = match (private_state, public_state) {
+        (ManagedSshIdentityFileState::Absent, ManagedSshIdentityFileState::Absent) => {
+            return Ok(ManagedSshIdentityState::Absent);
+        }
+        (
+            ManagedSshIdentityFileState::Bounded(private_snapshot),
+            ManagedSshIdentityFileState::Bounded(public_snapshot),
+        ) => (private_snapshot, public_snapshot),
+        _ => return Ok(ManagedSshIdentityState::Invalid),
+    };
+
+    let private_bytes = read_managed_ssh_identity_file(
+        private_key_path,
+        private_snapshot,
+        MAX_SSH_PRIVATE_KEY_BYTES,
+        "managed runtime SSH private key",
+        ManagedSshIdentityFileKind::Private,
+    )?;
+    let public_bytes = read_managed_ssh_identity_file(
+        &public_key_path,
+        public_snapshot,
+        MAX_SSH_PUBLIC_KEY_BYTES,
+        "managed runtime SSH public key",
+        ManagedSshIdentityFileKind::Public,
+    )?;
+    let Ok(private_key) = PrivateKey::from_openssh(private_bytes.as_slice()) else {
+        return Ok(ManagedSshIdentityState::Invalid);
+    };
+    let Ok(public_text) = std::str::from_utf8(public_bytes.as_slice()) else {
+        return Ok(ManagedSshIdentityState::Invalid);
+    };
+    let Ok(public_key) = PublicKey::from_openssh(public_text) else {
+        return Ok(ManagedSshIdentityState::Invalid);
+    };
+    if private_key.is_encrypted()
+        || private_key.algorithm() != Algorithm::Ed25519
+        || public_key.algorithm() != Algorithm::Ed25519
+        || private_key.public_key().key_data() != public_key.key_data()
+    {
+        return Ok(ManagedSshIdentityState::Invalid);
+    }
+    Ok(ManagedSshIdentityState::Valid)
+}
+
+#[cfg(windows)]
+fn remove_windows_verified_managed_ssh_identity_file_if_present(
+    path: &Path,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<()> {
+    let file = match open_windows_managed_ssh_cleanup_file(path, true) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} could not be opened for verified cleanup: {error}"
+            )));
+        }
+    };
+    let information = windows_managed_ssh_identity_handle_information(&file, label)?;
+    if information.number_of_links != 1 {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} must not be hard-linked"
+        )));
+    }
+    if kind == ManagedSshIdentityFileKind::Private {
+        verify_windows_current_user_only_dacl(&file).map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "{label} has unsafe Windows ownership or permissions: {error}"
+            ))
+        })?;
+    }
+    let before_delete = windows_file_information(&file)?;
+    if before_delete != information {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed during verified cleanup"
+        )));
+    }
+    mark_windows_managed_ssh_staging_handle_for_deletion(&file)?;
+    drop(file);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn cleanup_windows_managed_ssh_identity_staging_file(
+    staging: &Path,
+    destination: &Path,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<()> {
+    let staging_file = match open_windows_managed_ssh_cleanup_file(staging, true) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} could not be opened for verified cleanup: {error}"
+            )));
+        }
+    };
+    let staging_information =
+        windows_managed_ssh_identity_handle_information(&staging_file, label)?;
+    match staging_information.number_of_links {
+        1 => {
+            if kind == ManagedSshIdentityFileKind::Private {
+                verify_windows_current_user_only_dacl(&staging_file).map_err(|error| {
+                    AppError::NotAuthorized(format!(
+                        "{label} has unsafe Windows ownership or permissions: {error}"
+                    ))
+                })?;
+            }
+            let before_delete = windows_file_information(&staging_file)?;
+            if before_delete != staging_information {
+                return Err(AppError::NotAuthorized(format!(
+                    "{label} changed during verified cleanup"
+                )));
+            }
+            mark_windows_managed_ssh_staging_handle_for_deletion(&staging_file)?;
+            drop(staging_file);
+            Ok(())
+        }
+        2 => {
+            let destination_label = format!("{label} exact published destination");
+            let destination_file = open_windows_managed_ssh_cleanup_file(destination, false)
+                .map_err(|error| {
+                    AppError::NotAuthorized(format!(
+                        "{label} must not be hard-linked outside its exact destination: {error}"
+                    ))
+                })?;
+            let destination_information = windows_managed_ssh_identity_handle_information(
+                &destination_file,
+                &destination_label,
+            )?;
+            if destination_information.number_of_links != 2
+                || destination_information.identity != staging_information.identity
+            {
+                return Err(AppError::NotAuthorized(format!(
+                    "{label} must not be hard-linked outside its exact destination"
+                )));
+            }
+            if kind == ManagedSshIdentityFileKind::Private {
+                for (file, checked_label) in [
+                    (&staging_file, label),
+                    (&destination_file, destination_label.as_str()),
+                ] {
+                    verify_windows_current_user_only_dacl(file).map_err(|error| {
+                        AppError::NotAuthorized(format!(
+                            "{checked_label} has unsafe Windows ownership or permissions: {error}"
+                        ))
+                    })?;
+                }
+            }
+            let staging_before_delete = windows_file_information(&staging_file)?;
+            let destination_before_delete = windows_file_information(&destination_file)?;
+            if staging_before_delete != staging_information
+                || destination_before_delete != destination_information
+            {
+                return Err(AppError::NotAuthorized(format!(
+                    "{label} changed during verified crash recovery"
+                )));
+            }
+            mark_windows_managed_ssh_staging_handle_for_deletion(&staging_file)?;
+            // The destination handle shares delete with the staging handle.
+            // Close both so NTFS can remove only the link used to open staging.
+            drop(destination_file);
+            drop(staging_file);
+            Ok(())
+        }
+        _ => Err(AppError::NotAuthorized(format!(
+            "{label} must not be hard-linked"
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn cleanup_unix_managed_ssh_identity_staging_file(
+    staging: &Path,
+    destination: &Path,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let open = |path: &Path| {
+        let mut options = OpenOptions::new();
+        options.read(true).custom_flags(libc::O_NOFOLLOW);
+        options.open(path)
+    };
+    let staging_file = match open(staging) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} could not be opened for verified cleanup: {error}"
+            )));
+        }
+    };
+    let staging_metadata = staging_file.metadata()?;
+    let effective_uid = unsafe { libc::geteuid() };
+    let staging_mode = staging_metadata.permissions().mode() & 0o777;
+    if !staging_metadata.is_file() || staging_metadata.uid() != effective_uid {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} is unsafe for verified cleanup"
+        )));
+    }
+    match staging_metadata.nlink() {
+        1 => {
+            if !managed_ssh_identity_mode_is_safe(kind, staging_mode) {
+                return Err(AppError::NotAuthorized(format!(
+                    "{label} is unsafe for verified cleanup"
+                )));
+            }
+            remove_regular_file(staging)
+        }
+        2 => {
+            let destination_file = open(destination).map_err(|error| {
+                AppError::NotAuthorized(format!(
+                    "{label} must not be hard-linked outside its exact destination: {error}"
+                ))
+            })?;
+            let destination_metadata = destination_file.metadata()?;
+            let destination_mode = destination_metadata.permissions().mode() & 0o777;
+            if !destination_metadata.is_file()
+                || destination_metadata.dev() != staging_metadata.dev()
+                || destination_metadata.ino() != staging_metadata.ino()
+                || destination_metadata.nlink() != 2
+                || destination_metadata.uid() != effective_uid
+                || !managed_ssh_identity_mode_is_safe(kind, staging_mode)
+                || !managed_ssh_identity_mode_is_safe(kind, destination_mode)
+            {
+                return Err(AppError::NotAuthorized(format!(
+                    "{label} must not be hard-linked outside its exact destination"
+                )));
+            }
+            let before_delete = fs::symlink_metadata(staging)?;
+            if before_delete.dev() != staging_metadata.dev()
+                || before_delete.ino() != staging_metadata.ino()
+                || before_delete.nlink() != 2
+            {
+                return Err(AppError::NotAuthorized(format!(
+                    "{label} changed during verified crash recovery"
+                )));
+            }
+            fs::remove_file(staging)?;
+            drop(destination_file);
+            drop(staging_file);
+            Ok(())
+        }
+        _ => Err(AppError::NotAuthorized(format!(
+            "{label} must not be hard-linked"
+        ))),
+    }
+}
+
+fn cleanup_managed_ssh_identity_staging_file(
+    staging: &Path,
+    destination: &Path,
+    maximum: u64,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<()> {
+    #[cfg(windows)]
+    {
+        let _ = maximum;
+        cleanup_windows_managed_ssh_identity_staging_file(staging, destination, label, kind)
+    }
+    #[cfg(unix)]
+    {
+        let _ = maximum;
+        cleanup_unix_managed_ssh_identity_staging_file(staging, destination, label, kind)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = destination;
+        remove_verified_managed_ssh_identity_file_if_present(staging, maximum, label, kind)
+    }
+}
+
+fn remove_repairable_managed_ssh_identity(private_key_path: &Path) -> AppResult<()> {
+    let public_key_path = managed_ssh_public_key_path(private_key_path);
+    remove_verified_managed_ssh_identity_file_if_present(
+        private_key_path,
+        MAX_SSH_PRIVATE_KEY_BYTES,
+        "managed runtime SSH private key",
+        ManagedSshIdentityFileKind::Private,
+    )?;
+    remove_verified_managed_ssh_identity_file_if_present(
+        &public_key_path,
+        MAX_SSH_PUBLIC_KEY_BYTES,
+        "managed runtime SSH public key",
+        ManagedSshIdentityFileKind::Public,
+    )?;
+    let parent = private_key_path
+        .parent()
+        .ok_or_else(|| AppError::Internal("managed runtime SSH identity has no parent".into()))?;
+    sync_directory(parent)
+}
+
+fn remove_verified_managed_ssh_identity_file_if_present(
+    path: &Path,
+    maximum: u64,
+    label: &str,
+    kind: ManagedSshIdentityFileKind,
+) -> AppResult<()> {
+    #[cfg(windows)]
+    {
+        let _ = maximum;
+        remove_windows_verified_managed_ssh_identity_file_if_present(path, label, kind)
+    }
+    #[cfg(not(windows))]
+    {
+        match inspect_managed_ssh_identity_file(path, maximum, label, kind)? {
+            ManagedSshIdentityFileState::Absent => Ok(()),
+            ManagedSshIdentityFileState::Bounded(_) | ManagedSshIdentityFileState::Invalid => {
+                remove_regular_file(path)
+            }
+        }
+    }
+}
+
+fn cleanup_managed_ssh_identity_temporaries(private_key_path: &Path) -> AppResult<()> {
+    let (private_temporary, public_temporary) =
+        managed_ssh_identity_temporary_paths(private_key_path)?;
+    cleanup_managed_ssh_identity_staging_file(
+        &private_temporary,
+        private_key_path,
+        MAX_SSH_PRIVATE_KEY_BYTES,
+        "managed runtime SSH private-key staging file",
+        ManagedSshIdentityFileKind::Private,
+    )?;
+    cleanup_managed_ssh_identity_staging_file(
+        &public_temporary,
+        &managed_ssh_public_key_path(private_key_path),
+        MAX_SSH_PUBLIC_KEY_BYTES,
+        "managed runtime SSH public-key staging file",
+        ManagedSshIdentityFileKind::Public,
+    )
+}
+
+fn write_managed_ssh_identity_temporary(path: &Path, bytes: &[u8]) -> AppResult<()> {
+    let mut file = create_private_file(path)?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn publish_managed_ssh_identity_file(temporary: &Path, destination: &Path) -> AppResult<()> {
+    // A same-directory hard link publishes fully written bytes atomically and
+    // fails if an unexpected destination entry (including a symlink) appeared.
+    fs::hard_link(temporary, destination).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime SSH identity could not be published without replacing an existing entry: {error}"
+        ))
+    })?;
+    remove_regular_file(temporary)
+}
+
+fn generate_managed_ssh_identity(private_key_path: &Path) -> AppResult<()> {
+    let parent = private_key_path
+        .parent()
+        .ok_or_else(|| AppError::Internal("managed runtime SSH identity has no parent".into()))?;
+    let public_key_path = managed_ssh_public_key_path(private_key_path);
+    if private_entry_exists(private_key_path)? || private_entry_exists(&public_key_path)? {
+        return Err(AppError::NotAuthorized(
+            "managed runtime SSH identity destination appeared before publication".into(),
+        ));
+    }
+    let (private_temporary, public_temporary) =
+        managed_ssh_identity_temporary_paths(private_key_path)?;
+    cleanup_managed_ssh_identity_temporaries(private_key_path)?;
+
+    let mut private_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).map_err(|_| {
+        AppError::Runtime("managed runtime Ed25519 SSH identity generation failed".into())
+    })?;
+    private_key.set_comment(MANAGED_SSH_KEY_COMMENT);
+    let private_encoding = private_key.to_openssh(LineEnding::LF).map_err(|_| {
+        AppError::Runtime("managed runtime OpenSSH private key encoding failed".into())
+    })?;
+    let mut public_encoding = private_key.public_key().to_openssh().map_err(|_| {
+        AppError::Runtime("managed runtime OpenSSH public key encoding failed".into())
+    })?;
+    public_encoding.push('\n');
+    if private_encoding.is_empty()
+        || private_encoding.len() as u64 > MAX_SSH_PRIVATE_KEY_BYTES
+        || public_encoding.is_empty()
+        || public_encoding.len() as u64 > MAX_SSH_PUBLIC_KEY_BYTES
+    {
+        return Err(AppError::Runtime(
+            "managed runtime generated an unexpectedly sized SSH identity".into(),
+        ));
+    }
+
+    let mut public_published = false;
+    let result = (|| {
+        write_managed_ssh_identity_temporary(&private_temporary, private_encoding.as_bytes())?;
+        write_managed_ssh_identity_temporary(&public_temporary, public_encoding.as_bytes())?;
+        // Publish the public half first. A crash can therefore leave only a
+        // non-secret partial pair, which the next locked setup safely repairs.
+        publish_managed_ssh_identity_file(&public_temporary, &public_key_path)?;
+        public_published = true;
+        publish_managed_ssh_identity_file(&private_temporary, private_key_path)?;
+        sync_directory(parent)
+    })();
+    if result.is_err() {
+        let _ = cleanup_managed_ssh_identity_staging_file(
+            &private_temporary,
+            private_key_path,
+            MAX_SSH_PRIVATE_KEY_BYTES,
+            "managed runtime SSH private-key staging file",
+            ManagedSshIdentityFileKind::Private,
+        );
+        let _ = cleanup_managed_ssh_identity_staging_file(
+            &public_temporary,
+            &public_key_path,
+            MAX_SSH_PUBLIC_KEY_BYTES,
+            "managed runtime SSH public-key staging file",
+            ManagedSshIdentityFileKind::Public,
+        );
+        if public_published && !private_entry_exists(private_key_path).unwrap_or(true) {
+            let _ = remove_verified_managed_ssh_identity_file_if_present(
+                &public_key_path,
+                MAX_SSH_PUBLIC_KEY_BYTES,
+                "managed runtime SSH public key",
+                ManagedSshIdentityFileKind::Public,
+            );
+        }
+        let _ = sync_directory(parent);
+    }
+    result
+}
+
 fn machine_name(target: &ManagedTarget) -> String {
     let name = format!(
         "{MACHINE_PREFIX}-{}-{}-{}",
@@ -2492,6 +4500,207 @@ fn installation_directory_name(loaded: &LoadedManagedRuntimeManifest) -> String 
         loaded.manifest.runtime_version,
         &loaded.sha256[..16]
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsSystemDirectories {
+    system_root: PathBuf,
+    system32: PathBuf,
+}
+
+#[cfg(any(windows, test))]
+fn verified_windows_system_directories(system_root: &Path) -> AppResult<WindowsSystemDirectories> {
+    if !system_root.is_absolute() {
+        return Err(AppError::NotAuthorized(
+            "Windows system directory API did not return an absolute directory".into(),
+        ));
+    }
+    let system_root = canonical_real_directory(system_root, "Windows SystemRoot")?;
+    let system32 =
+        canonical_real_directory(&system_root.join("System32"), "Windows SystemRoot System32")?;
+    if !system32.starts_with(&system_root) {
+        return Err(AppError::NotAuthorized(
+            "Windows System32 directory escaped the canonical Windows root".into(),
+        ));
+    }
+    Ok(WindowsSystemDirectories {
+        system_root,
+        system32,
+    })
+}
+
+#[cfg(windows)]
+fn windows_system_directories() -> AppResult<WindowsSystemDirectories> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
+
+    const MAX_WINDOWS_DIRECTORY_UTF16_CODE_UNITS: usize = 32_768;
+    let mut encoded = vec![0_u16; MAX_WINDOWS_DIRECTORY_UTF16_CODE_UNITS];
+    let length = unsafe {
+        GetSystemWindowsDirectoryW(
+            encoded.as_mut_ptr(),
+            u32::try_from(encoded.len()).expect("Windows directory buffer fits u32"),
+        )
+    };
+    if length == 0 {
+        return Err(AppError::NotAvailable(format!(
+            "Windows system directory API failed: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    let length = usize::try_from(length).map_err(|_| {
+        AppError::NotAvailable("Windows system directory length exceeded this platform".into())
+    })?;
+    if length >= encoded.len() || encoded[length] != 0 || encoded[..length].contains(&0) {
+        return Err(AppError::NotAvailable(
+            "Windows system directory API returned an invalid or oversized path".into(),
+        ));
+    }
+    verified_windows_system_directories(&PathBuf::from(OsString::from_wide(&encoded[..length])))
+}
+
+#[cfg(not(windows))]
+fn windows_system_directories() -> AppResult<WindowsSystemDirectories> {
+    Err(AppError::NotAvailable(
+        "Windows system directory API is unavailable on this host".into(),
+    ))
+}
+
+fn windows_wsl_inventory_command(
+    managed_command: &ManagedRuntimeCommand,
+) -> AppResult<ManagedRuntimeCommand> {
+    let directories = windows_system_directories()?;
+    windows_wsl_inventory_command_with_directories(managed_command, &directories)
+}
+
+fn windows_wsl_inventory_command_with_directories(
+    managed_command: &ManagedRuntimeCommand,
+    directories: &WindowsSystemDirectories,
+) -> AppResult<ManagedRuntimeCommand> {
+    let system_root = &directories.system_root;
+    let system32 = &directories.system32;
+    let binary = system32.join("wsl.exe");
+    if !binary.is_absolute() {
+        return Err(AppError::NotAuthorized(
+            "Windows WSL inventory executable was not absolute".into(),
+        ));
+    }
+    verify_regular_file(&binary, "Windows System32 wsl.exe")?;
+    let working_directory = canonical_real_directory(
+        &managed_command.working_directory,
+        "managed Windows WSL inventory working",
+    )?;
+    let path = std::env::join_paths([system32.clone()])
+        .map_err(|_| AppError::Runtime("managed Windows WSL inventory PATH is invalid".into()))?;
+    let mut environment = BTreeMap::new();
+    environment.insert(
+        OsString::from("SystemRoot"),
+        system_root.as_os_str().to_owned(),
+    );
+    environment.insert(OsString::from("WINDIR"), system_root.as_os_str().to_owned());
+    environment.insert(OsString::from("PATH"), path);
+    environment.insert(
+        OsString::from("NoDefaultCurrentDirectoryInExePath"),
+        OsString::from("1"),
+    );
+
+    Ok(ManagedRuntimeCommand {
+        binary,
+        environment,
+        working_directory,
+        runtime_version: managed_command.runtime_version.clone(),
+        manifest_sha256: managed_command.manifest_sha256.clone(),
+        machine_image_sha256: managed_command.machine_image_sha256.clone(),
+    })
+}
+
+fn parse_windows_wsl_distribution_inventory(bytes: &[u8]) -> AppResult<Vec<String>> {
+    if bytes.len() as u64 > MAX_COMMAND_OUTPUT_BYTES {
+        return Err(AppError::Runtime(
+            "managed Windows WSL distribution inventory was oversized".into(),
+        ));
+    }
+    let decoded = if let Some(encoded) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        std::str::from_utf8(encoded)
+            .map(str::to_owned)
+            .map_err(|_| {
+                AppError::Runtime(
+                    "managed Windows WSL distribution inventory was not valid UTF-8".into(),
+                )
+            })?
+    } else if let Some(encoded) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        decode_windows_wsl_utf16le(encoded)?
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        return Err(AppError::Runtime(
+            "managed Windows WSL distribution inventory used unsupported UTF-16BE".into(),
+        ));
+    } else if let Ok(decoded) = std::str::from_utf8(bytes) {
+        if decoded.contains('\0') {
+            decode_windows_wsl_utf16le(bytes)?
+        } else {
+            decoded.to_owned()
+        }
+    } else {
+        decode_windows_wsl_utf16le(bytes)?
+    };
+
+    if decoded.contains(['\0', '\u{feff}']) {
+        return Err(AppError::Runtime(
+            "managed Windows WSL distribution inventory contained an invalid code point".into(),
+        ));
+    }
+    let mut distributions = Vec::new();
+    let mut lines = decoded.split('\n').peekable();
+    while let Some(encoded_line) = lines.next() {
+        if encoded_line.is_empty() && lines.peek().is_none() {
+            break;
+        }
+        let line = encoded_line.strip_suffix('\r').unwrap_or(encoded_line);
+        if line.is_empty()
+            || line.len() > MAX_WSL_DISTRIBUTION_NAME_BYTES
+            || line.trim() != line
+            || line.chars().any(|character| {
+                character.is_control()
+                    || matches!(character, '\u{2028}' | '\u{2029}')
+                    || unicode_code_point_is_noncharacter(character)
+            })
+        {
+            return Err(AppError::Runtime(
+                "managed Windows WSL distribution inventory contained an invalid name".into(),
+            ));
+        }
+        if distributions.len() == MAX_WSL_DISTRIBUTIONS {
+            return Err(AppError::Runtime(
+                "managed Windows WSL distribution inventory contained too many names".into(),
+            ));
+        }
+        distributions.push(line.to_owned());
+    }
+    Ok(distributions)
+}
+
+fn decode_windows_wsl_utf16le(bytes: &[u8]) -> AppResult<String> {
+    if !bytes.len().is_multiple_of(2) {
+        return Err(AppError::Runtime(
+            "managed Windows WSL distribution inventory had invalid UTF-16LE length".into(),
+        ));
+    }
+    let code_units = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&code_units).map_err(|_| {
+        AppError::Runtime(
+            "managed Windows WSL distribution inventory was not valid UTF-16LE".into(),
+        )
+    })
+}
+
+fn unicode_code_point_is_noncharacter(character: char) -> bool {
+    let code_point = character as u32;
+    (0xfdd0..=0xfdef).contains(&code_point) || code_point & 0xfffe == 0xfffe
 }
 
 fn require_success(operation: &str, output: &ManagedCommandOutput) -> AppResult<()> {
@@ -2519,18 +4728,172 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn managed_path(install: &Path, target: &ManagedTarget) -> AppResult<OsString> {
+#[cfg(unix)]
+fn macos_short_home_path(
+    base: &Path,
+    canonical_state_root: &Path,
+    manifest_sha256: &str,
+    effective_uid: libc::uid_t,
+) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+
+    let state_bytes = canonical_state_root.as_os_str().as_bytes();
+    let mut digest = Sha256::new();
+    digest.update(b"ai-security-scanner-macos-command-home-v1\0");
+    digest.update(effective_uid.to_be_bytes());
+    digest.update((state_bytes.len() as u64).to_be_bytes());
+    digest.update(state_bytes);
+    digest.update((manifest_sha256.len() as u64).to_be_bytes());
+    digest.update(manifest_sha256.as_bytes());
+    let encoded = hex::encode(digest.finalize());
+    base.join(format!(
+        "{MACOS_SHORT_HOME_PREFIX}{}",
+        &encoded[..MACOS_SHORT_HOME_DIGEST_HEX_CHARS]
+    ))
+}
+
+#[cfg(unix)]
+fn macos_podman_ignition_socket_alias(home: &Path, machine_name: &str) -> PathBuf {
+    home.join(".podman")
+        .join(format!("{machine_name}{PODMAN_IGNITION_SOCKET_SUFFIX}"))
+}
+
+#[cfg(unix)]
+fn ensure_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    verify_macos_short_home_directory(path, effective_uid)
+}
+
+#[cfg(unix)]
+fn verify_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS command home must be a real directory".into(),
+        ));
+    }
+    if metadata.uid() != effective_uid || metadata.mode() & 0o7777 != 0o700 {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS command home has unsafe ownership or permissions".into(),
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime macOS command home could not be opened without following links: {error}"
+        ))
+    })?;
+    let opened = directory.metadata()?;
+    if !opened.is_dir()
+        || opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.uid() != effective_uid
+        || opened.mode() & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS command home changed while it was being verified".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    remove_macos_short_home_directory_at(path, Path::new(MACOS_SHORT_HOME_BASE), effective_uid)
+}
+
+#[cfg(unix)]
+fn remove_macos_short_home_directory_at(
+    path: &Path,
+    base: &Path,
+    effective_uid: libc::uid_t,
+) -> AppResult<()> {
+    if path.parent() != Some(base) {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS command-home cleanup escaped its exact temporary base".into(),
+        ));
+    }
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    verify_macos_short_home_directory(path, effective_uid)?;
+    let base = base.canonicalize()?;
+    let base_metadata = fs::symlink_metadata(&base)?;
+    if !base_metadata.is_dir() || base_metadata.file_type().is_symlink() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS temporary base is not a real directory".into(),
+        ));
+    }
+    let aliases = path.join(".podman");
+    match fs::symlink_metadata(&aliases) {
+        Ok(metadata) => {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_dir()
+                || metadata.uid() != effective_uid
+                || metadata.mode() & 0o7777 != 0o700
+            {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime macOS socket-alias directory is unsafe".into(),
+                ));
+            }
+            if fs::read_dir(&aliases)?.next().transpose()?.is_some() {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime macOS socket-alias directory was not empty after machine removal"
+                        .into(),
+                ));
+            }
+            fs::remove_dir(&aliases)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    if fs::read_dir(path)?.next().transpose()?.is_some() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS command home contained an unexpected entry after machine removal"
+                .into(),
+        ));
+    }
+    fs::remove_dir(path)?;
+    sync_directory(&base)
+}
+
+fn managed_path(
+    install: &Path,
+    target: &ManagedTarget,
+    windows_directories: Option<&WindowsSystemDirectories>,
+) -> AppResult<OsString> {
     let bin = install.join("bin");
     let rendered = bin.to_str().ok_or_else(|| {
         AppError::Runtime("managed runtime install path is not representable".into())
     })?;
     let path = match target.operating_system {
         ManagedOperatingSystem::Windows => {
-            let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
-                AppError::NotAvailable("Windows SystemRoot is unavailable".into())
-            })?;
-            let system32 = PathBuf::from(system_root).join("System32");
-            std::env::join_paths([PathBuf::from(rendered), system32])
+            let system32 = &windows_directories
+                .ok_or_else(|| {
+                    AppError::Internal(
+                        "managed Windows PATH did not receive verified system directories".into(),
+                    )
+                })?
+                .system32;
+            std::env::join_paths([PathBuf::from(rendered), system32.clone()])
                 .map_err(|_| AppError::Runtime("managed Windows runtime PATH is invalid".into()))?
         }
         ManagedOperatingSystem::Linux | ManagedOperatingSystem::Macos => std::env::join_paths([
@@ -2541,6 +4904,21 @@ fn managed_path(install: &Path, target: &ManagedTarget) -> AppResult<OsString> {
         .map_err(|_| AppError::Runtime("managed runtime PATH is invalid".into()))?,
     };
     Ok(path)
+}
+
+fn apply_platform_command_environment(
+    environment: &mut BTreeMap<OsString, OsString>,
+    operating_system: ManagedOperatingSystem,
+) {
+    let key = OsString::from("NoDefaultCurrentDirectoryInExePath");
+    if operating_system == ManagedOperatingSystem::Windows {
+        // Go's os/exec honors this process environment switch on Windows and
+        // therefore never searches the private current directory ahead of the
+        // already constrained managed PATH for helper executables.
+        environment.insert(key, OsString::from("1"));
+    } else {
+        environment.remove(&key);
+    }
 }
 
 fn toml_string(path: &Path) -> AppResult<String> {
@@ -2571,6 +4949,199 @@ fn toml_scalar(value: &str) -> String {
     escaped
 }
 
+#[cfg(windows)]
+fn open_or_create_windows_managed_private_directory_guard(path: &Path) -> io::Result<File> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAceEx, CONTAINER_INHERIT_ACE,
+        InitializeAcl, InitializeSecurityDescriptor, OBJECT_INHERIT_ACE, SE_DACL_PROTECTED,
+        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
+        SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+    };
+    use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
+
+    let user = windows_current_user_sid()?;
+    // SAFETY: as_ptr returns the valid SID copy owned by user.
+    let sid_length = unsafe { windows_sys::Win32::Security::GetLengthSid(user.as_ptr()) } as usize;
+    let acl_bytes = std::mem::size_of::<ACL>()
+        .checked_add(std::mem::size_of::<ACCESS_ALLOWED_ACE>())
+        .and_then(|size| size.checked_sub(std::mem::size_of::<u32>()))
+        .and_then(|size| size.checked_add(sid_length))
+        .and_then(|size| size.checked_add(std::mem::size_of::<u32>() - 1))
+        .map(|size| size & !(std::mem::size_of::<u32>() - 1))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACL size overflowed"))?;
+    let acl_length = u32::try_from(acl_bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Windows ACL is too large"))?;
+    let mut acl = vec![0_u32; acl_bytes.div_ceil(std::mem::size_of::<u32>())];
+    // SAFETY: acl is DWORD-aligned and has acl_length writable bytes.
+    if unsafe { InitializeAcl(acl.as_mut_ptr().cast(), acl_length, ACL_REVISION) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    // SAFETY: the ACL was initialized and user owns a valid SID. The ACE
+    // applies to this directory and is inherited by its child files/directories.
+    if unsafe {
+        AddAccessAllowedAceEx(
+            acl.as_mut_ptr().cast(),
+            ACL_REVISION,
+            inheritance,
+            FILE_ALL_ACCESS,
+            user.as_ptr(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut descriptor = SECURITY_DESCRIPTOR::default();
+    // SAFETY: descriptor is correctly sized writable storage.
+    if unsafe {
+        InitializeSecurityDescriptor(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            SECURITY_DESCRIPTOR_REVISION,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descriptor is initialized and user remains live through directory creation.
+    if unsafe {
+        SetSecurityDescriptorOwner(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            user.as_ptr(),
+            FALSE,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descriptor and ACL are initialized and remain live through creation.
+    if unsafe {
+        SetSecurityDescriptorDacl(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            TRUE,
+            acl.as_ptr().cast(),
+            FALSE,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descriptor is initialized; protection prevents parent ACEs from
+    // being merged into the app-created namespace.
+    if unsafe {
+        SetSecurityDescriptorControl(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::addr_of_mut!(descriptor).cast(),
+        bInheritHandle: FALSE,
+    };
+
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows managed private directory has no parent",
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows managed private directory has no final component",
+        )
+    })?;
+    let canonical_parent = if parent.as_os_str().is_empty() {
+        Path::new(".").canonicalize()?
+    } else {
+        parent.canonicalize()?
+    };
+    let exact_path = canonical_parent.join(file_name);
+    let mut encoded = exact_path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows path contains a NUL code unit",
+        ));
+    }
+    encoded.push(0);
+    // SAFETY: encoded is NUL-terminated; attributes and all descriptor backing
+    // storage remain live for this call.
+    let created = unsafe { CreateDirectoryW(encoded.as_ptr(), &raw const attributes) };
+    if created == 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::AlreadyExists {
+            return Err(error);
+        }
+    }
+
+    // Open the exact final component without traversing a junction and without
+    // sharing delete while ownership, type, and DACL are verified by handle.
+    // SAFETY: encoded remains NUL-terminated and live for this call.
+    let raw = unsafe {
+        CreateFileW(
+            encoded.as_ptr(),
+            FILE_READ_ATTRIBUTES | READ_CONTROL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned a uniquely owned directory handle.
+    let directory = unsafe { File::from_raw_handle(raw) };
+    let information = windows_file_information(&directory)?;
+    if information.attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || information.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime path is not a real directory",
+        ));
+    }
+    verify_windows_current_user_only_dacl_with_ace_flags(
+        &directory,
+        u8::try_from(inheritance).expect("Windows inheritance flags fit in an ACE header"),
+    )?;
+    Ok(directory)
+}
+
+#[cfg(windows)]
+fn ensure_windows_managed_private_directory(path: &Path) -> io::Result<()> {
+    drop(open_or_create_windows_managed_private_directory_guard(
+        path,
+    )?);
+    Ok(())
+}
+
+fn ensure_managed_private_directory(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        ensure_windows_managed_private_directory(path)
+    }
+    #[cfg(not(windows))]
+    {
+        ensure_private_directory(path)
+    }
+}
+
 fn ensure_private_directory_tree(root: &Path, destination: &Path) -> AppResult<()> {
     if !destination.starts_with(root) {
         return Err(AppError::NotAuthorized(
@@ -2588,7 +5159,7 @@ fn ensure_private_directory_tree(root: &Path, destination: &Path) -> AppResult<(
             ));
         };
         current.push(component);
-        ensure_private_directory(&current)?;
+        ensure_managed_private_directory(&current)?;
     }
     Ok(())
 }
@@ -2626,14 +5197,190 @@ fn canonical_real_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
     path.canonicalize().map_err(AppError::from)
 }
 
-fn create_private_file(path: &Path) -> io::Result<File> {
-    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+#[cfg(windows)]
+fn create_windows_private_file(path: &Path) -> io::Result<File> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, InitializeAcl,
+        InitializeSecurityDescriptor, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
+        SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CREATE_NEW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_NONE,
+    };
+    use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
+
+    let user = windows_current_user_sid()?;
+    // SAFETY: as_ptr returns the valid SID copy owned by user.
+    let sid_length = unsafe { windows_sys::Win32::Security::GetLengthSid(user.as_ptr()) } as usize;
+    let acl_bytes = std::mem::size_of::<ACL>()
+        .checked_add(std::mem::size_of::<ACCESS_ALLOWED_ACE>())
+        .and_then(|size| size.checked_sub(std::mem::size_of::<u32>()))
+        .and_then(|size| size.checked_add(sid_length))
+        .and_then(|size| size.checked_add(std::mem::size_of::<u32>() - 1))
+        .map(|size| size & !(std::mem::size_of::<u32>() - 1))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACL size overflowed"))?;
+    let acl_length = u32::try_from(acl_bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Windows ACL is too large"))?;
+    let mut acl = vec![0_u32; acl_bytes.div_ceil(std::mem::size_of::<u32>())];
+    // SAFETY: acl is DWORD-aligned and has acl_length writable bytes.
+    if unsafe { InitializeAcl(acl.as_mut_ptr().cast(), acl_length, ACL_REVISION) } == 0 {
+        return Err(io::Error::last_os_error());
     }
+    // SAFETY: the ACL was initialized above and user owns a valid SID for the call.
+    if unsafe {
+        AddAccessAllowedAce(
+            acl.as_mut_ptr().cast(),
+            ACL_REVISION,
+            FILE_ALL_ACCESS,
+            user.as_ptr(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut descriptor = SECURITY_DESCRIPTOR::default();
+    // SAFETY: descriptor is correctly sized writable storage and revision is
+    // the version supported by InitializeSecurityDescriptor.
+    if unsafe {
+        InitializeSecurityDescriptor(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            SECURITY_DESCRIPTOR_REVISION,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descriptor was initialized and user owns a valid SID which stays
+    // live until CreateFileW returns.
+    if unsafe {
+        SetSecurityDescriptorOwner(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            user.as_ptr(),
+            FALSE,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descriptor and ACL are initialized and remain live through the
+    // CreateFileW call.
+    if unsafe {
+        SetSecurityDescriptorDacl(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            TRUE,
+            acl.as_ptr().cast(),
+            FALSE,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: descriptor is initialized; setting SE_DACL_PROTECTED prevents
+    // permissive inheritable parent ACEs from being merged into this DACL.
+    if unsafe {
+        SetSecurityDescriptorControl(
+            std::ptr::addr_of_mut!(descriptor).cast(),
+            SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::addr_of_mut!(descriptor).cast(),
+        bInheritHandle: FALSE,
+    };
+
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows private file path has no parent",
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows private file path has no file name",
+        )
+    })?;
+    // Rust's Windows canonicalize returns an absolute verbatim path. Resolve
+    // only the existing parent because CREATE_NEW requires the final file to be
+    // absent, then append the exact final component. This preserves long-path
+    // support and avoids interpreting a relative path in CreateFileW.
+    let canonical_parent = if parent.as_os_str().is_empty() {
+        Path::new(".").canonicalize()?
+    } else {
+        parent.canonicalize()?
+    };
+    let creation_path = canonical_parent.join(file_name);
+    let mut encoded = creation_path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows path contains a NUL code unit",
+        ));
+    }
+    encoded.push(0);
+    // SAFETY: encoded is NUL-terminated; attributes points to a live descriptor
+    // whose SID and ACL storage also remain live for the call.
+    let raw = unsafe {
+        CreateFileW(
+            encoded.as_ptr(),
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_SHARE_NONE,
+            &raw const attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned a uniquely owned file handle.
+    let file = unsafe { File::from_raw_handle(raw) };
+    let information = windows_file_information(&file)?;
+    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || information.number_of_links != 1
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "new Windows private file is not an unlinked regular file",
+        ));
+    }
+    verify_windows_current_user_only_dacl(&file)?;
     Ok(file)
+}
+
+fn create_private_file(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        create_windows_private_file(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(file)
+    }
 }
 
 fn open_private_download_file(path: &Path, append: bool) -> AppResult<File> {
@@ -2724,7 +5471,7 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
     let parent = path
         .parent()
         .ok_or_else(|| AppError::Runtime("managed runtime configuration has no parent".into()))?;
-    ensure_private_directory(parent)?;
+    ensure_managed_private_directory(parent)?;
     if path.exists() {
         verify_regular_file(path, "managed runtime configuration")?;
         let metadata = fs::symlink_metadata(path)?;
@@ -2750,6 +5497,8 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
+        // Windows cannot rename a file while its FILE_SHARE_NONE writer is open.
+        drop(file);
         fs::rename(&temporary, path)?;
         sync_directory(parent)?;
         Ok(())
@@ -2997,9 +5746,339 @@ mod tests {
         }
     }
 
+    fn failure(stderr: impl Into<Vec<u8>>) -> ManagedCommandOutput {
+        #[cfg(unix)]
+        let status = ExitStatus::from_raw(1 << 8);
+        #[cfg(windows)]
+        let status = ExitStatus::from_raw(1);
+        ManagedCommandOutput {
+            status,
+            stdout: Vec::new(),
+            stderr: stderr.into(),
+        }
+    }
+
+    fn utf16le(value: &str) -> Vec<u8> {
+        value.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[cfg(unix)]
+    fn direct_unix_test_command(
+        working_directory: &Path,
+        environment: BTreeMap<OsString, OsString>,
+    ) -> ManagedRuntimeCommand {
+        ManagedRuntimeCommand {
+            binary: PathBuf::from("/bin/sh"),
+            environment,
+            working_directory: working_directory.to_path_buf(),
+            runtime_version: "test".into(),
+            manifest_sha256: "a".repeat(64),
+            machine_image_sha256: "b".repeat(64),
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_unix_process_is_reaped(pid: i32) {
+        let reap_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let gone = unsafe { libc::kill(pid, 0) } == -1
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone {
+                return;
+            }
+            assert!(
+                Instant::now() < reap_deadline,
+                "managed runtime descendant survived process-group termination"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_command_zero_deadline_cannot_report_a_fast_exit_as_success() {
+        let temp = TempDir::new().expect("temporary root");
+        let command = direct_unix_test_command(temp.path(), BTreeMap::new());
+        let started = Instant::now();
+
+        let error = DirectManagedCommandRunner
+            .output(
+                &command,
+                &[OsString::from("-c"), OsString::from("exit 0")],
+                Duration::ZERO,
+            )
+            .expect_err("a zero-deadline command must fail closed");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("command exceeded its deadline"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn command_cleanup_failure_preserves_the_primary_error_kind() {
+        let error = managed_command_error_with_cleanup(
+            managed_command_deadline_error(),
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "fixture cleanup denial",
+            )),
+        );
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("fixture cleanup denial"));
+        assert!(error.to_string().contains("cleanup also failed"));
+    }
+
+    #[cfg(windows)]
+    fn set_windows_permissive_inheritable_dacl(path: &Path) {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::TRUE;
+        use windows_sys::Win32::Security::{
+            ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAceEx, CONTAINER_INHERIT_ACE,
+            CreateWellKnownSid, DACL_SECURITY_INFORMATION, InitializeAcl,
+            InitializeSecurityDescriptor, OBJECT_INHERIT_ACE, SECURITY_DESCRIPTOR,
+            SECURITY_MAX_SID_SIZE, SetFileSecurityW, SetSecurityDescriptorDacl, WinWorldSid,
+        };
+        use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+        use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
+
+        let mut everyone =
+            vec![0_u32; (SECURITY_MAX_SID_SIZE as usize).div_ceil(std::mem::size_of::<u32>())];
+        let mut everyone_size = (everyone.len() * std::mem::size_of::<u32>()) as u32;
+        // SAFETY: everyone is an aligned writable buffer of everyone_size bytes;
+        // WinWorldSid does not require a domain SID.
+        assert_ne!(
+            unsafe {
+                CreateWellKnownSid(
+                    WinWorldSid,
+                    std::ptr::null_mut(),
+                    everyone.as_mut_ptr().cast(),
+                    &raw mut everyone_size,
+                )
+            },
+            0,
+            "create Everyone SID: {}",
+            io::Error::last_os_error()
+        );
+        let acl_bytes = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            - std::mem::size_of::<u32>()
+            + everyone_size as usize;
+        let mut acl = vec![0_u32; acl_bytes.div_ceil(std::mem::size_of::<u32>())];
+        // SAFETY: acl is DWORD-aligned and provides at least acl_bytes writable bytes.
+        assert_ne!(
+            unsafe { InitializeAcl(acl.as_mut_ptr().cast(), acl_bytes as u32, ACL_REVISION) },
+            0,
+            "initialize permissive parent ACL: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: acl is initialized and everyone contains a valid SID.
+        assert_ne!(
+            unsafe {
+                AddAccessAllowedAceEx(
+                    acl.as_mut_ptr().cast(),
+                    ACL_REVISION,
+                    OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                    FILE_ALL_ACCESS,
+                    everyone.as_mut_ptr().cast(),
+                )
+            },
+            0,
+            "add permissive inheritable parent ACE: {}",
+            io::Error::last_os_error()
+        );
+
+        let mut descriptor = SECURITY_DESCRIPTOR::default();
+        // SAFETY: descriptor is correctly sized writable storage.
+        assert_ne!(
+            unsafe {
+                InitializeSecurityDescriptor(
+                    std::ptr::addr_of_mut!(descriptor).cast(),
+                    SECURITY_DESCRIPTOR_REVISION,
+                )
+            },
+            0,
+            "initialize permissive parent descriptor: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: descriptor and acl are initialized and remain live for SetFileSecurityW.
+        assert_ne!(
+            unsafe {
+                SetSecurityDescriptorDacl(
+                    std::ptr::addr_of_mut!(descriptor).cast(),
+                    TRUE,
+                    acl.as_ptr().cast(),
+                    0,
+                )
+            },
+            0,
+            "attach permissive parent DACL: {}",
+            io::Error::last_os_error()
+        );
+        let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        assert!(!encoded.contains(&0), "fixture path contains NUL");
+        encoded.push(0);
+        // SAFETY: encoded is NUL-terminated and descriptor references the live ACL.
+        assert_ne!(
+            unsafe {
+                SetFileSecurityW(
+                    encoded.as_ptr(),
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::addr_of_mut!(descriptor).cast(),
+                )
+            },
+            0,
+            "set permissive parent DACL: {}",
+            io::Error::last_os_error()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_namespace_is_protected_without_rewriting_the_data_root() {
+        let temp = TempDir::new().expect("temporary root");
+        let data_root = temp.path().join("user-selected-data-root");
+        fs::create_dir(&data_root).expect("data root");
+        set_windows_permissive_inheritable_dacl(&data_root);
+
+        let inherited_probe = data_root.join("inherited-before-managed-namespace");
+        fs::write(&inherited_probe, b"probe").expect("inherited probe");
+        let inherited_probe_file = File::open(&inherited_probe).expect("open inherited probe");
+        assert!(
+            verify_windows_current_user_only_dacl(&inherited_probe_file).is_err(),
+            "fixture data root must remain permissive"
+        );
+        drop(inherited_probe_file);
+
+        let state_root = data_root.join("managed-runtime");
+        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)
+            .expect("create and pin protected managed namespace");
+        let displaced_state_root = data_root.join("displaced-managed-runtime");
+        assert!(
+            fs::rename(&state_root, &displaced_state_root).is_err(),
+            "a live guard must deny replacement through parent FILE_DELETE_CHILD"
+        );
+        drop(state_root_guard);
+        ensure_windows_managed_private_directory(&state_root)
+            .expect("reuse protected managed namespace");
+
+        // Existing unsafe namespaces are never silently rewritten. This also
+        // proves the check above was against the namespace itself rather than
+        // merely accepting the still-permissive caller-owned data root.
+        set_windows_permissive_inheritable_dacl(&state_root);
+        let error = ensure_windows_managed_private_directory(&state_root)
+            .expect_err("unsafe existing managed namespace must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+        let inherited_after = data_root.join("inherited-after-managed-namespace");
+        fs::write(&inherited_after, b"probe").expect("second inherited probe");
+        let inherited_after_file = File::open(&inherited_after).expect("open second probe");
+        assert!(
+            verify_windows_current_user_only_dacl(&inherited_after_file).is_err(),
+            "creating the managed namespace must not rewrite the data root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_command_timeout_bounds_inherited_pipes_and_terminates_the_process_group() {
+        let temp = TempDir::new().expect("temporary root");
+        let pid_file = temp.path().join("descendant.pid");
+        let command = direct_unix_test_command(
+            temp.path(),
+            BTreeMap::from([(OsString::from("PID_FILE"), pid_file.as_os_str().to_owned())]),
+        );
+        let args = [
+            OsString::from("-c"),
+            OsString::from(
+                "/bin/sleep 30 & child=$!; printf '%s' \"$child\" > \"$PID_FILE\"; wait",
+            ),
+        ];
+        let started = Instant::now();
+
+        let error = DirectManagedCommandRunner
+            .output(&command, &args, Duration::from_millis(250))
+            .expect_err("inherited pipes must not outlive the command deadline");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("command exceeded its deadline"));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "bounded post-kill drain must return promptly"
+        );
+        let pid = fs::read_to_string(pid_file)
+            .expect("descendant pid")
+            .parse::<i32>()
+            .expect("numeric descendant pid");
+        assert_unix_process_is_reaped(pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_command_bounds_a_pipe_inherited_after_the_leader_exits() {
+        let temp = TempDir::new().expect("temporary root");
+        let pid_file = temp.path().join("descendant.pid");
+        let command = direct_unix_test_command(
+            temp.path(),
+            BTreeMap::from([(OsString::from("PID_FILE"), pid_file.as_os_str().to_owned())]),
+        );
+        let args = [
+            OsString::from("-c"),
+            OsString::from("/bin/sleep 30 & child=$!; printf '%s' \"$child\" > \"$PID_FILE\""),
+        ];
+        let started = Instant::now();
+
+        let error = DirectManagedCommandRunner
+            .output(&command, &args, Duration::from_millis(250))
+            .expect_err("a successful leader must not leave inherited pipes unbounded");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("output pipes did not close"));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "inherited-pipe cleanup must remain bounded"
+        );
+        let pid = fs::read_to_string(pid_file)
+            .expect("descendant pid")
+            .parse::<i32>()
+            .expect("numeric descendant pid");
+        assert_unix_process_is_reaped(pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_memory_capture_never_joins_a_pipe_with_a_live_writer() {
+        use std::os::unix::net::UnixStream;
+
+        let (reader, writer) = UnixStream::pair().expect("capture pipe pair");
+        let mut capture = spawn_bounded_capture(
+            reader,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            1024,
+        );
+        let started = Instant::now();
+
+        let error = capture
+            .finish_by(Instant::now() + Duration::from_millis(100))
+            .expect_err("live inherited writer must hit the bounded drain deadline");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(writer);
+        assert_eq!(
+            capture
+                .finish_by(Instant::now() + Duration::from_secs(1))
+                .expect("capture must join after its writer closes"),
+            Vec::<u8>::new()
+        );
+        assert!(capture.worker.is_none());
+    }
+
     #[derive(Default)]
     struct FakeCommands {
         calls: Mutex<Vec<Vec<String>>>,
+        commands: Mutex<Vec<ManagedRuntimeCommand>>,
+        timeouts: Mutex<Vec<Duration>>,
         outputs: Mutex<VecDeque<ManagedCommandOutput>>,
     }
 
@@ -3011,20 +6090,34 @@ mod tests {
         fn calls(&self) -> Vec<Vec<String>> {
             self.calls.lock().expect("calls").clone()
         }
+
+        #[cfg(windows)]
+        fn commands(&self) -> Vec<ManagedRuntimeCommand> {
+            self.commands.lock().expect("commands").clone()
+        }
+
+        fn timeouts(&self) -> Vec<Duration> {
+            self.timeouts.lock().expect("timeouts").clone()
+        }
     }
 
     impl ManagedCommandRunner for FakeCommands {
         fn output(
             &self,
-            _command: &ManagedRuntimeCommand,
+            command: &ManagedRuntimeCommand,
             args: &[OsString],
-            _timeout: Duration,
+            timeout: Duration,
         ) -> io::Result<ManagedCommandOutput> {
             self.calls.lock().expect("calls").push(
                 args.iter()
                     .map(|value| value.to_string_lossy().into_owned())
                     .collect(),
             );
+            self.commands
+                .lock()
+                .expect("commands")
+                .push(command.clone());
+            self.timeouts.lock().expect("timeouts").push(timeout);
             self.outputs
                 .lock()
                 .expect("outputs")
@@ -3055,8 +6148,10 @@ mod tests {
     }
 
     struct Fixture {
-        _temp: TempDir,
         manager: ManagedRuntimeManager,
+        // Drop the manager's Windows namespace guard before TempDir removes
+        // the fixture tree.
+        _temp: TempDir,
         commands: Arc<FakeCommands>,
         image: Vec<u8>,
     }
@@ -3183,6 +6278,14 @@ mod tests {
         .expect("json")
     }
 
+    #[cfg(windows)]
+    fn push_windows_wsl_absent(commands: &FakeCommands) {
+        commands.push(success(Vec::new()));
+    }
+
+    #[cfg(not(windows))]
+    fn push_windows_wsl_absent(_commands: &FakeCommands) {}
+
     #[test]
     fn machine_names_are_deterministic_unique_and_within_podman_limit() {
         let image = ManagedMachineImage {
@@ -3223,6 +6326,134 @@ mod tests {
         assert!(names.contains("assm1-linux-arm64-0123456789ab"));
         assert!(names.contains("assm1-macos-arm64-0123456789ab"));
         assert!(names.contains("assm1-win-x64-0123456789ab"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_short_home_is_stable_private_and_keeps_the_longest_socket_alias_bounded() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = TempDir::new().expect("temporary root");
+        let base = temp.path().join("short-homes");
+        let first_state = temp.path().join("first-state");
+        let second_state = temp.path().join("second-state");
+        for directory in [&base, &first_state, &second_state] {
+            ensure_private_directory(directory).expect("private directory");
+        }
+        let first_state = canonical_real_directory(&first_state, "first test state").unwrap();
+        let second_state = canonical_real_directory(&second_state, "second test state").unwrap();
+        // SAFETY: geteuid has no preconditions and does not dereference memory.
+        let effective_uid = unsafe { libc::geteuid() };
+        let first_manifest = "a".repeat(64);
+        let second_manifest = "b".repeat(64);
+
+        let home = macos_short_home_path(&base, &first_state, &first_manifest, effective_uid);
+        assert_eq!(
+            home,
+            macos_short_home_path(&base, &first_state, &first_manifest, effective_uid)
+        );
+        assert_ne!(
+            home,
+            macos_short_home_path(&base, &second_state, &first_manifest, effective_uid)
+        );
+        assert_ne!(
+            home,
+            macos_short_home_path(&base, &first_state, &second_manifest, effective_uid)
+        );
+        assert_eq!(home.parent(), Some(base.as_path()));
+        assert_eq!(
+            home.file_name().unwrap().as_bytes().len(),
+            MACOS_SHORT_HOME_PREFIX.len() + MACOS_SHORT_HOME_DIGEST_HEX_CHARS
+        );
+
+        ensure_macos_short_home_directory(&home, effective_uid).expect("create short home");
+        ensure_macos_short_home_directory(&home, effective_uid).expect("reuse short home");
+        let metadata = fs::symlink_metadata(&home).unwrap();
+        assert!(metadata.is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(metadata.uid(), effective_uid);
+        assert_eq!(metadata.mode() & 0o7777, 0o700);
+
+        let production_home = macos_short_home_path(
+            Path::new(MACOS_SHORT_HOME_BASE),
+            &first_state,
+            &first_manifest,
+            effective_uid,
+        );
+        let longest_alias = macos_podman_ignition_socket_alias(
+            &production_home,
+            &"m".repeat(MAX_MACHINE_NAME_BYTES),
+        );
+        assert_eq!(longest_alias.as_os_str().as_bytes().len(), 96);
+        assert!(longest_alias.as_os_str().as_bytes().len() <= PODMAN_MACOS_MAX_SOCKET_PATH_BYTES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_short_home_cleanup_is_exact_and_unsafe_preexisting_entries_fail_closed() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temp = TempDir::new().expect("temporary root");
+        let base = temp.path().join("short-homes");
+        let state = temp.path().join("state");
+        ensure_private_directory(&base).unwrap();
+        ensure_private_directory(&state).unwrap();
+        let state = canonical_real_directory(&state, "test state").unwrap();
+        // SAFETY: geteuid has no preconditions and does not dereference memory.
+        let effective_uid = unsafe { libc::geteuid() };
+
+        let home = macos_short_home_path(&base, &state, &"a".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&home, effective_uid).unwrap();
+        let aliases = home.join(".podman");
+        ensure_private_directory(&aliases).unwrap();
+        remove_macos_short_home_directory_at(&home, &base, effective_uid)
+            .expect("remove empty exact home after machine removal");
+        assert!(!private_entry_exists(&home).unwrap());
+
+        let unexpected = macos_short_home_path(&base, &state, &"d".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&unexpected, effective_uid).unwrap();
+        let aliases = unexpected.join(".podman");
+        ensure_private_directory(&aliases).unwrap();
+        let outside = temp.path().join("outside-socket-target");
+        fs::write(&outside, b"must remain").unwrap();
+        symlink(&outside, aliases.join("owned-alias.sock")).unwrap();
+
+        // Ordinary stop/update does not invoke cleanup; the stable namespace
+        // and any live socket aliases remain available until machine removal.
+        assert!(unexpected.is_dir());
+        let error = remove_macos_short_home_directory_at(&unexpected, &base, effective_uid)
+            .expect_err("unexpected alias entry must fail closed");
+        assert!(error.to_string().contains("was not empty"));
+        assert_eq!(fs::read(&outside).unwrap(), b"must remain");
+        assert!(unexpected.is_dir());
+
+        let permissive = macos_short_home_path(&base, &state, &"b".repeat(64), effective_uid);
+        fs::create_dir(&permissive).unwrap();
+        fs::set_permissions(&permissive, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = ensure_macos_short_home_directory(&permissive, effective_uid)
+            .expect_err("permissive preexisting directory must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unsafe ownership or permissions")
+        );
+        assert!(remove_macos_short_home_directory_at(&permissive, &base, effective_uid).is_err());
+        assert!(permissive.is_dir());
+
+        let linked = macos_short_home_path(&base, &state, &"c".repeat(64), effective_uid);
+        let outside_directory = temp.path().join("outside-directory");
+        ensure_private_directory(&outside_directory).unwrap();
+        symlink(&outside_directory, &linked).unwrap();
+        assert!(ensure_macos_short_home_directory(&linked, effective_uid).is_err());
+        assert!(remove_macos_short_home_directory_at(&linked, &base, effective_uid).is_err());
+        assert!(
+            fs::symlink_metadata(&linked)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(outside_directory.is_dir());
     }
 
     fn tamper_installed_driver(manager: &ManagedRuntimeManager) {
@@ -3281,6 +6512,115 @@ mod tests {
                 0o500
             );
         }
+    }
+
+    #[test]
+    fn windows_wsl_inventory_parser_accepts_strict_utf8_and_utf16le_only() {
+        assert!(
+            parse_windows_wsl_distribution_inventory(b"")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            parse_windows_wsl_distribution_inventory(
+                b"\xef\xbb\xbfpodman-assm1-win-x64-0123456789ab\r\nUbuntu\n"
+            )
+            .unwrap(),
+            ["podman-assm1-win-x64-0123456789ab", "Ubuntu"]
+        );
+        let utf16 = utf16le("podman-assm1-win-x64-0123456789ab\r\nUbuntu\r\n");
+        assert_eq!(
+            parse_windows_wsl_distribution_inventory(&utf16).unwrap(),
+            ["podman-assm1-win-x64-0123456789ab", "Ubuntu"]
+        );
+        let mut utf16_with_bom = vec![0xff, 0xfe];
+        utf16_with_bom.extend_from_slice(&utf16);
+        assert_eq!(
+            parse_windows_wsl_distribution_inventory(&utf16_with_bom).unwrap(),
+            ["podman-assm1-win-x64-0123456789ab", "Ubuntu"]
+        );
+        for malformed in [
+            vec![0xfe, 0xff, 0, b'A'],
+            vec![0xff, 0xfe, b'A'],
+            b" podman-assm1-win-x64-0123456789ab\n".to_vec(),
+            b"podman-assm1-win-x64-0123456789ab\0\n".to_vec(),
+            b"podman-assm1-win-x64-0123456789ab\n\n".to_vec(),
+        ] {
+            assert!(parse_windows_wsl_distribution_inventory(&malformed).is_err());
+        }
+        assert!(
+            parse_windows_wsl_distribution_inventory(
+                &vec!["A"; MAX_WSL_DISTRIBUTIONS + 1].join("\n").into_bytes(),
+            )
+            .is_err()
+        );
+        assert!(
+            parse_windows_wsl_distribution_inventory(&vec![
+                b'A';
+                MAX_COMMAND_OUTPUT_BYTES as usize + 1
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn windows_wsl_command_uses_verified_system_directories_not_managed_environment() {
+        let temp = TempDir::new().expect("temporary root");
+        let system_root = temp.path().join("trusted-windows-root");
+        let system32 = system_root.join("System32");
+        let working_directory = temp.path().join("provider-home");
+        fs::create_dir(&system_root).expect("Windows root");
+        fs::create_dir(&system32).expect("System32");
+        fs::create_dir(&working_directory).expect("provider home");
+        fs::write(system32.join("wsl.exe"), b"fixture wsl").expect("fixture wsl.exe");
+        let directories =
+            verified_windows_system_directories(&system_root).expect("verified directories");
+        let managed_command = ManagedRuntimeCommand {
+            binary: temp.path().join("managed-podman"),
+            environment: BTreeMap::from([
+                (
+                    OsString::from("SystemRoot"),
+                    OsString::from("C:\\attacker-controlled"),
+                ),
+                (
+                    OsString::from("PATH"),
+                    OsString::from("C:\\attacker-controlled\\System32"),
+                ),
+            ]),
+            working_directory: working_directory.clone(),
+            runtime_version: "test".into(),
+            manifest_sha256: "a".repeat(64),
+            machine_image_sha256: "b".repeat(64),
+        };
+
+        let command =
+            windows_wsl_inventory_command_with_directories(&managed_command, &directories)
+                .expect("trusted WSL command");
+
+        assert_eq!(command.binary, directories.system32.join("wsl.exe"));
+        assert_eq!(
+            command.environment.get(OsStr::new("SystemRoot")),
+            Some(&directories.system_root.as_os_str().to_owned())
+        );
+        assert_eq!(
+            command.environment.get(OsStr::new("WINDIR")),
+            command.environment.get(OsStr::new("SystemRoot"))
+        );
+        let path = command
+            .environment
+            .get(OsStr::new("PATH"))
+            .expect("trusted PATH");
+        assert_eq!(
+            std::env::split_paths(path).collect::<Vec<_>>(),
+            [directories.system32]
+        );
+        assert_eq!(
+            command.working_directory,
+            working_directory
+                .canonicalize()
+                .expect("canonical provider home")
+        );
+        assert_eq!(command.environment.len(), 4);
     }
 
     #[test]
@@ -3460,6 +6800,7 @@ mod tests {
         fixture.manager.install().expect("initial install");
         tamper_installed_driver(&fixture.manager);
         fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
 
         let status = fixture
             .manager
@@ -3468,6 +6809,355 @@ mod tests {
 
         assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
         assert!(!fixture.manager.install_directory().exists());
+        assert!(!fixture.manager.provider_home().exists());
+    }
+
+    #[test]
+    fn uninstall_removes_private_provider_state_retains_cache_and_later_purge_removes_it() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let image = {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+            fixture
+                .manager
+                .acquire_machine_image_locked(target, None)
+                .expect("cache exact machine image")
+        };
+        let (private_temporary, _) = managed_ssh_identity_temporary_paths(&identity).unwrap();
+        fs::write(&private_temporary, b"interrupted-staging-secret").unwrap();
+        assert!(identity.is_file());
+        assert!(managed_ssh_public_key_path(&identity).is_file());
+        assert_eq!(fs::read(&image).unwrap(), fixture.image);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+
+        let status = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions::default())
+            .expect("uninstall release-private state");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(!fixture.manager.install_directory().exists());
+        assert!(!fixture.manager.provider_home().exists());
+        assert!(!private_entry_exists(&identity).unwrap());
+        assert!(!private_entry_exists(&managed_ssh_public_key_path(&identity)).unwrap());
+        assert!(!private_entry_exists(&private_temporary).unwrap());
+        assert_eq!(fs::read(&image).unwrap(), fixture.image);
+
+        let calls_before_purge = fixture.commands.calls().len();
+        let status = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions {
+                stop_mode: ManagedStopMode::OnlyIfIdle,
+                remove_machine_image_cache: true,
+            })
+            .expect("purge retained image cache without reinstalling the runtime");
+        assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(!private_entry_exists(&image).unwrap());
+        assert_eq!(fixture.commands.calls().len(), calls_before_purge);
+    }
+
+    #[test]
+    fn uninstall_removes_the_exact_stopped_machine_before_private_state() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let image = {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+            fixture
+                .manager
+                .acquire_machine_image_locked(target, None)
+                .expect("cache exact machine image")
+        };
+        #[cfg(windows)]
+        let canonical_provider_home = fixture
+            .manager
+            .provider_home()
+            .canonicalize()
+            .expect("canonical provider home");
+        let expected_machine = machine_name(target);
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+        fixture.commands.push(success(Vec::new()));
+        push_windows_wsl_absent(&fixture.commands);
+
+        let status = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions::default())
+            .expect("remove exact stopped machine");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(!fixture.manager.install_directory().exists());
+        assert!(!fixture.manager.provider_home().exists());
+        assert!(!private_entry_exists(&identity).unwrap());
+        assert_eq!(fs::read(&image).unwrap(), fixture.image);
+        let calls = fixture.commands.calls();
+        assert_eq!(calls[0], ["machine", "list", "--format", "json"]);
+        assert_eq!(
+            calls[1],
+            ["machine", "rm", "--force", expected_machine.as_str()]
+        );
+        #[cfg(windows)]
+        {
+            assert_eq!(calls[2], ["--list", "--quiet"]);
+            let commands = fixture.commands.commands();
+            let wsl = &commands[2];
+            assert!(wsl.binary.is_absolute());
+            assert_eq!(wsl.binary.file_name(), Some(OsStr::new("wsl.exe")));
+            assert_eq!(
+                wsl.binary.parent().and_then(Path::file_name),
+                Some(OsStr::new("System32"))
+            );
+            assert_eq!(wsl.working_directory, canonical_provider_home);
+            assert_eq!(wsl.environment.len(), 4);
+            assert_eq!(
+                wsl.environment
+                    .get(OsStr::new("NoDefaultCurrentDirectoryInExePath")),
+                Some(&OsString::from("1"))
+            );
+        }
+    }
+
+    #[test]
+    fn uninstall_machine_removal_failure_retains_provider_install_and_cache() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let image = {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+            fixture
+                .manager
+                .acquire_machine_image_locked(target, None)
+                .expect("cache exact machine image")
+        };
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+        fixture.commands.push(failure(b"exact removal failed"));
+
+        let error = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions {
+                stop_mode: ManagedStopMode::Force,
+                remove_machine_image_cache: true,
+            })
+            .expect_err("nonzero machine removal must retain all private state");
+
+        assert!(error.to_string().contains("exact removal failed"));
+        assert!(fixture.manager.install_directory().exists());
+        assert!(fixture.manager.provider_home().exists());
+        assert!(identity.is_file());
+        assert_eq!(fs::read(&image).unwrap(), fixture.image);
+        assert_eq!(fixture.commands.calls().len(), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_retains_all_state_when_exact_wsl_distribution_survives_remediation() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let image = {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+            fixture
+                .manager
+                .acquire_machine_image_locked(target, None)
+                .expect("cache exact machine image")
+        };
+        let expected_distribution = format!("podman-{}", machine_name(target));
+        let listed = utf16le(&format!("{expected_distribution}\r\n"));
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+        fixture.commands.push(success(Vec::new()));
+        let mut first_inventory = success(listed.clone());
+        first_inventory.stderr = b"WSL update notice".to_vec();
+        fixture.commands.push(first_inventory);
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(listed));
+
+        let error = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions {
+                stop_mode: ManagedStopMode::Force,
+                remove_machine_image_cache: true,
+            })
+            .expect_err("a still-registered exact WSL distro must retain all private state");
+
+        assert!(error.to_string().contains("remained registered"));
+        assert!(fixture.manager.install_directory().exists());
+        assert!(fixture.manager.provider_home().exists());
+        assert!(identity.is_file());
+        assert_eq!(fs::read(&image).unwrap(), fixture.image);
+        let calls = fixture.commands.calls();
+        assert_eq!(calls[2], ["--list", "--quiet"]);
+        assert_eq!(calls[3], ["--unregister", expected_distribution.as_str()]);
+        assert_eq!(calls[4], ["--list", "--quiet"]);
+        let commands = fixture.commands.commands();
+        for command in &commands[2..=4] {
+            assert_eq!(command.binary, commands[2].binary);
+            assert_eq!(command.environment, commands[2].environment);
+            assert_eq!(command.working_directory, commands[2].working_directory);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_unregisters_only_the_exact_orphaned_wsl_distribution_then_proves_absence() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let expected_distribution = format!("podman-{}", machine_name(target));
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(utf16le(&format!(
+            "Ubuntu\r\n{expected_distribution}\r\n"
+        ))));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(utf16le("Ubuntu\r\n")));
+
+        let status = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions::default())
+            .expect("exact orphan remediation and absence proof");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(!fixture.manager.install_directory().exists());
+        assert!(!fixture.manager.provider_home().exists());
+        let calls = fixture.commands.calls();
+        assert_eq!(calls[3], ["--unregister", expected_distribution.as_str()]);
+        assert_eq!(calls[4], ["--list", "--quiet"]);
+        assert!(
+            calls
+                .iter()
+                .flatten()
+                .all(|argument| !argument.contains("podman-*") && !argument.contains("assm1-*"))
+        );
+    }
+
+    #[test]
+    fn uninstall_recovers_stale_provider_state_after_the_install_payload_was_lost() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+        }
+        remove_private_tree(
+            &fixture.manager.install_directory(),
+            &fixture.manager.versions_root(),
+        )
+        .expect("simulate interrupted older uninstall");
+        assert!(!fixture.manager.install_directory().exists());
+        assert!(fixture.manager.provider_home().exists());
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+
+        let status = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions::default())
+            .expect("restore the verified client and clean stale provider state");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(!fixture.manager.install_directory().exists());
+        assert!(!fixture.manager.provider_home().exists());
+        assert_eq!(
+            fixture.commands.calls().len(),
+            if cfg!(windows) { 2 } else { 1 }
+        );
+    }
+
+    #[test]
+    fn uninstall_rejects_an_unexpected_machine_before_removing_provider_state() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+        }
+        fixture.commands.push(success(
+            serde_json::to_vec(&serde_json::json!([{
+                "Name": "unexpected-private-machine",
+                "Running": false,
+                "VMType": target.provider.argument(),
+                "CPUs": 2,
+                "Memory": (4096_u64 * 1024 * 1024).to_string(),
+                "DiskSize": (40_u64 * 1024 * 1024 * 1024).to_string()
+            }]))
+            .unwrap(),
+        ));
+
+        let error = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions::default())
+            .expect_err("unexpected machine must fail closed");
+
+        assert!(error.to_string().contains("unexpected machine"));
+        assert!(fixture.manager.install_directory().exists());
+        assert!(fixture.manager.provider_home().exists());
+        assert!(identity.is_file());
+        assert_eq!(fixture.commands.calls().len(), 1);
     }
 
     #[test]
@@ -3548,10 +7238,456 @@ mod tests {
         );
         assert_eq!(calls[3][..3], ["machine", "start", "--quiet"]);
         assert_eq!(calls[4], ["version", "--format", "{{.Server.Version}}"]);
+        assert_eq!(
+            fixture.commands.timeouts(),
+            [
+                COMMAND_TIMEOUT,
+                MACHINE_INIT_TIMEOUT,
+                COMMAND_TIMEOUT,
+                MACHINE_START_TIMEOUT,
+                COMMAND_TIMEOUT,
+            ]
+        );
         let cached = fixture
             .manager
             .machine_image_path(fixture.manager.loaded.target().expect("target"));
         assert_eq!(fs::read(cached).expect("cached"), fixture.image);
+
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let private_bytes = Zeroizing::new(fs::read(&identity).expect("private identity"));
+        let private_key =
+            PrivateKey::from_openssh(private_bytes.as_slice()).expect("OpenSSH private key");
+        let public_text =
+            fs::read_to_string(managed_ssh_public_key_path(&identity)).expect("public identity");
+        let public_key = PublicKey::from_openssh(&public_text).expect("OpenSSH public key");
+        assert_eq!(private_key.algorithm(), Algorithm::Ed25519);
+        assert!(!private_key.is_encrypted());
+        assert_eq!(public_key.algorithm(), Algorithm::Ed25519);
+        assert_eq!(private_key.public_key().key_data(), public_key.key_data());
+        assert_eq!(private_key.comment(), MANAGED_SSH_KEY_COMMENT);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&identity).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(managed_ssh_public_key_path(&identity))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn managed_ssh_identity_is_reused_and_partial_regular_pair_is_safely_repaired() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let public_identity = managed_ssh_public_key_path(&identity);
+
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+        }
+        let first_private = fs::read(&identity).expect("first private key");
+        let first_public = fs::read(&public_identity).expect("first public key");
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("reuse valid identity");
+        }
+        assert_eq!(fs::read(&identity).unwrap(), first_private);
+        assert_eq!(fs::read(&public_identity).unwrap(), first_public);
+
+        fs::remove_file(&public_identity).expect("make partial pair");
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("repair partial identity before init");
+        }
+        assert_eq!(
+            inspect_managed_ssh_identity(&identity).expect("inspect repaired pair"),
+            ManagedSshIdentityState::Valid
+        );
+        assert!(private_entry_exists(&public_identity).unwrap());
+    }
+
+    #[test]
+    fn initialized_machine_rejects_an_inconsistent_ssh_identity_without_rotating_it() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+        }
+        let private_before = fs::read(&identity).expect("private key before failure");
+        fs::write(
+            managed_ssh_public_key_path(&identity),
+            b"not-an-openssh-public-key\n",
+        )
+        .expect("corrupt public half");
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("initialized machine identity mismatch must fail closed");
+
+        assert!(error.to_string().contains("refusing to rotate"));
+        assert_eq!(fs::read(&identity).unwrap(), private_before);
+        assert_eq!(fixture.commands.calls().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initialized_machine_rejects_an_overexposed_private_ssh_key_without_changing_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate identity");
+        }
+        fs::set_permissions(&identity, fs::Permissions::from_mode(0o644))
+            .expect("overexpose private key");
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("initialized machine must reject an overexposed private key");
+
+        assert!(error.to_string().contains("unsafe permissions"));
+        assert_eq!(
+            fs::metadata(&identity).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(fixture.commands.calls().len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_ssh_identity_is_private_under_a_permissive_parent_dacl() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let identity_parent = identity.parent().expect("identity parent");
+        ensure_private_directory_tree(
+            &fixture.manager.provider_home().join("data"),
+            identity_parent,
+        )
+        .expect("identity directory");
+        set_windows_permissive_inheritable_dacl(identity_parent);
+
+        let inherited_probe = identity_parent.join("inherited-acl-probe");
+        fs::write(&inherited_probe, b"probe").expect("create inherited ACL probe");
+        let probe = File::open(&inherited_probe).expect("open inherited ACL probe");
+        assert!(
+            verify_windows_current_user_only_dacl(&probe).is_err(),
+            "ordinary child must demonstrate that the parent DACL is permissive"
+        );
+        drop(probe);
+        fs::remove_file(&inherited_probe).expect("remove inherited ACL probe");
+
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("generate protected identity");
+        }
+
+        let public_identity = managed_ssh_public_key_path(&identity);
+        let private_file =
+            open_windows_managed_ssh_identity_file(&identity).expect("open private identity");
+        let public_file =
+            open_windows_managed_ssh_identity_file(&public_identity).expect("open public identity");
+        assert_eq!(
+            windows_file_information(&private_file)
+                .expect("private handle information")
+                .number_of_links,
+            1
+        );
+        assert_eq!(
+            windows_file_information(&public_file)
+                .expect("public handle information")
+                .number_of_links,
+            1
+        );
+        verify_windows_current_user_only_dacl(&private_file)
+            .expect("private key has a protected current-user-only DACL");
+        assert_eq!(
+            inspect_managed_ssh_identity(&identity).expect("inspect protected identity"),
+            ManagedSshIdentityState::Valid
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_ssh_identity_rejects_ntfs_hard_links_without_repairing_them() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        ensure_private_directory_tree(
+            &fixture.manager.provider_home().join("data"),
+            identity.parent().expect("identity parent"),
+        )
+        .expect("identity directory");
+        let outside = fixture._temp.path().join("outside-hard-linked-identity");
+        fs::write(&outside, b"outside-remains").expect("outside file");
+        fs::hard_link(&outside, &identity).expect("NTFS identity hard link");
+
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+        let error = fixture
+            .manager
+            .prepare_machine_ssh_identity_locked()
+            .expect_err("identity hard link must fail closed before repair");
+
+        assert!(error.to_string().contains("must not be hard-linked"));
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-remains");
+        assert_eq!(fs::read(&identity).unwrap(), b"outside-remains");
+        let outside_file = File::open(&outside).expect("open outside file");
+        assert_eq!(
+            windows_file_information(&outside_file)
+                .expect("outside handle information")
+                .number_of_links,
+            2
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn managed_ssh_identity_recovers_a_public_publish_crash_link() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let parent = identity.parent().expect("identity parent");
+        ensure_private_directory_tree(&fixture.manager.provider_home().join("data"), parent)
+            .expect("identity directory");
+        let (_, public_temporary) = managed_ssh_identity_temporary_paths(&identity).unwrap();
+        let public_identity = managed_ssh_public_key_path(&identity);
+        let mut staging = create_private_file(&public_temporary).expect("public staging file");
+        staging
+            .write_all(b"interrupted-publication")
+            .expect("write public staging");
+        staging.sync_all().expect("sync public staging");
+        drop(staging);
+        fs::hard_link(&public_temporary, &public_identity)
+            .expect("simulate public hard-link publication before staging unlink");
+
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("recover public publication crash");
+        }
+
+        assert!(!private_entry_exists(&public_temporary).unwrap());
+        assert_eq!(
+            inspect_managed_ssh_identity(&identity).expect("inspect recovered identity"),
+            ManagedSshIdentityState::Valid
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn managed_ssh_identity_recovers_a_private_publish_crash_link() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let parent = identity.parent().expect("identity parent");
+        ensure_private_directory_tree(&fixture.manager.provider_home().join("data"), parent)
+            .expect("identity directory");
+        let (private_temporary, _) = managed_ssh_identity_temporary_paths(&identity).unwrap();
+        let mut staging = create_private_file(&private_temporary).expect("private staging file");
+        staging
+            .write_all(b"interrupted-private-publication")
+            .expect("write private staging");
+        staging.sync_all().expect("sync private staging");
+        drop(staging);
+        fs::hard_link(&private_temporary, &identity)
+            .expect("simulate private hard-link publication before staging unlink");
+
+        {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .prepare_machine_ssh_identity_locked()
+                .expect("recover private publication crash");
+        }
+
+        assert!(!private_entry_exists(&private_temporary).unwrap());
+        assert_eq!(
+            inspect_managed_ssh_identity(&identity).expect("inspect recovered identity"),
+            ManagedSshIdentityState::Valid
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn managed_ssh_identity_rejects_a_hard_linked_staging_file_without_mutating_it() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        let parent = identity.parent().expect("identity parent");
+        ensure_private_directory_tree(&fixture.manager.provider_home().join("data"), parent)
+            .expect("identity directory");
+        let (private_temporary, _) = managed_ssh_identity_temporary_paths(&identity).unwrap();
+        let outside = fixture._temp.path().join("outside-staging-hard-link");
+        fs::write(&outside, b"outside-remains").expect("outside file");
+        fs::hard_link(&outside, &private_temporary).expect("staging hard link");
+
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+        let error = fixture
+            .manager
+            .prepare_machine_ssh_identity_locked()
+            .expect_err("hard-linked staging file must fail closed");
+
+        assert!(error.to_string().contains("must not be hard-linked"));
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-remains");
+        assert_eq!(fs::read(&private_temporary).unwrap(), b"outside-remains");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_ssh_identity_rejects_symlinks_without_touching_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        ensure_private_directory_tree(
+            &fixture.manager.provider_home().join("data"),
+            identity.parent().expect("identity parent"),
+        )
+        .expect("identity directory");
+        let outside = fixture._temp.path().join("outside-identity");
+        fs::write(&outside, b"outside-remains").expect("outside file");
+        symlink(&outside, &identity).expect("identity symlink");
+
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+        let error = fixture
+            .manager
+            .prepare_machine_ssh_identity_locked()
+            .expect_err("identity symlink must fail closed");
+
+        assert!(error.to_string().contains("real regular file"));
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-remains");
+        assert!(
+            fs::symlink_metadata(&identity)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_ssh_identity_rejects_hard_links_without_mutating_the_other_name() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private command home");
+        let identity = fixture.manager.machine_ssh_identity_path();
+        ensure_private_directory_tree(
+            &fixture.manager.provider_home().join("data"),
+            identity.parent().expect("identity parent"),
+        )
+        .expect("identity directory");
+        let outside = fixture._temp.path().join("outside-hard-linked-identity");
+        fs::write(&outside, b"outside-remains").expect("outside file");
+        let mode_before = fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+        fs::hard_link(&outside, &identity).expect("identity hard link");
+
+        let _lock = fixture.manager.lock().expect("lifecycle lock");
+        let error = fixture
+            .manager
+            .prepare_machine_ssh_identity_locked()
+            .expect_err("identity hard link must fail closed");
+
+        assert!(error.to_string().contains("must not be hard-linked"));
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-remains");
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            mode_before
+        );
+        assert_eq!(fs::metadata(&outside).unwrap().nlink(), 2);
     }
 
     #[test]
@@ -3629,10 +7765,19 @@ mod tests {
     fn command_environment_is_private_and_does_not_inherit_container_hosts() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
-        let command = fixture
-            .manager
-            .runtime_command(fixture.manager.loaded.target().expect("target"))
-            .expect("command");
+        let target = fixture.manager.loaded.target().expect("target");
+        let command = fixture.manager.runtime_command(target).expect("command");
+        let command_home = PathBuf::from(
+            command
+                .environment
+                .get(OsStr::new("HOME"))
+                .expect("command HOME"),
+        );
+        assert_eq!(
+            command.environment.get(OsStr::new("USERPROFILE")),
+            command.environment.get(OsStr::new("HOME"))
+        );
+        assert_eq!(command.working_directory, command_home);
         assert!(
             command
                 .environment
@@ -3649,8 +7794,105 @@ mod tests {
                 .environment
                 .contains_key(OsStr::new("CONTAINER_HOST"))
         );
+        let xdg_data_home = PathBuf::from(
+            command
+                .environment
+                .get(OsStr::new("XDG_DATA_HOME"))
+                .expect("XDG data home"),
+        );
+        assert_eq!(
+            fixture.manager.machine_ssh_identity_path(),
+            xdg_data_home.join("containers/podman/machine/machine")
+        );
+        if target.operating_system == ManagedOperatingSystem::Macos {
+            assert_ne!(command_home, fixture.manager.provider_home());
+            #[cfg(unix)]
+            assert!(command_home.starts_with(MACOS_SHORT_HOME_BASE));
+        } else {
+            assert_eq!(command_home, fixture.manager.provider_home());
+        }
+        let windows_lookup_guard = command
+            .environment
+            .get(OsStr::new("NoDefaultCurrentDirectoryInExePath"));
+        if target.operating_system == ManagedOperatingSystem::Windows {
+            assert_eq!(
+                windows_lookup_guard.map(OsString::as_os_str),
+                Some(OsStr::new("1"))
+            );
+            assert_eq!(
+                command.environment.get(OsStr::new("WINDIR")),
+                command.environment.get(OsStr::new("SystemRoot"))
+            );
+            let system_root = PathBuf::from(
+                command
+                    .environment
+                    .get(OsStr::new("SystemRoot"))
+                    .expect("trusted Windows root"),
+            );
+            let managed_paths = std::env::split_paths(
+                command
+                    .environment
+                    .get(OsStr::new("PATH"))
+                    .expect("managed PATH"),
+            )
+            .collect::<Vec<_>>();
+            assert_eq!(managed_paths.last(), Some(&system_root.join("System32")));
+        } else {
+            assert!(windows_lookup_guard.is_none());
+        }
         for value in command.environment.values() {
             assert!(!value.to_string_lossy().contains('\n'));
+        }
+    }
+
+    #[test]
+    fn current_directory_helper_lookup_is_disabled_only_for_windows_commands() {
+        let key = OsString::from("NoDefaultCurrentDirectoryInExePath");
+        let mut environment = BTreeMap::new();
+
+        apply_platform_command_environment(&mut environment, ManagedOperatingSystem::Windows);
+        assert_eq!(environment.get(&key), Some(&OsString::from("1")));
+
+        for operating_system in [ManagedOperatingSystem::Linux, ManagedOperatingSystem::Macos] {
+            apply_platform_command_environment(&mut environment, operating_system);
+            assert!(!environment.contains_key(&key));
+            apply_platform_command_environment(&mut environment, ManagedOperatingSystem::Windows);
+        }
+    }
+
+    #[test]
+    fn command_execution_errors_use_fixed_operation_labels_without_arguments() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        let command = fixture.manager.runtime_command(target).expect("command");
+        let operations = [
+            ManagedCommandOperation::MachineInitialization,
+            ManagedCommandOperation::MachineInventory,
+            ManagedCommandOperation::MachineStart,
+            ManagedCommandOperation::MachineStop,
+            ManagedCommandOperation::MachineRemoval,
+            ManagedCommandOperation::WslDistributionInventory,
+            ManagedCommandOperation::WslDistributionRemoval,
+            ManagedCommandOperation::ActiveContainerInventory,
+            ManagedCommandOperation::VersionPreflight,
+        ];
+        let mut labels = BTreeSet::new();
+
+        for operation in operations {
+            assert!(labels.insert(operation.label()));
+            let error = fixture
+                .manager
+                .run_command(
+                    operation,
+                    &command,
+                    ["--credential=must-not-appear"],
+                    COMMAND_TIMEOUT,
+                )
+                .expect_err("empty fake output queue must fail");
+            let message = error.to_string();
+            assert!(message.contains(operation.label()));
+            assert!(!message.contains("must-not-appear"));
         }
     }
 

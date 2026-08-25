@@ -60,7 +60,25 @@ new private data directory. Every platform must prove this exact sequence:
    container cleanup);
 5. real machine stop and `stopped` status; and
 6. forced uninstall with the exact machine-image cache purged, final `not_installed` status,
-   package removal, and private-directory removal.
+   package removal, and private-directory removal. Windows additionally inventories WSL through
+   the real absolute System32 executable resolved from the operating-system directory API, captures
+   its output as bounded raw bytes, strictly decodes UTF-8 or UTF-16LE, and proves the deterministic
+   exact managed distribution is no longer registered after uninstall. Malformed inventory is a
+   qualification failure, never evidence of absence.
+
+The Linux qualification separately resolves `bin/qemu-img` from the installed managed-runtime
+manifest, proves its regular executable file size and SHA-256, binds it to the exact QEMU component
+and version, and runs create/resize/JSON-info against a disposable qcow2 file by that absolute path.
+It does not install or resolve a host `qemu-img`. On every platform, qualification also proves after
+start that the exact private-XDG `machine{,.pub}` Ed25519 identity exists with bounded single-link
+current-user protection and that both fixed staging names are absent. After uninstall, the exact
+release-digest provider-home directory itself must be absent; an existing but empty directory does
+not satisfy this check.
+
+The macOS qualification independently derives the stable `/tmp/assm1-<32-hex-namespace>` short
+home from the canonical state root, installed manifest digest, and effective uid. It requires a
+fresh real current-user `0700` directory after start, checks the 103-byte Podman socket-path budget,
+requires the directory to survive ordinary stop, and requires it to be absent after uninstall.
 
 The universal macOS package is still built on `macos-14`, while its independent qualification runs
 the Intel slice on `macos-15-intel`. That fresh job must start the packaged AppleHV machine and run

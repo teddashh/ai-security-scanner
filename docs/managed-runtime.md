@@ -22,11 +22,61 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   length, requests the exact remaining suffix with HTTP `Range`, rejects a mismatched
   `Content-Range`, and restarts from zero if the approved server returns a complete response instead.
   Only a size- and SHA-256-verified complete image is atomically promoted into the runtime cache.
-- Each release uses its own private `HOME`, XDG directories, `containers.conf`, machine name, image
-  cache, and lifecycle lock. Machine names use the deterministic
+- Each release uses its own persistent private provider home, XDG directories, `containers.conf`,
+  machine name, image cache, and lifecycle lock. Machine names use the deterministic
   `assm1-<host>-<architecture>-<12-hex-image-id>` form and remain within Podman's 30-byte limit on
   every supported host and architecture. Managed commands clear the inherited environment and use
-  absolute, already-verified executable paths.
+  absolute, already-verified executable paths. On Windows they also disable current-directory
+  executable lookup, so Go helper resolution remains inside the constrained managed `PATH`.
+- On macOS only, managed commands set `HOME`, `USERPROFILE`, and their working directory to the
+  stable `/tmp/assm1-<32-hex-namespace>` directory. The namespace hashes the canonical managed
+  state root, exact release-manifest digest, and effective uid. The app creates or reopens that
+  exact entry only when it is a real current-user directory with mode `0700`; links, foreign
+  ownership, or permissive modes fail closed. XDG configuration, identities, images, and all other
+  durable provider data remain under the persistent private provider home. Even with a maximum
+  30-byte machine name, Podman 5.8.2's longest `$HOME/.podman/*-ignition.sock` alias is 96 bytes,
+  below its 103-byte Unix-socket path ceiling.
+- The macOS short home is stable and remains present across start, ordinary stop, and update so a
+  live vfkit/gvproxy process cannot lose its socket aliases. Uninstall removes only that exact
+  owned namespace after `machine rm` succeeds or inventory proves the exact machine is absent. It
+  removes only an absent or empty real `.podman` directory and then the empty home itself; links,
+  unexpected children, or an unsafe replacement abort cleanup instead of broadening removal.
+- On Windows, Podman can report `machine rm` success after an underlying WSL unregister failure.
+  Before deleting the release-private provider home, installation, or requested image cache, the
+  app therefore obtains the Windows root from the bounded operating-system directory API, never an
+  inherited `SystemRoot`, and runs its absolute canonical `SystemRoot\System32\wsl.exe` with a
+  cleared minimal environment, fixed provider working directory, bounded deadline/output, and
+  `--list --quiet`.
+  It strictly accepts only bounded UTF-8 or UTF-16LE distribution names. If the deterministic exact
+  `podman-assm1-win-x64-<12-hex-image-id>` distribution remains, the app unregisters only that
+  exact owned name and inventories again. Execution, decoding, unregister, or final-absence proof
+  failure retains provider, installation, and cache state for a safe retry; no prefix or wildcard
+  WSL removal is permitted.
+- Before first initialization, the app generates Podman 5.8.2's exact private-XDG
+  `data/containers/podman/machine/machine{,.pub}` identity itself as an unencrypted OpenSSH Ed25519
+  pair. It uses operating-system randomness and RustCrypto parsing/encoding, not a host
+  `ssh-keygen`, shell, inherited `PATH`, or external secret. Both halves are bounded, single-link
+  current-user files, durably staged, and atomically published. On Unix the private half must have
+  mode `0400` or `0600`; the non-secret public half may additionally use `0444` or `0644`. On
+  Windows both files have a protected current-user-only DACL from the first written byte, and
+  cleanup deletes through the already-verified handle. An interrupted hard-link publication is
+  recoverable only when the fixed staging name and its exact destination are the same regular
+  two-link file; every other hard link fails closed. A valid existing pair is reused without
+  changing its permissions; a
+  regular partial/corrupt pair can be repaired before initialization, while a non-regular entry or
+  any mismatch after a machine exists fails closed instead of silently rotating its trusted key.
+  Once uninstall removes or proves absence of the exact machine, it removes that release's exact
+  private provider home as well, so the SSH identity and provider configuration do not survive a
+  successful uninstall.
+- On Windows the app-created `managed-runtime` namespace and its provider directories use protected,
+  inheritable, current-user-only DACLs. The caller-selected data-directory root is never rewritten.
+  Each manager also retains a no-delete-share handle to the verified, non-reparse state root for its
+  lifetime, preventing a permissive parent directory from replacing that namespace mid-operation;
+  an unsafe pre-existing namespace is rejected rather than silently repaired.
+- Command execution errors use fixed operation labels and never echo command arguments. Inventory
+  and version probes retain 30-second bounds, stop/removal retain 90-second bounds, and first-time
+  initialization plus start/readiness each receive separate 10-minute deadlines for cold AppleHV
+  boots.
 - Runtime preflight and execution checkpoints persist typed command provenance: runtime version,
   release-manifest SHA-256, and machine-image SHA-256. Resume and cleanup can therefore reopen the
   exact older installation after an app update instead of guessing from `PATH`.
@@ -35,7 +85,7 @@ The current platform providers are:
 
 | Host | Provider | Release payload | Host prerequisite |
 | --- | --- | --- | --- |
-| Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static QEMU and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
+| Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
 | macOS Intel/Apple silicon | rootless Podman machine + AppleHV | Universal Podman, vfkit, and gvproxy | A supported macOS release with Apple virtualization support. |
 | Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2 must already be available. The app never enables Windows optional features. |
 
@@ -111,12 +161,15 @@ node runtime/vendor-managed-runtime.mjs \
 
 The tool reads `runtime/upstreams.lock.json`, enforces approved HTTPS origins, verifies every
 download by locked size and SHA-256, extracts without a shell, selects client files by exact content
-identity, and publishes the completed directory atomically. Linux QEMU is built from the locked QEMU
-and DTC sources in the pinned container builder; its native launcher probes KVM and changes only
-Podman's exact `-accel kvm -cpu host` arguments to `tcg/max` when KVM is unusable. The locked Linux
-build contract retains the x86_64 SeaBIOS, OVMF, and device firmware while excluding eight
-foreign-architecture firmware images that the x86_64-only emulator cannot use. Tauri maps the
-completed directory to `$RESOURCE/managed-runtime/`.
+identity, and publishes the completed directory atomically. Linux QEMU is built for the locked
+`linux/amd64` platform from the locked QEMU and DTC sources in the pinned container builder. The
+vendor step rejects each of the launcher, real emulator, and `qemu-img` unless it is static ELF64,
+little-endian x86-64, and it functionally proves `qemu-img` create/resize/JSON-info before staging.
+The native launcher probes KVM and changes only Podman's exact `-accel kvm -cpu host` arguments to
+`tcg/max` when KVM is unusable. The locked Linux build contract retains the x86_64 SeaBIOS, OVMF,
+and device firmware while excluding eight foreign-architecture firmware images that the
+x86_64-only emulator cannot use. Tauri maps the completed directory to
+`$RESOURCE/managed-runtime/`.
 
 The cheap lock-only validation used during development is:
 

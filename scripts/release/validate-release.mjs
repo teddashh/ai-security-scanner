@@ -342,6 +342,19 @@ function validatePlatformQualificationSources(sources) {
     "run_managed uninstall-purge uninstall --force --purge-image-cache",
     "xvfb-run",
     "apt-get purge",
+    'const binary = path.join(runtimeRoot, "bin", "qemu-img")',
+    "execFileSync(binary, args",
+    "QEMU component does not bind the installed qemu-img file.",
+    'run(["create", "-f", "qcow2", probe, "1G"])',
+    'run(["resize", probe, "40G"])',
+    'run(["info", "--output=json", probe])',
+    "assert_managed_ssh_identity",
+    "data/containers/podman/machine/machine",
+    ".machine.private-key-new",
+    ".machine.public-key-new",
+    "Managed SSH identity staging entries remain after start.",
+    "Managed runtime uninstall left its exact release provider home behind.",
+    "managed-runtime/provider-home",
   ]) assert(linux.includes(required), `Linux qualification is missing: ${required}`);
   for (const required of [
     "run_managed initial-status status",
@@ -355,6 +368,23 @@ function validatePlatformQualificationSources(sources) {
     "runtime managed stop --force",
     "runtime managed uninstall --force --purge-image-cache",
     "hdiutil attach",
+    "ai-security-scanner-macos-command-home-v1\\0",
+    "macOS qualification did not begin with a fresh exact short HOME.",
+    "Managed runtime macOS socket alias exceeds Podman 5.8.2 path budget.",
+    "Qualification cleanup found the exact macOS short HOME still present:",
+    "^/tmp/assm1-[0-9a-f]{32}$",
+    "Refusing to follow or remove an unsafe macOS short HOME during qualification cleanup.",
+    "[[ -d \"${short_home}\" && ! -L \"${short_home}\" ]]",
+    "stat -f '%u'",
+    "stat -f '%Lp'",
+    "Managed runtime uninstall left its exact macOS short HOME behind.",
+    "assert_managed_ssh_identity",
+    "data/containers/podman/machine/machine",
+    ".machine.private-key-new",
+    ".machine.public-key-new",
+    "Managed SSH identity staging entries remain after start.",
+    "Managed runtime uninstall left its exact release provider home behind.",
+    "managed-runtime/provider-home",
   ]) assert(macos.includes(required), `macOS qualification is missing: ${required}`);
   for (const required of [
     'Invoke-Managed "initial-status"',
@@ -365,7 +395,34 @@ function validatePlatformQualificationSources(sources) {
     'Invoke-Managed "uninstall-purge"',
     '"--purge-image-cache"',
     '"msiexec.exe"',
+    "GetSystemWindowsDirectoryW",
+    'Join-Path $systemRoot "System32"',
+    'Join-Path $system32 "wsl.exe"',
+    "QualificationBoundedMemoryStream",
+    '$startInfo.ArgumentList.Add("--list")',
+    '$startInfo.ArgumentList.Add("--quiet")',
+    "$startInfo.Environment.Clear()",
+    "[Text.UTF8Encoding]::new($false, $true)",
+    "[Text.UnicodeEncoding]::new($false, $false, $true)",
+    "unsupported UTF-16BE",
+    "contained an invalid name",
+    '"podman-$managedMachineName"',
+    "Assert-ManagedSshIdentity $providerReleaseHome",
+    "exact protected current-user-only DACL",
+    ".machine.private-key-new",
+    ".machine.public-key-new",
+    "Managed SSH identity staging entries remain after start.",
+    "Managed runtime uninstall left its exact release provider home behind.",
+    "Managed runtime uninstall left its exact WSL distribution registered:",
+    "managed-runtime\\provider-home",
   ]) assert(windows.includes(required), `Windows qualification is missing: ${required}`);
+  for (const [name, source] of [["Linux", linux], ["macOS", macos], ["Windows", windows]]) {
+    assert(!source.includes("ssh-keygen"), `${name} qualification depends on a host ssh-keygen`);
+  }
+  assert(!linux.includes("command -v qemu-img"), "Linux qualification can resolve qemu-img from the host PATH");
+  assert(!linux.includes("qemu-utils"), "Linux qualification installs a host qemu-img package");
+  assert(!windows.includes("$env:SystemRoot"), "Windows qualification trusts inherited SystemRoot for WSL cleanup");
+  assert(!windows.includes('.Replace([string][char]0, "")'), "Windows qualification silently repairs malformed WSL inventory");
   for (const required of [
     'engine_id === "gitleaks"',
     'network === "none"',
@@ -386,6 +443,50 @@ function validatePlatformQualificationSources(sources) {
   ]) {
     assert(!macos.includes(forbidden), `macOS qualification retains a bypass state: ${forbidden}`);
     assert(!evidence.includes(forbidden), `platform evidence validator retains a bypass state: ${forbidden}`);
+  }
+}
+
+function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
+  const qemu = lock?.linux_qemu;
+  assert(
+    qemu?.build_contract?.build_platform === "linux/amd64" &&
+      qemu?.build_contract?.static === true &&
+      JSON.stringify(qemu?.build_contract?.explicit_build_targets) ===
+      JSON.stringify(["qemu-img", "qemu-system-x86_64"]) &&
+      JSON.stringify(qemu?.build_contract?.exported_executables) ===
+        JSON.stringify([
+          "bin/qemu-img",
+          "bin/qemu-system-x86_64",
+          "bin/qemu-system-x86_64.real",
+        ]) &&
+      JSON.stringify(qemu?.build_contract?.required_outputs) ===
+        JSON.stringify([
+          "bin/qemu-img",
+          "bin/qemu-system-x86_64",
+          "bin/qemu-system-x86_64.real",
+          "share/qemu",
+        ]),
+    "Linux managed QEMU lock must include the exact amd64 static executable exports",
+  );
+  for (const required of [
+    'test "$TARGETPLATFORM" = "linux/amd64"',
+    "--enable-tools",
+    "samu -C build qemu-system-x86_64 qemu-img",
+    "/stage/opt/managed-qemu/bin/qemu-img /bin/qemu-img",
+  ]) {
+    assert(dockerfile.includes(required), `Linux managed QEMU build is missing: ${required}`);
+  }
+  for (const required of [
+    "['bin/qemu-img', 'bin/qemu-system-x86_64', 'bin/qemu-system-x86_64.real']",
+    "'--platform'",
+    "'linux/amd64'",
+    "readElfExecutableContract",
+    "executable.machine !== 62",
+    "executable.hasInterpreter",
+    "qemu-img version ${expectedVersion}",
+    "qemuFiles.map(bundledArtifact)",
+  ]) {
+    assert(vendor.includes(required), `managed-runtime vendor contract is missing: ${required}`);
   }
 }
 
@@ -439,6 +540,15 @@ async function main() {
     path.join(PROJECT_ROOT, `docs/release/v${version}.md`),
     "utf8",
   );
+  const managedRuntimeLock = await readJson(path.join(PROJECT_ROOT, "runtime/upstreams.lock.json"));
+  const managedRuntimeDockerfile = await readFile(
+    path.join(PROJECT_ROOT, "runtime/linux-qemu.Dockerfile"),
+    "utf8",
+  );
+  const managedRuntimeVendor = await readFile(
+    path.join(PROJECT_ROOT, "runtime/vendor-managed-runtime.mjs"),
+    "utf8",
+  );
 
   assert(isSemver(version), `package version is not strict SemVer: ${version}`);
   assert(tag === `v${version}`, `tag ${tag} does not exactly match package version ${version}`);
@@ -467,6 +577,14 @@ async function main() {
       !releaseGuide.includes("github_macos_hosted_nested_virtualization_unavailable") &&
       !releaseGuide.includes("`not_run`"),
     "release guide does not require a real Intel-hosted macOS runtime qualification",
+  );
+  assert(
+    releaseGuide.includes("resolves `bin/qemu-img` from the installed managed-runtime") &&
+      releaseGuide.includes("bounded raw bytes") &&
+      releaseGuide.includes("both fixed staging names are absent") &&
+      releaseGuide.includes("provider-home directory itself must be absent") &&
+      releaseGuide.includes("103-byte Podman socket-path budget"),
+    "release guide omits the self-contained managed-runtime qualification contract",
   );
   assert(
     releaseLineNotes.includes("macOS 15 Intel") &&
@@ -557,6 +675,15 @@ async function main() {
 
   const workflows = await validateWorkflowSyntaxAndPins();
   validateReleaseWorkflow(workflows.get("release.yml"));
+  assert(
+    !JSON.stringify(workflows.get("release.yml")).includes("qemu-utils"),
+    "release qualification must not mask a missing bundled qemu-img with a host package",
+  );
+  validateManagedRuntimeBuildContract(
+    managedRuntimeLock,
+    managedRuntimeDockerfile,
+    managedRuntimeVendor,
+  );
   const qualificationSources = new Map();
   for (const name of [
     "qualify-linux.sh",

@@ -4,7 +4,9 @@
 # copied into a Tauri resource bundle; this image is never shipped to users.
 FROM alpine@sha256:1beb0dc0a51de7ff38e3b5274078a2e0b81113ba5c7535e1a03d5913a5edbda3 AS build
 
-RUN apk add --no-cache \
+ARG TARGETPLATFORM
+RUN test "$TARGETPLATFORM" = "linux/amd64" \
+    && apk add --no-cache \
       build-base=0.5-r3 \
       glib-dev=2.86.3-r0 \
       glib-static=2.86.3-r0 \
@@ -35,6 +37,7 @@ RUN ./configure \
       --enable-kvm \
       --enable-fdt=internal \
       --enable-pixman \
+      --enable-tools \
       --enable-strip \
       --disable-docs \
       --disable-guest-agent \
@@ -42,7 +45,7 @@ RUN ./configure \
       --disable-slirp \
       --audio-drv-list= \
       --with-pkgversion=ai-security-scanner-managed \
-    && samu -C build qemu-system-x86_64 \
+    && samu -C build qemu-system-x86_64 qemu-img \
     && DESTDIR=/stage samu -C build install \
     && mv /stage/opt/managed-qemu/bin/qemu-system-x86_64 \
           /stage/opt/managed-qemu/bin/qemu-system-x86_64.real \
@@ -53,4 +56,5 @@ RUN ./configure \
 FROM scratch AS export
 COPY --from=build /stage/opt/managed-qemu/bin/qemu-system-x86_64 /bin/qemu-system-x86_64
 COPY --from=build /stage/opt/managed-qemu/bin/qemu-system-x86_64.real /bin/qemu-system-x86_64.real
+COPY --from=build /stage/opt/managed-qemu/bin/qemu-img /bin/qemu-img
 COPY --from=build /stage/opt/managed-qemu/share/qemu /share/qemu

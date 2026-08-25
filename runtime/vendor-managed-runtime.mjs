@@ -144,6 +144,31 @@ function normalizeRelativePath(value, label) {
 function excludedForeignQemuFirmware(lock) {
   const qemu = requireObject(lock.linux_qemu, 'Linux QEMU lock');
   const contract = requireObject(qemu.build_contract, 'Linux QEMU build contract');
+  const explicitBuildTargets = contract.explicit_build_targets;
+  const exportedExecutables = contract.exported_executables;
+  const requiredOutputs = contract.required_outputs;
+  if (
+    contract.build_platform !== 'linux/amd64' ||
+    contract.target_list !== 'x86_64-softmmu' ||
+    contract.static !== true ||
+    !Array.isArray(explicitBuildTargets) ||
+    explicitBuildTargets.length !== 2 ||
+    explicitBuildTargets[0] !== 'qemu-img' ||
+    explicitBuildTargets[1] !== 'qemu-system-x86_64' ||
+    !Array.isArray(exportedExecutables) ||
+    exportedExecutables.length !== 3 ||
+    exportedExecutables[0] !== 'bin/qemu-img' ||
+    exportedExecutables[1] !== 'bin/qemu-system-x86_64' ||
+    exportedExecutables[2] !== 'bin/qemu-system-x86_64.real' ||
+    !Array.isArray(requiredOutputs) ||
+    requiredOutputs.length !== 4 ||
+    requiredOutputs[0] !== 'bin/qemu-img' ||
+    requiredOutputs[1] !== 'bin/qemu-system-x86_64' ||
+    requiredOutputs[2] !== 'bin/qemu-system-x86_64.real' ||
+    requiredOutputs[3] !== 'share/qemu'
+  ) {
+    throw new Error('Linux QEMU build contract must lock the amd64 static executable exports');
+  }
   const configured = contract.excluded_foreign_firmware;
   if (!Array.isArray(configured) || configured.length === 0 || configured.length > 32) {
     throw new Error('Linux QEMU excluded foreign firmware must be a bounded non-empty array');
@@ -326,7 +351,12 @@ async function run(program, programArguments, options = {}) {
       windowsHide: true,
     });
   } catch (error) {
-    const detail = String(error.stderr ?? error.message).slice(0, 4096);
+    const message = String(error.message ?? 'command failed');
+    const stderr = String(error.stderr ?? '').trim();
+    const combined = stderr && !message.includes(stderr) ? `${message}\nstderr:\n${stderr}` : message;
+    const detail = combined.length <= 4096
+      ? combined
+      : `${combined.slice(0, 1536)}\n... diagnostic truncated ...\n${combined.slice(-2512)}`;
     throw new Error(`${program} failed: ${detail}`);
   }
 }
@@ -423,6 +453,62 @@ async function readElfIdentity(path) {
   return { class: header[4], data: header[5], machine };
 }
 
+async function readElfExecutableContract(path) {
+  const identity = await readElfIdentity(path);
+  if (!identity) throw new Error(`managed QEMU executable is not ELF: ${path}`);
+  const handle = await open(path, 'r');
+  const headerSize = identity.class === 1 ? 52 : 64;
+  const header = Buffer.alloc(headerSize);
+  let bytesRead;
+  let fileSize;
+  try {
+    ({ bytesRead } = await handle.read(header, 0, header.length, 0));
+    fileSize = (await handle.stat()).size;
+  } finally {
+    await handle.close();
+  }
+  if (bytesRead !== header.length) {
+    throw new Error(`managed QEMU executable has a truncated ELF header: ${path}`);
+  }
+  const littleEndian = identity.data === 1;
+  const read16 = (offset) => littleEndian ? header.readUInt16LE(offset) : header.readUInt16BE(offset);
+  const programHeaderOffset = identity.class === 1
+    ? (littleEndian ? header.readUInt32LE(28) : header.readUInt32BE(28))
+    : Number(littleEndian ? header.readBigUInt64LE(32) : header.readBigUInt64BE(32));
+  const programHeaderEntrySize = read16(identity.class === 1 ? 42 : 54);
+  const programHeaderCount = read16(identity.class === 1 ? 44 : 56);
+  const minimumEntrySize = identity.class === 1 ? 32 : 56;
+  const tableBytes = programHeaderEntrySize * programHeaderCount;
+  if (
+    !Number.isSafeInteger(programHeaderOffset) ||
+    programHeaderOffset < headerSize ||
+    programHeaderCount < 1 ||
+    programHeaderCount > 256 ||
+    programHeaderEntrySize < minimumEntrySize ||
+    tableBytes > 1024 * 1024 ||
+    programHeaderOffset + tableBytes > fileSize
+  ) {
+    throw new Error(`managed QEMU executable has an invalid ELF program-header table: ${path}`);
+  }
+  const table = Buffer.alloc(tableBytes);
+  const tableHandle = await open(path, 'r');
+  try {
+    const result = await tableHandle.read(table, 0, table.length, programHeaderOffset);
+    if (result.bytesRead !== table.length) {
+      throw new Error(`managed QEMU executable program headers changed while reading: ${path}`);
+    }
+  } finally {
+    await tableHandle.close();
+  }
+  let hasInterpreter = false;
+  for (let index = 0; index < programHeaderCount; index += 1) {
+    const offset = index * programHeaderEntrySize;
+    const type = littleEndian ? table.readUInt32LE(offset) : table.readUInt32BE(offset);
+    if (type === 3) hasInterpreter = true;
+  }
+  return { ...identity, hasInterpreter };
+}
+
 function isNativeX86Elf(identity) {
   return (
     identity.data === 1 &&
@@ -498,13 +584,38 @@ async function copyQemuOutput(qemuOutput, stageRoot, expectedVersion, excludedFi
     await copyFile(file.path, destination, fsConstants.COPYFILE_EXCL);
     await chmod(destination, destinationRelative.startsWith('bin/') ? 0o700 : 0o600);
   }
-  for (const required of ['bin/qemu-system-x86_64', 'bin/qemu-system-x86_64.real']) {
+  for (const required of ['bin/qemu-img', 'bin/qemu-system-x86_64', 'bin/qemu-system-x86_64.real']) {
     const metadata = await stat(join(stageRoot, ...required.split('/')));
     if (!metadata.isFile()) throw new Error(`managed QEMU omitted ${required}`);
+    const executable = await readElfExecutableContract(join(stageRoot, ...required.split('/')));
+    if (
+      executable.class !== 2 ||
+      executable.data !== 1 ||
+      executable.machine !== 62 ||
+      executable.hasInterpreter
+    ) {
+      throw new Error(`managed QEMU executable is not a static ELF64 little-endian x86-64 binary: ${required}`);
+    }
   }
-  const version = await run(join(stageRoot, 'bin', 'qemu-system-x86_64.real'), ['--version']);
-  if (!version.stdout.includes(`QEMU emulator version ${expectedVersion}`)) {
+  const emulatorVersion = await run(join(stageRoot, 'bin', 'qemu-system-x86_64.real'), ['--version']);
+  if (!emulatorVersion.stdout.includes(`QEMU emulator version ${expectedVersion}`)) {
     throw new Error('managed QEMU version does not match the upstream lock');
+  }
+  const imageToolVersion = await run(join(stageRoot, 'bin', 'qemu-img'), ['--version']);
+  if (!imageToolVersion.stdout.includes(`qemu-img version ${expectedVersion}`)) {
+    throw new Error('managed qemu-img version does not match the upstream lock');
+  }
+  const imageTool = join(stageRoot, 'bin', 'qemu-img');
+  const imageProbe = join(qemuOutput, `.qemu-img-probe-${randomUUID()}.qcow2`);
+  try {
+    await run(imageTool, ['create', '-f', 'qcow2', imageProbe, '1G']);
+    await run(imageTool, ['resize', imageProbe, '40G']);
+    const information = JSON.parse((await run(imageTool, ['info', '--output=json', imageProbe])).stdout);
+    if (information.format !== 'qcow2' || information['virtual-size'] !== 40 * 1024 * 1024 * 1024) {
+      throw new Error('managed qemu-img failed its exact create, resize, and inspect contract');
+    }
+  } finally {
+    await rm(imageProbe, { force: true });
   }
 }
 
@@ -543,6 +654,8 @@ async function buildLinuxQemu(lock, workRoot, stageRoot) {
     [
       'buildx',
       'build',
+      '--platform',
+      'linux/amd64',
       '--file',
       join(SCRIPT_DIRECTORY, 'linux-qemu.Dockerfile'),
       '--build-context',
@@ -700,7 +813,7 @@ function componentInventory(lock, targetName, files, targets) {
     components.push(componentRecord(
       qemu,
       'qemu',
-      'Statically built x86_64 system emulator; foreign-architecture firmware is excluded and launcher source is runtime/qemu-launcher.c',
+      'Statically built x86_64 system emulator and image utility; foreign-architecture firmware is excluded and launcher source is runtime/qemu-launcher.c',
       qemuFiles.map(bundledArtifact),
       {
         url: approvedUrl(qemu.source_url, 'QEMU source URL').href,
