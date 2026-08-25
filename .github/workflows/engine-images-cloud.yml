@@ -40,19 +40,19 @@ jobs:
       matrix:
         include:
           - engine: cloudquery
-            tag: 2.0.31-aws9.2.0-1
+            tag: 2.0.31-aws9.2.0-2
             dockerfile: engines/images/cloudquery/Dockerfile
           - engine: prowler
-            tag: 5.39.1-1
+            tag: 5.39.1-2
             dockerfile: engines/images/prowler/Dockerfile
           - engine: cloudsplaining
-            tag: 0.9.1-1
+            tag: 0.9.1-2
             dockerfile: engines/images/cloudsplaining/Dockerfile
           - engine: scoutsuite
-            tag: 5.14.0-1
+            tag: 5.14.0-2
             dockerfile: engines/images/scoutsuite/Dockerfile
           - engine: steampipe
-            tag: 2.4.5-1
+            tag: 2.4.5-2
             dockerfile: engines/images/steampipe/Dockerfile
     env:
       IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-${{ matrix.engine }}
@@ -142,6 +142,42 @@ jobs:
             | sha256sum --check --strict
           jq -e '.registry == {mode:"local", authenticated:false, runtime_downloads:false}' \
             "${evidence}/build/dependencies.lock.json" >/dev/null
+
+      - name: Run the anonymous Prowler amd64 patch and launcher contract
+        if: matrix.engine == 'prowler'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          reference="${IMAGE}@${DIGEST}"
+          docker logout ghcr.io
+          docker pull --platform linux/amd64 "${reference}"
+          test "$(docker image inspect "${reference}" --format '{{.Config.User}}')" = "65532:65532"
+          test "$(docker image inspect "${reference}" --format '{{json .Config.Entrypoint}}')" = '["/usr/local/bin/ai-security-scanner-cloud-launcher"]'
+          test "$(docker image inspect "${reference}" --format '{{index .Config.Labels "io.ai-security-scanner.profile"}}')" = "aws-azure-gcp-narrow-iam"
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --entrypoint /home/prowler/.venv/bin/python "${reference}" -c '
+          import hashlib
+          from pathlib import Path
+          expected = {
+              "prowler/providers/azure/azure_provider.py": "b86ac5e1b350f07012058d2d53b15a9aa79126cb31577b871984e3d877b924cd",
+              "prowler/providers/azure/lib/arguments/arguments.py": "afb7c9b47f1b9b2354774579121db4f1c26d6b03112a3d0407fb4f14ad8625af",
+              "prowler/providers/common/provider.py": "4fe43b204884910bfbceac5ebb3e0b2898c9c044b18d241b566cc9a53ae6cf04",
+              "prowler/providers/gcp/gcp_provider.py": "36287ddfe2a79b9a61ca71b926b69cde43202f658c55e6a144794b1aa3bba3ae",
+          }
+          root = Path("/home/prowler")
+          assert all(hashlib.sha256((root / path).read_bytes()).hexdigest() == digest for path, digest in expected.items())
+          '
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --entrypoint /home/prowler/.venv/bin/prowler "${reference}" azure --help \
+            | grep -F -- '--access-token-auth'
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --entrypoint /home/prowler/.venv/bin/prowler "${reference}" gcp --help \
+            | grep -F -- '--project-ids'
+          if docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            "${reference}" --engine prowler --scope /run/ai-security-scanner/scope.json --output /output; then
+            echo 'Prowler launcher accepted missing protected mounts' >&2
+            exit 1
+          fi
 
       - name: Record the published index digest
         env:

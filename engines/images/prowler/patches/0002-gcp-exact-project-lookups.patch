@@ -1,0 +1,329 @@
+diff --git a/prowler/providers/gcp/gcp_provider.py b/prowler/providers/gcp/gcp_provider.py
+index 69ab9404ef1be12d53bf02a689702ebea9b34f8b..b9af05c99924093810a7f0cb6b9e1d4d904f129a 100644
+--- a/prowler/providers/gcp/gcp_provider.py
++++ b/prowler/providers/gcp/gcp_provider.py
+@@ -710,6 +710,78 @@ class GcpProvider(Provider):
+                         original_exception=http_error,
+                         message=message,
+                     )
++            elif project_ids:
++                try:
++                    if (
++                        not isinstance(project_ids, list)
++                        or len(set(project_ids)) != len(project_ids)
++                        or any(
++                            not isinstance(project_id, str)
++                            or not project_id
++                            or project_id.strip() != project_id
++                            or "*" in project_id
++                            for project_id in project_ids
++                        )
++                    ):
++                        raise GCPNoAccesibleProjectsError(
++                            file=__file__,
++                            message="Exact project IDs must be a non-empty, duplicate-free string list.",
++                        )
++
++                    service = discovery.build(
++                        "cloudresourcemanager",
++                        "v1",
++                        credentials=credentials,
++                        num_retries=DEFAULT_RETRY_ATTEMPTS,
++                    )
++                    for requested_project_id in project_ids:
++                        project = (
++                            service.projects()
++                            .get(projectId=requested_project_id)
++                            .execute(num_retries=DEFAULT_RETRY_ATTEMPTS)
++                        )
++                        if project.get("projectId") != requested_project_id:
++                            raise GCPNoAccesibleProjectsError(
++                                file=__file__,
++                                message=f"Cloud Resource Manager returned a different project for requested project '{requested_project_id}'.",
++                            )
++                        if project.get("lifecycleState") != "ACTIVE":
++                            raise GCPNoAccesibleProjectsError(
++                                file=__file__,
++                                message=f"Requested project '{requested_project_id}' is not ACTIVE.",
++                            )
++
++                        project_name = project.get("name") or requested_project_id
++                        if not project_name.strip():
++                            project_name = "GCP Project"
++                        gcp_project = GCPProject(
++                            number=project["projectNumber"],
++                            id=requested_project_id,
++                            name=project_name,
++                            lifecycle_state=project["lifecycleState"],
++                            labels=project.get("labels", {}),
++                        )
++                        if (
++                            "parent" in project
++                            and project["parent"].get("type") == "organization"
++                        ):
++                            parent_org_id = project["parent"]["id"]
++                            gcp_project.organization = GCPOrganization(
++                                id=parent_org_id,
++                                name=f"organizations/{parent_org_id}",
++                            )
++                        projects[requested_project_id] = gcp_project
++                except GCPBaseException as gcp_error:
++                    raise gcp_error
++                except Exception as error:
++                    logger.critical(
++                        f"{error.__class__.__name__}[{error.__traceback__.tb_lineno}]: exact project lookup failed"
++                    )
++                    raise GCPNoAccesibleProjectsError(
++                        file=__file__,
++                        original_exception=error,
++                        message="At least one exact requested project cannot be read via Cloud Resource Manager.",
++                    )
+             else:
+                 try:
+                     # Initialize Cloud Resource Manager API for simple project listing
+@@ -780,26 +852,10 @@ class GcpProvider(Provider):
+                             f"{http_error.__class__.__name__}[{http_error.__traceback__.tb_lineno}]: {http_error}"
+                         )
+             if not projects:
+-                # If no projects were able to be accessed via API, add them manually if provided by the user in arguments
+-                if project_ids:
+-                    for input_project in project_ids:
+-                        # Handle empty or null project names
+-                        project_name = (
+-                            input_project
+-                            if input_project and input_project.strip() != ""
+-                            else "GCP Project"
+-                        )
+-                        projects[input_project] = GCPProject(
+-                            id=input_project,
+-                            name=project_name,
+-                            number=0,
+-                            labels={},
+-                            lifecycle_state="ACTIVE",
+-                        )
+                 # If no projects were able to be accessed via API, add them manually from the credentials file.
+                 # Skip this fallback when an organization scan was explicitly requested: silently
+                 # downgrading scope to the service account's home project hides permission errors.
+-                elif credentials_file and not organization_id:
++                if credentials_file and not organization_id and not project_ids:
+                     with open(credentials_file, "r", encoding="utf-8") as file:
+                         project_id = json.load(file)["project_id"]
+                         # Handle empty or null project names
+diff --git a/tests/providers/gcp/gcp_exact_projects_test.py b/tests/providers/gcp/gcp_exact_projects_test.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f5e919db85b2a2dbc3f59ae47870237345d0bd31
+--- /dev/null
++++ b/tests/providers/gcp/gcp_exact_projects_test.py
+@@ -0,0 +1,211 @@
++from unittest.mock import MagicMock, call, patch
++
++import pytest
++from googleapiclient.errors import HttpError
++
++from prowler.providers.gcp.exceptions.exceptions import (
++    GCPNoAccesibleProjectsError,
++)
++from prowler.providers.gcp.config import DEFAULT_RETRY_ATTEMPTS
++from prowler.providers.gcp.gcp_provider import GcpProvider
++
++
++def _project(project_id, state="ACTIVE", number="123456789"):
++    return {
++        "projectId": project_id,
++        "projectNumber": number,
++        "name": f"Display {project_id}",
++        "lifecycleState": state,
++        "labels": {"scope": "exact"},
++        "parent": {"type": "organization", "id": "987654321"},
++    }
++
++
++def _service_for_projects(projects):
++    projects_resource = MagicMock()
++
++    def get_project(projectId):
++        request = MagicMock()
++        result = projects[projectId]
++        if isinstance(result, Exception):
++            request.execute.side_effect = result
++        else:
++            request.execute.return_value = result
++        return request
++
++    projects_resource.get.side_effect = get_project
++    service = MagicMock()
++    service.projects.return_value = projects_resource
++    return service, projects_resource
++
++
++class TestGCPExactProjects:
++    def test_uses_only_individual_gets_for_requested_projects(self):
++        first_id = "exact-project-a"
++        second_id = "exact-project-b"
++        service, projects_resource = _service_for_projects(
++            {
++                first_id: _project(first_id, number="1"),
++                second_id: _project(second_id, number="2"),
++            }
++        )
++        credentials = MagicMock()
++
++        with (
++            patch(
++                "prowler.providers.gcp.gcp_provider.discovery.build",
++                return_value=service,
++            ) as mock_build,
++            patch("builtins.open") as mock_open,
++        ):
++            projects = GcpProvider.get_projects(
++                credentials=credentials,
++                project_ids=[first_id, second_id],
++                credentials_file="/ambient/default.json",
++            )
++
++        mock_build.assert_called_once_with(
++            "cloudresourcemanager",
++            "v1",
++            credentials=credentials,
++            num_retries=DEFAULT_RETRY_ATTEMPTS,
++        )
++        assert projects_resource.get.call_args_list == [
++            call(projectId=first_id),
++            call(projectId=second_id),
++        ]
++        projects_resource.list.assert_not_called()
++        projects_resource.list_next.assert_not_called()
++        mock_open.assert_not_called()
++        assert list(projects) == [first_id, second_id]
++        assert projects[first_id].lifecycle_state == "ACTIVE"
++        assert projects[first_id].organization.id == "987654321"
++
++    @pytest.mark.parametrize("state", ["DELETE_REQUESTED", "DELETE_IN_PROGRESS", ""])
++    def test_non_active_requested_project_fails_closed(self, state):
++        project_id = "inactive-project"
++        service, projects_resource = _service_for_projects(
++            {project_id: _project(project_id, state=state)}
++        )
++
++        with (
++            patch(
++                "prowler.providers.gcp.gcp_provider.discovery.build",
++                return_value=service,
++            ),
++            pytest.raises(GCPNoAccesibleProjectsError, match="not ACTIVE"),
++        ):
++            GcpProvider.get_projects(credentials=MagicMock(), project_ids=[project_id])
++
++        projects_resource.list.assert_not_called()
++
++    def test_unreadable_requested_project_fails_without_fallback(self):
++        project_id = "forbidden-project"
++        response = MagicMock(status=403, reason="Forbidden")
++        error = HttpError(
++            resp=response,
++            content=b'{"error":{"code":403,"message":"forbidden"}}',
++            uri=f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}",
++        )
++        service, projects_resource = _service_for_projects({project_id: error})
++
++        with (
++            patch(
++                "prowler.providers.gcp.gcp_provider.discovery.build",
++                return_value=service,
++            ),
++            patch("builtins.open") as mock_open,
++            pytest.raises(GCPNoAccesibleProjectsError, match="cannot be read"),
++        ):
++            GcpProvider.get_projects(
++                credentials=MagicMock(),
++                project_ids=[project_id],
++                credentials_file="/ambient/default.json",
++            )
++
++        projects_resource.list.assert_not_called()
++        mock_open.assert_not_called()
++
++    def test_response_for_a_different_project_fails_closed(self):
++        requested_id = "requested-project"
++        service, projects_resource = _service_for_projects(
++            {requested_id: _project("different-project")}
++        )
++
++        with (
++            patch(
++                "prowler.providers.gcp.gcp_provider.discovery.build",
++                return_value=service,
++            ),
++            pytest.raises(GCPNoAccesibleProjectsError, match="different project"),
++        ):
++            GcpProvider.get_projects(
++                credentials=MagicMock(), project_ids=[requested_id]
++            )
++
++        projects_resource.list.assert_not_called()
++
++    def test_malformed_project_response_fails_the_entire_request(self):
++        first_id = "valid-project"
++        second_id = "malformed-project"
++        malformed = _project(second_id)
++        del malformed["projectNumber"]
++        service, projects_resource = _service_for_projects(
++            {first_id: _project(first_id), second_id: malformed}
++        )
++
++        with (
++            patch(
++                "prowler.providers.gcp.gcp_provider.discovery.build",
++                return_value=service,
++            ),
++            pytest.raises(GCPNoAccesibleProjectsError, match="cannot be read"),
++        ):
++            GcpProvider.get_projects(
++                credentials=MagicMock(), project_ids=[first_id, second_id]
++            )
++
++        assert projects_resource.get.call_args_list == [
++            call(projectId=first_id),
++            call(projectId=second_id),
++        ]
++        projects_resource.list.assert_not_called()
++
++    @pytest.mark.parametrize(
++        "project_ids",
++        [
++            ["duplicate-project", "duplicate-project"],
++            ["wildcard-*"],
++            [""],
++            [" padded-project"],
++        ],
++    )
++    def test_malformed_exact_project_set_fails_before_discovery(self, project_ids):
++        with (
++            patch("prowler.providers.gcp.gcp_provider.discovery.build") as mock_build,
++            pytest.raises(GCPNoAccesibleProjectsError),
++        ):
++            GcpProvider.get_projects(credentials=MagicMock(), project_ids=project_ids)
++
++        mock_build.assert_not_called()
++
++    def test_empty_project_scope_preserves_legacy_discovery(self):
++        discovered_id = "discovered-project"
++        projects_resource = MagicMock()
++        request = MagicMock()
++        response = {"projects": [_project(discovered_id)]}
++        request.execute.return_value = response
++        projects_resource.list.return_value = request
++        projects_resource.list_next.return_value = None
++        service = MagicMock()
++        service.projects.return_value = projects_resource
++
++        with patch(
++            "prowler.providers.gcp.gcp_provider.discovery.build",
++            return_value=service,
++        ):
++            projects = GcpProvider.get_projects(credentials=MagicMock(), project_ids=[])
++
++        projects_resource.get.assert_not_called()
++        projects_resource.list.assert_called_once_with()
++        assert list(projects) == [discovered_id]
+

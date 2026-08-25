@@ -6,12 +6,18 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,10 +28,19 @@ import (
 )
 
 const (
-	credentialPath    = "/run/ai-security-scanner/credentials.json"
-	maxCredentialSize = 256 * 1024
-	maxScopeSize      = 4 * 1024 * 1024
-	maxOutputFileSize = 512 * 1024 * 1024
+	credentialPath          = "/run/ai-security-scanner/credentials.json"
+	awsRegionalSTSEndpoint  = "https://sts.us-east-1.amazonaws.com/"
+	awsGlobalSTSEndpoint    = "https://sts.amazonaws.com/"
+	awsSTSRegion            = "us-east-1"
+	azureManagementRoot     = "https://management.azure.com"
+	gcpResourceManagerRoot  = "https://cloudresourcemanager.googleapis.com"
+	maxCredentialSize       = 256 * 1024
+	maxScopeSize            = 4 * 1024 * 1024
+	maxOutputFileSize       = 512 * 1024 * 1024
+	maxProviderResponseSize = 256 * 1024
+	maxJSONRecordSize       = 8 * 1024 * 1024
+	maxJSONRecords          = 1_000_000
+	minimumCredentialTTL    = 5 * time.Minute
 )
 
 var safeEnvironmentKeys = []string{
@@ -92,6 +107,10 @@ type invocation struct {
 	Env     []string
 }
 
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "cloud engine launcher: %v\n", err)
@@ -121,7 +140,7 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	credentials, selectedProvider, err := loadCredentials(credentialPath)
+	credentials, selectedProvider, credentialExpiresAt, err := loadCredentials(credentialPath)
 	if err != nil {
 		return err
 	}
@@ -130,6 +149,32 @@ func run(arguments []string) error {
 	}
 	if err := validateScopePermissions(scope, *engineID); err != nil {
 		return err
+	}
+	providerTarget, err := expectedProviderTarget(scope, selectedProvider)
+	if err != nil {
+		return err
+	}
+	providerClient := &http.Client{
+		Timeout: 20 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("provider identity verification refused a redirect")
+		},
+	}
+	switch selectedProvider {
+	case providerAWS:
+		if err := verifyAWSCallerIdentity(providerClient, awsSTSEndpointForEngine(*engineID), credentials, providerTarget, time.Now().UTC()); err != nil {
+			return err
+		}
+	case providerAzure:
+		if err := verifyAzureSubscription(providerClient, azureManagementRoot, credentials["AZURE_ACCESS_TOKEN"], providerTarget); err != nil {
+			return err
+		}
+	case providerGCP:
+		if err := verifyGCPProject(providerClient, gcpResourceManagerRoot, credentials["GOOGLE_OAUTH_ACCESS_TOKEN"], providerTarget); err != nil {
+			return err
+		}
+	default:
+		return errors.New("unreachable provider preflight")
 	}
 
 	temporaryRoot, err := os.MkdirTemp("/tmp", "ai-security-scanner-cloud-")
@@ -141,21 +186,16 @@ func run(arguments []string) error {
 	}
 	defer os.RemoveAll(temporaryRoot)
 
-	environment := childEnvironment(credentials, selectedProvider, temporaryRoot)
+	environment := childEnvironment(credentials, selectedProvider, providerTarget, temporaryRoot)
 	switch *engineID {
 	case "cloudsplaining":
 		return runCloudsplaining(environment, temporaryRoot, *outputPath)
 	case "prowler":
-		return runCommand(invocation{
-			Program: "/home/prowler/.venv/bin/prowler",
-			Args: []string{
-				"aws", "--service", "iam", "--region", "us-east-1",
-				"--output-formats", "json-ocsf", "--output-filename", "prowler",
-				"--output-directory", *outputPath, "--ignore-exit-code-3",
-				"--no-banner", "--no-color", "--skip-sh-update",
-			},
-			Env: environment,
-		})
+		profile, err := prowlerInvocation(selectedProvider, providerTarget, credentialExpiresAt, environment, *outputPath)
+		if err != nil {
+			return err
+		}
+		return runProwler(profile, *outputPath)
 	case "scoutsuite":
 		return runScoutSuite(environment, temporaryRoot, *outputPath)
 	case "cloudquery":
@@ -176,6 +216,15 @@ func supportedEngine(engineID string) bool {
 	}
 }
 
+func awsSTSEndpointForEngine(engineID string) string {
+	// Each value is a compile-time endpoint already present in that engine's
+	// managed-network closure. The global STS endpoint still signs in us-east-1.
+	if engineID == "cloudsplaining" {
+		return awsGlobalSTSEndpoint
+	}
+	return awsRegionalSTSEndpoint
+}
+
 func loadScope(path, expectedEngine string) (*scopeDocument, error) {
 	bytes, err := readBoundedRegularFile(path, maxScopeSize)
 	if err != nil {
@@ -190,7 +239,7 @@ func loadScope(path, expectedEngine string) (*scopeDocument, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return nil, errors.New("scope document has trailing data")
 	}
-	if scope.SchemaVersion != "1" || scope.EngineID != expectedEngine || len(scope.Assets) == 0 || len(scope.Assets) > 4096 {
+	if scope.SchemaVersion != "1" || scope.EngineID != expectedEngine || len(scope.Assets) != 1 {
 		return nil, errors.New("scope document version, engine, or asset count is invalid")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, scope.GeneratedAt); err != nil {
@@ -201,8 +250,8 @@ func loadScope(path, expectedEngine string) (*scopeDocument, error) {
 		if !safeText(asset.ID, 256) || !safeText(asset.Name, 4096) || !safeText(asset.Kind, 128) {
 			return nil, errors.New("scope contains an invalid asset")
 		}
-		if asset.Provider == nil || *asset.Provider != "aws" {
-			return nil, errors.New("released cloud engine scope must identify the AWS provider")
+		if asset.Provider == nil || !matchesProvider(*asset.Provider) {
+			return nil, errors.New("released cloud engine scope must identify one supported provider")
 		}
 		if asset.Region != nil && !safeText(*asset.Region, 128) {
 			return nil, errors.New("scope contains an invalid provider region")
@@ -257,41 +306,50 @@ func validateScopePermissions(scope *scopeDocument, engineID string) error {
 	return nil
 }
 
-func loadCredentials(path string) (map[string]string, provider, error) {
+func loadCredentials(path string) (map[string]string, provider, time.Time, error) {
 	bytes, err := readBoundedRegularFile(path, maxCredentialSize)
 	if err != nil {
-		return nil, "", fmt.Errorf("read protected credential channel: %w", err)
+		return nil, "", time.Time{}, fmt.Errorf("read protected credential channel: %w", err)
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(bytes)))
 	decoder.DisallowUnknownFields()
 	var envelope credentialEnvelope
 	if err := decoder.Decode(&envelope); err != nil || requireJSONEOF(decoder) != nil {
-		return nil, "", errors.New("credential channel is malformed")
+		return nil, "", time.Time{}, errors.New("credential channel is malformed")
 	}
 	if envelope.SchemaVersion != "1.0.0" || len(envelope.Credentials) == 0 || len(envelope.Credentials) > 3 {
-		return nil, "", errors.New("credential channel version or entry count is invalid")
+		return nil, "", time.Time{}, errors.New("credential channel version or entry count is invalid")
 	}
 	values := make(map[string]string, len(envelope.Credentials))
+	minimumExpiry := time.Time{}
+	now := time.Now().UTC()
 	for _, credential := range envelope.Credentials {
-		if !allowedCredentialKey(credential.Key) || credential.Value == "" || len(credential.Value) > 64*1024 {
-			return nil, "", errors.New("credential channel contains an unauthorized entry")
+		if !allowedCredentialKey(credential.Key) || !safeText(credential.Value, 64*1024) {
+			return nil, "", time.Time{}, errors.New("credential channel contains an unauthorized entry")
 		}
 		if credential.Source != "ephemeral_scan_role" && credential.Source != "external_read_only_grant" {
-			return nil, "", errors.New("credential source is not a scanner-only source")
+			return nil, "", time.Time{}, errors.New("credential source is not a scanner-only source")
 		}
-		if !credential.ExpiresAt.After(time.Now().UTC()) {
-			return nil, "", errors.New("credential channel contains an expired entry")
+		if !credential.ExpiresAt.After(now.Add(minimumCredentialTTL)) {
+			return nil, "", time.Time{}, errors.New("credential channel lacks the minimum scanner-only lifetime")
 		}
 		if _, exists := values[credential.Key]; exists {
-			return nil, "", errors.New("credential channel contains a duplicate key")
+			return nil, "", time.Time{}, errors.New("credential channel contains a duplicate key")
 		}
 		values[credential.Key] = credential.Value
+		if minimumExpiry.IsZero() || credential.ExpiresAt.Before(minimumExpiry) {
+			minimumExpiry = credential.ExpiresAt.UTC()
+		}
 	}
 	selected, err := providerFromCredentialKeys(values)
 	if err != nil {
-		return nil, "", err
+		return nil, "", time.Time{}, err
 	}
-	return values, selected, nil
+	return values, selected, minimumExpiry, nil
+}
+
+func matchesProvider(value string) bool {
+	return value == string(providerAWS) || value == string(providerAzure) || value == string(providerGCP)
 }
 
 func providerFromCredentialKeys(values map[string]string) (provider, error) {
@@ -314,12 +372,11 @@ func providerFromCredentialKeys(values map[string]string) (provider, error) {
 }
 
 func validateProviderForEngine(engineID string, selected provider, scope *scopeDocument) error {
-	// This release intentionally exposes only the AWS IAM subsets. Azure and
-	// GCP SDKs used by these upstreams do not consume the token-only profiles
-	// offered by ScannerCredentialSet without writing credential files or
-	// broadening the provider endpoint set.
-	if selected != providerAWS {
+	if engineID != "prowler" && selected != providerAWS {
 		return fmt.Errorf("engine %s has no released %s token profile", engineID, selected)
+	}
+	if engineID == "prowler" && selected != providerAWS && selected != providerAzure && selected != providerGCP {
+		return errors.New("Prowler credential provider is not released")
 	}
 	for _, asset := range scope.Assets {
 		if asset.Provider == nil || *asset.Provider != string(selected) {
@@ -329,34 +386,390 @@ func validateProviderForEngine(engineID string, selected provider, scope *scopeD
 	return nil
 }
 
-func childEnvironment(credentials map[string]string, selected provider, temporaryRoot string) []string {
+func expectedProviderTarget(scope *scopeDocument, selected provider) (string, error) {
+	if len(scope.Assets) != 1 {
+		return "", errors.New("provider execution must contain exactly one asset")
+	}
+	asset := scope.Assets[0]
+	expectedKind := ""
+	expectedNamespace := ""
+	switch selected {
+	case providerAWS:
+		expectedKind, expectedNamespace = "cloud_account", "aws_account_id"
+	case providerAzure:
+		expectedKind, expectedNamespace = "subscription", "azure_subscription_id"
+	case providerGCP:
+		expectedKind, expectedNamespace = "project", "gcp_project_id"
+	default:
+		return "", errors.New("provider execution target is unsupported")
+	}
+	if asset.Kind != expectedKind || asset.Provider == nil || *asset.Provider != string(selected) {
+		return "", errors.New("provider execution scope has the wrong asset kind or provider")
+	}
+	target := ""
+	for _, identifier := range asset.Identifiers {
+		if identifier.Namespace != expectedNamespace {
+			continue
+		}
+		if target != "" {
+			return "", errors.New("provider execution scope contains more than one native identifier")
+		}
+		target = identifier.Value
+	}
+	valid := false
+	switch selected {
+	case providerAWS:
+		valid = validAWSAccountID(target)
+	case providerAzure:
+		valid = validCanonicalUUID(target)
+	case providerGCP:
+		valid = validGCPProjectID(target)
+	}
+	if !valid {
+		return "", errors.New("provider execution scope has no valid native identifier")
+	}
+	return target, nil
+}
+
+func expectedAWSAccountID(scope *scopeDocument) (string, error) {
+	return expectedProviderTarget(scope, providerAWS)
+}
+
+func validAWSAccountID(value string) bool {
+	if len(value) != 12 {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validCanonicalUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
+				return false
+			}
+			continue
+		}
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func validGCPProjectID(value string) bool {
+	if len(value) < 6 || len(value) > 30 || value[0] < 'a' || value[0] > 'z' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func verifyAWSCallerIdentity(client httpDoer, endpoint string, credentials map[string]string, expectedAccountID string, now time.Time) error {
+	if client == nil {
+		return errors.New("AWS STS identity verifier is unavailable")
+	}
+	if len(expectedAccountID) != 12 {
+		return errors.New("AWS STS expected account is invalid")
+	}
+	accessKeyID := credentials["AWS_ACCESS_KEY_ID"]
+	secretAccessKey := credentials["AWS_SECRET_ACCESS_KEY"]
+	sessionToken := credentials["AWS_SESSION_TOKEN"]
+	if accessKeyID == "" || secretAccessKey == "" || sessionToken == "" {
+		return errors.New("AWS STS identity verifier lacks the complete credential closure")
+	}
+
+	const contentType = "application/x-www-form-urlencoded; charset=utf-8"
+	body := []byte("Action=GetCallerIdentity&Version=2011-06-15")
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil || request.URL.Path != "/" || request.URL.RawQuery != "" || request.URL.User != nil || request.URL.Fragment != "" {
+		return errors.New("AWS STS identity endpoint is invalid")
+	}
+	host := request.URL.Host
+	if host == "" {
+		return errors.New("AWS STS identity endpoint has no host")
+	}
+	amzDate := now.UTC().Format("20060102T150405Z")
+	date := now.UTC().Format("20060102")
+	canonicalHeaders := fmt.Sprintf(
+		"content-type:%s\nhost:%s\nx-amz-date:%s\nx-amz-security-token:%s\n",
+		contentType, host, amzDate, sessionToken,
+	)
+	const signedHeaders = "content-type;host;x-amz-date;x-amz-security-token"
+	payloadHash := sha256Hex(body)
+	canonicalRequest := fmt.Sprintf(
+		"POST\n/\n\n%s\n%s\n%s",
+		canonicalHeaders, signedHeaders, payloadHash,
+	)
+	credentialScope := fmt.Sprintf("%s/%s/sts/aws4_request", date, awsSTSRegion)
+	stringToSign := fmt.Sprintf(
+		"AWS4-HMAC-SHA256\n%s\n%s\n%s",
+		amzDate, credentialScope, sha256Hex([]byte(canonicalRequest)),
+	)
+	dateKey := hmacSHA256([]byte("AWS4"+secretAccessKey), []byte(date))
+	regionKey := hmacSHA256(dateKey, []byte(awsSTSRegion))
+	serviceKey := hmacSHA256(regionKey, []byte("sts"))
+	signingKey := hmacSHA256(serviceKey, []byte("aws4_request"))
+	signature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
+	authorization := fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		accessKeyID, credentialScope, signedHeaders, signature,
+	)
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("X-Amz-Date", amzDate)
+	request.Header.Set("X-Amz-Security-Token", sessionToken)
+	request.Header.Set("Authorization", authorization)
+
+	response, err := client.Do(request)
+	if err != nil {
+		return errors.New("AWS STS caller identity verification failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("AWS STS caller identity verification returned HTTP %d", response.StatusCode)
+	}
+	if response.ContentLength > maxProviderResponseSize {
+		return errors.New("AWS STS caller identity response exceeds its bound")
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maxProviderResponseSize+1))
+	if err != nil || len(payload) > maxProviderResponseSize {
+		return errors.New("AWS STS caller identity response is unreadable or oversized")
+	}
+	accountID, err := accountIDFromSTSXML(payload)
+	if err != nil {
+		return err
+	}
+	if accountID != expectedAccountID {
+		return errors.New("AWS STS caller account does not match the immutable execution scope")
+	}
+	return nil
+}
+
+func accountIDFromSTSXML(payload []byte) (string, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(payload))
+	seenResponse := false
+	accounts := make([]string, 0, 1)
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", errors.New("AWS STS caller identity response is malformed")
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		switch start.Name.Local {
+		case "GetCallerIdentityResponse":
+			seenResponse = true
+		case "Account":
+			var value string
+			if err := decoder.DecodeElement(&value, &start); err != nil {
+				return "", errors.New("AWS STS caller identity account is malformed")
+			}
+			accounts = append(accounts, strings.TrimSpace(value))
+		}
+	}
+	if !seenResponse || len(accounts) != 1 || len(accounts[0]) != 12 {
+		return "", errors.New("AWS STS caller identity response has no unique account")
+	}
+	for _, character := range accounts[0] {
+		if character < '0' || character > '9' {
+			return "", errors.New("AWS STS caller identity response has an invalid account")
+		}
+	}
+	return accounts[0], nil
+}
+
+func verifyAzureSubscription(client httpDoer, root, accessToken, expectedSubscriptionID string) error {
+	if client == nil || !validCanonicalUUID(expectedSubscriptionID) || !safeText(accessToken, 64*1024) {
+		return errors.New("Azure subscription verifier lacks an exact target or token")
+	}
+	endpoint := strings.TrimSuffix(root, "/") + "/subscriptions/" + expectedSubscriptionID + "?api-version=2022-12-01"
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil || request.URL.User != nil || request.URL.Fragment != "" {
+		return errors.New("Azure subscription identity endpoint is invalid")
+	}
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("Accept", "application/json")
+	payload, err := performProviderRequest(client, request, "Azure subscription identity")
+	if err != nil {
+		return err
+	}
+	object, err := uniqueJSONObject(payload)
+	if err != nil {
+		return errors.New("Azure subscription identity response is malformed")
+	}
+	var actual string
+	if raw, exists := object["subscriptionId"]; !exists || json.Unmarshal(raw, &actual) != nil || actual != expectedSubscriptionID {
+		return errors.New("Azure subscription identity does not match the immutable execution scope")
+	}
+	return nil
+}
+
+func verifyGCPProject(client httpDoer, root, accessToken, expectedProjectID string) error {
+	if client == nil || !validGCPProjectID(expectedProjectID) || !safeText(accessToken, 64*1024) {
+		return errors.New("GCP project verifier lacks an exact target or token")
+	}
+	base := strings.TrimSuffix(root, "/")
+	projectRequest, err := http.NewRequest(http.MethodGet, base+"/v3/projects/"+expectedProjectID, nil)
+	if err != nil || projectRequest.URL.User != nil || projectRequest.URL.Fragment != "" {
+		return errors.New("GCP project identity endpoint is invalid")
+	}
+	projectRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	projectRequest.Header.Set("Accept", "application/json")
+	projectPayload, err := performProviderRequest(client, projectRequest, "GCP project identity")
+	if err != nil {
+		return err
+	}
+	project, err := uniqueJSONObject(projectPayload)
+	if err != nil {
+		return errors.New("GCP project identity response is malformed")
+	}
+	var actualProjectID, state string
+	if raw, exists := project["projectId"]; !exists || json.Unmarshal(raw, &actualProjectID) != nil || actualProjectID != expectedProjectID {
+		return errors.New("GCP project identity does not match the immutable execution scope")
+	}
+	if raw, exists := project["state"]; !exists || json.Unmarshal(raw, &state) != nil || state != "ACTIVE" {
+		return errors.New("GCP project identity is not active")
+	}
+
+	policyBody := []byte(`{"options":{"requestedPolicyVersion":3}}`)
+	policyRequest, err := http.NewRequest(
+		http.MethodPost,
+		base+"/v1/projects/"+expectedProjectID+":getIamPolicy",
+		bytes.NewReader(policyBody),
+	)
+	if err != nil || policyRequest.URL.User != nil || policyRequest.URL.Fragment != "" {
+		return errors.New("GCP IAM policy endpoint is invalid")
+	}
+	policyRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	policyRequest.Header.Set("Accept", "application/json")
+	policyRequest.Header.Set("Content-Type", "application/json")
+	policyPayload, err := performProviderRequest(client, policyRequest, "GCP IAM policy")
+	if err != nil {
+		return err
+	}
+	policy, err := uniqueJSONObject(policyPayload)
+	if err != nil {
+		return errors.New("GCP IAM policy response is malformed")
+	}
+	var bindings []json.RawMessage
+	if raw, exists := policy["bindings"]; !exists || json.Unmarshal(raw, &bindings) != nil {
+		return errors.New("GCP IAM policy response has no bounded bindings array")
+	}
+	return nil
+}
+
+func performProviderRequest(client httpDoer, request *http.Request, label string) ([]byte, error) {
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("%s verification failed", label)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s verification returned HTTP %d", label, response.StatusCode)
+	}
+	if response.ContentLength > maxProviderResponseSize {
+		return nil, fmt.Errorf("%s response exceeds its bound", label)
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maxProviderResponseSize+1))
+	if err != nil || len(payload) > maxProviderResponseSize {
+		return nil, fmt.Errorf("%s response is unreadable or oversized", label)
+	}
+	return payload, nil
+}
+
+func uniqueJSONObject(payload []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return nil, errors.New("JSON value is not an object")
+	}
+	object := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok {
+			return nil, errors.New("JSON object key is malformed")
+		}
+		if _, exists := object[key]; exists {
+			return nil, errors.New("JSON object contains a duplicate key")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errors.New("JSON object value is malformed")
+		}
+		object[key] = value
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') || requireJSONEOF(decoder) != nil {
+		return nil, errors.New("JSON object has trailing or malformed data")
+	}
+	return object, nil
+}
+
+func sha256Hex(value []byte) string {
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:])
+}
+
+func hmacSHA256(key, value []byte) []byte {
+	digest := hmac.New(sha256.New, key)
+	_, _ = digest.Write(value)
+	return digest.Sum(nil)
+}
+
+func childEnvironment(credentials map[string]string, selected provider, providerTarget, temporaryRoot string) []string {
 	values := make(map[string]string)
 	for _, key := range safeEnvironmentKeys {
 		if value, exists := os.LookupEnv(key); exists {
 			values[key] = value
 		}
 	}
-	for key, value := range credentials {
-		values[key] = value
-	}
 	values["HOME"] = temporaryRoot
 	values["USER"] = "scanner"
 	values["XDG_CACHE_HOME"] = filepath.Join(temporaryRoot, "cache")
-	values["AWS_EC2_METADATA_DISABLED"] = "true"
-	values["AWS_DEFAULT_REGION"] = "us-east-1"
-	values["AWS_REGION"] = "us-east-1"
-	values["AWS_MAX_ATTEMPTS"] = "2"
-	values["AWS_RETRY_MODE"] = "standard"
-	values["AWS_STS_REGIONAL_ENDPOINTS"] = "regional"
-	values["AWS_SDK_LOAD_CONFIG"] = "false"
-	values["CLOUDQUERY_TELEMETRY_LEVEL"] = "none"
-	values["STEAMPIPE_INSTALL_DIR"] = filepath.Join(temporaryRoot, "steampipe")
-	values["STEAMPIPE_TELEMETRY"] = "none"
-	values["STEAMPIPE_UPDATE_CHECK"] = "false"
-	values["STEAMPIPE_CACHE"] = "false"
-	values["STEAMPIPE_MAX_PARALLEL"] = "4"
-	values["STEAMPIPE_MEMORY_MAX_MB"] = "768"
-	_ = selected
+	switch selected {
+	case providerAWS:
+		for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+			values[key] = credentials[key]
+		}
+		values["AWS_EC2_METADATA_DISABLED"] = "true"
+		values["AWS_DEFAULT_REGION"] = "us-east-1"
+		values["AWS_REGION"] = "us-east-1"
+		values["AWS_MAX_ATTEMPTS"] = "2"
+		values["AWS_RETRY_MODE"] = "standard"
+		values["AWS_STS_REGIONAL_ENDPOINTS"] = "regional"
+		values["AWS_SDK_LOAD_CONFIG"] = "false"
+		values["CLOUDQUERY_TELEMETRY_LEVEL"] = "none"
+		values["STEAMPIPE_INSTALL_DIR"] = filepath.Join(temporaryRoot, "steampipe")
+		values["STEAMPIPE_TELEMETRY"] = "none"
+		values["STEAMPIPE_UPDATE_CHECK"] = "false"
+		values["STEAMPIPE_CACHE"] = "false"
+		values["STEAMPIPE_MAX_PARALLEL"] = "4"
+		values["STEAMPIPE_MEMORY_MAX_MB"] = "768"
+	case providerAzure:
+		values["AZURE_ACCESS_TOKEN"] = credentials["AZURE_ACCESS_TOKEN"]
+	case providerGCP:
+		values["CLOUDSDK_AUTH_ACCESS_TOKEN"] = credentials["GOOGLE_OAUTH_ACCESS_TOKEN"]
+		values["GOOGLE_CLOUD_PROJECT"] = providerTarget
+		values["GOOGLE_API_USE_MTLS_ENDPOINT"] = "never"
+	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -367,6 +780,190 @@ func childEnvironment(credentials map[string]string, selected provider, temporar
 		environment = append(environment, key+"="+values[key])
 	}
 	return environment
+}
+
+func prowlerInvocation(selected provider, providerTarget string, credentialExpiresAt time.Time, environment []string, output string) (invocation, error) {
+	if output != "/output" {
+		return invocation{}, errors.New("Prowler output path is outside the managed mount")
+	}
+	common := []string{
+		"--output-formats", "json-ocsf", "--output-filename", "prowler",
+		"--output-directory", output, "--ignore-exit-code-3", "--no-banner",
+		"--no-color", "--skip-sh-update",
+	}
+	args := make([]string, 0, 32)
+	switch selected {
+	case providerAWS:
+		if !validAWSAccountID(providerTarget) {
+			return invocation{}, errors.New("Prowler AWS target is invalid")
+		}
+		args = append(args, "aws", "--service", "iam", "--region", "us-east-1")
+	case providerAzure:
+		now := time.Now().UTC()
+		if !validCanonicalUUID(providerTarget) || !credentialExpiresAt.After(now.Add(minimumCredentialTTL)) || credentialExpiresAt.After(now.Add(time.Hour)) {
+			return invocation{}, errors.New("Prowler Azure target or token expiry is invalid")
+		}
+		args = append(args,
+			"azure", "--access-token-auth", "--access-token-expires-at", fmt.Sprintf("%d", credentialExpiresAt.Unix()),
+			"--subscription-ids", providerTarget, "--service", "iam",
+		)
+	case providerGCP:
+		if !validGCPProjectID(providerTarget) {
+			return invocation{}, errors.New("Prowler GCP target is invalid")
+		}
+		args = append(args,
+			"gcp", "--project-ids", providerTarget,
+			"--checks", "iam_audit_logs_enabled", "iam_no_service_roles_at_project_level",
+			"iam_role_kms_enforce_separation_of_duties", "iam_role_sa_enforce_separation_of_duties",
+			"--skip-api-check", "--gcp-retries-max-attempts", "2",
+		)
+	default:
+		return invocation{}, errors.New("Prowler provider profile is unsupported")
+	}
+	args = append(args, common...)
+	return invocation{
+		Program: "/home/prowler/.venv/bin/prowler",
+		Args:    args,
+		Env:     environment,
+	}, nil
+}
+
+func runProwler(profile invocation, output string) error {
+	destination := filepath.Join(output, "prowler.ocsf.json")
+	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("normalized Prowler output already exists")
+	}
+	if err := runCommand(profile); err != nil {
+		return err
+	}
+	if err := validateProwlerOutput(destination); err != nil {
+		return fmt.Errorf("validate Prowler OCSF output: %w", err)
+	}
+	return nil
+}
+
+func validateProwlerOutput(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() == 0 || info.Size() > maxOutputFileSize {
+		return errors.New("Prowler OCSF output is not a bounded regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return errors.New("Prowler OCSF output cannot be opened")
+	}
+	defer file.Close()
+	reader := bufio.NewReaderSize(io.LimitReader(file, maxOutputFileSize+1), 64*1024)
+	opening, err := readNextNonWhitespace(reader)
+	if err != nil || opening != '[' {
+		return errors.New("Prowler OCSF output must be one JSON array")
+	}
+	records := 0
+	next, err := readNextNonWhitespace(reader)
+	if err != nil {
+		return errors.New("Prowler OCSF output is truncated")
+	}
+	if next == ']' {
+		return requireWhitespaceEOF(reader)
+	}
+	for {
+		if next != '{' {
+			return errors.New("Prowler OCSF array contains a non-object record")
+		}
+		record, err := readJSONObjectRecord(reader, next)
+		if err != nil {
+			return err
+		}
+		if !json.Valid(record) {
+			return errors.New("Prowler OCSF array contains malformed JSON")
+		}
+		records++
+		if records > maxJSONRecords {
+			return errors.New("Prowler OCSF output exceeds its record bound")
+		}
+		separator, err := readNextNonWhitespace(reader)
+		if err != nil {
+			return errors.New("Prowler OCSF output is truncated")
+		}
+		switch separator {
+		case ']':
+			return requireWhitespaceEOF(reader)
+		case ',':
+			next, err = readNextNonWhitespace(reader)
+			if err != nil {
+				return errors.New("Prowler OCSF output is truncated")
+			}
+		default:
+			return errors.New("Prowler OCSF array has an invalid separator")
+		}
+	}
+}
+
+func readJSONObjectRecord(reader *bufio.Reader, opening byte) ([]byte, error) {
+	record := make([]byte, 1, 4096)
+	record[0] = opening
+	depth := 1
+	inString := false
+	escaped := false
+	for depth > 0 {
+		value, err := reader.ReadByte()
+		if err != nil {
+			return nil, errors.New("Prowler OCSF record is truncated")
+		}
+		if len(record) >= maxJSONRecordSize {
+			return nil, errors.New("Prowler OCSF record exceeds its size bound")
+		}
+		record = append(record, value)
+		if inString {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if value == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch value {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth < 0 {
+				return nil, errors.New("Prowler OCSF record has invalid nesting")
+			}
+		}
+	}
+	return record, nil
+}
+
+func readNextNonWhitespace(reader *bufio.Reader) (byte, error) {
+	for {
+		value, err := reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if !isJSONWhitespace(value) {
+			return value, nil
+		}
+	}
+}
+
+func requireWhitespaceEOF(reader *bufio.Reader) error {
+	for {
+		value, err := reader.ReadByte()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil || !isJSONWhitespace(value) {
+			return errors.New("Prowler OCSF output has trailing data")
+		}
+	}
+}
+
+func isJSONWhitespace(value byte) bool {
+	return value == ' ' || value == '\n' || value == '\r' || value == '\t'
 }
 
 func runCloudsplaining(environment []string, temporaryRoot, output string) error {

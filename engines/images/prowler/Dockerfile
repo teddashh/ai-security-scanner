@@ -9,18 +9,24 @@ RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -trimpath \
 FROM public.ecr.aws/prowler-cloud/prowler@sha256:5752ad690fa6ab32c9f2c9031db29d45af111459373d70212638d00efd4834e0
 
 LABEL org.opencontainers.image.title="ai-security-scanner Prowler engine" \
-      org.opencontainers.image.description="Pinned Prowler AWS IAM assessment with a scanner-owned credential and scope launcher" \
+      org.opencontainers.image.description="Pinned Prowler AWS, Azure, and GCP narrow IAM assessment with exact provider scope binding" \
       org.opencontainers.image.source="https://github.com/teddashh/ai-security-scanner" \
       org.opencontainers.image.revision="40ecbd035e5541bf099917c5033cceb8959c4737" \
-      org.opencontainers.image.version="5.39.1-1" \
+      org.opencontainers.image.version="5.39.1-2" \
       org.opencontainers.image.licenses="Apache-2.0" \
       io.ai-security-scanner.upstream.image="public.ecr.aws/prowler-cloud/prowler@sha256:5752ad690fa6ab32c9f2c9031db29d45af111459373d70212638d00efd4834e0" \
-      io.ai-security-scanner.profile="aws-iam-us-east-1"
+      io.ai-security-scanner.profile="aws-azure-gcp-narrow-iam"
 
 COPY --from=launcher --chmod=0555 /out/ai-security-scanner-cloud-launcher /usr/local/bin/ai-security-scanner-cloud-launcher
 
 USER root
-RUN chmod 0755 /home/prowler
+COPY --chmod=0555 engines/images/prowler/apply-runtime-patches.py /tmp/ai-security-scanner-prowler/apply-runtime-patches.py
+COPY --chmod=0444 engines/images/prowler/patches /tmp/ai-security-scanner-prowler/patches
+RUN /home/prowler/.venv/bin/python /tmp/ai-security-scanner-prowler/apply-runtime-patches.py \
+      --root /home/prowler \
+      --patch-dir /tmp/ai-security-scanner-prowler/patches \
+    && rm -rf /tmp/ai-security-scanner-prowler \
+    && chmod 0755 /home/prowler
 
 ENV AWS_EC2_METADATA_DISABLED="true" \
     AWS_DEFAULT_REGION="us-east-1" \

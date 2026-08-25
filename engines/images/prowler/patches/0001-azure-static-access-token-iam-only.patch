@@ -1,0 +1,707 @@
+diff --git a/prowler/providers/azure/azure_provider.py b/prowler/providers/azure/azure_provider.py
+index bffc72396bf1d0f022d0bfe7acb051d3e1311f87..6e5b83aa83d98eb42735bf80cc6df6eca22f5f73 100644
+--- a/prowler/providers/azure/azure_provider.py
++++ b/prowler/providers/azure/azure_provider.py
+@@ -5,10 +5,12 @@ import re
+ from argparse import ArgumentTypeError
+ from itertools import chain
+ from os import getenv
++from time import time
+ from typing import Union
+ from uuid import UUID
+ 
+ import requests
++from azure.core.credentials import AccessToken, TokenCredential
+ from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
+ from azure.identity import (
+     ClientSecretCredential,
+@@ -54,7 +56,11 @@ from prowler.providers.azure.exceptions.exceptions import (
+     AzureTenantIdAndClientSecretNotBelongingToClientIdError,
+     AzureTenantIDNoBrowserAuthError,
+ )
+-from prowler.providers.azure.lib.arguments.arguments import validate_azure_region
++from prowler.providers.azure.lib.arguments.arguments import (
++    access_token_expiry_is_valid,
++    exact_subscription_ids_are_valid,
++    validate_azure_region,
++)
+ from prowler.providers.azure.lib.mutelist.mutelist import AzureMutelist
+ from prowler.providers.azure.lib.regions.regions import get_regions_config
+ from prowler.providers.azure.models import AzureIdentityInfo, AzureRegionConfig
+@@ -62,6 +68,69 @@ from prowler.providers.common.models import Audit_Metadata, Connection
+ from prowler.providers.common.provider import Provider
+ 
+ 
++class StaticAccessTokenCredential(TokenCredential):
++    """Non-refreshing Azure TokenCredential restricted to one ARM scope."""
++
++    _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9\-._~+/]+=*")
++    _MAX_TOKEN_LENGTH = 64 * 1024
++
++    def __init__(self, token, expires_on, allowed_scopes):
++        if (
++            not isinstance(token, str)
++            or not token
++            or len(token) > self._MAX_TOKEN_LENGTH
++            or self._TOKEN_PATTERN.fullmatch(token) is None
++        ):
++            raise AzureArgumentTypeValidationError(
++                file=os.path.basename(__file__),
++                message="AZURE_ACCESS_TOKEN is missing or malformed",
++            )
++        if not access_token_expiry_is_valid(expires_on):
++            raise AzureArgumentTypeValidationError(
++                file=os.path.basename(__file__),
++                message="Azure access token expiry is expired, malformed, or exceeds 3600 seconds",
++            )
++        if (
++            not isinstance(allowed_scopes, list)
++            or len(allowed_scopes) != 1
++            or not isinstance(allowed_scopes[0], str)
++            or not allowed_scopes[0]
++        ):
++            raise AzureArgumentTypeValidationError(
++                file=os.path.basename(__file__),
++                message="Azure access token requires exactly one ARM credential scope",
++            )
++        self._token = token
++        self._expires_on = expires_on
++        self._allowed_scope = allowed_scopes[0]
++
++    def get_token(
++        self,
++        *scopes: str,
++        claims: str = None,
++        tenant_id: str = None,
++        enable_cae: bool = False,
++        **kwargs,
++    ) -> AccessToken:
++        if self._expires_on <= int(time()):
++            raise ClientAuthenticationError(
++                message="The static Azure access token has expired"
++            )
++        if (
++            scopes != (self._allowed_scope,)
++            or claims is not None
++            or tenant_id is not None
++            or enable_cae
++        ):
++            raise ClientAuthenticationError(
++                message="The static Azure access token cannot satisfy this token request"
++            )
++        return AccessToken(self._token, self._expires_on)
++
++    def close(self):
++        """Match Azure credential lifecycle APIs without acquiring resources."""
++
++
+ class AzureProvider(Provider):
+     """
+     Represents an Azure provider.
+@@ -126,6 +195,9 @@ class AzureProvider(Provider):
+         client_id: str = None,
+         client_secret: str = None,
+         resource_groups: list = [],
++        access_token_auth: bool = False,
++        access_token_expires_at: int = None,
++        services: list = None,
+     ):
+         """
+         Initializes the Azure provider.
+@@ -242,6 +314,10 @@ class AzureProvider(Provider):
+             tenant_id,
+             client_id,
+             client_secret,
++            access_token_auth,
++            access_token_expires_at,
++            subscription_ids,
++            services,
+         )
+ 
+         logger.info("Checking if region is different than default one")
+@@ -266,6 +342,8 @@ class AzureProvider(Provider):
+             tenant_id,
+             azure_credentials,
+             self._region_config,
++            access_token_auth,
++            access_token_expires_at,
+         )
+ 
+         # Set up the identity
+@@ -276,6 +354,7 @@ class AzureProvider(Provider):
+             managed_identity_auth,
+             subscription_ids,
+             client_id,
++            access_token_auth,
+         )
+ 
+         # TODO: should we keep this here or within the identity?
+@@ -364,6 +443,10 @@ class AzureProvider(Provider):
+         tenant_id: str,
+         client_id: str,
+         client_secret: str,
++        access_token_auth: bool = False,
++        access_token_expires_at: int = None,
++        subscription_ids: list = None,
++        services: list = None,
+     ):
+         """
+         Validates the authentication arguments for the Azure provider.
+@@ -381,6 +464,45 @@ class AzureProvider(Provider):
+             AzureBrowserAuthNoTenantIDError: If browser authentication is enabled but the tenant ID is not found.
+         """
+ 
++        if access_token_auth:
++            if any(
++                (
++                    az_cli_auth,
++                    sp_env_auth,
++                    browser_auth,
++                    managed_identity_auth,
++                    tenant_id,
++                    client_id,
++                    client_secret,
++                )
++            ):
++                raise AzureArgumentTypeValidationError(
++                    file=os.path.basename(__file__),
++                    message="--access-token-auth cannot be combined with another Azure credential source",
++                )
++            if not access_token_expiry_is_valid(access_token_expires_at):
++                raise AzureArgumentTypeValidationError(
++                    file=os.path.basename(__file__),
++                    message="--access-token-auth requires a future expiry no more than 3600 seconds away",
++                )
++            if not exact_subscription_ids_are_valid(subscription_ids):
++                raise AzureArgumentTypeValidationError(
++                    file=os.path.basename(__file__),
++                    message="--access-token-auth requires canonical exact subscription IDs",
++                )
++            if services != ["iam"]:
++                raise AzureArgumentTypeValidationError(
++                    file=os.path.basename(__file__),
++                    message="--access-token-auth is restricted to exactly --service iam",
++                )
++            return
++
++        if access_token_expires_at is not None:
++            raise AzureArgumentTypeValidationError(
++                file=os.path.basename(__file__),
++                message="--access-token-expires-at requires --access-token-auth",
++            )
++
+         if not client_id and not client_secret:
+             if not browser_auth and tenant_id:
+                 raise AzureTenantIDNoBrowserAuthError(
+@@ -490,6 +612,8 @@ class AzureProvider(Provider):
+         tenant_id: str,
+         azure_credentials: dict,
+         region_config: AzureRegionConfig,
++        access_token_auth: bool = False,
++        access_token_expires_at: int = None,
+     ):
+         """Returns the Azure credentials object.
+ 
+@@ -514,6 +638,13 @@ class AzureProvider(Provider):
+             Exception: If failed to retrieve Azure credentials.
+ 
+         """
++        if access_token_auth:
++            return StaticAccessTokenCredential(
++                token=getenv("AZURE_ACCESS_TOKEN"),
++                expires_on=access_token_expires_at,
++                allowed_scopes=region_config.credential_scopes,
++            )
++
+         # Browser auth creds cannot be set with DefaultAzureCredentials()
+         if not browser_auth:
+             if sp_env_auth:
+@@ -898,6 +1029,7 @@ class AzureProvider(Provider):
+         managed_identity_auth,
+         subscription_ids,
+         client_id,
++        access_token_auth=False,
+     ):
+         """
+         Sets up the identity for the Azure provider.
+@@ -920,7 +1052,13 @@ class AzureProvider(Provider):
+         # the identity can access AAD and retrieve the tenant domain name.
+         # With cli also should be possible but right now it does not work, azure python package issue is coming
+         # At the time of writting this with az cli creds is not working, despite that is included
+-        if sp_env_auth or browser_auth or az_cli_auth or client_id:
++        if access_token_auth:
++            identity.identity_id = (
++                "Not discovered for static access-token authentication"
++            )
++            identity.identity_type = "Static Access Token"
++
++        elif sp_env_auth or browser_auth or az_cli_auth or client_id:
+ 
+             async def get_azure_identity():
+                 # Trying to recover tenant domain info
+diff --git a/prowler/providers/azure/lib/arguments/arguments.py b/prowler/providers/azure/lib/arguments/arguments.py
+index 87bea948aaa6c34d947cac411a1db1e7476961e8..bbfb6d5e54ba193401e24b0e879209de1a4941dd 100644
+--- a/prowler/providers/azure/lib/arguments/arguments.py
++++ b/prowler/providers/azure/lib/arguments/arguments.py
+@@ -1,4 +1,9 @@
+ from argparse import ArgumentTypeError
++from time import time
++from uuid import UUID
++
++
++ACCESS_TOKEN_MAX_LIFETIME_SECONDS = 3600
+ 
+ 
+ def init_parser(self):
+@@ -29,6 +34,18 @@ def init_parser(self):
+         action="store_true",
+         help="Use managed identity authentication to log in against Azure ",
+     )
++    azure_auth_modes_group.add_argument(
++        "--access-token-auth",
++        action="store_true",
++        help="Use the downstream static AZURE_ACCESS_TOKEN authentication mode",
++    )
++    azure_auth_subparser.add_argument(
++        "--access-token-expires-at",
++        type=validate_access_token_expiry,
++        default=None,
++        metavar="UNIX_SECONDS",
++        help="Exact AZURE_ACCESS_TOKEN expiry as Unix seconds (maximum 1 hour)",
++    )
+     # Subscriptions
+     azure_subscriptions_subparser = azure_parser.add_argument_group("Subscriptions")
+     azure_subscriptions_subparser.add_argument(
+@@ -77,3 +94,77 @@ def validate_azure_region(region):
+             f"Region {region} not allowed, allowed regions are {' '.join(regions_allowed)}"
+         )
+     return region
++
++
++def access_token_expiry_is_valid(expires_at, now=None):
++    """Return whether an exact epoch expiry is currently usable and bounded."""
++    if type(expires_at) is not int:
++        return False
++    current_time = int(time()) if now is None else now
++    return current_time < expires_at <= current_time + ACCESS_TOKEN_MAX_LIFETIME_SECONDS
++
++
++def validate_access_token_expiry(value):
++    """Parse a canonical, future Unix-seconds expiry bounded to one hour."""
++    if (
++        not isinstance(value, str)
++        or not value.isascii()
++        or not value.isdecimal()
++        or str(int(value)) != value
++    ):
++        raise ArgumentTypeError("access token expiry must be canonical Unix seconds")
++    expires_at = int(value)
++    if not access_token_expiry_is_valid(expires_at):
++        raise ArgumentTypeError(
++            "access token expiry must be in the future and no more than 3600 seconds away"
++        )
++    return expires_at
++
++
++def exact_subscription_ids_are_valid(subscription_ids):
++    """Return whether IDs are a non-empty, duplicate-free canonical UUID list."""
++    if not isinstance(subscription_ids, list) or not subscription_ids:
++        return False
++    for subscription_id in subscription_ids:
++        try:
++            if (
++                not isinstance(subscription_id, str)
++                or str(UUID(subscription_id)) != subscription_id
++            ):
++                return False
++        except (AttributeError, ValueError):
++            return False
++    return len(set(subscription_ids)) == len(subscription_ids)
++
++
++def validate_arguments(arguments):
++    """Validate the downstream static access-token CLI contract."""
++    access_token_auth = getattr(arguments, "access_token_auth", False)
++    expires_at = getattr(arguments, "access_token_expires_at", None)
++
++    if not access_token_auth:
++        if expires_at is not None:
++            return (
++                False,
++                "--access-token-expires-at requires --access-token-auth",
++            )
++        return (True, "")
++
++    if not access_token_expiry_is_valid(expires_at):
++        return (
++            False,
++            "--access-token-auth requires a future --access-token-expires-at no more than 3600 seconds away",
++        )
++    if not exact_subscription_ids_are_valid(
++        getattr(arguments, "subscription_id", None)
++    ):
++        return (
++            False,
++            "--access-token-auth requires one or more canonical --subscription-ids",
++        )
++    if getattr(arguments, "service", None) != ["iam"]:
++        return (
++            False,
++            "--access-token-auth is restricted to exactly --service iam",
++        )
++    return (True, "")
+diff --git a/prowler/providers/common/provider.py b/prowler/providers/common/provider.py
+index 2e81bad12100ca73fdd3c936bb6ee4e895c490b1..c023408269ba6e1866b39acb1b8ab128c3979a42 100644
+--- a/prowler/providers/common/provider.py
++++ b/prowler/providers/common/provider.py
+@@ -404,9 +404,12 @@ class Provider(ABC):
+                         sp_env_auth=arguments.sp_env_auth,
+                         browser_auth=arguments.browser_auth,
+                         managed_identity_auth=arguments.managed_identity_auth,
++                        access_token_auth=arguments.access_token_auth,
++                        access_token_expires_at=arguments.access_token_expires_at,
+                         tenant_id=arguments.tenant_id,
+                         region=arguments.azure_region,
+                         subscription_ids=arguments.subscription_id,
++                        services=arguments.service,
+                         resource_groups=arguments.resource_groups,
+                         config_path=arguments.config_file,
+                         mutelist_path=arguments.mutelist_file,
+diff --git a/tests/providers/azure/azure_access_token_auth_test.py b/tests/providers/azure/azure_access_token_auth_test.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1bdecf4b2d798098fce41b2ce07b5efd783a6b30
+--- /dev/null
++++ b/tests/providers/azure/azure_access_token_auth_test.py
+@@ -0,0 +1,331 @@
++from argparse import ArgumentTypeError, Namespace
++from unittest.mock import MagicMock, call, patch
++from uuid import uuid4
++
++import pytest
++from azure.core.exceptions import ClientAuthenticationError
++
++from prowler.lib.cli.parser import ProwlerArgumentParser
++from prowler.providers.azure.azure_provider import (
++    AzureProvider,
++    StaticAccessTokenCredential,
++)
++from prowler.providers.azure.exceptions.exceptions import (
++    AzureArgumentTypeValidationError,
++)
++from prowler.providers.azure.lib.arguments.arguments import (
++    validate_access_token_expiry,
++    validate_arguments,
++)
++from prowler.providers.azure.models import AzureRegionConfig
++from prowler.providers.common.provider import Provider
++
++
++NOW = 2_000_000_000
++TOKEN = "header.payload.signature"
++ARM_SCOPE = "https://management.azure.com/.default"
++
++
++def _region_config():
++    return AzureRegionConfig(
++        name="AzureCloud",
++        base_url="https://management.azure.com",
++        credential_scopes=[ARM_SCOPE],
++    )
++
++
++def _provider_arguments(**overrides):
++    arguments = {
++        "access_token_auth": True,
++        "access_token_expires_at": NOW + 60,
++        "subscription_id": [str(uuid4())],
++        "service": ["iam"],
++    }
++    arguments.update(overrides)
++    return Namespace(**arguments)
++
++
++class TestAzureAccessTokenArguments:
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_exact_expiry_is_parsed_as_unix_seconds(self, _mock_time):
++        assert validate_access_token_expiry(str(NOW + 3600)) == NOW + 3600
++
++    @pytest.mark.parametrize(
++        "value",
++        [
++            str(NOW),
++            str(NOW + 3601),
++            f"0{NOW + 1}",
++            "1.5",
++            "not-an-epoch",
++            "",
++        ],
++    )
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_expiry_rejects_malformed_expired_or_unbounded_values(
++        self, _mock_time, value
++    ):
++        with pytest.raises(ArgumentTypeError):
++            validate_access_token_expiry(value)
++
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_cli_contract_accepts_exact_iam_subscription_scope(self, _mock_time):
++        assert validate_arguments(_provider_arguments()) == (True, "")
++
++    def test_parser_registers_the_complete_static_token_contract(self):
++        subscription_id = str(uuid4())
++        with (
++            patch.object(Provider, "get_available_providers", return_value=["azure"]),
++            patch(
++                "prowler.providers.azure.lib.arguments.arguments.time",
++                return_value=NOW,
++            ),
++            patch("sys.argv", ["prowler"]),
++        ):
++            parsed = ProwlerArgumentParser().parse(
++                [
++                    "prowler",
++                    "azure",
++                    "--access-token-auth",
++                    "--access-token-expires-at",
++                    str(NOW + 60),
++                    "--subscription-ids",
++                    subscription_id,
++                    "--service",
++                    "iam",
++                ]
++            )
++
++        assert parsed.access_token_auth
++        assert parsed.access_token_expires_at == NOW + 60
++        assert parsed.subscription_id == [subscription_id]
++        assert parsed.service == ["iam"]
++
++    @pytest.mark.parametrize(
++        "overrides",
++        [
++            {"access_token_auth": False},
++            {"access_token_expires_at": NOW},
++            {"access_token_expires_at": NOW + 3601},
++            {"subscription_id": []},
++            {"subscription_id": ["not-a-uuid"]},
++            {
++                "subscription_id": [
++                    "00000000-0000-0000-0000-000000000001",
++                    "00000000-0000-0000-0000-000000000001",
++                ]
++            },
++            {"service": None},
++            {"service": ["iam", "storage"]},
++        ],
++    )
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_cli_contract_fails_closed(self, _mock_time, overrides):
++        valid, _message = validate_arguments(_provider_arguments(**overrides))
++        assert not valid
++
++    def test_expiry_flag_without_access_token_mode_is_rejected(self):
++        valid, message = validate_arguments(
++            Namespace(
++                access_token_auth=False,
++                access_token_expires_at=NOW + 60,
++            )
++        )
++        assert not valid
++        assert "requires --access-token-auth" in message
++
++
++class TestStaticAccessTokenCredential:
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    @patch("prowler.providers.azure.azure_provider.time", return_value=NOW)
++    def test_returns_only_the_exact_static_token_and_expiry(
++        self, _mock_provider_time, _mock_arguments_time
++    ):
++        credential = StaticAccessTokenCredential(TOKEN, NOW + 60, [ARM_SCOPE])
++
++        access_token = credential.get_token(ARM_SCOPE)
++
++        assert access_token.token == TOKEN
++        assert access_token.expires_on == NOW + 60
++
++    @pytest.mark.parametrize("token", [None, "", "token with spaces", "bad\ntoken"])
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_rejects_missing_or_malformed_tokens(self, _mock_time, token):
++        with pytest.raises(AzureArgumentTypeValidationError):
++            StaticAccessTokenCredential(token, NOW + 60, [ARM_SCOPE])
++
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    @patch("prowler.providers.azure.azure_provider.time", return_value=NOW + 60)
++    def test_rechecks_expiry_on_every_token_request(
++        self, _mock_provider_time, _mock_arguments_time
++    ):
++        credential = StaticAccessTokenCredential(TOKEN, NOW + 60, [ARM_SCOPE])
++
++        with pytest.raises(ClientAuthenticationError, match="expired"):
++            credential.get_token(ARM_SCOPE)
++
++    @pytest.mark.parametrize(
++        "scopes, kwargs",
++        [
++            (("https://graph.microsoft.com/.default",), {}),
++            ((ARM_SCOPE,), {"claims": "challenge"}),
++            ((ARM_SCOPE,), {"tenant_id": str(uuid4())}),
++            ((ARM_SCOPE,), {"enable_cae": True}),
++        ],
++    )
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    @patch("prowler.providers.azure.azure_provider.time", return_value=NOW)
++    def test_rejects_non_arm_or_dynamic_token_requests(
++        self, _mock_provider_time, _mock_arguments_time, scopes, kwargs
++    ):
++        credential = StaticAccessTokenCredential(TOKEN, NOW + 60, [ARM_SCOPE])
++
++        with pytest.raises(ClientAuthenticationError):
++            credential.get_token(*scopes, **kwargs)
++
++
++class TestAzureAccessTokenProvider:
++    @staticmethod
++    def _validate(**overrides):
++        arguments = {
++            "az_cli_auth": False,
++            "sp_env_auth": False,
++            "browser_auth": False,
++            "managed_identity_auth": False,
++            "tenant_id": None,
++            "client_id": None,
++            "client_secret": None,
++            "access_token_auth": True,
++            "access_token_expires_at": NOW + 60,
++            "subscription_ids": [str(uuid4())],
++            "services": ["iam"],
++        }
++        arguments.update(overrides)
++        return AzureProvider.validate_arguments(**arguments)
++
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_provider_revalidates_the_contract(self, _mock_time):
++        assert self._validate() is None
++
++    @pytest.mark.parametrize(
++        "overrides",
++        [
++            {"az_cli_auth": True},
++            {"sp_env_auth": True},
++            {"browser_auth": True},
++            {"managed_identity_auth": True},
++            {"tenant_id": str(uuid4())},
++            {"client_id": str(uuid4()), "client_secret": "secret"},
++            {"access_token_expires_at": NOW},
++            {"access_token_expires_at": NOW + 3601},
++            {"subscription_ids": []},
++            {"subscription_ids": ["not-a-uuid"]},
++            {"services": None},
++            {"services": ["iam", "storage"]},
++        ],
++    )
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_provider_contract_fails_closed(self, _mock_time, overrides):
++        with pytest.raises(AzureArgumentTypeValidationError):
++            self._validate(**overrides)
++
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    @patch("prowler.providers.azure.azure_provider.DefaultAzureCredential")
++    @patch("prowler.providers.azure.azure_provider.InteractiveBrowserCredential")
++    @patch("prowler.providers.azure.azure_provider.ClientSecretCredential")
++    def test_setup_session_never_uses_a_fallback_credential(
++        self,
++        mock_client_secret,
++        mock_browser,
++        mock_default,
++        _mock_time,
++        monkeypatch,
++    ):
++        monkeypatch.setenv("AZURE_ACCESS_TOKEN", TOKEN)
++
++        credential = AzureProvider.setup_session(
++            az_cli_auth=False,
++            sp_env_auth=False,
++            browser_auth=False,
++            managed_identity_auth=False,
++            tenant_id=None,
++            azure_credentials=None,
++            region_config=_region_config(),
++            access_token_auth=True,
++            access_token_expires_at=NOW + 60,
++        )
++
++        assert isinstance(credential, StaticAccessTokenCredential)
++        mock_default.assert_not_called()
++        mock_browser.assert_not_called()
++        mock_client_secret.assert_not_called()
++
++    @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
++    def test_setup_session_requires_only_azure_access_token(
++        self, _mock_time, monkeypatch
++    ):
++        monkeypatch.delenv("AZURE_ACCESS_TOKEN", raising=False)
++        monkeypatch.setenv("AZURE_CLIENT_ID", "ambient-client")
++        monkeypatch.setenv("AZURE_CLIENT_SECRET", "ambient-secret")
++        monkeypatch.setenv("AZURE_TENANT_ID", "ambient-tenant")
++
++        with pytest.raises(AzureArgumentTypeValidationError):
++            AzureProvider.setup_session(
++                az_cli_auth=False,
++                sp_env_auth=False,
++                browser_auth=False,
++                managed_identity_auth=False,
++                tenant_id=None,
++                azure_credentials=None,
++                region_config=_region_config(),
++                access_token_auth=True,
++                access_token_expires_at=NOW + 60,
++            )
++
++    def test_identity_skips_graph_and_gets_only_requested_subscriptions(self):
++        first_id = str(uuid4())
++        second_id = str(uuid4())
++        subscriptions = {
++            first_id: MagicMock(display_name="First"),
++            second_id: MagicMock(display_name="Second"),
++        }
++        subscriptions_client = MagicMock()
++        subscriptions_client.subscriptions.get.side_effect = (
++            lambda subscription_id: subscriptions[subscription_id]
++        )
++        subscriptions_client.tenants.list.return_value = [
++            MagicMock(tenant_id=str(uuid4()))
++        ]
++
++        with (
++            patch.object(AzureProvider, "__init__", return_value=None),
++            patch(
++                "prowler.providers.azure.azure_provider.SubscriptionClient",
++                return_value=subscriptions_client,
++            ),
++            patch(
++                "prowler.providers.azure.azure_provider.GraphServiceClient"
++            ) as mock_graph,
++        ):
++            provider = AzureProvider()
++            provider._session = MagicMock()
++            provider._region_config = _region_config()
++
++            identity = provider.setup_identity(
++                az_cli_auth=False,
++                sp_env_auth=False,
++                browser_auth=False,
++                managed_identity_auth=False,
++                subscription_ids=[first_id, second_id],
++                client_id=None,
++                access_token_auth=True,
++            )
++
++        mock_graph.assert_not_called()
++        subscriptions_client.subscriptions.list.assert_not_called()
++        assert subscriptions_client.subscriptions.get.call_args_list == [
++            call(subscription_id=first_id),
++            call(subscription_id=second_id),
++        ]
++        assert identity.subscriptions == {first_id: "First", second_id: "Second"}
++        assert identity.identity_type == "Static Access Token"
+
