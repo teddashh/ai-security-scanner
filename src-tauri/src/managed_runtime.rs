@@ -5625,7 +5625,9 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
-    use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
+    use windows_sys::Win32::Security::Authorization::{
+        SE_FILE_OBJECT, SetNamedSecurityInfoW, SetSecurityInfo,
+    };
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, DACL_SECURITY_INFORMATION,
         InitializeAcl, InitializeSecurityDescriptor, PROTECTED_DACL_SECURITY_INFORMATION,
@@ -5635,7 +5637,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use windows_sys::Win32::Storage::FileSystem::{
         CREATE_NEW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
         FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-        FILE_SHARE_NONE, WRITE_DAC,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, WRITE_DAC,
     };
     use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
@@ -5760,7 +5762,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
         CreateFileW(
             encoded.as_ptr(),
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | DELETE,
-            FILE_SHARE_NONE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             &raw const attributes,
             CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL,
@@ -5774,12 +5776,31 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     let file = unsafe { File::from_raw_handle(raw) };
     let secure = (|| {
         // CreateFileW may preserve the ACL entries while clearing the DACL
-        // protection control bit. Re-apply the exact protected DACL through
-        // this still-empty file's WRITE_DAC handle before exposing it to any
-        // caller that can write bytes.
+        // protection control bit. First replace the DACL through the exact
+        // still-empty handle. Filesystem inheritance protection is then
+        // applied through the filesystem's named security provider while this
+        // original handle remains open. The original handle is verified below;
+        // no caller can write bytes until both operations are proven.
         let status = unsafe {
             SetSecurityInfo(
                 file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl.as_ptr().cast(),
+                std::ptr::null(),
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        // SAFETY: encoded is the live NUL-terminated canonical creation path;
+        // the original handle remains open and shares access for the security
+        // provider. ACL and SID backing storage remain live for this call.
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                encoded.as_ptr(),
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
