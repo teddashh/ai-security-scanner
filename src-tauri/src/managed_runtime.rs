@@ -1499,6 +1499,10 @@ impl ManagedRuntimeManager {
             manifest_file.write_all(&self.loaded.encoded)?;
             manifest_file.flush()?;
             manifest_file.sync_all()?;
+            // Windows refuses to rename a directory while a child file is
+            // still open without delete sharing. Close the manifest handle
+            // before the atomic directory commit on every platform.
+            drop(manifest_file);
             fs::rename(&staging, &destination).map_err(|error| {
                 AppError::Runtime(format!(
                     "managed runtime payload could not be committed atomically: {error}"
@@ -3375,6 +3379,7 @@ mod tests {
 
         let fixture = fixture();
         let versions = fixture.manager.versions_root();
+        ensure_private_directory(&versions).unwrap();
         let install = versions.join("readonly-link-repair-fixture");
         fs::create_dir(&install).unwrap();
         let outside = fixture._temp.path().join("outside-readonly-target");
