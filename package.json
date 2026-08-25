@@ -1,7 +1,7 @@
 {
   "name": "ai-security-scanner",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first, repeatable security assessment casework",
   "license": "Apache-2.0",
   "author": "Ted Huang and ai-security-scanner contributors",
@@ -20,6 +20,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
+    "test:frontend": "node --experimental-strip-types --test tests/frontend/*.test.ts",
     "validate:engines": "node scripts/validate-engine-catalog.mjs",
     "desktop:prepare-sidecar": "node scripts/release/build-sidecar.mjs",
     "desktop:check": "node scripts/release/check-desktop.mjs",

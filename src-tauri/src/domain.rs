@@ -709,6 +709,10 @@ pub struct FindingObservation {
     pub confidence: Confidence,
     pub evidence_hashes: Vec<String>,
     pub observed_at: DateTime<Utc>,
+    /// Immutable normalized finding content for this exact run. Legacy cases
+    /// may omit it and fall back to the latest canonical projection.
+    #[serde(default)]
+    pub finding_snapshot: Option<Finding>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -787,6 +791,14 @@ pub struct VerificationComparison {
     pub current_run_id: Id,
     pub created_at: DateTime<Utc>,
     pub diffs: Vec<FindingDiff>,
+    /// True only when every planned engine/asset coordinate completed with an
+    /// exactly comparable immutable execution identity in both runs.
+    #[serde(default)]
+    pub complete: bool,
+    /// Run/coordinate-level uncertainty remains visible even when neither run
+    /// produced a finding and the fingerprint diff is therefore empty.
+    #[serde(default)]
+    pub completeness_issues: Vec<FindingDiffReason>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -816,6 +828,8 @@ pub struct CaseExport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssessmentCase {
+    #[serde(skip)]
+    pub(crate) storage_revision: i64,
     pub id: Id,
     pub title: String,
     pub profile: OrganizationProfile,
@@ -849,6 +863,7 @@ impl AssessmentCase {
     pub fn new(title: String, profile: OrganizationProfile) -> Self {
         let now = Utc::now();
         Self {
+            storage_revision: 0,
             id: new_id(),
             title,
             profile,
@@ -877,6 +892,35 @@ impl AssessmentCase {
 
     pub fn touch(&mut self) {
         self.updated_at = Utc::now();
+    }
+
+    /// Projects time-bounded workflow decisions without deleting or rewriting
+    /// their immutable audit events. An expired false-positive suppression
+    /// returns to the status it temporarily replaced.
+    pub(crate) fn apply_effective_finding_statuses(&mut self, now: DateTime<Utc>) {
+        for finding in &mut self.findings {
+            let latest = self
+                .finding_workflow_events
+                .iter()
+                .filter(|event| event.finding_id == finding.id)
+                .max_by(|left, right| {
+                    left.decided_at
+                        .cmp(&right.decided_at)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+            let Some(latest) = latest else {
+                continue;
+            };
+            finding.status = if latest.to_status == FindingStatus::FalsePositive
+                && latest
+                    .expires_at
+                    .is_some_and(|expires_at| expires_at <= now)
+            {
+                latest.from_status.clone()
+            } else {
+                latest.to_status.clone()
+            };
+        }
     }
 }
 

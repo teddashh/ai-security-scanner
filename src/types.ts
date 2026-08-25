@@ -701,6 +701,13 @@ export interface VerificationSummary {
   comparisonRunId: string;
   baselineAt: string;
   comparisonAt: string;
+  complete?: boolean;
+  completenessIssues?: Array<{
+    code: string;
+    engineId?: string;
+    assetId?: string;
+    detail: string;
+  }>;
   diffs: VerificationDiff[];
 }
 

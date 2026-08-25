@@ -14,10 +14,23 @@ pub struct AdapterInput<'a> {
     pub raw_artifacts: &'a [RawArtifact],
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AdapterOutput {
     pub findings: Vec<Finding>,
     pub warnings: Vec<String>,
+    /// False when any captured evidence could not be fully normalized. Valid
+    /// findings remain usable, but the engine run must not claim completion.
+    pub complete: bool,
+}
+
+impl Default for AdapterOutput {
+    fn default() -> Self {
+        Self {
+            findings: Vec::new(),
+            warnings: Vec::new(),
+            complete: true,
+        }
+    }
 }
 
 pub trait EngineAdapter: Send + Sync {
@@ -326,6 +339,7 @@ mod tests {
             output: AdapterOutput {
                 findings: vec![bad_finding],
                 warnings: vec![],
+                complete: true,
             },
         };
         let artifacts = vec![artifact];
@@ -355,6 +369,7 @@ mod tests {
             output: AdapterOutput {
                 findings: vec![bad_finding],
                 warnings: vec![],
+                complete: true,
             },
         };
         let artifacts = vec![artifact];

@@ -408,7 +408,10 @@ async function main() {
   );
   await writeJsonAtomic(path.join(directory, "latest.json"), {
     version,
-    notes: "Signed ai-security-scanner application update. Existing local cases and historical provenance remain intact.",
+    notes:
+      version === "0.1.1"
+        ? "Security and consistency repair release. Existing local cases, historical evidence snapshots, and v0.1.0 cleanup obligations remain intact."
+        : "Signed ai-security-scanner application update. Existing local cases and historical provenance remain intact.",
     pub_date: metadata.sourceDate,
     platforms: updatePlatforms,
   });
@@ -422,6 +425,14 @@ async function main() {
     "",
     `Source: \`${commit}\``,
     "",
+    ...(version === "0.1.1"
+      ? [
+          "This patch release hardens container ownership controls, provider bootstrap recovery,",
+          "case revision concurrency, managed-runtime repair, historical evidence validation,",
+          "incomplete-result reporting, and exact artifact cleanup migration from v0.1.0.",
+          "",
+        ]
+      : []),
     "These desktop installers are built for Linux x86-64, universal macOS (Intel + Apple silicon),",
     "and Windows x86-64. Verify the selected file against `SHA256SUMS.txt` and the public GitHub",
     "artifact attestation before installing.",

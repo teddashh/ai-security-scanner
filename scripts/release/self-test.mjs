@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
   copyFile,
   mkdir,
@@ -15,7 +16,9 @@ import path from "node:path";
 import { PROJECT_ROOT, readJson, runMain, sha256File } from "./lib.mjs";
 import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
 
-const VERSION = "0.1.0";
+const VERSION = JSON.parse(
+  readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf8"),
+).version;
 const TAG = `v${VERSION}`;
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TEST_KEY_PASSWORD = "release-self-test-only";
@@ -441,10 +444,14 @@ async function main() {
     const cyclonedx = await readJson(path.join(release, `ai-security-scanner-${VERSION}.cyclonedx.json`));
     const spdx = await readJson(path.join(release, `ai-security-scanner-${VERSION}.spdx.json`));
     const latest = await readJson(path.join(release, "latest.json"));
+    const releaseNotes = await readFile(path.join(release, "RELEASE_NOTES.md"), "utf8");
     const checksums = await readFile(path.join(release, "SHA256SUMS.txt"), "utf8");
     if (
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
+      latest.version !== VERSION ||
+      !latest.notes.includes("Security and consistency repair release") ||
+      !releaseNotes.includes("This patch release hardens container ownership controls") ||
       !checksums.includes("ai-security-scanner-egress-gateway") ||
       !checksums.includes("ai-security-scanner-bootstrap-broker") ||
       !checksums.includes("ai-security-scanner-cli") ||

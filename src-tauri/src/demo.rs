@@ -208,7 +208,7 @@ pub fn build_demo_case() -> AssessmentCase {
                 engine_version: Some("synthetic-demo".into()),
                 image_digest: Some("sha256:synthetic-demo-not-an-image".into()),
                 rule_version: Some("synthetic-demo".into()),
-                adapter_version: "0.1.0-demo".into(),
+                adapter_version: "0.1.1-demo".into(),
                 manifest_schema_version: Some("synthetic-demo".into()),
                 source_revision: Some("synthetic-demo".into()),
                 repository_url: None,
@@ -244,7 +244,7 @@ pub fn build_demo_case() -> AssessmentCase {
                 engine_version: Some("synthetic-demo".into()),
                 image_digest: None,
                 rule_version: None,
-                adapter_version: "0.1.0-demo".into(),
+                adapter_version: "0.1.1-demo".into(),
                 manifest_schema_version: Some("synthetic-demo".into()),
                 source_revision: Some("synthetic-demo".into()),
                 repository_url: None,
@@ -361,7 +361,7 @@ pub fn build_demo_case() -> AssessmentCase {
             id: new_id(),
             finding_id: finding_id.clone(),
             run_id: run_id.clone(),
-            engine_run_id: Some(prowler_run_id),
+            engine_run_id: Some(prowler_run_id.clone()),
             kind: EvidenceKind::Configuration,
             engine_id: "prowler".into(),
             observed_at: now - Duration::days(2),
@@ -400,6 +400,28 @@ pub fn build_demo_case() -> AssessmentCase {
         tags: vec!["synthetic-demo".into(), "data-exposure".into()],
     });
 
+    let timeout_content =
+        r#"{"demo":true,"check":"hsts","status":"INCOMPLETE","reason":"TARGET_TIMEOUT"}"#;
+    let timeout_artifact_id = new_id();
+    case.raw_artifacts.push(RawArtifact {
+        id: timeout_artifact_id.clone(),
+        case_id: case.id.clone(),
+        run_id: run_id.clone(),
+        engine_run_id: httpx_run_id.clone(),
+        relative_path: "raw/httpx/synthetic-timeout.json".into(),
+        media_type: "application/json".into(),
+        sha256: artifact_hash(timeout_content),
+        byte_length: timeout_content.len() as u64,
+        created_at: now - Duration::days(2),
+        contains_sensitive_data: false,
+    });
+    case.scan_runs[0].engine_runs[0]
+        .raw_artifact_ids
+        .push(artifact_id);
+    case.scan_runs[0].engine_runs[1]
+        .raw_artifact_ids
+        .push(timeout_artifact_id.clone());
+
     let second_finding_id = new_id();
     case.findings.push(Finding {
         id: second_finding_id.clone(),
@@ -407,15 +429,28 @@ pub fn build_demo_case() -> AssessmentCase {
         first_seen_run_id: run_id.clone(),
         last_seen_run_id: run_id.clone(),
         fingerprint: "demo:web:missing-hsts".into(),
-        title: "公開網站未觀察到 HSTS 回應標頭".into(),
-        plain_language_summary: "合成展示資料未觀察到瀏覽器強制使用 HTTPS 的 HSTS 標頭。".into(),
-        possible_impact: "在特定網路攻擊情境下，首次連線可能被降級或攔截。".into(),
-        severity: Severity::Medium,
+        title: "公開網站的 HSTS 狀態尚未完成確認".into(),
+        plain_language_summary: "合成展示掃描因部分目標逾時，尚無法確認瀏覽器強制使用 HTTPS 的 HSTS 狀態。".into(),
+        possible_impact: "目前證據不足以判定風險；若後續確認未啟用 HSTS，首次連線在特定情境下可能被降級或攔截。".into(),
+        severity: Severity::Informational,
         confidence: Confidence::Medium,
         priority: 58,
         priority_reasons: vec!["公開服務".into(), "掃描僅部分完成".into()],
         asset_ids: vec![domain_id],
-        evidence: Vec::new(),
+        evidence: vec![Evidence {
+            id: new_id(),
+            finding_id: second_finding_id.clone(),
+            run_id: run_id.clone(),
+            engine_run_id: Some(httpx_run_id),
+            kind: EvidenceKind::Observation,
+            engine_id: "httpx".into(),
+            observed_at: now - Duration::days(2),
+            summary: "Synthetic timeout record proving the check was incomplete, not that HSTS was absent.".into(),
+            artifact_id: timeout_artifact_id,
+            artifact_sha256: artifact_hash(timeout_content),
+            pointer: Some("/status".into()),
+            redacted: false,
+        }],
         control_references: vec![ControlReference {
             framework: "NIST CSF".into(),
             framework_version: "2.0".into(),
@@ -485,6 +520,7 @@ pub fn build_demo_case() -> AssessmentCase {
                 .map(|evidence| evidence.artifact_sha256.clone())
                 .collect(),
             observed_at: now - Duration::days(2),
+            finding_snapshot: Some(finding.clone()),
         })
         .collect();
 

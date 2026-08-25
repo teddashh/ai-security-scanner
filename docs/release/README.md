@@ -4,7 +4,7 @@ The release workflow builds native Tauri installers from either a manual `main` 
 strict stable-version tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`,
 receives no publication privileges, creates no tag or GitHub Release, and preserves the finalized
 candidate as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag
-such as `v0.1.0` must exactly match the versions in `package.json`, `package-lock.json`,
+such as `v0.1.1` must exactly match the versions in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
 
 ## Produced installers
@@ -76,6 +76,9 @@ Each GitHub Release contains:
 - the project license and release notes; and
 - a GitHub build-provenance attestation over every published file.
 
+Patch-release details are recorded in the source tree; see the
+[`v0.1.1` security and consistency repair notes](v0.1.1.md).
+
 All third-party engines remain separately acquired artifacts. No engine image, ruleset, feed,
 provider plugin, or vulnerability database is embedded in these desktop installers. A runnable
 catalog entry is not a redistribution claim.
@@ -113,7 +116,7 @@ First run the local metadata validator and normal implementation checks. Dispatc
 workflow from `main` before creating a tag:
 
 ```sh
-npm run release:validate -- --tag v0.1.0
+npm run release:validate -- --tag v0.1.1
 gh workflow run release.yml --ref main
 ```
 
@@ -123,8 +126,8 @@ its immutable `headSha`, and retain or download its `release-finalized` artifact
 commit—not a later `main` tip:
 
 ```sh
-git tag -a v0.1.0 <preflight-head-sha> -m "ai-security-scanner v0.1.0"
-git push origin v0.1.0
+git tag -a v0.1.1 <preflight-head-sha> -m "ai-security-scanner v0.1.1"
+git push origin v0.1.1
 ```
 
 The tag run rebuilds from the same commit rather than reusing preflight binaries. The GitHub Release

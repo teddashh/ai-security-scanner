@@ -21,6 +21,10 @@ This is the release-reviewed update procedure referenced by every engine compati
 8. Set the entry-specific `knowledge_date` from the verified knowledge closure and set `support_until` according to the maintained window. Copy both values into the corresponding packaging plan; never bulk-date an older closure merely because a new application release was built.
 9. Run catalog validation, implementation tests, release self-tests, and three-platform packaging. Attach the image, feed, SBOM, source, smoke, and attestation evidence to the release record.
 
+An engine-image publication revision identifies the exact tree that built those immutable image
+bytes. An application adapter revision identifies the exact normalizer source. They advance
+independently when adapter hardening does not change an engine image, ruleset, feed, or wrapper.
+
 ## Expiry and replacement
 
 The catalog keeps expired versions visible for historical provenance. A replacement gets a new immutable digest and dates; it never rewrites an existing case. If an update cannot satisfy licensing, source association, adapter, platform, or scope constraints, the engine stays `not_executed` with a concrete blocker rather than falling back to an unpinned or broader implementation.

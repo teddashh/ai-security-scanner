@@ -1,7 +1,7 @@
 use crate::domain::{AssessmentCase, CaseSummary};
 use crate::error::{AppError, AppResult};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -13,6 +13,13 @@ pub struct CaseEvent {
     pub event_type: String,
     pub occurred_at: String,
     pub payload_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactDeletionObligation {
+    pub case_id: String,
+    pub exact_path: String,
+    pub created_at: String,
 }
 
 pub struct Storage {
@@ -95,7 +102,8 @@ impl Storage {
                 is_demo INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                document_json TEXT NOT NULL
+                document_json TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1
             );
 
             CREATE INDEX IF NOT EXISTS idx_cases_updated_at
@@ -118,9 +126,40 @@ impl Storage {
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS artifact_deletion_obligations (
+                case_id TEXT PRIMARY KEY,
+                exact_path TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             INSERT OR IGNORE INTO schema_migrations(version, applied_at)
             VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
             "#,
+        )?;
+        let has_revision = {
+            let mut statement = connection.prepare("PRAGMA table_info(cases)")?;
+            let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+            let mut found = false;
+            for column in columns {
+                if column? == "revision" {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if !has_revision {
+            connection.execute(
+                "ALTER TABLE cases ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
+                [],
+            )?;
+        }
+        connection.execute(
+            r#"
+            INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+            VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            "#,
+            [],
         )?;
         Ok(())
     }
@@ -147,39 +186,81 @@ impl Storage {
         Ok(())
     }
 
-    pub fn save_case(&self, case: &AssessmentCase, event_type: &str) -> AppResult<()> {
+    /// Persists a case only if the caller still owns the revision it loaded.
+    /// New cases carry revision zero; every successful save advances the
+    /// in-memory revision after the transaction commits.
+    pub fn save_case(&self, case: &mut AssessmentCase, event_type: &str) -> AppResult<()> {
+        if case.storage_revision < 0 {
+            return Err(AppError::Storage(
+                "case storage revision cannot be negative".into(),
+            ));
+        }
+        let expected_revision = case.storage_revision;
+        let next_revision = expected_revision
+            .checked_add(1)
+            .ok_or_else(|| AppError::Storage("case storage revision overflowed".into()))?;
         let document = serde_json::to_string(case)?;
         let status = serde_json::to_string(&case.status)?
             .trim_matches('"')
             .to_string();
         let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
-        transaction.execute(
-            r#"
-            INSERT INTO cases (
-                id, title, organization_name, status, is_demo,
-                created_at, updated_at, document_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            ON CONFLICT(id) DO UPDATE SET
-                title = excluded.title,
-                organization_name = excluded.organization_name,
-                status = excluded.status,
-                is_demo = excluded.is_demo,
-                updated_at = excluded.updated_at,
-                document_json = excluded.document_json
-            "#,
-            params![
-                case.id,
-                case.title,
-                case.profile.organization_name,
-                status,
-                case.is_demo,
-                case.created_at.to_rfc3339(),
-                case.updated_at.to_rfc3339(),
-                document,
-            ],
-        )?;
+        let affected = if expected_revision == 0 {
+            transaction.execute(
+                r#"
+                INSERT INTO cases (
+                    id, title, organization_name, status, is_demo,
+                    created_at, updated_at, document_json, revision
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ON CONFLICT(id) DO NOTHING
+                "#,
+                params![
+                    case.id,
+                    case.title,
+                    case.profile.organization_name,
+                    status,
+                    case.is_demo,
+                    case.created_at.to_rfc3339(),
+                    case.updated_at.to_rfc3339(),
+                    document,
+                    next_revision,
+                ],
+            )?
+        } else {
+            transaction.execute(
+                r#"
+                UPDATE cases
+                SET title = ?2,
+                    organization_name = ?3,
+                    status = ?4,
+                    is_demo = ?5,
+                    created_at = ?6,
+                    updated_at = ?7,
+                    document_json = ?8,
+                    revision = ?9
+                WHERE id = ?1 AND revision = ?10
+                "#,
+                params![
+                    case.id,
+                    case.title,
+                    case.profile.organization_name,
+                    status,
+                    case.is_demo,
+                    case.created_at.to_rfc3339(),
+                    case.updated_at.to_rfc3339(),
+                    document,
+                    next_revision,
+                    expected_revision,
+                ],
+            )?
+        };
+        if affected != 1 {
+            return Err(AppError::Conflict(format!(
+                "case {} changed or was deleted after it was loaded",
+                case.id
+            )));
+        }
 
         transaction.execute(
             r#"
@@ -195,21 +276,25 @@ impl Storage {
         )?;
 
         transaction.commit()?;
+        case.storage_revision = next_revision;
         Ok(())
     }
 
     pub fn get_case(&self, id: &str) -> AppResult<AssessmentCase> {
         let connection = self.connection()?;
-        let document: Option<String> = connection
+        let stored: Option<(i64, String)> = connection
             .query_row(
-                "SELECT document_json FROM cases WHERE id = ?1",
+                "SELECT revision, document_json FROM cases WHERE id = ?1",
                 [id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
 
-        let document = document.ok_or_else(|| AppError::CaseNotFound(id.to_owned()))?;
-        Ok(serde_json::from_str(&document)?)
+        let (revision, document) = stored.ok_or_else(|| AppError::CaseNotFound(id.to_owned()))?;
+        let mut case: AssessmentCase = serde_json::from_str(&document)?;
+        case.storage_revision = revision;
+        case.apply_effective_finding_statuses(Utc::now());
+        Ok(case)
     }
 
     pub fn list_cases(&self) -> AppResult<Vec<CaseSummary>> {
@@ -288,24 +373,199 @@ impl Storage {
     /// Permanently removes one exact case document and its event history.
     /// Artifact files are handled by the case service so their case-scoped path
     /// can be resolved and reported separately.
-    pub fn delete_case(&self, case_id: &str) -> AppResult<()> {
+    pub fn delete_case(
+        &self,
+        case_id: &str,
+        expected_revision: i64,
+        artifact_path: Option<&str>,
+    ) -> AppResult<()> {
         let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        let exists: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM cases WHERE id = ?1)",
-            [case_id],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(AppError::CaseNotFound(case_id.to_owned()));
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let revision: Option<i64> = transaction
+            .query_row(
+                "SELECT revision FROM cases WHERE id = ?1",
+                [case_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let revision = revision.ok_or_else(|| AppError::CaseNotFound(case_id.to_owned()))?;
+        if revision != expected_revision {
+            return Err(AppError::Conflict(format!(
+                "case {case_id} changed after deletion was validated"
+            )));
         }
-        transaction.execute("DELETE FROM cases WHERE id = ?1", [case_id])?;
+        if let Some(exact_path) = artifact_path {
+            let existing: Option<String> = transaction
+                .query_row(
+                    "SELECT exact_path FROM artifact_deletion_obligations WHERE case_id = ?1",
+                    [case_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(existing) = existing {
+                if existing != exact_path {
+                    return Err(AppError::NotAuthorized(
+                        "an existing artifact cleanup obligation has a different path".into(),
+                    ));
+                }
+            } else {
+                transaction.execute(
+                    r#"
+                    INSERT INTO artifact_deletion_obligations(case_id, exact_path, created_at)
+                    VALUES (?1, ?2, ?3)
+                    "#,
+                    params![case_id, exact_path, Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+        let deleted = transaction.execute(
+            "DELETE FROM cases WHERE id = ?1 AND revision = ?2",
+            params![case_id, expected_revision],
+        )?;
+        if deleted != 1 {
+            return Err(AppError::Conflict(format!(
+                "case {case_id} changed after deletion was validated"
+            )));
+        }
         transaction.execute(
             "DELETE FROM app_settings WHERE key = 'selected_case_id' AND value = ?1",
             [case_id],
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    pub fn list_artifact_deletion_obligations(&self) -> AppResult<Vec<ArtifactDeletionObligation>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT case_id, exact_path, created_at
+            FROM artifact_deletion_obligations
+            ORDER BY case_id ASC
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ArtifactDeletionObligation {
+                case_id: row.get(0)?,
+                exact_path: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Imports one exact obligation written by the v0.1.0 filesystem ledger.
+    /// The immediate transaction prevents the live-case check and durable
+    /// insert from being interleaved with another database writer. An exact
+    /// existing row is idempotent; a different path is never overwritten.
+    pub fn import_artifact_deletion_obligation(
+        &self,
+        case_id: &str,
+        exact_path: &str,
+    ) -> AppResult<()> {
+        if case_id.is_empty() || exact_path.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "legacy artifact cleanup obligation is missing its exact identity".into(),
+            ));
+        }
+
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let case_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cases WHERE id = ?1)",
+            [case_id],
+            |row| row.get(0),
+        )?;
+        if case_exists {
+            return Err(AppError::NotAuthorized(
+                "legacy artifact cleanup obligation cannot be imported while the case database record exists"
+                    .into(),
+            ));
+        }
+
+        let existing: Option<String> = transaction
+            .query_row(
+                "SELECT exact_path FROM artifact_deletion_obligations WHERE case_id = ?1",
+                [case_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(existing) if existing == exact_path => {}
+            Some(_) => {
+                return Err(AppError::Conflict(
+                    "legacy artifact cleanup obligation conflicts with the durable exact path"
+                        .into(),
+                ));
+            }
+            None => {
+                transaction.execute(
+                    r#"
+                    INSERT INTO artifact_deletion_obligations(case_id, exact_path, created_at)
+                    VALUES (?1, ?2, ?3)
+                    "#,
+                    params![case_id, exact_path, Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Claims exactly one durable cleanup obligation while excluding any
+    /// concurrent case recreation or second cleanup attempt. The obligation
+    /// is consumed only after the filesystem action succeeds.
+    pub fn consume_artifact_deletion_obligation<T>(
+        &self,
+        case_id: &str,
+        exact_path: &str,
+        action: impl FnOnce() -> AppResult<T>,
+    ) -> AppResult<T> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let case_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cases WHERE id = ?1)",
+            [case_id],
+            |row| row.get(0),
+        )?;
+        if case_exists {
+            return Err(AppError::NotAuthorized(
+                "artifact cleanup is refused while the case database record exists".into(),
+            ));
+        }
+        let obligated_path: Option<String> = transaction
+            .query_row(
+                "SELECT exact_path FROM artifact_deletion_obligations WHERE case_id = ?1",
+                [case_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let obligated_path = obligated_path.ok_or_else(|| {
+            AppError::NotAuthorized(
+                "no durable artifact cleanup obligation exists for this deleted case".into(),
+            )
+        })?;
+        if obligated_path != exact_path {
+            return Err(AppError::NotAuthorized(
+                "artifact cleanup path does not match the durable obligation".into(),
+            ));
+        }
+
+        let result = action()?;
+        let deleted = transaction.execute(
+            r#"
+            DELETE FROM artifact_deletion_obligations
+            WHERE case_id = ?1 AND exact_path = ?2
+            "#,
+            params![case_id, exact_path],
+        )?;
+        if deleted != 1 {
+            return Err(AppError::Conflict(
+                "artifact cleanup obligation changed while it was claimed".into(),
+            ));
+        }
+        transaction.commit()?;
+        Ok(result)
     }
 }
 
@@ -337,6 +597,7 @@ fn restrict_file(_path: &Path) -> AppResult<()> {
 mod tests {
     use super::*;
     use crate::domain::{AssessmentCase, DataClass, OrganizationProfile};
+    use std::sync::{Arc, Barrier};
 
     fn sample_case() -> AssessmentCase {
         AssessmentCase::new(
@@ -354,9 +615,9 @@ mod tests {
     fn case_round_trip_and_selection() {
         let directory = tempfile::tempdir().expect("temp directory");
         let storage = Storage::open(directory.path().join("casework.db")).expect("storage");
-        let case = sample_case();
+        let mut case = sample_case();
 
-        storage.save_case(&case, "case.created").expect("save");
+        storage.save_case(&mut case, "case.created").expect("save");
         storage
             .set_selected_case(Some(&case.id))
             .expect("selection");
@@ -372,24 +633,89 @@ mod tests {
     }
 
     #[test]
+    fn legacy_case_rows_receive_a_revision_without_data_loss() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let database = directory.path().join("casework.db");
+        let legacy_case = sample_case();
+        let connection = Connection::open(&database).expect("legacy database");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE cases (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    organization_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    is_demo INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    document_json TEXT NOT NULL
+                );
+                "#,
+            )
+            .expect("legacy schema");
+        connection
+            .execute(
+                r#"
+                INSERT INTO cases(
+                    id, title, organization_name, status, is_demo,
+                    created_at, updated_at, document_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+                params![
+                    legacy_case.id,
+                    legacy_case.title,
+                    legacy_case.profile.organization_name,
+                    "draft",
+                    legacy_case.is_demo,
+                    legacy_case.created_at.to_rfc3339(),
+                    legacy_case.updated_at.to_rfc3339(),
+                    serde_json::to_string(&legacy_case).expect("legacy document"),
+                ],
+            )
+            .expect("legacy case row");
+        drop(connection);
+
+        let storage = Storage::open(&database).expect("migrated storage");
+        let mut loaded = storage.get_case(&legacy_case.id).expect("migrated case");
+        assert_eq!(loaded.title, legacy_case.title);
+        assert_eq!(loaded.storage_revision, 1);
+        loaded.title = "Updated after migration".into();
+        loaded.touch();
+        storage
+            .save_case(&mut loaded, "case.updated_after_migration")
+            .expect("revision-aware update");
+        assert_eq!(loaded.storage_revision, 2);
+        assert_eq!(
+            storage
+                .get_case(&legacy_case.id)
+                .expect("updated migrated case")
+                .title,
+            "Updated after migration"
+        );
+    }
+
+    #[test]
     fn deletion_is_exact_and_cascades_case_events() {
         let directory = tempfile::tempdir().expect("temp directory");
         let storage = Storage::open(directory.path().join("casework.db")).expect("storage");
-        let first = sample_case();
+        let mut first = sample_case();
         let mut second = sample_case();
         second.id = "case-to-keep".into();
         second.title = "Keep me".into();
         storage
-            .save_case(&first, "case.created")
+            .save_case(&mut first, "case.created")
             .expect("save first");
         storage
-            .save_case(&second, "case.created")
+            .save_case(&mut second, "case.created")
             .expect("save second");
         storage
             .set_selected_case(Some(&first.id))
             .expect("select first");
 
-        storage.delete_case(&first.id).expect("delete first");
+        storage
+            .delete_case(&first.id, first.storage_revision, None)
+            .expect("delete first");
 
         assert!(matches!(
             storage.get_case(&first.id),
@@ -402,9 +728,164 @@ mod tests {
         );
         assert_eq!(storage.selected_case_id().expect("selection"), None);
         assert!(matches!(
-            storage.delete_case(&first.id),
+            storage.delete_case(&first.id, first.storage_revision, None),
             Err(AppError::CaseNotFound(_))
         ));
+    }
+
+    #[test]
+    fn legacy_artifact_obligation_import_is_exact_idempotent_and_refuses_live_cases() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let storage = Storage::open(directory.path().join("casework.db")).expect("storage");
+        let mut live_case = sample_case();
+        live_case.id = "live-case".into();
+        storage
+            .save_case(&mut live_case, "case.created")
+            .expect("save live case");
+
+        assert!(matches!(
+            storage
+                .import_artifact_deletion_obligation(&live_case.id, "/private/artifacts/live-case"),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(
+            storage
+                .list_artifact_deletion_obligations()
+                .expect("empty obligations")
+                .is_empty()
+        );
+
+        storage
+            .import_artifact_deletion_obligation("deleted-case", "/private/artifacts/deleted-case")
+            .expect("first import");
+        storage
+            .import_artifact_deletion_obligation("deleted-case", "/private/artifacts/deleted-case")
+            .expect("exact import is idempotent");
+        assert!(matches!(
+            storage.import_artifact_deletion_obligation(
+                "deleted-case",
+                "/different/artifacts/deleted-case"
+            ),
+            Err(AppError::Conflict(_))
+        ));
+
+        let obligations = storage
+            .list_artifact_deletion_obligations()
+            .expect("durable obligation");
+        assert_eq!(obligations.len(), 1);
+        assert_eq!(obligations[0].case_id, "deleted-case");
+        assert_eq!(obligations[0].exact_path, "/private/artifacts/deleted-case");
+    }
+
+    #[test]
+    fn concurrent_stale_updates_cannot_overwrite_each_other() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let storage =
+            Arc::new(Storage::open(directory.path().join("casework.db")).expect("storage"));
+        let mut case = sample_case();
+        storage
+            .save_case(&mut case, "case.created")
+            .expect("initial save");
+
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for title in ["first concurrent writer", "second concurrent writer"] {
+            let storage = Arc::clone(&storage);
+            let barrier = Arc::clone(&barrier);
+            let case_id = case.id.clone();
+            workers.push(std::thread::spawn(move || {
+                let mut loaded = storage.get_case(&case_id).expect("load shared revision");
+                loaded.title = title.into();
+                loaded.touch();
+                barrier.wait();
+                let result = storage.save_case(&mut loaded, "case.concurrent_update");
+                (title, result)
+            }));
+        }
+        barrier.wait();
+
+        let outcomes = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("writer thread"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes.iter().filter(|(_, result)| result.is_ok()).count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|(_, result)| matches!(result, Err(AppError::Conflict(_))))
+                .count(),
+            1
+        );
+        let winning_title = outcomes
+            .iter()
+            .find_map(|(title, result)| result.is_ok().then_some(*title))
+            .expect("one winner");
+        assert_eq!(
+            storage.get_case(&case.id).expect("stored winner").title,
+            winning_title
+        );
+        assert_eq!(
+            storage
+                .list_case_events(&case.id)
+                .expect("committed events")
+                .len(),
+            2,
+            "the rejected writer must not append an event"
+        );
+    }
+
+    #[test]
+    fn stale_save_cannot_resurrect_a_deleted_case() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let storage = Storage::open(directory.path().join("casework.db")).expect("storage");
+        let mut case = sample_case();
+        storage
+            .save_case(&mut case, "case.created")
+            .expect("initial save");
+        let mut stale = storage.get_case(&case.id).expect("stale snapshot");
+
+        storage
+            .delete_case(&case.id, case.storage_revision, None)
+            .expect("delete");
+        stale.title = "must not return".into();
+        stale.touch();
+        assert!(matches!(
+            storage.save_case(&mut stale, "case.stale_update"),
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            storage.get_case(&case.id),
+            Err(AppError::CaseNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn stale_revision_cannot_delete_a_newer_case() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let storage = Storage::open(directory.path().join("casework.db")).expect("storage");
+        let mut case = sample_case();
+        storage
+            .save_case(&mut case, "case.created")
+            .expect("initial save");
+        let stale_revision = case.storage_revision;
+        let mut current = storage.get_case(&case.id).expect("current snapshot");
+        current.title = "newer case".into();
+        current.touch();
+        storage
+            .save_case(&mut current, "case.updated")
+            .expect("newer save");
+
+        assert!(matches!(
+            storage.delete_case(&case.id, stale_revision, None),
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(
+            storage.get_case(&case.id).expect("case survives").title,
+            "newer case"
+        );
     }
 
     #[cfg(unix)]

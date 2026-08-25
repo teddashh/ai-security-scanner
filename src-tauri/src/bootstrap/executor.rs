@@ -173,6 +173,32 @@ pub struct BootstrapMutationCleanupItem {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum BootstrapMutationKind {
+    AwsCloudFormationStack,
+    MicrosoftApplication,
+    MicrosoftServicePrincipal,
+    MicrosoftPassword,
+    MicrosoftAppRoleAssignment,
+    GcpServiceAccount,
+}
+
+/// A durable record written before a provider request whose exact cleanup ID
+/// is assigned by the provider. A successful response atomically replaces the
+/// intent with its exact cleanup item; a crash leaves the intent visibly
+/// pending instead of allowing recovery to report a false completion.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapMutationIntent {
+    pub intent_id: String,
+    pub kind: BootstrapMutationKind,
+    pub provider_api_method: String,
+    pub provider_api_endpoint: String,
+    pub request_reference: String,
+    pub mutation_semantics: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum BootstrapMutationItemState {
     Pending,
     Attempting,
@@ -212,8 +238,9 @@ pub struct BootstrapMutationRecovery {
 }
 
 /// Durable, secret-free journal written before and after every provider
-/// mutation. If execution is interrupted, it contains only exact resources
-/// already returned by the provider—never a wildcard or discovery pattern.
+/// mutation. If execution is interrupted, it contains exact resources already
+/// returned by the provider plus bounded unresolved mutation intents—never a
+/// wildcard or discovery pattern.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BootstrapMutationLedger {
@@ -223,6 +250,8 @@ pub struct BootstrapMutationLedger {
     pub provider_context: BootstrapMutationProviderContext,
     pub created_at: DateTime<Utc>,
     pub items: Vec<BootstrapMutationCleanupItem>,
+    #[serde(default)]
+    pub mutation_intents: Vec<BootstrapMutationIntent>,
     pub safety_notice: String,
     /// SHA-256 over all immutable journal fields. Recovery refuses legacy or
     /// modified partial journals rather than guessing at a cleanup target.
@@ -246,7 +275,8 @@ impl BootstrapMutationLedger {
             provider_context,
             created_at: now,
             items: Vec::new(),
-            safety_notice: "Bootstrap was interrupted or is in progress. Reauthenticate in the isolated broker and clean only the exact resource IDs below. This file contains no credentials.".into(),
+            mutation_intents: Vec::new(),
+            safety_notice: "Bootstrap was interrupted or is in progress. Exact returned resource IDs and any unresolved provider mutation intents are recorded below. Reconcile an unresolved intent to an exact ID before cleanup; never broaden cleanup targets. This file contains no credentials.".into(),
             immutable_sha256: String::new(),
             recovery: BootstrapMutationRecovery::default(),
         };
@@ -260,34 +290,118 @@ impl BootstrapMutationLedger {
     fn record(&mut self, path: &Path, item: BootstrapMutationCleanupItem) -> AppResult<()> {
         validate_partial_item_shape(&item)?;
         validate_partial_provider_item(self.provider, &item)?;
+        self.ensure_execution_pending()?;
+        let mut next = self.clone();
+        next.items.push(item);
+        validate_partial_target_relationships(next.provider, &next.items)?;
+        validate_partial_context_targets(&next.provider_context, &next.items)?;
+        next.immutable_sha256 = next.derive_immutable_sha256()?;
+        write_secret_free_atomic_json(path, &next)?;
+        *self = next;
+        Ok(())
+    }
+
+    fn prepare_mutation(
+        &mut self,
+        path: &Path,
+        kind: BootstrapMutationKind,
+        provider_api_method: &str,
+        provider_api_endpoint: String,
+        request_reference: String,
+        mutation_semantics: &str,
+    ) -> AppResult<String> {
+        self.ensure_execution_pending()?;
+        let intent = BootstrapMutationIntent {
+            intent_id: Uuid::new_v4().to_string(),
+            kind,
+            provider_api_method: provider_api_method.into(),
+            provider_api_endpoint,
+            request_reference,
+            mutation_semantics: mutation_semantics.into(),
+        };
+        validate_partial_mutation_intent(&self.provider_context, &intent)?;
+        let mut next = self.clone();
+        next.mutation_intents.push(intent.clone());
+        next.immutable_sha256 = next.derive_immutable_sha256()?;
+        write_secret_free_atomic_json(path, &next)?;
+        *self = next;
+        Ok(intent.intent_id)
+    }
+
+    fn resolve_mutation(
+        &mut self,
+        path: &Path,
+        intent_id: &str,
+        item: BootstrapMutationCleanupItem,
+    ) -> AppResult<()> {
+        self.ensure_execution_pending()?;
+        validate_partial_item_shape(&item)?;
+        validate_partial_provider_item(self.provider, &item)?;
+        let position = self
+            .mutation_intents
+            .iter()
+            .position(|intent| intent.intent_id == intent_id)
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "bootstrap mutation response has no durable prepared intent".into(),
+                )
+            })?;
+        validate_partial_intent_binding(
+            &self.provider_context,
+            &self.mutation_intents[position],
+            &item,
+        )?;
+        let mut next = self.clone();
+        next.mutation_intents.remove(position);
+        next.items.push(item);
+        validate_partial_target_relationships(next.provider, &next.items)?;
+        validate_partial_context_targets(&next.provider_context, &next.items)?;
+        next.immutable_sha256 = next.derive_immutable_sha256()?;
+        write_secret_free_atomic_json(path, &next)?;
+        *self = next;
+        Ok(())
+    }
+
+    fn ensure_execution_pending(&self) -> AppResult<()> {
         if self.recovery.state != BootstrapMutationRecoveryState::Pending
             || !self.recovery.items.is_empty()
         {
             return Err(AppError::NotAuthorized(
-                "bootstrap mutation journal cannot grow after cleanup recovery starts".into(),
+                "bootstrap mutation journal cannot change after cleanup recovery starts".into(),
             ));
         }
-        self.items.push(item);
-        validate_partial_target_relationships(self.provider, &self.items)?;
-        validate_partial_context_targets(&self.provider_context, &self.items)?;
-        self.immutable_sha256 = self.derive_immutable_sha256()?;
-        write_secret_free_atomic_json(path, self)
+        Ok(())
     }
 
     fn initialize(&self, path: &Path) -> AppResult<()> {
-        write_secret_free_atomic_json(path, self)
+        write_secret_free_new_json(path, self)
     }
 
     fn derive_immutable_sha256(&self) -> AppResult<String> {
-        let encoded = serde_json::to_vec(&(
-            &self.schema_version,
-            &self.case_id,
-            self.provider,
-            &self.provider_context,
-            self.created_at,
-            &self.items,
-            &self.safety_notice,
-        ))
+        // Preserve the original digest shape when no prepared intent exists so
+        // already-written 1.0.0-partial ledgers remain recoverable.
+        let encoded = if self.mutation_intents.is_empty() {
+            serde_json::to_vec(&(
+                &self.schema_version,
+                &self.case_id,
+                self.provider,
+                &self.provider_context,
+                self.created_at,
+                &self.items,
+                &self.safety_notice,
+            ))
+        } else {
+            serde_json::to_vec(&(
+                &self.schema_version,
+                &self.case_id,
+                self.provider,
+                &self.provider_context,
+                self.created_at,
+                &self.items,
+                &self.mutation_intents,
+                &self.safety_notice,
+            ))
+        }
         .map_err(|_| AppError::Internal("partial cleanup integrity could not be derived".into()))?;
         Ok(hex::encode(Sha256::digest(encoded)))
     }
@@ -766,7 +880,7 @@ fn partial_cleanup_summary(
 ) -> BootstrapCleanupObligationSummary {
     let (pending_items, in_progress_items, retryable_items, completed_items) =
         if ledger.recovery.items.is_empty() {
-            (ledger.items.len(), 0, 0, 0)
+            (ledger.items.len() + ledger.mutation_intents.len(), 0, 0, 0)
         } else {
             (
                 ledger
@@ -809,7 +923,7 @@ fn partial_cleanup_summary(
         case_id: ledger.case_id.clone(),
         schema_version: ledger.schema_version.clone(),
         status,
-        total_items: ledger.items.len(),
+        total_items: ledger.items.len() + ledger.mutation_intents.len(),
         pending_items,
         in_progress_items,
         retryable_items,
@@ -864,12 +978,207 @@ fn validate_partial_item_shape(item: &BootstrapMutationCleanupItem) -> AppResult
     Ok(())
 }
 
+fn validate_partial_mutation_intent(
+    context: &BootstrapMutationProviderContext,
+    intent: &BootstrapMutationIntent,
+) -> AppResult<()> {
+    if Uuid::parse_str(&intent.intent_id).is_err()
+        || !matches!(intent.provider_api_method.as_str(), "POST" | "PUT")
+        || intent.provider_api_endpoint.is_empty()
+        || intent.provider_api_endpoint.len() > 8192
+        || intent.request_reference.is_empty()
+        || intent.request_reference.len() > 2048
+        || intent.mutation_semantics.is_empty()
+        || intent.mutation_semantics.len() > 2048
+        || intent.provider_api_endpoint.contains('*')
+        || intent.request_reference.contains('*')
+        || intent
+            .provider_api_endpoint
+            .chars()
+            .chain(intent.request_reference.chars())
+            .chain(intent.mutation_semantics.chars())
+            .any(char::is_control)
+    {
+        return Err(AppError::NotAuthorized(
+            "bootstrap mutation intent is malformed or inexact".into(),
+        ));
+    }
+    let endpoint = Url::parse(&intent.provider_api_endpoint)
+        .map_err(|_| AppError::NotAuthorized("bootstrap mutation endpoint is malformed".into()))?;
+    if endpoint.scheme() != "https"
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.port().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(AppError::NotAuthorized(
+            "bootstrap mutation endpoint is not an exact HTTPS provider endpoint".into(),
+        ));
+    }
+    let allowed = match (context, intent.kind) {
+        (
+            BootstrapMutationProviderContext::Aws { region, .. },
+            BootstrapMutationKind::AwsCloudFormationStack,
+        ) => {
+            intent.provider_api_method == "POST"
+                && endpoint.host_str()
+                    == Some(format!("cloudformation.{region}.amazonaws.com").as_str())
+                && endpoint.path() == "/"
+                && valid_provider_path_segment(&intent.request_reference, 128)
+        }
+        (
+            BootstrapMutationProviderContext::Azure { .. }
+            | BootstrapMutationProviderContext::Microsoft365 { .. },
+            BootstrapMutationKind::MicrosoftApplication,
+        ) => {
+            intent.provider_api_method == "POST"
+                && intent.provider_api_endpoint == format!("{MICROSOFT_GRAPH_ROOT}/applications")
+        }
+        (
+            BootstrapMutationProviderContext::Azure { .. }
+            | BootstrapMutationProviderContext::Microsoft365 { .. },
+            BootstrapMutationKind::MicrosoftServicePrincipal,
+        ) => {
+            intent.provider_api_method == "POST"
+                && intent.provider_api_endpoint
+                    == format!("{MICROSOFT_GRAPH_ROOT}/servicePrincipals")
+                && Uuid::parse_str(&intent.request_reference).is_ok()
+        }
+        (
+            BootstrapMutationProviderContext::Azure { .. }
+            | BootstrapMutationProviderContext::Microsoft365 { .. },
+            BootstrapMutationKind::MicrosoftPassword,
+        ) => {
+            intent.provider_api_method == "POST"
+                && Uuid::parse_str(&intent.request_reference).is_ok()
+                && intent.provider_api_endpoint
+                    == format!(
+                        "{MICROSOFT_GRAPH_ROOT}/applications/{}/addPassword",
+                        intent.request_reference
+                    )
+        }
+        (
+            BootstrapMutationProviderContext::Microsoft365 { .. },
+            BootstrapMutationKind::MicrosoftAppRoleAssignment,
+        ) => {
+            let assignment_reference = intent.request_reference.split_once(':');
+            intent.provider_api_method == "POST"
+                && assignment_reference.is_some_and(|(principal_id, role_id)| {
+                    Uuid::parse_str(principal_id).is_ok()
+                        && Uuid::parse_str(role_id).is_ok()
+                        && intent.provider_api_endpoint
+                            == format!(
+                                "{MICROSOFT_GRAPH_ROOT}/servicePrincipals/{principal_id}/appRoleAssignments"
+                            )
+                })
+        }
+        (
+            BootstrapMutationProviderContext::Gcp { project_id, .. },
+            BootstrapMutationKind::GcpServiceAccount,
+        ) => {
+            intent.provider_api_method == "POST"
+                && intent.provider_api_endpoint
+                    == format!(
+                        "https://iam.googleapis.com/v1/projects/{project_id}/serviceAccounts"
+                    )
+                && valid_provider_path_segment(&intent.request_reference, 64)
+        }
+        _ => false,
+    };
+    if !allowed {
+        return Err(AppError::NotAuthorized(
+            "bootstrap mutation intent is outside the provider allowlist".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_partial_intent_binding(
+    context: &BootstrapMutationProviderContext,
+    intent: &BootstrapMutationIntent,
+    item: &BootstrapMutationCleanupItem,
+) -> AppResult<()> {
+    validate_partial_mutation_intent(context, intent)?;
+    let target = validate_partial_provider_item(context.provider(), item)?;
+    let matches = match (intent.kind, target) {
+        (
+            BootstrapMutationKind::AwsCloudFormationStack,
+            PartialProviderTarget::AwsStack { stack_id, .. },
+        ) => {
+            stack_id
+                .split(":stack/")
+                .nth(1)
+                .and_then(|value| value.split('/').next())
+                == Some(intent.request_reference.as_str())
+        }
+        (
+            BootstrapMutationKind::MicrosoftApplication,
+            PartialProviderTarget::MicrosoftApplication { .. },
+        ) => true,
+        (
+            BootstrapMutationKind::MicrosoftServicePrincipal,
+            PartialProviderTarget::MicrosoftServicePrincipal { .. },
+        ) => true,
+        (
+            BootstrapMutationKind::MicrosoftPassword,
+            PartialProviderTarget::MicrosoftPassword {
+                application_object_id,
+                ..
+            },
+        ) => application_object_id == intent.request_reference,
+        (
+            BootstrapMutationKind::MicrosoftAppRoleAssignment,
+            PartialProviderTarget::MicrosoftAppRoleAssignment {
+                service_principal_object_id,
+                ..
+            },
+        ) => intent
+            .request_reference
+            .split_once(':')
+            .is_some_and(|(principal_id, _)| service_principal_object_id == principal_id),
+        (
+            BootstrapMutationKind::GcpServiceAccount,
+            PartialProviderTarget::GcpServiceAccount {
+                project_id, email, ..
+            },
+        ) => {
+            let BootstrapMutationProviderContext::Gcp {
+                project_id: expected_project,
+                ..
+            } = context
+            else {
+                return Err(AppError::NotAuthorized(
+                    "bootstrap mutation response changed providers".into(),
+                ));
+            };
+            project_id == *expected_project
+                && email
+                    == format!(
+                        "{}@{}.iam.gserviceaccount.com",
+                        intent.request_reference, expected_project
+                    )
+        }
+        _ => false,
+    };
+    if !matches {
+        return Err(AppError::NotAuthorized(
+            "bootstrap mutation response does not match its durable prepared intent".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_partial_mutation_ledger(ledger: &BootstrapMutationLedger) -> AppResult<()> {
     if ledger.schema_version != PARTIAL_LEDGER_SCHEMA_VERSION
         || !valid_cleanup_identifier(&ledger.case_id)
         || ledger.provider != ledger.provider_context.provider()
         || !valid_partial_provider_context(&ledger.provider_context)
-        || ledger.items.len() > MAX_CLEANUP_LEDGER_FILES
+        || ledger
+            .items
+            .len()
+            .saturating_add(ledger.mutation_intents.len())
+            > MAX_CLEANUP_LEDGER_FILES
         || ledger.safety_notice.is_empty()
         || ledger.safety_notice.len() > 2048
         || ledger.safety_notice.chars().any(char::is_control)
@@ -900,8 +1209,26 @@ fn validate_partial_mutation_ledger(ledger: &BootstrapMutationLedger) -> AppResu
             ));
         }
     }
+    let mut intent_ids = BTreeSet::new();
+    for intent in &ledger.mutation_intents {
+        validate_partial_mutation_intent(&ledger.provider_context, intent)?;
+        if !intent_ids.insert(intent.intent_id.clone()) {
+            return Err(AppError::NotAuthorized(
+                "partial cleanup ledger contains a duplicate mutation intent".into(),
+            ));
+        }
+    }
     validate_partial_target_relationships(ledger.provider, &ledger.items)?;
     validate_partial_context_targets(&ledger.provider_context, &ledger.items)?;
+    if !ledger.mutation_intents.is_empty()
+        && (ledger.recovery.state != BootstrapMutationRecoveryState::Pending
+            || !ledger.recovery.items.is_empty()
+            || ledger.recovery.updated_at.is_some())
+    {
+        return Err(AppError::NotAuthorized(
+            "unresolved bootstrap mutation intents cannot be marked recovered".into(),
+        ));
+    }
     if ledger.recovery.items.is_empty() {
         let pristine = ledger.recovery.state == BootstrapMutationRecoveryState::Pending
             && ledger.recovery.updated_at.is_none();
@@ -1484,6 +1811,12 @@ fn cleanup_partial_mutation_ledger(
 ) -> AppResult<()> {
     validate_partial_mutation_ledger(ledger)?;
     validate_partial_operator_context(&ledger.provider_context, &operator)?;
+    if !ledger.mutation_intents.is_empty() {
+        return Err(AppError::NotAvailable(format!(
+            "bootstrap cleanup has {} unresolved provider mutation intent(s); exact provider IDs must be reconciled before cleanup can continue",
+            ledger.mutation_intents.len()
+        )));
+    }
     if ledger.items.is_empty() {
         ledger.recovery.state = BootstrapMutationRecoveryState::Completed;
         ledger.recovery.updated_at = Some(interaction.now());
@@ -2596,6 +2929,17 @@ fn execute_aws(
         bootstrap.scan_identity_name,
         &hex::encode(Sha256::digest(bootstrap.case_id.as_bytes()))[..10]
     );
+    let stack_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::AwsCloudFormationStack,
+        "POST",
+        format!(
+            "https://cloudformation.{}.amazonaws.com/",
+            administrator.region
+        ),
+        stack_name.clone(),
+        "Create this exact named CloudFormation stack",
+    )?;
     let stack_id = aws_create_stack(
         http,
         &administrator,
@@ -2606,8 +2950,9 @@ fn execute_aws(
         &external_id,
         interaction.now(),
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &stack_intent,
         BootstrapMutationCleanupItem {
             exact_resource_id: stack_id.clone(),
             provider_api_method: "POST".into(),
@@ -2998,6 +3343,14 @@ fn execute_azure(
     )?;
     verify_azure_administrator_permissions(http, &arm_token.access_token, &subscription_id)?;
 
+    let application_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::MicrosoftApplication,
+        "POST",
+        format!("{MICROSOFT_GRAPH_ROOT}/applications"),
+        bootstrap.scan_identity_name.clone(),
+        "Create the dedicated Azure application object",
+    )?;
     let application = create_microsoft_application(
         http,
         &admin.graph_token,
@@ -3005,8 +3358,9 @@ fn execute_azure(
         bootstrap.expires_at,
         Vec::new(),
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &application_intent,
         microsoft_cleanup_item(
             application.object_id.clone(),
             "DELETE",
@@ -3017,13 +3371,22 @@ fn execute_azure(
             "Delete this exact application object",
         ),
     )?;
+    let service_principal_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::MicrosoftServicePrincipal,
+        "POST",
+        format!("{MICROSOFT_GRAPH_ROOT}/servicePrincipals"),
+        application.application_client_id.clone(),
+        "Create the dedicated Azure service principal",
+    )?;
     let service_principal = create_microsoft_service_principal(
         http,
         &admin.graph_token,
         &application.application_client_id,
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &service_principal_intent,
         microsoft_cleanup_item(
             service_principal.object_id.clone(),
             "DELETE",
@@ -3040,14 +3403,26 @@ fn execute_azure(
         &service_principal.object_id,
         &application.application_client_id,
     )?;
+    let password_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::MicrosoftPassword,
+        "POST",
+        format!(
+            "{MICROSOFT_GRAPH_ROOT}/applications/{}/addPassword",
+            application.object_id
+        ),
+        application.object_id.clone(),
+        "Create the one-shot Azure application password",
+    )?;
     let password = add_microsoft_temporary_password(
         http,
         &admin.graph_token,
         &application.object_id,
         bootstrap.expires_at,
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &password_intent,
         microsoft_cleanup_item(
             password.key_id.clone(),
             "POST",
@@ -3060,14 +3435,6 @@ fn execute_azure(
     )?;
     let reader_assignment_id = Uuid::new_v4().to_string();
     let security_reader_assignment_id = Uuid::new_v4().to_string();
-    put_azure_role_assignment(
-        http,
-        &arm_token.access_token,
-        &subscription_id,
-        &reader_assignment_id,
-        &service_principal.object_id,
-        "acdd72a7-3385-48ef-bd42-f606fba81ae7",
-    )?;
     journal.record(
         cleanup_ledger_path,
         microsoft_cleanup_item(
@@ -3081,9 +3448,9 @@ fn execute_azure(
         http,
         &arm_token.access_token,
         &subscription_id,
-        &security_reader_assignment_id,
+        &reader_assignment_id,
         &service_principal.object_id,
-        "39bc4728-0917-49c7-9d2c-d95423bc2eb4",
+        "acdd72a7-3385-48ef-bd42-f606fba81ae7",
     )?;
     journal.record(
         cleanup_ledger_path,
@@ -3093,6 +3460,14 @@ fn execute_azure(
             format!("{MICROSOFT_ARM_ROOT}/subscriptions/{subscription_id}/providers/Microsoft.Authorization/roleAssignments/{security_reader_assignment_id}?api-version=2022-04-01"),
             "Delete this exact Security Reader role assignment",
         ),
+    )?;
+    put_azure_role_assignment(
+        http,
+        &arm_token.access_token,
+        &subscription_id,
+        &security_reader_assignment_id,
+        &service_principal.object_id,
+        "39bc4728-0917-49c7-9d2c-d95423bc2eb4",
     )?;
     let scanner_token = microsoft_client_credentials_token(
         http,
@@ -3175,6 +3550,14 @@ fn execute_gcp(
         "ai-security-scanner-{}",
         &hex::encode(Sha256::digest(bootstrap.case_id.as_bytes()))[..10]
     );
+    let service_account_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::GcpServiceAccount,
+        "POST",
+        format!("https://iam.googleapis.com/v1/projects/{project_id}/serviceAccounts"),
+        account_id.clone(),
+        "Create the dedicated GCP service account",
+    )?;
     let service_account = create_gcp_service_account(
         http,
         &admin.access_token,
@@ -3182,8 +3565,9 @@ fn execute_gcp(
         &account_id,
         &bootstrap.scan_identity_name,
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &service_account_intent,
         BootstrapMutationCleanupItem {
             exact_resource_id: service_account.unique_id.clone(),
             provider_api_method: "DELETE".into(),
@@ -3203,13 +3587,6 @@ fn execute_gcp(
         &service_account.email,
     )?;
     let roles = gcp_read_only_roles();
-    attach_gcp_organization_roles(
-        http,
-        &admin.access_token,
-        &authorization.organization_id,
-        &service_account.email,
-        &roles,
-    )?;
     for role in &roles {
         journal.record(
             cleanup_ledger_path,
@@ -3227,6 +3604,13 @@ fn execute_gcp(
             },
         )?;
     }
+    attach_gcp_organization_roles(
+        http,
+        &admin.access_token,
+        &authorization.organization_id,
+        &service_account.email,
+        &roles,
+    )?;
     let scanner_token = generate_gcp_service_account_token(
         http,
         &admin.access_token,
@@ -3907,6 +4291,14 @@ fn execute_microsoft365(
             access_type: "Role",
         })
         .collect::<Vec<_>>();
+    let application_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::MicrosoftApplication,
+        "POST",
+        format!("{MICROSOFT_GRAPH_ROOT}/applications"),
+        bootstrap.scan_identity_name.clone(),
+        "Create the dedicated Microsoft 365 application object",
+    )?;
     let application = create_microsoft_application(
         http,
         &admin.graph_token,
@@ -3917,8 +4309,9 @@ fn execute_microsoft365(
             resource_access: required_resource_access,
         }],
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &application_intent,
         microsoft_cleanup_item(
             application.object_id.clone(),
             "DELETE",
@@ -3929,13 +4322,22 @@ fn execute_microsoft365(
             "Delete this exact application object",
         ),
     )?;
+    let service_principal_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::MicrosoftServicePrincipal,
+        "POST",
+        format!("{MICROSOFT_GRAPH_ROOT}/servicePrincipals"),
+        application.application_client_id.clone(),
+        "Create the dedicated Microsoft 365 service principal",
+    )?;
     let service_principal = create_microsoft_service_principal(
         http,
         &admin.graph_token,
         &application.application_client_id,
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &service_principal_intent,
         microsoft_cleanup_item(
             service_principal.object_id.clone(),
             "DELETE",
@@ -3952,14 +4354,26 @@ fn execute_microsoft365(
         &service_principal.object_id,
         &application.application_client_id,
     )?;
+    let password_intent = journal.prepare_mutation(
+        cleanup_ledger_path,
+        BootstrapMutationKind::MicrosoftPassword,
+        "POST",
+        format!(
+            "{MICROSOFT_GRAPH_ROOT}/applications/{}/addPassword",
+            application.object_id
+        ),
+        application.object_id.clone(),
+        "Create the one-shot Microsoft 365 application password",
+    )?;
     let password = add_microsoft_temporary_password(
         http,
         &admin.graph_token,
         &application.object_id,
         bootstrap.expires_at,
     )?;
-    journal.record(
+    journal.resolve_mutation(
         cleanup_ledger_path,
+        &password_intent,
         microsoft_cleanup_item(
             password.key_id.clone(),
             "POST",
@@ -3977,6 +4391,17 @@ fn execute_microsoft365(
                 "Microsoft Graph resource is missing required application role {permission}"
             ))
         })?;
+        let assignment_intent = journal.prepare_mutation(
+            cleanup_ledger_path,
+            BootstrapMutationKind::MicrosoftAppRoleAssignment,
+            "POST",
+            format!(
+                "{MICROSOFT_GRAPH_ROOT}/servicePrincipals/{}/appRoleAssignments",
+                service_principal.object_id
+            ),
+            format!("{}:{role_id}", service_principal.object_id),
+            "Create one exact Microsoft Graph application-role assignment",
+        )?;
         let assignment_id = assign_microsoft_graph_app_role(
             http,
             &admin.graph_token,
@@ -3984,8 +4409,9 @@ fn execute_microsoft365(
             &graph_resource.id,
             role_id,
         )?;
-        journal.record(
+        journal.resolve_mutation(
             cleanup_ledger_path,
+            &assignment_intent,
             microsoft_cleanup_item(
                 assignment_id.clone(),
                 "DELETE",
@@ -4851,6 +5277,71 @@ fn microsoft_cleanup_item(
     }
 }
 
+fn write_secret_free_new_json<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
+    let parent = path.parent().ok_or_else(|| {
+        AppError::InvalidRequest("bootstrap cleanup ledger path has no parent directory".into())
+    })?;
+    fs::create_dir_all(parent)?;
+    let parent = fs::canonicalize(parent)?;
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            AppError::InvalidRequest("bootstrap cleanup ledger filename is invalid".into())
+        })?;
+    if filename.is_empty() || filename.contains('/') || filename.contains('\\') {
+        return Err(AppError::InvalidRequest(
+            "bootstrap cleanup ledger filename is invalid".into(),
+        ));
+    }
+    let encoded = serde_json::to_vec_pretty(value)
+        .map_err(|_| AppError::Internal("bootstrap cleanup ledger could not be encoded".into()))?;
+    let destination = parent.join(filename);
+    let temporary = parent.join(format!(
+        ".{filename}.{}.{}.tmp",
+        std::process::id(),
+        Uuid::new_v4().simple()
+    ));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(&encoded)?;
+    file.sync_all()?;
+    drop(file);
+    match fs::hard_link(&temporary, &destination) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&temporary);
+            return Err(AppError::Conflict(
+                "bootstrap operation already has a cleanup ledger; choose a new operation ID"
+                    .into(),
+            ));
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(error.into());
+        }
+    }
+    fs::remove_file(&temporary)?;
+    sync_parent_directory(&parent)?;
+    Ok(())
+}
+
+fn sync_parent_directory(parent: &Path) -> AppResult<()> {
+    #[cfg(unix)]
+    {
+        File::open(parent)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = parent;
+    Ok(())
+}
+
 fn write_secret_free_atomic_json<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
     let parent = path.parent().ok_or_else(|| {
         AppError::InvalidRequest("bootstrap cleanup ledger path has no parent directory".into())
@@ -4893,6 +5384,7 @@ fn write_secret_free_atomic_json<T: Serialize>(path: &Path, value: &T) -> AppRes
     file.sync_all()?;
     drop(file);
     fs::rename(&temporary, &destination)?;
+    sync_parent_directory(&parent)?;
     Ok(())
 }
 
@@ -5058,6 +5550,164 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn reused_operation_id_cannot_overwrite_existing_ledger_bytes() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("cleanup-reused-operation.json");
+        let original = br#"{"schema_version":"existing","evidence":"preserve-me"}"#;
+        fs::write(&path, original).unwrap();
+        let ledger = BootstrapMutationLedger::new(
+            "case-1",
+            BootstrapMutationProviderContext::Aws {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+            },
+            Utc::now(),
+        );
+
+        let result = ledger.initialize(&path);
+
+        assert!(matches!(result, Err(AppError::Conflict(_))));
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn failpoint_after_provider_commit_retains_intent_and_blocks_false_completion() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("cleanup-interrupted-create.json");
+        let mut ledger = BootstrapMutationLedger::new(
+            "case-1",
+            BootstrapMutationProviderContext::Aws {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+            },
+            Utc::now(),
+        );
+        ledger.initialize(&path).unwrap();
+        ledger
+            .prepare_mutation(
+                &path,
+                BootstrapMutationKind::AwsCloudFormationStack,
+                "POST",
+                "https://cloudformation.us-east-1.amazonaws.com/".into(),
+                "exact-stack".into(),
+                "create this exact named stack",
+            )
+            .unwrap();
+
+        // Failpoint: the provider accepted the request, but the process exits
+        // before its returned ID can be bound to an exact cleanup item.
+        let persisted = match read_cleanup_document(&path, "case-1").unwrap() {
+            CleanupDocument::Partial(ledger) => ledger,
+            CleanupDocument::Complete(_) => panic!("expected partial ledger"),
+        };
+        assert!(persisted.items.is_empty());
+        assert_eq!(persisted.mutation_intents.len(), 1);
+        let summary =
+            bootstrap_cleanup_obligation_summary(&path, "case-1", "interrupted-create").unwrap();
+        assert_eq!(summary.status, BootstrapCleanupStatus::Pending);
+        assert_eq!(summary.total_items, 1);
+        assert_eq!(summary.pending_items, 1);
+
+        let fixture = PolicyFixture::new(Vec::new());
+        let result = execute_bootstrap_cleanup(
+            &fixture,
+            &NoInteraction(Utc::now()),
+            BootstrapOperatorConfig::Aws {
+                administrator: AwsNativeAuthorizationConfig {
+                    start_url: "https://company.awsapps.com/start".into(),
+                    region: "us-east-1".into(),
+                    account_id: "123456789012".into(),
+                    role_name: "AdministratorAccess".into(),
+                    role_arn: "arn:aws:iam::123456789012:role/AdministratorAccess".into(),
+                },
+            },
+            "case-1",
+            "interrupted-create",
+            &path,
+        );
+        assert!(matches!(result, Err(AppError::NotAvailable(_))));
+        let after = match read_cleanup_document(&path, "case-1").unwrap() {
+            CleanupDocument::Partial(ledger) => ledger,
+            CleanupDocument::Complete(_) => panic!("expected partial ledger"),
+        };
+        assert_eq!(
+            after.recovery.state,
+            BootstrapMutationRecoveryState::Pending
+        );
+        assert_eq!(after.mutation_intents.len(), 1);
+    }
+
+    #[test]
+    fn provider_response_atomically_binds_prepared_intent_to_exact_item() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("cleanup-response-binding.json");
+        let mut ledger = BootstrapMutationLedger::new(
+            "case-1",
+            BootstrapMutationProviderContext::Aws {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+            },
+            Utc::now(),
+        );
+        ledger.initialize(&path).unwrap();
+        let intent_id = ledger
+            .prepare_mutation(
+                &path,
+                BootstrapMutationKind::AwsCloudFormationStack,
+                "POST",
+                "https://cloudformation.us-east-1.amazonaws.com/".into(),
+                "exact-stack".into(),
+                "create this exact named stack",
+            )
+            .unwrap();
+        let exact_item = partial_fixture_items(BootstrapProvider::Aws).pop().unwrap();
+
+        ledger
+            .resolve_mutation(&path, &intent_id, exact_item.clone())
+            .unwrap();
+
+        let persisted = match read_cleanup_document(&path, "case-1").unwrap() {
+            CleanupDocument::Partial(ledger) => ledger,
+            CleanupDocument::Complete(_) => panic!("expected partial ledger"),
+        };
+        assert!(persisted.mutation_intents.is_empty());
+        assert_eq!(persisted.items, vec![exact_item]);
+    }
+
+    #[test]
+    fn failpoint_before_known_id_mutation_retains_exact_cleanup_target() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("cleanup-before-put.json");
+        let mut ledger = BootstrapMutationLedger::new(
+            "case-1",
+            BootstrapMutationProviderContext::Azure {
+                tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
+                subscription_id: "66666666-6666-4666-8666-666666666666".into(),
+            },
+            Utc::now(),
+        );
+        ledger.initialize(&path).unwrap();
+        let mut prerequisites = partial_fixture_items(BootstrapProvider::Azure);
+        let assignment = prerequisites.pop().unwrap();
+        for item in prerequisites.into_iter().take(2) {
+            ledger.record(&path, item).unwrap();
+        }
+        ledger.record(&path, assignment.clone()).unwrap();
+
+        // Failpoint: the process exits immediately before the provider PUT.
+        let persisted = match read_cleanup_document(&path, "case-1").unwrap() {
+            CleanupDocument::Partial(ledger) => ledger,
+            CleanupDocument::Complete(_) => panic!("expected partial ledger"),
+        };
+        assert!(persisted.items.contains(&assignment));
+        assert!(persisted.mutation_intents.is_empty());
+        assert_eq!(
+            partial_cleanup_summary("before-put", &persisted).status,
+            BootstrapCleanupStatus::Pending
+        );
     }
 
     #[test]

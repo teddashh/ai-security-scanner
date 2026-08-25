@@ -31,6 +31,11 @@ Instead, publication creates evidence after the index digest is final:
    uploading the downloadable evidence directory. A failed verification prevents publication
    evidence from being preserved as a successful artifact.
 
+The evidence `sourceRevision` is the exact repository commit used by the workflow that built those
+immutable image bytes. It is intentionally independent of a later desktop adapter revision: an
+adapter-only parser hardening release does not rewrite this historical build identity or claim that
+an unchanged image was republished.
+
 The downloadable manifest follows
 [`engine-image-supply-chain.schema.json`](engine-image-supply-chain.schema.json). Workflow
 artifacts retain the manifest, four SBOM files, five Sigstore bundles, and `SHA256SUMS.txt` for 90

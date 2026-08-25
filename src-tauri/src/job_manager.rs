@@ -139,6 +139,8 @@ pub enum JobManagerError {
     DuplicateLiveJob(JobKey),
     #[error("no live job exists for {0:?}")]
     LiveJobNotFound(JobKey),
+    #[error("job cancellation is already pending for {0:?}")]
+    CancellationPending(JobKey),
     #[error("engine {engine_id} is not registered in job {key:?}")]
     EngineNotFound { key: JobKey, engine_id: String },
     #[error("engine {engine_id} in job {key:?} is already terminal")]
@@ -258,33 +260,117 @@ impl JobManager {
     }
 
     pub fn pause(&self, key: &JobKey) -> Result<JobSnapshot, JobManagerError> {
-        let state = lock(&self.inner.state);
-        let record = state
-            .live
-            .get(key)
-            .ok_or_else(|| JobManagerError::LiveJobNotFound(key.clone()))?;
-        record.request_pause();
-        Ok(record.snapshot())
+        self.pause_transition(key).map(|(snapshot, _)| snapshot)
+    }
+
+    /// Signals a pause and reports whether this call changed the live worker.
+    /// Callers may compensate a failed durable mutation only when `changed` is
+    /// true; duplicate requests must never reverse an earlier transition.
+    pub fn pause_transition(&self, key: &JobKey) -> Result<(JobSnapshot, bool), JobManagerError> {
+        let record = self.live_record(key)?;
+        let _control = lock(&record.control_transition);
+        self.require_current_live_record(key, &record)?;
+        if record.cancel_requested.load(Ordering::SeqCst) {
+            return Err(JobManagerError::CancellationPending(key.clone()));
+        }
+        let changed = record.request_pause();
+        Ok((record.snapshot(), changed))
     }
 
     pub fn resume(&self, key: &JobKey) -> Result<JobSnapshot, JobManagerError> {
-        let state = lock(&self.inner.state);
-        let record = state
-            .live
-            .get(key)
-            .ok_or_else(|| JobManagerError::LiveJobNotFound(key.clone()))?;
-        record.request_resume();
-        Ok(record.snapshot())
+        self.resume_transition(key).map(|(snapshot, _)| snapshot)
+    }
+
+    /// Signals a resume and reports whether this call cleared a prior pause.
+    pub fn resume_transition(&self, key: &JobKey) -> Result<(JobSnapshot, bool), JobManagerError> {
+        let record = self.live_record(key)?;
+        let _control = lock(&record.control_transition);
+        self.require_current_live_record(key, &record)?;
+        if record.cancel_requested.load(Ordering::SeqCst) {
+            return Err(JobManagerError::CancellationPending(key.clone()));
+        }
+        let changed = record.request_resume();
+        Ok((record.snapshot(), changed))
+    }
+
+    /// Serializes the live-worker pause signal, durable case mutation, and
+    /// compensation for one exact job. The inner result belongs to the caller's
+    /// persistence layer; manager/lifecycle errors remain the outer result.
+    pub fn pause_with_durable_transition<T, E, F>(
+        &self,
+        key: &JobKey,
+        durable: F,
+    ) -> Result<Result<T, E>, JobManagerError>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        let record = self.live_record(key)?;
+        let _control = lock(&record.control_transition);
+        self.require_current_live_record(key, &record)?;
+        if record.cancel_requested.load(Ordering::SeqCst) {
+            return Err(JobManagerError::CancellationPending(key.clone()));
+        }
+        let changed = record.request_pause();
+        let result = durable();
+        if result.is_err() && changed {
+            record.request_resume();
+        }
+        Ok(result)
+    }
+
+    /// Resume counterpart to [`Self::pause_with_durable_transition`].
+    pub fn resume_with_durable_transition<T, E, F>(
+        &self,
+        key: &JobKey,
+        durable: F,
+    ) -> Result<Result<T, E>, JobManagerError>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        let record = self.live_record(key)?;
+        let _control = lock(&record.control_transition);
+        self.require_current_live_record(key, &record)?;
+        if record.cancel_requested.load(Ordering::SeqCst) {
+            return Err(JobManagerError::CancellationPending(key.clone()));
+        }
+        let changed = record.request_resume();
+        let result = durable();
+        if result.is_err() && changed {
+            record.request_pause();
+        }
+        Ok(result)
     }
 
     pub fn cancel(&self, key: &JobKey) -> Result<JobSnapshot, JobManagerError> {
-        let state = lock(&self.inner.state);
-        let record = state
-            .live
-            .get(key)
-            .ok_or_else(|| JobManagerError::LiveJobNotFound(key.clone()))?;
+        let record = self.live_record(key)?;
+        let _control = lock(&record.control_transition);
+        self.require_current_live_record(key, &record)?;
         record.request_cancel();
         Ok(record.snapshot())
+    }
+
+    fn live_record(&self, key: &JobKey) -> Result<Arc<JobRecord>, JobManagerError> {
+        lock(&self.inner.state)
+            .live
+            .get(key)
+            .cloned()
+            .ok_or_else(|| JobManagerError::LiveJobNotFound(key.clone()))
+    }
+
+    fn require_current_live_record(
+        &self,
+        key: &JobKey,
+        record: &Arc<JobRecord>,
+    ) -> Result<(), JobManagerError> {
+        if lock(&self.inner.state)
+            .live
+            .get(key)
+            .is_some_and(|current| current.generation == record.generation)
+        {
+            Ok(())
+        } else {
+            Err(JobManagerError::LiveJobNotFound(key.clone()))
+        }
     }
 
     /// Removes a retained terminal snapshot. Live jobs cannot be forgotten.
@@ -303,6 +389,7 @@ impl JobManager {
         completion: JobCompletion,
         forced_failure: Option<JobFailureKind>,
     ) -> JobSnapshot {
+        let _control = lock(&record.control_transition);
         let mut state = lock(&self.inner.state);
         let still_current = state
             .live
@@ -349,6 +436,15 @@ impl JobContext {
 
     pub fn engine_ids(&self) -> Vec<String> {
         self.record.engines.keys().cloned().collect()
+    }
+
+    /// Runs one durable worker-state write under the same per-job coordinator
+    /// used by pause, resume, cancellation, and terminalization. This prevents
+    /// a worker checkpoint/final report from racing the case revision changed
+    /// by a control request.
+    pub fn coordinate_durable_write<T>(&self, write: impl FnOnce() -> T) -> T {
+        let _control = lock(&self.record.control_transition);
+        write()
     }
 
     pub fn engine(&self, engine_id: &str) -> Result<EngineJobControl, JobManagerError> {
@@ -460,6 +556,7 @@ struct JobRecord {
     engines: BTreeMap<String, Arc<EngineRecord>>,
     pause_requested: AtomicBool,
     cancel_requested: AtomicBool,
+    control_transition: Mutex<()>,
     gate: Mutex<()>,
     gate_changed: Condvar,
 }
@@ -473,6 +570,7 @@ impl JobRecord {
             engines,
             pause_requested: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
+            control_transition: Mutex::new(()),
             gate: Mutex::new(()),
             gate_changed: Condvar::new(),
         }
@@ -485,26 +583,32 @@ impl JobRecord {
         }
     }
 
-    fn request_pause(&self) {
+    fn request_pause(&self) -> bool {
         if self.cancel_requested.load(Ordering::SeqCst) {
-            return;
+            return false;
         }
-        self.pause_requested.store(true, Ordering::SeqCst);
+        if self.pause_requested.swap(true, Ordering::SeqCst) {
+            return false;
+        }
         for engine in self.engines.values() {
             if !engine.base_status().is_terminal() {
                 engine.token.request_pause();
             }
         }
+        true
     }
 
-    fn request_resume(&self) {
-        self.pause_requested.store(false, Ordering::SeqCst);
+    fn request_resume(&self) -> bool {
+        if !self.pause_requested.swap(false, Ordering::SeqCst) {
+            return false;
+        }
         for engine in self.engines.values() {
             if !engine.base_status().is_terminal() {
                 engine.token.resume();
             }
         }
         self.gate_changed.notify_all();
+        true
     }
 
     fn request_cancel(&self) {
@@ -613,7 +717,7 @@ impl JobRecord {
             .values()
             .map(|engine| engine.base_status())
             .collect::<Vec<_>>();
-        let status = if statuses.contains(&BaseEngineStatus::Failed) {
+        let status = if failure_kind.is_some() || statuses.contains(&BaseEngineStatus::Failed) {
             failure_kind.get_or_insert(JobFailureKind::WorkerReported);
             JobStatus::Failed
         } else if statuses.contains(&BaseEngineStatus::Cancelled) {

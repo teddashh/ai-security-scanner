@@ -30,8 +30,8 @@ interface FindingsPageProps {
   focusedFindingId?: string;
   workflowEvents: FindingWorkflowEvent[];
   busy: boolean;
-  onUpdateWorkflow: (input: Omit<FindingWorkflowUpdateInput, "caseId">) => Promise<void>;
-  onGroupFindings: (input: { title: string; findingIds: string[]; rationale: string }) => Promise<void>;
+  onUpdateWorkflow: (input: Omit<FindingWorkflowUpdateInput, "caseId">) => Promise<boolean>;
+  onGroupFindings: (input: { title: string; findingIds: string[]; rationale: string }) => Promise<boolean>;
   onUngroupFindings: (groupId: string) => Promise<void>;
   onOpenCoverage: () => void;
   onOpenProgress: () => void;
@@ -222,7 +222,7 @@ export function FindingsPage({
   const submitDecision = async (event: FormEvent) => {
     event.preventDefault();
     if (!selected || !decidedBy.trim() || !decisionReason.trim()) return;
-    await onUpdateWorkflow({
+    const updated = await onUpdateWorkflow({
       findingId: selected.id,
       status: decisionStatus,
       decidedBy: decidedBy.trim(),
@@ -231,6 +231,7 @@ export function FindingsPage({
         ? new Date(`${decisionExpiry}T23:59:59`).toISOString()
         : undefined,
     });
+    if (!updated) return;
     setDecisionReason("");
     setDecisionExpiry("");
   };
@@ -244,11 +245,12 @@ export function FindingsPage({
   const submitGroup = async (event: FormEvent) => {
     event.preventDefault();
     if (!groupTitle.trim() || !groupRationale.trim() || groupFindingIds.length < 2) return;
-    await onGroupFindings({
+    const grouped = await onGroupFindings({
       title: groupTitle.trim(),
       findingIds: groupFindingIds,
       rationale: groupRationale.trim(),
     });
+    if (!grouped) return;
     setGroupTitle("");
     setGroupRationale("");
     setGroupFindingIds([]);

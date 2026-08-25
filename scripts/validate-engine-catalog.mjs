@@ -571,9 +571,13 @@ function validatePublishedManagedEvidence(
   if (publication?.anonymous_pull_verified !== true) {
     errors.push(`${planRelative}: publication must prove anonymous access to the immutable multi-platform index`);
   }
-  const adapterRevision = engine.provenance?.adapter?.source_revision;
-  if (!revisionPattern.test(publication?.source_revision ?? "") || publication?.source_revision !== adapterRevision) {
-    errors.push(`${planRelative}: publication source revision must equal the released adapter provenance revision`);
+  // The publication revision identifies the exact source tree used to build
+  // the immutable engine image. The desktop adapter can advance independently
+  // while continuing to consume that same pinned image, so coupling these two
+  // revisions would force a false image-republication claim on every adapter
+  // hardening release.
+  if (!revisionPattern.test(publication?.source_revision ?? "")) {
+    errors.push(`${planRelative}: publication must record an exact 40-character build source revision`);
   }
   const artifactMatch = typeof publication?.evidence_artifact === "string"
     ? new RegExp(`^${engine.id}-image-evidence-([1-9][0-9]*)-([1-9][0-9]*)$`).exec(publication.evidence_artifact)

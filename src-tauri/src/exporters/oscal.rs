@@ -13,8 +13,9 @@ pub const OSCAL_EXPORT_NOTICE: &str = "This document contains preliminary scanne
 ///
 /// OSCAL requires an assessment-plan import and reviewed-controls structure. Because
 /// the product does not perform a formal control assessment, the exporter points to
-/// an explicit placeholder plan and selects its empty control set. Canonical control
-/// mappings appear only as namespaced observation properties.
+/// an explicit placeholder plan and selects one clearly named local structural
+/// sentinel instead of `include-all`. Canonical control mappings appear only as
+/// namespaced observation properties.
 pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> AppResult<Value> {
     let run = case
         .scan_runs
@@ -46,8 +47,10 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
     let observations = canonical_observations
         .into_iter()
         .map(|observation| {
-            let finding = findings
-                .get(observation.finding_id.as_str())
+            let finding = observation
+                .finding_snapshot
+                .as_ref()
+                .or_else(|| findings.get(observation.finding_id.as_str()).copied())
                 .ok_or_else(|| {
                     AppError::InvalidRequest(format!(
                         "observation {} references missing finding {}",
@@ -85,10 +88,13 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
                     property("export-kind", "preliminary-scanner-observations")
                 ],
                 "reviewed-controls": {
-                    "description": "No formal controls were reviewed. This required OSCAL structure selects the empty set from the explicit placeholder assessment plan; related coordinates appear only on observations.",
+                    "description": "No formal catalog controls were reviewed. The required OSCAL selection contains only a product-local structural sentinel; related framework coordinates appear only on observations.",
                     "control-selections": [{
-                        "description": "Empty structural selection; it makes no control assessment claim.",
-                        "include-all": {}
+                        "description": "Product-local structural sentinel only; this is not a NIST, ISO, CIS, or other catalog control and makes no control assessment claim.",
+                        "props": [property("selection-kind", "no-formal-controls-reviewed")],
+                        "include-controls": [{
+                            "control-id": "ai-security-scanner-no-formal-controls-reviewed"
+                        }]
                     }]
                 },
                 "observations": observations,
@@ -327,6 +333,7 @@ mod tests {
             confidence: Confidence::High,
             evidence_hashes: vec!["abc".into()],
             observed_at: time,
+            finding_snapshot: None,
         });
         case
     }
@@ -342,8 +349,12 @@ mod tests {
         assert!(result.get("attestations").is_none());
         assert!(
             result["reviewed-controls"]["control-selections"][0]
-                .get("include-controls")
+                .get("include-all")
                 .is_none()
+        );
+        assert_eq!(
+            result["reviewed-controls"]["control-selections"][0]["include-controls"][0]["control-id"],
+            "ai-security-scanner-no-formal-controls-reviewed"
         );
         let props = result["observations"][0]["props"].as_array().unwrap();
         let coordinate = props
@@ -364,5 +375,29 @@ mod tests {
         let first = stable_uuid("same input");
         assert_eq!(first, stable_uuid("same input"));
         assert!(Uuid::parse_str(&first).is_ok());
+    }
+
+    #[test]
+    fn historical_export_uses_the_run_specific_finding_snapshot() {
+        let mut case = fixture();
+        let mut original = case.findings[0].clone();
+        original.title = "Run one title".into();
+        original.plain_language_summary = "Run one summary".into();
+        case.finding_observations[0].finding_snapshot = Some(original);
+        case.findings[0].title = "Later run title".into();
+        case.findings[0].plain_language_summary = "Later run summary".into();
+
+        let value =
+            export_oscal_assessment_results(&case, "run-1").expect("historical OSCAL export");
+        let observation = &value["assessment-results"]["results"][0]["observations"][0];
+
+        assert_eq!(observation["title"], "Run one title");
+        assert!(
+            observation["description"]
+                .as_str()
+                .expect("description")
+                .contains("Run one summary")
+        );
+        assert!(!observation.to_string().contains("Later run"));
     }
 }

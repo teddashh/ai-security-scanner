@@ -56,7 +56,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command as ProcessCommand, Stdio};
+use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration as StdDuration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const COVERAGE_CHANGED_EVENT: &str = "case://coverage-changed";
@@ -64,6 +67,8 @@ const RUN_PROGRESS_EVENT: &str = "scan://run-progress";
 const RUN_FINISHED_EVENT: &str = "scan://run-finished";
 const EXPORT_PROGRESS_EVENT: &str = "export://progress";
 const BOOTSTRAP_MESSAGE_EVENT: &str = "provider://bootstrap-message";
+const BOOTSTRAP_BROKER_DEADLINE: StdDuration = StdDuration::from_secs(20 * 60);
+const BOOTSTRAP_PIPE_DRAIN_DEADLINE: StdDuration = StdDuration::from_secs(2);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -963,8 +968,20 @@ fn run_bootstrap_broker_execute(
         .stdout
         .take()
         .ok_or_else(|| AppError::Internal("bootstrap broker stdout is unavailable".into()))?;
-    let authorization = crate::source_authorization::read_verified_authorization_one_shot(stdout);
-    let status = child.wait()?;
+    let (authorization_sender, authorization_receiver) = mpsc::sync_channel(1);
+    let authorization_reader = thread::spawn(move || {
+        let result = crate::source_authorization::read_verified_authorization_one_shot(stdout);
+        let _ = authorization_sender.send(result);
+    });
+    let status = wait_for_bootstrap_broker(&mut child, BOOTSTRAP_BROKER_DEADLINE)?;
+    let authorization = authorization_receiver
+        .recv_timeout(BOOTSTRAP_PIPE_DRAIN_DEADLINE)
+        .map_err(|_| {
+            AppError::NotAvailable(
+                "isolated bootstrap broker did not close its authorization channel".into(),
+            )
+        })?;
+    let _ = authorization_reader.join();
     let _ = stderr_reader.join();
     if !status.success() {
         return Err(AppError::NotAuthorized(
@@ -984,14 +1001,28 @@ fn run_bootstrap_broker_cleanup(
     app: &AppHandle,
 ) -> AppResult<BootstrapCleanupResult> {
     let (mut child, stderr_reader) = spawn_bootstrap_broker(binary, command, operation_id, app)?;
-    let mut encoded = Vec::new();
-    child
+    let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| AppError::Internal("bootstrap broker stdout is unavailable".into()))?
-        .take(1024 * 1024 + 1)
-        .read_to_end(&mut encoded)?;
-    let status = child.wait()?;
+        .ok_or_else(|| AppError::Internal("bootstrap broker stdout is unavailable".into()))?;
+    let (output_sender, output_receiver) = mpsc::sync_channel(1);
+    let output_reader = thread::spawn(move || {
+        let mut encoded = Vec::new();
+        let result = stdout
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut encoded)
+            .map(|_| encoded);
+        let _ = output_sender.send(result);
+    });
+    let status = wait_for_bootstrap_broker(&mut child, BOOTSTRAP_BROKER_DEADLINE)?;
+    let encoded = output_receiver
+        .recv_timeout(BOOTSTRAP_PIPE_DRAIN_DEADLINE)
+        .map_err(|_| {
+            AppError::NotAvailable(
+                "isolated bootstrap broker did not close its cleanup result channel".into(),
+            )
+        })??;
+    let _ = output_reader.join();
     let _ = stderr_reader.join();
     if !status.success() || encoded.len() > 1024 * 1024 {
         return Err(AppError::NotAuthorized(
@@ -1008,6 +1039,43 @@ fn run_bootstrap_broker_cleanup(
         ));
     }
     Ok(result)
+}
+
+fn wait_for_bootstrap_broker(child: &mut Child, timeout: StdDuration) -> AppResult<ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(_) => {
+                terminate_bootstrap_broker_bounded(child);
+                return Err(AppError::NotAvailable(
+                    "isolated bootstrap broker status could not be verified; exact partial cleanup remains in its ledger"
+                        .into(),
+                ));
+            }
+        }
+        if Instant::now() >= deadline {
+            terminate_bootstrap_broker_bounded(child);
+            return Err(AppError::NotAvailable(
+                "isolated bootstrap broker exceeded its bounded authorization window; exact partial cleanup remains in its ledger"
+                    .into(),
+            ));
+        }
+        thread::sleep(StdDuration::from_millis(50));
+    }
+}
+
+fn terminate_bootstrap_broker_bounded(child: &mut Child) {
+    let _ = child.kill();
+    let reap_deadline = Instant::now() + BOOTSTRAP_PIPE_DRAIN_DEADLINE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= reap_deadline => return,
+            Ok(None) => thread::sleep(StdDuration::from_millis(25)),
+        }
+    }
 }
 
 #[tauri::command]
@@ -1058,8 +1126,8 @@ pub fn seed_demo_case(state: State<'_, AppState>) -> AppResult<AssessmentCase> {
         return state.case_service().select_case(&summary.id);
     }
 
-    let case = build_demo_case();
-    state.storage.save_case(&case, "case.demo_seeded")?;
+    let mut case = build_demo_case();
+    state.storage.save_case(&mut case, "case.demo_seeded")?;
     state.storage.set_selected_case(Some(&case.id))?;
     Ok(case)
 }
@@ -1390,10 +1458,11 @@ pub fn approve_scope(
     }
     let service = state.case_service();
     let expires_at = Utc::now() + Duration::days(30);
-    for decision in decisions {
-        service.approve_scope(
-            &case_id,
-            ScopeApprovalRequest {
+    service.approve_scopes(
+        &case_id,
+        decisions
+            .into_iter()
+            .map(|decision| ScopeApprovalRequest {
                 asset_id: decision.asset_id,
                 permissions: decision.permissions,
                 confirmed_by: decision.confirmed_by,
@@ -1401,9 +1470,9 @@ pub fn approve_scope(
                 authorization_reference: decision.authorization_reference,
                 notes: decision.notes,
                 external_scope: decision.external_scope,
-            },
-        )?;
-    }
+            })
+            .collect(),
+    )?;
     let case = service.show_case(&case_id)?;
     emit(&app, COVERAGE_CHANGED_EVENT, &case)?;
     Ok(case)
@@ -1500,18 +1569,14 @@ pub fn pause_scan(
     let run_id = requested_or_latest_run(&service, &case_id, run_id.as_deref())?;
     let key = JobKey::new(case_id.clone(), run_id.clone())
         .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
-    state.jobs.pause(&key).map_err(|error| {
-        AppError::NotAvailable(format!(
-            "the scan has no live local worker to pause: {error}"
-        ))
-    })?;
-    let case = match service.pause_scan(&case_id, &run_id) {
-        Ok(case) => case,
-        Err(error) => {
-            let _ = state.jobs.resume(&key);
-            return Err(error);
-        }
-    };
+    let case = state
+        .jobs
+        .pause_with_durable_transition(&key, || service.pause_scan(&case_id, &run_id))
+        .map_err(|error| {
+            AppError::NotAvailable(format!(
+                "the scan has no live local worker to pause: {error}"
+            ))
+        })??;
     emit(&app, RUN_PROGRESS_EVENT, &case)?;
     Ok(case)
 }
@@ -1532,16 +1597,12 @@ pub fn resume_scan(
         .snapshot(&key)
         .is_some_and(|snapshot| !snapshot.is_terminal())
     {
-        state.jobs.resume(&key).map_err(|error| {
-            AppError::Runtime(format!("live scan resume could not be signalled: {error}"))
-        })?;
-        let case = match service.resume_scan(&case_id, &run_id) {
-            Ok(case) => case,
-            Err(error) => {
-                let _ = state.jobs.pause(&key);
-                return Err(error);
-            }
-        };
+        let case = state
+            .jobs
+            .resume_with_durable_transition(&key, || service.resume_scan(&case_id, &run_id))
+            .map_err(|error| {
+                AppError::Runtime(format!("live scan resume could not be signalled: {error}"))
+            })??;
         emit(&app, RUN_PROGRESS_EVENT, &case)?;
         return Ok(case);
     }
@@ -1813,9 +1874,11 @@ fn run_scan_worker(
                 ExecutionStage::Cancelled,
                 "scan cancellation was requested before this engine started",
             );
-            let _ = state
-                .case_service()
-                .apply_execution_report(&execution.case_id, &report);
+            let _ = context.coordinate_durable_write(|| {
+                state
+                    .case_service()
+                    .apply_execution_report(&execution.case_id, &report)
+            });
             let _ = control.mark_cancelled();
             cancelled = true;
             continue;
@@ -1848,6 +1911,7 @@ fn run_scan_worker(
                 artifacts,
                 &execution,
                 &control.cancellation_token(),
+                &context,
             ),
             (Err(error), _) | (_, Err(error)) => Err(AppError::Runtime(error.to_string())),
         };
@@ -1855,10 +1919,11 @@ fn run_scan_worker(
         match outcome {
             Ok(report) => {
                 let stage = report.checkpoint.stage.clone();
-                match state
-                    .case_service()
-                    .apply_execution_report(&execution.case_id, &report)
-                {
+                match context.coordinate_durable_write(|| {
+                    state
+                        .case_service()
+                        .apply_execution_report(&execution.case_id, &report)
+                }) {
                     Ok(applied) => {
                         let _ = emit(&app, RUN_PROGRESS_EVENT, &applied.case);
                         match stage {
@@ -1893,10 +1958,11 @@ fn run_scan_worker(
                     },
                     &bounded_error(&error),
                 );
-                if let Ok(applied) = state
-                    .case_service()
-                    .apply_execution_report(&execution.case_id, &report)
-                {
+                if let Ok(applied) = context.coordinate_durable_write(|| {
+                    state
+                        .case_service()
+                        .apply_execution_report(&execution.case_id, &report)
+                }) {
                     let _ = emit(&app, RUN_PROGRESS_EVENT, &applied.case);
                 }
                 if report.checkpoint.stage == ExecutionStage::Cancelled {
@@ -1926,6 +1992,7 @@ fn execute_planned_engine(
     artifacts: &ArtifactStore,
     execution: &PlannedEngineExecution,
     cancellation: &crate::container_runtime::CancellationToken,
+    job_context: &JobContext,
 ) -> AppResult<DurableExecutionReport> {
     let mut reconciled_cleanup = None::<ManagedNetworkCleanupOutcome>;
     let runtime_context = runtime.command_context();
@@ -1946,7 +2013,8 @@ fn execute_planned_engine(
                                 .into(),
                         )
                     })?;
-                    let cleanup = runtime.cleanup(container_name)?;
+                    let cleanup =
+                        cleanup_resume_container(runtime, execution, checkpoint, container_name)?;
                     merge_container_cleanup(&mut reconciled_cleanup, &cleanup);
                 }
             }
@@ -1956,14 +2024,16 @@ fn execute_planned_engine(
                         "interrupted container checkpoint has no exact container identity".into(),
                     )
                 })?;
-                let cleanup = runtime.cleanup(container_name)?;
+                let cleanup =
+                    cleanup_resume_container(runtime, execution, checkpoint, container_name)?;
                 merge_container_cleanup(&mut reconciled_cleanup, &cleanup);
             }
             ResumeAction::Reexecute
                 if !checkpoint.cleanup_completed || checkpoint.managed_network.is_some() =>
             {
                 if let Some(container_name) = checkpoint.container_name.as_deref() {
-                    let cleanup = runtime.cleanup(container_name)?;
+                    let cleanup =
+                        cleanup_resume_container(runtime, execution, checkpoint, container_name)?;
                     merge_container_cleanup(&mut reconciled_cleanup, &cleanup);
                 }
             }
@@ -2048,9 +2118,11 @@ fn execute_planned_engine(
             durable.checkpoint.managed_network = network_identity.clone();
             durable.checkpoint.cleanup_completed =
                 network_identity.is_none() && durable.checkpoint.cleanup_completed;
-            let applied = state
-                .case_service()
-                .apply_execution_report(&execution.case_id, &durable)?;
+            let applied = job_context.coordinate_durable_write(|| {
+                state
+                    .case_service()
+                    .apply_execution_report(&execution.case_id, &durable)
+            })?;
             let _ = emit(app, RUN_PROGRESS_EVENT, &applied.case);
             Ok(())
         }) {
@@ -2098,6 +2170,40 @@ fn execute_planned_engine(
         }
     }
     Ok(DurableExecutionReport::from(&report))
+}
+
+fn cleanup_resume_container(
+    runtime: &ProcessContainerRuntime,
+    execution: &PlannedEngineExecution,
+    checkpoint: &ExecutionCheckpoint,
+    persisted_container_name: &str,
+) -> AppResult<CleanupOutcome> {
+    if checkpoint.case_id != execution.case_id
+        || checkpoint.scan_run_id != execution.scan_run_id
+        || checkpoint.engine_run_id != execution.engine_run_id
+        || checkpoint.engine_id != execution.manifest.id
+    {
+        return Err(AppError::NotAuthorized(
+            "resume cleanup checkpoint does not match the planned execution".into(),
+        ));
+    }
+    let ownership = OwnedContainerCleanupRequest {
+        case_id: checkpoint.case_id.clone(),
+        scan_run_id: checkpoint.scan_run_id.clone(),
+        engine_run_id: checkpoint.engine_run_id.clone(),
+        engine_id: checkpoint.engine_id.clone(),
+        attempt: checkpoint.attempt,
+        scope_sha256: checkpoint.scope_sha256.clone().ok_or_else(|| {
+            AppError::NotAuthorized("resume cleanup checkpoint has no frozen scope digest".into())
+        })?,
+        image: PinnedImage::from_manifest(&execution.manifest)?,
+    };
+    if ownership.container_name()? != persisted_container_name {
+        return Err(AppError::NotAuthorized(
+            "resume cleanup container name conflicts with its execution ownership proof".into(),
+        ));
+    }
+    runtime.cleanup_owned_container(&ownership)
 }
 
 fn resume_captured_execution(
@@ -3125,7 +3231,7 @@ mod tests {
             engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
             state
                 .storage
-                .save_case(&stored, "test.interrupted_checkpoint")
+                .save_case(&mut stored, "test.interrupted_checkpoint")
                 .unwrap();
         }
         assert_eq!(service.recover_interrupted_scans().unwrap(), 1);

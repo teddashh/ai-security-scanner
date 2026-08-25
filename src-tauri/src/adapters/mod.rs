@@ -21,7 +21,7 @@ use std::io::{Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.1.0";
+pub const ADAPTER_VERSION: &str = "0.1.1";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -293,10 +293,12 @@ fn normalize_artifacts(
             artifact.case_id == input.case_id
                 && artifact.run_id == input.scan_run_id
                 && artifact.engine_run_id == input.engine_run_id
+                && !is_runtime_stream_capture_path(&artifact.relative_path)
         })
         .collect();
 
     if relevant.is_empty() {
+        output.complete = false;
         push_warning(
             &mut output.warnings,
             format!("{} produced no raw artifacts to normalize", adapter.id),
@@ -304,8 +306,10 @@ fn normalize_artifacts(
         return Ok(output);
     }
 
+    let relevant_count = relevant.len();
     for artifact in relevant.into_iter().take(MAX_ARTIFACTS) {
         if processed_bytes.saturating_add(artifact.byte_length) > MAX_TOTAL_BYTES {
+            output.complete = false;
             push_warning(
                 &mut output.warnings,
                 "adapter input exceeded the total byte limit; remaining raw artifacts were retained but not normalized",
@@ -313,19 +317,39 @@ fn normalize_artifacts(
             break;
         }
 
-        let Some(bytes) =
-            read_bounded_artifact(input.artifact_root, artifact, &mut output.warnings)
-        else {
+        let warnings_before_read = output.warnings.len();
+        let bytes = read_bounded_artifact(input.artifact_root, artifact, &mut output.warnings);
+        if output.warnings.len() > warnings_before_read {
+            output.complete = false;
+        }
+        let Some(bytes) = bytes else {
             continue;
         };
         processed_bytes += bytes.len() as u64;
 
-        let Some(parsed) = parse_artifact(&bytes, artifact, &mut output.warnings) else {
+        let warnings_before_parse = output.warnings.len();
+        let parsed = parse_artifact(&bytes, artifact, &mut output.warnings);
+        if output.warnings.len() > warnings_before_parse {
+            output.complete = false;
+        }
+        let Some(parsed) = parsed else {
             continue;
         };
+        let warnings_before_extract = output.warnings.len();
         let records = extract_records(adapter.profile, &parsed, &mut output.warnings);
+        if output.warnings.len() > warnings_before_extract {
+            output.complete = false;
+        }
+        if records.len() >= MAX_RECORDS {
+            output.complete = false;
+            push_warning(
+                &mut output.warnings,
+                "adapter extraction reached the record safety boundary; completeness cannot be established",
+            );
+        }
         for record in records {
             if processed_records >= MAX_RECORDS {
+                output.complete = false;
                 push_warning(
                     &mut output.warnings,
                     "adapter record limit reached; remaining raw records were retained but not normalized",
@@ -333,15 +357,20 @@ fn normalize_artifacts(
                 break;
             }
             processed_records += 1;
-            let Some(asset_id) = resolve_asset(&record, input.asset_ids, &mut output.warnings)
-            else {
+            let warnings_before_resolution = output.warnings.len();
+            let asset_id = resolve_asset(&record, input.asset_ids, &mut output.warnings);
+            if output.warnings.len() > warnings_before_resolution {
+                output.complete = false;
+            }
+            let Some(asset_id) = asset_id else {
                 continue;
             };
             merge_finding(&mut findings, adapter, input, artifact, record, asset_id);
         }
     }
 
-    if input.raw_artifacts.len() > MAX_ARTIFACTS {
+    if relevant_count > MAX_ARTIFACTS {
+        output.complete = false;
         push_warning(
             &mut output.warnings,
             "adapter artifact-count limit reached; extra raw artifacts were retained but not normalized",
@@ -360,6 +389,36 @@ fn normalize_artifacts(
 
     output.findings = findings.into_values().collect();
     Ok(output)
+}
+
+/// Stdout and stderr are retained as raw evidence, but the released engine
+/// contract writes normalizer input below `/output`. Feeding the backend-owned
+/// stream captures to JSON/XML adapters would make every otherwise-valid run
+/// look malformed (including the normal empty-stream case). Match the complete
+/// private run layout so an engine-created `output/raw/stdout.log` remains
+/// ordinary untrusted output instead of being silently skipped.
+fn is_runtime_stream_capture_path(relative_path: &str) -> bool {
+    let mut components = Path::new(relative_path).components().rev();
+    let Some(Component::Normal(file_name)) = components.next() else {
+        return false;
+    };
+    let Some(Component::Normal(raw_directory)) = components.next() else {
+        return false;
+    };
+    let Some(Component::Normal(attempt_directory)) = components.next() else {
+        return false;
+    };
+    let Some(attempt_directory) = attempt_directory.to_str() else {
+        return false;
+    };
+
+    matches!(file_name.to_str(), Some("stdout.log" | "stderr.log"))
+        && raw_directory == "raw"
+        && attempt_directory
+            .strip_prefix("attempt-")
+            .is_some_and(|attempt| {
+                !attempt.is_empty() && attempt.bytes().all(|byte| byte.is_ascii_digit())
+            })
 }
 
 fn read_bounded_artifact(
@@ -475,6 +534,13 @@ fn parse_artifact(
                 if line.is_empty() {
                     continue;
                 }
+                if rows.len() >= MAX_RECORDS {
+                    push_warning(
+                        warnings,
+                        "JSONL record limit reached; later lines remain only as raw evidence",
+                    );
+                    break;
+                }
                 if line.len() > MAX_LINE_BYTES {
                     push_warning(
                         warnings,
@@ -491,9 +557,6 @@ fn parse_artifact(
                         warnings,
                         format!("malformed JSONL line {} was skipped", index + 1),
                     ),
-                }
-                if rows.len() >= MAX_RECORDS {
-                    break;
                 }
             }
             if rows.is_empty() {
@@ -920,12 +983,20 @@ fn json_rows<'a>(
     warnings: &mut Vec<String>,
 ) -> Vec<(String, &'a Value)> {
     match parsed {
-        ParsedArtifact::Json(Value::Array(values)) => values
-            .iter()
-            .take(MAX_RECORDS)
-            .enumerate()
-            .map(|(index, value)| (format!("/{index}"), value))
-            .collect(),
+        ParsedArtifact::Json(Value::Array(values)) => {
+            if values.len() > MAX_RECORDS {
+                push_warning(
+                    warnings,
+                    "top-level JSON record limit reached; later rows remain only as raw evidence",
+                );
+            }
+            values
+                .iter()
+                .take(MAX_RECORDS)
+                .enumerate()
+                .map(|(index, value)| (format!("/{index}"), value))
+                .collect()
+        }
         ParsedArtifact::Json(value @ Value::Object(_)) => vec![("/".into(), value)],
         ParsedArtifact::Json(_) => {
             push_warning(warnings, "top-level JSON scalar was ignored");
@@ -2340,5 +2411,24 @@ mod tests {
             Some("Example")
         );
         assert!(references_from(&value).is_empty());
+    }
+
+    #[test]
+    fn only_backend_runtime_stream_capture_paths_are_excluded() {
+        assert!(is_runtime_stream_capture_path(
+            "case/run/engine/attempt-1/raw/stdout.log"
+        ));
+        assert!(is_runtime_stream_capture_path(
+            "case/run/engine/attempt-42/raw/stderr.log"
+        ));
+        assert!(!is_runtime_stream_capture_path(
+            "case/run/engine/attempt-1/output/raw/stdout.log"
+        ));
+        assert!(!is_runtime_stream_capture_path(
+            "case/run/engine/attempt-one/raw/stdout.log"
+        ));
+        assert!(!is_runtime_stream_capture_path(
+            "case/run/engine/attempt-1/raw/result.json"
+        ));
     }
 }

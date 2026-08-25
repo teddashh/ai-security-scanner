@@ -99,6 +99,9 @@ jobs:
       - name: Exercise release collection and finalization tooling
         run: npm run release:self-test
 
+      - name: Test frontend security policy
+        run: npm run test:frontend
+
   supply-chain:
     name: Generate SBOMs and notices
     needs: validate

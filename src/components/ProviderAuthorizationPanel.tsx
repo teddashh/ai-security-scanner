@@ -187,16 +187,26 @@ export function ProviderAuthorizationPanel({
 
   useEffect(() => {
     if (!nativeMode) return undefined;
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     void scannerService.subscribe(EVENTS.bootstrapMessage, (payload) => {
+      if (disposed) return;
       if (!payload || typeof payload !== "object") return;
       const message = payload as { operationId?: unknown; operation_id?: unknown; message?: unknown };
       const id = typeof message.operationId === "string" ? message.operationId : message.operation_id;
       const safeMessage = message.message;
       if (typeof id !== "string" || id !== bootstrapOperationIdRef.current || typeof safeMessage !== "string") return;
       setBootstrapMessages((current) => [...current.slice(-11), safeMessage.slice(0, 4096)]);
-    }).then((next) => { unlisten = next; });
-    return () => { unlisten?.(); };
+    }).then((next) => {
+      if (disposed) next();
+      else unlisten = next;
+    }).catch((subscribeError) => {
+      if (!disposed) setError(`無法接收 bootstrap 狀態通知：${messageFromError(subscribeError)}`);
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [nativeMode]);
 
   useEffect(() => {

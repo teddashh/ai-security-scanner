@@ -140,7 +140,7 @@ impl BootstrapInteraction for StdioInteraction {
             AppError::NotAvailable("PKCE loopback callback listener could not bind".into())
         })?;
         listener
-            .set_nonblocking(false)
+            .set_nonblocking(true)
             .map_err(|_| AppError::NotAvailable("PKCE callback listener could not start".into()))?;
         writeln!(
             io::stderr().lock(),
@@ -149,14 +149,32 @@ impl BootstrapInteraction for StdioInteraction {
             prompt.redirect_uri,
             prompt.safety_notice
         )?;
-        let (mut stream, peer) = listener.accept().map_err(|_| {
-            AppError::NotAvailable("PKCE loopback callback was not received".into())
-        })?;
+        let (mut stream, peer) = loop {
+            if Utc::now() >= prompt.expires_at {
+                return Err(AppError::NotAuthorized(
+                    "PKCE callback authorization window expired".into(),
+                ));
+            }
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(StdDuration::from_millis(100));
+                }
+                Err(_) => {
+                    return Err(AppError::NotAvailable(
+                        "PKCE loopback callback was not received".into(),
+                    ));
+                }
+            }
+        };
         if !peer.ip().is_loopback() {
             return Err(AppError::NotAuthorized(
                 "PKCE callback did not originate on loopback".into(),
             ));
         }
+        stream
+            .set_nonblocking(false)
+            .map_err(|_| AppError::NotAvailable("PKCE callback stream could not start".into()))?;
         stream
             .set_read_timeout(Some(StdDuration::from_secs(30)))
             .map_err(|_| AppError::NotAvailable("PKCE callback timeout could not be set".into()))?;
@@ -335,3 +353,57 @@ fn harden_process() {
 
 #[cfg(not(unix))]
 fn harden_process() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ai_security_scanner_lib::bootstrap::BootstrapProvider;
+    use std::net::TcpStream;
+    use std::thread;
+
+    #[test]
+    fn fragmented_pkce_callback_is_read_after_accept() {
+        let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve callback port");
+        let port = reservation.local_addr().expect("reserved address").port();
+        drop(reservation);
+
+        let prompt = PkceAuthorizationPrompt {
+            provider: BootstrapProvider::Gcp,
+            authorization_url: "https://accounts.google.com/o/oauth2/v2/auth".into(),
+            redirect_uri: format!("http://127.0.0.1:{port}/callback"),
+            expires_at: Utc::now() + chrono::Duration::seconds(10),
+            safety_notice: "test callback".into(),
+        };
+        let broker = thread::spawn(move || StdioInteraction.complete_pkce_authorization(&prompt));
+
+        let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+        let mut browser = loop {
+            match TcpStream::connect(("127.0.0.1", port)) {
+                Ok(stream) => break stream,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    thread::sleep(StdDuration::from_millis(25));
+                }
+                Err(error) => panic!("connect to callback listener: {error}"),
+            }
+        };
+        browser
+            .write_all(b"GET /callback?code=code-123&state=state-456 HTTP/1.1\r\n")
+            .expect("write request line");
+        thread::sleep(StdDuration::from_millis(150));
+        browser
+            .write_all(b"Host: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .expect("write delayed headers");
+        let mut response = String::new();
+        browser
+            .read_to_string(&mut response)
+            .expect("read callback response");
+
+        let callback = broker
+            .join()
+            .expect("broker thread")
+            .expect("accepted callback");
+        assert_eq!(callback.authorization_code.as_str(), "code-123");
+        assert_eq!(callback.returned_state.as_str(), "state-456");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    }
+}

@@ -982,6 +982,11 @@ pub(crate) fn case_for_export(
         for finding in &mut exported.findings {
             redact_finding(finding);
         }
+        for observation in &mut exported.finding_observations {
+            if let Some(snapshot) = &mut observation.finding_snapshot {
+                redact_finding(snapshot);
+            }
+        }
         for artifact in &mut exported.raw_artifacts {
             artifact.relative_path = "[redacted]".into();
         }
@@ -991,6 +996,9 @@ pub(crate) fn case_for_export(
                 for reason in &mut diff.reasons {
                     reason.detail = "[redacted comparison reason]".into();
                 }
+            }
+            for issue in &mut comparison.completeness_issues {
+                issue.detail = "[redacted comparison completeness reason]".into();
             }
         }
     }
@@ -1107,6 +1115,21 @@ fn sort_case(case: &mut AssessmentCase) {
         observation.asset_ids.sort();
         observation.engine_ids.sort();
         observation.evidence_hashes.sort();
+        if let Some(finding) = &mut observation.finding_snapshot {
+            finding.asset_ids.sort();
+            finding
+                .evidence
+                .sort_by(|left, right| left.id.cmp(&right.id));
+            finding.control_references.sort_by(|left, right| {
+                left.framework
+                    .cmp(&right.framework)
+                    .then_with(|| left.framework_version.cmp(&right.framework_version))
+                    .then_with(|| left.control_id.cmp(&right.control_id))
+            });
+            finding.official_references.sort();
+            finding.priority_reasons.sort();
+            finding.tags.sort();
+        }
     }
     case.raw_artifacts
         .sort_by(|left, right| left.id.cmp(&right.id));
@@ -1227,6 +1250,11 @@ fn prepare_artifacts(
 }
 
 fn validate_evidence_references(case: &AssessmentCase) -> AppResult<()> {
+    let run_ids = case
+        .scan_runs
+        .iter()
+        .map(|run| run.id.as_str())
+        .collect::<BTreeSet<_>>();
     let engine_runs = case
         .scan_runs
         .iter()
@@ -1244,13 +1272,34 @@ fn validate_evidence_references(case: &AssessmentCase) -> AppResult<()> {
         .iter()
         .map(|artifact| (artifact.id.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
-    let mut evidence_ids = BTreeSet::new();
-
-    for finding in &case.findings {
+    let mut evidence_by_id = BTreeMap::<String, Value>::new();
+    let mut validate_finding = |finding: &Finding,
+                                expected_run_id: Option<&str>|
+     -> AppResult<()> {
+        if finding.case_id != case.id {
+            return Err(AppError::InvalidRequest(format!(
+                "finding {} belongs to another case",
+                finding.id
+            )));
+        }
+        if !run_ids.contains(finding.first_seen_run_id.as_str())
+            || !run_ids.contains(finding.last_seen_run_id.as_str())
+        {
+            return Err(AppError::InvalidRequest(format!(
+                "finding {} references a missing first or last scan run",
+                finding.id
+            )));
+        }
+        if finding.evidence.is_empty() {
+            return Err(AppError::InvalidRequest(format!(
+                "finding {} has no exact evidence provenance",
+                finding.id
+            )));
+        }
         for evidence in &finding.evidence {
-            if !evidence_ids.insert(evidence.id.as_str()) {
+            if expected_run_id.is_some_and(|run_id| evidence.run_id != run_id) {
                 return Err(AppError::InvalidRequest(format!(
-                    "duplicate evidence identifier in case export: {}",
+                    "historical finding snapshot evidence {} belongs to a different run",
                     evidence.id
                 )));
             }
@@ -1287,7 +1336,107 @@ fn validate_evidence_references(case: &AssessmentCase) -> AppResult<()> {
                     evidence.id
                 )));
             }
+            let encoded = serde_json::to_value(evidence)?;
+            if let Some(existing) = evidence_by_id.get(&evidence.id) {
+                if existing != &encoded {
+                    return Err(AppError::InvalidRequest(format!(
+                        "conflicting duplicate evidence identifier in case export: {}",
+                        evidence.id
+                    )));
+                }
+            } else {
+                evidence_by_id.insert(evidence.id.clone(), encoded);
+            }
         }
+        Ok(())
+    };
+
+    for finding in &case.findings {
+        validate_finding(finding, None)?;
+    }
+    let canonical_findings = case
+        .findings
+        .iter()
+        .map(|finding| (finding.id.as_str(), finding))
+        .collect::<BTreeMap<_, _>>();
+    if canonical_findings.len() != case.findings.len() {
+        return Err(AppError::InvalidRequest(
+            "case export contains duplicate canonical finding identifiers".into(),
+        ));
+    }
+    for observation in &case.finding_observations {
+        if !run_ids.contains(observation.run_id.as_str()) {
+            return Err(AppError::InvalidRequest(format!(
+                "observation {} references missing scan run {}",
+                observation.id, observation.run_id
+            )));
+        }
+        let canonical = canonical_findings
+            .get(observation.finding_id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                AppError::InvalidRequest(format!(
+                    "observation {} references missing canonical finding {}",
+                    observation.id, observation.finding_id
+                ))
+            })?;
+        let historical = observation.finding_snapshot.as_ref().unwrap_or(canonical);
+        if observation.engine_ids.is_empty() || observation.evidence_hashes.is_empty() {
+            return Err(AppError::InvalidRequest(format!(
+                "historical finding snapshot for observation {} has no exact evidence provenance",
+                observation.id
+            )));
+        }
+        let normalize = |values: &[String]| {
+            let mut values = values.to_vec();
+            values.sort();
+            values.dedup();
+            values
+        };
+        let snapshot_assets = normalize(&historical.asset_ids);
+        let observation_assets = normalize(&observation.asset_ids);
+        let mut snapshot_hashes = historical
+            .evidence
+            .iter()
+            .map(|evidence| evidence.artifact_sha256.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        snapshot_hashes.sort();
+        snapshot_hashes.dedup();
+        let mut observation_hashes = observation
+            .evidence_hashes
+            .iter()
+            .map(|hash| hash.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        observation_hashes.sort();
+        observation_hashes.dedup();
+        let snapshot_engines = normalize(
+            &historical
+                .evidence
+                .iter()
+                .map(|evidence| evidence.engine_id.clone())
+                .collect::<Vec<_>>(),
+        );
+        let observation_engines = normalize(&observation.engine_ids);
+        if historical.id != observation.finding_id
+            || historical.fingerprint != observation.fingerprint
+            || historical.last_seen_run_id != observation.run_id
+            || snapshot_assets != observation_assets
+            || historical.severity != observation.severity
+            || historical.confidence != observation.confidence
+            || snapshot_hashes != observation_hashes
+            || snapshot_engines != observation_engines
+        {
+            let provenance = if observation.finding_snapshot.is_some() {
+                "historical finding snapshot"
+            } else {
+                "legacy canonical finding provenance"
+            };
+            return Err(AppError::InvalidRequest(format!(
+                "observation {} does not match its {provenance}",
+                observation.id
+            )));
+        }
+        validate_finding(historical, Some(&observation.run_id))?;
     }
     Ok(())
 }
@@ -1800,6 +1949,7 @@ mod tests {
 
     fn add_reversible_grouping(case: &mut AssessmentCase) {
         let time = Utc.with_ymd_and_hms(2026, 8, 24, 12, 30, 0).unwrap();
+        let artifact = case.raw_artifacts[0].clone();
         for (id, title) in [
             ("finding-a", "Independent finding A"),
             ("finding-b", "Independent finding B"),
@@ -1818,7 +1968,20 @@ mod tests {
                 priority: 50,
                 priority_reasons: vec![],
                 asset_ids: vec!["asset-1".into()],
-                evidence: vec![],
+                evidence: vec![Evidence {
+                    id: format!("evidence-{id}"),
+                    finding_id: id.into(),
+                    run_id: artifact.run_id.clone(),
+                    engine_run_id: Some(artifact.engine_run_id.clone()),
+                    kind: EvidenceKind::Observation,
+                    engine_id: "engine-1".into(),
+                    observed_at: time,
+                    summary: "Independent fixture evidence".into(),
+                    artifact_id: artifact.id.clone(),
+                    artifact_sha256: artifact.sha256.clone(),
+                    pointer: None,
+                    redacted: false,
+                }],
                 control_references: vec![],
                 recommendation: "Review without automatic remediation".into(),
                 verification_guidance: "Run the responsible engine again".into(),
@@ -1990,6 +2153,15 @@ mod tests {
         });
 
         validate_evidence_references(&case).unwrap();
+        let canonical_evidence = case.findings[0].evidence.clone();
+        case.findings[0].evidence.clear();
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("no exact evidence provenance")
+        );
+        case.findings[0].evidence = canonical_evidence;
         case.findings[0].evidence[0].engine_run_id = Some("another-engine-run".into());
         assert!(
             validate_evidence_references(&case)
@@ -2004,6 +2176,91 @@ mod tests {
         validate_evidence_references(&case).unwrap();
         case.findings[0].evidence[0].artifact_sha256 = "f".repeat(64);
         assert!(validate_evidence_references(&case).is_err());
+
+        case.findings[0].evidence[0].artifact_sha256 = artifact.sha256.clone();
+        let snapshot = case.findings[0].clone();
+        case.finding_observations.push(FindingObservation {
+            id: "observation-1".into(),
+            run_id: "run-1".into(),
+            finding_id: snapshot.id.clone(),
+            fingerprint: snapshot.fingerprint.clone(),
+            asset_ids: snapshot.asset_ids.clone(),
+            engine_ids: vec!["engine-1".into()],
+            severity: snapshot.severity.clone(),
+            confidence: snapshot.confidence.clone(),
+            evidence_hashes: vec![artifact.sha256.clone()],
+            observed_at: artifact.created_at,
+            finding_snapshot: Some(snapshot),
+        });
+        validate_evidence_references(&case)
+            .expect("an identical canonical/snapshot evidence record is deduplicated");
+        let snapshot = case.finding_observations[0]
+            .finding_snapshot
+            .take()
+            .expect("snapshot");
+        validate_evidence_references(&case)
+            .expect("latest exact legacy canonical projection remains exportable");
+        case.findings[0].severity = Severity::Low;
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("legacy canonical finding provenance")
+        );
+        case.findings[0].severity = Severity::Medium;
+        case.finding_observations[0].finding_snapshot = Some(snapshot);
+        case.finding_observations[0]
+            .finding_snapshot
+            .as_mut()
+            .unwrap()
+            .evidence[0]
+            .engine_id = "tampered-engine".into();
+        assert!(validate_evidence_references(&case).is_err());
+        case.finding_observations[0]
+            .finding_snapshot
+            .as_mut()
+            .unwrap()
+            .evidence[0]
+            .engine_id = "engine-1".into();
+        case.finding_observations[0].severity = Severity::Low;
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("historical finding snapshot")
+        );
+        case.finding_observations[0].severity = Severity::Medium;
+        case.finding_observations[0]
+            .finding_snapshot
+            .as_mut()
+            .unwrap()
+            .evidence
+            .clear();
+        case.finding_observations[0].evidence_hashes.clear();
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("historical finding snapshot"),
+            "empty snapshot evidence must not bypass observation engine binding"
+        );
+
+        let canonical = case.findings[0].clone();
+        case.findings.clear();
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("missing canonical finding")
+        );
+        case.findings.push(canonical);
+        case.finding_observations[0].run_id = "missing-run".into();
+        assert!(
+            validate_evidence_references(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("missing scan run")
+        );
     }
 
     #[test]
@@ -2169,6 +2426,7 @@ mod tests {
             confidence: Confidence::High,
             evidence_hashes: vec![case.raw_artifacts[0].sha256.clone()],
             observed_at: time,
+            finding_snapshot: None,
         });
         case.comparisons.push(VerificationComparison {
             id: "comparison-1".into(),
@@ -2191,6 +2449,13 @@ mod tests {
                     asset_id: Some("asset-1".into()),
                     detail: SENTINEL.into(),
                 }],
+            }],
+            complete: false,
+            completeness_issues: vec![FindingDiffReason {
+                code: FindingDiffReasonCode::CoordinateNotCompleted,
+                engine_id: Some("engine-1".into()),
+                asset_id: Some("asset-1".into()),
+                detail: SENTINEL.into(),
             }],
         });
         case.raw_artifacts[0].relative_path = format!("raw/{SENTINEL}.txt");

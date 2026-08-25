@@ -90,15 +90,27 @@ fn pause_resume_and_cancel_requests_reach_each_engine_control() {
         .recv_timeout(Duration::from_secs(2))
         .expect("engine token");
 
-    let paused = manager.pause(&key).expect("pause request");
+    let (paused, pause_changed) = manager.pause_transition(&key).expect("pause request");
+    assert!(pause_changed);
     assert_eq!(paused.status, JobStatus::PauseRequested);
     assert_eq!(paused.engines[0].status, EngineJobStatus::PauseRequested);
     assert!(token.is_pause_requested());
     assert!(!token.is_paused(), "a request is not an acknowledged pause");
+    let (_, duplicate_pause_changed) = manager
+        .pause_transition(&key)
+        .expect("duplicate pause request");
+    assert!(!duplicate_pause_changed);
+    assert!(token.is_pause_requested());
 
-    let resumed = manager.resume(&key).expect("resume request");
+    let (resumed, resume_changed) = manager.resume_transition(&key).expect("resume request");
+    assert!(resume_changed);
     assert_eq!(resumed.status, JobStatus::Running);
     assert_eq!(resumed.engines[0].status, EngineJobStatus::Running);
+    assert!(!token.is_pause_requested());
+    let (_, duplicate_resume_changed) = manager
+        .resume_transition(&key)
+        .expect("duplicate resume request");
+    assert!(!duplicate_resume_changed);
     assert!(!token.is_pause_requested());
 
     let cancelling = manager.cancel(&key).expect("cancel request");
@@ -108,6 +120,14 @@ fn pause_resume_and_cancel_requests_reach_each_engine_control() {
         EngineJobStatus::CancelRequested
     );
     assert!(token.is_cancelled());
+    assert!(matches!(
+        manager.pause_transition(&key),
+        Err(JobManagerError::CancellationPending(_))
+    ));
+    assert!(matches!(
+        manager.resume_transition(&key),
+        Err(JobManagerError::CancellationPending(_))
+    ));
 
     let terminal = terminal_rx
         .recv_timeout(Duration::from_secs(2))
@@ -115,6 +135,181 @@ fn pause_resume_and_cancel_requests_reach_each_engine_control() {
     assert_eq!(terminal.status, JobStatus::Cancelled);
     assert_eq!(terminal.engines[0].status, EngineJobStatus::Cancelled);
     assert_eq!(manager.live_count(), 0);
+}
+
+#[test]
+fn durable_pause_and_resume_transitions_are_serialized_per_job() {
+    let manager = JobManager::default();
+    let key = key();
+    let (token_tx, token_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |context| {
+                let engine = context.engine("gitleaks").expect("engine control");
+                engine.mark_running().expect("running");
+                let token = engine.cancellation_token();
+                token_tx.send(token.clone()).expect("token");
+                while !token.is_cancelled() {
+                    thread::sleep(Duration::from_millis(2));
+                }
+                engine.mark_cancelled().expect("cancelled");
+                JobCompletion::Cancelled
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal event"),
+        )
+        .expect("job starts");
+    let token = token_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("engine token");
+
+    let pause_release = Arc::new(Barrier::new(2));
+    let (pause_a_entered_tx, pause_a_entered_rx) = mpsc::channel();
+    let pause_a_manager = manager.clone();
+    let pause_a_key = key.clone();
+    let pause_a_release = Arc::clone(&pause_release);
+    let pause_a = thread::spawn(move || {
+        pause_a_manager.pause_with_durable_transition(&pause_a_key, || {
+            pause_a_entered_tx.send(()).expect("pause A entered");
+            pause_a_release.wait();
+            Err::<(), _>("simulated revision conflict")
+        })
+    });
+    pause_a_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("pause A entered durable mutation");
+
+    let (pause_b_entered_tx, pause_b_entered_rx) = mpsc::channel();
+    let pause_b_manager = manager.clone();
+    let pause_b_key = key.clone();
+    let pause_b = thread::spawn(move || {
+        pause_b_manager.pause_with_durable_transition(&pause_b_key, || {
+            pause_b_entered_tx.send(()).expect("pause B entered");
+            Ok::<_, &str>(())
+        })
+    });
+    assert!(
+        pause_b_entered_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "duplicate durable pause must wait for the first transition"
+    );
+    pause_release.wait();
+    assert!(pause_a.join().expect("pause A thread").unwrap().is_err());
+    assert!(pause_b.join().expect("pause B thread").unwrap().is_ok());
+    assert!(token.is_pause_requested());
+
+    let resume_release = Arc::new(Barrier::new(2));
+    let (resume_a_entered_tx, resume_a_entered_rx) = mpsc::channel();
+    let resume_a_manager = manager.clone();
+    let resume_a_key = key.clone();
+    let resume_a_release = Arc::clone(&resume_release);
+    let resume_a = thread::spawn(move || {
+        resume_a_manager.resume_with_durable_transition(&resume_a_key, || {
+            resume_a_entered_tx.send(()).expect("resume A entered");
+            resume_a_release.wait();
+            Err::<(), _>("simulated revision conflict")
+        })
+    });
+    resume_a_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("resume A entered durable mutation");
+
+    let (resume_b_entered_tx, resume_b_entered_rx) = mpsc::channel();
+    let resume_b_manager = manager.clone();
+    let resume_b_key = key.clone();
+    let resume_b = thread::spawn(move || {
+        resume_b_manager.resume_with_durable_transition(&resume_b_key, || {
+            resume_b_entered_tx.send(()).expect("resume B entered");
+            Ok::<_, &str>(())
+        })
+    });
+    assert!(
+        resume_b_entered_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "duplicate durable resume must wait for the first transition"
+    );
+    resume_release.wait();
+    assert!(resume_a.join().expect("resume A thread").unwrap().is_err());
+    assert!(resume_b.join().expect("resume B thread").unwrap().is_ok());
+    assert!(!token.is_pause_requested());
+
+    manager.cancel(&key).expect("cancel worker");
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("terminal callback");
+    assert_eq!(terminal.status, JobStatus::Cancelled);
+}
+
+#[test]
+fn worker_durable_write_is_serialized_with_pause_transition() {
+    let manager = JobManager::default();
+    let key = key();
+    let durable_release = Arc::new(Barrier::new(2));
+    let worker_release = Arc::clone(&durable_release);
+    let (durable_entered_tx, durable_entered_rx) = mpsc::channel();
+    let (token_tx, token_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |context| {
+                let engine = context.engine("gitleaks").expect("engine control");
+                engine.mark_running().expect("running");
+                let token = engine.cancellation_token();
+                token_tx.send(token.clone()).expect("token");
+                context.coordinate_durable_write(|| {
+                    durable_entered_tx.send(()).expect("worker write entered");
+                    worker_release.wait();
+                });
+                while !token.is_cancelled() {
+                    thread::sleep(Duration::from_millis(2));
+                }
+                engine.mark_cancelled().expect("cancelled");
+                JobCompletion::Cancelled
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal event"),
+        )
+        .expect("job starts");
+    let token = token_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("engine token");
+    durable_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker durable write entered");
+
+    let (pause_entered_tx, pause_entered_rx) = mpsc::channel();
+    let pause_manager = manager.clone();
+    let pause_key = key.clone();
+    let pause = thread::spawn(move || {
+        pause_manager.pause_with_durable_transition(&pause_key, || {
+            pause_entered_tx
+                .send(())
+                .expect("pause durable write entered");
+            Ok::<_, &str>(())
+        })
+    });
+    assert!(
+        pause_entered_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "pause persistence must wait for the worker's report persistence"
+    );
+
+    durable_release.wait();
+    assert!(pause.join().expect("pause thread").unwrap().is_ok());
+    assert!(token.is_pause_requested());
+
+    manager.cancel(&key).expect("cancel worker");
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("terminal callback");
+    assert_eq!(terminal.status, JobStatus::Cancelled);
 }
 
 #[test]
@@ -207,6 +402,34 @@ fn worker_panic_is_sanitized_and_reported_as_terminal_failure() {
             .contains("sensitive panic payload")
     );
     assert_eq!(manager.live_count(), 0);
+}
+
+#[test]
+fn panic_after_engine_completion_cannot_report_a_successful_job() {
+    let manager = JobManager::default();
+    let key = key();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+
+    manager
+        .start_job(
+            key,
+            ["gitleaks"],
+            |context| {
+                let engine = context.engine("gitleaks").expect("engine");
+                engine.mark_running().expect("running");
+                engine.mark_completed().expect("completed engine report");
+                panic!("panic after durable engine completion");
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal event"),
+        )
+        .expect("job starts");
+
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("terminal callback");
+    assert_eq!(terminal.engines[0].status, EngineJobStatus::Completed);
+    assert_eq!(terminal.status, JobStatus::Failed);
+    assert_eq!(terminal.failure_kind, Some(JobFailureKind::WorkerPanicked));
 }
 
 #[test]

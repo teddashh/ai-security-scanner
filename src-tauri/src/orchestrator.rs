@@ -380,9 +380,14 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         let capture = self.artifacts.prepare_capture(&directories)?;
         report.checkpoint.stage = ExecutionStage::Running;
         observer(&report)?;
-        let runtime_result = self
-            .runtime
-            .run(&plan, request.credentials, cancellation, &capture);
+        let mut created_container = None;
+        let runtime_result = self.runtime.run(
+            &plan,
+            request.credentials,
+            cancellation,
+            &capture,
+            &mut created_container,
+        );
 
         report.checkpoint.stage = ExecutionStage::CapturingArtifacts;
         let artifact_result = (|| -> AppResult<Vec<RawArtifact>> {
@@ -393,7 +398,16 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             );
             Ok(artifacts)
         })();
-        let cleanup_result = self.runtime.cleanup(plan.container_name());
+        let cleanup_result = match created_container.as_ref() {
+            Some(created) => self.runtime.cleanup(plan.ownership(), Some(created)),
+            None => {
+                report.checkpoint.container_name = None;
+                Ok(CleanupOutcome {
+                    removed: false,
+                    detail: "this runtime invocation did not create a container".into(),
+                })
+            }
+        };
 
         match artifact_result {
             Ok(artifacts) => {
@@ -476,6 +490,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
     pub fn cleanup_checkpoint(
         &self,
         checkpoint: &ExecutionCheckpoint,
+        ownership: &crate::container_runtime::OwnedContainerCleanupRequest,
     ) -> AppResult<ExecutionCheckpoint> {
         if checkpoint.resume_action() != ResumeAction::CleanupContainer {
             return Err(AppError::InvalidRequest(
@@ -493,7 +508,19 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             .container_name
             .as_deref()
             .ok_or_else(|| AppError::Runtime("cleanup checkpoint has no container name".into()))?;
-        self.runtime.cleanup(container_name)?;
+        if ownership.container_name()? != container_name
+            || ownership.case_id != checkpoint.case_id
+            || ownership.scan_run_id != checkpoint.scan_run_id
+            || ownership.engine_run_id != checkpoint.engine_run_id
+            || ownership.engine_id != checkpoint.engine_id
+            || ownership.attempt != checkpoint.attempt
+            || Some(ownership.scope_sha256.as_str()) != checkpoint.scope_sha256.as_deref()
+        {
+            return Err(AppError::NotAuthorized(
+                "cleanup ownership proof does not match the saved execution checkpoint".into(),
+            ));
+        }
+        self.runtime.cleanup(ownership, None)?;
         let mut updated = checkpoint.clone();
         updated.cleanup_completed = true;
         updated.stage = ExecutionStage::Failed;
@@ -521,8 +548,15 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             Ok(Some(output)) => {
                 report.findings = output.findings;
                 report.warnings.extend(output.warnings);
-                report.checkpoint.stage = ExecutionStage::Completed;
-                report.checkpoint.last_error = None;
+                if output.complete {
+                    report.checkpoint.stage = ExecutionStage::Completed;
+                    report.checkpoint.last_error = None;
+                } else {
+                    report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+                    report.checkpoint.last_error = Some(
+                        "adapter normalization was incomplete; raw evidence was retained".into(),
+                    );
+                }
             }
             Ok(None) => {
                 report.findings.clear();
@@ -813,6 +847,7 @@ fn run_directories_with_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::{AdapterOutput, EngineAdapter};
     use crate::container_runtime::{FakeContainerRuntime, FakeRunBehavior, RuntimeCall};
     use crate::domain::{
         AssetIdentifier, AssetKind, DistributionMode, EngineCategory, EngineCompatibility,
@@ -824,6 +859,27 @@ mod tests {
     };
     use chrono::Duration;
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    struct IncompleteAdapter;
+
+    impl EngineAdapter for IncompleteAdapter {
+        fn engine_id(&self) -> &str {
+            "scanner"
+        }
+
+        fn adapter_version(&self) -> &str {
+            "adapter-1"
+        }
+
+        fn normalize(&self, _input: &AdapterInput<'_>) -> AppResult<AdapterOutput> {
+            Ok(AdapterOutput {
+                findings: Vec::new(),
+                warnings: vec!["one malformed record was retained only as raw evidence".into()],
+                complete: false,
+            })
+        }
+    }
 
     fn manifest(active_external: bool) -> EngineManifest {
         EngineManifest {
@@ -1147,6 +1203,114 @@ mod tests {
                 RuntimeCall::Run("ass-scanner-engine-run-1-a1".into()),
                 RuntimeCall::Cleanup("ass-scanner-engine-run-1-a1".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn failed_launch_without_a_created_object_never_cleans_a_same_name_container() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_skip_creation(true);
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(125),
+            ..FakeRunBehavior::default()
+        });
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            assets: &assets,
+            scope_grants: &grants,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("failed launch report");
+
+        assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
+        assert!(report.checkpoint.container_name.is_none());
+        assert!(report.checkpoint.cleanup_completed);
+        assert!(
+            !runtime
+                .calls()
+                .iter()
+                .any(|call| matches!(call, RuntimeCall::Cleanup(_)))
+        );
+    }
+
+    #[test]
+    fn incomplete_normalization_cannot_complete_or_green_the_engine_run() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(0),
+            stdout: b"scanner stdout".to_vec(),
+            stderr: vec![],
+            output_files: BTreeMap::from([("result.json".into(), b"{}".to_vec())]),
+        });
+        let mut adapters = AdapterRegistry::default();
+        adapters
+            .register(Arc::new(IncompleteAdapter))
+            .expect("register adapter");
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            assets: &assets,
+            scope_grants: &grants,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("execution report");
+
+        assert_eq!(
+            report.checkpoint.stage,
+            ExecutionStage::CapturedAwaitingAdapter
+        );
+        assert!(report.checkpoint.cleanup_completed);
+        assert_eq!(
+            report.checkpoint.last_error.as_deref(),
+            Some("adapter normalization was incomplete; raw evidence was retained")
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("malformed record"))
         );
     }
 

@@ -281,6 +281,13 @@ export interface NativeExportPreview {
   sensitive_data_warning: string;
 }
 
+interface NativeDiffReason {
+  code: string;
+  engine_id?: string | null;
+  asset_id?: string | null;
+  detail: string;
+}
+
 interface NativeFindingDiff {
   fingerprint: string;
   baseline_finding_id: string | null;
@@ -290,12 +297,7 @@ interface NativeFindingDiff {
   baseline_severity?: string | null;
   current_severity?: string | null;
   evidence_changed?: boolean;
-  reasons?: Array<{
-    code: string;
-    engine_id?: string | null;
-    asset_id?: string | null;
-    detail: string;
-  }>;
+  reasons?: NativeDiffReason[];
 }
 
 interface NativeFindingGroup {
@@ -326,6 +328,8 @@ interface NativeComparison {
   current_run_id: string;
   created_at: string;
   diffs: NativeFindingDiff[];
+  complete?: boolean;
+  completeness_issues?: NativeDiffReason[];
 }
 
 export interface NativeAssessmentCase {
@@ -1000,6 +1004,13 @@ export const adaptNativeCase = (
       comparisonRunId: comparison.current_run_id,
       baselineAt: runById.get(comparison.baseline_run_id)?.completed_at ?? runById.get(comparison.baseline_run_id)?.created_at ?? comparison.created_at,
       comparisonAt: runById.get(comparison.current_run_id)?.completed_at ?? runById.get(comparison.current_run_id)?.created_at ?? comparison.created_at,
+      complete: comparison.complete ?? false,
+      completenessIssues: (comparison.completeness_issues ?? []).map((reason) => ({
+        code: reason.code,
+        engineId: reason.engine_id ?? undefined,
+        assetId: reason.asset_id ?? undefined,
+        detail: reason.detail,
+      })),
       diffs: comparison.diffs.map((diff, index) => {
         const sourceFinding = nativeFindingById.get(diff.current_finding_id ?? "") ?? nativeFindingById.get(diff.baseline_finding_id ?? "");
         const statusMap: Record<string, DiffState> = {

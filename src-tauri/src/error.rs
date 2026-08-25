@@ -7,6 +7,8 @@ pub enum AppError {
     CaseNotFound(String),
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("storage error: {0}")]
     Storage(String),
     #[error("engine registry error: {0}")]

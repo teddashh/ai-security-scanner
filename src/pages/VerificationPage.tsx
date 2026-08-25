@@ -83,7 +83,8 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
   const filtered = filter === "all" ? verification.diffs : verification.diffs.filter((item) => item.state === filter);
   const baselineRun = runs.find((run) => run.id === verification.baselineRunId);
   const comparisonRun = runs.find((run) => run.id === verification.comparisonRunId);
-  const comparisonIncomplete = comparisonRun && comparisonRun.status !== "completed";
+  const comparisonIncomplete = verification.complete === false || Boolean(comparisonRun && comparisonRun.status !== "completed");
+  const completenessIssues = verification.completenessIssues ?? [];
   const canRescan = !activeRun && Boolean(selectedBaselineRun);
 
   return (
@@ -130,8 +131,16 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
       </InlineNotice>
 
       {comparisonIncomplete && (
-        <InlineNotice tone="warning" title="本次複驗輪次沒有完整完成">
+        <InlineNotice tone="warning" title="本次複驗輪次或比較座標沒有完整完成">
           <p>差異只反映有可比證據的範圍。未完成引擎對應的項目應標示為「無法驗證」，不能歸類為已消失。</p>
+          {completenessIssues.length > 0 && (
+            <ul>
+              {completenessIssues.slice(0, 6).map((issue, index) => (
+                <li key={`${issue.code}-${issue.engineId ?? "run"}-${issue.assetId ?? "global"}-${index}`}>{issue.detail}</li>
+              ))}
+              {completenessIssues.length > 6 && <li>另有 {completenessIssues.length - 6} 個不可比座標；完整內容保存在案件與匯出包。</li>}
+            </ul>
+          )}
         </InlineNotice>
       )}
 

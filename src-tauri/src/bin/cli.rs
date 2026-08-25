@@ -952,8 +952,8 @@ fn execute_case(
             {
                 storage.get_case(&summary.id)?
             } else {
-                let case = build_demo_case();
-                storage.save_case(&case, "case.demo_seeded.cli")?;
+                let mut case = build_demo_case();
+                storage.save_case(&mut case, "case.demo_seeded.cli")?;
                 case
             };
             storage.set_selected_case(Some(&case.id))?;
@@ -1072,7 +1072,7 @@ fn execute_source(
                 .insert_into(source)
                 .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
             case.touch();
-            storage.save_case(&case, "source.snapshot_ingested.cli")?;
+            storage.save_case(&mut case, "source.snapshot_ingested.cli")?;
 
             let source = case
                 .data_sources
@@ -2677,11 +2677,6 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let artifact_root = temporary.path().join("artifacts");
         fs::create_dir(&artifact_root).expect("artifact root");
-        let connector_root =
-            case_connector_artifact_root(&artifact_root, "case-1").expect("case connector root");
-        let connector_snapshot = connector_root.join("connector-snapshot-test.json");
-        fs::write(&connector_snapshot, b"{}\n").expect("connector snapshot");
-
         let storage = Storage::open(temporary.path().join("casework.db")).expect("storage");
         let engines = EngineRegistry::load_builtin().expect("engine catalog");
         let adapters = builtin_adapter_registry().expect("adapter registry");
@@ -2692,15 +2687,34 @@ mod tests {
             &artifact_root,
             temporary.path().join("integrity-signing-key"),
         );
-        let plan = service
-            .artifact_deletion_plan("case-1")
-            .expect("artifact deletion plan");
+        let case = service
+            .create_case(&CreateCaseRequest {
+                title: "CLI deletion fixture".into(),
+                organization_name: "Example".into(),
+                employee_range: "1-10".into(),
+                data_classes: vec![],
+                requested_activities: vec![],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![],
+                notes: None,
+            })
+            .expect("case");
+        let connector_root =
+            case_connector_artifact_root(&artifact_root, &case.id).expect("case connector root");
+        let connector_snapshot = connector_root.join("connector-snapshot-test.json");
+        fs::write(&connector_snapshot, b"{}\n").expect("connector snapshot");
+        let deletion = service.delete_case(&case.id).expect("database deletion");
         let result = service
-            .delete_case_artifacts("case-1", &plan.exact_path, "DELETE case-1")
+            .delete_case_artifacts(
+                &case.id,
+                &deletion.artifacts.exact_path,
+                &format!("DELETE {}", case.id),
+            )
             .expect("confirmed artifact deletion");
 
         assert!(result.removed);
         assert!(!connector_snapshot.exists());
-        assert!(!artifact_root.join("case-1").exists());
+        assert!(!artifact_root.join(&case.id).exists());
     }
 }

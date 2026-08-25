@@ -130,7 +130,7 @@ fn preserved_live_pages_survive_restart_without_persisting_authorization() {
     {
         let storage = Storage::open(&database).unwrap();
         storage
-            .save_case(&case, "fixture.live_capture_saved")
+            .save_case(&mut case, "fixture.live_capture_saved")
             .unwrap();
     }
     let storage = Storage::open(&database).unwrap();

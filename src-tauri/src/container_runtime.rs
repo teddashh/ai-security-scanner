@@ -33,6 +33,8 @@ const MAX_OUTPUT_ENTRIES: usize = 10_000;
 const MAX_OUTPUT_DEPTH: usize = 32;
 const MAX_RUNTIME_COMMAND_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+const RUNTIME_PIPE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(2);
+const CONTAINER_CAPTURE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 const MANAGED_NETWORK_LABEL_KEY: &str = "ai.security-scanner.managed";
 const NETWORK_POLICY_LABEL_KEY: &str = "ai.security-scanner.policy-id";
 const CONTAINER_MANAGED_LABEL_KEY: &str = "ai.security-scanner.managed";
@@ -688,6 +690,114 @@ impl Drop for SecretFileGuard {
     }
 }
 
+struct ContainerIdFileGuard {
+    path: PathBuf,
+}
+
+impl ContainerIdFileGuard {
+    fn prepare(control_dir: &Path) -> AppResult<Self> {
+        validate_mount_directory(control_dir, "container ID control")?;
+        for _ in 0..4 {
+            let mut nonce = [0_u8; 16];
+            getrandom::fill(&mut nonce)
+                .map_err(|_| AppError::Internal("operating system random source failed".into()))?;
+            let path = control_dir.join(format!("container-{}.cid", hex::encode(nonce)));
+            match fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Ok(Self { path });
+                }
+                Ok(_) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(AppError::Runtime(
+            "could not reserve a unique container created-object tracking path".into(),
+        ))
+    }
+
+    fn argument(&self) -> AppResult<String> {
+        let value = self.path.to_str().ok_or_else(|| {
+            AppError::Runtime("container ID tracking path is not valid UTF-8".into())
+        })?;
+        if value.contains(['\n', '\r', '\0']) {
+            return Err(AppError::Runtime(
+                "container ID tracking path contains an invalid character".into(),
+            ));
+        }
+        Ok(value.to_owned())
+    }
+
+    fn created_container(&self) -> AppResult<Option<CreatedContainer>> {
+        let metadata = match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 129 {
+            return Err(AppError::NotAuthorized(
+                "container created-object tracking file was not a bounded regular file".into(),
+            ));
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let file = options.open(&self.path)?;
+        let opened_metadata = file.metadata()?;
+        if opened_metadata.file_type().is_symlink()
+            || !opened_metadata.is_file()
+            || opened_metadata.len() > 129
+        {
+            return Err(AppError::NotAuthorized(
+                "opened container created-object tracking handle was not a bounded regular file"
+                    .into(),
+            ));
+        }
+        let mut value = String::new();
+        file.take(130).read_to_string(&mut value)?;
+        if value.len() > 129 {
+            return Err(AppError::NotAuthorized(
+                "container created-object tracking file exceeded its bound".into(),
+            ));
+        }
+        CreatedContainer::from_runtime_id(&value).map(Some)
+    }
+
+    fn created_container_if_ready(&self) -> AppResult<Option<CreatedContainer>> {
+        let metadata = match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 129 {
+            return Err(AppError::NotAuthorized(
+                "container created-object tracking file was not a bounded regular file".into(),
+            ));
+        }
+        if metadata.len() < 64 {
+            return Ok(None);
+        }
+        self.created_container()
+    }
+}
+
+impl Drop for ContainerIdFileGuard {
+    fn drop(&mut self) {
+        if fs::symlink_metadata(&self.path).is_ok() {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerRunPlan {
     engine_id: String,
@@ -701,6 +811,7 @@ pub struct ContainerRunPlan {
     credential_control_dir: PathBuf,
     network_policy: NetworkPolicy,
     output_bytes: u64,
+    ownership: OwnedContainerCleanupRequest,
 }
 
 impl ContainerRunPlan {
@@ -746,6 +857,10 @@ impl ContainerRunPlan {
 
     pub fn output_bytes(&self) -> u64 {
         self.output_bytes
+    }
+
+    pub fn ownership(&self) -> &OwnedContainerCleanupRequest {
+        &self.ownership
     }
 }
 
@@ -937,10 +1052,19 @@ impl<'a> ContainerPlanBuilder<'a> {
             workspace,
             output,
             scope_file,
-            scope_sha256,
+            scope_sha256: scope_sha256.clone(),
             credential_control_dir,
             network_policy: self.network_policy.clone(),
             output_bytes: self.limits.output_bytes,
+            ownership: OwnedContainerCleanupRequest {
+                case_id: self.case_id.to_owned(),
+                scan_run_id: self.scan_run_id.to_owned(),
+                engine_run_id: self.engine_run_id.to_owned(),
+                engine_id: self.manifest.id.clone(),
+                attempt: self.attempt,
+                scope_sha256,
+                image: self.image.clone(),
+            },
         })
     }
 }
@@ -955,6 +1079,35 @@ pub struct RuntimeOutcome {
 pub struct CleanupOutcome {
     pub removed: bool,
     pub detail: String,
+}
+
+/// Immutable identity emitted by the runtime only when this invocation
+/// actually created a container. Cleanup accepts this handle instead of a
+/// deterministic name so a failed name-collision launch cannot delete a
+/// pre-existing object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedContainer {
+    immutable_id: String,
+}
+
+impl CreatedContainer {
+    fn from_runtime_id(value: &str) -> AppResult<Self> {
+        let immutable_id = value.trim().to_ascii_lowercase();
+        if immutable_id.len() != 64
+            || !immutable_id
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            return Err(AppError::NotAuthorized(
+                "container runtime returned an invalid immutable created-object ID".into(),
+            ));
+        }
+        Ok(Self { immutable_id })
+    }
+
+    pub fn immutable_id(&self) -> &str {
+        &self.immutable_id
+    }
 }
 
 /// Exact, non-secret ownership proof required before crash recovery may remove
@@ -1084,8 +1237,13 @@ pub trait ContainerRuntime: Send + Sync {
         credentials: &ScannerCredentialSet,
         cancellation: &CancellationToken,
         capture: &CapturePaths,
+        created_container: &mut Option<CreatedContainer>,
     ) -> AppResult<RuntimeOutcome>;
-    fn cleanup(&self, container_name: &str) -> AppResult<CleanupOutcome>;
+    fn cleanup(
+        &self,
+        ownership: &OwnedContainerCleanupRequest,
+        created_container: Option<&CreatedContainer>,
+    ) -> AppResult<CleanupOutcome>;
 }
 
 #[derive(Debug, Clone)]
@@ -1274,7 +1432,13 @@ fn bounded_command_output(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let mut process_tree = CommandProcessTree::prepare(command)?;
     let mut child = command.spawn()?;
+    if let Err(error) = process_tree.attach(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
     let stdout = child
         .stdout
         .take()
@@ -1293,16 +1457,14 @@ fn bounded_command_output(
             break Ok(status);
         }
         if oversized.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
+            process_tree.terminate_and_wait(&mut child);
             break Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "runtime command output exceeded its aggregate limit",
             ));
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            process_tree.terminate_and_wait(&mut child);
             break Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "runtime command exceeded its deadline",
@@ -1310,9 +1472,27 @@ fn bounded_command_output(
         }
         thread::sleep(StdDuration::from_millis(25));
     };
-    let stdout = join_memory_capture(stdout_capture)?;
-    let stderr = join_memory_capture(stderr_capture)?;
+    let drain_deadline = if process_result.is_err() {
+        std::time::Instant::now() + RUNTIME_PIPE_DRAIN_TIMEOUT
+    } else {
+        deadline
+    };
+    let stdout = stdout_capture.finish_by(drain_deadline);
+    let stderr = stderr_capture.finish_by(drain_deadline);
+    if stdout
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut)
+        || stderr
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut)
+    {
+        process_tree.terminate_and_wait(&mut child);
+    }
     let status = process_result?;
+    let stdout = stdout?;
+    let stderr = stderr?;
     if oversized.load(Ordering::Acquire) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -1326,38 +1506,174 @@ fn bounded_command_output(
     })
 }
 
+struct MemoryCapture {
+    result: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl MemoryCapture {
+    fn finish_by(mut self, deadline: std::time::Instant) -> io::Result<Vec<u8>> {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let result = match self.result.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "runtime output pipes did not close before the bounded drain deadline",
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(io::Error::other("runtime output capture thread failed"))
+            }
+        };
+        if result.is_ok()
+            && let Some(worker) = self.worker.take()
+        {
+            worker
+                .join()
+                .map_err(|_| io::Error::other("runtime output capture thread failed"))?;
+        }
+        result
+    }
+}
+
 fn spawn_memory_capture<R>(
     mut reader: R,
     captured: Arc<AtomicU64>,
     oversized: Arc<AtomicBool>,
     maximum: u64,
-) -> thread::JoinHandle<io::Result<Vec<u8>>>
+) -> MemoryCapture
 where
     R: Read + Send + 'static,
 {
-    thread::spawn(move || {
+    let (sender, result) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
         let mut output = Vec::new();
         let mut buffer = [0_u8; 16 * 1024];
-        loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
-                break;
+        let capture = (|| {
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                let previous = captured.fetch_add(read as u64, Ordering::AcqRel);
+                let remaining = maximum.saturating_sub(previous) as usize;
+                output.extend_from_slice(&buffer[..read.min(remaining)]);
+                if read > remaining {
+                    oversized.store(true, Ordering::Release);
+                }
             }
-            let previous = captured.fetch_add(read as u64, Ordering::AcqRel);
-            let remaining = maximum.saturating_sub(previous) as usize;
-            output.extend_from_slice(&buffer[..read.min(remaining)]);
-            if read > remaining {
-                oversized.store(true, Ordering::Release);
-            }
-        }
-        Ok(output)
-    })
+            Ok(output)
+        })();
+        let _ = sender.send(capture);
+    });
+    MemoryCapture {
+        result,
+        worker: Some(worker),
+    }
 }
 
-fn join_memory_capture(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
-    handle
-        .join()
-        .map_err(|_| io::Error::other("runtime output capture thread failed"))?
+struct CommandProcessTree {
+    #[cfg(unix)]
+    process_group: Option<i32>,
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl CommandProcessTree {
+    fn prepare(command: &mut Command) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+            Ok(Self {
+                process_group: None,
+            })
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::JobObjects::{
+                CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = unsafe {
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::addr_of!(limits).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if configured == 0 {
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(job);
+                }
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self { job })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = command;
+            Ok(Self {})
+        }
+    }
+
+    fn attach(&mut self, child: &Child) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.process_group = Some(i32::try_from(child.id()).map_err(|_| {
+                io::Error::other("runtime child process ID exceeded the platform range")
+            })?);
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+            let assigned =
+                unsafe { AssignProcessToJobObject(self.job, child.as_raw_handle().cast()) };
+            if assigned == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = child;
+            Ok(())
+        }
+    }
+
+    fn terminate_and_wait(&self, child: &mut Child) {
+        #[cfg(unix)]
+        if let Some(process_group) = self.process_group {
+            unsafe {
+                libc::kill(-process_group, libc::SIGKILL);
+            }
+        }
+        #[cfg(windows)]
+        unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(windows)]
+impl Drop for CommandProcessTree {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.job);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1402,8 +1718,8 @@ impl OutputBudget {
 }
 
 struct OutputCaptureWorkers {
-    stdout: thread::JoinHandle<io::Result<()>>,
-    stderr: thread::JoinHandle<io::Result<()>>,
+    stdout: FileCapture,
+    stderr: FileCapture,
 }
 
 impl OutputCaptureWorkers {
@@ -1424,30 +1740,53 @@ impl OutputCaptureWorkers {
         })
     }
 
-    fn finish(self) -> AppResult<()> {
-        // Join both pipe readers before propagating either failure so a
-        // detached reader can never outlive the bounded run operation.
-        let stdout = self.stdout.join();
-        let stderr = self.stderr.join();
-        let stdout =
-            stdout.map_err(|_| AppError::Runtime("stdout capture thread failed".into()))?;
-        let stderr =
-            stderr.map_err(|_| AppError::Runtime("stderr capture thread failed".into()))?;
-        stdout.map_err(AppError::from)?;
-        stderr.map_err(AppError::from)?;
+    fn finish_by(self, deadline: std::time::Instant) -> io::Result<()> {
+        // Wait for both readers against one shared deadline. If a descendant
+        // inherited a pipe, callers can terminate the process tree and return
+        // without an unbounded JoinHandle wait.
+        let stdout = self.stdout.finish_by(deadline);
+        let stderr = self.stderr.finish_by(deadline);
+        stdout?;
+        stderr?;
         Ok(())
     }
 }
 
-fn spawn_file_capture<R>(
-    mut reader: R,
-    mut file: File,
-    budget: OutputBudget,
-) -> thread::JoinHandle<io::Result<()>>
+struct FileCapture {
+    result: std::sync::mpsc::Receiver<io::Result<()>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl FileCapture {
+    fn finish_by(mut self, deadline: std::time::Instant) -> io::Result<()> {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let result = match self.result.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "container output pipes did not close before the bounded drain deadline",
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(io::Error::other("container output capture thread failed"))
+            }
+        };
+        if result.is_ok()
+            && let Some(worker) = self.worker.take()
+        {
+            worker
+                .join()
+                .map_err(|_| io::Error::other("container output capture thread failed"))?;
+        }
+        result
+    }
+}
+
+fn spawn_file_capture<R>(mut reader: R, mut file: File, budget: OutputBudget) -> FileCapture
 where
     R: Read + Send + 'static,
 {
-    thread::spawn(move || {
+    let (sender, result) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
         let result = (|| {
             let mut buffer = [0_u8; 16 * 1024];
             loop {
@@ -1469,8 +1808,12 @@ where
         if result.is_err() {
             budget.capture_failed.store(true, Ordering::Release);
         }
-        result
-    })
+        let _ = sender.send(result);
+    });
+    FileCapture {
+        result,
+        worker: Some(worker),
+    }
 }
 
 fn open_runtime_capture_file(path: &Path) -> AppResult<File> {
@@ -1585,32 +1928,7 @@ impl ProcessContainerRuntime {
         &self,
         request: &OwnedContainerCleanupRequest,
     ) -> AppResult<CleanupOutcome> {
-        let container_name = request.container_name()?;
-        let inspection = self.direct_output(["container", "inspect", container_name.as_str()])?;
-        if !inspection.status.success() {
-            if runtime_object_is_absent(&inspection.stderr) {
-                return Ok(CleanupOutcome {
-                    removed: false,
-                    detail: "owned container was already absent".into(),
-                });
-            }
-            return Err(process_failure("owned container inspection", &inspection));
-        }
-        let immutable_id = prove_owned_container(&inspection.stdout, request)?;
-        let removal = self.direct_output(["rm", "--force", immutable_id.as_str()])?;
-        if removal.status.success() {
-            return Ok(CleanupOutcome {
-                removed: true,
-                detail: "ownership-proven interrupted container removed".into(),
-            });
-        }
-        if runtime_object_is_absent(&removal.stderr) {
-            return Ok(CleanupOutcome {
-                removed: false,
-                detail: "ownership-proven container disappeared before removal".into(),
-            });
-        }
-        Err(process_failure("owned container cleanup", &removal))
+        <Self as ContainerRuntime>::cleanup(self, request, None)
     }
 
     pub fn detect() -> AppResult<Self> {
@@ -1651,9 +1969,9 @@ impl ProcessContainerRuntime {
             })
     }
 
-    fn container_control(&self, operation: &'static str, container_name: &str) -> AppResult<()> {
+    fn container_control(&self, operation: &'static str, immutable_id: &str) -> AppResult<()> {
         debug_assert!(matches!(operation, "pause" | "unpause"));
-        let output = self.direct_output([operation, container_name])?;
+        let output = self.direct_output([operation, immutable_id])?;
         if output.status.success() {
             Ok(())
         } else {
@@ -1661,13 +1979,50 @@ impl ProcessContainerRuntime {
         }
     }
 
-    fn stop_container(&self, container_name: &str) -> AppResult<()> {
-        let output = self.direct_output(["stop", "--time", "5", container_name])?;
+    fn stop_container(&self, immutable_id: &str) -> AppResult<()> {
+        let output = self.direct_output(["stop", "--time", "5", immutable_id])?;
         if output.status.success() {
             Ok(())
         } else {
             Err(process_failure("container stop", &output))
         }
+    }
+
+    fn refresh_active_container(
+        &self,
+        plan: &ContainerRunPlan,
+        container_id_file: &ContainerIdFileGuard,
+        created_container: &mut Option<CreatedContainer>,
+        active_container: &mut Option<CreatedContainer>,
+    ) -> AppResult<()> {
+        if created_container.is_none() {
+            *created_container = container_id_file.created_container_if_ready()?;
+        }
+        let Some(created) = created_container.as_ref() else {
+            return Ok(());
+        };
+        if active_container.is_some() {
+            return Ok(());
+        }
+        let inspection = self.direct_output(["container", "inspect", created.immutable_id()])?;
+        if !inspection.status.success() {
+            if runtime_object_is_absent(&inspection.stderr) {
+                return Ok(());
+            }
+            return Err(process_failure(
+                "created container ownership inspection",
+                &inspection,
+            ));
+        }
+        let inspected_id = prove_owned_container(&inspection.stdout, plan.ownership())?;
+        if !inspected_id.eq_ignore_ascii_case(created.immutable_id()) {
+            return Err(AppError::NotAuthorized(
+                "active container ID does not match this invocation's created-object tracking"
+                    .into(),
+            ));
+        }
+        *active_container = Some(created.clone());
+        Ok(())
     }
 
     fn wait_for_container(
@@ -1676,11 +2031,22 @@ impl ProcessContainerRuntime {
         plan: &ContainerRunPlan,
         cancellation: &CancellationToken,
         budget: &OutputBudget,
+        container_id_file: &ContainerIdFileGuard,
+        created_container: &mut Option<CreatedContainer>,
     ) -> AppResult<RuntimeOutcome> {
         let mut runtime_paused = false;
+        let mut active_container = None;
         loop {
+            self.refresh_active_container(
+                plan,
+                container_id_file,
+                created_container,
+                &mut active_container,
+            )?;
             if let Err(output_error) = budget.check(plan.output()) {
-                let stop_error = self.stop_container(plan.container_name()).err();
+                let stop_error = active_container
+                    .as_ref()
+                    .and_then(|container| self.stop_container(container.immutable_id()).err());
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(AppError::Runtime(match stop_error {
@@ -1692,10 +2058,16 @@ impl ProcessContainerRuntime {
             }
             if cancellation.is_cancelled() {
                 if runtime_paused {
+                    let active = active_container.as_ref().ok_or_else(|| {
+                        AppError::Internal(
+                            "runtime pause acknowledgement lost its created container identity"
+                                .into(),
+                        )
+                    })?;
                     if let Err(unpause_error) =
-                        self.container_control("unpause", plan.container_name())
+                        self.container_control("unpause", active.immutable_id())
                     {
-                        let stop_error = self.stop_container(plan.container_name()).err();
+                        let stop_error = self.stop_container(active.immutable_id()).err();
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err(AppError::Runtime(match stop_error {
@@ -1707,7 +2079,10 @@ impl ProcessContainerRuntime {
                     }
                     cancellation.acknowledge_resumed();
                 }
-                let stop_result = self.stop_container(plan.container_name());
+                let stop_result = active_container
+                    .as_ref()
+                    .map(|container| self.stop_container(container.immutable_id()))
+                    .transpose();
                 let _ = child.kill();
                 let _ = child.wait();
                 stop_result?;
@@ -1728,23 +2103,31 @@ impl ProcessContainerRuntime {
 
             let pause_requested = cancellation.is_pause_requested();
             if pause_requested && !runtime_paused {
-                if let Err(pause_error) = self.container_control("pause", plan.container_name()) {
-                    let stop_error = self.stop_container(plan.container_name()).err();
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(AppError::Runtime(match stop_error {
-                        Some(stop_error) => format!(
-                            "{pause_error}; fail-closed container stop also failed: {stop_error}"
-                        ),
-                        None => format!("{pause_error}; container was stopped fail-closed"),
-                    }));
+                if let Some(active) = active_container.as_ref() {
+                    if let Err(pause_error) = self.container_control("pause", active.immutable_id())
+                    {
+                        let stop_error = self.stop_container(active.immutable_id()).err();
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(AppError::Runtime(match stop_error {
+                            Some(stop_error) => format!(
+                                "{pause_error}; fail-closed container stop also failed: {stop_error}"
+                            ),
+                            None => format!("{pause_error}; container was stopped fail-closed"),
+                        }));
+                    }
+                    runtime_paused = true;
+                    cancellation.acknowledge_paused();
                 }
-                runtime_paused = true;
-                cancellation.acknowledge_paused();
             } else if !pause_requested && runtime_paused {
-                if let Err(unpause_error) = self.container_control("unpause", plan.container_name())
+                let active = active_container.as_ref().ok_or_else(|| {
+                    AppError::Internal(
+                        "runtime pause acknowledgement lost its created container identity".into(),
+                    )
+                })?;
+                if let Err(unpause_error) = self.container_control("unpause", active.immutable_id())
                 {
-                    let stop_error = self.stop_container(plan.container_name()).err();
+                    let stop_error = self.stop_container(active.immutable_id()).err();
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(AppError::Runtime(match stop_error {
@@ -1830,7 +2213,9 @@ impl ContainerRuntime for ProcessContainerRuntime {
         credentials: &ScannerCredentialSet,
         cancellation: &CancellationToken,
         capture: &CapturePaths,
+        created_container: &mut Option<CreatedContainer>,
     ) -> AppResult<RuntimeOutcome> {
+        *created_container = None;
         validate_run_plan_integrity(plan)?;
         credentials.validate_fresh()?;
         if cancellation.is_cancelled() {
@@ -1845,7 +2230,9 @@ impl ContainerRuntime for ProcessContainerRuntime {
         // internal-network invariant.
         self.verify_network(plan.network_policy())?;
         let mut secret = SecretFileGuard::create(plan.credential_control_dir(), credentials)?;
-        let runtime_args = runtime_args_with_secret(plan, secret.as_ref())?;
+        let container_id_file = ContainerIdFileGuard::prepare(plan.credential_control_dir())?;
+        let runtime_args =
+            runtime_args_with_secret(plan, secret.as_ref(), Some(&container_id_file))?;
         let execution = (|| -> AppResult<RuntimeOutcome> {
             let mut command = Command::new(&self.context.binary);
             command.args(&runtime_args);
@@ -1854,24 +2241,45 @@ impl ContainerRuntime for ProcessContainerRuntime {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
+            let mut process_tree = CommandProcessTree::prepare(&mut command).map_err(|error| {
+                AppError::Runtime(format!(
+                    "container process tree could not be prepared: {error}"
+                ))
+            })?;
             let mut child = command.spawn().map_err(|error| {
                 AppError::Runtime(format!("container run could not start: {error}"))
             })?;
+            if let Err(error) = process_tree.attach(&child) {
+                process_tree.terminate_and_wait(&mut child);
+                return Err(AppError::Runtime(format!(
+                    "container process tree could not be attached: {error}"
+                )));
+            }
             let budget = OutputBudget::new(plan.output_bytes());
             let capture_workers = match OutputCaptureWorkers::start(&mut child, capture, &budget) {
                 Ok(workers) => workers,
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    process_tree.terminate_and_wait(&mut child);
                     return Err(error);
                 }
             };
-            let outcome = self.wait_for_container(&mut child, plan, cancellation, &budget);
-            if outcome.is_err() {
-                let _ = child.kill();
-                let _ = child.wait();
+            let outcome = self.wait_for_container(
+                &mut child,
+                plan,
+                cancellation,
+                &budget,
+                &container_id_file,
+                created_container,
+            );
+            if outcome.as_ref().is_err() || outcome.as_ref().is_ok_and(|outcome| outcome.cancelled)
+            {
+                process_tree.terminate_and_wait(&mut child);
             }
-            let capture_result = capture_workers.finish();
+            let capture_result = capture_workers
+                .finish_by(std::time::Instant::now() + CONTAINER_CAPTURE_DRAIN_TIMEOUT);
+            if capture_result.is_err() {
+                process_tree.terminate_and_wait(&mut child);
+            }
             let budget_result = budget.check(plan.output());
             match (outcome, capture_result, budget_result) {
                 (Ok(outcome), Ok(()), Ok(())) => Ok(outcome),
@@ -1882,6 +2290,27 @@ impl ContainerRuntime for ProcessContainerRuntime {
                 (Ok(_), Ok(()), Err(error)) => Err(error),
             }
         })();
+        let tracking = container_id_file.created_container();
+        if let Ok(Some(created)) = tracking.as_ref() {
+            *created_container = Some(created.clone());
+        }
+        let execution = match (execution, tracking) {
+            (Ok(outcome), Ok(Some(_))) => Ok(outcome),
+            (Ok(outcome), Ok(None))
+                if outcome.exit_code == Some(0) && !outcome.cancelled =>
+            {
+                Err(AppError::Runtime(
+                    "container runtime reported success without a created-object ID; cleanup cannot be proven"
+                        .into(),
+                ))
+            }
+            (Ok(outcome), Ok(None)) => Ok(outcome),
+            (Err(error), Ok(_)) => Err(error),
+            (Ok(_), Err(tracking)) => Err(tracking),
+            (Err(execution), Err(tracking)) => Err(AppError::Runtime(format!(
+                "{execution}; container created-object tracking also failed: {tracking}"
+            ))),
+        };
         let secret_cleanup = secret.as_mut().map_or(Ok(()), SecretFileGuard::cleanup);
         match (execution, secret_cleanup) {
             (Ok(outcome), Ok(())) => Ok(outcome),
@@ -1893,27 +2322,49 @@ impl ContainerRuntime for ProcessContainerRuntime {
         }
     }
 
-    fn cleanup(&self, container_name: &str) -> AppResult<CleanupOutcome> {
-        if !valid_runtime_name(container_name) {
-            return Err(AppError::InvalidRequest(
-                "container cleanup name is invalid".into(),
+    fn cleanup(
+        &self,
+        ownership: &OwnedContainerCleanupRequest,
+        created_container: Option<&CreatedContainer>,
+    ) -> AppResult<CleanupOutcome> {
+        ownership.validate()?;
+        let target = match created_container {
+            Some(created) => created.immutable_id().to_owned(),
+            None => ownership.container_name()?,
+        };
+        let inspection = self.direct_output(["container", "inspect", target.as_str()])?;
+        if !inspection.status.success() {
+            if runtime_object_is_absent(&inspection.stderr) {
+                return Ok(CleanupOutcome {
+                    removed: false,
+                    detail: "ownership-proven container was already absent".into(),
+                });
+            }
+            return Err(process_failure("owned container inspection", &inspection));
+        }
+        let immutable_id = prove_owned_container(&inspection.stdout, ownership)?;
+        if created_container
+            .is_some_and(|created| !immutable_id.eq_ignore_ascii_case(created.immutable_id()))
+        {
+            return Err(AppError::NotAuthorized(
+                "inspected container ID does not match the object created by this invocation"
+                    .into(),
             ));
         }
-        let output = self.direct_output(["rm", "--force", container_name])?;
-        if output.status.success() {
+        let removal = self.direct_output(["rm", "--force", immutable_id.as_str()])?;
+        if removal.status.success() {
             return Ok(CleanupOutcome {
                 removed: true,
-                detail: "container removed".into(),
+                detail: "ownership-proven container removed by immutable object ID".into(),
             });
         }
-        let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-        if stderr.contains("no such container") || stderr.contains("no container with name") {
+        if runtime_object_is_absent(&removal.stderr) {
             return Ok(CleanupOutcome {
                 removed: false,
-                detail: "container was already absent".into(),
+                detail: "ownership-proven container disappeared before removal".into(),
             });
         }
-        Err(process_failure("container cleanup", &output))
+        Err(process_failure("owned container cleanup", &removal))
     }
 }
 
@@ -1953,6 +2404,7 @@ pub struct FakeContainerRuntime {
     fail_network: AtomicBool,
     fail_pull: AtomicBool,
     fail_cleanup: AtomicBool,
+    skip_creation: AtomicBool,
 }
 
 impl FakeContainerRuntime {
@@ -1974,6 +2426,10 @@ impl FakeContainerRuntime {
 
     pub fn set_fail_cleanup(&self, fail: bool) {
         self.fail_cleanup.store(fail, Ordering::SeqCst);
+    }
+
+    pub fn set_skip_creation(&self, skip: bool) {
+        self.skip_creation.store(skip, Ordering::SeqCst);
     }
 
     pub fn calls(&self) -> Vec<RuntimeCall> {
@@ -2030,7 +2486,9 @@ impl ContainerRuntime for FakeContainerRuntime {
         credentials: &ScannerCredentialSet,
         cancellation: &CancellationToken,
         capture: &CapturePaths,
+        created_container: &mut Option<CreatedContainer>,
     ) -> AppResult<RuntimeOutcome> {
+        *created_container = None;
         validate_run_plan_integrity(plan)?;
         credentials.validate_fresh()?;
         self.calls
@@ -2042,6 +2500,9 @@ impl ContainerRuntime for FakeContainerRuntime {
                 exit_code: None,
                 cancelled: true,
             });
+        }
+        if !self.skip_creation.load(Ordering::SeqCst) {
+            *created_container = Some(CreatedContainer::from_runtime_id(&"f".repeat(64))?);
         }
         let behavior = self.behavior.lock().expect("fake behavior lock").clone();
         let mut bytes = behavior
@@ -2086,11 +2547,16 @@ impl ContainerRuntime for FakeContainerRuntime {
         })
     }
 
-    fn cleanup(&self, container_name: &str) -> AppResult<CleanupOutcome> {
+    fn cleanup(
+        &self,
+        ownership: &OwnedContainerCleanupRequest,
+        _created_container: Option<&CreatedContainer>,
+    ) -> AppResult<CleanupOutcome> {
+        let container_name = ownership.container_name()?;
         self.calls
             .lock()
             .expect("fake calls lock")
-            .push(RuntimeCall::Cleanup(container_name.into()));
+            .push(RuntimeCall::Cleanup(container_name));
         if self.fail_cleanup.load(Ordering::SeqCst) {
             return Err(AppError::Runtime("fake cleanup failure".into()));
         }
@@ -2318,6 +2784,7 @@ fn hash_bounded_control_file(path: &Path, max_bytes: u64, label: &str) -> AppRes
 fn runtime_args_with_secret(
     plan: &ContainerRunPlan,
     secret: Option<&SecretFileGuard>,
+    container_id_file: Option<&ContainerIdFileGuard>,
 ) -> AppResult<Vec<String>> {
     let image_reference = plan.image.reference();
     let image_index = plan
@@ -2328,11 +2795,16 @@ fn runtime_args_with_secret(
             AppError::Runtime("container run plan lost its pinned image reference".into())
         })?;
     let mut arguments = plan.runtime_args.clone();
+    let mut injected = Vec::new();
+    if let Some(container_id_file) = container_id_file {
+        injected.extend(["--cidfile".into(), container_id_file.argument()?]);
+    }
     if let Some(secret) = secret {
         secret.validate_integrity()?;
         let mount = bind_mount(&secret.path, CONTAINER_CREDENTIAL_PATH, true)?;
-        arguments.splice(image_index..image_index, ["--mount".into(), mount]);
+        injected.extend(["--mount".into(), mount]);
     }
+    arguments.splice(image_index..image_index, injected);
     Ok(arguments)
 }
 
@@ -2731,6 +3203,23 @@ mod tests {
         }
     }
 
+    fn owned_container_inspect(plan: &ContainerRunPlan, immutable_id: &str) -> Vec<u8> {
+        let labels = plan
+            .ownership()
+            .expected_labels()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        serde_json::to_vec(&serde_json::json!([{
+            "Id": immutable_id,
+            "Name": plan.container_name(),
+            "Config": {
+                "Image": plan.image().reference(),
+                "Labels": labels,
+            }
+        }]))
+        .expect("owned container inspect JSON")
+    }
+
     fn docker_network_inspect(internal: bool, policy_id: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!([{
             "Name": "ass-egress",
@@ -2760,18 +3249,28 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn fake_runtime(temp: &tempfile::TempDir, fail_pause: bool) -> (PathBuf, PathBuf) {
+    fn fake_runtime(
+        temp: &tempfile::TempDir,
+        plan: &ContainerRunPlan,
+        fail_pause: bool,
+    ) -> (PathBuf, PathBuf) {
         let binary = temp.path().join("fake-container-runtime");
         let log = temp.path().join("fake-container-runtime.log");
+        let response = temp.path().join("fake-container-inspect.json");
+        let immutable_id = "c".repeat(64);
+        fs::write(&response, owned_container_inspect(plan, &immutable_id))
+            .expect("owned inspect fixture");
         let pause_exit = if fail_pause { "exit 23" } else { "exit 0" };
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprevious=''\nfor argument in \"$@\"; do\n  if [ \"$previous\" = --cidfile ]; then printf '%s\\n' '{}' > \"$argument\"; fi\n  previous=$argument\ndone\nif [ \"$1\" = container ] && [ \"$2\" = inspect ]; then /bin/cat '{}'; exit 0; fi
 case \"$1\" in
   run) exec /bin/sleep 30 ;;
   pause) {pause_exit} ;;
   *) exit 0 ;;
 esac\n",
-            log.display()
+            log.display(),
+            immutable_id,
+            response.display(),
         );
         fs::write(&binary, script).expect("fake runtime script");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
@@ -2780,16 +3279,39 @@ esac\n",
     }
 
     #[cfg(unix)]
-    fn fake_output_flood_runtime(temp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
+    fn fake_output_flood_runtime(
+        temp: &tempfile::TempDir,
+        plan: &ContainerRunPlan,
+    ) -> (PathBuf, PathBuf) {
         let binary = temp.path().join("fake-output-flood-runtime");
         let log = temp.path().join("fake-output-flood-runtime.log");
+        let response = temp.path().join("fake-output-flood-inspect.json");
+        let immutable_id = "e".repeat(64);
+        fs::write(&response, owned_container_inspect(plan, &immutable_id))
+            .expect("owned inspect fixture");
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  run) exec /bin/dd if=/dev/zero bs=65536 count=1024 2>/dev/null ;;\n  stop) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
-            log.display()
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprevious=''\nfor argument in \"$@\"; do\n  if [ \"$previous\" = --cidfile ]; then printf '%s\\n' '{}' > \"$argument\"; fi\n  previous=$argument\ndone\nif [ \"$1\" = container ] && [ \"$2\" = inspect ]; then /bin/cat '{}'; exit 0; fi\ncase \"$1\" in\n  run) exec /bin/dd if=/dev/zero bs=65536 count=1024 2>/dev/null ;;\n  stop) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            log.display(),
+            immutable_id,
+            response.display(),
         );
         fs::write(&binary, script).expect("fake output flood runtime script");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("fake output flood runtime executable");
+        (binary, log)
+    }
+
+    #[cfg(unix)]
+    fn fake_name_collision_runtime(temp: &tempfile::TempDir) -> (PathBuf, PathBuf) {
+        let binary = temp.path().join("fake-name-collision-runtime");
+        let log = temp.path().join("fake-name-collision-runtime.log");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\n  run) exec /bin/sleep 30 ;;\n  *) exit 0 ;;\nesac\n",
+            log.display(),
+        );
+        fs::write(&binary, script).expect("fake name collision runtime script");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake name collision runtime executable");
         (binary, log)
     }
 
@@ -2929,6 +3451,126 @@ esac\n",
                 .lines()
                 .any(|line| line == format!("rm --force {}", "d".repeat(64)))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_cleanup_refuses_a_foreign_same_name_container_without_removing_it() {
+        let (temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let request = owned_cleanup_request(&scope, &image);
+        let mut labels = request
+            .expected_labels()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        labels.insert(CONTAINER_CASE_LABEL_KEY, "foreign-case".into());
+        let (binary, log, response) = fake_owned_cleanup_runtime(&temp);
+        fs::write(
+            response,
+            serde_json::to_vec(&serde_json::json!([{
+                "Id": "7".repeat(64),
+                "Name": request.container_name().expect("name"),
+                "Config": {
+                    "Image": request.image.reference(),
+                    "Labels": labels,
+                }
+            }]))
+            .expect("inspect document"),
+        )
+        .expect("inspect fixture");
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+
+        let error = runtime
+            .cleanup_owned_container(&request)
+            .expect_err("foreign container must not be removed");
+
+        assert!(error.to_string().contains(CONTAINER_CASE_LABEL_KEY));
+        let commands = fs::read_to_string(log).expect("runtime log");
+        assert!(
+            commands
+                .lines()
+                .any(|line| line.starts_with("container inspect "))
+        );
+        assert!(!commands.lines().any(|line| line.starts_with("rm --force ")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn created_container_cleanup_inspects_and_removes_only_the_tracked_id() {
+        let (temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let request = owned_cleanup_request(&scope, &image);
+        let immutable_id = "9".repeat(64);
+        let labels = request
+            .expected_labels()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let (binary, log, response) = fake_owned_cleanup_runtime(&temp);
+        fs::write(
+            response,
+            serde_json::to_vec(&serde_json::json!([{
+                "Id": immutable_id,
+                "Name": request.container_name().expect("name"),
+                "Config": {
+                    "Image": request.image.reference(),
+                    "Labels": labels,
+                }
+            }]))
+            .expect("inspect document"),
+        )
+        .expect("inspect fixture");
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let created = CreatedContainer::from_runtime_id(&"9".repeat(64)).expect("created ID");
+
+        assert!(runtime.cleanup(&request, Some(&created)).unwrap().removed);
+
+        let commands = fs::read_to_string(log).expect("runtime log");
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("container inspect {}", "9".repeat(64)))
+        );
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("rm --force {}", "9".repeat(64)))
+        );
+        assert!(!commands.lines().any(|line| {
+            line == format!(
+                "rm --force {}",
+                request.container_name().expect("container name")
+            )
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_output_pipe_is_bounded_and_its_process_group_is_terminated() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let pid_file = temp.path().join("descendant.pid");
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("/bin/sleep 30 & child=$!; printf '%s' \"$child\" > \"$PID_FILE\"")
+            .env("PID_FILE", &pid_file);
+        let started = Instant::now();
+
+        let error = bounded_command_output(&mut command, 1024, StdDuration::from_millis(250))
+            .expect_err("inherited pipe must not outlive the command deadline");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < StdDuration::from_secs(3),
+            "bounded drain must return promptly"
+        );
+        let pid = fs::read_to_string(pid_file)
+            .expect("descendant pid")
+            .parse::<i32>()
+            .expect("numeric descendant pid");
+        wait_until(|| unsafe {
+            libc::kill(pid, 0) == -1
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        });
     }
 
     #[test]
@@ -3076,7 +3718,7 @@ esac\n",
         let mut secret = SecretFileGuard::create(plan.credential_control_dir(), &credentials)
             .expect("secret channel")
             .expect("nonempty channel");
-        let arguments = runtime_args_with_secret(&plan, Some(&secret)).expect("runtime args");
+        let arguments = runtime_args_with_secret(&plan, Some(&secret), None).expect("runtime args");
 
         assert_eq!(
             arguments
@@ -3135,7 +3777,13 @@ esac\n",
         let capture = store.prepare_capture(&directories).expect("capture");
 
         let error = FakeContainerRuntime::default()
-            .run(&plan, &credentials, &CancellationToken::default(), &capture)
+            .run(
+                &plan,
+                &credentials,
+                &CancellationToken::default(),
+                &capture,
+                &mut None,
+            )
             .expect_err("changed scope rejected");
         assert!(error.to_string().contains("scope document changed"));
     }
@@ -3280,7 +3928,13 @@ esac\n",
         let capture = store.prepare_capture(&directories).expect("capture");
 
         let error = FakeContainerRuntime::default()
-            .run(&plan, &credentials, &CancellationToken::default(), &capture)
+            .run(
+                &plan,
+                &credentials,
+                &CancellationToken::default(),
+                &capture,
+                &mut None,
+            )
             .expect_err("weakened network isolation rejected");
         assert!(error.to_string().contains("exact none network isolation"));
     }
@@ -3361,7 +4015,13 @@ esac\n",
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
 
         let error = runtime
-            .run(&plan, &credentials, &CancellationToken::default(), &capture)
+            .run(
+                &plan,
+                &credentials,
+                &CancellationToken::default(),
+                &capture,
+                &mut None,
+            )
             .expect_err("direct process run rejected");
 
         assert!(error.to_string().contains("exact internal bridge"));
@@ -3458,6 +4118,7 @@ esac\n",
                 &ScannerCredentialSet::default(),
                 &CancellationToken::default(),
                 &capture,
+                &mut None,
             )
             .expect_err("aggregate output must be rejected");
         assert!(error.to_string().contains("scan coverage is incomplete"));
@@ -3490,9 +4151,9 @@ esac\n",
         )
         .build()
         .expect("bounded plan");
-        let container_name = plan.container_name().to_owned();
+        let immutable_id = "e".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
-        let (binary, log) = fake_output_flood_runtime(&temp);
+        let (binary, log) = fake_output_flood_runtime(&temp, &plan);
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
 
         let error = runtime
@@ -3501,6 +4162,7 @@ esac\n",
                 &ScannerCredentialSet::default(),
                 &CancellationToken::default(),
                 &capture,
+                &mut None,
             )
             .expect_err("stdout flood must terminate the run");
         assert!(error.to_string().contains("scan coverage is incomplete"));
@@ -3512,7 +4174,7 @@ esac\n",
             fs::read_to_string(log)
                 .expect("runtime log")
                 .lines()
-                .any(|line| line == format!("stop --time 5 {container_name}"))
+                .any(|line| line == format!("stop --time 5 {immutable_id}"))
         );
     }
 
@@ -3563,6 +4225,62 @@ esac\n",
 
     #[cfg(unix)]
     #[test]
+    fn cancellation_without_a_created_id_never_controls_a_same_name_container() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("plan");
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log) = fake_name_collision_runtime(&temp);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let cancellation = CancellationToken::default();
+        let worker_token = cancellation.clone();
+        let worker = thread::spawn(move || {
+            let mut created = None;
+            let outcome = runtime.run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &worker_token,
+                &capture,
+                &mut created,
+            );
+            (outcome, created)
+        });
+        wait_until(|| {
+            fs::read_to_string(&log)
+                .is_ok_and(|contents| contents.lines().any(|line| line.starts_with("run ")))
+        });
+
+        cancellation.cancel();
+        let (outcome, created) = worker.join().expect("runtime thread");
+        let outcome = outcome.expect("cancelled runtime outcome");
+
+        assert!(outcome.cancelled);
+        assert!(created.is_none());
+        let commands = fs::read_to_string(log).expect("runtime log");
+        assert!(!commands.lines().any(|line| {
+            line.starts_with("pause ")
+                || line.starts_with("unpause ")
+                || line.starts_with("stop ")
+                || line.starts_with("container inspect ")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn process_runtime_pauses_and_unpauses_exactly_once_per_request() {
         let (temp, store, directories, scope, manifest, image) =
             plan_fixture(vec!["scanner".into()]);
@@ -3581,9 +4299,9 @@ esac\n",
         )
         .build()
         .expect("plan");
-        let container_name = plan.container_name().to_owned();
+        let immutable_id = "c".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
-        let (binary, log) = fake_runtime(&temp, false);
+        let (binary, log) = fake_runtime(&temp, &plan, false);
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
@@ -3593,6 +4311,7 @@ esac\n",
                 &ScannerCredentialSet::default(),
                 &worker_token,
                 &capture,
+                &mut None,
             )
         });
         wait_until(|| {
@@ -3615,21 +4334,21 @@ esac\n",
         assert_eq!(
             commands
                 .lines()
-                .filter(|line| *line == format!("pause {container_name}"))
+                .filter(|line| *line == format!("pause {immutable_id}"))
                 .count(),
             1
         );
         assert_eq!(
             commands
                 .lines()
-                .filter(|line| *line == format!("unpause {container_name}"))
+                .filter(|line| *line == format!("unpause {immutable_id}"))
                 .count(),
             1
         );
         assert!(
             commands
                 .lines()
-                .any(|line| { line == format!("stop --time 5 {container_name}") })
+                .any(|line| { line == format!("stop --time 5 {immutable_id}") })
         );
     }
 
@@ -3653,9 +4372,9 @@ esac\n",
         )
         .build()
         .expect("plan");
-        let container_name = plan.container_name().to_owned();
+        let immutable_id = "c".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
-        let (binary, log) = fake_runtime(&temp, false);
+        let (binary, log) = fake_runtime(&temp, &plan, false);
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary);
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
@@ -3665,6 +4384,7 @@ esac\n",
                 &ScannerCredentialSet::default(),
                 &worker_token,
                 &capture,
+                &mut None,
             )
         });
         wait_until(|| {
@@ -3685,11 +4405,11 @@ esac\n",
         let commands = fs::read_to_string(log).expect("runtime log");
         let unpause = commands
             .lines()
-            .position(|line| line == format!("unpause {container_name}"))
+            .position(|line| line == format!("unpause {immutable_id}"))
             .expect("unpause command");
         let stop = commands
             .lines()
-            .position(|line| line == format!("stop --time 5 {container_name}"))
+            .position(|line| line == format!("stop --time 5 {immutable_id}"))
             .expect("stop command");
         assert!(
             unpause < stop,
@@ -3717,9 +4437,9 @@ esac\n",
         )
         .build()
         .expect("plan");
-        let container_name = plan.container_name().to_owned();
+        let immutable_id = "c".repeat(64);
         let capture = store.prepare_capture(&directories).expect("capture");
-        let (binary, log) = fake_runtime(&temp, true);
+        let (binary, log) = fake_runtime(&temp, &plan, true);
         let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
         let cancellation = CancellationToken::default();
         let worker_token = cancellation.clone();
@@ -3729,13 +4449,11 @@ esac\n",
                 &ScannerCredentialSet::default(),
                 &worker_token,
                 &capture,
+                &mut None,
             )
         });
-        wait_until(|| {
-            fs::read_to_string(&log)
-                .is_ok_and(|contents| contents.lines().any(|line| line.starts_with("run ")))
-        });
-
+        // A pause may race runtime startup. The runtime must defer the control
+        // command until it has proven the created container's immutable ID.
         cancellation.request_pause();
         let error = worker
             .join()
@@ -3748,7 +4466,7 @@ esac\n",
         assert!(
             commands
                 .lines()
-                .any(|line| { line == format!("stop --time 5 {container_name}") })
+                .any(|line| { line == format!("stop --time 5 {immutable_id}") })
         );
     }
 }

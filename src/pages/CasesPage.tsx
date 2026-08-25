@@ -30,7 +30,7 @@ interface CasesPageProps {
   artifactCleanupPlan?: CaseArtifactDeletionPlan;
   artifactCleanupResult?: CaseArtifactCleanupResult;
   busy?: boolean;
-  onCreate: (input: CreateCaseInput) => Promise<void>;
+  onCreate: (input: CreateCaseInput) => Promise<boolean>;
   onArchive: (caseId: string) => Promise<void>;
   onDelete: (caseId: string, confirmation: string) => Promise<boolean>;
   onDeleteArtifacts: (confirmation: string) => Promise<boolean>;
@@ -183,7 +183,7 @@ export function CasesPage({
       ...lineValues(containerImages).map((value) => ({ kind: "container_image" as const, value })),
       ...lineValues(kubernetesClusters).map((value) => ({ kind: "kubernetes_cluster" as const, value })),
     ];
-    await onCreate({
+    const created = await onCreate({
       name: name.trim(),
       organizationName: organizationName.trim(),
       companySize,
@@ -193,6 +193,7 @@ export function CasesPage({
       dataClasses: dataClasses.length ? dataClasses : ["none"],
       description: description.trim() || undefined,
     });
+    if (!created) return;
     setShowForm(false);
     setName("");
     setDescription("");

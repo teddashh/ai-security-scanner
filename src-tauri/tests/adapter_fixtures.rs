@@ -199,6 +199,10 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
     let no_security_findings = BTreeSet::from(["cloudquery", "syft"]);
     for engine_id in BUILTIN_ENGINE_IDS {
         let output = normalize_fixture(engine_id);
+        assert!(
+            output.complete,
+            "native fixture for {engine_id} must normalize completely"
+        );
         if no_security_findings.contains(engine_id) {
             assert!(
                 output.findings.is_empty(),
@@ -341,6 +345,7 @@ fn malformed_jsonl_is_contained_while_valid_records_survive() {
         "run-1",
     );
     assert_eq!(output.findings.len(), 1);
+    assert!(!output.complete);
     assert!(
         output
             .warnings
@@ -401,6 +406,7 @@ fn greenbone_xml_with_a_doctype_is_rejected_without_inference() {
         "run-1",
     );
     assert!(output.findings.is_empty());
+    assert!(!output.complete);
     assert!(
         output
             .warnings
@@ -483,6 +489,7 @@ fn artifact_path_escape_is_rejected_without_reading_outside_root() {
         .expect("contained result")
         .expect("adapter");
     assert!(output.findings.is_empty());
+    assert!(!output.complete);
     assert!(
         output
             .warnings

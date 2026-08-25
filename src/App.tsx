@@ -206,15 +206,24 @@ export default function App() {
         const unlisten = await scannerService.subscribe(eventName, () => {
           if (!disposed) void loadSnapshot(snapshot?.selectedCaseId, true);
         });
-        unlisteners.push(unlisten);
+        if (disposed) unlisten();
+        else unlisteners.push(unlisten);
       }),
-    );
+    ).catch((error: unknown) => {
+      if (!disposed) {
+        pushToast({
+          tone: "warning",
+          title: "即時狀態通知未完整連接",
+          detail: `${describeError(error)}；可重新開啟案件以重試。`,
+        });
+      }
+    });
 
     return () => {
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [loadSnapshot, snapshot?.selectedCaseId]);
+  }, [loadSnapshot, pushToast, snapshot?.selectedCaseId]);
 
   const navigate = (target: PageId) => {
     if (target !== "findings") setFocusedFindingId(undefined);
@@ -236,7 +245,7 @@ export default function App() {
     }
   };
 
-  const createCase = async (input: CreateCaseInput) => {
+  const createCase = async (input: CreateCaseInput): Promise<boolean> => {
     setBusyAction("create");
     try {
       const result = await scannerService.createCase(input);
@@ -247,17 +256,19 @@ export default function App() {
         title: result.mode === "native" ? "案件已建立" : "展示案件已建立",
         detail: result.mode === "native" ? "資料保存在本機案件核心。" : "只保存在瀏覽器 localStorage，沒有啟動掃描。",
       });
+      return true;
     } catch (error) {
       pushToast({ tone: "danger", title: "案件建立失敗", detail: describeError(error) });
+      return false;
     } finally {
       setBusyAction(undefined);
     }
   };
 
-  const runAction = async (
+  const executeAction = async (
     key: string,
     action: () => Promise<ServiceResult<ActionResponse>>,
-  ) => {
+  ): Promise<boolean> => {
     setBusyAction(key);
     try {
       const result = await action();
@@ -269,11 +280,20 @@ export default function App() {
       });
       if (result.data.snapshot) setSnapshot(result.data.snapshot);
       else if (result.mode === "native") await loadSnapshot(snapshot?.selectedCaseId, true);
+      return result.data.accepted;
     } catch (error) {
       pushToast({ tone: "danger", title: "本機工作失敗", detail: describeError(error) });
+      return false;
     } finally {
       setBusyAction(undefined);
     }
+  };
+
+  const runAction = async (
+    key: string,
+    action: () => Promise<ServiceResult<ActionResponse>>,
+  ): Promise<void> => {
+    await executeAction(key, action);
   };
 
   const deleteCase = async (caseId: string, confirmation: string): Promise<boolean> => {
@@ -494,7 +514,7 @@ export default function App() {
             onAttachWorkspaceSnapshot={(input) => runAction("attach-workspace", () => scannerService.attachWorkspaceSnapshot(input))}
             onStartDiscovery={() => runAction("discovery", () => scannerService.startDiscovery(currentCaseId))}
             onAuthorizationChanged={() => loadSnapshot(currentCaseId, true)}
-            onApprovePending={(assetIds, modes, confirmation, externalScope) => runAction("scope", () => scannerService.approveScope({
+            onApprovePending={(assetIds, modes, confirmation, externalScope) => executeAction("scope", () => scannerService.approveScope({
               caseId: currentCaseId,
               assetIds,
               modes,
@@ -525,8 +545,8 @@ export default function App() {
             runs={workspace.runs}
             focusedFindingId={focusedFindingId}
             busy={["finding-workflow", "finding-group", "finding-ungroup"].includes(busyAction ?? "")}
-            onUpdateWorkflow={(input) => runAction("finding-workflow", () => scannerService.updateFindingWorkflow({ caseId: currentCaseId, ...input }))}
-            onGroupFindings={(input) => runAction("finding-group", () => scannerService.groupFindings({
+            onUpdateWorkflow={(input) => executeAction("finding-workflow", () => scannerService.updateFindingWorkflow({ caseId: currentCaseId, ...input }))}
+            onGroupFindings={(input) => executeAction("finding-group", () => scannerService.groupFindings({
               caseId: currentCaseId,
               groupedBy: "本機使用者",
               ...input,

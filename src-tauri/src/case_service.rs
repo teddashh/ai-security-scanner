@@ -54,6 +54,9 @@ use std::path::{Component, Path, PathBuf};
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 const MAX_DECLARED_ASSETS: usize = 200;
 const MAX_FINDINGS_PER_GROUP: usize = 100;
+const LEGACY_DELETION_OBLIGATION_DIRECTORY: &str = ".case-deletion-obligations";
+const MAX_LEGACY_DELETION_OBLIGATION_BYTES: u64 = 64 * 1024;
+const MAX_ARTIFACT_DELETION_OBLIGATIONS: usize = 10_000;
 const UNSIGNED_SCHEMA_NOTICE: &str = "This schema export is unsigned. The stored SHA-256 digest can detect later byte changes but does not establish correctness, completeness, authorship, audit status, or forensic validity.";
 
 /// Core service dependencies are borrowed so desktop and CLI entry points can
@@ -434,7 +437,7 @@ impl<'a> CaseService<'a> {
             case.status = CaseStatus::ScopeReview;
         }
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&case, "case.created")?;
+        self.storage.save_case(&mut case, "case.created")?;
         self.storage.set_selected_case(Some(&case.id))?;
         Ok(case)
     }
@@ -474,7 +477,7 @@ impl<'a> CaseService<'a> {
         case.status = CaseStatus::Archived;
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
-        self.storage.save_case(&case, "case.archived")?;
+        self.storage.save_case(&mut case, "case.archived")?;
         Ok(case)
     }
 
@@ -492,6 +495,10 @@ impl<'a> CaseService<'a> {
     }
 
     pub fn validate_case_deletion(&self, case_id: &str) -> AppResult<()> {
+        self.validated_case_for_deletion(case_id).map(|_| ())
+    }
+
+    fn validated_case_for_deletion(&self, case_id: &str) -> AppResult<AssessmentCase> {
         let case = self.storage.get_case(case_id)?;
         if case.scan_runs.iter().any(|run| {
             run.engine_runs.iter().any(|engine| {
@@ -524,70 +531,178 @@ impl<'a> CaseService<'a> {
                 "complete {pending_bootstrap} provider bootstrap cleanup obligation(s) before deleting this case"
             )));
         }
-        Ok(())
+        Ok(case)
     }
 
     pub fn list_artifact_deletion_obligations(&self) -> AppResult<Vec<ArtifactDeletionPlan>> {
-        let root = self.deletion_obligation_root(false)?;
-        let Some(root) = root else {
-            return Ok(Vec::new());
+        self.migrate_legacy_artifact_deletion_obligations(None)?;
+        let obligations = self.storage.list_artifact_deletion_obligations()?;
+        if obligations.len() > MAX_ARTIFACT_DELETION_OBLIGATIONS {
+            return Err(AppError::InvalidRequest(
+                "case artifact cleanup obligation limit exceeded".into(),
+            ));
+        }
+        obligations
+            .into_iter()
+            .map(|obligation| {
+                safe_path_component("case id", &obligation.case_id)?;
+                let expected = self.artifact_deletion_plan(&obligation.case_id)?;
+                if obligation.exact_path != expected.exact_path {
+                    return Err(AppError::NotAuthorized(
+                        "cleanup obligation path does not match the backend-owned case path".into(),
+                    ));
+                }
+                Ok(expected)
+            })
+            .collect()
+    }
+
+    /// Moves v0.1.0's private JSON cleanup records into the transactional
+    /// SQLite ledger. The database row is committed before the legacy file is
+    /// removed, so a crash or filesystem error can only leave an idempotent
+    /// duplicate, never lose the cleanup obligation.
+    fn migrate_legacy_artifact_deletion_obligations(
+        &self,
+        only_case_id: Option<&str>,
+    ) -> AppResult<()> {
+        if let Some(case_id) = only_case_id {
+            safe_path_component("case id", case_id)?;
+        }
+        let Some(root) = self.legacy_deletion_obligation_root()? else {
+            return Ok(());
         };
-        let mut obligations = Vec::new();
-        for entry in fs::read_dir(&root)? {
-            if obligations.len() >= 10_000 {
-                return Err(AppError::InvalidRequest(
-                    "case artifact cleanup obligation limit exceeded".into(),
-                ));
+
+        if let Some(case_id) = only_case_id {
+            let path = root.join(format!("{case_id}.json"));
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                    return Err(AppError::NotAuthorized(
+                        "legacy cleanup obligation is not a regular non-symlink file".into(),
+                    ));
+                }
+                Ok(_) => self.migrate_legacy_artifact_deletion_obligation(&path)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
             }
+            return Ok(());
+        }
+
+        let mut obligation_count = 0_usize;
+        for entry in fs::read_dir(&root)? {
             let entry = entry?;
-            let file_type = entry.file_type()?;
             let name = entry.file_name();
             let name = name.to_str().ok_or_else(|| {
-                AppError::InvalidRequest("cleanup obligation filename is invalid".into())
+                AppError::InvalidRequest("legacy cleanup obligation filename is invalid".into())
             })?;
             if name.starts_with('.') && name.ends_with(".tmp") {
                 continue;
             }
+            obligation_count += 1;
+            if obligation_count > MAX_ARTIFACT_DELETION_OBLIGATIONS {
+                return Err(AppError::InvalidRequest(
+                    "case artifact cleanup obligation limit exceeded".into(),
+                ));
+            }
+            let file_type = entry.file_type()?;
             if file_type.is_symlink() || !file_type.is_file() || !name.ends_with(".json") {
                 return Err(AppError::NotAuthorized(
-                    "cleanup obligation directory contains an unexpected entry".into(),
+                    "legacy cleanup obligation directory contains an unexpected entry".into(),
                 ));
             }
-            let bytes = fs::read(entry.path())?;
-            if bytes.len() > 64 * 1024 {
-                return Err(AppError::InvalidRequest(
-                    "cleanup obligation record is too large".into(),
-                ));
-            }
-            let mut plan: ArtifactDeletionPlan = serde_json::from_slice(&bytes)?;
-            safe_path_component("case id", &plan.case_id)?;
-            let expected = self.artifact_deletion_plan(&plan.case_id)?;
-            if plan.exact_path != expected.exact_path {
-                return Err(AppError::NotAuthorized(
-                    "cleanup obligation path does not match the backend-owned case path".into(),
-                ));
-            }
-            plan.exists = expected.exists;
-            obligations.push(plan);
+            self.migrate_legacy_artifact_deletion_obligation(&entry.path())?;
         }
-        obligations.sort_by(|left, right| left.case_id.cmp(&right.case_id));
-        Ok(obligations)
+        Ok(())
+    }
+
+    fn legacy_deletion_obligation_root(&self) -> AppResult<Option<PathBuf>> {
+        let artifact_metadata = match fs::symlink_metadata(&self.artifact_root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if artifact_metadata.file_type().is_symlink() || !artifact_metadata.is_dir() {
+            return Err(AppError::NotAuthorized(
+                "artifact root containing legacy cleanup obligations must be a real directory"
+                    .into(),
+            ));
+        }
+        let canonical_artifact_root = fs::canonicalize(&self.artifact_root)?;
+        let root = canonical_artifact_root.join(LEGACY_DELETION_OBLIGATION_DIRECTORY);
+        match fs::symlink_metadata(&root) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                Err(AppError::NotAuthorized(
+                    "legacy cleanup obligation root is not a real directory".into(),
+                ))
+            }
+            Ok(_) => Ok(Some(root)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn migrate_legacy_artifact_deletion_obligation(&self, path: &Path) -> AppResult<()> {
+        let bytes = read_legacy_deletion_obligation(path)?;
+        let plan: ArtifactDeletionPlan = serde_json::from_slice(&bytes)?;
+        safe_path_component("case id", &plan.case_id)?;
+
+        let expected_filename = format!("{}.json", plan.case_id);
+        if path.file_name() != Some(std::ffi::OsStr::new(&expected_filename)) {
+            return Err(AppError::NotAuthorized(
+                "legacy cleanup obligation filename does not match its case id".into(),
+            ));
+        }
+        if !plan.exists || !plan.requires_explicit_confirmation {
+            return Err(AppError::NotAuthorized(
+                "legacy cleanup obligation does not contain the required deletion safeguards"
+                    .into(),
+            ));
+        }
+
+        let expected = self.artifact_deletion_plan(&plan.case_id)?;
+        let recorded_path = Path::new(&plan.exact_path);
+        if plan.exact_path != expected.exact_path
+            || recorded_path.parent() != Some(self.artifact_root.as_path())
+            || recorded_path.file_name() != Some(std::ffi::OsStr::new(&plan.case_id))
+        {
+            return Err(AppError::NotAuthorized(
+                "legacy cleanup obligation path is not the exact backend-owned case path".into(),
+            ));
+        }
+
+        self.storage
+            .import_artifact_deletion_obligation(&plan.case_id, &plan.exact_path)?;
+
+        // Revalidate the file after the database commit. If it changed, retain
+        // it for operator review instead of unlinking a different record.
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(AppError::Conflict(
+                    "legacy cleanup obligation changed during migration".into(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+        if read_legacy_deletion_obligation(path)? != bytes {
+            return Err(AppError::Conflict(
+                "legacy cleanup obligation changed during migration".into(),
+            ));
+        }
+        fs::remove_file(path)?;
+        Ok(())
     }
 
     pub fn delete_case(&self, case_id: &str) -> AppResult<CaseDeletionResult> {
         // Resolve both the database target and the artifact plan before the
         // irreversible database operation.
-        self.validate_case_deletion(case_id)?;
+        let case = self.validated_case_for_deletion(case_id)?;
         let artifacts = self.artifact_deletion_plan(case_id)?;
-        if artifacts.exists {
-            self.persist_deletion_obligation(&artifacts)?;
-        }
-        if let Err(error) = self.storage.delete_case(case_id) {
-            if artifacts.exists {
-                let _ = self.clear_deletion_obligation(case_id);
-            }
-            return Err(error);
-        }
+        self.storage.delete_case(
+            case_id,
+            case.storage_revision,
+            artifacts.exists.then_some(artifacts.exact_path.as_str()),
+        )?;
         Ok(CaseDeletionResult {
             database_record_deleted: true,
             artifacts,
@@ -614,114 +729,43 @@ impl<'a> CaseService<'a> {
                 "artifact deletion confirmation must exactly match the displayed phrase".into(),
             ));
         }
-        let target = Path::new(&plan.exact_path);
-        let metadata = match fs::symlink_metadata(target) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.clear_deletion_obligation(case_id)?;
-                return Ok(ArtifactDeletionResult {
-                    removed: false,
-                    exact_path: plan.exact_path,
-                    recoverable: false,
-                });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(AppError::NotAuthorized(
-                "case artifact deletion target is not a real directory".into(),
-            ));
-        }
-        let canonical_root = self.artifact_root.canonicalize()?;
-        let canonical_target = target.canonicalize()?;
-        if canonical_target.parent() != Some(canonical_root.as_path())
-            || canonical_target.file_name() != Some(std::ffi::OsStr::new(case_id))
-        {
-            return Err(AppError::NotAuthorized(
-                "case artifact deletion target escaped the backend-owned artifact root".into(),
-            ));
-        }
-        fs::remove_dir_all(&canonical_target)?;
-        self.clear_deletion_obligation(case_id)?;
-        Ok(ArtifactDeletionResult {
-            removed: true,
-            exact_path: plan.exact_path,
-            recoverable: false,
-        })
-    }
-
-    fn deletion_obligation_root(&self, create: bool) -> AppResult<Option<PathBuf>> {
-        let root = self.artifact_root.join(".case-deletion-obligations");
-        match fs::symlink_metadata(&root) {
-            Ok(metadata) => {
+        self.migrate_legacy_artifact_deletion_obligations(Some(case_id))?;
+        self.storage
+            .consume_artifact_deletion_obligation(case_id, &plan.exact_path, || {
+                let target = Path::new(&plan.exact_path);
+                let metadata = match fs::symlink_metadata(target) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(ArtifactDeletionResult {
+                            removed: false,
+                            exact_path: plan.exact_path.clone(),
+                            recoverable: false,
+                        });
+                    }
+                    Err(error) => return Err(error.into()),
+                };
                 if metadata.file_type().is_symlink() || !metadata.is_dir() {
                     return Err(AppError::NotAuthorized(
-                        "case cleanup obligation root is not a real directory".into(),
+                        "case artifact deletion target is not a real directory".into(),
                     ));
                 }
-                Ok(Some(root))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !create => Ok(None),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir_all(&root)?;
-                restrict_private_directory(&root)?;
-                Ok(Some(root))
-            }
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    fn deletion_obligation_path(&self, case_id: &str, create: bool) -> AppResult<Option<PathBuf>> {
-        safe_path_component("case id", case_id)?;
-        Ok(self
-            .deletion_obligation_root(create)?
-            .map(|root| root.join(format!("{case_id}.json"))))
-    }
-
-    fn persist_deletion_obligation(&self, plan: &ArtifactDeletionPlan) -> AppResult<()> {
-        let path = self
-            .deletion_obligation_path(&plan.case_id, true)?
-            .expect("created obligation root has a path");
-        if fs::symlink_metadata(&path).is_ok() {
-            let existing: ArtifactDeletionPlan = serde_json::from_slice(&fs::read(&path)?)?;
-            if existing == *plan {
-                return Ok(());
-            }
-            return Err(AppError::NotAuthorized(
-                "an existing cleanup obligation conflicts with this case deletion".into(),
-            ));
-        }
-        let temporary = path.with_file_name(format!(".{}.tmp", new_id()));
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
-        restrict_private_file(&temporary)?;
-        file.write_all(&serde_json::to_vec_pretty(plan)?)?;
-        file.sync_all()?;
-        drop(file);
-        if let Err(error) = fs::rename(&temporary, &path) {
-            let _ = fs::remove_file(&temporary);
-            return Err(error.into());
-        }
-        Ok(())
-    }
-
-    fn clear_deletion_obligation(&self, case_id: &str) -> AppResult<()> {
-        let Some(path) = self.deletion_obligation_path(case_id, false)? else {
-            return Ok(());
-        };
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
-                AppError::NotAuthorized("cleanup obligation is not a regular file".into()),
-            ),
-            Ok(_) => {
-                fs::remove_file(path)?;
-                Ok(())
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        }
+                let canonical_root = self.artifact_root.canonicalize()?;
+                let canonical_target = target.canonicalize()?;
+                if canonical_target.parent() != Some(canonical_root.as_path())
+                    || canonical_target.file_name() != Some(std::ffi::OsStr::new(case_id))
+                {
+                    return Err(AppError::NotAuthorized(
+                        "case artifact deletion target escaped the backend-owned artifact root"
+                            .into(),
+                    ));
+                }
+                fs::remove_dir_all(&canonical_target)?;
+                Ok(ArtifactDeletionResult {
+                    removed: true,
+                    exact_path: plan.exact_path.clone(),
+                    recoverable: false,
+                })
+            })
     }
 
     pub fn upsert_source(&self, case_id: &str, request: SourceMutation) -> AppResult<DataSource> {
@@ -772,7 +816,7 @@ impl<'a> CaseService<'a> {
         };
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&case, "source.upserted")?;
+        self.storage.save_case(&mut case, "source.upserted")?;
         Ok(result)
     }
 
@@ -834,7 +878,8 @@ impl<'a> CaseService<'a> {
         case.status = CaseStatus::Discovering;
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&case, "source.snapshot_connected")?;
+        self.storage
+            .save_case(&mut case, "source.snapshot_connected")?;
         Ok(connected)
     }
 
@@ -899,7 +944,7 @@ impl<'a> CaseService<'a> {
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
-            .save_case(&case, "source.live_provider_pages_preserved")?;
+            .save_case(&mut case, "source.live_provider_pages_preserved")?;
         Ok(captured)
     }
 
@@ -976,7 +1021,7 @@ impl<'a> CaseService<'a> {
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
-            .save_case(&case, "source.live_provider_discovery_outcome")?;
+            .save_case(&mut case, "source.live_provider_discovery_outcome")?;
         Ok(updated)
     }
 
@@ -1071,7 +1116,7 @@ impl<'a> CaseService<'a> {
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
-            .save_case(&case, "source.workspace_snapshot_attached")?;
+            .save_case(&mut case, "source.workspace_snapshot_attached")?;
         Ok(case)
     }
 
@@ -1114,7 +1159,7 @@ impl<'a> CaseService<'a> {
         case.status = CaseStatus::ScopeReview;
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
-        self.storage.save_case(&case, "discovery.reconciled")?;
+        self.storage.save_case(&mut case, "discovery.reconciled")?;
         Ok(reports)
     }
 
@@ -1123,18 +1168,42 @@ impl<'a> CaseService<'a> {
         case_id: &str,
         request: ScopeApprovalRequest,
     ) -> AppResult<Vec<ScopeGrant>> {
+        self.approve_scopes(case_id, vec![request])
+    }
+
+    /// Applies a complete scope decision batch as one optimistic, durable case
+    /// update. Any invalid decision leaves every grant and asset unchanged.
+    pub fn approve_scopes(
+        &self,
+        case_id: &str,
+        requests: Vec<ScopeApprovalRequest>,
+    ) -> AppResult<Vec<ScopeGrant>> {
+        if requests.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "at least one scope approval request is required".into(),
+            ));
+        }
         let now = Utc::now();
-        validate_scope_approval(&request, now)?;
+        for request in &requests {
+            validate_scope_approval(request, now)?;
+        }
+        let mut decisions = BTreeSet::new();
+        for request in &requests {
+            let mut permissions = request.permissions.clone();
+            permissions.sort_by_key(enum_key);
+            permissions.dedup();
+            for permission in permissions {
+                if !decisions.insert(grant_key(&request.asset_id, &permission)) {
+                    return Err(AppError::InvalidRequest(format!(
+                        "scope decision is duplicated for asset {} and permission {}",
+                        request.asset_id,
+                        enum_key(&permission)
+                    )));
+                }
+            }
+        }
         let mut case = self.mutable_case(case_id, "approve scope")?;
         ensure_no_active_scan(&case, "change scan authorization")?;
-        let asset = case
-            .assets
-            .iter()
-            .find(|asset| asset.id == request.asset_id)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::InvalidRequest(format!("asset not found: {}", request.asset_id))
-            })?;
 
         // Collapse any legacy duplicates first, preserving the oldest stable
         // grant ID, then replace each requested decision in place.
@@ -1145,31 +1214,56 @@ impl<'a> CaseService<'a> {
                 .or_insert(grant);
         }
 
-        let mut permissions = request.permissions.clone();
-        permissions.sort_by_key(enum_key);
-        permissions.dedup();
         let mut approved = Vec::new();
-        for permission in permissions {
-            let key = grant_key(&request.asset_id, &permission);
-            let grant = grants.entry(key).or_insert_with(|| ScopeGrant {
-                id: new_id(),
-                asset_id: request.asset_id.clone(),
-                permission: permission.clone(),
-                confirmed_by: String::new(),
-                confirmed_at: now,
-                expires_at: None,
-                authorization_reference: None,
-                notes: None,
-                external_scope: None,
-            });
-            grant.confirmed_by = request.confirmed_by.trim().to_owned();
-            grant.confirmed_at = now;
-            grant.expires_at = request.expires_at;
-            grant.authorization_reference = trim_option(request.authorization_reference.as_deref());
-            grant.notes = optional_text("scope notes", request.notes.as_deref(), 4_000)?;
-            grant.external_scope =
-                materialize_external_scope(case_id, &asset, &grant.id, &permission, &request, now)?;
-            approved.push(grant.clone());
+        for request in requests {
+            let asset = case
+                .assets
+                .iter()
+                .find(|asset| asset.id == request.asset_id)
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::InvalidRequest(format!("asset not found: {}", request.asset_id))
+                })?;
+            let mut permissions = request.permissions.clone();
+            permissions.sort_by_key(enum_key);
+            permissions.dedup();
+            for permission in permissions {
+                let key = grant_key(&request.asset_id, &permission);
+                let grant = grants.entry(key).or_insert_with(|| ScopeGrant {
+                    id: new_id(),
+                    asset_id: request.asset_id.clone(),
+                    permission: permission.clone(),
+                    confirmed_by: String::new(),
+                    confirmed_at: now,
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                });
+                grant.confirmed_by = request.confirmed_by.trim().to_owned();
+                grant.confirmed_at = now;
+                grant.expires_at = request.expires_at;
+                grant.authorization_reference =
+                    trim_option(request.authorization_reference.as_deref());
+                grant.notes = optional_text("scope notes", request.notes.as_deref(), 4_000)?;
+                grant.external_scope = materialize_external_scope(
+                    case_id,
+                    &asset,
+                    &grant.id,
+                    &permission,
+                    &request,
+                    now,
+                )?;
+                approved.push(grant.clone());
+            }
+            if let Some(asset) = case
+                .assets
+                .iter_mut()
+                .find(|asset| asset.id == request.asset_id)
+            {
+                asset.owner_confirmed = true;
+                asset.candidate = false;
+            }
         }
         case.scope_grants = grants.into_values().collect();
         case.scope_grants.sort_by(|left, right| {
@@ -1177,18 +1271,10 @@ impl<'a> CaseService<'a> {
                 .cmp(&right.asset_id)
                 .then_with(|| enum_key(&left.permission).cmp(&enum_key(&right.permission)))
         });
-        if let Some(asset) = case
-            .assets
-            .iter_mut()
-            .find(|asset| asset.id == request.asset_id)
-        {
-            asset.owner_confirmed = true;
-            asset.candidate = false;
-        }
         case.status = CaseStatus::Ready;
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&case, "scope.approved")?;
+        self.storage.save_case(&mut case, "scope.approved")?;
         Ok(approved)
     }
 
@@ -1460,7 +1546,7 @@ impl<'a> CaseService<'a> {
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
         self.storage.save_case(
-            &case,
+            &mut case,
             if verification_baseline_run_id.is_some() {
                 "scan.rescan_planned"
             } else {
@@ -1563,7 +1649,7 @@ impl<'a> CaseService<'a> {
                 case.touch();
                 refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
                 self.storage
-                    .save_case(&case, "scan.interrupted_after_restart")?;
+                    .save_case(&mut case, "scan.interrupted_after_restart")?;
             }
         }
         Ok(recovered_runs)
@@ -1642,7 +1728,7 @@ impl<'a> CaseService<'a> {
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
-            .save_case(&case, "scan.interrupted_resources_reconciled")?;
+            .save_case(&mut case, "scan.interrupted_resources_reconciled")?;
         Ok(case)
     }
 
@@ -1712,7 +1798,7 @@ impl<'a> CaseService<'a> {
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
-            .save_case(&case, "scan.interrupted_cleanup_pending")?;
+            .save_case(&mut case, "scan.interrupted_cleanup_pending")?;
         Ok(case)
     }
 
@@ -1922,7 +2008,7 @@ impl<'a> CaseService<'a> {
         };
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&case, "scan.resume_planned")?;
+        self.storage.save_case(&mut case, "scan.resume_planned")?;
 
         Ok(ScanPlan {
             scan_run: case.scan_runs[run_index].clone(),
@@ -1935,6 +2021,22 @@ impl<'a> CaseService<'a> {
     }
 
     pub fn apply_execution_report(
+        &self,
+        case_id: &str,
+        report: &DurableExecutionReport,
+    ) -> AppResult<ExecutionApplyResult> {
+        let mut last_conflict = None;
+        for _ in 0..3 {
+            match self.apply_execution_report_once(case_id, report) {
+                Ok(applied) => return Ok(applied),
+                Err(error @ AppError::Conflict(_)) => last_conflict = Some(error),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_conflict.expect("bounded execution report retry recorded a conflict"))
+    }
+
+    fn apply_execution_report_once(
         &self,
         case_id: &str,
         report: &DurableExecutionReport,
@@ -2039,7 +2141,8 @@ impl<'a> CaseService<'a> {
         update_run_and_case_status(&mut case, run_index, now);
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&case, "execution.report_applied")?;
+        self.storage
+            .save_case(&mut case, "execution.report_applied")?;
         Ok(ExecutionApplyResult {
             case,
             idempotent_replay: false,
@@ -2144,7 +2247,7 @@ impl<'a> CaseService<'a> {
         update_run_and_case_status(&mut case, run_index, now);
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&case, transition.event_name())?;
+        self.storage.save_case(&mut case, transition.event_name())?;
         Ok(case)
     }
 
@@ -2178,17 +2281,39 @@ impl<'a> CaseService<'a> {
             .filter(|observation| observation.run_id == run_id)
             .map(|observation| observation.finding_id.as_str())
             .collect::<BTreeSet<_>>();
-        let evidence_index_count = case
+        let findings_by_id = case
             .findings
             .iter()
-            .map(|finding| finding.evidence.len())
-            .sum();
-        let selected_run_evidence_count = case
-            .findings
-            .iter()
-            .flat_map(|finding| &finding.evidence)
-            .filter(|evidence| evidence.run_id == run_id)
-            .count();
+            .map(|finding| (finding.id.as_str(), finding))
+            .collect::<BTreeMap<_, _>>();
+        let mut evidence_ids = BTreeSet::new();
+        let mut selected_run_evidence_ids = BTreeSet::new();
+        for observation in &case.finding_observations {
+            let finding = observation
+                .finding_snapshot
+                .as_ref()
+                .or_else(|| findings_by_id.get(observation.finding_id.as_str()).copied());
+            if let Some(finding) = finding {
+                for evidence in finding
+                    .evidence
+                    .iter()
+                    .filter(|evidence| evidence.run_id == observation.run_id)
+                {
+                    evidence_ids.insert(evidence.id.as_str());
+                    if observation.run_id == run_id {
+                        selected_run_evidence_ids.insert(evidence.id.as_str());
+                    }
+                }
+            }
+        }
+        for evidence in case.findings.iter().flat_map(|finding| &finding.evidence) {
+            evidence_ids.insert(evidence.id.as_str());
+            if evidence.run_id == run_id {
+                selected_run_evidence_ids.insert(evidence.id.as_str());
+            }
+        }
+        let evidence_index_count = evidence_ids.len();
+        let selected_run_evidence_count = selected_run_evidence_ids.len();
         let include_raw_bytes =
             format == CaseExportFormat::CaseBundle && options.include_raw_artifacts;
         let raw_artifacts_included = case
@@ -2310,7 +2435,7 @@ impl<'a> CaseService<'a> {
         )?;
         case.exports.push(export.clone());
         case.touch();
-        self.storage.save_case(&case, "export.bundle_created")?;
+        self.storage.save_case(&mut case, "export.bundle_created")?;
         Ok(export)
     }
 
@@ -2404,7 +2529,7 @@ impl<'a> CaseService<'a> {
         };
         case.exports.push(export.clone());
         case.touch();
-        self.storage.save_case(&case, "export.schema_created")?;
+        self.storage.save_case(&mut case, "export.schema_created")?;
         Ok(export)
     }
 
@@ -2469,9 +2594,13 @@ impl<'a> CaseService<'a> {
         }
         let comparison = compare_case_runs(&case, baseline_run_id, current_run_id)?;
         case.comparisons.push(comparison.clone());
-        case.status = CaseStatus::ReadyForHandoff;
+        case.status = if comparison.complete {
+            CaseStatus::ReadyForHandoff
+        } else {
+            CaseStatus::NeedsAttention
+        };
         case.touch();
-        self.storage.save_case(&case, "verification.compared")?;
+        self.storage.save_case(&mut case, "verification.compared")?;
         Ok(comparison)
     }
 
@@ -2623,7 +2752,8 @@ impl<'a> CaseService<'a> {
             expires_at: request.expires_at,
         });
         case.touch();
-        self.storage.save_case(&case, "finding.workflow_changed")?;
+        self.storage
+            .save_case(&mut case, "finding.workflow_changed")?;
         Ok(case)
     }
 
@@ -2699,7 +2829,7 @@ impl<'a> CaseService<'a> {
         });
         case.finding_groups.push(group);
         case.touch();
-        self.storage.save_case(&case, "finding.group_created")?;
+        self.storage.save_case(&mut case, "finding.group_created")?;
         Ok(case)
     }
 
@@ -2736,7 +2866,7 @@ impl<'a> CaseService<'a> {
             occurred_at: Utc::now(),
         });
         case.touch();
-        self.storage.save_case(&case, "finding.group_removed")?;
+        self.storage.save_case(&mut case, "finding.group_removed")?;
         Ok(case)
     }
 
@@ -4166,7 +4296,13 @@ fn reconcile_finding(
         canonical_id = incoming.id.clone();
     }
 
-    let observed_at = incoming
+    let finding_snapshot = case
+        .findings
+        .iter()
+        .find(|finding| finding.id == canonical_id)
+        .cloned()
+        .ok_or_else(|| AppError::Runtime("canonical finding projection disappeared".into()))?;
+    let observed_at = finding_snapshot
         .evidence
         .iter()
         .map(|evidence| evidence.observed_at)
@@ -4183,6 +4319,7 @@ fn reconcile_finding(
         confidence: incoming.confidence.clone(),
         evidence_hashes,
         observed_at,
+        finding_snapshot: Some(finding_snapshot),
     });
     Ok(())
 }
@@ -4460,21 +4597,42 @@ fn restrict_private_file(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn restrict_private_directory(path: &Path) -> AppResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    Ok(())
-}
-
 #[cfg(not(unix))]
 fn restrict_private_file(_path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn restrict_private_directory(_path: &Path) -> AppResult<()> {
-    Ok(())
+fn read_legacy_deletion_obligation(path: &Path) -> AppResult<Vec<u8>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_LEGACY_DELETION_OBLIGATION_BYTES {
+        return Err(AppError::InvalidRequest(
+            "legacy cleanup obligation must be a bounded regular file".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_LEGACY_DELETION_OBLIGATION_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_LEGACY_DELETION_OBLIGATION_BYTES {
+        return Err(AppError::InvalidRequest(
+            "legacy cleanup obligation record is too large".into(),
+        ));
+    }
+    Ok(bytes)
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {
@@ -4691,10 +4849,14 @@ fn html_report_bytes(
     }
 
     let mut findings = String::new();
-    let mut run_findings = exported
-        .findings
+    let mut run_findings = observations
         .iter()
-        .filter(|finding| observed_finding_ids.contains(finding.id.as_str()))
+        .filter_map(|observation| {
+            observation
+                .finding_snapshot
+                .as_ref()
+                .or_else(|| finding_by_id.get(observation.finding_id.as_str()).copied())
+        })
         .collect::<Vec<_>>();
     run_findings.sort_by(|left, right| {
         right
@@ -4911,6 +5073,21 @@ mod tests {
             let asset_id = case.assets[0].id.clone();
             (case, asset_id)
         }
+    }
+
+    fn write_legacy_artifact_deletion_obligation(
+        fixture: &Fixture,
+        plan: &ArtifactDeletionPlan,
+    ) -> PathBuf {
+        let root = fixture
+            .directory
+            .path()
+            .join("artifacts")
+            .join(LEGACY_DELETION_OBLIGATION_DIRECTORY);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(format!("{}.json", plan.case_id));
+        fs::write(&path, serde_json::to_vec_pretty(plan).unwrap()).unwrap();
+        path
     }
 
     fn comparison_scope_manifest() -> EngineManifest {
@@ -5148,7 +5325,7 @@ mod tests {
         stored.status = CaseStatus::ReadyForHandoff;
         fixture
             .storage
-            .save_case(&stored, "test.baseline_completed")
+            .save_case(&mut stored, "test.baseline_completed")
             .unwrap();
         (created.id, baseline.scan_run.id)
     }
@@ -5381,11 +5558,15 @@ mod tests {
                 confidence: Confidence::High,
                 evidence_hashes: vec!["a".repeat(64)],
                 observed_at: now,
+                finding_snapshot: None,
             });
         }
         case.updated_at = now;
         let canonical_findings = serde_json::to_value(&case.findings).unwrap();
-        fixture.storage.save_case(&case, "test.findings").unwrap();
+        fixture
+            .storage
+            .save_case(&mut case, "test.findings")
+            .unwrap();
 
         let group_title = "Related access observations";
         let group_rationale = "A human should review the shared access path together.";
@@ -5641,6 +5822,271 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        assert!(matches!(
+            reopened_service.delete_case_artifacts(
+                &case_id,
+                &deletion.artifacts.exact_path,
+                &format!("DELETE {case_id}"),
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_artifact_obligation_migrates_before_listing_and_remains_deletable() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        fs::write(case_artifacts.join("evidence.bin"), b"legacy evidence").unwrap();
+        let service = fixture.service();
+        let plan = service.artifact_deletion_plan(&case.id).unwrap();
+        fixture
+            .storage
+            .delete_case(&case.id, case.storage_revision, None)
+            .unwrap();
+        let legacy_path = write_legacy_artifact_deletion_obligation(&fixture, &plan);
+
+        assert_eq!(
+            service.list_artifact_deletion_obligations().unwrap(),
+            vec![plan.clone()]
+        );
+        assert!(!legacy_path.exists());
+        let durable = fixture
+            .storage
+            .list_artifact_deletion_obligations()
+            .unwrap();
+        assert_eq!(durable.len(), 1);
+        assert_eq!(durable[0].case_id, case.id);
+        assert_eq!(durable[0].exact_path, plan.exact_path);
+
+        let removed = service
+            .delete_case_artifacts(
+                &plan.case_id,
+                &plan.exact_path,
+                &format!("DELETE {}", plan.case_id),
+            )
+            .unwrap();
+        assert!(removed.removed);
+        assert!(!case_artifacts.exists());
+    }
+
+    #[test]
+    fn legacy_artifact_obligation_migrates_on_direct_delete() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        fs::write(case_artifacts.join("evidence.bin"), b"legacy evidence").unwrap();
+        let service = fixture.service();
+        let plan = service.artifact_deletion_plan(&case.id).unwrap();
+        fixture
+            .storage
+            .delete_case(&case.id, case.storage_revision, None)
+            .unwrap();
+        let legacy_path = write_legacy_artifact_deletion_obligation(&fixture, &plan);
+
+        let removed = service
+            .delete_case_artifacts(&case.id, &plan.exact_path, &format!("DELETE {}", case.id))
+            .unwrap();
+        assert!(removed.removed);
+        assert!(!legacy_path.exists());
+        assert!(
+            fixture
+                .storage
+                .list_artifact_deletion_obligations()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn legacy_artifact_obligation_is_preserved_for_a_live_case() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        let service = fixture.service();
+        let plan = service.artifact_deletion_plan(&case.id).unwrap();
+        let legacy_path = write_legacy_artifact_deletion_obligation(&fixture, &plan);
+
+        assert!(matches!(
+            service.list_artifact_deletion_obligations(),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(legacy_path.exists());
+        assert!(
+            fixture
+                .storage
+                .list_artifact_deletion_obligations()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(service.show_case(&case.id).unwrap().id, case.id);
+    }
+
+    #[test]
+    fn legacy_artifact_obligation_rejects_a_path_outside_the_artifact_root() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        let service = fixture.service();
+        let mut plan = service.artifact_deletion_plan(&case.id).unwrap();
+        fixture
+            .storage
+            .delete_case(&case.id, case.storage_revision, None)
+            .unwrap();
+        plan.exact_path = fixture
+            .directory
+            .path()
+            .join("outside")
+            .join(&case.id)
+            .display()
+            .to_string();
+        let legacy_path = write_legacy_artifact_deletion_obligation(&fixture, &plan);
+
+        assert!(matches!(
+            service.list_artifact_deletion_obligations(),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(legacy_path.exists());
+        assert!(case_artifacts.exists());
+        assert!(
+            fixture
+                .storage
+                .list_artifact_deletion_obligations()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_artifact_obligation_is_durable_before_unlink_and_retry_is_idempotent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        let service = fixture.service();
+        let plan = service.artifact_deletion_plan(&case.id).unwrap();
+        fixture
+            .storage
+            .delete_case(&case.id, case.storage_revision, None)
+            .unwrap();
+        let legacy_path = write_legacy_artifact_deletion_obligation(&fixture, &plan);
+        let legacy_root = legacy_path.parent().unwrap();
+        fs::set_permissions(legacy_root, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let result = service.list_artifact_deletion_obligations();
+        fs::set_permissions(legacy_root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err());
+        assert!(legacy_path.exists());
+        let durable = fixture
+            .storage
+            .list_artifact_deletion_obligations()
+            .unwrap();
+        assert_eq!(durable.len(), 1, "SQLite commit must precede legacy unlink");
+        assert_eq!(durable[0].exact_path, plan.exact_path);
+
+        assert_eq!(
+            service.list_artifact_deletion_obligations().unwrap(),
+            vec![plan]
+        );
+        assert!(!legacy_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_artifact_obligation_symlink_is_never_followed() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        let service = fixture.service();
+        let plan = service.artifact_deletion_plan(&case.id).unwrap();
+        fixture
+            .storage
+            .delete_case(&case.id, case.storage_revision, None)
+            .unwrap();
+        let target = fixture.directory.path().join("outside-obligation.json");
+        fs::write(&target, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+        let root = fixture
+            .directory
+            .path()
+            .join("artifacts")
+            .join(LEGACY_DELETION_OBLIGATION_DIRECTORY);
+        fs::create_dir_all(&root).unwrap();
+        let linked = root.join(format!("{}.json", case.id));
+        symlink(&target, &linked).unwrap();
+
+        assert!(matches!(
+            service.list_artifact_deletion_obligations(),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(linked.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(target.exists());
+        assert!(
+            fixture
+                .storage
+                .list_artifact_deletion_obligations()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn artifact_deletion_refuses_a_live_case_without_an_obligation() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        fs::write(case_artifacts.join("evidence.bin"), b"keep me").unwrap();
+        let service = fixture.service();
+        let plan = service.artifact_deletion_plan(&case.id).unwrap();
+
+        assert!(matches!(
+            service.delete_case_artifacts(
+                &case.id,
+                &plan.exact_path,
+                &format!("DELETE {}", case.id),
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(case_artifacts.join("evidence.bin").exists());
+        assert_eq!(service.show_case(&case.id).unwrap().id, case.id);
+    }
+
+    #[test]
+    fn artifact_deletion_refuses_a_deleted_case_without_an_obligation() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let service = fixture.service();
+        let deletion = service.delete_case(&case.id).unwrap();
+        assert!(!deletion.artifacts.exists);
+        assert!(
+            service
+                .list_artifact_deletion_obligations()
+                .unwrap()
+                .is_empty()
+        );
+
+        let case_artifacts = fixture.directory.path().join("artifacts").join(&case.id);
+        fs::create_dir_all(&case_artifacts).unwrap();
+        fs::write(case_artifacts.join("late-file.bin"), b"keep me").unwrap();
+        assert!(matches!(
+            service.delete_case_artifacts(
+                &case.id,
+                &deletion.artifacts.exact_path,
+                &format!("DELETE {}", case.id),
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(case_artifacts.join("late-file.bin").exists());
     }
 
     #[test]
@@ -5673,7 +6119,10 @@ mod tests {
                 scope_grant_snapshots: vec![],
                 engine_runs: vec![engine_run],
             });
-            fixture.storage.save_case(&case, "test.active_run").unwrap();
+            fixture
+                .storage
+                .save_case(&mut case, "test.active_run")
+                .unwrap();
 
             let service = fixture.service();
             let error = service.delete_case(&case.id).unwrap_err();
@@ -5737,8 +6186,8 @@ mod tests {
     #[test]
     fn demo_case_can_never_be_planned_or_mutated_into_a_real_case() {
         let fixture = Fixture::new();
-        let demo = crate::demo::build_demo_case();
-        fixture.storage.save_case(&demo, "demo.seeded").unwrap();
+        let mut demo = crate::demo::build_demo_case();
+        fixture.storage.save_case(&mut demo, "demo.seeded").unwrap();
         let service = fixture.service();
         let error = service
             .plan_scan(&demo.id, ScanPlanRequest::default())
@@ -5777,7 +6226,7 @@ mod tests {
         attributable.assets[0].internet_exposed = Some(true);
         fixture
             .storage
-            .save_case(&attributable, "test.external_target_attributed")
+            .save_case(&mut attributable, "test.external_target_attributed")
             .unwrap();
         let request = ScopeApprovalRequest {
             asset_id: asset_id.clone(),
@@ -5828,6 +6277,52 @@ mod tests {
                 .target,
             CanonicalTarget::Hostname("app.example.test".into())
         );
+    }
+
+    #[test]
+    fn scope_approval_batch_rolls_back_every_decision_when_one_is_invalid() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        let before = service.show_case(&case.id).unwrap();
+        assert!(before.scope_grants.is_empty());
+        assert!(!before.assets[0].owner_confirmed);
+
+        let result = service.approve_scopes(
+            &case.id,
+            vec![
+                ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: Some("valid first decision".into()),
+                    external_scope: None,
+                },
+                ScopeApprovalRequest {
+                    asset_id: "missing-asset".into(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: Some("invalid second decision".into()),
+                    external_scope: None,
+                },
+            ],
+        );
+        assert!(matches!(result, Err(AppError::InvalidRequest(_))));
+
+        let after = service.show_case(&case.id).unwrap();
+        assert!(after.scope_grants.is_empty());
+        let asset = after
+            .assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .unwrap();
+        assert!(!asset.owner_confirmed);
+        assert!(asset.candidate);
     }
 
     #[test]
@@ -5980,7 +6475,7 @@ mod tests {
         current.completed_at = Some(Utc::now());
         fixture
             .storage
-            .save_case(&terminal, "test.verification_terminal")
+            .save_case(&mut terminal, "test.verification_terminal")
             .unwrap();
 
         let first = service
@@ -6095,7 +6590,7 @@ mod tests {
         engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
         fixture
             .storage
-            .save_case(&running, "test.running_before_restart")
+            .save_case(&mut running, "test.running_before_restart")
             .unwrap();
 
         assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
@@ -6287,7 +6782,7 @@ mod tests {
             original.scan_run.created_at + Duration::seconds(1);
         fixture
             .storage
-            .save_case(&changed_scope, "test.scope_reapproved")
+            .save_case(&mut changed_scope, "test.scope_reapproved")
             .unwrap();
         let error = service
             .plan_resume(&case.id, &original.scan_run.id)
@@ -6304,7 +6799,7 @@ mod tests {
         discovered.assets[0].provider = Some("aws".into());
         fixture
             .storage
-            .save_case(&discovered, "test.aws_provider_attributed")
+            .save_case(&mut discovered, "test.aws_provider_attributed")
             .unwrap();
         let service = fixture.service();
         service
@@ -6372,7 +6867,7 @@ mod tests {
             discovered.assets[0].provider = provider.map(str::to_owned);
             fixture
                 .storage
-                .save_case(&discovered, "test.provider_attributed")
+                .save_case(&mut discovered, "test.provider_attributed")
                 .unwrap();
             let service = fixture.service();
             service
@@ -6424,7 +6919,7 @@ mod tests {
         discovered.assets[0].provider = Some("aws".into());
         fixture
             .storage
-            .save_case(&discovered, "test.aws_provider_attributed")
+            .save_case(&mut discovered, "test.aws_provider_attributed")
             .unwrap();
         let service = fixture.service();
         service
@@ -6456,7 +6951,7 @@ mod tests {
         interrupted.status = CaseStatus::NeedsAttention;
         fixture
             .storage
-            .save_case(&interrupted, "test.provider_changed_before_resume")
+            .save_case(&mut interrupted, "test.provider_changed_before_resume")
             .unwrap();
 
         let error = service
@@ -6548,7 +7043,10 @@ mod tests {
                 error_message: None,
             }],
         });
-        fixture.storage.save_case(&case, "test.prepared").unwrap();
+        fixture
+            .storage
+            .save_case(&mut case, "test.prepared")
+            .unwrap();
         let artifact_path = fixture
             .directory
             .path()
@@ -6694,6 +7192,16 @@ mod tests {
             workflow.finding_workflow_events[0].from_status,
             FindingStatus::Unreviewed
         );
+        let mut after_expiry = workflow.clone();
+        after_expiry.finding_workflow_events[0].expires_at =
+            Some(Utc::now() - Duration::seconds(1));
+        after_expiry.apply_effective_finding_statuses(Utc::now());
+        assert_eq!(
+            after_expiry.findings[0].status,
+            FindingStatus::Unreviewed,
+            "expired suppression must restore the status recorded in its audit event"
+        );
+        assert_eq!(after_expiry.finding_workflow_events.len(), 1);
         assert!(
             service
                 .update_finding_workflow(
@@ -6819,8 +7327,9 @@ mod tests {
             confidence: Confidence::High,
             evidence_hashes: vec!["a".repeat(64)],
             observed_at: now,
+            finding_snapshot: None,
         });
-        fixture.storage.save_case(&case, "test.runs").unwrap();
+        fixture.storage.save_case(&mut case, "test.runs").unwrap();
         let destination = fixture.directory.path().join("ocsf.json");
         let service = fixture.service();
         let export = service
@@ -6888,5 +7397,81 @@ mod tests {
             notices: vec![],
         };
         assert!(discovery.assets.is_empty());
+    }
+
+    #[test]
+    fn repeat_observations_keep_immutable_run_specific_finding_and_evidence_snapshots() {
+        let fixture = Fixture::new();
+        let mut case = fixture.create();
+        let case_id = case.id.clone();
+        let observed = |run_id: &str, title: &str, evidence_id: &str, hash: &str| Finding {
+            id: format!("finding-{run_id}"),
+            case_id: case_id.clone(),
+            first_seen_run_id: run_id.into(),
+            last_seen_run_id: run_id.into(),
+            fingerprint: "stable-fingerprint".into(),
+            title: title.into(),
+            plain_language_summary: format!("summary for {run_id}"),
+            possible_impact: format!("impact for {run_id}"),
+            severity: Severity::High,
+            confidence: Confidence::High,
+            priority: 70,
+            priority_reasons: vec![format!("priority for {run_id}")],
+            asset_ids: vec!["asset-1".into()],
+            evidence: vec![Evidence {
+                id: evidence_id.into(),
+                finding_id: format!("finding-{run_id}"),
+                run_id: run_id.into(),
+                engine_run_id: Some(format!("engine-{run_id}")),
+                kind: EvidenceKind::Configuration,
+                engine_id: "cloudquery".into(),
+                observed_at: Utc::now(),
+                summary: format!("evidence for {run_id}"),
+                artifact_id: format!("artifact-{run_id}"),
+                artifact_sha256: hash.into(),
+                pointer: Some(format!("/{run_id}")),
+                redacted: false,
+            }],
+            control_references: vec![],
+            recommendation: format!("recommendation for {run_id}"),
+            verification_guidance: format!("verification for {run_id}"),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![run_id.into()],
+        };
+
+        reconcile_finding(
+            &mut case,
+            &observed("run-1", "Original title", "evidence-1", &"a".repeat(64)),
+            "cloudquery",
+        )
+        .expect("first observation");
+        reconcile_finding(
+            &mut case,
+            &observed("run-2", "Updated title", "evidence-2", &"b".repeat(64)),
+            "cloudquery",
+        )
+        .expect("repeat observation");
+
+        assert_eq!(case.findings.len(), 1);
+        assert_eq!(case.findings[0].title, "Updated title");
+        assert_eq!(case.findings[0].evidence[0].id, "evidence-2");
+        assert_eq!(case.finding_observations.len(), 2);
+        let first = case.finding_observations[0]
+            .finding_snapshot
+            .as_ref()
+            .expect("run-1 snapshot");
+        let second = case.finding_observations[1]
+            .finding_snapshot
+            .as_ref()
+            .expect("run-2 snapshot");
+        assert_eq!(first.title, "Original title");
+        assert_eq!(first.evidence[0].id, "evidence-1");
+        assert_eq!(first.evidence[0].run_id, "run-1");
+        assert_eq!(second.title, "Updated title");
+        assert_eq!(second.evidence[0].id, "evidence-2");
+        assert_eq!(second.evidence[0].run_id, "run-2");
     }
 }

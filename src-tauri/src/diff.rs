@@ -82,8 +82,32 @@ pub fn compare_case_runs_at(
                 current_run,
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
 
+    let mut completeness_issues = run_completeness_issues(baseline_run, current_run);
+    for diff in &diffs {
+        if diff.status != FindingDiffStatus::UnableToVerify {
+            continue;
+        }
+        if diff.reasons.is_empty() {
+            push_unique_reason(
+                &mut completeness_issues,
+                reason(
+                    FindingDiffReasonCode::ComparisonIdentityMissing,
+                    None,
+                    None,
+                    format!(
+                        "finding fingerprint {} could not be compared",
+                        diff.fingerprint
+                    ),
+                ),
+            );
+        } else {
+            for issue in &diff.reasons {
+                push_unique_reason(&mut completeness_issues, issue.clone());
+            }
+        }
+    }
     Ok(VerificationComparison {
         id: new_id(),
         case_id: case.id.clone(),
@@ -91,7 +115,55 @@ pub fn compare_case_runs_at(
         current_run_id: current_run_id.into(),
         created_at,
         diffs,
+        complete: completeness_issues.is_empty(),
+        completeness_issues,
     })
+}
+
+fn run_completeness_issues(
+    baseline_run: &ScanRun,
+    current_run: &ScanRun,
+) -> Vec<FindingDiffReason> {
+    let coordinates = |run: &ScanRun| {
+        run.engine_runs
+            .iter()
+            .flat_map(|engine_run| {
+                if engine_run.asset_ids.is_empty() {
+                    vec![(engine_run.engine_id.clone(), None)]
+                } else {
+                    engine_run
+                        .asset_ids
+                        .iter()
+                        .cloned()
+                        .map(|asset_id| (engine_run.engine_id.clone(), Some(asset_id)))
+                        .collect()
+                }
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let baseline_coordinates = coordinates(baseline_run);
+    let current_coordinates = coordinates(current_run);
+    if baseline_coordinates.is_empty() && current_coordinates.is_empty() {
+        return vec![reason(
+            FindingDiffReasonCode::ComparisonIdentityMissing,
+            None,
+            None,
+            "both runs lack planned engine/asset coordinates".into(),
+        )];
+    }
+
+    let mut issues = Vec::new();
+    for (engine_id, asset_id) in &baseline_coordinates {
+        for issue in compare_coordinate(baseline_run, current_run, engine_id, asset_id.as_deref()) {
+            push_unique_reason(&mut issues, issue);
+        }
+    }
+    for (engine_id, asset_id) in &current_coordinates {
+        for issue in compare_coordinate(current_run, baseline_run, engine_id, asset_id.as_deref()) {
+            push_unique_reason(&mut issues, issue);
+        }
+    }
+    issues
 }
 
 #[derive(Debug, Clone)]
@@ -911,6 +983,7 @@ mod tests {
             confidence: crate::domain::Confidence::High,
             evidence_hashes: vec![hash.into()],
             observed_at: Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap(),
+            finding_snapshot: None,
         }
     }
 
@@ -977,6 +1050,54 @@ mod tests {
             FindingDiffStatus::UnableToVerify
         );
         assert!(comparison.diffs[0].explanation.contains("engine=engine-a"));
+        assert!(!comparison.complete);
+        assert!(!comparison.completeness_issues.is_empty());
+    }
+
+    #[test]
+    fn an_unidentifiable_legacy_observation_prevents_handoff_even_when_runs_completed() {
+        let mut case = fixture();
+        let mut legacy = observation("baseline", "legacy", Severity::High, "a");
+        legacy.engine_ids.clear();
+        case.finding_observations = vec![legacy];
+
+        let comparison = compare_case_runs(&case, "baseline", "current").unwrap();
+
+        assert_eq!(
+            comparison.diffs[0].status,
+            FindingDiffStatus::UnableToVerify
+        );
+        assert!(!comparison.complete);
+        assert!(comparison.completeness_issues.iter().any(|issue| {
+            issue.code == FindingDiffReasonCode::ComparisonIdentityMissing
+                && issue.detail.contains("no originating engine")
+        }));
+    }
+
+    #[test]
+    fn zero_finding_runs_are_complete_only_when_all_coordinates_are_comparable() {
+        let complete = fixture();
+        let comparison = compare_case_runs(&complete, "baseline", "current").unwrap();
+        assert!(comparison.diffs.is_empty());
+        assert!(comparison.complete);
+        assert!(comparison.completeness_issues.is_empty());
+
+        for status in [
+            EngineRunStatus::Failed,
+            EngineRunStatus::NotExecuted,
+            EngineRunStatus::PartiallyCompleted,
+        ] {
+            let mut incomplete = fixture();
+            incomplete.scan_runs[1].engine_runs[0].status = status.clone();
+            let comparison = compare_case_runs(&incomplete, "baseline", "current").unwrap();
+            assert!(comparison.diffs.is_empty());
+            assert!(!comparison.complete, "{status:?} must be incomplete");
+            assert!(comparison.completeness_issues.iter().any(|issue| {
+                issue.code == FindingDiffReasonCode::CoordinateNotCompleted
+                    && issue.engine_id.as_deref() == Some("engine-a")
+                    && issue.asset_id.as_deref() == Some("asset-a")
+            }));
+        }
     }
 
     #[test]

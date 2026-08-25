@@ -1277,7 +1277,11 @@ impl ManagedRuntimeManager {
 
     pub fn uninstall(&self, options: ManagedUninstallOptions) -> AppResult<ManagedRuntimeStatus> {
         let _lock = self.lock()?;
-        if self.install_directory().exists() {
+        if private_entry_exists(&self.install_directory())? {
+            // Repair a corrupted release payload from the verified application
+            // resources before invoking it for owned-machine cleanup. A damaged
+            // client must not permanently wedge either retry or uninstall.
+            self.install_locked()?;
             let target = self.loaded.target()?;
             let command = self.runtime_command(target)?;
             let machine_name = machine_name(target);
@@ -1310,8 +1314,8 @@ impl ManagedRuntimeManager {
             remove_private_tree(&self.install_directory(), &self.versions_root())?;
             if options.remove_machine_image_cache {
                 let image = self.machine_image_path(target);
-                if image.exists() {
-                    remove_regular_file(&image)?;
+                if private_entry_exists(&image)? {
+                    remove_private_tree(&image, &self.image_cache_root())?;
                 }
             }
         }
@@ -1468,8 +1472,14 @@ impl ManagedRuntimeManager {
         self.verify_resource_bundle()?;
         ensure_private_directory(&self.versions_root())?;
         let destination = self.install_directory();
-        if destination.exists() {
-            return self.verify_installation();
+        if private_entry_exists(&destination)? {
+            match self.verify_installation() {
+                Ok(()) => return Ok(()),
+                Err(_) => {
+                    remove_private_tree(&destination, &self.versions_root())?;
+                    sync_directory(&self.versions_root())?;
+                }
+            }
         }
         let staging = self
             .versions_root()
@@ -1509,6 +1519,7 @@ impl ManagedRuntimeManager {
 
     fn verify_installation(&self) -> AppResult<()> {
         let root = canonical_real_directory(&self.install_directory(), "managed runtime install")?;
+        verify_installed_permissions(&root, &self.loaded.manifest.files)?;
         verify_bundle_files(&root, &self.loaded.manifest.files)?;
         let installed_manifest = LoadedManagedRuntimeManifest::read(&root.join("manifest.json"))?;
         if installed_manifest.sha256 != self.loaded.sha256 {
@@ -1608,35 +1619,70 @@ impl ManagedRuntimeManager {
     ) -> AppResult<PathBuf> {
         ensure_private_directory(&self.image_cache_root())?;
         let destination = self.machine_image_path(target);
-        if destination.exists() {
-            verify_file_hash_size(
+        if private_entry_exists(&destination)? {
+            if verify_file_hash_size(
                 &destination,
                 target.machine_image.size_bytes,
                 &target.machine_image.sha256,
                 "cached managed runtime machine image",
-            )?;
-            if let Some(setup) = setup {
-                setup.report_download(
-                    target.machine_image.size_bytes,
-                    target.machine_image.size_bytes,
-                    target.machine_image.size_bytes,
-                )?;
+            )
+            .is_ok()
+            {
+                if let Some(setup) = setup {
+                    setup.report_download(
+                        target.machine_image.size_bytes,
+                        target.machine_image.size_bytes,
+                        target.machine_image.size_bytes,
+                    )?;
+                }
+                return Ok(destination);
             }
-            return Ok(destination);
+            remove_private_tree(&destination, &self.image_cache_root())?;
+            sync_directory(&self.image_cache_root())?;
         }
         let partial = destination.with_extension("download-part");
-        let mut progress = |received, total, resumed_from| match setup {
-            Some(setup) => setup.report_download(received, total, resumed_from),
-            None => Ok(()),
-        };
-        self.downloader
-            .acquire(&target.machine_image, &partial, &mut progress)?;
-        verify_file_hash_size(
-            &partial,
-            target.machine_image.size_bytes,
-            &target.machine_image.sha256,
-            "downloaded managed runtime machine image",
-        )?;
+        match fs::symlink_metadata(&partial) {
+            Ok(metadata) if !metadata.is_file() => {
+                remove_private_tree(&partial, &self.image_cache_root())?;
+                sync_directory(&self.image_cache_root())?;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let mut verified = false;
+        for attempt in 0..2 {
+            let mut progress = |received, total, resumed_from| match setup {
+                Some(setup) => setup.report_download(received, total, resumed_from),
+                None => Ok(()),
+            };
+            self.downloader
+                .acquire(&target.machine_image, &partial, &mut progress)?;
+            match verify_file_hash_size(
+                &partial,
+                target.machine_image.size_bytes,
+                &target.machine_image.sha256,
+                "downloaded managed runtime machine image",
+            ) {
+                Ok(()) => {
+                    verified = true;
+                    break;
+                }
+                Err(_) if attempt == 0 => {
+                    remove_private_tree(&partial, &self.image_cache_root())?;
+                    sync_directory(&self.image_cache_root())?;
+                    if let Some(setup) = setup {
+                        setup.report_download(0, target.machine_image.size_bytes, 0)?;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if !verified {
+            return Err(AppError::Runtime(
+                "managed runtime machine image could not be verified".into(),
+            ));
+        }
         fs::rename(&partial, &destination).map_err(|error| {
             AppError::Runtime(format!(
                 "managed runtime machine image could not be committed: {error}"
@@ -1832,6 +1878,59 @@ impl ManagedRuntimeManager {
         self.image_cache_root()
             .join(format!("{}.zst", target.machine_image.sha256))
     }
+}
+
+#[cfg(unix)]
+fn verify_installed_permissions(root: &Path, files: &[ManagedRuntimeFile]) -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root_mode = fs::symlink_metadata(root)?.permissions().mode() & 0o777;
+    if root_mode != 0o700 {
+        return Err(AppError::NotAuthorized(
+            "managed runtime install directory permissions are not private and traversable".into(),
+        ));
+    }
+    let mut directories = BTreeSet::new();
+    for entry in files {
+        let path = safe_join(root, &entry.path)?;
+        let expected_mode = if entry.executable { 0o500 } else { 0o400 };
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.permissions().mode() & 0o777 != expected_mode
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "managed runtime installed file permissions differ from the release contract: {}",
+                entry.path
+            )));
+        }
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            if directory == root {
+                break;
+            }
+            directories.insert(directory.to_path_buf());
+            parent = directory.parent();
+        }
+    }
+    for directory in directories {
+        let metadata = fs::symlink_metadata(&directory)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || metadata.permissions().mode() & 0o777 != 0o700
+        {
+            return Err(AppError::NotAuthorized(
+                "managed runtime install contains a non-private or non-traversable directory"
+                    .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_installed_permissions(_root: &Path, _files: &[ManagedRuntimeFile]) -> AppResult<()> {
+    Ok(())
 }
 
 struct ManagedRuntimeLock {
@@ -2659,49 +2758,192 @@ fn remove_regular_file(path: &Path) -> AppResult<()> {
     }
 }
 
+fn private_entry_exists(path: &Path) -> AppResult<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Removes one exact backend-owned entry without following a symlink. A
+/// corrupted install/cache path may itself be a file or symlink; refusing to
+/// unlink that directory entry would permanently wedge verified repair.
 fn remove_private_tree(path: &Path, expected_parent: &Path) -> AppResult<()> {
     let parent = canonical_real_directory(expected_parent, "managed runtime versions")?;
+    let requested_parent = path
+        .parent()
+        .ok_or_else(|| {
+            AppError::NotAuthorized("managed runtime removal path has no parent".into())
+        })?
+        .canonicalize()?;
+    if requested_parent != parent {
+        return Err(AppError::NotAuthorized(
+            "managed runtime payload removal escaped its private parent".into(),
+        ));
+    }
     let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(AppError::NotAuthorized(
-            "managed runtime refused to remove a non-directory payload".into(),
-        ));
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        remove_windows_private_entry_tree(path)?;
+        sync_directory(&parent)?;
+        return Ok(());
     }
-    let canonical = path.canonicalize()?;
-    if canonical.parent() != Some(parent.as_path()) {
-        return Err(AppError::NotAuthorized(
-            "managed runtime payload removal escaped the versions directory".into(),
-        ));
+    #[cfg(not(windows))]
+    {
+        if !metadata.is_dir() {
+            fs::remove_file(path)?;
+            sync_directory(&parent)?;
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
+        let canonical = path.canonicalize()?;
+        if canonical.parent() != Some(parent.as_path()) {
+            return Err(AppError::NotAuthorized(
+                "managed runtime payload removal escaped the versions directory".into(),
+            ));
+        }
+        #[cfg(unix)]
+        make_tree_owner_writable(&canonical)?;
+        fs::remove_dir_all(canonical)?;
+        sync_directory(&parent)?;
+        Ok(())
     }
-    #[cfg(unix)]
-    make_tree_owner_writable(&canonical)?;
-    fs::remove_dir_all(canonical)?;
-    Ok(())
 }
 
 #[cfg(unix)]
 fn make_tree_owner_writable(path: &Path) -> AppResult<()> {
     use std::os::unix::fs::PermissionsExt;
+    // Make each directory traversable before attempting read_dir or descent;
+    // corruption may have removed every permission bit.
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         let metadata = fs::symlink_metadata(entry.path())?;
         if metadata.file_type().is_symlink() {
-            return Err(AppError::NotAuthorized(
-                "managed runtime install unexpectedly contains a symlink".into(),
-            ));
+            // remove_dir_all unlinks a child symlink rather than following it;
+            // do not chmod or canonicalize its target.
+            continue;
         }
         if metadata.is_dir() {
             make_tree_owner_writable(&entry.path())?;
-            fs::set_permissions(entry.path(), fs::Permissions::from_mode(0o700))?;
-        } else if metadata.is_file() {
-            fs::set_permissions(entry.path(), fs::Permissions::from_mode(0o600))?;
-        } else {
-            return Err(AppError::NotAuthorized(
-                "managed runtime install contains an unsupported file type".into(),
-            ));
         }
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn remove_windows_private_entry_tree(path: &Path) -> AppResult<()> {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let metadata = fs::symlink_metadata(path)?;
+    let attributes = metadata.file_attributes();
+    let directory = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+    let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+
+    if directory && !reparse {
+        set_windows_entry_readonly_nofollow(path, false)?;
+        for entry in fs::read_dir(path)? {
+            remove_windows_private_entry_tree(&entry?.path())?;
+        }
+        set_windows_entry_readonly_nofollow(path, false)?;
+        fs::remove_dir(path)?;
+    } else {
+        // FILE_FLAG_OPEN_REPARSE_POINT ensures the attribute update targets
+        // the link/junction entry itself. DeleteFileW/RemoveDirectoryW then
+        // unlink that entry rather than traversing its target.
+        set_windows_entry_readonly_nofollow(path, false)?;
+        if directory {
+            fs::remove_dir(path)?;
+        } else {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_windows_entry_readonly_nofollow(path: &Path, readonly: bool) -> AppResult<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY, FILE_BASIC_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FileBasicInfo,
+        GetFileInformationByHandleEx, OPEN_EXISTING, SetFileInformationByHandle,
+    };
+
+    let encoded = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: `encoded` is NUL-terminated and lives for the call. The returned
+    // owned handle is closed exactly once below.
+    let raw = unsafe {
+        CreateFileW(
+            encoded.as_ptr(),
+            FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error().into());
+    }
+    // SAFETY: `raw` was returned by CreateFileW and is now uniquely owned.
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut information = FILE_BASIC_INFO::default();
+    // SAFETY: the handle is valid and the output buffer has the declared size.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            FileBasicInfo,
+            (&raw mut information).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    let has_readonly = information.FileAttributes & FILE_ATTRIBUTE_READONLY != 0;
+    if has_readonly == readonly {
+        return Ok(());
+    }
+    if readonly {
+        information.FileAttributes &= !FILE_ATTRIBUTE_NORMAL;
+        information.FileAttributes |= FILE_ATTRIBUTE_READONLY;
+    } else {
+        information.FileAttributes &= !FILE_ATTRIBUTE_READONLY;
+        if information.FileAttributes == 0 {
+            information.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+        }
+    }
+    // SAFETY: the handle was opened with FILE_WRITE_ATTRIBUTES and the input
+    // buffer is a fully initialized FILE_BASIC_INFO value.
+    if unsafe {
+        SetFileInformationByHandle(
+            handle.as_raw_handle(),
+            FileBasicInfo,
+            (&raw const information).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
     Ok(())
 }
 
@@ -2918,6 +3160,17 @@ mod tests {
         .expect("json")
     }
 
+    fn tamper_installed_driver(manager: &ManagedRuntimeManager) {
+        let installed = manager.install_directory().join("bin/podman");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&installed, fs::Permissions::from_mode(0o600))
+                .expect("make test payload writable");
+        }
+        fs::write(installed, b"tampered-runtime").expect("tamper installed payload");
+    }
+
     #[test]
     fn manifest_rejects_traversal_duplicate_targets_and_unapproved_downloads() {
         let fixture = fixture();
@@ -2963,6 +3216,192 @@ mod tests {
                 0o500
             );
         }
+    }
+
+    #[test]
+    fn corrupted_install_is_replaced_from_verified_release_resources() {
+        let fixture = fixture();
+        fixture.manager.install().expect("initial install");
+        let installed = fixture.manager.install_directory().join("bin/podman");
+        tamper_installed_driver(&fixture.manager);
+
+        fixture.manager.install().expect("repair install");
+
+        assert_eq!(
+            fs::read(installed).expect("repaired driver"),
+            b"managed-podman-driver"
+        );
+        fixture
+            .manager
+            .verify_installation()
+            .expect("repaired installation verifies");
+    }
+
+    #[test]
+    fn corrupted_machine_image_cache_is_removed_and_downloaded_again() {
+        let fixture = fixture();
+        let target = fixture.manager.loaded.target().expect("target");
+        let cached = fixture
+            .manager
+            .acquire_machine_image_locked(target, None)
+            .expect("initial image");
+        fs::write(&cached, vec![b'x'; fixture.image.len()]).expect("tamper cache");
+
+        let repaired = fixture
+            .manager
+            .acquire_machine_image_locked(target, None)
+            .expect("repair image");
+
+        assert_eq!(repaired, cached);
+        assert_eq!(fs::read(repaired).expect("repaired image"), fixture.image);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_install_symlink_is_unlinked_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = fixture();
+        fixture.manager.install().expect("initial install");
+        let install = fixture.manager.install_directory();
+        fs::remove_dir_all(&install).expect("remove test install");
+        let outside = fixture._temp.path().join("outside-install-target");
+        fs::create_dir(&outside).expect("outside directory");
+        fs::write(outside.join("keep"), b"outside").expect("outside marker");
+        symlink(&outside, &install).expect("corrupt install symlink");
+
+        fixture.manager.install().expect("repair symlink");
+
+        assert_eq!(fs::read(outside.join("keep")).unwrap(), b"outside");
+        assert!(
+            !fs::symlink_metadata(&install)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fixture
+            .manager
+            .verify_installation()
+            .expect("repaired install");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_image_symlink_is_unlinked_and_redownloaded() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = fixture();
+        let target = fixture.manager.loaded.target().expect("target");
+        let cached = fixture
+            .manager
+            .acquire_machine_image_locked(target, None)
+            .expect("initial image");
+        fs::remove_file(&cached).expect("remove cached image");
+        let outside = fixture._temp.path().join("outside-image");
+        fs::write(&outside, b"outside").expect("outside image");
+        symlink(&outside, &cached).expect("corrupt cache symlink");
+
+        let repaired = fixture
+            .manager
+            .acquire_machine_image_locked(target, None)
+            .expect("repair image symlink");
+
+        assert_eq!(fs::read(outside).unwrap(), b"outside");
+        assert_eq!(fs::read(repaired).unwrap(), fixture.image);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_traversable_install_directories_are_repaired() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = fixture();
+        fixture.manager.install().expect("initial install");
+        let install = fixture.manager.install_directory();
+        fs::set_permissions(install.join("bin"), fs::Permissions::from_mode(0o000)).unwrap();
+        fs::set_permissions(&install, fs::Permissions::from_mode(0o000)).unwrap();
+
+        fixture.manager.install().expect("repair directory modes");
+
+        fixture
+            .manager
+            .verify_installation()
+            .expect("repaired install");
+        assert_eq!(
+            fs::metadata(install).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn readonly_windows_payload_tree_can_be_removed_for_repair() {
+        let fixture = fixture();
+        let versions = fixture.manager.versions_root();
+        let install = versions.join("readonly-repair-fixture");
+        let nested = install.join("nested");
+        fs::create_dir_all(&nested).expect("create readonly fixture");
+        let payload = nested.join("payload.dat");
+        fs::write(&payload, b"payload").expect("write readonly fixture");
+
+        for path in [&payload, &nested, &install] {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+
+        remove_private_tree(&install, &versions).expect("remove readonly tree");
+        assert!(!private_entry_exists(&install).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn readonly_windows_top_level_cache_file_can_be_removed_for_repair() {
+        let fixture = fixture();
+        let cache = fixture.manager.image_cache_root();
+        ensure_private_directory(&cache).unwrap();
+        let payload = cache.join("readonly-top-level.zst");
+        fs::write(&payload, b"corrupt cache").unwrap();
+        set_windows_entry_readonly_nofollow(&payload, true).unwrap();
+
+        remove_private_tree(&payload, &cache).expect("remove readonly cache file");
+        assert!(!private_entry_exists(&payload).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn readonly_windows_child_symlink_is_unlinked_without_touching_target() {
+        use std::os::windows::fs::symlink_file;
+
+        let fixture = fixture();
+        let versions = fixture.manager.versions_root();
+        let install = versions.join("readonly-link-repair-fixture");
+        fs::create_dir(&install).unwrap();
+        let outside = fixture._temp.path().join("outside-readonly-target");
+        fs::write(&outside, b"outside remains").unwrap();
+        let link = install.join("payload-link");
+        symlink_file(&outside, &link).expect("create file symlink");
+        set_windows_entry_readonly_nofollow(&link, true).unwrap();
+
+        remove_private_tree(&install, &versions).expect("remove tree with readonly link");
+        assert!(!private_entry_exists(&install).unwrap());
+        assert_eq!(fs::read(&outside).unwrap(), b"outside remains");
+    }
+
+    #[test]
+    fn corrupted_install_does_not_wedge_uninstall() {
+        let fixture = fixture();
+        fixture.manager.install().expect("initial install");
+        tamper_installed_driver(&fixture.manager);
+        fixture.commands.push(success(b"[]".to_vec()));
+
+        let status = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions::default())
+            .expect("repair then uninstall");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(!fixture.manager.install_directory().exists());
     }
 
     #[test]

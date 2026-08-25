@@ -51,15 +51,31 @@ pub fn export_ocsf_finding_events(case: &AssessmentCase, run_id: &str) -> AppRes
     observations
         .into_iter()
         .map(|observation| {
-            let finding = findings
-                .get(observation.finding_id.as_str())
+            let canonical_finding = findings.get(observation.finding_id.as_str()).copied();
+            let finding = observation
+                .finding_snapshot
+                .as_ref()
+                .or(canonical_finding)
                 .ok_or_else(|| {
                     AppError::InvalidRequest(format!(
                         "observation {} references missing finding {}",
                         observation.id, observation.finding_id
                     ))
                 })?;
-            Ok(to_event(case, run_id, finding, observation, &assets))
+            // Normalized evidence and prose are run-specific, while workflow
+            // state is a current case projection (including expired temporary
+            // suppressions). Never revive stale snapshot status in an export.
+            let effective_status = canonical_finding
+                .map(|canonical| &canonical.status)
+                .unwrap_or(&finding.status);
+            Ok(to_event(
+                case,
+                run_id,
+                finding,
+                effective_status,
+                observation,
+                &assets,
+            ))
         })
         .collect()
 }
@@ -74,6 +90,7 @@ fn to_event(
     case: &AssessmentCase,
     run_id: &str,
     finding: &Finding,
+    effective_status: &FindingStatus,
     observation: &FindingObservation,
     assets: &BTreeMap<&str, &Asset>,
 ) -> Value {
@@ -85,7 +102,7 @@ fn to_event(
     let activity_name = if activity_id == 1 { "Create" } else { "Update" };
     let (severity_id, severity) = ocsf_severity(&observation.severity);
     let (confidence_id, confidence) = ocsf_confidence(&observation.confidence);
-    let (status_id, status) = ocsf_status(&finding.status);
+    let (status_id, status) = ocsf_status(effective_status);
 
     let first_seen_time = case
         .scan_runs
@@ -391,6 +408,7 @@ mod tests {
             confidence: Confidence::Confirmed,
             evidence_hashes: vec!["abc".into()],
             observed_at: time,
+            finding_snapshot: None,
         });
         case
     }
@@ -409,5 +427,43 @@ mod tests {
         assert!(event.get("compliance").is_none());
         let coordinates = &event["unmapped"]["ai_security_scanner"]["related_control_coordinates"];
         assert_eq!(coordinates[0]["assertion"], "related_coordinate_only");
+    }
+
+    #[test]
+    fn historical_export_uses_the_observation_snapshot_not_latest_projection() {
+        let mut case = fixture();
+        let mut original = case.findings[0].clone();
+        original.title = "Run one title".into();
+        original.plain_language_summary = "Run one summary".into();
+        original.status = FindingStatus::FalsePositive;
+        original.evidence.push(Evidence {
+            id: "evidence-1".into(),
+            finding_id: original.id.clone(),
+            run_id: "run-1".into(),
+            engine_run_id: None,
+            kind: EvidenceKind::Configuration,
+            engine_id: "prowler".into(),
+            observed_at: Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap(),
+            summary: "Run one evidence".into(),
+            artifact_id: "artifact-1".into(),
+            artifact_sha256: "abc".into(),
+            pointer: None,
+            redacted: false,
+        });
+        case.finding_observations[0].finding_snapshot = Some(original);
+        case.findings[0].title = "Later run title".into();
+        case.findings[0].plain_language_summary = "Later run summary".into();
+        case.findings[0].evidence.clear();
+
+        let events = export_ocsf_finding_events(&case, "run-1").expect("historical export");
+
+        assert_eq!(events[0]["finding_info"]["title"], "Run one title");
+        assert_eq!(events[0]["message"], "Run one summary");
+        assert_eq!(events[0]["status"], "New");
+        assert_eq!(
+            events[0]["evidences"][0]["data"]["summary"],
+            "Run one evidence"
+        );
+        assert!(!events[0].to_string().contains("Later run"));
     }
 }

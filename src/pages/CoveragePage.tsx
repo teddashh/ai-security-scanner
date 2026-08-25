@@ -21,6 +21,7 @@ import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 import { ProviderAuthorizationPanel } from "../components/ProviderAuthorizationPanel";
+import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scopePolicy";
 
 interface CoveragePageProps {
   caseId: string;
@@ -37,7 +38,7 @@ interface CoveragePageProps {
   onAttachWorkspaceSnapshot: (input: AttachWorkspaceSnapshotInput) => Promise<void>;
   onStartDiscovery: () => Promise<void>;
   onAuthorizationChanged: () => Promise<void>;
-  onApprovePending: (assetIds: string[], modes: ScopeMode[], confirmation: string, externalScope?: ExternalScopeRequest) => Promise<void>;
+  onApprovePending: (assetIds: string[], modes: ScopeMode[], confirmation: string, externalScope?: ExternalScopeRequest) => Promise<boolean>;
 }
 
 interface SourceDefinition {
@@ -191,43 +192,6 @@ const parsePorts = (value: string): number[] | undefined => {
 const parseTemplateIds = (value: string): string[] =>
   [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
 
-const permittedModes = (asset: Asset): ScopeMode[] => {
-  if (asset.platform === "external") return ["public_data", "low_impact_external", "active_external"];
-  if (["code", "container", "kubernetes"].includes(asset.platform)) return ["local_artifact"];
-  return ["inventory", "configuration"];
-};
-
-const suggestedModesForAsset = (
-  requestedActivities: readonly AssessmentActivity[],
-  asset: Asset,
-): ScopeMode[] => {
-  const available = new Set(permittedModes(asset));
-  const requested = new Set(requestedActivities);
-  const suggested: ScopeMode[] = [];
-
-  if (requested.has("configuration_assessment") && available.has("configuration")) {
-    suggested.push("configuration");
-  }
-  if (requested.has("local_artifact_analysis") && available.has("local_artifact")) {
-    suggested.push("local_artifact");
-  }
-
-  const requestedExternalMode = requested.has("active_external_vulnerability_tests")
-    ? "active_external"
-    : requested.has("low_impact_external_checks")
-      ? "low_impact_external"
-      : undefined;
-  if (
-    requestedExternalMode
-    && available.has(requestedExternalMode)
-    && asset.internetExposed === true
-  ) {
-    suggested.push(requestedExternalMode);
-  }
-
-  return suggested;
-};
-
 const fileNameFromPath = (path: string): string =>
   path.split(/[\\/]/).filter(Boolean).at(-1) ?? "已選取 JSON 快照";
 
@@ -286,19 +250,20 @@ export function CoveragePage({
   );
 
   const pendingAssets = assets.filter((asset) => asset.authorizationState === "pending");
+  const scopeEligibleAssets = assets.filter(isScopeEligible);
   const scannedAssets = assets.filter((asset) => asset.coverageState === "discovered_authorized_scanned").length;
   const incompleteAssets = assets.filter((asset) => asset.coverageState === "authorized_incomplete").length;
   const unknownSourceCount = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
   const connectedNoAssetCount = coverage.filter((item) => item.state === "source_connected_none").length;
   const frozenExternalGrants = scopeGrants.filter((grant) => grant.externalScope);
   const selectedSource = sourceDefinitions[sourceKind];
-  const selectedPendingAssets = assets.filter((asset) => selectedAssets.includes(asset.id));
-  const firstSelectedPendingAsset = selectedPendingAssets[0];
-  const availableScopeModes = !firstSelectedPendingAsset
+  const selectedScopeAssets = assets.filter((asset) => selectedAssets.includes(asset.id));
+  const firstSelectedScopeAsset = selectedScopeAssets[0];
+  const availableScopeModes = !firstSelectedScopeAsset
     ? []
-    : permittedModes(firstSelectedPendingAsset).filter((mode) => selectedPendingAssets.every((asset) => permittedModes(asset).includes(mode)));
-  const selectedExternalAsset = selectedPendingAssets.length === 1 && selectedPendingAssets[0]?.platform === "external"
-    ? selectedPendingAssets[0]
+    : permittedModes(firstSelectedScopeAsset).filter((mode) => selectedScopeAssets.every((asset) => permittedModes(asset).includes(mode)));
+  const selectedExternalAsset = selectedScopeAssets.length === 1 && selectedScopeAssets[0]?.platform === "external"
+    ? selectedScopeAssets[0]
     : undefined;
   const externalMode = scopeModes.find((mode) => externalActivities[mode]);
   const externalActivity = externalMode ? externalActivities[externalMode] : undefined;
@@ -412,13 +377,13 @@ export function CoveragePage({
       assertedAuthority: scopeConfirmation.trim(),
       allowSensitiveNetworks,
     } : undefined;
-    await onApprovePending(
+    const approved = await onApprovePending(
       selectedAssets,
       scopeModes,
       scopeConfirmation.trim() || "使用者已在本機介面逐項確認資產所有權與唯讀範圍。",
       externalScope,
     );
-    resetScopeForm();
+    if (approved) resetScopeForm();
   };
 
   const changeSourceKind = (nextKind: SourceKind) => {
@@ -868,7 +833,7 @@ export function CoveragePage({
             )}
 
             <div className="scope-confirmation-panel__assets">
-              {selectedPendingAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{asset.locator}</small></span>)}
+              {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{asset.locator}</small></span>)}
             </div>
 
             <label className="toggle-row">
@@ -926,10 +891,10 @@ export function CoveragePage({
               </thead>
               <tbody>
                 {filteredAssets.map((asset) => {
-                  const pending = asset.authorizationState === "pending";
+                  const scopeEligible = scopeEligibleAssets.some((item) => item.id === asset.id);
                   const meta = coverageMeta[asset.coverageState];
                   const anotherAssetSelected = selectedAssets.length > 0 && !selectedAssets.includes(asset.id);
-                  const selectedIncludesExternal = selectedPendingAssets.some((item) => item.platform === "external");
+                  const selectedIncludesExternal = selectedScopeAssets.some((item) => item.platform === "external");
                   const incompatibleWithSelection = anotherAssetSelected && (asset.platform === "external" || selectedIncludesExternal);
                   return (
                     <tr key={asset.id}>
@@ -938,8 +903,12 @@ export function CoveragePage({
                           type="checkbox"
                           aria-label={`選取 ${asset.name}`}
                           checked={selectedAssets.includes(asset.id)}
-                          disabled={!pending || incompatibleWithSelection}
-                          title={incompatibleWithSelection ? "外部目標必須逐項建立 canonical scope，請先完成或清除目前選取。" : undefined}
+                          disabled={!scopeEligible || incompatibleWithSelection}
+                          title={incompatibleWithSelection
+                            ? "外部目標必須逐項建立 canonical scope，請先完成或清除目前選取。"
+                            : asset.authorizationState === "authorized"
+                              ? "可重新確認資產，補充缺少的唯讀允許模式。"
+                              : undefined}
                           onChange={() => toggleAsset(asset.id)}
                         />
                       </td>

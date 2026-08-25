@@ -25,7 +25,11 @@
     "image": { "type": "string", "pattern": "^[a-z0-9.-]+/[a-z0-9._/-]+$" },
     "tag": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
     "indexDigest": { "$ref": "#/$defs/digest" },
-    "sourceRevision": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "sourceRevision": {
+      "description": "Exact repository revision used by the workflow that built the immutable image; independent of later desktop adapter revisions.",
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
     "public": { "const": true },
     "generator": {
       "type": "object",

@@ -16,6 +16,8 @@ const LEASE_FILENAME: &str = ".exclusive-process.lock";
 #[derive(Debug)]
 pub struct DataDirectoryExclusiveLease {
     _file: File,
+    #[cfg(unix)]
+    _sentinel: File,
     path: PathBuf,
 }
 
@@ -23,7 +25,19 @@ impl DataDirectoryExclusiveLease {
     pub fn acquire(data_directory: &Path) -> AppResult<Self> {
         fs::create_dir_all(data_directory)?;
         let path = data_directory.join(LEASE_FILENAME);
-        let file = open_regular_lock_file(&path)?;
+        let sentinel = open_regular_lock_file(&path)?;
+        #[cfg(unix)]
+        let file = {
+            let metadata = fs::symlink_metadata(data_directory)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(AppError::NotAuthorized(
+                    "process lease data directory must be a real directory".into(),
+                ));
+            }
+            File::open(data_directory)?
+        };
+        #[cfg(not(unix))]
+        let file = sentinel;
         if let Err(error) = FileExt::try_lock_exclusive(&file) {
             if error.kind() == std::io::ErrorKind::WouldBlock {
                 return Err(AppError::NotAvailable(
@@ -33,7 +47,12 @@ impl DataDirectoryExclusiveLease {
             }
             return Err(error.into());
         }
-        Ok(Self { _file: file, path })
+        Ok(Self {
+            _file: file,
+            #[cfg(unix)]
+            _sentinel: sentinel,
+            path,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -103,5 +122,18 @@ mod tests {
 
         assert!(DataDirectoryExclusiveLease::acquire(temporary.path()).is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"outside");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unlinking_the_sentinel_cannot_bypass_the_directory_lease() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first = DataDirectoryExclusiveLease::acquire(temporary.path()).unwrap();
+        fs::remove_file(first.path()).unwrap();
+
+        assert!(matches!(
+            DataDirectoryExclusiveLease::acquire(temporary.path()),
+            Err(AppError::NotAvailable(_))
+        ));
     }
 }
