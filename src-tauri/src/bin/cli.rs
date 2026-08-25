@@ -44,6 +44,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const MANAGED_RUNTIME_QUALIFICATION_ENGINE_ID: &str = "gitleaks";
+// Keep the release-only artifact prefix compact. Podman's Windows client owns
+// the `--cidfile` lifecycle and rejects otherwise valid extended-length paths
+// once a long LocalApplicationData prefix, two UUIDs, and its CID filename are
+// combined. One fresh engine-run UUID still gives every qualification an
+// unpredictable, unique ownership namespace.
+const MANAGED_RUNTIME_QUALIFICATION_CASE_ID: &str = "q";
+const MANAGED_RUNTIME_QUALIFICATION_SCAN_RUN_ID: &str = "s";
 const MANAGED_RUNTIME_QUALIFICATION_IMAGE: &str = concat!(
     "ghcr.io/gitleaks/gitleaks@",
     "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
@@ -2144,8 +2151,8 @@ fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
 
     let store = ArtifactStore::open(evidence_root)?;
     let context = ArtifactContext {
-        case_id: "release-qualification".into(),
-        scan_run_id: new_id(),
+        case_id: MANAGED_RUNTIME_QUALIFICATION_CASE_ID.into(),
+        scan_run_id: MANAGED_RUNTIME_QUALIFICATION_SCAN_RUN_ID.into(),
         engine_run_id: new_id(),
     };
     let directories = store.prepare_run(&context, 1)?;
@@ -2659,6 +2666,7 @@ mod tests {
     #[test]
     fn fixed_managed_container_qualification_runs_offline_and_cleans_up() {
         let temporary = tempfile::tempdir().expect("temporary directory");
+        let evidence_root = temporary.path().join("qualification");
         let runtime = FakeContainerRuntime::default();
         runtime.set_behavior(FakeRunBehavior {
             exit_code: Some(0),
@@ -2672,7 +2680,7 @@ mod tests {
             &runtime,
             managed_qualification_preflight(),
             &engines,
-            &temporary.path().join("qualification"),
+            &evidence_root,
         )
         .expect("qualification");
 
@@ -2704,6 +2712,28 @@ mod tests {
             panic!("expected fixed runtime cleanup");
         };
         assert_eq!(run_name, cleanup_name);
+
+        let qualification_scan_root = evidence_root
+            .join(MANAGED_RUNTIME_QUALIFICATION_CASE_ID)
+            .join(MANAGED_RUNTIME_QUALIFICATION_SCAN_RUN_ID);
+        let engine_runs = fs::read_dir(&qualification_scan_root)
+            .expect("compact qualification scan root")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("qualification engine-run entries");
+        assert_eq!(engine_runs.len(), 1);
+        let projected_cid_file = engine_runs[0]
+            .path()
+            .join("attempt-1")
+            .join("control")
+            .join("container-00000000000000000000000000000000.cid");
+        let relative_cid_file = projected_cid_file
+            .strip_prefix(&evidence_root)
+            .expect("qualification CID file remains below evidence root");
+        assert!(
+            relative_cid_file.to_string_lossy().len() < 128,
+            "release qualification reintroduced an unnecessarily long CID path"
+        );
+        assert!(!evidence_root.join("release-qualification").exists());
     }
 
     #[test]

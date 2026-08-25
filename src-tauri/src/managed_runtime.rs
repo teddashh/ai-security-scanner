@@ -39,6 +39,10 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
+#[cfg(windows)]
+const WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(windows)]
+const WINDOWS_WSL_PROVIDER_DELETE_POLL: Duration = Duration::from_millis(100);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const DOWNLOAD_CHUNK_BYTES: usize = 128 * 1024;
@@ -63,6 +67,10 @@ const PODMAN_LINUX_MAX_SOCKET_PATH_BYTES: usize = 103;
 #[cfg(unix)]
 const PODMAN_LINUX_RUNTIME_DIRECTORY: &str = "podman";
 #[cfg(unix)]
+const PODMAN_LINUX_EAGER_STORAGE_DIRECTORY: &str = "containers";
+#[cfg(unix)]
+const PODMAN_LINUX_EAGER_LIBPOD_DIRECTORY: &str = "libpod";
+#[cfg(unix)]
 const PODMAN_GVPROXY_SOCKET_SUFFIX: &str = "-gvproxy.sock";
 #[cfg(unix)]
 const PODMAN_GVPROXY_LOG_NAME: &str = "gvproxy.log";
@@ -84,6 +92,10 @@ const MACOS_SHORT_HOME_DIGEST_HEX_CHARS: usize = 32;
 const PODMAN_MACOS_MAX_SOCKET_PATH_BYTES: usize = 103;
 #[cfg(unix)]
 const PODMAN_IGNITION_SOCKET_SUFFIX: &str = "-ignition.sock";
+#[cfg(unix)]
+const PODMAN_MACOS_SSH_DIRECTORY: &str = ".ssh";
+#[cfg(unix)]
+const PODMAN_MACOS_KNOWN_HOSTS_FILE: &str = "known_hosts";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -1989,6 +2001,26 @@ impl ManagedRuntimeManager {
     }
 
     pub fn uninstall(&self, options: ManagedUninstallOptions) -> AppResult<ManagedRuntimeStatus> {
+        #[cfg(windows)]
+        let (provider_delete_timeout, provider_delete_poll) = (
+            WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+            WINDOWS_WSL_PROVIDER_DELETE_POLL,
+        );
+        #[cfg(not(windows))]
+        let (provider_delete_timeout, provider_delete_poll) = (Duration::ZERO, Duration::ZERO);
+        self.uninstall_with_windows_provider_delete_timing(
+            options,
+            provider_delete_timeout,
+            provider_delete_poll,
+        )
+    }
+
+    fn uninstall_with_windows_provider_delete_timing(
+        &self,
+        options: ManagedUninstallOptions,
+        provider_delete_timeout: Duration,
+        provider_delete_poll: Duration,
+    ) -> AppResult<ManagedRuntimeStatus> {
         let _lock = self.lock()?;
         let target = self.loaded.target()?;
         let install = self.install_directory();
@@ -2038,7 +2070,12 @@ impl ManagedRuntimeManager {
             self.prove_windows_wsl_distribution_absent_locked(target, &command, &machine_name)?;
             self.remove_temporary_command_state_after_machine_removal_locked(target)?;
             if private_entry_exists(&provider_home)? {
-                remove_private_tree(&provider_home, &self.state_root.join("provider-home"))?;
+                remove_provider_home_after_machine_removal(
+                    &provider_home,
+                    &self.state_root.join("provider-home"),
+                    provider_delete_timeout,
+                    provider_delete_poll,
+                )?;
             }
             remove_private_tree(&install, &self.versions_root())?;
         }
@@ -5390,6 +5427,18 @@ fn ensure_linux_short_runtime_directory_at(
 
 #[cfg(unix)]
 fn verify_linux_short_runtime_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    drop(open_verified_linux_short_runtime_directory(
+        path,
+        effective_uid,
+    )?);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_verified_linux_short_runtime_directory(
+    path: &Path,
+    effective_uid: libc::uid_t,
+) -> AppResult<File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
     let metadata = fs::symlink_metadata(path)?;
@@ -5423,7 +5472,7 @@ fn verify_linux_short_runtime_directory(path: &Path, effective_uid: libc::uid_t)
             "managed runtime Linux short runtime changed while it was being verified".into(),
         ));
     }
-    Ok(())
+    Ok(directory)
 }
 
 #[cfg(unix)]
@@ -5659,6 +5708,155 @@ fn remove_expected_linux_virtiofs_residue(
 }
 
 #[cfg(unix)]
+fn linux_runtime_child_stat(
+    parent: &File,
+    basename: &std::ffi::CStr,
+) -> AppResult<Option<libc::stat>> {
+    use std::os::fd::AsRawFd;
+
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: parent owns a live directory descriptor, basename is a
+    // NUL-terminated relative name, and metadata points to writable storage.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            basename.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            return Ok(None);
+        }
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime Linux eager runtime directory could not be inspected without following links: {error}"
+        )));
+    }
+    // SAFETY: successful fstatat initialized every field of metadata.
+    Ok(Some(unsafe { metadata.assume_init() }))
+}
+
+#[cfg(unix)]
+fn linux_runtime_opened_stat(directory: &File) -> AppResult<libc::stat> {
+    use std::os::fd::AsRawFd;
+
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: directory owns a live descriptor and metadata points to writable storage.
+    if unsafe { libc::fstat(directory.as_raw_fd(), metadata.as_mut_ptr()) } != 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime Linux eager runtime directory descriptor could not be inspected: {error}"
+        )));
+    }
+    // SAFETY: successful fstat initialized every field of metadata.
+    Ok(unsafe { metadata.assume_init() })
+}
+
+#[cfg(unix)]
+fn remove_expected_empty_linux_runtime_directory(
+    parent_path: &Path,
+    parent: &File,
+    basename: &str,
+    expected_mode: libc::mode_t,
+    effective_uid: libc::uid_t,
+) -> AppResult<()> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    if basename.is_empty() || basename.contains(['/', '\0']) {
+        return Err(AppError::Internal(
+            "managed runtime Linux eager runtime basename is invalid".into(),
+        ));
+    }
+    let c_basename = CString::new(basename.as_bytes()).map_err(|_| {
+        AppError::Internal(
+            "managed runtime Linux eager runtime basename was not representable".into(),
+        )
+    })?;
+    let Some(expected) = linux_runtime_child_stat(parent, &c_basename)? else {
+        return Ok(());
+    };
+    if expected.st_mode & libc::S_IFMT != libc::S_IFDIR
+        || expected.st_uid != effective_uid
+        || expected.st_mode & 0o7777 != expected_mode
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime Linux eager {basename} directory has unsafe type, ownership, or permissions"
+        )));
+    }
+
+    // SAFETY: parent is a verified directory descriptor and c_basename is a
+    // fixed relative child name. O_NOFOLLOW rejects a link replacement.
+    let raw = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            c_basename.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if raw < 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime Linux eager {basename} directory could not be opened without following links: {error}"
+        )));
+    }
+    // SAFETY: openat returned a fresh owned descriptor that is transferred to File.
+    let directory = unsafe { File::from_raw_fd(raw) };
+    let opened = linux_runtime_opened_stat(&directory)?;
+    if opened.st_mode & libc::S_IFMT != libc::S_IFDIR
+        || opened.st_dev != expected.st_dev
+        || opened.st_ino != expected.st_ino
+        || opened.st_uid != effective_uid
+        || opened.st_mode & 0o7777 != expected_mode
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime Linux eager {basename} directory changed while it was opened"
+        )));
+    }
+    if fs::read_dir(parent_path.join(basename))?
+        .next()
+        .transpose()?
+        .is_some()
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime Linux eager {basename} directory was not empty after machine removal"
+        )));
+    }
+
+    let current = linux_runtime_child_stat(parent, &c_basename)?.ok_or_else(|| {
+        AppError::NotAuthorized(format!(
+            "managed runtime Linux eager {basename} directory disappeared during verification"
+        ))
+    })?;
+    let reopened = linux_runtime_opened_stat(&directory)?;
+    if current.st_dev != expected.st_dev
+        || current.st_ino != expected.st_ino
+        || current.st_mode != expected.st_mode
+        || current.st_uid != expected.st_uid
+        || reopened.st_dev != current.st_dev
+        || reopened.st_ino != current.st_ino
+        || reopened.st_uid != effective_uid
+        || reopened.st_mode & 0o7777 != expected_mode
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime Linux eager {basename} directory changed during exact cleanup"
+        )));
+    }
+    // SAFETY: parent remains the verified short-runtime descriptor and the
+    // exact child was proved to be the same empty directory through its live descriptor.
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), c_basename.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::Runtime(format!(
+            "managed runtime Linux eager {basename} directory could not be removed: {error}"
+        )));
+    }
+    parent.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
 fn remove_linux_short_runtime_directory_at(
     path: &Path,
     base: &Path,
@@ -5675,12 +5873,17 @@ fn remove_linux_short_runtime_directory_at(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     }
-    verify_linux_short_runtime_directory(path, effective_uid)?;
+    let short_directory = open_verified_linux_short_runtime_directory(path, effective_uid)?;
 
     let podman = path.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
     for entry in fs::read_dir(path)? {
         let entry = entry?;
-        if entry.file_name() != OsStr::new(PODMAN_LINUX_RUNTIME_DIRECTORY) {
+        if !matches!(
+            entry.file_name().to_str(),
+            Some(PODMAN_LINUX_RUNTIME_DIRECTORY)
+                | Some(PODMAN_LINUX_EAGER_STORAGE_DIRECTORY)
+                | Some(PODMAN_LINUX_EAGER_LIBPOD_DIRECTORY)
+        ) {
             return Err(AppError::NotAuthorized(
                 "managed runtime Linux short runtime contained an unexpected entry after machine removal"
                     .into(),
@@ -5724,6 +5927,24 @@ fn remove_linux_short_runtime_directory_at(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
+    // Pinned containers/storage v1.62.0 and containers/common eagerly create
+    // these exact roots from XDG_RUNTIME_DIR before the release-private
+    // storage.conf and containers.conf overrides are applied. Neither may
+    // contain state: accept only the observed exact modes and empty real dirs.
+    remove_expected_empty_linux_runtime_directory(
+        path,
+        &short_directory,
+        PODMAN_LINUX_EAGER_STORAGE_DIRECTORY,
+        0o700,
+        effective_uid,
+    )?;
+    remove_expected_empty_linux_runtime_directory(
+        path,
+        &short_directory,
+        PODMAN_LINUX_EAGER_LIBPOD_DIRECTORY,
+        0o1700,
+        effective_uid,
+    )?;
     if fs::read_dir(path)?.next().transpose()?.is_some() {
         return Err(AppError::NotAuthorized(
             "managed runtime Linux short runtime was not empty after machine removal".into(),
@@ -5780,6 +6001,18 @@ fn ensure_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) ->
 
 #[cfg(unix)]
 fn verify_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    drop(open_verified_macos_short_home_directory(
+        path,
+        effective_uid,
+    )?);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_verified_macos_short_home_directory(
+    path: &Path,
+    effective_uid: libc::uid_t,
+) -> AppResult<File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
     let metadata = fs::symlink_metadata(path)?;
@@ -5814,7 +6047,7 @@ fn verify_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) ->
             "managed runtime macOS command home changed while it was being verified".into(),
         ));
     }
-    Ok(())
+    Ok(directory)
 }
 
 #[cfg(unix)]
@@ -5997,6 +6230,267 @@ fn remove_expected_macos_ignition_socket_alias(
 }
 
 #[cfg(unix)]
+fn macos_runtime_child_stat(
+    parent: &File,
+    basename: &std::ffi::CStr,
+    label: &str,
+) -> AppResult<Option<libc::stat>> {
+    use std::os::fd::AsRawFd;
+
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: parent owns a live directory descriptor, basename is a
+    // NUL-terminated relative name, and metadata points to writable storage.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            basename.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            return Ok(None);
+        }
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime macOS {label} could not be inspected without following links: {error}"
+        )));
+    }
+    // SAFETY: successful fstatat initialized every field of metadata.
+    Ok(Some(unsafe { metadata.assume_init() }))
+}
+
+#[cfg(unix)]
+fn macos_runtime_opened_stat(file: &File, label: &str) -> AppResult<libc::stat> {
+    use std::os::fd::AsRawFd;
+
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: file owns a live descriptor and metadata points to writable storage.
+    if unsafe { libc::fstat(file.as_raw_fd(), metadata.as_mut_ptr()) } != 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime macOS {label} descriptor could not be inspected: {error}"
+        )));
+    }
+    // SAFETY: successful fstat initialized every field of metadata.
+    Ok(unsafe { metadata.assume_init() })
+}
+
+#[cfg(unix)]
+fn verify_exact_macos_known_hosts_entry(ssh_directory: &Path) -> AppResult<()> {
+    let mut entries = fs::read_dir(ssh_directory)?;
+    let first = entries.next().transpose()?.map(|entry| entry.file_name());
+    if first.as_deref() != Some(OsStr::new(PODMAN_MACOS_KNOWN_HOSTS_FILE))
+        || entries.next().transpose()?.is_some()
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS SSH directory did not contain exactly the expected empty known_hosts file"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_expected_macos_known_hosts(
+    home_path: &Path,
+    home: &File,
+    effective_uid: libc::uid_t,
+) -> AppResult<()> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let ssh_basename = CString::new(PODMAN_MACOS_SSH_DIRECTORY).map_err(|_| {
+        AppError::Internal("managed runtime macOS SSH directory name was invalid".into())
+    })?;
+    let known_hosts_basename = CString::new(PODMAN_MACOS_KNOWN_HOSTS_FILE).map_err(|_| {
+        AppError::Internal("managed runtime macOS known_hosts filename was invalid".into())
+    })?;
+    let Some(expected_directory) = macos_runtime_child_stat(home, &ssh_basename, "SSH directory")?
+    else {
+        return Ok(());
+    };
+    if expected_directory.st_mode & libc::S_IFMT != libc::S_IFDIR
+        || expected_directory.st_uid != effective_uid
+        || expected_directory.st_mode & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS SSH directory has unsafe type, ownership, or permissions".into(),
+        ));
+    }
+
+    // SAFETY: home is a verified command-home descriptor and ssh_basename is
+    // the fixed relative .ssh child. O_NOFOLLOW rejects a link replacement.
+    let raw_directory = unsafe {
+        libc::openat(
+            home.as_raw_fd(),
+            ssh_basename.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if raw_directory < 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime macOS SSH directory could not be opened without following links: {error}"
+        )));
+    }
+    // SAFETY: openat returned a fresh owned descriptor that is transferred to File.
+    let directory = unsafe { File::from_raw_fd(raw_directory) };
+    let opened_directory = macos_runtime_opened_stat(&directory, "SSH directory")?;
+    if opened_directory.st_mode & libc::S_IFMT != libc::S_IFDIR
+        || opened_directory.st_dev != expected_directory.st_dev
+        || opened_directory.st_ino != expected_directory.st_ino
+        || opened_directory.st_uid != effective_uid
+        || opened_directory.st_mode & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS SSH directory changed while it was opened".into(),
+        ));
+    }
+
+    let ssh_directory = home_path.join(PODMAN_MACOS_SSH_DIRECTORY);
+    verify_exact_macos_known_hosts_entry(&ssh_directory)?;
+    let expected_file =
+        macos_runtime_child_stat(&directory, &known_hosts_basename, "known_hosts file")?
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "managed runtime macOS known_hosts file disappeared during verification".into(),
+                )
+            })?;
+    if expected_file.st_mode & libc::S_IFMT != libc::S_IFREG
+        || expected_file.st_uid != effective_uid
+        || expected_file.st_nlink != 1
+        || expected_file.st_mode & 0o7777 != 0o600
+        || expected_file.st_size != 0
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS known_hosts file is not the expected current-user, single-link, mode-0600 empty regular file"
+                .into(),
+        ));
+    }
+
+    // SAFETY: directory is the verified .ssh descriptor and the basename is
+    // fixed. O_NOFOLLOW prevents opening a symlink replacement.
+    let raw_file = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            known_hosts_basename.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if raw_file < 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime macOS known_hosts file could not be opened without following links: {error}"
+        )));
+    }
+    // SAFETY: openat returned a fresh owned descriptor that is transferred to File.
+    let file = unsafe { File::from_raw_fd(raw_file) };
+    let opened_file = macos_runtime_opened_stat(&file, "known_hosts file")?;
+    if opened_file.st_mode & libc::S_IFMT != libc::S_IFREG
+        || opened_file.st_dev != expected_file.st_dev
+        || opened_file.st_ino != expected_file.st_ino
+        || opened_file.st_uid != effective_uid
+        || opened_file.st_nlink != 1
+        || opened_file.st_mode & 0o7777 != 0o600
+        || opened_file.st_size != 0
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS known_hosts file changed while it was opened".into(),
+        ));
+    }
+
+    verify_exact_macos_known_hosts_entry(&ssh_directory)?;
+    let current_file =
+        macos_runtime_child_stat(&directory, &known_hosts_basename, "known_hosts file")?
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "managed runtime macOS known_hosts file disappeared during exact cleanup"
+                        .into(),
+                )
+            })?;
+    let reopened_file = macos_runtime_opened_stat(&file, "known_hosts file")?;
+    let current_directory = macos_runtime_child_stat(home, &ssh_basename, "SSH directory")?
+        .ok_or_else(|| {
+            AppError::NotAuthorized(
+                "managed runtime macOS SSH directory disappeared during exact cleanup".into(),
+            )
+        })?;
+    let reopened_directory = macos_runtime_opened_stat(&directory, "SSH directory")?;
+    if current_file.st_dev != expected_file.st_dev
+        || current_file.st_ino != expected_file.st_ino
+        || current_file.st_mode != expected_file.st_mode
+        || current_file.st_uid != expected_file.st_uid
+        || current_file.st_nlink != expected_file.st_nlink
+        || current_file.st_size != 0
+        || reopened_file.st_dev != current_file.st_dev
+        || reopened_file.st_ino != current_file.st_ino
+        || reopened_file.st_mode != current_file.st_mode
+        || reopened_file.st_uid != effective_uid
+        || reopened_file.st_nlink != 1
+        || reopened_file.st_size != 0
+        || current_directory.st_dev != expected_directory.st_dev
+        || current_directory.st_ino != expected_directory.st_ino
+        || current_directory.st_mode != expected_directory.st_mode
+        || current_directory.st_uid != expected_directory.st_uid
+        || reopened_directory.st_dev != current_directory.st_dev
+        || reopened_directory.st_ino != current_directory.st_ino
+        || reopened_directory.st_uid != effective_uid
+        || reopened_directory.st_mode & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS SSH residue changed during exact cleanup".into(),
+        ));
+    }
+
+    // SAFETY: directory is the verified .ssh descriptor, and the exact file
+    // was proved unchanged through its still-live no-follow descriptor.
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), known_hosts_basename.as_ptr(), 0) } != 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::Runtime(format!(
+            "managed runtime macOS known_hosts file could not be removed: {error}"
+        )));
+    }
+    directory.sync_all()?;
+    if fs::read_dir(&ssh_directory)?.next().transpose()?.is_some() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS SSH directory changed after exact known_hosts cleanup".into(),
+        ));
+    }
+    let final_directory = macos_runtime_child_stat(home, &ssh_basename, "SSH directory")?
+        .ok_or_else(|| {
+            AppError::NotAuthorized(
+                "managed runtime macOS SSH directory disappeared before exact removal".into(),
+            )
+        })?;
+    let final_opened_directory = macos_runtime_opened_stat(&directory, "SSH directory")?;
+    if final_directory.st_dev != expected_directory.st_dev
+        || final_directory.st_ino != expected_directory.st_ino
+        || final_directory.st_mode != expected_directory.st_mode
+        || final_directory.st_uid != expected_directory.st_uid
+        || final_opened_directory.st_dev != final_directory.st_dev
+        || final_opened_directory.st_ino != final_directory.st_ino
+        || final_opened_directory.st_uid != effective_uid
+        || final_opened_directory.st_mode & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS SSH directory changed before exact removal".into(),
+        ));
+    }
+    // SAFETY: home is the verified command-home descriptor and .ssh is still
+    // the same empty directory held open above.
+    if unsafe { libc::unlinkat(home.as_raw_fd(), ssh_basename.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+        let error = io::Error::last_os_error();
+        return Err(AppError::Runtime(format!(
+            "managed runtime macOS SSH directory could not be removed: {error}"
+        )));
+    }
+    home.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
 fn remove_macos_short_home_directory(
     path: &Path,
     effective_uid: libc::uid_t,
@@ -6027,13 +6521,26 @@ fn remove_macos_short_home_directory_at(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     }
-    verify_macos_short_home_directory(path, effective_uid)?;
+    let home = open_verified_macos_short_home_directory(path, effective_uid)?;
     let base = base.canonicalize()?;
     let base_metadata = fs::symlink_metadata(&base)?;
     if !base_metadata.is_dir() || base_metadata.file_type().is_symlink() {
         return Err(AppError::NotAuthorized(
             "managed runtime macOS temporary base is not a real directory".into(),
         ));
+    }
+
+    // Complete the root whitelist before deleting either recognized provider
+    // residue. This prevents an unknown peer entry from being hidden by a
+    // partial cleanup of .podman or .ssh.
+    for entry in fs::read_dir(path)? {
+        let name = entry?.file_name();
+        if name != OsStr::new(".podman") && name != OsStr::new(PODMAN_MACOS_SSH_DIRECTORY) {
+            return Err(AppError::NotAuthorized(
+                "managed runtime macOS command home contained an unexpected entry after machine removal"
+                    .into(),
+            ));
+        }
     }
     let aliases = path.join(".podman");
     match fs::symlink_metadata(&aliases) {
@@ -6044,6 +6551,10 @@ fn remove_macos_short_home_directory_at(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
+    // Pinned Podman 5.8.2's Go SSH backend creates this empty file before it
+    // selects the insecure host-key callback used only for machine connections.
+    // Accept only the exact observed empty artifact; it is never provider state.
+    remove_expected_macos_known_hosts(path, &home, effective_uid)?;
     if fs::read_dir(path)?.next().transpose()?.is_some() {
         return Err(AppError::NotAuthorized(
             "managed runtime macOS command home contained an unexpected entry after machine removal"
@@ -7214,10 +7725,7 @@ fn private_entry_exists(path: &Path) -> AppResult<bool> {
     }
 }
 
-/// Removes one exact backend-owned entry without following a symlink. A
-/// corrupted install/cache path may itself be a file or symlink; refusing to
-/// unlink that directory entry would permanently wedge verified repair.
-fn remove_private_tree(path: &Path, expected_parent: &Path) -> AppResult<()> {
+fn private_tree_removal_parent(path: &Path, expected_parent: &Path) -> AppResult<PathBuf> {
     let parent = canonical_real_directory(expected_parent, "managed runtime versions")?;
     let requested_parent = path
         .parent()
@@ -7230,11 +7738,19 @@ fn remove_private_tree(path: &Path, expected_parent: &Path) -> AppResult<()> {
             "managed runtime payload removal escaped its private parent".into(),
         ));
     }
+    Ok(parent)
+}
+
+/// Removes one exact backend-owned entry without following a symlink. A
+/// corrupted install/cache path may itself be a file or symlink; refusing to
+/// unlink that directory entry would permanently wedge verified repair.
+fn remove_private_tree(path: &Path, expected_parent: &Path) -> AppResult<()> {
+    let parent = private_tree_removal_parent(path, expected_parent)?;
     let metadata = fs::symlink_metadata(path)?;
     #[cfg(windows)]
     {
         let _ = metadata;
-        remove_windows_private_entry_tree(path)?;
+        remove_windows_private_entry_tree(path, WindowsPrivateFileDeletePolicy::Immediate)?;
         sync_directory(&parent)?;
         return Ok(());
     }
@@ -7264,6 +7780,47 @@ fn remove_private_tree(path: &Path, expected_parent: &Path) -> AppResult<()> {
     }
 }
 
+fn remove_provider_home_after_machine_removal(
+    path: &Path,
+    expected_parent: &Path,
+    timeout: Duration,
+    poll: Duration,
+) -> AppResult<()> {
+    #[cfg(windows)]
+    {
+        remove_provider_home_after_machine_removal_with_timing(path, expected_parent, timeout, poll)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (timeout, poll);
+        remove_private_tree(path, expected_parent)
+    }
+}
+
+#[cfg(windows)]
+fn remove_provider_home_after_machine_removal_with_timing(
+    path: &Path,
+    expected_parent: &Path,
+    timeout: Duration,
+    poll: Duration,
+) -> AppResult<()> {
+    if poll.is_zero() {
+        return Err(AppError::Internal(
+            "managed Windows WSL provider deletion poll interval was zero".into(),
+        ));
+    }
+    let parent = private_tree_removal_parent(path, expected_parent)?;
+    let _ = fs::symlink_metadata(path)?;
+    let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
+        AppError::Internal("managed Windows WSL provider deletion deadline overflowed".into())
+    })?;
+    remove_windows_private_entry_tree(
+        path,
+        WindowsPrivateFileDeletePolicy::RetrySharingViolation { deadline, poll },
+    )?;
+    sync_directory(&parent)
+}
+
 #[cfg(unix)]
 fn make_tree_owner_writable(path: &Path) -> AppResult<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -7286,7 +7843,17 @@ fn make_tree_owner_writable(path: &Path) -> AppResult<()> {
 }
 
 #[cfg(windows)]
-fn remove_windows_private_entry_tree(path: &Path) -> AppResult<()> {
+#[derive(Clone, Copy)]
+enum WindowsPrivateFileDeletePolicy {
+    Immediate,
+    RetrySharingViolation { deadline: Instant, poll: Duration },
+}
+
+#[cfg(windows)]
+fn remove_windows_private_entry_tree(
+    path: &Path,
+    delete_policy: WindowsPrivateFileDeletePolicy,
+) -> AppResult<()> {
     use std::os::windows::fs::MetadataExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -7300,7 +7867,7 @@ fn remove_windows_private_entry_tree(path: &Path) -> AppResult<()> {
     if directory && !reparse {
         set_windows_entry_readonly_nofollow(path, false)?;
         for entry in fs::read_dir(path)? {
-            remove_windows_private_entry_tree(&entry?.path())?;
+            remove_windows_private_entry_tree(&entry?.path(), delete_policy)?;
         }
         set_windows_entry_readonly_nofollow(path, false)?;
         fs::remove_dir(path)?;
@@ -7308,18 +7875,64 @@ fn remove_windows_private_entry_tree(path: &Path) -> AppResult<()> {
         // FILE_FLAG_OPEN_REPARSE_POINT ensures the attribute update targets
         // the link/junction entry itself. DeleteFileW/RemoveDirectoryW then
         // unlink that entry rather than traversing its target.
-        set_windows_entry_readonly_nofollow(path, false)?;
         if directory {
+            set_windows_entry_readonly_nofollow(path, false)?;
             fs::remove_dir(path)?;
         } else {
-            fs::remove_file(path)?;
+            remove_windows_private_file(path, delete_policy)?;
         }
     }
     Ok(())
 }
 
 #[cfg(windows)]
-fn set_windows_entry_readonly_nofollow(path: &Path, readonly: bool) -> AppResult<()> {
+fn windows_error_is_sharing_violation(error: &io::Error) -> bool {
+    use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+
+    error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32)
+}
+
+#[cfg(windows)]
+fn remove_windows_private_file(
+    path: &Path,
+    delete_policy: WindowsPrivateFileDeletePolicy,
+) -> AppResult<()> {
+    loop {
+        match set_windows_entry_readonly_nofollow(path, false) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+        match fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error)
+                if windows_error_is_sharing_violation(&error)
+                    && matches!(
+                        delete_policy,
+                        WindowsPrivateFileDeletePolicy::RetrySharingViolation { .. }
+                    ) =>
+            {
+                let WindowsPrivateFileDeletePolicy::RetrySharingViolation { deadline, poll } =
+                    delete_policy
+                else {
+                    unreachable!("sharing-violation retry policy was matched above")
+                };
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(AppError::Runtime(format!(
+                        "managed Windows WSL provider storage remained in use after its bounded release wait; retaining remaining provider, installation, and image-cache state for a safe retry: {error}"
+                    )));
+                }
+                thread::sleep(poll.min(deadline.saturating_duration_since(now)));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn set_windows_entry_readonly_nofollow(path: &Path, readonly: bool) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
@@ -7349,7 +7962,7 @@ fn set_windows_entry_readonly_nofollow(path: &Path, readonly: bool) -> AppResult
         )
     };
     if raw == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error().into());
+        return Err(io::Error::last_os_error());
     }
     // SAFETY: `raw` was returned by CreateFileW and is now uniquely owned.
     let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
@@ -7364,7 +7977,7 @@ fn set_windows_entry_readonly_nofollow(path: &Path, readonly: bool) -> AppResult
         )
     } == 0
     {
-        return Err(io::Error::last_os_error().into());
+        return Err(io::Error::last_os_error());
     }
     let has_readonly = information.FileAttributes & FILE_ATTRIBUTE_READONLY != 0;
     if has_readonly == readonly {
@@ -7390,7 +8003,7 @@ fn set_windows_entry_readonly_nofollow(path: &Path, readonly: bool) -> AppResult
         )
     } == 0
     {
-        return Err(io::Error::last_os_error().into());
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }
@@ -8083,6 +8696,35 @@ mod tests {
     #[cfg(not(windows))]
     fn push_windows_wsl_absent(_commands: &FakeCommands) {}
 
+    #[cfg(windows)]
+    fn windows_fixture_vhd_path(
+        manager: &ManagedRuntimeManager,
+        target: &ManagedTarget,
+    ) -> PathBuf {
+        manager
+            .provider_home()
+            .join("data")
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join(target.provider.argument())
+            .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
+            .join(machine_name(target))
+            .join("ext4.vhdx")
+    }
+
+    #[cfg(windows)]
+    fn open_without_windows_delete_sharing(path: &Path) -> File {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(path)
+            .expect("open fixture without delete sharing")
+    }
+
     #[test]
     fn machine_names_are_deterministic_unique_and_within_podman_limit() {
         let image = ManagedMachineImage {
@@ -8218,6 +8860,14 @@ mod tests {
 
         let runtime = linux_short_runtime_path(&base, &state, &"a".repeat(64), effective_uid);
         ensure_linux_short_runtime_directory_at(&runtime, &base, effective_uid).unwrap();
+        for (basename, mode) in [
+            (PODMAN_LINUX_EAGER_STORAGE_DIRECTORY, 0o700),
+            (PODMAN_LINUX_EAGER_LIBPOD_DIRECTORY, 0o1700),
+        ] {
+            let directory = runtime.join(basename);
+            fs::create_dir(&directory).unwrap();
+            fs::set_permissions(&directory, fs::Permissions::from_mode(mode)).unwrap();
+        }
         let podman = runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
         fs::create_dir(&podman).unwrap();
         fs::set_permissions(&podman, fs::Permissions::from_mode(0o750)).unwrap();
@@ -8261,11 +8911,44 @@ mod tests {
         let error =
             remove_linux_short_runtime_directory_at(&legacy_storage_runtime, &base, effective_uid)
                 .expect_err("legacy containers/storage state must never be removed recursively");
-        assert!(error.to_string().contains("unexpected entry"));
+        assert!(error.to_string().contains("was not empty"));
         assert_eq!(
             fs::read(legacy_storage.join("must-remain")).unwrap(),
             b"legacy storage state"
         );
+
+        let linked_eager_runtime =
+            linux_short_runtime_path(&base, &state, &"2".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&linked_eager_runtime, &base, effective_uid)
+            .unwrap();
+        let outside_eager = temp.path().join("outside-eager-runtime");
+        ensure_private_directory(&outside_eager).unwrap();
+        fs::write(outside_eager.join("must-remain"), b"outside eager state").unwrap();
+        symlink(
+            &outside_eager,
+            linked_eager_runtime.join(PODMAN_LINUX_EAGER_STORAGE_DIRECTORY),
+        )
+        .unwrap();
+        let error =
+            remove_linux_short_runtime_directory_at(&linked_eager_runtime, &base, effective_uid)
+                .expect_err("an exact-name eager-runtime symlink must fail closed");
+        assert!(error.to_string().contains("unsafe type"));
+        assert_eq!(
+            fs::read(outside_eager.join("must-remain")).unwrap(),
+            b"outside eager state"
+        );
+
+        let wrong_mode_runtime =
+            linux_short_runtime_path(&base, &state, &"3".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&wrong_mode_runtime, &base, effective_uid).unwrap();
+        let wrong_mode_libpod = wrong_mode_runtime.join(PODMAN_LINUX_EAGER_LIBPOD_DIRECTORY);
+        fs::create_dir(&wrong_mode_libpod).unwrap();
+        fs::set_permissions(&wrong_mode_libpod, fs::Permissions::from_mode(0o700)).unwrap();
+        let error =
+            remove_linux_short_runtime_directory_at(&wrong_mode_runtime, &base, effective_uid)
+                .expect_err("libpod without its exact sticky mode must fail closed");
+        assert!(error.to_string().contains("unsafe type"));
+        assert!(wrong_mode_libpod.is_dir());
 
         let linked_log_runtime =
             linux_short_runtime_path(&base, &state, &"c".repeat(64), effective_uid);
@@ -8467,6 +9150,14 @@ mod tests {
         // SAFETY: geteuid has no preconditions and does not dereference memory.
         let effective_uid = unsafe { libc::geteuid() };
         let machine_name = "m";
+        let seed_known_hosts = |home: &Path, contents: &[u8], mode: u32| {
+            let ssh_directory = home.join(PODMAN_MACOS_SSH_DIRECTORY);
+            ensure_private_directory(&ssh_directory).unwrap();
+            let known_hosts = ssh_directory.join(PODMAN_MACOS_KNOWN_HOSTS_FILE);
+            fs::write(&known_hosts, contents).unwrap();
+            fs::set_permissions(&known_hosts, fs::Permissions::from_mode(mode)).unwrap();
+            known_hosts
+        };
 
         let home = macos_short_home_path(&base, &state, &"a".repeat(64), effective_uid);
         ensure_macos_short_home_directory(&home, effective_uid).unwrap();
@@ -8486,6 +9177,28 @@ mod tests {
         remove_macos_short_home_directory_at(&socket_home, &base, effective_uid, machine_name)
             .expect("remove exact stale pinned-Podman ignition socket and short home");
         assert!(!private_entry_exists(&socket_home).unwrap());
+
+        let ssh_home = macos_short_home_path(&base, &state, &"1".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&ssh_home, effective_uid).unwrap();
+        let known_hosts = seed_known_hosts(&ssh_home, b"", 0o600);
+        let metadata = fs::symlink_metadata(&known_hosts).unwrap();
+        assert!(metadata.is_file());
+        assert_eq!(metadata.len(), 0);
+        remove_macos_short_home_directory_at(&ssh_home, &base, effective_uid, machine_name)
+            .expect("remove exact pinned-Podman empty known_hosts residue and short home");
+        assert!(!private_entry_exists(&ssh_home).unwrap());
+
+        let combined_home = macos_short_home_path(&base, &state, &"ab".repeat(32), effective_uid);
+        ensure_macos_short_home_directory(&combined_home, effective_uid).unwrap();
+        let combined_aliases = combined_home.join(".podman");
+        ensure_private_directory(&combined_aliases).unwrap();
+        let combined_socket = macos_podman_ignition_socket_alias(&combined_home, machine_name);
+        let listener = UnixListener::bind(&combined_socket).unwrap();
+        drop(listener);
+        seed_known_hosts(&combined_home, b"", 0o600);
+        remove_macos_short_home_directory_at(&combined_home, &base, effective_uid, machine_name)
+            .expect("remove both exact pinned-Podman residue namespaces");
+        assert!(!private_entry_exists(&combined_home).unwrap());
 
         let unexpected = macos_short_home_path(&base, &state, &"d".repeat(64), effective_uid);
         ensure_macos_short_home_directory(&unexpected, effective_uid).unwrap();
@@ -8568,6 +9281,159 @@ mod tests {
             fs::read(aliases.join("unexpected")).unwrap(),
             b"must remain"
         );
+
+        let root_extra_home = macos_short_home_path(&base, &state, &"2".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&root_extra_home, effective_uid).unwrap();
+        let root_extra_aliases = root_extra_home.join(".podman");
+        ensure_private_directory(&root_extra_aliases).unwrap();
+        fs::write(root_extra_home.join("unexpected"), b"must remain").unwrap();
+        let error = remove_macos_short_home_directory_at(
+            &root_extra_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("an unknown root entry must fail before recognized residue is removed");
+        assert!(error.to_string().contains("unexpected entry"));
+        assert!(root_extra_aliases.is_dir());
+        assert_eq!(
+            fs::read(root_extra_home.join("unexpected")).unwrap(),
+            b"must remain"
+        );
+
+        let linked_ssh_home = macos_short_home_path(&base, &state, &"3".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&linked_ssh_home, effective_uid).unwrap();
+        let outside_ssh_directory = temp.path().join("outside-ssh-directory");
+        ensure_private_directory(&outside_ssh_directory).unwrap();
+        fs::write(
+            outside_ssh_directory.join("must-remain"),
+            b"outside ssh state",
+        )
+        .unwrap();
+        symlink(
+            &outside_ssh_directory,
+            linked_ssh_home.join(PODMAN_MACOS_SSH_DIRECTORY),
+        )
+        .unwrap();
+        let error = remove_macos_short_home_directory_at(
+            &linked_ssh_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("an exact-name .ssh symlink must fail closed");
+        assert!(error.to_string().contains("unsafe type"));
+        assert_eq!(
+            fs::read(outside_ssh_directory.join("must-remain")).unwrap(),
+            b"outside ssh state"
+        );
+
+        let linked_known_hosts_home =
+            macos_short_home_path(&base, &state, &"4".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&linked_known_hosts_home, effective_uid).unwrap();
+        let linked_known_hosts_directory = linked_known_hosts_home.join(PODMAN_MACOS_SSH_DIRECTORY);
+        ensure_private_directory(&linked_known_hosts_directory).unwrap();
+        symlink(
+            &outside,
+            linked_known_hosts_directory.join(PODMAN_MACOS_KNOWN_HOSTS_FILE),
+        )
+        .unwrap();
+        let error = remove_macos_short_home_directory_at(
+            &linked_known_hosts_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("an exact-name known_hosts symlink must fail closed");
+        assert!(error.to_string().contains("empty regular file"));
+        assert_eq!(fs::read(&outside).unwrap(), b"must remain");
+
+        let hardlinked_known_hosts_home =
+            macos_short_home_path(&base, &state, &"5".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&hardlinked_known_hosts_home, effective_uid).unwrap();
+        let hardlinked_known_hosts_directory =
+            hardlinked_known_hosts_home.join(PODMAN_MACOS_SSH_DIRECTORY);
+        ensure_private_directory(&hardlinked_known_hosts_directory).unwrap();
+        let outside_hardlink = temp.path().join("outside-known-hosts-hardlink");
+        fs::write(&outside_hardlink, b"").unwrap();
+        fs::set_permissions(&outside_hardlink, fs::Permissions::from_mode(0o600)).unwrap();
+        let hardlinked_known_hosts =
+            hardlinked_known_hosts_directory.join(PODMAN_MACOS_KNOWN_HOSTS_FILE);
+        fs::hard_link(&outside_hardlink, &hardlinked_known_hosts).unwrap();
+        let error = remove_macos_short_home_directory_at(
+            &hardlinked_known_hosts_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("a multiply-linked known_hosts file must fail closed");
+        assert!(error.to_string().contains("single-link"));
+        assert!(hardlinked_known_hosts.is_file());
+        assert!(outside_hardlink.is_file());
+
+        let nonempty_known_hosts_home =
+            macos_short_home_path(&base, &state, &"6".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&nonempty_known_hosts_home, effective_uid).unwrap();
+        let nonempty_known_hosts =
+            seed_known_hosts(&nonempty_known_hosts_home, b"must remain", 0o600);
+        let error = remove_macos_short_home_directory_at(
+            &nonempty_known_hosts_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("a nonempty known_hosts file must fail closed");
+        assert!(error.to_string().contains("empty regular file"));
+        assert_eq!(fs::read(nonempty_known_hosts).unwrap(), b"must remain");
+
+        let wrong_mode_known_hosts_home =
+            macos_short_home_path(&base, &state, &"7".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&wrong_mode_known_hosts_home, effective_uid).unwrap();
+        let wrong_mode_known_hosts = seed_known_hosts(&wrong_mode_known_hosts_home, b"", 0o644);
+        let error = remove_macos_short_home_directory_at(
+            &wrong_mode_known_hosts_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("known_hosts without exact mode 0600 must fail closed");
+        assert!(error.to_string().contains("mode-0600"));
+        assert!(wrong_mode_known_hosts.is_file());
+
+        let extra_ssh_entry_home =
+            macos_short_home_path(&base, &state, &"8".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&extra_ssh_entry_home, effective_uid).unwrap();
+        let exact_known_hosts = seed_known_hosts(&extra_ssh_entry_home, b"", 0o600);
+        let extra_ssh_entry = extra_ssh_entry_home
+            .join(PODMAN_MACOS_SSH_DIRECTORY)
+            .join("unexpected");
+        fs::write(&extra_ssh_entry, b"must remain").unwrap();
+        let error = remove_macos_short_home_directory_at(
+            &extra_ssh_entry_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("an extra .ssh entry must fail closed");
+        assert!(error.to_string().contains("exactly the expected"));
+        assert!(exact_known_hosts.is_file());
+        assert_eq!(fs::read(extra_ssh_entry).unwrap(), b"must remain");
+
+        let permissive_ssh_home =
+            macos_short_home_path(&base, &state, &"9".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&permissive_ssh_home, effective_uid).unwrap();
+        let permissive_known_hosts = seed_known_hosts(&permissive_ssh_home, b"", 0o600);
+        let permissive_ssh_directory = permissive_ssh_home.join(PODMAN_MACOS_SSH_DIRECTORY);
+        fs::set_permissions(&permissive_ssh_directory, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = remove_macos_short_home_directory_at(
+            &permissive_ssh_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("a permissive .ssh directory must fail closed");
+        assert!(error.to_string().contains("unsafe type"));
+        assert!(permissive_known_hosts.is_file());
 
         let permissive = macos_short_home_path(&base, &state, &"b".repeat(64), effective_uid);
         fs::create_dir(&permissive).unwrap();
@@ -8939,6 +9805,116 @@ mod tests {
         remove_private_tree(&install, &versions).expect("remove tree with readonly link");
         assert!(!private_entry_exists(&install).unwrap());
         assert_eq!(fs::read(&outside).unwrap(), b"outside remains");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_provider_delete_retry_classifies_only_sharing_violations() {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
+
+        assert!(windows_error_is_sharing_violation(
+            &io::Error::from_raw_os_error(ERROR_SHARING_VIOLATION as i32)
+        ));
+        assert!(!windows_error_is_sharing_violation(
+            &io::Error::from_raw_os_error(ERROR_ACCESS_DENIED as i32)
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_provider_delete_accepts_a_concurrent_not_found() {
+        let fixture = fixture();
+        let missing = fixture
+            .manager
+            .versions_root()
+            .join("already-released.vhdx");
+        ensure_private_directory(&fixture.manager.versions_root()).unwrap();
+
+        remove_windows_private_file(
+            &missing,
+            WindowsPrivateFileDeletePolicy::RetrySharingViolation {
+                deadline: Instant::now() + Duration::from_secs(1),
+                poll: Duration::from_millis(10),
+            },
+        )
+        .expect("a concurrently removed exact entry is already clean");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_waits_for_exact_windows_wsl_vhd_release() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        fs::create_dir(vhd.parent().expect("VHD parent")).expect("create WSL distribution root");
+        fs::write(&vhd, b"fixture VHD").expect("write fixture VHD");
+        let locked_vhd = open_without_windows_delete_sharing(&vhd);
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            drop(locked_vhd);
+        });
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+
+        let result = fixture
+            .manager
+            .uninstall(ManagedUninstallOptions::default());
+        release.join().expect("release fixture VHD handle");
+        let status = result.expect("uninstall after bounded VHD release wait");
+
+        assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(!private_entry_exists(&fixture.manager.provider_home()).unwrap());
+        assert!(!private_entry_exists(&fixture.manager.install_directory()).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_provider_delete_timeout_retains_install_and_image_cache() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let image = fixture
+            .manager
+            .acquire_machine_image_locked(target, None)
+            .expect("cache exact machine image");
+        let provider_home = fixture.manager.provider_home();
+        let vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        fs::create_dir(vhd.parent().expect("VHD parent")).expect("create WSL distribution root");
+        fs::write(&vhd, b"fixture VHD").expect("write fixture VHD");
+        let locked_vhd = open_without_windows_delete_sharing(&vhd);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        let started = Instant::now();
+
+        let error = fixture
+            .manager
+            .uninstall_with_windows_provider_delete_timing(
+                ManagedUninstallOptions {
+                    stop_mode: ManagedStopMode::Force,
+                    remove_machine_image_cache: true,
+                },
+                Duration::from_millis(150),
+                Duration::from_millis(25),
+            )
+            .expect_err("an unreleased VHD must stop provider deletion at its deadline");
+
+        assert!(error.to_string().contains("remained in use"));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert!(private_entry_exists(&provider_home).unwrap());
+        assert!(private_entry_exists(&vhd).unwrap());
+        assert!(private_entry_exists(&fixture.manager.install_directory()).unwrap());
+        assert_eq!(fs::read(image).unwrap(), fixture.image);
+        assert_eq!(fixture.commands.calls().len(), 2);
+        drop(locked_vhd);
     }
 
     #[test]

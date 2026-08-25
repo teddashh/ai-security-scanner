@@ -410,6 +410,110 @@ function Invoke-WslInventoryRaw(
   }
 }
 
+function Invoke-BoundedCleanupProcess(
+  [string]$FileName,
+  [string[]]$Arguments,
+  [int]$TimeoutMilliseconds,
+  [string]$Label,
+  [Collections.Generic.Dictionary[string,string]]$Environment = $null
+) {
+  if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 600000) {
+    throw "$Label cleanup deadline is outside its fixed bound."
+  }
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $FileName
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  foreach ($argument in $Arguments) {
+    $startInfo.ArgumentList.Add($argument)
+  }
+  if ($null -ne $Environment) {
+    $startInfo.Environment.Clear()
+    foreach ($entry in $Environment.GetEnumerator()) {
+      $startInfo.Environment[$entry.Key] = $entry.Value
+    }
+  }
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  $stdout = [QualificationBoundedMemoryStream]::new(64 * 1024)
+  $stderr = [QualificationBoundedMemoryStream]::new(64 * 1024)
+  try {
+    if (-not $process.Start()) {
+      throw "$Label cleanup process did not start."
+    }
+    $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
+    $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderr)
+    if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+      try { $process.Kill($true) } catch {}
+      $process.WaitForExit(5000) | Out-Null
+      throw "$Label cleanup exceeded its fixed deadline."
+    }
+    $drain = [Threading.Tasks.Task]::WhenAll([Threading.Tasks.Task[]]@($stdoutTask, $stderrTask))
+    try { $drained = $drain.Wait(5000) } catch { throw "$Label cleanup output exceeded its bound or failed to drain." }
+    if (-not $drained -or -not $drain.IsCompletedSuccessfully) {
+      throw "$Label cleanup output failed to drain within its deadline."
+    }
+    if ($process.ExitCode -ne 0) {
+      throw "$Label cleanup failed with status $($process.ExitCode)."
+    }
+  } finally {
+    $stdout.Dispose()
+    $stderr.Dispose()
+    $process.Dispose()
+  }
+}
+
+function Remove-BoundedQualificationTree([string]$Path, [string]$Label) {
+  $job = Start-Job -ScriptBlock {
+    param([string]$ExactPath)
+    $ErrorActionPreference = "Stop"
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+      try {
+        if (Test-Path -LiteralPath $ExactPath) {
+          Remove-Item -LiteralPath $ExactPath -Recurse -Force
+        }
+        if (-not (Test-Path -LiteralPath $ExactPath)) {
+          return
+        }
+      } catch {
+        if ([DateTime]::UtcNow -ge $deadline) {
+          throw
+        }
+      }
+      Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "qualification tree remained after its fixed cleanup deadline"
+  } -ArgumentList $Path
+  try {
+    $completed = Wait-Job -Job $job -Timeout 35
+    if ($null -eq $completed) {
+      Stop-Job -Job $job -ErrorAction SilentlyContinue
+      throw "$Label cleanup exceeded its fixed deadline."
+    }
+    Receive-Job -Job $job -ErrorAction Stop | Out-Null
+    if ($job.State -ne [Management.Automation.JobState]::Completed) {
+      throw "$Label cleanup did not complete successfully."
+    }
+  } finally {
+    if ($job.State -eq [Management.Automation.JobState]::Running) {
+      Stop-Job -Job $job -ErrorAction SilentlyContinue
+    }
+    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Get-BoundedCleanupFailure([Management.Automation.ErrorRecord]$Failure, [string]$Label) {
+  $message = [string]$Failure.Exception.Message
+  $message = $message.Replace("`r", " ").Replace("`n", " ")
+  if ($message.Length -gt 2048) {
+    $message = $message.Substring(0, 2048) + " (truncated)"
+  }
+  return "$Label`: $message"
+}
+
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
 $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
 $workRoot = [IO.Path]::GetFullPath($WorkDirectory)
@@ -450,6 +554,14 @@ if (Test-ExactEntryExists $dataDirectory) {
 
 $installed = $false
 $installerPath = $null
+$cli = $null
+$wsl = $null
+$systemRoot = $null
+$system32 = $null
+$managedWslDistribution = $null
+$exactWslAbsent = $false
+$primaryFailure = $null
+$cleanupFailures = [Collections.Generic.List[string]]::new()
 try {
   $installerManifestPath = Join-Path $artifactRoot "installers-windows-x86_64.json"
   $installerManifest = Get-Content -LiteralPath $installerManifestPath -Raw | ConvertFrom-Json
@@ -652,13 +764,94 @@ try {
   }
   $observations | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $workRoot "observations.json") -Encoding utf8NoBOM -NoNewline
   Add-Content -LiteralPath (Join-Path $workRoot "observations.json") -Value "" -Encoding utf8NoBOM
+} catch {
+  $primaryFailure = $_
 } finally {
-  if ($installed -and $null -ne $installerPath) {
-    Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $installerPath, "/qn", "/norestart") -Wait | Out-Null
+  if ($null -ne $primaryFailure) {
+  try {
+    if ($null -ne $cli -and (Test-Path -LiteralPath $cli -PathType Leaf) -and
+        (Test-Path -LiteralPath $dataDirectory -PathType Container)) {
+      try {
+        Invoke-BoundedCleanupProcess $cli @(
+          "--json", "--data-dir", $dataDirectory, "runtime", "managed", "stop", "--force"
+        ) 120000 "Managed runtime forced stop"
+      } catch {
+        $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "managed runtime forced stop"))
+      }
+      try {
+        Invoke-BoundedCleanupProcess $cli @(
+          "--json", "--data-dir", $dataDirectory,
+          "runtime", "managed", "uninstall", "--force", "--purge-image-cache"
+        ) 300000 "Managed runtime uninstall"
+      } catch {
+        $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "managed runtime uninstall"))
+      }
+    }
+  } catch {
+    $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "managed runtime cleanup preflight"))
   }
-  foreach ($boundedPath in @($installDirectory, $dataDirectory)) {
-    if (Test-Path -LiteralPath $boundedPath) {
-      Remove-Item -LiteralPath $boundedPath -Recurse -Force
+  try {
+    if ($null -ne $wsl -and $null -ne $systemRoot -and $null -ne $system32 -and
+        $null -ne $managedWslDistribution -and (Test-Path -LiteralPath $workRoot -PathType Container)) {
+      $remaining = @(Invoke-WslInventoryRaw $wsl $systemRoot $system32 $workRoot)
+      if (@(
+          $remaining | Where-Object {
+            [String]::Equals([string]$_, $managedWslDistribution, [StringComparison]::OrdinalIgnoreCase)
+          }
+        ).Count -ne 0) {
+        $wslEnvironment = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $wslEnvironment["SystemRoot"] = $systemRoot
+        $wslEnvironment["WINDIR"] = $systemRoot
+        $wslEnvironment["PATH"] = $system32
+        $wslEnvironment["NoDefaultCurrentDirectoryInExePath"] = "1"
+        Invoke-BoundedCleanupProcess $wsl @("--unregister", $managedWslDistribution) 90000 "Exact managed WSL distribution" $wslEnvironment
+      }
+      $remaining = @(Invoke-WslInventoryRaw $wsl $systemRoot $system32 $workRoot)
+      $exactWslAbsent = @(
+        $remaining | Where-Object {
+          [String]::Equals([string]$_, $managedWslDistribution, [StringComparison]::OrdinalIgnoreCase)
+        }
+      ).Count -eq 0
+      if (-not $exactWslAbsent) {
+        throw "Exact managed WSL distribution remained registered after bounded cleanup."
+      }
+    }
+  } catch {
+    $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "exact managed WSL distribution"))
+  }
+  if ($installed -and $null -ne $installerPath) {
+    try {
+      Invoke-BoundedCleanupProcess "msiexec.exe" @("/x", $installerPath, "/qn", "/norestart") 120000 "MSI uninstall"
+    } catch {
+      $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "MSI uninstall"))
     }
   }
+  foreach ($boundedPath in @($installDirectory, $dataDirectory)) {
+    try {
+      if (Test-Path -LiteralPath $boundedPath) {
+        if ([String]::Equals($boundedPath, $dataDirectory, [StringComparison]::OrdinalIgnoreCase) -and
+            -not $exactWslAbsent) {
+          throw "Qualification data was preserved because exact managed WSL absence was not proven."
+        }
+        Remove-BoundedQualificationTree $boundedPath "Qualification private tree"
+      }
+    } catch {
+      $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "qualification private tree"))
+    }
+  }
+  }
+}
+
+if ($null -ne $primaryFailure) {
+  if ($cleanupFailures.Count -ne 0) {
+    $cleanupSummary = [String]::Join("; ", $cleanupFailures)
+    throw [InvalidOperationException]::new(
+      "$($primaryFailure.Exception.Message) Additional bounded qualification cleanup failure(s): $cleanupSummary",
+      $primaryFailure.Exception
+    )
+  }
+  throw $primaryFailure
+}
+if ($cleanupFailures.Count -ne 0) {
+  throw "Bounded qualification cleanup failed: $([String]::Join('; ', $cleanupFailures))"
 }

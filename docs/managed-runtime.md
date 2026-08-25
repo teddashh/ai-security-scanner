@@ -37,14 +37,20 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   handle. An immutable private `storage.conf`, selected through the exact
   `CONTAINERS_STORAGE_CONF` path, pins containers/storage's `runroot` to
   `provider-home/run/containers` and `graphroot` to `provider-home/data/containers/storage`.
-  Consequently, the short runtime holds only Podman's socket-budgeted `podman` namespace instead
-  of the default `$XDG_RUNTIME_DIR/containers` storage state. A link, foreign owner, permissive
-  mode, non-canonical temporary base, or changed object fails closed. With a maximum 30-byte machine
-  name, Podman 5.8.2's longest
+  The pinned containers/storage and containers/common libraries resolve defaults before applying
+  those private overrides, so they may eagerly leave only empty `containers` (mode `0700`) and
+  `libpod` (mode `01700`) scaffolds beside Podman's socket-budgeted `podman` namespace. Runtime and
+  image state still remain in the persistent private provider home. A link, foreign owner,
+  permissive mode, non-canonical temporary base, or changed object fails closed. With a maximum
+  30-byte machine name, Podman 5.8.2's longest
   `$XDG_RUNTIME_DIR/podman/*-gvproxy.sock` path is 94 bytes, below its 103-byte Unix-socket budget.
 - The Linux short runtime remains stable across start, ordinary stop, and update. After exact
-  machine removal, uninstall accepts only the pinned Podman `podman` child. It may remove only the
-  exact `virtiofschar0.pid`, `virtiofschar0`, and `gvproxy.log` basenames. The pid must be a
+  machine removal, uninstall accepts only the pinned Podman `podman` child and the exact empty
+  `containers` and `libpod` scaffolds. Each scaffold must be a real current-user directory with
+  its exact observed mode, opened without following links and rechecked by device and inode before
+  descriptor-relative removal; a nonempty directory or any other entry fails closed. From the
+  `podman` child, cleanup may remove only the exact `virtiofschar0.pid`, `virtiofschar0`, and
+  `gvproxy.log` basenames. The pid must be a
   current-user, single-link, mode-`0600` regular file whose exclusive `flock` becomes available
   within a bounded wait; only that proof permits removal of a matching current-user, single-link,
   mode-`0700` Unix socket. A socket without its exact pid-lock proof, a still-live lock, or any
@@ -66,9 +72,14 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   `<deterministic-machine>-ignition.sock` pathname left by pinned Podman 5.8.2's first-boot
   ignition server. That one pathname is removed through the verified directory handle only after
   no-follow inspection proves it is a current-user, single-link Unix socket and a second identity
-  check is unchanged. Cleanup is not recursive: another basename, an additional child, a link or
-  regular file at the expected name, foreign ownership, or an unsafe directory replacement aborts
-  cleanup before the exact directories are removed.
+  check is unchanged. The pinned SSH client also eagerly creates `.ssh/known_hosts` before selecting
+  its machine-only host-key callback. Uninstall accepts `.ssh` only as a real current-user mode-
+  `0700` directory containing exactly one current-user, single-link, mode-`0600`, zero-byte regular
+  `known_hosts` file. Both objects are opened without following links and rechecked by device,
+  inode, ownership, mode, link count, and size as applicable before descriptor-relative removal.
+  Cleanup is not recursive: another root basename, an additional child, a nonempty or hard-linked
+  `known_hosts`, a link, foreign ownership, a wrong mode or type, or an unsafe directory replacement
+  aborts cleanup before the unsafe object is removed.
 - On Windows, Podman can report `machine rm` success after an underlying WSL unregister failure.
   Before deleting the release-private provider home, installation, or requested image cache, the
   app therefore obtains the Windows root from the bounded operating-system directory API, never an
@@ -77,9 +88,13 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   `--list --quiet`.
   It strictly accepts only bounded UTF-8 or UTF-16LE distribution names. If the deterministic exact
   `podman-assm1-win-x64-<12-hex-image-id>` distribution remains, the app unregisters only that
-  exact owned name and inventories again. Execution, decoding, unregister, or final-absence proof
-  failure retains provider, installation, and cache state for a safe retry; no prefix or wildcard
-  WSL removal is permitted.
+  exact owned name and inventories again. Only after the final inventory proves that exact name
+  absent, deletion of its verified provider home retries Win32 sharing violations every 100 ms for
+  at most 10 seconds so a released `ext4.vhdx` can be removed; every other deletion error fails
+  immediately. Execution, decoding, unregister, final-absence proof, or delete-timeout failure
+  retains the remaining provider, installation, and requested image-cache state for a safe retry.
+  No prefix or wildcard WSL removal is permitted, and cleanup never uses the global
+  `wsl --shutdown` operation.
 - Before first initialization, the app generates Podman 5.8.2's exact private-XDG
   `data/containers/podman/machine/machine{,.pub}` identity itself as an unencrypted OpenSSH Ed25519
   pair. It uses operating-system randomness and RustCrypto parsing/encoding, not a host
