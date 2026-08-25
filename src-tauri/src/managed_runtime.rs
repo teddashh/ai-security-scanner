@@ -3628,7 +3628,7 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid,
         GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorControl,
         GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidAcl, IsValidSid, PSID,
-        SE_DACL_PROTECTED,
+        SE_DACL_PROTECTED, SE_SELF_RELATIVE,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
     use windows_sys::Win32::System::SystemServices::{
@@ -3675,10 +3675,13 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     {
         return Err(io::Error::last_os_error());
     }
-    if revision != SECURITY_DESCRIPTOR_REVISION || control & SE_DACL_PROTECTED == 0 {
+    if revision != SECURITY_DESCRIPTOR_REVISION
+        || control & (SE_DACL_PROTECTED | SE_SELF_RELATIVE)
+            != (SE_DACL_PROTECTED | SE_SELF_RELATIVE)
+    {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "file DACL is not a protected revision-1 descriptor",
+            "file DACL is not a protected self-relative revision-1 descriptor",
         ));
     }
 
@@ -5801,15 +5804,31 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     // SAFETY: CreateFileW returned a uniquely owned file handle.
     let file = unsafe { File::from_raw_handle(raw) };
     let secure = (|| {
-        // CreateFileW may preserve the ACL entries while clearing the DACL
-        // protection control bit. Replace the DACL and its inheritance policy
-        // through the exact, exclusively opened, still-empty filesystem handle.
-        // No caller can write bytes until the same handle is verified below.
+        // CreateFileW may apply the permissive parent's inheritable ACE before
+        // persisting the protection bit. First make that exact, exclusively
+        // opened, still-empty object protected. Windows can preserve the old
+        // inherited ACE as explicit during this transition, so replace the
+        // DACL only after inheritance is disabled. No caller can write bytes
+        // until the same handle is verified below.
         let status = unsafe {
             SetSecurityInfo(
                 file.as_raw_handle(),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        let status = unsafe {
+            SetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 acl.as_ptr().cast(),
