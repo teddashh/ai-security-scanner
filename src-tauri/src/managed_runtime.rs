@@ -3425,6 +3425,30 @@ impl WindowsCurrentUserSid {
 }
 
 #[cfg(windows)]
+struct WindowsCurrentUserOnlyAcl {
+    raw: *mut windows_sys::Win32::Security::ACL,
+}
+
+#[cfg(windows)]
+impl WindowsCurrentUserOnlyAcl {
+    fn as_ptr(&self) -> *const windows_sys::Win32::Security::ACL {
+        self.raw
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsCurrentUserOnlyAcl {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::LocalFree;
+
+        // SAFETY: SetEntriesInAclW allocated this ACL with LocalAlloc.
+        unsafe {
+            LocalFree(self.raw.cast());
+        }
+    }
+}
+
+#[cfg(windows)]
 fn windows_current_user_sid() -> io::Result<WindowsCurrentUserSid> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
@@ -3509,6 +3533,124 @@ fn windows_current_user_sid() -> io::Result<WindowsCurrentUserSid> {
         return Err(io::Error::last_os_error());
     }
     Ok(WindowsCurrentUserSid { storage })
+}
+
+#[cfg(windows)]
+fn windows_current_user_only_acl(
+    user: &WindowsCurrentUserSid,
+) -> io::Result<WindowsCurrentUserOnlyAcl> {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SET_ACCESS, SetEntriesInAclW, TRUSTEE_IS_SID,
+        TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid,
+        GetAce, GetAclInformation, GetLengthSid, IsValidAcl, IsValidSid, NO_INHERITANCE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+
+    let explicit = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: FILE_ALL_ACCESS,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            // TRUSTEE_W reuses this field for a SID when TrusteeForm is
+            // TRUSTEE_IS_SID; no UTF-16 string is read in that form.
+            ptstrName: user.as_ptr().cast(),
+        },
+    };
+    let mut raw = std::ptr::null_mut::<ACL>();
+    // SAFETY: explicit is fully initialized, user remains live, and raw is
+    // writable output storage. A null old ACL requests a fresh one-entry ACL.
+    let status =
+        unsafe { SetEntriesInAclW(1, &raw const explicit, std::ptr::null(), &raw mut raw) };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    if raw.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned a null current-user ACL",
+        ));
+    }
+    let acl = WindowsCurrentUserOnlyAcl { raw };
+    // Validate the provider-built ACL before it is ever attached to a security
+    // descriptor. This distinguishes ACL construction from filesystem
+    // inheritance behavior and keeps malformed policy from reaching CreateFileW.
+    // SAFETY: acl owns the live SetEntriesInAclW allocation.
+    if unsafe { IsValidAcl(acl.raw) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows built an invalid current-user ACL",
+        ));
+    }
+    let mut information = ACL_SIZE_INFORMATION::default();
+    // SAFETY: acl is valid and information is writable storage of the declared size.
+    if unsafe {
+        GetAclInformation(
+            acl.raw,
+            (&raw mut information).cast(),
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if information.AceCount != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows current-user ACL does not contain exactly one access rule",
+        ));
+    }
+    let mut raw_ace = std::ptr::null_mut::<c_void>();
+    // SAFETY: the valid ACL reports one ACE, so index zero exists.
+    if unsafe { GetAce(acl.raw, 0, &raw mut raw_ace) } == 0 || raw_ace.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: GetAce returned a pointer to at least an ACE_HEADER in the live ACL.
+    let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
+    if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE
+        || header.AceFlags != 0
+        || usize::from(header.AceSize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows current-user ACL contains an unexpected access rule",
+        ));
+    }
+    // SAFETY: the ACE type and size establish its fixed ACCESS_ALLOWED_ACE prefix.
+    let allowed = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
+    let ace_sid = std::ptr::addr_of!(allowed.SidStart).cast_mut().cast();
+    // SAFETY: the fixed prefix is bounded by a valid ACL and user owns a valid SID.
+    if allowed.Mask != FILE_ALL_ACCESS
+        || unsafe { IsValidSid(ace_sid) } == 0
+        || unsafe { EqualSid(ace_sid, user.as_ptr()) } == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows current-user ACL was built for the wrong principal",
+        ));
+    }
+    // SAFETY: both SIDs were validated above.
+    let user_sid_length = unsafe { GetLengthSid(user.as_ptr()) } as usize;
+    let expected_ace_size = std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+        .checked_sub(std::mem::size_of::<u32>())
+        .and_then(|prefix| prefix.checked_add(user_sid_length))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACE size overflowed"))?;
+    if usize::from(header.AceSize) != expected_ace_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows current-user ACL contains a malformed SID boundary",
+        ));
+    }
+    Ok(acl)
 }
 
 #[cfg(windows)]
@@ -3627,8 +3769,8 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid,
         GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorControl,
-        GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidAcl, IsValidSid, PSID,
-        SE_DACL_PROTECTED, SE_SELF_RELATIVE,
+        GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidAcl, IsValidSid,
+        IsWellKnownSid, PSID, SE_DACL_PROTECTED, SE_SELF_RELATIVE, WinWorldSid,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
     use windows_sys::Win32::System::SystemServices::{
@@ -3764,19 +3906,22 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     }
     // SAFETY: IsValidSid established both SID pointers as valid.
     let sid_length = unsafe { GetLengthSid(ace_sid) } as usize;
+    let current_user_sid_length = unsafe { GetLengthSid(user.as_ptr()) } as usize;
     let expected_ace_size = std::mem::size_of::<ACCESS_ALLOWED_ACE>()
         .checked_sub(std::mem::size_of::<u32>())
         .and_then(|prefix| prefix.checked_add(sid_length))
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACE size overflowed"))?;
     // SAFETY: IsValidSid established both SID pointers as valid.
     let sid_matches_current_user = unsafe { EqualSid(ace_sid, user.as_ptr()) } != 0;
+    let sid_is_everyone = unsafe { IsWellKnownSid(ace_sid, WinWorldSid) } != 0;
     if usize::from(header.AceSize) != expected_ace_size || !sid_matches_current_user {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
                 "file DACL is not restricted to the current Windows user \
                  (ACE size {}, expected {expected_ace_size}, SID match {sid_matches_current_user}, \
-                 descriptor control {control:#06x})",
+                 SID length {sid_length}, current-user SID length {current_user_sid_length}, \
+                 Everyone SID {sid_is_everyone}, descriptor control {control:#06x})",
                 header.AceSize
             ),
         ));
@@ -5658,52 +5803,23 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
     use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
     use windows_sys::Win32::Security::{
-        ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, DACL_SECURITY_INFORMATION,
-        InitializeAcl, InitializeSecurityDescriptor, PROTECTED_DACL_SECURITY_INFORMATION,
-        SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
-        SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+        DACL_SECURITY_INFORMATION, InitializeSecurityDescriptor,
+        PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+        SECURITY_DESCRIPTOR, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
+        SetSecurityDescriptorOwner,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CREATE_NEW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
-        FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-        FILE_SHARE_NONE, WRITE_DAC,
+        CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_NONE,
+        WRITE_DAC,
     };
     use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
     let user = windows_current_user_sid()?;
-    // SAFETY: as_ptr returns the valid SID copy owned by user.
-    let sid_length = unsafe { windows_sys::Win32::Security::GetLengthSid(user.as_ptr()) } as usize;
-    let acl_bytes = std::mem::size_of::<ACL>()
-        .checked_add(std::mem::size_of::<ACCESS_ALLOWED_ACE>())
-        .and_then(|size| size.checked_sub(std::mem::size_of::<u32>()))
-        .and_then(|size| size.checked_add(sid_length))
-        .and_then(|size| size.checked_add(std::mem::size_of::<u32>() - 1))
-        .map(|size| size & !(std::mem::size_of::<u32>() - 1))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACL size overflowed"))?;
-    let acl_length = u32::try_from(acl_bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Windows ACL is too large"))?;
-    let mut acl = vec![0_u32; acl_bytes.div_ceil(std::mem::size_of::<u32>())];
-    // SAFETY: acl is DWORD-aligned and has acl_length writable bytes.
-    if unsafe { InitializeAcl(acl.as_mut_ptr().cast(), acl_length, ACL_REVISION) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the ACL was initialized above and user owns a valid SID for the call.
-    if unsafe {
-        AddAccessAllowedAce(
-            acl.as_mut_ptr().cast(),
-            ACL_REVISION,
-            FILE_ALL_ACCESS,
-            user.as_ptr(),
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // Keep a pristine ACL outside the SECURITY_ATTRIBUTES descriptor backing.
-    // Filesystem creation can apply inheritance while consuming that mutable
-    // absolute descriptor; post-create enforcement must not reuse any storage
-    // the creation provider was allowed to canonicalize.
-    let enforcement_acl = acl.clone();
+    let creation_acl = windows_current_user_only_acl(&user)?;
+    // Use a separately provider-built and locally verified ACL for post-create
+    // enforcement so creation and enforcement never share mutable backing.
+    let enforcement_acl = windows_current_user_only_acl(&user)?;
 
     let mut descriptor = SECURITY_DESCRIPTOR::default();
     // SAFETY: descriptor is correctly sized writable storage and revision is
@@ -5735,7 +5851,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
         SetSecurityDescriptorDacl(
             std::ptr::addr_of_mut!(descriptor).cast(),
             TRUE,
-            acl.as_ptr().cast(),
+            creation_acl.as_ptr(),
             FALSE,
         )
     } == 0
@@ -5809,20 +5925,20 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     // SAFETY: CreateFileW returned a uniquely owned file handle.
     let file = unsafe { File::from_raw_handle(raw) };
     let secure = (|| {
-        // CreateFileW may apply the permissive parent's inheritable ACE before
-        // persisting the protection bit. First make that exact, exclusively
-        // opened, still-empty object protected. Windows can preserve the old
-        // inherited ACE as explicit during this transition, so replace the
-        // DACL only after inheritance is disabled. No caller can write bytes
-        // until the same handle is verified below.
+        // First transition both the DACL and its inheritance policy through
+        // the exact, exclusively opened, still-empty filesystem handle. The
+        // file provider can preserve an inherited ACE while applying that
+        // transition, so replace the DACL once more after the object is
+        // protected. No caller can write bytes until this same handle is
+        // verified below.
         let status = unsafe {
             SetSecurityInfo(
                 file.as_raw_handle(),
                 SE_FILE_OBJECT,
-                PROTECTED_DACL_SECURITY_INFORMATION,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                std::ptr::null(),
+                enforcement_acl.as_ptr(),
                 std::ptr::null(),
             )
         };
@@ -5836,7 +5952,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
                 DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                enforcement_acl.as_ptr().cast(),
+                enforcement_acl.as_ptr(),
                 std::ptr::null(),
             )
         };
