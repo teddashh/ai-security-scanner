@@ -39,7 +39,9 @@ const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const DOWNLOAD_CHUNK_BYTES: usize = 128 * 1024;
-const MACHINE_PREFIX: &str = "ass-managed-v1";
+const MACHINE_PREFIX: &str = "assm1";
+const MAX_MACHINE_NAME_BYTES: usize = 30;
+const MACHINE_IMAGE_ID_HEX_CHARS: usize = 12;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +71,14 @@ impl ManagedOperatingSystem {
             Self::Windows => "windows",
         }
     }
+
+    fn machine_name_key(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Macos => "macos",
+            Self::Windows => "win",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -93,6 +103,13 @@ impl ManagedArchitecture {
         match self {
             Self::X86_64 => "x86-64",
             Self::Aarch64 => "aarch64",
+        }
+    }
+
+    fn machine_name_key(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x64",
+            Self::Aarch64 => "arm64",
         }
     }
 }
@@ -2458,12 +2475,14 @@ fn verify_regular_file(path: &Path, label: &str) -> AppResult<()> {
 }
 
 fn machine_name(target: &ManagedTarget) -> String {
-    format!(
+    let name = format!(
         "{MACHINE_PREFIX}-{}-{}-{}",
-        target.operating_system.key(),
-        target.architecture.key(),
-        &target.machine_image.sha256[..12]
-    )
+        target.operating_system.machine_name_key(),
+        target.architecture.machine_name_key(),
+        &target.machine_image.sha256[..MACHINE_IMAGE_ID_HEX_CHARS]
+    );
+    debug_assert!(name.len() <= MAX_MACHINE_NAME_BYTES);
+    name
 }
 
 fn installation_directory_name(loaded: &LoadedManagedRuntimeManifest) -> String {
@@ -3162,6 +3181,48 @@ mod tests {
             "DiskSize": (40_u64 * 1024 * 1024 * 1024).to_string()
         }]))
         .expect("json")
+    }
+
+    #[test]
+    fn machine_names_are_deterministic_unique_and_within_podman_limit() {
+        let image = ManagedMachineImage {
+            url: "https://github.com/podman-container-tools/podman-machine-os/releases/download/v5.8.2/machine.zst".into(),
+            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
+            size_bytes: 1,
+        };
+        let operating_systems = [
+            (ManagedOperatingSystem::Linux, ManagedMachineProvider::Qemu),
+            (
+                ManagedOperatingSystem::Macos,
+                ManagedMachineProvider::Applehv,
+            ),
+            (ManagedOperatingSystem::Windows, ManagedMachineProvider::Wsl),
+        ];
+        let architectures = [ManagedArchitecture::X86_64, ManagedArchitecture::Aarch64];
+        let mut names = BTreeSet::new();
+
+        for (operating_system, provider) in operating_systems {
+            for architecture in architectures {
+                let target = ManagedTarget {
+                    operating_system,
+                    architecture,
+                    provider,
+                    machine_image: image.clone(),
+                    prerequisite: None,
+                };
+                let name = machine_name(&target);
+                assert_eq!(name, machine_name(&target));
+                assert!(name.is_ascii());
+                assert!(name.len() <= MAX_MACHINE_NAME_BYTES, "{name}");
+                assert!(names.insert(name));
+            }
+        }
+
+        assert_eq!(names.iter().map(String::len).max(), Some(30));
+        assert!(names.contains("assm1-linux-arm64-0123456789ab"));
+        assert!(names.contains("assm1-macos-arm64-0123456789ab"));
+        assert!(names.contains("assm1-win-x64-0123456789ab"));
     }
 
     fn tamper_installed_driver(manager: &ManagedRuntimeManager) {

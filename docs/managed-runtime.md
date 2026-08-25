@@ -23,8 +23,10 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   `Content-Range`, and restarts from zero if the approved server returns a complete response instead.
   Only a size- and SHA-256-verified complete image is atomically promoted into the runtime cache.
 - Each release uses its own private `HOME`, XDG directories, `containers.conf`, machine name, image
-  cache, and lifecycle lock. Managed commands clear the inherited environment and use absolute,
-  already-verified executable paths.
+  cache, and lifecycle lock. Machine names use the deterministic
+  `assm1-<host>-<architecture>-<12-hex-image-id>` form and remain within Podman's 30-byte limit on
+  every supported host and architecture. Managed commands clear the inherited environment and use
+  absolute, already-verified executable paths.
 - Runtime preflight and execution checkpoints persist typed command provenance: runtime version,
   release-manifest SHA-256, and machine-image SHA-256. Resume and cleanup can therefore reopen the
   exact older installation after an app update instead of guessing from `PATH`.
