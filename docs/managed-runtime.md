@@ -70,9 +70,11 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   successful uninstall.
 - On Windows the app-created `managed-runtime` namespace and its provider directories use protected,
   inheritable, current-user-only DACLs. The caller-selected data-directory root is never rewritten.
-  Each manager also retains a no-delete-share handle to the verified, non-reparse state root for its
-  lifetime, preventing a permissive parent directory from replacing that namespace mid-operation;
-  an unsafe pre-existing namespace is rejected rather than silently repaired.
+  Before creating or accepting that namespace, the app opens the canonical local ancestor chain
+  without following reparse points and rejects an untrusted owner, malformed/unsupported ACL, or
+  any untrusted grant of namespace-replacement rights. Each manager then retains a no-delete-share
+  handle that pins the exact verified, non-reparse state-root object for its lifetime. An unsafe
+  parent or pre-existing namespace is rejected rather than silently repaired.
 - Command execution errors use fixed operation labels and never echo command arguments. Inventory
   and version probes retain 30-second bounds, stop/removal retain 90-second bounds, and first-time
   initialization plus start/readiness each receive separate 10-minute deadlines for cold AppleHV

@@ -1596,9 +1596,9 @@ fn write_download_body<R: Read>(
 
 pub struct ManagedRuntimeManager {
     state_root: PathBuf,
-    /// Pins the verified state-root directory name for the manager lifetime.
-    /// Its Windows share mode intentionally excludes delete, preventing a
-    /// permissive caller-owned parent from replacing this namespace by name.
+    /// Keeps the verified state-root object open for the manager lifetime.
+    /// Windows namespace replacement through an ancestor's FILE_DELETE_CHILD
+    /// is prevented separately by validating the canonical ancestor ACL chain.
     #[cfg(windows)]
     _state_root_guard: File,
     resource_root: PathBuf,
@@ -1627,7 +1627,9 @@ impl ManagedRuntimeManager {
         let state_root = app_local_data_directory.join("managed-runtime");
         ensure_private_directory(app_local_data_directory)?;
         #[cfg(windows)]
-        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)?;
+        let (state_root, state_root_guard) =
+            open_or_create_windows_managed_private_directory_guard(&state_root, true)
+                .map_err(windows_managed_namespace_error)?;
         #[cfg(not(windows))]
         ensure_managed_private_directory(&state_root)?;
         let resource_root = canonical_real_directory(resource_root, "managed runtime resource")?;
@@ -1667,7 +1669,9 @@ impl ManagedRuntimeManager {
         }
         let state_root = app_local_data_directory.join("managed-runtime");
         #[cfg(windows)]
-        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)?;
+        let (state_root, state_root_guard) =
+            open_or_create_windows_managed_private_directory_guard(&state_root, true)
+                .map_err(windows_managed_namespace_error)?;
         #[cfg(not(windows))]
         ensure_managed_private_directory(&state_root)?;
         let versions_root =
@@ -1753,7 +1757,9 @@ impl ManagedRuntimeManager {
         downloader: Arc<dyn ManagedArtifactDownloader>,
     ) -> AppResult<Self> {
         #[cfg(windows)]
-        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)?;
+        let (state_root, state_root_guard) =
+            open_or_create_windows_managed_private_directory_guard(&state_root, true)
+                .map_err(windows_managed_namespace_error)?;
         #[cfg(not(windows))]
         ensure_managed_private_directory(&state_root)?;
         let resource_root = canonical_real_directory(&resource_root, "managed runtime resource")?;
@@ -3531,31 +3537,13 @@ fn windows_file_information(file: &File) -> io::Result<WindowsFileInformation> {
 }
 
 #[cfg(windows)]
-fn verify_windows_current_user_only_dacl(file: &File) -> io::Result<()> {
-    verify_windows_current_user_only_dacl_with_ace_flags(file, 0)
-}
-
-#[cfg(windows)]
-fn verify_windows_current_user_only_dacl_with_ace_flags(
-    file: &File,
-    expected_ace_flags: u8,
-) -> io::Result<()> {
-    use std::ffi::c_void;
+fn windows_owner_dacl_security_descriptor(file: &File) -> io::Result<Vec<usize>> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
     use windows_sys::Win32::Security::{
-        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
-        DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetKernelObjectSecurity,
-        GetLengthSid, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
-        GetSecurityDescriptorOwner, IsValidAcl, IsValidSid, OWNER_SECURITY_INFORMATION, PSID,
-        SE_DACL_PROTECTED,
-    };
-    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
-    use windows_sys::Win32::System::SystemServices::{
-        ACCESS_ALLOWED_ACE_TYPE, SECURITY_DESCRIPTOR_REVISION,
+        DACL_SECURITY_INFORMATION, GetKernelObjectSecurity, OWNER_SECURITY_INFORMATION,
     };
 
-    let user = windows_current_user_sid()?;
     let requested = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
     let mut required = 0_u32;
     // SAFETY: the null/zero probe is documented for obtaining the security
@@ -3598,6 +3586,33 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     {
         return Err(io::Error::last_os_error());
     }
+    Ok(descriptor)
+}
+
+#[cfg(windows)]
+fn verify_windows_current_user_only_dacl(file: &File) -> io::Result<()> {
+    verify_windows_current_user_only_dacl_with_ace_flags(file, 0)
+}
+
+#[cfg(windows)]
+fn verify_windows_current_user_only_dacl_with_ace_flags(
+    file: &File,
+    expected_ace_flags: u8,
+) -> io::Result<()> {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid,
+        GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorControl,
+        GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidAcl, IsValidSid, PSID,
+        SE_DACL_PROTECTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::SystemServices::{
+        ACCESS_ALLOWED_ACE_TYPE, SECURITY_DESCRIPTOR_REVISION,
+    };
+
+    let user = windows_current_user_sid()?;
+    let mut descriptor = windows_owner_dacl_security_descriptor(file)?;
     let security_descriptor = descriptor.as_mut_ptr().cast::<c_void>();
 
     let mut owner = std::ptr::null_mut();
@@ -3781,7 +3796,7 @@ fn open_windows_managed_ssh_cleanup_file(path: &Path, delete_access: bool) -> io
 }
 
 #[cfg(windows)]
-fn mark_windows_managed_ssh_staging_handle_for_deletion(file: &File) -> AppResult<()> {
+fn mark_windows_file_handle_for_deletion(file: &File) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle,
@@ -3800,8 +3815,14 @@ fn mark_windows_managed_ssh_staging_handle_for_deletion(file: &File) -> AppResul
         )
     } == 0
     {
-        return Err(io::Error::last_os_error().into());
+        return Err(io::Error::last_os_error());
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn mark_windows_managed_ssh_staging_handle_for_deletion(file: &File) -> AppResult<()> {
+    mark_windows_file_handle_for_deletion(file)?;
     Ok(())
 }
 
@@ -4950,7 +4971,401 @@ fn toml_scalar(value: &str) -> String {
 }
 
 #[cfg(windows)]
-fn open_or_create_windows_managed_private_directory_guard(path: &Path) -> io::Result<File> {
+fn windows_well_known_sid(
+    kind: windows_sys::Win32::Security::WELL_KNOWN_SID_TYPE,
+) -> io::Result<WindowsCurrentUserSid> {
+    use windows_sys::Win32::Security::{CreateWellKnownSid, IsValidSid, SECURITY_MAX_SID_SIZE};
+
+    let mut storage =
+        vec![0_u32; (SECURITY_MAX_SID_SIZE as usize).div_ceil(std::mem::size_of::<u32>())];
+    let mut length = (storage.len() * std::mem::size_of::<u32>()) as u32;
+    // SAFETY: storage is aligned and contains length writable bytes; these
+    // well-known SID kinds do not require a domain SID.
+    if unsafe {
+        CreateWellKnownSid(
+            kind,
+            std::ptr::null_mut(),
+            storage.as_mut_ptr().cast(),
+            &raw mut length,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateWellKnownSid initialized the SID in storage.
+    if unsafe { IsValidSid(storage.as_mut_ptr().cast()) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid well-known SID",
+        ));
+    }
+    Ok(WindowsCurrentUserSid { storage })
+}
+
+#[cfg(windows)]
+fn windows_managed_namespace_error(error: io::Error) -> AppError {
+    if error.kind() == io::ErrorKind::PermissionDenied {
+        AppError::NotAuthorized(format!(
+            "managed runtime Windows namespace is replaceable or unsafe: {error}"
+        ))
+    } else {
+        error.into()
+    }
+}
+
+#[cfg(windows)]
+fn windows_trusted_installer_sid() -> io::Result<WindowsCurrentUserSid> {
+    use windows_sys::Win32::Security::IsValidSid;
+
+    // S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464.
+    // TrustedInstaller commonly owns/protects Windows volume-root ancestors.
+    let subauthorities = [
+        80_u32,
+        956_008_885,
+        3_418_522_649,
+        1_831_038_044,
+        1_853_292_631,
+        2_271_478_464,
+    ];
+    let byte_length = 8 + subauthorities.len() * std::mem::size_of::<u32>();
+    let mut storage = vec![0_u32; byte_length.div_ceil(std::mem::size_of::<u32>())];
+    let bytes = unsafe {
+        // SAFETY: storage is live, aligned, and byte_length is within its allocation.
+        std::slice::from_raw_parts_mut(storage.as_mut_ptr().cast::<u8>(), byte_length)
+    };
+    bytes[0] = 1;
+    bytes[1] = subauthorities.len() as u8;
+    bytes[2..8].copy_from_slice(&[0, 0, 0, 0, 0, 5]);
+    for (index, value) in subauthorities.into_iter().enumerate() {
+        let offset = 8 + index * std::mem::size_of::<u32>();
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let sid = WindowsCurrentUserSid { storage };
+    // SAFETY: the storage above contains a complete aligned SID encoding.
+    if unsafe { IsValidSid(sid.as_ptr()) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the built-in TrustedInstaller SID encoding is invalid",
+        ));
+    }
+    Ok(sid)
+}
+
+#[cfg(windows)]
+fn windows_sid_is_trusted_for_managed_namespace(
+    sid: windows_sys::Win32::Security::PSID,
+    trusted: &[WindowsCurrentUserSid],
+) -> bool {
+    use windows_sys::Win32::Security::{EqualSid, IsValidSid};
+
+    if sid.is_null() || unsafe { IsValidSid(sid) } == 0 {
+        return false;
+    }
+    trusted
+        .iter()
+        // SAFETY: sid and each trusted SID were validated and remain live.
+        .any(|candidate| unsafe { EqualSid(sid, candidate.as_ptr()) } != 0)
+}
+
+#[cfg(windows)]
+fn windows_basic_ace_sid(
+    raw_ace: *mut std::ffi::c_void,
+    ace_size: usize,
+) -> io::Result<windows_sys::Win32::Security::PSID> {
+    use windows_sys::Win32::Security::{ACCESS_ALLOWED_ACE, GetLengthSid, IsValidSid, PSID};
+    use windows_sys::Win32::System::SystemServices::SID_REVISION;
+
+    let sid_offset = std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+        .checked_sub(std::mem::size_of::<u32>())
+        .expect("ACCESS_ALLOWED_ACE contains SidStart");
+    let minimum_sid_bytes = 8_usize;
+    if ace_size < sid_offset + minimum_sid_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "managed runtime namespace ancestor has a truncated basic ACE",
+        ));
+    }
+    // Read only the bounded SID header before asking Win32 to validate it.
+    // SAFETY: the checks above establish that both header bytes are inside the ACE.
+    let sid_bytes = unsafe { raw_ace.cast::<u8>().add(sid_offset) };
+    let revision = unsafe { *sid_bytes };
+    let subauthority_count = usize::from(unsafe { *sid_bytes.add(1) });
+    let sid_length = minimum_sid_bytes
+        .checked_add(
+            subauthority_count
+                .checked_mul(std::mem::size_of::<u32>())
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "Windows SID size overflowed")
+                })?,
+        )
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows SID size overflowed"))?;
+    if revision != SID_REVISION as u8
+        || sid_offset
+            .checked_add(sid_length)
+            .is_none_or(|expected| expected != ace_size)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "managed runtime namespace ancestor has a malformed bounded SID",
+        ));
+    }
+    let sid: PSID = sid_bytes.cast_mut().cast();
+    // SAFETY: the SID header-derived length was proven to be exactly bounded by the ACE.
+    if unsafe { IsValidSid(sid) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "managed runtime namespace ancestor has an invalid basic ACE SID",
+        ));
+    }
+    // SAFETY: IsValidSid established that the embedded SID is readable.
+    if unsafe { GetLengthSid(sid) } as usize != sid_length {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "managed runtime namespace ancestor has a malformed basic ACE",
+        ));
+    }
+    Ok(sid)
+}
+
+#[cfg(windows)]
+fn verify_windows_managed_namespace_ancestor_handle(
+    directory: &File,
+    allow_trusted_installer_anchor: bool,
+) -> io::Result<()> {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+        GENERIC_MAPPING, GetAce, GetAclInformation, GetSecurityDescriptorDacl,
+        GetSecurityDescriptorOwner, INHERIT_ONLY_ACE, IsValidAcl, MapGenericMask,
+        WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_ALL_ACCESS, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
+        FILE_GENERIC_WRITE, WRITE_DAC, WRITE_OWNER,
+    };
+    use windows_sys::Win32::System::SystemServices::{
+        ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE,
+        ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_ALLOWED_COMPOUND_ACE_TYPE,
+        ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_DENIED_ACE_TYPE,
+    };
+
+    let mut trusted = vec![
+        windows_current_user_sid()?,
+        windows_well_known_sid(WinLocalSystemSid)?,
+        windows_well_known_sid(WinBuiltinAdministratorsSid)?,
+    ];
+    if allow_trusted_installer_anchor {
+        trusted.push(windows_trusted_installer_sid()?);
+    }
+    let mut descriptor = windows_owner_dacl_security_descriptor(directory)?;
+    let security_descriptor = descriptor.as_mut_ptr().cast::<c_void>();
+
+    let mut owner = std::ptr::null_mut();
+    let mut owner_defaulted = 0;
+    // SAFETY: security_descriptor is the live descriptor returned by the kernel.
+    if unsafe {
+        GetSecurityDescriptorOwner(
+            security_descriptor,
+            &raw mut owner,
+            &raw mut owner_defaulted,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if !windows_sid_is_trusted_for_managed_namespace(owner, &trusted) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime namespace ancestor has an untrusted Windows owner",
+        ));
+    }
+
+    let mut dacl_present = 0;
+    let mut dacl_defaulted = 0;
+    let mut dacl = std::ptr::null_mut::<ACL>();
+    // SAFETY: security_descriptor is valid and all output pointers are writable.
+    if unsafe {
+        GetSecurityDescriptorDacl(
+            security_descriptor,
+            &raw mut dacl_present,
+            &raw mut dacl,
+            &raw mut dacl_defaulted,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if dacl_present == 0 || dacl.is_null() || unsafe { IsValidAcl(dacl) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime namespace ancestor has no valid Windows DACL",
+        ));
+    }
+
+    let mut acl_information = ACL_SIZE_INFORMATION::default();
+    // SAFETY: dacl is valid and acl_information is writable storage of the declared size.
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            (&raw mut acl_information).cast(),
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ,
+        GenericWrite: FILE_GENERIC_WRITE,
+        GenericExecute: FILE_GENERIC_EXECUTE,
+        GenericAll: FILE_ALL_ACCESS,
+    };
+    let dangerous = FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER;
+    for index in 0..acl_information.AceCount {
+        let mut raw_ace = std::ptr::null_mut::<c_void>();
+        // SAFETY: index is bounded by the ACE count returned for this valid ACL.
+        if unsafe { GetAce(dacl, index, &raw mut raw_ace) } == 0 || raw_ace.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: GetAce returned at least an ACE_HEADER inside the live ACL.
+        let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
+        if header.AceFlags & (INHERIT_ONLY_ACE as u8) != 0 {
+            continue;
+        }
+        let ace_type = u32::from(header.AceType);
+        let ace_size = usize::from(header.AceSize);
+        match ace_type {
+            ACCESS_ALLOWED_ACE_TYPE => {
+                let sid = windows_basic_ace_sid(raw_ace, ace_size)?;
+                // SAFETY: the validated basic ACE contains the fixed Mask field.
+                let mut mask = unsafe { (*raw_ace.cast::<ACCESS_ALLOWED_ACE>()).Mask };
+                // SAFETY: mask and mapping are initialized writable/readable values.
+                unsafe { MapGenericMask(&raw mut mask, &raw const mapping) };
+                if mask & dangerous != 0
+                    && !windows_sid_is_trusted_for_managed_namespace(sid, &trusted)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "managed runtime namespace ancestor grants replacement rights to an untrusted Windows principal",
+                    ));
+                }
+                // Ordinary Users/AppPackages read/execute rules are harmless
+                // and remain compatible with LocalAppData/runner temp roots.
+            }
+            ACCESS_DENIED_ACE_TYPE => {
+                // A basic deny ACE cannot grant replacement rights, but still
+                // require its encoded SID/size to be structurally exact.
+                let _ = windows_basic_ace_sid(raw_ace, ace_size)?;
+            }
+            ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+            | ACCESS_ALLOWED_OBJECT_ACE_TYPE
+            | ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE
+            | ACCESS_ALLOWED_COMPOUND_ACE_TYPE => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "managed runtime namespace ancestor has a conditional or object allow ACE",
+                ));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "managed runtime namespace ancestor has an unsupported Windows ACE",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_windows_real_directory_security_handle(path: &Path) -> io::Result<File> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+    };
+
+    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows path contains a NUL code unit",
+        ));
+    }
+    encoded.push(0);
+    // No FILE_SHARE_DELETE: keep this exact ancestor object pinned while the
+    // remaining chain and managed child are opened and verified.
+    let raw = unsafe {
+        CreateFileW(
+            encoded.as_ptr(),
+            FILE_READ_ATTRIBUTES | READ_CONTROL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned a uniquely owned handle.
+    let directory = unsafe { File::from_raw_handle(raw) };
+    let information = windows_file_information(&directory)?;
+    if information.attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || information.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed runtime namespace ancestor is not a real directory",
+        ));
+    }
+    Ok(directory)
+}
+
+#[cfg(windows)]
+fn open_windows_managed_namespace_ancestor(
+    path: &Path,
+    allow_trusted_installer_anchor: bool,
+) -> io::Result<File> {
+    let directory = open_windows_real_directory_security_handle(path)?;
+    verify_windows_managed_namespace_ancestor_handle(&directory, allow_trusted_installer_anchor)?;
+    Ok(directory)
+}
+
+#[cfg(windows)]
+fn verify_windows_managed_namespace_ancestor_chain(
+    canonical_parent: &Path,
+) -> io::Result<Vec<File>> {
+    let mut guards = Vec::new();
+    for ancestor in canonical_parent.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        guards.push(open_windows_managed_namespace_ancestor(
+            ancestor,
+            ancestor.parent().is_none(),
+        )?);
+    }
+    if guards.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows managed namespace has no canonical ancestor chain",
+        ));
+    }
+    Ok(guards)
+}
+
+#[cfg(windows)]
+fn open_or_create_windows_managed_private_directory_guard(
+    path: &Path,
+    verify_ancestor_chain: bool,
+) -> io::Result<(PathBuf, File)> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
@@ -5069,6 +5484,14 @@ fn open_or_create_windows_managed_private_directory_guard(path: &Path) -> io::Re
     } else {
         parent.canonicalize()?
     };
+    // Validate every canonical ancestor through the volume/share root. A
+    // protected child DACL alone cannot stop FILE_DELETE_CHILD granted by any
+    // ancestor from redirecting the caller-supplied namespace path.
+    let _ancestor_guards = if verify_ancestor_chain {
+        verify_windows_managed_namespace_ancestor_chain(&canonical_parent)?
+    } else {
+        Vec::new()
+    };
     let exact_path = canonical_parent.join(file_name);
     let mut encoded = exact_path.as_os_str().encode_wide().collect::<Vec<_>>();
     if encoded.contains(&0) {
@@ -5120,13 +5543,13 @@ fn open_or_create_windows_managed_private_directory_guard(path: &Path) -> io::Re
         &directory,
         u8::try_from(inheritance).expect("Windows inheritance flags fit in an ACE header"),
     )?;
-    Ok(directory)
+    Ok((exact_path, directory))
 }
 
 #[cfg(windows)]
 fn ensure_windows_managed_private_directory(path: &Path) -> io::Result<()> {
     drop(open_or_create_windows_managed_private_directory_guard(
-        path,
+        path, false,
     )?);
     Ok(())
 }
@@ -5200,16 +5623,19 @@ fn canonical_real_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
 #[cfg(windows)]
 fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
+    use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
     use windows_sys::Win32::Security::{
-        ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, InitializeAcl,
-        InitializeSecurityDescriptor, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
-        SetSecurityDescriptorControl, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
+        ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, DACL_SECURITY_INFORMATION,
+        InitializeAcl, InitializeSecurityDescriptor, PROTECTED_DACL_SECURITY_INFORMATION,
+        SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
+        SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CREATE_NEW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_NONE,
+        CREATE_NEW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        FILE_SHARE_NONE, WRITE_DAC,
     };
     use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
@@ -5333,7 +5759,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     let raw = unsafe {
         CreateFileW(
             encoded.as_ptr(),
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | DELETE,
             FILE_SHARE_NONE,
             &raw const attributes,
             CREATE_NEW,
@@ -5346,16 +5772,50 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     }
     // SAFETY: CreateFileW returned a uniquely owned file handle.
     let file = unsafe { File::from_raw_handle(raw) };
-    let information = windows_file_information(&file)?;
-    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
-        || information.number_of_links != 1
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "new Windows private file is not an unlinked regular file",
-        ));
+    let secure = (|| {
+        // CreateFileW may preserve the ACL entries while clearing the DACL
+        // protection control bit. Re-apply the exact protected DACL through
+        // this still-empty file's WRITE_DAC handle before exposing it to any
+        // caller that can write bytes.
+        let status = unsafe {
+            SetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl.as_ptr().cast(),
+                std::ptr::null(),
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        let information = windows_file_information(&file)?;
+        if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+            || information.number_of_links != 1
+            || information.size != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "new Windows private file is not an empty unlinked regular file",
+            ));
+        }
+        verify_windows_current_user_only_dacl(&file)
+    })();
+    if let Err(error) = secure {
+        let cleanup = mark_windows_file_handle_for_deletion(&file);
+        drop(file);
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup) => io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}; empty Windows private staging file cleanup also failed: {cleanup}"
+                ),
+            ),
+        });
     }
-    verify_windows_current_user_only_dacl(&file)?;
     Ok(file)
 }
 
@@ -5934,48 +6394,69 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_managed_namespace_is_protected_without_rewriting_the_data_root() {
+    fn windows_manager_rejects_a_replaceable_data_root_without_rewriting_its_acl() {
         let temp = TempDir::new().expect("temporary root");
         let data_root = temp.path().join("user-selected-data-root");
         fs::create_dir(&data_root).expect("data root");
         set_windows_permissive_inheritable_dacl(&data_root);
 
-        let inherited_probe = data_root.join("inherited-before-managed-namespace");
-        fs::write(&inherited_probe, b"probe").expect("inherited probe");
-        let inherited_probe_file = File::open(&inherited_probe).expect("open inherited probe");
-        assert!(
-            verify_windows_current_user_only_dacl(&inherited_probe_file).is_err(),
-            "fixture data root must remain permissive"
-        );
-        drop(inherited_probe_file);
+        let before_handle =
+            open_windows_real_directory_security_handle(&data_root).expect("open data root");
+        let before = windows_owner_dacl_security_descriptor(&before_handle)
+            .expect("snapshot permissive data-root ACL");
+        drop(before_handle);
 
         let state_root = data_root.join("managed-runtime");
-        let state_root_guard = open_or_create_windows_managed_private_directory_guard(&state_root)
-            .expect("create and pin protected managed namespace");
-        let displaced_state_root = data_root.join("displaced-managed-runtime");
-        assert!(
-            fs::rename(&state_root, &displaced_state_root).is_err(),
-            "a live guard must deny replacement through parent FILE_DELETE_CHILD"
-        );
-        drop(state_root_guard);
-        ensure_windows_managed_private_directory(&state_root)
-            .expect("reuse protected managed namespace");
+        let error = ManagedRuntimeManager::open(
+            &data_root,
+            temp.path(),
+            &temp.path().join("unreachable-manifest.json"),
+        )
+        .expect_err("replaceable caller-owned data root must fail closed in the constructor");
+        assert!(matches!(error, AppError::NotAuthorized(_)));
+        assert!(!state_root.exists());
 
-        // Existing unsafe namespaces are never silently rewritten. This also
-        // proves the check above was against the namespace itself rather than
-        // merely accepting the still-permissive caller-owned data root.
-        set_windows_permissive_inheritable_dacl(&state_root);
-        let error = ensure_windows_managed_private_directory(&state_root)
-            .expect_err("unsafe existing managed namespace must fail closed");
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-
-        let inherited_after = data_root.join("inherited-after-managed-namespace");
-        fs::write(&inherited_after, b"probe").expect("second inherited probe");
-        let inherited_after_file = File::open(&inherited_after).expect("open second probe");
-        assert!(
-            verify_windows_current_user_only_dacl(&inherited_after_file).is_err(),
-            "creating the managed namespace must not rewrite the data root"
+        let after_handle =
+            open_windows_real_directory_security_handle(&data_root).expect("reopen data root");
+        let after = windows_owner_dacl_security_descriptor(&after_handle)
+            .expect("snapshot data-root ACL after rejection");
+        assert_eq!(
+            after, before,
+            "constructor rejection must not rewrite the caller-owned data root"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_state_root_guard_pins_a_canonical_protected_directory() {
+        use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        };
+
+        let temp = TempDir::new().expect("temporary root");
+        let data_root = temp.path().join("ordinary-data-root");
+        fs::create_dir(&data_root).expect("ordinary data root");
+        let requested_state_root = data_root.join("managed-runtime");
+
+        let (canonical_state_root, guard) =
+            open_or_create_windows_managed_private_directory_guard(&requested_state_root, true)
+                .expect("create canonical protected state-root guard");
+
+        assert_eq!(
+            canonical_state_root,
+            requested_state_root
+                .canonicalize()
+                .expect("canonical state root")
+        );
+        let information = windows_file_information(&guard).expect("guard information");
+        assert_ne!(information.attributes & FILE_ATTRIBUTE_DIRECTORY, 0);
+        assert_eq!(information.attributes & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+        verify_windows_current_user_only_dacl_with_ace_flags(
+            &guard,
+            (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8,
+        )
+        .expect("guarded state root has the exact protected DACL");
     }
 
     #[cfg(unix)]
