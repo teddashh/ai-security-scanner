@@ -155,6 +155,33 @@ function Assert-ManagedSshIdentityFile(
   return $text
 }
 
+function Assert-ManagedPrivateDirectory([string]$Path, [string]$Label) {
+  $item = Get-Item -LiteralPath $Path -Force
+  if (-not $item.PSIsContainer -or
+      ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "$Label is not an exact real directory."
+  }
+  $acl = Get-Acl -LiteralPath $Path
+  $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+  $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+  if (-not $acl.AreAccessRulesProtected -or -not $ownerSid.Equals($currentSid) -or $rules.Count -ne 1) {
+    throw "$Label does not have an exact protected current-user-only DACL."
+  }
+  $rule = $rules[0]
+  [Security.AccessControl.InheritanceFlags]$expectedInheritance = (
+    [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+    [Security.AccessControl.InheritanceFlags]::ObjectInherit
+  )
+  if ($rule.IsInherited -or -not $rule.IdentityReference.Equals($currentSid) -or
+      $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+      $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+      $rule.InheritanceFlags -ne $expectedInheritance -or
+      $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) {
+    throw "$Label DACL grants anything other than inheritable current-user full control."
+  }
+}
+
 function Assert-ManagedSshIdentity([string]$ProviderReleaseHome) {
   $identityDirectory = Join-Path $ProviderReleaseHome "data\containers\podman\machine"
   $privateKey = Join-Path $identityDirectory "machine"
@@ -437,6 +464,15 @@ try {
   $initialStatus = Invoke-Managed "initial-status" @("status")
   $installStatus = Invoke-Managed "install" @("install")
   $installedStatus = Invoke-Managed "installed-status" @("status")
+  $podmanNamespaceDirectories = @(
+    (Join-Path $providerReleaseHome "run\podman"),
+    (Join-Path $providerReleaseHome "config\containers\podman\machine\wsl"),
+    (Join-Path $providerReleaseHome "data\containers\podman\machine"),
+    (Join-Path $providerReleaseHome "data\containers\podman\machine\wsl\cache")
+  )
+  foreach ($namespaceDirectory in $podmanNamespaceDirectories) {
+    Assert-ManagedPrivateDirectory $namespaceDirectory "Managed Podman namespace directory"
+  }
   $startStatus = Invoke-Managed "start" @("start")
   Assert-ManagedSshIdentity $providerReleaseHome
   $runningStatus = Invoke-Managed "running-status" @("status")

@@ -32,6 +32,7 @@ const DEFAULT_OUTPUT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_OUTPUT_ENTRIES: usize = 10_000;
 const MAX_OUTPUT_DEPTH: usize = 32;
 const MAX_RUNTIME_COMMAND_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_RUNTIME_SECURITY_OPTIONS_BYTES: usize = 8 * 1024;
 const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 const RUNTIME_PIPE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(2);
 const CONTAINER_CAPTURE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(30);
@@ -189,6 +190,98 @@ pub struct RuntimePreflight {
     /// Older records deserialize as `Compatibility`.
     #[serde(default)]
     pub command_provenance: RuntimeCommandProvenance,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PodmanSecurityInfo {
+    #[serde(rename = "apparmorEnabled")]
+    apparmor_enabled: bool,
+    capabilities: String,
+    rootless: bool,
+    #[serde(rename = "seccompEnabled")]
+    seccomp_enabled: bool,
+    #[serde(rename = "seccompProfilePath")]
+    seccomp_profile_path: String,
+    #[serde(rename = "selinuxEnabled")]
+    selinux_enabled: bool,
+}
+
+fn runtime_security_info_template(provider: RuntimeProvider) -> &'static str {
+    match provider {
+        RuntimeProvider::Docker => "{{json .SecurityOptions}}",
+        RuntimeProvider::ManagedLocal | RuntimeProvider::Podman => "{{json .Host.Security}}",
+    }
+}
+
+fn validate_runtime_security_options(
+    provider: RuntimeProvider,
+    document: &[u8],
+) -> AppResult<String> {
+    if document.is_empty() || document.len() > MAX_RUNTIME_SECURITY_OPTIONS_BYTES {
+        return Err(AppError::Runtime(
+            "container runtime security information exceeded its bounded JSON contract".into(),
+        ));
+    }
+    let validate_text = |value: &str, label: &str, allow_empty: bool| -> AppResult<()> {
+        if (!allow_empty && value.is_empty())
+            || value.len() > 4096
+            || value.chars().any(char::is_control)
+        {
+            return Err(AppError::Runtime(format!(
+                "container runtime {label} is malformed"
+            )));
+        }
+        Ok(())
+    };
+
+    match provider {
+        RuntimeProvider::Docker => {
+            let options: Vec<String> = serde_json::from_slice(document).map_err(|error| {
+                AppError::Runtime(format!(
+                    "Docker returned malformed security-options JSON: {error}"
+                ))
+            })?;
+            if options.len() > 256 {
+                return Err(AppError::Runtime(
+                    "Docker returned too many security options".into(),
+                ));
+            }
+            for option in &options {
+                validate_text(option, "security option", false)?;
+            }
+            serde_json::to_string(&options).map_err(|error| {
+                AppError::Runtime(format!(
+                    "Docker security options could not be canonicalized: {error}"
+                ))
+            })
+        }
+        RuntimeProvider::ManagedLocal | RuntimeProvider::Podman => {
+            let security: PodmanSecurityInfo =
+                serde_json::from_slice(document).map_err(|error| {
+                    AppError::Runtime(format!(
+                        "Podman returned malformed host-security JSON: {error}"
+                    ))
+                })?;
+            validate_text(&security.capabilities, "capabilities", false)?;
+            validate_text(
+                &security.seccomp_profile_path,
+                "seccomp profile path",
+                !security.seccomp_enabled,
+            )?;
+            if provider == RuntimeProvider::ManagedLocal
+                && (!security.rootless || !security.seccomp_enabled)
+            {
+                return Err(AppError::NotAuthorized(
+                    "release-managed Podman did not report rootless seccomp isolation".into(),
+                ));
+            }
+            serde_json::to_string(&security).map_err(|error| {
+                AppError::Runtime(format!(
+                    "Podman host security information could not be canonicalized: {error}"
+                ))
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2173,14 +2266,20 @@ impl ContainerRuntime for ProcessContainerRuntime {
             ));
         }
 
-        let info = self.direct_output(["info", "--format", "{{json .SecurityOptions}}"])?;
+        let info = self.direct_output([
+            "info",
+            "--format",
+            runtime_security_info_template(self.context.provider),
+        ])?;
         if !info.status.success() {
             return Err(process_failure("runtime security preflight", &info));
         }
+        let security_options =
+            validate_runtime_security_options(self.context.provider, &info.stdout)?;
         Ok(RuntimePreflight {
             provider: self.context.provider,
             server_version,
-            security_options: String::from_utf8_lossy(&info.stdout).trim().to_owned(),
+            security_options,
             command_provenance: self.context.provenance.clone(),
         })
     }
@@ -3176,6 +3275,132 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::time::Instant;
+
+    #[test]
+    fn security_preflight_uses_the_provider_native_template_and_bounded_schema() {
+        assert_eq!(
+            runtime_security_info_template(RuntimeProvider::Docker),
+            "{{json .SecurityOptions}}"
+        );
+        for provider in [RuntimeProvider::ManagedLocal, RuntimeProvider::Podman] {
+            assert_eq!(
+                runtime_security_info_template(provider),
+                "{{json .Host.Security}}"
+            );
+        }
+
+        let podman = br#"{
+            "selinuxEnabled": false,
+            "seccompProfilePath": "/usr/share/containers/seccomp.json",
+            "rootless": true,
+            "capabilities": "CAP_CHOWN,CAP_SETUID",
+            "apparmorEnabled": false,
+            "seccompEnabled": true,
+            "futureField": "ignored after validation"
+        }"#;
+        assert_eq!(
+            validate_runtime_security_options(RuntimeProvider::ManagedLocal, podman).unwrap(),
+            r#"{"apparmorEnabled":false,"capabilities":"CAP_CHOWN,CAP_SETUID","rootless":true,"seccompEnabled":true,"seccompProfilePath":"/usr/share/containers/seccomp.json","selinuxEnabled":false}"#
+        );
+
+        let compatibility = br#"{
+            "apparmorEnabled": false,
+            "capabilities": "CAP_CHOWN",
+            "rootless": false,
+            "seccompEnabled": false,
+            "seccompProfilePath": "",
+            "selinuxEnabled": false
+        }"#;
+        assert!(
+            validate_runtime_security_options(RuntimeProvider::Podman, compatibility).is_ok(),
+            "compatibility Podman may intentionally be rootful"
+        );
+        assert!(matches!(
+            validate_runtime_security_options(RuntimeProvider::ManagedLocal, compatibility),
+            Err(AppError::NotAuthorized(_))
+        ));
+
+        let docker = br#"["name=seccomp,profile=default","name=apparmor"]"#;
+        assert_eq!(
+            validate_runtime_security_options(RuntimeProvider::Docker, docker).unwrap(),
+            r#"["name=seccomp,profile=default","name=apparmor"]"#
+        );
+        assert!(validate_runtime_security_options(RuntimeProvider::Docker, b"null").is_err());
+        assert!(validate_runtime_security_options(RuntimeProvider::Docker, b"{}").is_err());
+
+        for malformed in [
+            &b""[..],
+            &b"null"[..],
+            &b"[]"[..],
+            &b"{\"apparmorEnabled\":false}"[..],
+            &b"{\"apparmorEnabled\":false,\"apparmorEnabled\":true}"[..],
+            &b"{\"apparmorEnabled\":false} trailing"[..],
+            &b"\xff"[..],
+        ] {
+            assert!(
+                validate_runtime_security_options(RuntimeProvider::Podman, malformed).is_err(),
+                "malformed Podman security information must fail closed"
+            );
+        }
+        assert!(
+            validate_runtime_security_options(
+                RuntimeProvider::Podman,
+                &vec![b' '; MAX_RUNTIME_SECURITY_OPTIONS_BYTES + 1],
+            )
+            .is_err()
+        );
+
+        let controlled = br#"{
+            "apparmorEnabled": false,
+            "capabilities": "CAP_CHOWN\u0000",
+            "rootless": true,
+            "seccompEnabled": true,
+            "seccompProfilePath": "/profile",
+            "selinuxEnabled": false
+        }"#;
+        assert!(
+            validate_runtime_security_options(RuntimeProvider::ManagedLocal, controlled).is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_preflight_invokes_the_exact_podman_security_selector() {
+        let temp = tempfile::tempdir().expect("temporary runtime");
+        let binary = temp.path().join("podman-fixture");
+        let log = temp.path().join("commands.log");
+        fs::write(
+            &binary,
+            r#"#!/bin/sh
+set -eu
+script_root=${0%/*}
+printf '%s\n' "$*" >> "$script_root/commands.log"
+case "$1" in
+  version) printf '%s\n' '5.8.2' ;;
+  info) printf '%s\n' '{"apparmorEnabled":false,"capabilities":"CAP_CHOWN","rootless":true,"seccompEnabled":true,"seccompProfilePath":"/profile","selinuxEnabled":false}' ;;
+  *) exit 9 ;;
+esac
+"#,
+        )
+        .expect("write runtime fixture");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("make runtime fixture executable");
+
+        let preflight = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary)
+            .preflight()
+            .expect("Podman preflight");
+
+        assert_eq!(preflight.provider, RuntimeProvider::Podman);
+        assert_eq!(preflight.server_version, "5.8.2");
+        assert_eq!(
+            preflight.security_options,
+            r#"{"apparmorEnabled":false,"capabilities":"CAP_CHOWN","rootless":true,"seccompEnabled":true,"seccompProfilePath":"/profile","selinuxEnabled":false}"#
+        );
+        assert_eq!(
+            fs::read_to_string(log).expect("runtime command log"),
+            "version --format {{.Server.Version}}\ninfo --format {{json .Host.Security}}\n"
+        );
+    }
 
     fn manifest(command: Vec<String>) -> EngineManifest {
         EngineManifest {

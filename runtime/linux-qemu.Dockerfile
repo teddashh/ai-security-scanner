@@ -38,6 +38,7 @@ RUN ./configure \
       --enable-fdt=internal \
       --enable-pixman \
       --enable-tools \
+      --enable-vhost-user \
       --enable-strip \
       --disable-docs \
       --disable-guest-agent \
@@ -49,6 +50,9 @@ RUN ./configure \
     && DESTDIR=/stage samu -C build install \
     && mv /stage/opt/managed-qemu/bin/qemu-system-x86_64 \
           /stage/opt/managed-qemu/bin/qemu-system-x86_64.real \
+    && /stage/opt/managed-qemu/bin/qemu-system-x86_64.real \
+          -device help > /tmp/qemu-device-help \
+    && grep -Eq '^name "vhost-user-fs-pci"(,|$)' /tmp/qemu-device-help \
     && cc -static -Os -s -Wall -Wextra -Werror \
           -o /stage/opt/managed-qemu/bin/qemu-system-x86_64 \
           /src/ass-qemu-launcher.c

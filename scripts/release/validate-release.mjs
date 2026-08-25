@@ -385,6 +385,12 @@ function validatePlatformQualificationSources(sources) {
     "(podman_runtime_mode_value & ~0755) != 0",
     "Managed runtime Linux Podman runtime directory has unsafe permissions.",
     "Managed runtime Linux gvproxy socket exceeds Podman 5.8.2 path budget.",
+    "vhost-user-fs-pci",
+    'const emulator = path.join(runtimeRoot, "bin", "qemu-system-x86_64.real")',
+    "QEMU component does not bind the installed system emulator.",
+    'runBinary(emulator, ["-device", "help"])',
+    'deviceNames.has("vhost-user-fs-pci")',
+    "Installed QEMU system emulator omits the vhost-user-fs-pci device required by Podman.",
     "virtiofschar0.pid",
     'flock -n "${virtiofs_pid}" true',
     "Managed runtime uninstall left its exact Linux short XDG runtime directory behind.",
@@ -443,6 +449,12 @@ function validatePlatformQualificationSources(sources) {
     "contained an invalid name",
     '"podman-$managedMachineName"',
     "Assert-ManagedSshIdentity $providerReleaseHome",
+    "Assert-ManagedPrivateDirectory",
+    '$podmanNamespaceDirectories = @(',
+    'run\\podman',
+    'config\\containers\\podman\\machine\\wsl',
+    'data\\containers\\podman\\machine\\wsl\\cache',
+    "inheritable current-user full control",
     "exact protected current-user-only DACL",
     ".machine.private-key-new",
     ".machine.public-key-new",
@@ -500,6 +512,7 @@ function validatePlatformQualificationSources(sources) {
     '$initialStatus = Invoke-Managed "initial-status" @("status")',
     '$installStatus = Invoke-Managed "install" @("install")',
     '$installedStatus = Invoke-Managed "installed-status" @("status")',
+    '$podmanNamespaceDirectories = @(',
     '$startStatus = Invoke-Managed "start" @("start")',
     '$runningStatus = Invoke-Managed "running-status" @("status")',
     '$containerQualification = Invoke-Managed "container-qualification" @("qualify")',
@@ -554,6 +567,8 @@ function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
       qemu?.build_contract?.static === true &&
       JSON.stringify(qemu?.build_contract?.explicit_build_targets) ===
       JSON.stringify(["qemu-img", "qemu-system-x86_64"]) &&
+      JSON.stringify(qemu?.build_contract?.required_device_models) ===
+        JSON.stringify(["vhost-user-fs-pci"]) &&
       JSON.stringify(qemu?.build_contract?.exported_executables) ===
         JSON.stringify([
           "bin/qemu-img",
@@ -584,7 +599,10 @@ function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
   for (const required of [
     'test "$TARGETPLATFORM" = "linux/amd64"',
     "--enable-tools",
+    "--enable-vhost-user",
     "samu -C build qemu-system-x86_64 qemu-img",
+    "-device help > /tmp/qemu-device-help",
+    "^name \"vhost-user-fs-pci\"(,|$)",
     "/stage/opt/managed-qemu/bin/qemu-img /bin/qemu-img",
     "FROM rust@sha256:d9f4b83fd097eaae5f9ace6d939e5a955dbbaa92804f9af4925f646cf9e46636 AS virtiofsd-build",
     "COPY --from=virtiofsd . /src/",
@@ -602,6 +620,11 @@ function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
     "executable.machine !== 62",
     "executable.hasInterpreter",
     "qemu-img version ${expectedVersion}",
+    "requiredQemuDeviceModels",
+    "requiredQemuDeviceModels(lock)",
+    "deviceHelp.stdout.matchAll",
+    "deviceNames.has(model)",
+    "managed QEMU omitted required device model ${model}",
     "virtiofsd ${expectedVirtiofsdVersion}",
     "qemuFiles.map(bundledArtifact)",
     "select('bin/virtiofsd')",
@@ -631,6 +654,11 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "self.initialize_machine(&command, target, &image, &machine_name)?",
     "ManagedOperatingSystem::Macos | ManagedOperatingSystem::Windows => Ok(None)",
     "machine_application_data_volume_is_linux_only",
+    "Pinned Podman 5.8.2 GetMachineDirs uses os.MkdirAll",
+    'persistent_run.join("podman")',
+    'containers.join("podman").join("machine").join(provider)',
+    'join(provider)\n                    .join("cache")',
+    "windows_runtime_command_precreates_the_exact_private_podman_machine_namespace",
   ]) {
     assert(
       managedRuntime.includes(required),
@@ -644,6 +672,13 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "rootless_user_mapping_for_ids(65532, 65532)",
     "validate_run_plan_user_integrity(plan)?",
     "podman_execution_injects_exact_keep_id_mapping_but_docker_does_not",
+    'RuntimeProvider::Docker => "{{json .SecurityOptions}}"',
+    'RuntimeProvider::ManagedLocal | RuntimeProvider::Podman => "{{json .Host.Security}}"',
+    "validate_runtime_security_options",
+    "MAX_RUNTIME_SECURITY_OPTIONS_BYTES",
+    "release-managed Podman did not report rootless seccomp isolation",
+    "security_preflight_uses_the_provider_native_template_and_bounded_schema",
+    "process_preflight_invokes_the_exact_podman_security_selector",
   ]) {
     assert(
       containerRuntime.includes(required),
@@ -850,6 +885,10 @@ async function main() {
 
   const workflows = await validateWorkflowSyntaxAndPins();
   validateReleaseWorkflow(workflows.get("release.yml"));
+  assert(
+    workflows.get("ci.yml")?.jobs?.["windows-managed-runtime"]?.["runs-on"] === "windows-2025",
+    "Windows managed-runtime native tests must match the fresh release qualification runner",
+  );
   assert(
     !JSON.stringify(workflows.get("release.yml")).includes("qemu-utils"),
     "release qualification must not mask a missing bundled qemu-img with a host package",

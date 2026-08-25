@@ -112,6 +112,32 @@ node -e '
   if (!version.includes(`qemu-img version ${components[0].version}`)) {
     throw new Error("Installed qemu-img version differs from the exact QEMU component.");
   }
+  const emulatorRecords = manifest.files.filter((item) => item.path === "bin/qemu-system-x86_64.real");
+  if (emulatorRecords.length !== 1) {
+    throw new Error("Installed managed runtime has no exact bundled QEMU system emulator.");
+  }
+  const emulatorRecord = emulatorRecords[0];
+  const emulatorArtifacts = components[0].artifacts.filter((item) =>
+    item.delivery === "bundled_file" && item.locator === emulatorRecord.path &&
+    item.sha256 === emulatorRecord.sha256 && item.size_bytes === emulatorRecord.size_bytes);
+  if (emulatorRecord.executable !== true || emulatorArtifacts.length !== 1) {
+    throw new Error("QEMU component does not bind the installed system emulator.");
+  }
+  const emulator = path.join(runtimeRoot, "bin", "qemu-system-x86_64.real");
+  const emulatorMetadata = fs.lstatSync(emulator);
+  const emulatorDigest = crypto.createHash("sha256").update(fs.readFileSync(emulator)).digest("hex");
+  if (!emulatorMetadata.isFile() || emulatorMetadata.isSymbolicLink() ||
+      emulatorMetadata.size !== emulatorRecord.size_bytes || (emulatorMetadata.mode & 0o111) === 0 ||
+      fs.realpathSync(emulator) !== emulator || emulatorDigest !== emulatorRecord.sha256) {
+    throw new Error("Installed QEMU system emulator is not the exact manifest-bound executable.");
+  }
+  const deviceNames = new Set(
+    [...runBinary(emulator, ["-device", "help"]).matchAll(/name "([^"]+)"/gu)]
+      .map((match) => match[1]),
+  );
+  if (!deviceNames.has("vhost-user-fs-pci")) {
+    throw new Error("Installed QEMU system emulator omits the vhost-user-fs-pci device required by Podman.");
+  }
   const probeRoot = fs.mkdtempSync(path.join(workRoot, "qemu-img-probe-"));
   const probe = path.join(probeRoot, "qualification.qcow2");
   try {

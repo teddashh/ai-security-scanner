@@ -69,6 +69,9 @@ new private data directory. Every platform must prove this exact sequence:
 The Linux qualification separately resolves `bin/qemu-img` from the installed managed-runtime
 manifest, proves its regular executable file size and SHA-256, binds it to the exact QEMU component
 and version, and runs create/resize/JSON-info against a disposable qcow2 file by that absolute path.
+It independently binds `bin/qemu-system-x86_64.real` to the same component and manifest, then
+requires its exact device inventory to contain `vhost-user-fs-pci`, which Podman's explicit
+application-data VirtioFS mount needs.
 It also resolves `bin/virtiofsd` from that manifest, binds its digest to the exact component and
 version, rejects a non-x86-64 ELF or any host interpreter dependency, and executes its version probe
 by absolute path. It does not install or resolve host QEMU or VirtioFS packages. On every platform,
@@ -76,6 +79,11 @@ qualification also proves after start that the exact private-XDG `machine{,.pub}
 exists with bounded single-link current-user protection and that both fixed staging names are absent.
 After uninstall, the exact release-digest provider-home directory itself must be absent; an existing
 but empty directory does not satisfy this check.
+
+Before Windows starts the machine, qualification also proves that the fixed Podman runtime,
+configuration, WSL data, SSH-identity-parent, and image-cache directories already have protected,
+current-user-only inheritable DACLs. Podman therefore never gets an opportunity to create those
+security-sensitive namespace ancestors with the administrator token's ambient default owner.
 
 The macOS qualification independently derives the stable `/tmp/assm1-<32-hex-namespace>` short
 home from the canonical state root, installed manifest digest, and effective uid. It requires a

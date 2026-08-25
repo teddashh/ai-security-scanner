@@ -104,6 +104,10 @@ explicit compatibility providers; they are not silently mixed with managed runs.
 - Runtime preflight and execution checkpoints persist typed command provenance: runtime version,
   release-manifest SHA-256, and machine-image SHA-256. Resume and cleanup can therefore reopen the
   exact older installation after an app update instead of guessing from `PATH`.
+- Runtime preflight reads Docker's native security-options array or Podman's typed
+  `Host.Security` object according to the selected provider. Managed Podman must report both
+  rootless execution and seccomp; malformed, oversized, or incomplete security information fails
+  closed instead of being retained as an unverified display string.
 - On Linux, first initialization mounts the canonical application-data directory at the identical
   absolute path inside the QEMU machine. All execution workspaces are immutable snapshots below
   that directory. Podman runs each engine with the desktop user's exact non-root uid/gid and an
@@ -196,7 +200,9 @@ identity, and publishes the completed directory atomically. Linux QEMU is built 
 `virtiofsd` is independently built from its locked source and Cargo graph with a digest-pinned Rust
 builder. The vendor step rejects each of the launcher, real emulator, `qemu-img`, and `virtiofsd`
 unless it is static ELF64, little-endian x86-64. It verifies both helper versions and functionally
-proves `qemu-img` create/resize/JSON-info before staging.
+proves `qemu-img` create/resize/JSON-info before staging. The exact QEMU build enables vhost-user
+support and must expose `vhost-user-fs-pci` both before installation and from the staged real
+emulator; this is a lock-driven capability contract, not a host-QEMU fallback.
 The native launcher probes KVM and changes only Podman's exact `-accel kvm -cpu host` arguments to
 `tcg/max` when KVM is unusable. The locked Linux build contract retains the x86_64 SeaBIOS, OVMF,
 and device firmware while excluding eight foreign-architecture firmware images that the

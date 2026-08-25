@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "updated_at": "2026-08-24T00:00:00Z",
+  "updated_at": "2026-08-25T00:00:00Z",
   "runtime": {
     "name": "Podman machine",
     "version": "5.8.2",
@@ -33,6 +33,9 @@
       "explicit_build_targets": [
         "qemu-img",
         "qemu-system-x86_64"
+      ],
+      "required_device_models": [
+        "vhost-user-fs-pci"
       ],
       "graphical_frontends": false,
       "network_backend": "socket supplied by Podman/gvproxy",

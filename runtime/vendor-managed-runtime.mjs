@@ -184,6 +184,20 @@ function excludedForeignQemuFirmware(lock) {
   return excluded;
 }
 
+function requiredQemuDeviceModels(lock) {
+  const qemu = requireObject(lock.linux_qemu, 'Linux QEMU lock');
+  const contract = requireObject(qemu.build_contract, 'Linux QEMU build contract');
+  const configured = contract.required_device_models;
+  if (
+    !Array.isArray(configured) ||
+    configured.length !== 1 ||
+    configured[0] !== 'vhost-user-fs-pci'
+  ) {
+    throw new Error('Linux QEMU build contract must require the exact Podman virtio-fs PCI device');
+  }
+  return configured;
+}
+
 function linuxVirtiofsdBuildContract(lock) {
   const virtiofsd = requireObject(lock.linux_virtiofsd, 'Linux virtiofsd lock');
   approvedUrl(virtiofsd.repository_url, 'virtiofsd repository');
@@ -249,6 +263,7 @@ function validateLock(lock, targetName) {
       requireText(source.source_revision, `${name} source revision`);
     }
     excludedForeignQemuFirmware(lock);
+    requiredQemuDeviceModels(lock);
     linuxVirtiofsdBuildContract(lock);
     const gvproxyAsset = requireObject(gvproxy.asset, 'gvproxy asset');
     assetUrl(gvproxy.release_base_url, gvproxyAsset.name, 'gvproxy');
@@ -571,6 +586,7 @@ async function copyQemuOutput(
   stageRoot,
   expectedVersion,
   excludedFirmware,
+  requiredDeviceModels,
   virtiofsd,
 ) {
   const sourceFiles = await walkRegularFiles(qemuOutput, {
@@ -639,6 +655,18 @@ async function copyQemuOutput(
   const emulatorVersion = await run(join(stageRoot, 'bin', 'qemu-system-x86_64.real'), ['--version']);
   if (!emulatorVersion.stdout.includes(`QEMU emulator version ${expectedVersion}`)) {
     throw new Error('managed QEMU version does not match the upstream lock');
+  }
+  const deviceHelp = await run(join(stageRoot, 'bin', 'qemu-system-x86_64.real'), [
+    '-device',
+    'help',
+  ]);
+  const deviceNames = new Set(
+    [...deviceHelp.stdout.matchAll(/name "([^"]+)"/gu)].map((match) => match[1]),
+  );
+  for (const model of requiredDeviceModels) {
+    if (!deviceNames.has(model)) {
+      throw new Error(`managed QEMU omitted required device model ${model}`);
+    }
   }
   const imageToolVersion = await run(join(stageRoot, 'bin', 'qemu-img'), ['--version']);
   if (!imageToolVersion.stdout.includes(`qemu-img version ${expectedVersion}`)) {
@@ -731,6 +759,7 @@ async function buildLinuxQemu(lock, workRoot, stageRoot) {
     stageRoot,
     requireText(qemu.version, 'QEMU version'),
     excludedForeignQemuFirmware(lock),
+    requiredQemuDeviceModels(lock),
     virtiofsd,
   );
 }

@@ -2280,6 +2280,29 @@ impl ManagedRuntimeManager {
         }
         let containers = config.join("containers");
         ensure_managed_private_directory(&containers)?;
+        if target.operating_system == ManagedOperatingSystem::Windows {
+            // Pinned Podman 5.8.2 GetMachineDirs uses os.MkdirAll before every
+            // machine operation. On an administrator token, those defaulted
+            // children can be owned by TokenOwner (Administrators), not
+            // TokenUser. Pre-create the complete fixed WSL namespace with the
+            // product's protected current-user-only descriptor before Podman
+            // can create any ancestor with ambient Windows defaults.
+            let provider = target.provider.argument();
+            ensure_private_directory_tree(&persistent_run, &persistent_run.join("podman"))?;
+            ensure_private_directory_tree(
+                &config,
+                &containers.join("podman").join("machine").join(provider),
+            )?;
+            ensure_private_directory_tree(
+                &data,
+                &data
+                    .join("containers")
+                    .join("podman")
+                    .join("machine")
+                    .join(provider)
+                    .join("cache"),
+            )?;
+        }
         self.write_containers_config(&containers.join("containers.conf"), &install, target)?;
 
         let command_home = self.command_home(target)?;
@@ -3915,16 +3938,34 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: owner is either null or points inside the live descriptor buffer;
-    // user points to the live aligned SID copy.
-    if owner.is_null()
-        || owner_defaulted != 0
-        || unsafe { IsValidSid(owner) } == 0
-        || unsafe { EqualSid(owner, user.as_ptr()) } == 0
-    {
+    if owner.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file has no Windows owner SID",
+        ));
+    }
+    // SAFETY: owner points inside the live descriptor buffer.
+    if unsafe { IsValidSid(owner) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file has an invalid Windows owner SID",
+        ));
+    }
+    // SAFETY: owner and user are valid SIDs backed by live aligned storage.
+    if unsafe { EqualSid(owner, user.as_ptr()) } == 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "file owner is not the current Windows user",
+        ));
+    }
+    // Product-created private entries always provide an explicit TokenUser
+    // owner. Keep that provenance check separate from the actual SID check so
+    // a default TokenOwner (commonly Administrators on hosted runners) cannot
+    // be mistaken for an app-owned namespace.
+    if owner_defaulted != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file owner was supplied by the Windows default mechanism",
         ));
     }
 
@@ -7176,6 +7217,59 @@ mod tests {
             (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8,
         )
         .expect("guarded state root has the exact protected DACL");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_command_precreates_the_exact_private_podman_machine_namespace() {
+        use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        assert_eq!(target.operating_system, ManagedOperatingSystem::Windows);
+
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("prepare managed command namespace");
+
+        assert!(
+            fixture.commands.calls().is_empty(),
+            "namespace must be complete before the first provider command"
+        );
+        let provider_home = fixture.manager.provider_home();
+        let identity_parent = fixture
+            .manager
+            .machine_ssh_identity_path()
+            .parent()
+            .expect("identity parent")
+            .to_path_buf();
+        let expected = [
+            provider_home.join("run").join("podman"),
+            provider_home
+                .join("config")
+                .join("containers")
+                .join("podman")
+                .join("machine")
+                .join(target.provider.argument()),
+            identity_parent,
+            provider_home
+                .join("data")
+                .join("containers")
+                .join("podman")
+                .join("machine")
+                .join(target.provider.argument())
+                .join("cache"),
+        ];
+        let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+            .expect("inheritance flags fit in an ACE header");
+        for directory in expected {
+            let handle = open_windows_real_directory_security_handle(&directory)
+                .unwrap_or_else(|error| panic!("open {}: {error}", directory.display()));
+            verify_windows_current_user_only_dacl_with_ace_flags(&handle, inheritance)
+                .unwrap_or_else(|error| panic!("verify {}: {error}", directory.display()));
+        }
     }
 
     #[cfg(unix)]
