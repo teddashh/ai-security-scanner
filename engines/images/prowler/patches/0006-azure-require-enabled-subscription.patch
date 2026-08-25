@@ -1,0 +1,80 @@
+diff --git a/prowler/providers/azure/azure_provider.py b/prowler/providers/azure/azure_provider.py
+index 6343bc6..df1e5a1 100644
+--- a/prowler/providers/azure/azure_provider.py
++++ b/prowler/providers/azure/azure_provider.py
+@@ -1170,6 +1170,10 @@ class AzureProvider(Provider):
+                             raise ValueError(
+                                 "Exact subscription response tenant ID is missing or is not a canonical UUID"
+                             )
++                        if getattr(subscription, "state", None) != "Enabled":
++                            raise ValueError(
++                                "Exact subscription response state is not Enabled"
++                            )
+                         if tenant_id not in identity.tenant_ids:
+                             identity.tenant_ids.append(tenant_id)
+                     subscription_pairs.append(
+diff --git a/tests/providers/azure/azure_access_token_auth_test.py b/tests/providers/azure/azure_access_token_auth_test.py
+index 943b333..c269d35 100644
+--- a/tests/providers/azure/azure_access_token_auth_test.py
++++ b/tests/providers/azure/azure_access_token_auth_test.py
+@@ -47,10 +47,11 @@ def _region_config():
+     )
+ 
+ 
+-def _exact_subscription(display_name, tenant_id):
++def _exact_subscription(display_name, tenant_id, state="Enabled"):
+     subscription = ExactSubscription()
+     subscription.display_name = display_name
+     subscription.tenant_id = tenant_id
++    subscription.state = state
+     return subscription
+ 
+ 
+@@ -432,6 +433,47 @@ class TestAzureAccessTokenProvider:
+         exact_subscriptions_client.subscriptions.list.assert_not_called()
+         exact_subscriptions_client.tenants.list.assert_not_called()
+ 
++    @pytest.mark.parametrize(
++        "state", [None, "Disabled", "PastDue", "Warned", "enabled"]
++    )
++    def test_identity_rejects_exact_subscription_that_is_not_enabled(self, state):
++        subscription_id = str(uuid4())
++        exact_subscriptions_client = MagicMock()
++        exact_subscriptions_client.subscriptions.get.return_value = _exact_subscription(
++            "Exact", str(uuid4()), state=state
++        )
++
++        with (
++            patch.object(AzureProvider, "__init__", return_value=None),
++            patch(
++                "prowler.providers.azure.azure_provider.ExactSubscriptionClient",
++                return_value=exact_subscriptions_client,
++            ),
++            patch(
++                "prowler.providers.azure.azure_provider.SubscriptionClient"
++            ) as mock_ambient_subscription_client,
++        ):
++            provider = AzureProvider()
++            provider._session = MagicMock()
++            provider._region_config = _region_config()
++
++            with pytest.raises(
++                AzureSetUpIdentityError, match="state is not Enabled"
++            ):
++                provider.setup_identity(
++                    az_cli_auth=False,
++                    sp_env_auth=False,
++                    browser_auth=False,
++                    managed_identity_auth=False,
++                    subscription_ids=[subscription_id],
++                    client_id=None,
++                    access_token_auth=True,
++                )
++
++        mock_ambient_subscription_client.assert_not_called()
++        exact_subscriptions_client.subscriptions.list.assert_not_called()
++        exact_subscriptions_client.tenants.list.assert_not_called()
++
+     def test_whole_constructor_print_finding_and_ocsf_exact_scope(self, monkeypatch):
+         subscription_id = str(uuid4())
+         tenant_id = str(uuid4())

@@ -24,6 +24,7 @@ SERIES = (
     "0003-gcp-disable-ambient-organization-search.patch",
     "0004-gcp-disable-provider-organization-lookup.patch",
     "0005-azure-disable-tenant-enumeration.patch",
+    "0006-azure-require-enabled-subscription.patch",
 )
 PATCH_SHA256 = {
     SERIES[0]: "bf6059a33443e9f1fa459c6360346829170ee56e0775260f8a42f56dcb53c73c",
@@ -31,6 +32,7 @@ PATCH_SHA256 = {
     SERIES[2]: "136335c3b7defd5a167aa6d07633bcb8f5c99c6f98b398eff01fc15d11a417d1",
     SERIES[3]: "ffef7b02808bbb85f1f7d28ab3c453237b33cde45729daa51feb37633e1fd79a",
     SERIES[4]: "00f40971d80137612b5327a8b7e31de6b05b08dd8239f1bd635339ae6325f80b",
+    SERIES[5]: "47b4202cdfe545b699fbe0b0dfc3e5d249d94e9d00cf7d61388405071e5aaeba",
 }
 EXPECTED_DIFF_FILES = {
     SERIES[0]: {
@@ -56,11 +58,15 @@ EXPECTED_DIFF_FILES = {
         "prowler/providers/azure/azure_provider.py",
         "tests/providers/azure/azure_access_token_auth_test.py",
     },
+    SERIES[5]: {
+        "prowler/providers/azure/azure_provider.py",
+        "tests/providers/azure/azure_access_token_auth_test.py",
+    },
 }
 RUNTIME_FILES = {
     "prowler/providers/azure/azure_provider.py": (
         "8e54390485d31feeb5e114db2c24933f3c73a4f22f2532b5c18583f9520c9cbb",
-        "421c9c913ee62076a3305ef1feca6130f87d5ab508a0cb20cd704f1cf1241460",
+        "51cef0e3e7ed819144959f62389d3eb169b97aa37baf37aab66d4c290d21bf14",
     ),
     "prowler/providers/azure/lib/arguments/arguments.py": (
         "fc48fdd229d5760f5675f06032e05df8e54ee8777dd04a60aecc093615474068",

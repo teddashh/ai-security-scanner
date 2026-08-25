@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly PIN="40ecbd035e5541bf099917c5033cceb8959c4737"
 readonly PATCH_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PYTHON="${PYTHON:-python3}"
-readonly EXPECTED_SERIES=$'0001-azure-static-access-token-iam-only.patch\n0002-gcp-exact-project-lookups.patch\n0003-gcp-disable-ambient-organization-search.patch\n0004-gcp-disable-provider-organization-lookup.patch\n0005-azure-disable-tenant-enumeration.patch'
+readonly EXPECTED_SERIES=$'0001-azure-static-access-token-iam-only.patch\n0002-gcp-exact-project-lookups.patch\n0003-gcp-disable-ambient-organization-search.patch\n0004-gcp-disable-provider-organization-lookup.patch\n0005-azure-disable-tenant-enumeration.patch\n0006-azure-require-enabled-subscription.patch'
 
 usage() {
   echo "usage: $0 /path/to/prowler [--pytest]" >&2
@@ -40,6 +40,9 @@ expected_patch_digest() {
     0005-azure-disable-tenant-enumeration.patch)
       printf '%s\n' '00f40971d80137612b5327a8b7e31de6b05b08dd8239f1bd635339ae6325f80b'
       ;;
+    0006-azure-require-enabled-subscription.patch)
+      printf '%s\n' '47b4202cdfe545b699fbe0b0dfc3e5d249d94e9d00cf7d61388405071e5aaeba'
+      ;;
     *) return 1 ;;
   esac
 }
@@ -71,6 +74,11 @@ expected_patch_files() {
     0005-azure-disable-tenant-enumeration.patch)
       printf '%s\n' \
         'prowler/lib/outputs/finding.py' \
+        'prowler/providers/azure/azure_provider.py' \
+        'tests/providers/azure/azure_access_token_auth_test.py'
+      ;;
+    0006-azure-require-enabled-subscription.patch)
+      printf '%s\n' \
         'prowler/providers/azure/azure_provider.py' \
         'tests/providers/azure/azure_access_token_auth_test.py'
       ;;

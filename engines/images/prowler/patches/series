@@ -3,3 +3,4 @@
 0003-gcp-disable-ambient-organization-search.patch
 0004-gcp-disable-provider-organization-lookup.patch
 0005-azure-disable-tenant-enumeration.patch
+0006-azure-require-enabled-subscription.patch
