@@ -4,6 +4,38 @@
 
 This feature does not ship sample OAuth client IDs. Azure, Microsoft 365, and Google deployments must register their own public client. Values such as all-zero UUIDs, example Google client IDs, and unknown JSON fields are rejected.
 
+## Connection setup file
+
+The desktop UI leads with a one-file handoff instead of asking an ordinary user to transcribe cloud identifiers. The user copies the provider-specific request and JSON template from the application, an IT or cloud administrator fills in the non-secret coordinates, and the user imports that file before continuing to the provider-hosted sign-in page. Manual entry remains available as a secondary path.
+
+The file is read once in the webview, is never persisted, and is discarded after its values fill the existing non-secret authorization state. It is limited to 64 KiB, four levels, 64 JSON nodes, exact keys, and schema version `1.0.0`. Any field name containing a password, secret, token, key, credential, certificate, or private-material term is rejected recursively. The backend still performs its existing provider-specific validation and live read-only authorization checks.
+
+The exact top-level shape is:
+
+```json
+{
+  "schema_version": "1.0.0",
+  "provider": "azure",
+  "connection_method": "existing_read_only",
+  "details": {
+    "tenant_id": "11111111-2222-4333-8444-555555555555",
+    "public_client_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "subscription_id": "22222222-3333-4444-8555-666666666666"
+  }
+}
+```
+
+`connection_method` is either `existing_read_only` or `temporary_read_only`. The application shows the exact template for the selected provider and method. Its accepted `details` fields are:
+
+| Provider | Existing read-only | Temporary read-only |
+|---|---|---|
+| AWS | `start_url`, `region`, `account_id`, `role_name` | Same fields |
+| Azure | `tenant_id`, `public_client_id`, `subscription_id` | Same fields |
+| Google Cloud | `public_client_id`, `organization_id` | Existing fields plus `project_id` |
+| Microsoft 365 | `tenant_id`, `public_client_id` | Same fields |
+
+AWS `role_arn` is derived locally from the region, account, and role. Google Cloud `redirect_uri` is generated locally for the current loopback listener. Neither value belongs in the IT handoff file.
+
 ## Security boundary
 
 - Provider login happens only on the provider-hosted HTTPS page.

@@ -18,7 +18,7 @@ import type {
   Severity,
 } from "../types";
 import { Icon } from "../components/Icon";
-import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
+import { EmptyState, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 
 import "./page-technical-details.css";
@@ -55,17 +55,17 @@ const controlKey = (framework: string, version: string, controlId: string): stri
 const copy = {
   eyebrow: { en: "PROBLEMS FOUND", zhTW: "發現的問題" },
   title: {
-    en: "Start with what deserves attention, without hiding the complete result",
-    zhTW: "先看最值得處理的事，完整結果一項不少",
+    en: "Know what to fix first",
+    zhTW: "先知道該修什麼",
   },
   description: {
-    en: "Every problem links back to its asset, scan run, evidence file, and scanner version. Framework references help navigation; they are not NIST or ISO compliance decisions.",
-    zhTW: "每項問題都連回資產、掃描輪次、證據檔案與掃描器版本。控制項只是導航座標，不是 NIST／ISO 合規判定。",
+    en: "See the issues that matter most, what they could affect, and the clearest next step for your team.",
+    zhTW: "先看最重要的問題、可能影響，以及團隊接下來可以怎麼做。",
   },
   emptyHeaderTitle: { en: "Problem list", zhTW: "問題清單" },
   emptyHeaderDescription: {
-    en: "An empty list must be read together with coverage and scanner status.",
-    zhTW: "空清單也必須連同涵蓋與引擎狀態一起解讀。",
+    en: "Your scan results and recommended next steps will appear here.",
+    zhTW: "掃描結果與建議的下一步會顯示在這裡。",
   },
   emptyNoRunTitle: { en: "No scan results yet", zhTW: "尚未產生掃描結果" },
   emptyIncompleteTitle: {
@@ -73,45 +73,45 @@ const copy = {
     zhTW: "本輪沒有正式問題紀錄，但掃描未完整完成",
   },
   emptyUnknownTitle: {
-    en: "No problems are shown, but some sources are still unknown",
-    zhTW: "目前沒有問題，但仍有未知視野",
+    en: "No problems are shown, but some sources still need data",
+    zhTW: "目前沒有顯示問題，但有些來源還需要資料",
   },
   emptyCompletedTitle: {
     en: "No problems were observed in the work that completed",
     zhTW: "已完成的範圍內沒有觀察到問題",
   },
   emptyNoRunDescription: {
-    en: "Review assets and coverage first, confirm each source and asset boundary, then start work from Scan progress.",
-    zhTW: "先查看資產與涵蓋，確認來源與逐資產範圍，再從掃描進度啟動工作。",
+    en: "Add what you want to scan, then start the check from Scan progress.",
+    zhTW: "先加入想掃描的目標，再到掃描進度開始檢查。",
   },
   emptyIncompleteDescription: {
-    en: "Failed, partly completed, cancelled, or skipped jobs can leave unchecked areas. Review the final state and reason for every scanner.",
-    zhTW: "失敗、部分完成、取消或未執行的工作都可能留下未檢查範圍；請查看每個掃描器的終態與原因。",
+    en: "Some checks did not finish, so there may be issues we could not see. Open Scan progress to see what needs attention.",
+    zhTW: "有些檢查沒有完成，因此可能還有看不到的問題。打開掃描進度，就能知道哪裡需要處理。",
   },
   emptyUnknownDescription: {
-    en: "{count} sources have no usable data. An empty list therefore does not mean there are no assets or that they are secure.",
-    zhTW: "{count} 個來源沒有可用資料，因此不能把空清單解讀為沒有資產或安全。",
+    en: "{count} sources have not shared usable information yet. Open Scan setup to connect or check them.",
+    zhTW: "還有 {count} 個來源沒有提供可用資訊。打開掃描設定即可連接或確認。",
   },
   emptyCompletedDescription: {
-    en: "{count} sources reported ‘connected, nothing found.’ This describes only the known scope of this run; it is not a security guarantee.",
-    zhTW: "{count} 個來源回報「已連接但未發現」。這只描述本次已知範圍，不是安全保證。",
+    en: "Good news: the checks that finished found no issues. Open Scan setup to see what was included across {count} sources.",
+    zhTW: "好消息：已完成的檢查沒有發現問題。打開掃描設定，即可查看這 {count} 個來源實際包含了什麼。",
   },
-  openCoverage: { en: "Review what was covered", zhTW: "查看涵蓋" },
+  openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
   openProgress: { en: "Review scanner status", zhTW: "查看掃描器狀態" },
   summaryAria: { en: "Problem summary", zhTW: "問題摘要" },
   critical: { en: "Critical", zhTW: "嚴重" },
   criticalDetail: { en: "Ask the appropriate specialist to confirm these first", zhTW: "優先請對應專家確認" },
   high: { en: "High priority", zhTW: "高風險" },
-  highDetail: { en: "Ordered by evidence and context, not a risk score", zhTW: "依證據與情境排列，不是風險分數" },
+  highDetail: { en: "Plan these into the next round of work", zhTW: "排進下一輪處理工作" },
   needsReview: { en: "Needs human review", zhTW: "待人工確認" },
-  needsReviewDetail: { en: "A scanner observation is not a confirmed fact", zhTW: "掃描器判定不等於已確認事實" },
+  needsReviewDetail: { en: "Confirm these before your team acts", zhTW: "團隊採取行動前先確認" },
   affectedAssets: { en: "Affected assets", zhTW: "受影響資產" },
   completeListCount: { en: "{count} problems in the complete list", zhTW: "完整清單共 {count} 項" },
-  reversibleLinks: { en: "REVERSIBLE LINKS", zhTW: "可逆關聯" },
-  groupsTitle: { en: "Put related problems into one handoff group", zhTW: "把相關問題放在同一個交接群組" },
+  reversibleLinks: { en: "TEAM HANDOFF", zhTW: "團隊交接" },
+  groupsTitle: { en: "Organize related issues for the right team", zhTW: "把相關問題整理給同一個團隊" },
   groupsDescription: {
-    en: "A group changes presentation only. Every original problem, fingerprint, evidence record, and raw evidence file stays independent.",
-    zhTW: "群組只改變呈現方式；每筆原始問題、內容指紋、證據與原始證據檔都保持獨立。",
+    en: "Bundle issues that should be reviewed together, so handoff is faster and easier to follow.",
+    zhTW: "把適合一起處理的問題放在同一組，讓交接更快、更容易追蹤。",
   },
   items: { en: "{count} items", zhTW: "{count} 項" },
   createdBy: { en: "Created by {actor}", zhTW: "建立者：{actor}" },
@@ -134,16 +134,16 @@ const copy = {
   },
   groupReason: { en: "Why these belong together", zhTW: "關聯理由" },
   groupReasonPlaceholder: {
-    en: "Explain why one specialist should review them together. Do not write this as an audit conclusion.",
-    zhTW: "說明為何應由同一位專家一起檢視；不要把它寫成稽核結論。",
+    en: "Add a short note so the next person knows why these should be handled together.",
+    zhTW: "簡單說明為什麼這些問題適合一起處理，讓接手者一看就懂。",
   },
   chooseTwo: { en: "Choose at least two ungrouped problems", zhTW: "選擇至少兩項尚未分組的問題" },
   createGroup: { en: "Create reversible group", zhTW: "建立可逆群組" },
-  doNow: { en: "START HERE", zhTW: "現在先處理" },
-  priorityTitle: { en: "Priority summary", zhTW: "優先摘要" },
+  doNow: { en: "START HERE", zhTW: "從這裡開始" },
+  priorityTitle: { en: "Start with these issues", zhTW: "優先處理這些問題" },
   priorityDescription: {
-    en: "This order helps people triage work. It does not hide other problems or make changes to the environment.",
-    zhTW: "優先順序方便人員分流；不會隱藏其他問題，也不會自動修改環境。",
+    en: "These are likely to matter most. Open one to see the impact, evidence, and suggested next step.",
+    zhTW: "這些問題最值得先看。打開任一項，就能查看影響、證據與建議的下一步。",
   },
   reviewEvidence: { en: "Review evidence", zhTW: "查看證據" },
   boundaryTitle: { en: "This is not an audit conclusion or an executable fix", zhTW: "這不是稽核結論，也不是可執行修復" },
@@ -151,8 +151,9 @@ const copy = {
     en: "This page records observations, possible impact, human decisions, and the kind of specialist to consult. Authorized people evaluate and perform any environment change outside this product.",
     zhTW: "畫面只保存觀察、可能影響、人工決定與建議找哪類專家。任何環境變更都在產品之外由具權限的人員評估及執行。",
   },
-  allProblems: { en: "ALL PROBLEMS", zhTW: "全部問題" },
-  completeList: { en: "Complete problem list", zhTW: "完整問題清單" },
+  howToRead: { en: "How to read these results", zhTW: "如何解讀這些結果" },
+  allProblems: { en: "EXPLORE RESULTS", zhTW: "查看所有結果" },
+  completeList: { en: "Browse every issue", zhTW: "瀏覽所有問題" },
   searchAria: { en: "Search problems, evidence, or source details", zhTW: "搜尋問題、證據或來源細節" },
   searchPlaceholder: { en: "Search problem, asset, evidence, fingerprint…", zhTW: "搜尋問題、資產、證據、內容指紋…" },
   severityFilter: { en: "Severity", zhTW: "嚴重度" },
@@ -469,12 +470,39 @@ export function FindingsPage({
         <MetricCard label={text(copy.affectedAssets)} value={affectedAssets} detail={text(copy.completeListCount, { count: formatNumber(findings.length) })} icon="database" />
       </section>
 
-      <section className="section-block" aria-labelledby="finding-groups-title">
-        <div className="section-heading">
-          <p className="eyebrow">{text(copy.reversibleLinks)}</p>
-          <h2 id="finding-groups-title">{text(copy.groupsTitle)}</h2>
-          <p>{text(copy.groupsDescription)}</p>
-        </div>
+      {topFindings.length > 0 && (
+        <section className="section-block priority-section">
+          <div className="section-heading">
+            <p className="eyebrow">{text(copy.doNow)}</p>
+            <h2>{text(copy.priorityTitle)}</h2>
+            <p>{text(copy.priorityDescription)}</p>
+          </div>
+          <div className="priority-grid">
+            {topFindings.map((finding, index) => (
+              <button
+                key={finding.id}
+                type="button"
+                className="priority-card"
+                onClick={() => {
+                  setSelectedId(finding.id);
+                  document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
+                <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
+                <h3>{finding.title}</h3>
+                <p>{finding.impact}</p>
+                <span className="priority-card__asset">{finding.assetName}</span>
+                <span className="priority-card__action">{text(copy.reviewEvidence)} <Icon name="arrow" size={15} /></span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <details className="section-block page-secondary-feature">
+        <summary id="finding-groups-title">{text(copy.groupsTitle)}</summary>
+        <p className="page-secondary-feature__intro">{text(copy.groupsDescription)}</p>
 
         {findingGroups.length > 0 && (
           <div className="evidence-list">
@@ -573,41 +601,13 @@ export function FindingsPage({
             {text(copy.createGroup)}
           </button>
         </form>
-      </section>
+      </details>
 
-      {topFindings.length > 0 && (
-        <section className="section-block priority-section">
-          <div className="section-heading">
-            <p className="eyebrow">{text(copy.doNow)}</p>
-            <h2>{text(copy.priorityTitle)}</h2>
-            <p>{text(copy.priorityDescription)}</p>
-          </div>
-          <div className="priority-grid">
-            {topFindings.map((finding, index) => (
-              <button
-                key={finding.id}
-                type="button"
-                className="priority-card"
-                onClick={() => {
-                  setSelectedId(finding.id);
-                  document.getElementById("finding-browser")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-              >
-                <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
-                <StatusPill label={severityMeta[finding.severity].label} tone={severityMeta[finding.severity].tone} />
-                <h3>{finding.title}</h3>
-                <p>{finding.impact}</p>
-                <span className="priority-card__asset">{finding.assetName}</span>
-                <span className="priority-card__action">{text(copy.reviewEvidence)} <Icon name="arrow" size={15} /></span>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <InlineNotice tone="info" title={text(copy.boundaryTitle)}>
+      <details className="page-technical-details page-technical-details--guide">
+        <summary>{text(copy.howToRead)}</summary>
+        <strong>{text(copy.boundaryTitle)}</strong>
         <p>{text(copy.boundaryBody)}</p>
-      </InlineNotice>
+      </details>
 
       <section id="finding-browser" className="finding-browser">
         <div className="finding-browser__list">

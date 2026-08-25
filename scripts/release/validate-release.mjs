@@ -767,7 +767,7 @@ async function main() {
   assert(cargoPackageVersion(cargoToml) === version, "Cargo package version is out of sync");
   assert(cargoLockPackageVersion(cargoLock) === version, "Cargo.lock package version is out of sync");
   assert(
-    repositoryReadme.includes(`> Release line: v${version}.`),
+    repositoryReadme.includes(`<!-- Release line: v${version}. -->`),
     "README release line is out of sync",
   );
   assert(

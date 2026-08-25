@@ -30,6 +30,7 @@ import {
 } from "../useCases";
 
 import "../cases-page.css";
+import "./page-technical-details.css";
 
 export interface CasesPageProps {
   cases: AssessmentCase[];
@@ -52,6 +53,7 @@ export interface CasesPageProps {
   onDelete: (caseId: string, confirmation: string) => Promise<boolean>;
   onDeleteArtifacts: (confirmation: string) => Promise<boolean>;
   onDismissArtifactCleanup: () => void;
+  onStartNewScan: () => void;
   onSelect: (caseId: string) => void;
   onContinue: () => void;
   onOpenProgress: () => void;
@@ -61,29 +63,29 @@ export interface CasesPageProps {
 }
 
 const pageCopy = {
-  headerEyebrow: { en: "Security assessment cases", zhTW: "資安健檢案件" },
-  headerTitle: { en: "Keep every check in one repeatable case", zhTW: "把每次檢查留在可複驗的案件裡" },
+  headerEyebrow: { en: "My security scans", zhTW: "我的資安檢查" },
+  headerTitle: { en: "Start a new scan or pick up where you left off", zhTW: "開始新的檢查，或接著上次進度" },
   headerDescription: {
-    en: "A case keeps targets, permission boundaries, original evidence, and before-and-after results together. It is more than a report you read once and discard.",
-    zhTW: "案件會把目標、授權範圍、原始證據與修復前後結果放在一起；它不是看完一次就丟掉的報告。",
+    en: "Keep your targets, results, reports, and follow-up scans together in one project.",
+    zhTW: "把檢查目標、結果、報告與修復後複查集中放在同一個專案。",
   },
-  create: { en: "Create a case", zhTW: "建立案件" },
-  closeForm: { en: "Close form", zhTW: "關閉表單" },
-  newCaseEyebrow: { en: "New case", zhTW: "新案件" },
-  newCaseTitle: { en: "Tell us what this check is for", zhTW: "先說這次要檢查什麼" },
+  create: { en: "Start a new scan", zhTW: "開始新的檢查" },
+  closeForm: { en: "Close setup", zhTW: "關閉設定" },
+  newCaseEyebrow: { en: "New scan", zhTW: "新的檢查" },
+  newCaseTitle: { en: "Let's set up your scan", zhTW: "一起設定這次檢查" },
   newCaseDescription: {
-    en: "The product will choose appropriate tools later. These answers prepare the case; they are not audit evidence and do not authorize a scan.",
-    zhTW: "產品稍後會安排適合的工具。這些答案只是準備案件，不是稽核證據，也不會授權掃描。",
+    en: "Give it a name, tell us who it is for, and add the first thing you want checked. You can add more later.",
+    zhTW: "取一個好認的名稱、選擇所屬團隊，再加入第一個想檢查的目標；之後隨時都能再加。",
   },
-  changeUseCase: { en: "Choose a different goal", zhTW: "改選其他檢查目標" },
-  caseName: { en: "Case name", zhTW: "案件名稱" },
+  changeUseCase: { en: "Choose a different scan", zhTW: "改選其他檢查方式" },
+  caseName: { en: "Scan project name", zhTW: "掃描專案名稱" },
   caseNamePlaceholder: { en: "Example: 2026 first security check", zhTW: "例如：2026 年首次安全健檢" },
   organizationName: { en: "Company or team name", zhTW: "公司或團隊名稱" },
   organizationPlaceholder: { en: "Who owns the systems being checked?", zhTW: "這些系統屬於哪個公司或團隊？" },
-  selectedGoal: { en: "Selected goal", zhTW: "目前選擇" },
+  selectedGoal: { en: "What are you checking?", zhTW: "這次要檢查什麼？" },
   targetCandidateHelp: {
-    en: "Anything entered here becomes an unconfirmed candidate only. It does not prove ownership, connect to a system, or start a scan.",
-    zhTW: "這裡輸入的內容只會成為「待確認候選」；不會證明所有權、不會連線，也不會開始掃描。",
+    en: "We'll add this to your scan project. You can review everything before the scan starts.",
+    zhTW: "我們會先把它加入掃描專案；開始掃描前，你仍可檢查與調整所有內容。",
   },
   websiteUrl: { en: "Website or API URL", zhTW: "網站或 API 網址" },
   websitePlaceholder: { en: "https://portal.example.com/login", zhTW: "https://portal.example.com/login" },
@@ -91,74 +93,74 @@ const pageCopy = {
     en: "Enter one complete http:// or https:// URL. Do not include a username or password.",
     zhTW: "請輸入一個完整的 http:// 或 https:// 網址；不要放入帳號或密碼。",
   },
-  websitePreparedTitle: { en: "What will be saved now", zhTW: "現在會先保存什麼" },
+  websitePreparedTitle: { en: "Website ready to add", zhTW: "網站已準備好加入" },
   websitePrepared: {
-    en: "The case will save {target} as an unconfirmed candidate. {protocol} port {port} and path {path} are shown for context only; you must confirm the exact service, ownership, limits, and permission before any scanner contacts it.",
-    zhTW: "案件現在只會把 {target} 保存成待確認候選。{protocol} 連接埠 {port} 與路徑 {path} 目前只是提示；任何掃描器連線前，你仍要確認精確服務、所有權、限制與許可。",
+    en: "Great — {target} will be the first website in this scan project. We'll suggest sensible scan settings on the next screen.",
+    zhTW: "很好，{target} 會成為這個掃描專案的第一個網站；下一頁會幫你準備合適的掃描設定。",
   },
   websiteQueryRemoved: {
     en: "Query parameters and page fragments are not saved because they can contain private tokens or personal data.",
     zhTW: "網址參數與頁面片段不會保存，因為其中可能含有私人權杖或個人資料。",
   },
-  publicTargets: { en: "Public domains, IP addresses, or small CIDR ranges", zhTW: "公開網域、IP 或小型 CIDR 網段" },
+  publicTargets: { en: "Public domains, IP addresses, or small network ranges", zhTW: "公開網域、IP 或小型網段" },
   publicTargetsPlaceholder: { en: "example.com\n203.0.113.10\n203.0.113.0/28", zhTW: "example.com\n203.0.113.10\n203.0.113.0/28" },
   publicTargetsHelp: {
-    en: "One exact target per line. Wildcards are not accepted. Each target still needs ownership and permission confirmation.",
-    zhTW: "每行一個精確目標，不接受萬用字元；每一項之後仍要確認所有權與掃描許可。",
+    en: "Enter one IP address or domain per line. You can review the list before anything runs.",
+    zhTW: "每行輸入一個 IP 或網域；開始前仍可檢查與調整清單。",
   },
-  internalTargets: { en: "Internal IP addresses or small CIDR ranges", zhTW: "內部 IP 或小型 CIDR 網段" },
+  internalTargets: { en: "Internal IP addresses or small network ranges", zhTW: "內部 IP 或小型網段" },
   internalTargetsPlaceholder: { en: "10.20.0.8\n10.20.1.0/28", zhTW: "10.20.0.8\n10.20.1.0/28" },
   internalTargetsHelp: {
-    en: "One approved target per line. Private addresses remain blocked until you create an explicit internal-network grant later.",
-    zhTW: "每行一個已核准目標。私有位址仍會被阻擋，直到你稍後建立明確的內部網路授權。",
+    en: "Enter one server, device, or small network range per line.",
+    zhTW: "每行輸入一台伺服器、設備或小型網段。",
   },
   repositories: { en: "Source project or repository", zhTW: "程式碼專案或儲存庫" },
   repositoriesPlaceholder: { en: "Local project name or read-only repository coordinate", zhTW: "本機專案名稱或唯讀程式碼儲存庫位置" },
   repositoriesHelp: {
-    en: "One per line. You will attach an exact read-only working-tree snapshot before scanning.",
-    zhTW: "每行一項；掃描前仍會請你附加精確、唯讀的工作目錄快照。",
+    en: "Name the project here; you'll choose its local folder on the next screen.",
+    zhTW: "先填專案名稱；下一頁再選擇本機資料夾。",
   },
   iacProjects: { en: "Infrastructure-code project", zhTW: "基礎設施程式碼專案" },
   iacPlaceholder: { en: "infra/production\nterraform/prod", zhTW: "infra/production\nterraform/prod" },
   iacHelp: {
-    en: "Terraform, CloudFormation, Kubernetes YAML, or another deployment-definition project. One coordinate per line.",
-    zhTW: "可填 Terraform、CloudFormation、Kubernetes YAML 或其他部署定義專案；每行一項。",
+    en: "Name a Terraform, CloudFormation, Kubernetes YAML, or other deployment project. Use one project per line.",
+    zhTW: "填入 Terraform、CloudFormation、Kubernetes YAML 或其他部署專案名稱；每行一個專案。",
   },
-  containerImages: { en: "Exact container image digest", zhTW: "精確的容器映像內容摘要" },
-  containerPlaceholder: { en: "registry.example/app@sha256:…", zhTW: "registry.example/app@sha256:…" },
+  containerImages: { en: "Container image name", zhTW: "容器映像名稱" },
+  containerPlaceholder: { en: "Example: production-api", zhTW: "例如：production-api" },
   containerHelp: {
-    en: "For a repeatable result, use repository@sha256 followed by 64 lowercase hexadecimal characters.",
-    zhTW: "為了讓結果可重現，請使用「映像儲存庫@sha256:」加上 64 個小寫十六進位字元。",
+    en: "Name the image here. On the next screen, choose the exact local image copy you want checked.",
+    zhTW: "先填映像名稱；下一頁再選擇要檢查的精確本機映像副本。",
   },
   kubernetes: { en: "Kubernetes cluster or snapshot name", zhTW: "Kubernetes 叢集或快照名稱" },
   kubernetesPlaceholder: { en: "production-eks\nstaging-gke", zhTW: "production-eks\nstaging-gke" },
   kubernetesHelp: {
-    en: "This name creates a candidate only. You will later choose a read-only, immutable manifest or node-configuration snapshot.",
-    zhTW: "名稱只會建立候選；之後仍要選擇唯讀、不可變的設定檔或節點設定快照。",
+    en: "Name the cluster or project here. On the next screen, choose the configuration copy you want checked.",
+    zhTW: "先填叢集或專案名稱；下一頁再選擇要檢查的設定副本。",
   },
   cloudChoice: { en: "Which cloud services do you use?", zhTW: "你使用哪些雲端服務？" },
   cloudChoiceHelp: {
-    en: "Keep the ones relevant to this case. After case creation, the product will guide you through the provider's official read-only sign-in—do not paste an administrator password here.",
-    zhTW: "只保留這次相關的項目。建立案件後，產品會帶你走雲端服務商的官方唯讀登入流程；不要在這裡貼管理員密碼。",
+    en: "Pick the services you want to review. We'll open each provider's official sign-in when you are ready.",
+    zhTW: "選擇想檢查的服務；準備好後，我們會開啟各平台的官方登入流程。",
   },
-  moreSummary: { en: "More case details", zhTW: "更多案件資料" },
+  moreSummary: { en: "Customize this scan", zhTW: "自訂這次檢查" },
   moreSummaryHint: {
-    en: "Company size, data types, other systems, and optional scan activities",
-    zhTW: "公司規模、資料類型、其他系統與可選檢查活動",
+    en: "Add other systems, priorities, and optional details",
+    zhTW: "加入其他系統、優先方向與選填資料",
   },
   organizationSize: { en: "Organization size", zhTW: "組織規模" },
   notes: { en: "Notes (optional)", zhTW: "備註（選填）" },
   notesPlaceholder: { en: "What question should this case answer first?", zhTW: "這次最想先釐清什麼？" },
   otherSystems: { en: "Other systems to include", zhTW: "這次還要納入哪些系統" },
   otherSystemsHelp: {
-    en: "Adding a system keeps the full product scope available. It still does not authorize a scan.",
-    zhTW: "加入其他系統可保留完整產品範圍，但仍不會授權掃描。",
+    en: "Add anything else you want to include in this scan project.",
+    zhTW: "把這次還想一起檢查的內容加進來。",
   },
   additionalCoordinates: { en: "Other known targets (optional)", zhTW: "其他已知目標（選填）" },
   activities: { en: "What kinds of checks may be needed?", zhTW: "這次可能需要哪些檢查？" },
   activitiesHelp: {
-    en: "Select at least one. This records intent only; it does not create a permission grant or start a tool.",
-    zhTW: "至少選一項。這只記錄案件意向，不會建立授權，也不會啟動工具。",
+    en: "Choose the kind of answers you want. You can fine-tune the actual scan before it runs.",
+    zhTW: "選擇你想得到哪類答案；正式開始前仍可微調掃描內容。",
   },
   activeWarningTitle: { en: "Active testing is not authorized yet", zhTW: "選擇主動測試不等於已授權" },
   activeWarning: {
@@ -167,12 +169,12 @@ const pageCopy = {
   },
   dataTypes: { en: "Data this case may involve", zhTW: "這個案件可能涉及哪些資料" },
   dataTypesHelp: {
-    en: "This adjusts explanations and priority context. It is not a legal or regulatory decision.",
-    zhTW: "這只用來調整說明與優先順序，不是法律或法規判定。",
+    en: "This helps the app explain impact and put the most useful results first.",
+    zhTW: "這會幫助產品說明影響，並把更重要的結果排在前面。",
   },
-  createSafety: { en: "Creating a case does not connect to a cloud service or start a scan.", zhTW: "建立案件不會連接雲端，也不會開始掃描。" },
+  createSafety: { en: "You can add or change targets before you run the scan.", zhTW: "正式掃描前，仍可隨時加入或修改目標。" },
   creating: { en: "Creating…", zhTW: "建立中…" },
-  createLocal: { en: "Create local case", zhTW: "建立本機案件" },
+  createLocal: { en: "Create scan project", zhTW: "建立掃描專案" },
   formConflictTitle: { en: "The same target has two different descriptions", zhTW: "同一目標被標成兩種不同環境" },
   formConflict: {
     en: "{target} appears in both public and internal target lists. Keep it in the one list that describes where it is reached.",
@@ -181,19 +183,19 @@ const pageCopy = {
   demo: { en: "Demo", zhTW: "展示" },
   latestRun: { en: "Latest run: {status}", zhTW: "最新一輪：{status}" },
   updated: { en: "Updated {date}", zhTW: "更新於 {date}" },
-  caseSystems: { en: "Systems in this case", zhTW: "案件環境" },
-  caseIntent: { en: "Requested check types", zhTW: "案件檢查意向" },
+  caseSystems: { en: "Systems in this scan", zhTW: "這次檢查的系統" },
+  caseIntent: { en: "Planned checks", zhTW: "預計檢查項目" },
   handleInterrupted: { en: "Handle interrupted work", zhTW: "處理重啟後中斷" },
-  viewCoverage: { en: "Review targets and coverage", zhTW: "查看目標與涵蓋" },
+  viewCoverage: { en: "Set up this scan", zhTW: "設定這次掃描" },
   verificationEyebrow: { en: "Check fixes", zhTW: "確認修復" },
   verificationTitle: { en: "Choose the earlier run to compare", zhTW: "選擇要比較的先前掃描" },
   verificationDescription: {
-    en: "Only a run with a clear final state can be used. The chosen baseline is saved with the new run so the comparison can resume safely.",
-    zhTW: "只有已明確結束的掃描可當作比較基準；選定後會與新掃描一起保存，讓比較可以安全續跑。",
+    en: "Pick the scan from before the fix. We'll run the same checks again and show what changed.",
+    zhTW: "選擇修復前的掃描；我們會再次執行相同檢查，直接顯示前後差異。",
   },
   viewDifference: { en: "View differences", zhTW: "查看差異" },
   baseline: { en: "Completed baseline run", zhTW: "已結束的基準掃描" },
-  baselineSelected: { en: "The new comparison will use run {id}.", zhTW: "新比較將使用掃描 {id}。" },
+  baselineSelected: { en: "This earlier scan is ready for comparison.", zhTW: "已選好先前掃描，可以開始比較。" },
   baselineChoose: { en: "Choose a completed run.", zhTW: "請選擇一個已結束的掃描。" },
   activeRun: { en: "{label} is still active. Resume or cancel it first.", zhTW: "{label} 尚未結束，請先續跑或取消。" },
   verificationOutcome: {
@@ -202,20 +204,33 @@ const pageCopy = {
   },
   handleActiveFirst: { en: "Handle the active run first", zhTW: "先處理未結束的掃描" },
   startVerification: { en: "Start a new check from this baseline", zhTW: "以這次結果開始複驗" },
-  unknownZeroTitle: { en: "0 candidates are shown, but visibility is still unknown", zhTW: "目前顯示 0 個候選資產，但視野仍是未知" },
+  unknownZeroTitle: { en: "Add a source to start finding your systems", zhTW: "先加入資料來源，才能開始找出系統" },
   unknownZero: {
-    en: "This only means no usable source has produced a candidate list yet. It does not mean the organization has no assets. Connect a source and check again.",
-    zhTW: "這只代表目前沒有可用來源建立候選清單，不表示組織沒有資產。請先連接資料來源再重新盤點。",
+    en: "We do not have enough information yet. Open scan setup, connect the place you want to check, then try again.",
+    zhTW: "目前資訊還不夠。請打開掃描設定，連接想檢查的位置，再重新嘗試。",
   },
-  connectedZeroTitle: { en: "A connected source reported no candidates this time", zhTW: "資料來源已連接，而且這次確實沒有候選資產" },
+  unknownZeroDetails: {
+    en: "No usable source has produced a candidate list yet. This does not mean the organization has no assets.",
+    zhTW: "目前沒有可用來源建立候選清單；這不表示組織沒有資產。",
+  },
+  connectedZeroTitle: { en: "No systems were found this time", zhTW: "這次沒有找到系統" },
   connectedZero: {
-    en: "This is different from unknown visibility. The statement applies only to the connected snapshot, confirmed boundary, and observation time.",
-    zhTW: "這與來源未知不同；結論只適用於已連接快照、已確認範圍與當時的觀察時間。",
+    en: "The connected source returned no systems. Check that you connected the right place, then scan again if needed.",
+    zhTW: "已連接的位置沒有回傳系統。請確認是否選對位置；需要時再重新掃描。",
   },
-  interruptedTitle: { en: "{count} scanner jobs paused when the desktop restarted", zhTW: "桌面程式重啟時，有 {count} 個掃描工作暫停" },
+  connectedZeroDetails: {
+    en: "The zero result applies only to the saved source snapshot, confirmed boundary, and observation time.",
+    zhTW: "零項結果只適用於已保存的來源快照、已確認範圍與當時的觀察時間。",
+  },
+  noticeDetails: { en: "Why this result appears", zhTW: "為什麼會出現這個結果" },
+  interruptedTitle: { en: "{count} checks paused when the app restarted", zhTW: "應用程式重新啟動時，有 {count} 項檢查暫停" },
   interrupted: {
-    en: "Run {id} kept a safe restart point. Open Scan progress to explicitly resume or cancel it; the app will not reconnect automatically.",
-    zhTW: "掃描 {id} 已保留安全續跑點。請到「掃描進度」明確續跑或取消；應用程式不會自動重新連線。",
+    en: "Open Scan progress to continue where you left off or cancel the unfinished work.",
+    zhTW: "請打開「掃描進度」，從中斷處繼續，或取消未完成的工作。",
+  },
+  interruptedDetails: {
+    en: "Run {id} kept a restart checkpoint. The app will not reconnect automatically.",
+    zhTW: "掃描輪次 {id} 已保留接續點；應用程式不會自動重新連線。",
   },
   cleanupEyebrow: { en: "Separate step: local evidence cleanup", zhTW: "獨立步驟：清理本機證據" },
   cleanupRemovedTitle: { en: "Case evidence was permanently removed", zhTW: "案件證據已永久移除" },
@@ -238,22 +253,23 @@ const pageCopy = {
   deletingEvidence: { en: "Permanently deleting…", zhTW: "永久刪除中…" },
   deleteEvidence: { en: "Permanently delete evidence", zhTW: "永久刪除證據" },
   understood: { en: "Done", zhTW: "知道了" },
-  summaryAria: { en: "Current case summary", zhTW: "目前案件摘要" },
-  assetsMetric: { en: "Assets found", zhTW: "已發現資產" },
-  assetsMetricHelp: { en: "Counts only candidates backed by a source", zhTW: "只計入目前有資料來源的候選資產" },
-  findingsMetric: { en: "Complete problem list", zhTW: "完整問題清單" },
-  findingsMetricHelp: { en: "Priority views never hide the other results", zhTW: "優先排序不會隱藏其他結果" },
+  summaryAria: { en: "Current scan summary", zhTW: "目前掃描摘要" },
+  assetsMetric: { en: "Systems found", zhTW: "找到的系統" },
+  assetsMetricHelp: { en: "Ready to review in this scan project", zhTW: "可在這個掃描專案中繼續查看" },
+  findingsMetric: { en: "Problems found", zhTW: "找到的問題" },
+  findingsMetricHelp: { en: "Open the problem list to see what to fix first", zhTW: "打開問題清單，查看該先修什麼" },
+  scanDiagnostics: { en: "Source and scan details", zhTW: "資料來源與掃描細節" },
   unknownMetric: { en: "Unknown data sources", zhTW: "未知資料來源" },
   unknownMetricHelp: { en: "Unknown never means no assets or passed", zhTW: "未知不等於沒有資產或已通過" },
   incompleteMetric: { en: "Incomplete scanner jobs", zhTW: "未完成的掃描工作" },
   incompleteMetricHelp: { en: "{count} connected sources reported no assets", zhTW: "{count} 個已連接來源沒有發現資產" },
-  allCasesEyebrow: { en: "All cases", zhTW: "所有案件" },
-  allCasesTitle: { en: "Cases stored on this device", zhTW: "保存在這台電腦的案件" },
-  caseCount: { en: "{count} cases", zhTW: "{count} 個案件" },
-  noCases: { en: "No cases yet", zhTW: "尚未建立案件" },
+  allCasesEyebrow: { en: "All scans", zhTW: "所有掃描" },
+  allCasesTitle: { en: "Scan projects on this device", zhTW: "這台電腦上的掃描專案" },
+  caseCount: { en: "{count} projects", zhTW: "{count} 個專案" },
+  noCases: { en: "No scan projects yet", zhTW: "還沒有掃描專案" },
   noCasesHelp: {
-    en: "Create the first case to keep its targets, scan evidence, handoff, and later verification in one lifecycle.",
-    zhTW: "建立第一個案件後，目標、掃描證據、交接與後續複驗都會保存在同一條生命週期。",
+    en: "Start with a website, IP address, internal system, code project, cloud account, container, or Kubernetes.",
+    zhTW: "從網站、IP、內部系統、程式碼、雲端帳號、容器或 Kubernetes 開始。",
   },
   assetFindingCount: { en: "{assets} assets · {findings} findings", zhTW: "{assets} 個資產 · {findings} 個問題" },
   archiveAria: { en: "Archive {name}", zhTW: "封存 {name}" },
@@ -271,6 +287,11 @@ const pageCopy = {
   cancel: { en: "Cancel", zhTW: "取消" },
   deleting: { en: "Deleting…", zhTW: "刪除中…" },
   deleteRecordOnly: { en: "Delete case record only", zhTW: "只刪除案件紀錄" },
+  workflowSummary: { en: "See how your scan stays under your control", zhTW: "了解掃描如何始終由你掌控" },
+  workflowIntro: {
+    en: "Open this when you need the exact workflow behind discovery, permission, scanning, handoff, and follow-up checks.",
+    zhTW: "需要了解盤點、授權、掃描、交接與後續複驗的完整流程時，再打開這裡。",
+  },
   workflowAria: { en: "Complete case workflow", zhTW: "完整案件流程" },
 } as const;
 
@@ -398,6 +419,7 @@ export function CasesPage({
   onDelete,
   onDeleteArtifacts,
   onDismissArtifactCleanup,
+  onStartNewScan,
   onSelect,
   onContinue,
   onOpenProgress,
@@ -525,8 +547,12 @@ export function CasesPage({
   };
 
   const openBlankForm = () => {
+    if (!selectedDefinition) {
+      onStartNewScan();
+      return;
+    }
     setShowForm(true);
-    setAdvancedOpen(!selectedDefinition);
+    setAdvancedOpen(false);
   };
 
   const submit = async (event: FormEvent) => {
@@ -646,9 +672,6 @@ export function CasesPage({
         <InlineNotice tone="info" title={text(pageCopy.websitePreparedTitle)}>
           <p>{text(pageCopy.websitePrepared, {
             target: preparedWebsite.value.target,
-            protocol: preparedWebsite.value.service.protocol.toUpperCase(),
-            port: formatNumber(preparedWebsite.value.service.port),
-            path: preparedWebsite.value.service.path,
           })}</p>
           {preparedWebsite.value.service.queryWasRemoved && <p>{text(pageCopy.websiteQueryRemoved)}</p>}
         </InlineNotice>
@@ -949,7 +972,7 @@ export function CasesPage({
               ))}
             </select>
             <small>{selectedVerificationBaseline
-              ? text(pageCopy.baselineSelected, { id: selectedVerificationBaseline.id })
+              ? text(pageCopy.baselineSelected)
               : text(pageCopy.baselineChoose)}</small>
           </label>
           <div className="form-actions">
@@ -965,16 +988,32 @@ export function CasesPage({
       )}
 
       {assetCount === 0 && unknownSourceCount > 0 && (
-        <InlineNotice tone="warning" title={text(pageCopy.unknownZeroTitle)}><p>{text(pageCopy.unknownZero)}</p></InlineNotice>
+        <InlineNotice tone="warning" title={text(pageCopy.unknownZeroTitle)}>
+          <p>{text(pageCopy.unknownZero)}</p>
+          <details className="page-technical-details">
+            <summary>{text(pageCopy.noticeDetails)}</summary>
+            <p>{text(pageCopy.unknownZeroDetails)}</p>
+          </details>
+        </InlineNotice>
       )}
 
       {assetCount === 0 && unknownSourceCount === 0 && connectedNoAssetSourceCount > 0 && (
-        <InlineNotice tone="info" title={text(pageCopy.connectedZeroTitle)}><p>{text(pageCopy.connectedZero)}</p></InlineNotice>
+        <InlineNotice tone="info" title={text(pageCopy.connectedZeroTitle)}>
+          <p>{text(pageCopy.connectedZero)}</p>
+          <details className="page-technical-details">
+            <summary>{text(pageCopy.noticeDetails)}</summary>
+            <p>{text(pageCopy.connectedZeroDetails)}</p>
+          </details>
+        </InlineNotice>
       )}
 
       {interruptedEngineCount > 0 && latestRun && (
         <InlineNotice tone="warning" title={text(pageCopy.interruptedTitle, { count: formatNumber(interruptedEngineCount) })}>
-          <p>{text(pageCopy.interrupted, { id: latestRun.id })}</p>
+          <p>{text(pageCopy.interrupted)}</p>
+          <details className="page-technical-details">
+            <summary>{text(pageCopy.noticeDetails)}</summary>
+            <p>{text(pageCopy.interruptedDetails, { id: latestRun.id })}</p>
+          </details>
         </InlineNotice>
       )}
 
@@ -1015,12 +1054,18 @@ export function CasesPage({
         </section>
       )}
 
-      <section className="metrics-grid metrics-grid--four" aria-label={text(pageCopy.summaryAria)}>
+      <section className="metrics-grid page-outcome-metrics" aria-label={text(pageCopy.summaryAria)}>
         <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} detail={text(pageCopy.assetsMetricHelp)} icon="database" />
         <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} detail={text(pageCopy.findingsMetricHelp)} icon="findings" tone={findingCount ? "danger" : "default"} />
-        <MetricCard label={text(pageCopy.unknownMetric)} value={formatNumber(unknownSourceCount)} detail={text(pageCopy.unknownMetricHelp)} icon="warning" tone={unknownSourceCount ? "warning" : "default"} />
-        <MetricCard label={text(pageCopy.incompleteMetric)} value={formatNumber(incompleteEngineCount)} detail={text(pageCopy.incompleteMetricHelp, { count: formatNumber(connectedNoAssetSourceCount) })} icon="progress" tone={incompleteEngineCount ? "warning" : "default"} />
       </section>
+
+      <details className="page-technical-details page-technical-details--guide">
+        <summary>{text(pageCopy.scanDiagnostics)}</summary>
+        <section className="metrics-grid page-diagnostic-metrics">
+          <MetricCard label={text(pageCopy.unknownMetric)} value={formatNumber(unknownSourceCount)} detail={text(pageCopy.unknownMetricHelp)} icon="warning" tone={unknownSourceCount ? "warning" : "default"} />
+          <MetricCard label={text(pageCopy.incompleteMetric)} value={formatNumber(incompleteEngineCount)} detail={text(pageCopy.incompleteMetricHelp, { count: formatNumber(connectedNoAssetSourceCount) })} icon="progress" tone={incompleteEngineCount ? "warning" : "default"} />
+        </section>
+      </details>
 
       <section className="section-block">
         <div className="section-heading section-heading--row">
@@ -1088,11 +1133,15 @@ export function CasesPage({
         )}
       </section>
 
-      <section className="workflow-strip" aria-label={text(pageCopy.workflowAria)}>
-        {workflowCopy.map(({ step, title, detail }) => (
-          <div key={step} className="workflow-step"><span>{step}</span><strong>{text(title)}</strong><small>{text(detail)}</small></div>
-        ))}
-      </section>
+      <details className="page-secondary-feature page-secondary-feature--workflow">
+        <summary>{text(pageCopy.workflowSummary)}</summary>
+        <p className="page-secondary-feature__intro">{text(pageCopy.workflowIntro)}</p>
+        <section className="workflow-strip" aria-label={text(pageCopy.workflowAria)}>
+          {workflowCopy.map(({ step, title, detail }) => (
+            <div key={step} className="workflow-step"><span>{step}</span><strong>{text(title)}</strong><small>{text(detail)}</small></div>
+          ))}
+        </section>
+      </details>
     </div>
   );
 }

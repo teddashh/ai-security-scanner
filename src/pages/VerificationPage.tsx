@@ -22,51 +22,57 @@ interface VerificationPageProps {
 
 const copy = {
   eyebrow: { en: "CHECK FIXES", zhTW: "確認修復" },
-  beforeTitle: { en: "Check the same systems again after a fix", zhTW: "修復後，用相同範圍再檢查一次" },
+  beforeTitle: { en: "See whether the fix worked", zhTW: "看看修復有沒有成功" },
   beforeDescription: {
-    en: "Choose an earlier scan as the baseline. The app checks the original approved scope again and records what was not comparable.",
-    zhTW: "先選一輪過往掃描當基準；系統會重新檢查原本已授權的範圍，並記錄哪些項目無法比較。",
+    en: "Choose a scan from before the change. We will check again and show what disappeared, what remains, and what is new.",
+    zhTW: "選擇修復前的掃描，我們會再次檢查，告訴你哪些消失了、哪些還在，以及有哪些新問題。",
   },
-  resultTitle: { en: "What changed after the fix", zhTW: "查看修復前後有什麼變化" },
+  resultTitle: { en: "See whether the fix worked", zhTW: "看看修復有沒有成功" },
   resultDescription: {
-    en: "The comparison uses the same case and approved scope. Permission, scope, or scanner changes are shown as could not verify—not as fixed.",
-    zhTW: "比較會沿用同一案件與授權範圍。若權限、範圍或工具有變化，結果會標成「無法確認」，不會算成已修復。",
+    en: "See what is fixed, what still needs work, and anything new since the earlier scan.",
+    zhTW: "快速看出哪些已修好、哪些還要處理，以及和上次相比出現了哪些新問題。",
   },
   baselineEyebrow: { en: "COMPARISON STARTING POINT", zhTW: "比較起點" },
   baselineTitle: { en: "Choose the scan from before the fix", zhTW: "選擇修復前的掃描" },
   baselineDescription: {
-    en: "The chosen final-outcome run is saved with the new scan before work starts, so the same comparison can be rebuilt after a restart.",
-    zhTW: "開始前會把選定的最終狀態輪次寫進新掃描，因此重新啟動後仍能重建同一組比較。",
+    en: "Pick the earlier scan you want to compare with.",
+    zhTW: "挑選一輪修復前的掃描來比較。",
   },
   baselineLabel: { en: "Earlier scan", zhTW: "修復前掃描" },
   baselineSelected: { en: "Selected run ID: {id}", zhTW: "已選輪次 ID：{id}" },
-  baselinePrompt: { en: "Choose a scan with a clear final outcome first.", zhTW: "請先選擇一輪已有明確最終結果的掃描。" },
+  baselinePrompt: { en: "Choose an earlier scan first.", zhTW: "請先選擇一輪過往掃描。" },
+  comparisonDetails: { en: "How this comparison works", zhTW: "這次比較如何運作" },
+  comparisonMechanics: {
+    en: "The app saves the selected earlier run with the new scan, checks the same approved scope, and keeps both run IDs so the comparison can be rebuilt after a restart.",
+    zhTW: "系統會把選定的舊掃描和新掃描一起保存，重新檢查相同的已授權範圍，並保留兩個輪次 ID，讓重新啟動後仍能重建比較。",
+  },
+  comparisonRunIds: { en: "Scan run IDs", zhTW: "掃描輪次 ID" },
   activeTitle: { en: "Another scan has not reached a final outcome", zhTW: "目前有另一輪掃描尚未結束" },
   activePaused: {
-    en: "{run} is paused. Continue or cancel it on Scan progress first. Verification will not quietly start another scope beside it.",
-    zhTW: "{run} 目前已暫停。請先到掃描進度繼續或取消；複驗不會在旁邊偷偷建立另一個範圍。",
+    en: "{run} is paused. Continue or cancel it on Scan progress before checking the fix.",
+    zhTW: "{run} 目前已暫停。請先到掃描進度繼續或取消，再確認修復結果。",
   },
   activeRunning: {
-    en: "{run} is still in progress. Finish or cancel it on Scan progress first. Verification will not quietly start another scope beside it.",
-    zhTW: "{run} 仍在進行中。請先到掃描進度完成或取消；複驗不會在旁邊偷偷建立另一個範圍。",
+    en: "{run} is still running. Finish or cancel it on Scan progress before checking the fix.",
+    zhTW: "{run} 仍在掃描中。請先到掃描進度完成或取消，再確認修復結果。",
   },
-  noBaselineTitle: { en: "There is no earlier scan to compare yet", zhTW: "目前還沒有可比較的過往掃描" },
-  readyTitle: { en: "The baseline is ready; no comparison has been run", zhTW: "基準已選好，尚未開始比較" },
+  noBaselineTitle: { en: "Run your first scan to create a starting point", zhTW: "先完成第一次掃描，建立比較起點" },
+  readyTitle: { en: "Ready to check the fix", zhTW: "已準備好確認修復" },
   noBaselineDescription: {
-    en: "At least one scan must have a clear final outcome. A failed or partial run can be selected, but some differences may correctly become could not verify.",
-    zhTW: "至少需要一輪已有明確最終結果的掃描。失敗或部分完成也能當基準，但部分差異可能會正確標成「無法確認」。",
+    en: "Complete at least one scan, then return here after making a change.",
+    zhTW: "先完成至少一輪掃描；做完修復後，再回到這裡比較。",
   },
   selectedDescription: {
-    en: "The baseline is {run} ({date}). Verification runs the approved scope again; old findings are not reused as new evidence.",
-    zhTW: "目前基準是 {run}（{date}）。複驗會重新執行已授權範圍，不會把舊問題當成新證據。",
+    en: "We will compare the new check with {run} from {date}.",
+    zhTW: "新的檢查會和 {date} 的 {run} 比較。",
   },
   handleActiveFirst: { en: "Handle the unfinished scan first", zhTW: "先處理未完成的掃描" },
-  start: { en: "Start verification scan", zhTW: "開始複驗" },
+  start: { en: "Check the fix again", zhTW: "重新檢查修復結果" },
   preparing: { en: "Preparing…", zhTW: "準備中…" },
-  rescan: { en: "Check again", zhTW: "再次複驗" },
+  rescan: { en: "Check the fix again", zhTW: "重新檢查修復結果" },
   baselineRun: { en: "Before-fix scan", zhTW: "修復前掃描" },
   comparisonRun: { en: "After-fix check", zhTW: "修復後複驗" },
-  sameCase: { en: "Same case", zhTW: "同一案件" },
+  sameCase: { en: "Same scan project", zhTW: "同一掃描專案" },
   runProgress: { en: "{progress}% · {status}", zhTW: "{progress}% · {status}" },
   metricsAria: { en: "Four possible verification outcomes", zhTW: "四種複驗結果" },
   resolvedDetail: { en: "Not observed by the same check this time", zhTW: "相同檢查這次沒有再觀察到" },
@@ -75,13 +81,13 @@ const copy = {
   unverifiableDetail: { en: "Permission, scope, or scanner state prevented comparison", zhTW: "權限、範圍或工具狀態使它無法比較" },
   resolvedCautionTitle: { en: "Not observed does not mean permanently safe", zhTW: "這次沒看到，不代表永久安全" },
   resolvedCautionBody: {
-    en: "This outcome means only that the same check did not observe the problem this time. It does not guarantee the quality of the fix or say anything about unknown scope.",
-    zhTW: "這只表示相同檢查這次沒有觀察到問題；不能保證修復品質，也不能代表其他未知範圍安全。",
+    en: "A clean recheck is encouraging, but it covers only the checks that ran this time. Review the evidence before closing the work.",
+    zhTW: "複驗沒有再看到問題是好消息，但只代表這次實際完成的檢查。關閉工作前，請再確認證據。",
   },
   incompleteTitle: { en: "This verification could not compare everything", zhTW: "這次複驗沒有辦法比較所有項目" },
   incompleteBody: {
-    en: "Differences cover only coordinates with comparable evidence. Work tied to incomplete scanners must remain could not verify and must never be counted as no longer observed.",
-    zhTW: "差異只涵蓋有可比證據的項目。未完成工具對應的項目必須保留為「無法確認」，不能算成這次沒看到。",
+    en: "Some checks did not finish or could not be matched. Those items stay under Could not verify and are not counted as fixed.",
+    zhTW: "有些檢查沒有完成或無法配對；這些項目會保留在「無法確認」，不會算成已修復。",
   },
   issueCount: { en: "{count} comparison issues were recorded.", zhTW: "已記錄 {count} 個無法比較的原因。" },
   technicalIssues: { en: "Technical comparison issues", zhTW: "無法比較的技術細節" },
@@ -93,8 +99,8 @@ const copy = {
   diffEyebrow: { en: "COMPARISON RESULTS", zhTW: "比較結果" },
   diffTitle: { en: "Items checked again", zhTW: "再次檢查的項目" },
   diffDescription: {
-    en: "If a problem remains but its evidence changed, it stays in Still present and the evidence change is called out separately.",
-    zhTW: "如果問題仍存在但證據有變化，它仍會留在「仍然存在」，並另外標示證據已改變。",
+    en: "Open any item to see what changed and the evidence behind the result.",
+    zhTW: "打開任一項，就能查看哪裡改變，以及結果背後的證據。",
   },
   count: { en: "{shown} of {total}", zhTW: "{shown}／{total}" },
   filterAria: { en: "Filter verification outcomes", zhTW: "篩選複驗結果" },
@@ -168,8 +174,15 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
             </option>
           ))}
         </select>
-        <small>{selectedBaselineRun ? text(copy.baselineSelected, { id: selectedBaselineRun.id }) : text(copy.baselinePrompt)}</small>
+        {!selectedBaselineRun && <small>{text(copy.baselinePrompt)}</small>}
       </label>
+      <details className="page-technical-details page-technical-details--guide">
+        <summary>{text(copy.comparisonDetails)}</summary>
+        <p>{text(copy.comparisonMechanics)}</p>
+        {selectedBaselineRun && (
+          <dl><div><dt>{text(copy.baselineLabel)}</dt><dd><code>{selectedBaselineRun.id}</code></dd></div></dl>
+        )}
+      </details>
     </section>
   ) : undefined;
 
@@ -232,7 +245,6 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         <div className="comparison-run">
           <span>{text(copy.baselineRun)}</span>
           <strong>{formatDateTime(verification.baselineAt)}</strong>
-          <code>{verification.baselineRunId}</code>
           {baselineRun && (
             <StatusPill
               label={text(copy.runProgress, { progress: formatNumber(baselineRun.progress), status: runStatusMeta[baselineRun.status].label })}
@@ -244,7 +256,6 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         <div className="comparison-run comparison-run--current">
           <span>{text(copy.comparisonRun)}</span>
           <strong>{formatDateTime(verification.comparisonAt)}</strong>
-          <code>{verification.comparisonRunId}</code>
           {comparisonRun && (
             <StatusPill
               label={text(copy.runProgress, { progress: formatNumber(comparisonRun.progress), status: runStatusMeta[comparisonRun.status].label })}
@@ -254,6 +265,15 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         </div>
       </section>
 
+      <details className="page-technical-details page-technical-details--guide">
+        <summary>{text(copy.comparisonRunIds)}</summary>
+        <p>{text(copy.comparisonMechanics)}</p>
+        <dl>
+          <div><dt>{text(copy.baselineRun)}</dt><dd><code>{verification.baselineRunId}</code></dd></div>
+          <div><dt>{text(copy.comparisonRun)}</dt><dd><code>{verification.comparisonRunId}</code></dd></div>
+        </dl>
+      </details>
+
       <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
         <MetricCard label={diffMeta.resolved.label} value={formatNumber(counts.resolved)} detail={text(copy.resolvedDetail)} icon="check" tone="accent" />
         <MetricCard label={diffMeta.persistent.label} value={formatNumber(counts.persistent)} detail={text(copy.persistentDetail)} icon="warning" tone={counts.persistent ? "danger" : "default"} />
@@ -261,9 +281,11 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         <MetricCard label={diffMeta.unverifiable.label} value={formatNumber(counts.unverifiable)} detail={text(copy.unverifiableDetail)} icon="info" />
       </section>
 
-      <InlineNotice tone="info" title={text(copy.resolvedCautionTitle)}>
-        <p>{text(copy.resolvedCautionBody)}</p>
-      </InlineNotice>
+      {counts.resolved > 0 && (
+        <InlineNotice tone="info" title={text(copy.resolvedCautionTitle)}>
+          <p>{text(copy.resolvedCautionBody)}</p>
+        </InlineNotice>
+      )}
 
       {comparisonIncomplete && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>

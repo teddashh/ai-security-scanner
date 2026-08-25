@@ -2,15 +2,68 @@
 
 [繁體中文說明](README.zh-TW.md)
 
+## Find security problems without becoming a security-tool expert
+
+**Check your website, public IPs, internal systems, source code, cloud, containers, and Kubernetes from one desktop app.** Start with what you want to protect—not a wall of scanner names—and get a clear list of what needs attention.
+
+`ai-security-scanner` brings proven open-source security tools into one guided workflow. It chooses checks that fit your situation, turns technical output into useful next steps, keeps the evidence together, and lets you verify what changed after a fix.
+
+### What can you check?
+
+- **A live website or API** — uncover exposed services and known vulnerabilities.
+- **External IP addresses or domains** — understand what is reachable from the internet.
+- **An internal IT environment** — check selected systems or configuration snapshots.
+- **Source code** — find risky code patterns and accidentally committed secrets.
+- **Infrastructure as code** — catch cloud and deployment mistakes before they ship.
+- **AWS, Azure, GCP, or Microsoft 365** — review assets, configuration, identity, and permissions.
+- **Container images** — find vulnerable packages and create a software inventory (SBOM).
+- **Kubernetes** — review workload configuration and node security posture.
+
+### From “what should I check?” to “what should I fix?” in three steps
+
+1. **Choose your goal.** Pick the situation that matches what you want to inspect.
+2. **Add your target.** Select a project, enter a website or IP, or connect a cloud account with read-only access.
+3. **Run the check.** See the most important findings first, open the evidence when you need it, and re-run after a fix to confirm the difference.
+
+### Why use ai-security-scanner?
+
+- **One clear workflow:** no need to install, learn, and reconcile a toolbox full of scanners.
+- **Results written for humans:** understand the problem, the affected asset, and the next useful action.
+- **Your data stays with you:** scan projects and detailed results remain on your computer unless you export them.
+- **Always know where you stand:** see what was checked, what is still waiting, and where more information is needed.
+- **Easy to share and verify:** export a clear report and compare results after a fix.
+
+## Try the guided demo
+
+See how a website check moves from setup to a prioritized fix list using ready-made sample results. It runs in your browser, so you can explore the complete experience right away. [Open the browser demo instructions](#browser-demo).
+
+## Want the details?
+
+<!-- Release line: v0.2.0. -->
+
+> **Project status:** `v0.2.0` is an active source candidate, not a published installer release. The source and demo are available now; detailed release evidence and remaining completion work are documented under [Release and evidence status](#release-and-evidence-status).
+
+Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
+
+- [Product specification](docs/product-spec.md)
+- [Architecture](docs/architecture.md)
+- [Threat model](docs/threat-model.md)
+- [Provider authorization](docs/provider-authorization.md)
+- [Managed local runtime](docs/managed-runtime.md)
+- [Engine catalog](docs/engine-catalog.md)
+- [Release pipeline and evidence](docs/release/README.md)
+
+The remaining sections keep the complete operating and engineering details in one place without making them the product introduction.
+
+### What the product is—and what results mean
+
 `ai-security-scanner` is a local-first desktop application that turns a security check into a repeatable case. Tell it what you want to inspect, confirm the exact scope, run the applicable open-source engines in an isolated local environment, review the evidence in plain language, export a handoff package, and compare a later verification run with the original result.
 
 It does **not** promise that an organization is secure, replace a qualified security professional, or produce an ISO 27001 or NIST certification score. A framework reference is a coordinate for discussion, not a compliance conclusion. “No finding” is also not the same as “everything was checked.”
 
-> Release line: v0.2.0. This is a source candidate, not a published release. Automated cross-platform build and fresh-host qualification have completed, but the required live first-run study with an IAM-naive participant and the subsequent formal QC/code review have not. There is therefore no public `v0.2.0` tag or GitHub Release yet. Source text, screenshots, demo data, and automated tests must not be mistaken for that human-study evidence.
+### Detailed use-case guide
 
-## Start with what you want to check
-
-You do not need to choose scanner names. Choose the situation that sounds like yours:
+You do not need to choose scanner names. Choose the situation that sounds like yours. This detailed view explains what to prepare and how each check is bounded:
 
 | Use case | What you bring | What the product does—and its boundary |
 | --- | --- | --- |
@@ -25,7 +78,7 @@ You do not need to choose scanner names. Choose the situation that sounds like y
 
 Choosing a use case prepares the next setup screen; it never authorizes a scan. The application still requires exact targets, ownership, allowed activity, and limits before contacting a system. Other areas stay available in the same case, so this simpler start does not reduce product scope.
 
-## What a complete case looks like
+### What a complete case looks like
 
 1. Choose what you want to check and create a case.
 2. Add an exact local artifact, target list, or provider source.
@@ -39,7 +92,7 @@ Choosing a use case prepares the next setup screen; it never authorizes a scan. 
 
 A source that was checked and contained no assets is different from a source that was never connected. The coverage ledger preserves that distinction and never paints unknown coverage green.
 
-## Privacy, credentials, and scan authorization
+### Privacy, credentials, and scan authorization
 
 - Case data and raw evidence stay on the workstation unless the user explicitly exports them.
 - Scanner engines never receive administrator credentials.
@@ -51,7 +104,7 @@ A source that was checked and contained no assets is different from a source tha
 
 Read the [threat model](docs/threat-model.md), [provider authorization contract](docs/provider-authorization.md), and [security policy](SECURITY.md) before using the project with sensitive systems. Report vulnerabilities according to `SECURITY.md`, not in a public issue.
 
-## Managed isolated runtime
+### Managed isolated runtime
 
 Installed desktop packages carry a pinned, product-managed Podman machine client and platform helpers. The user does not separately install Docker, Podman, Python, PowerShell modules, vulnerability databases, or individual engine CLIs.
 
@@ -67,7 +120,7 @@ On Windows, a failed WSL check is shown as one plain-language next action: insta
 
 Docker or a user-installed Podman can be selected only as an explicitly labeled compatibility provider; they are not required or silently mixed with managed runs. See the [managed runtime contract](docs/managed-runtime.md) for lifecycle, recovery, verification, and exact cleanup behavior.
 
-## Included assessment families
+### Included assessment families
 
 The required `v0.2.0` catalog covers these end-to-end engine families:
 
@@ -84,11 +137,22 @@ Each engine is a separately licensed process or container with a pinned artifact
 
 See the [engine catalog guide](docs/engine-catalog.md) and [third-party inventory](THIRD_PARTY.md). Third-party code, images, templates, rules, feeds, and vulnerability databases keep their own licenses and are not relicensed by this project.
 
-## Demo mode
+### Demo mode
 
 Running the Vite interface in a browser shows a clearly marked synthetic demo. It does not start a scanner and it does not represent a real assessment. Native desktop builds use the Rust local case service and managed runtime.
 
-## Local development
+### Browser demo
+
+With Node.js 24 or newer:
+
+```sh
+npm ci
+npm run dev
+```
+
+Open the local URL printed by Vite.
+
+### Local development
 
 Source-checkout prerequisites:
 
@@ -123,7 +187,7 @@ Start a native desktop development build after installing Tauri's platform packa
 npm run tauri dev
 ```
 
-## Local CLI
+### Local CLI
 
 Every desktop installer places `ai-security-scanner-cli` beside the application executable. It is intentionally not added to `PATH`. Live scan controls stay in the desktop process so its authorization capability and worker state cannot diverge from a second process. The CLI handles local planning, inspection, export, verification records, managed-runtime lifecycle, and exact cleanup.
 
@@ -151,7 +215,7 @@ cargo run --package ai-security-scanner \
 
 See [the CLI and agent skill](.codex/skills/ai-security-scanner/SKILL.md) for constrained operational workflows. That skill cannot handle credentials, approve or widen scope, contact an unapproved target, or perform remediation.
 
-## Repository layout
+### Repository layout
 
 ```text
 src/                         React desktop interface
@@ -166,7 +230,9 @@ docs/usability/              Real-person study protocol and evidence schema
 .upstreams/                  Local shallow research clones; ignored by Git
 ```
 
-## Release and evidence status
+### Release and evidence status
+
+The `v0.2.0` source candidate has completed automated cross-platform builds and fresh-host qualification, but the required live first-run study with an IAM-naive participant and the subsequent formal QC/code review have not. There is therefore no public `v0.2.0` tag or GitHub Release yet. Source text, screenshots, demo data, and automated tests must not be mistaken for that human-study evidence.
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 
@@ -180,7 +246,7 @@ Before `v0.2.0` publication, the project still requires:
 
 Automated tests, contributor walkthroughs, and generated evidence cannot substitute for the participant. See the [study protocol](docs/usability/iam-naive-first-run.md) and [release pipeline](docs/release/README.md).
 
-## Documentation
+### Documentation
 
 - [Product specification](docs/product-spec.md)
 - [Architecture](docs/architecture.md)
@@ -193,6 +259,6 @@ Automated tests, contributor walkthroughs, and generated evidence cannot substit
 - [Third-party inventory](THIRD_PARTY.md)
 - [Contributing](CONTRIBUTING.md)
 
-## Contributing and license
+### Contributing and license
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and follow the repository's scope, evidence, fixture, license, and security-boundary requirements. The project-owned source is licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses.

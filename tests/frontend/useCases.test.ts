@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -20,12 +21,17 @@ const requiredUseCases = [
   "kubernetes",
 ] satisfies UseCaseId[];
 
+const startPageSource = readFileSync(
+  new URL("../../src/pages/StartPage.tsx", import.meta.url),
+  "utf8",
+);
+
 test("the plain-language start page preserves every required assessment use case", () => {
   assert.deepEqual(useCaseDefinitions.map(({ id }) => id), requiredUseCases);
   assert.equal(new Set(useCaseDefinitions.map(({ id }) => id)).size, requiredUseCases.length);
 });
 
-test("both locales explain preparation, product behavior, and boundaries", () => {
+test("both locales preserve optional preparation, behavior, and boundary details", () => {
   for (const locale of ["en", "zh-TW"] as const) {
     const copy = startPageCopy[locale];
     for (const id of requiredUseCases) {
@@ -38,6 +44,12 @@ test("both locales explain preparation, product behavior, and boundaries", () =>
       assert.ok(card.productDoesNot.trim(), `${locale}.${id}.productDoesNot`);
     }
   }
+});
+
+test("the start page leads with outcomes and keeps technical guidance progressive", () => {
+  assert.ok(startPageSource.includes('className="use-case-card__more"'));
+  assert.ok(startPageSource.includes('className="start-page__more-use-cases"'));
+  assert.ok(startPageSource.includes('className="start-page__scope-note"'));
 });
 
 test("cloud onboarding names every released provider path", () => {

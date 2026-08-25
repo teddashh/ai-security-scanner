@@ -82,7 +82,7 @@ const sourceDefinitions = {
     label: bilingual("DNS records", "DNS 紀錄"),
     platform: "external",
     profiles: ["dns-response"],
-    description: bilingual("Saved DNS responses for an exact query boundary.", "明確查詢範圍內已保存的 DNS 回應。"),
+    description: bilingual("Saved DNS answers for a website or domain.", "網站或網域的既有 DNS 查詢結果。"),
   },
   certificate_transparency: {
     label: bilingual("Certificate Transparency", "憑證透明度紀錄"),
@@ -94,13 +94,13 @@ const sourceDefinitions = {
     label: bilingual("Billing export", "帳務匯出"),
     platform: "external",
     profiles: ["billing-export"],
-    description: bilingual("A saved billing export that can identify asset candidates.", "可用來建立候選資產的帳務匯出快照。"),
+    description: bilingual("A saved billing export that can help find cloud resources.", "可協助找出雲端資源的既有帳務匯出檔。"),
   },
   git_repository: {
     label: bilingual("Git repositories", "Git 程式碼儲存庫"),
     platform: "code",
     profiles: ["git-manifest"],
-    description: bilingual("A bounded JSON manifest of repositories you selected.", "你所選程式碼儲存庫的受限 JSON 清單。"),
+    description: bilingual("A saved list of the code repositories you selected.", "你所選程式碼儲存庫的既有清單。"),
   },
   terraform_state: {
     label: bilingual("Terraform state", "Terraform 狀態檔"),
@@ -118,19 +118,19 @@ const sourceDefinitions = {
     label: bilingual("Container registries", "容器映像倉庫"),
     platform: "container",
     profiles: ["container-registry-manifest"],
-    description: bilingual("A bounded manifest of registries, repositories, images, and digests.", "映像倉庫、映像名稱與精確內容指紋的受限清單。"),
+    description: bilingual("A saved list of container registries and images.", "容器映像倉庫與映像的既有清單。"),
   },
   file_system: {
     label: bilingual("Local files", "本機檔案"),
     platform: "code",
     profiles: ["filesystem-manifest"],
-    description: bilingual("A filesystem manifest containing only the content you explicitly selected.", "只包含你明確選取內容的檔案清單。"),
+    description: bilingual("A saved list of the local files you selected.", "你所選本機檔案的既有清單。"),
   },
   user_declared: {
-    label: bilingual("Targets entered for this case", "案件中輸入的目標"),
+    label: bilingual("Websites and systems already added", "已加入的網站與系統"),
     platform: "external",
     profiles: ["user-declared-manifest"],
-    description: bilingual("Candidate assets entered by a person; this does not prove ownership.", "由使用者列出的候選資產；不會自動證明所有權。"),
+    description: bilingual("Websites, IP addresses, and systems already added to this scan.", "已加入這次掃描的網站、IP 位址與系統。"),
   },
 } as const satisfies Record<SourceKind, SourceDefinition>;
 
@@ -155,31 +155,36 @@ const allSourceKinds = Object.keys(sourceDefinitions) as SourceKind[];
 const coverageStates = Object.keys(coverageMeta) as CoverageState[];
 type LocalInputProfile = AttachWorkspaceSnapshotInput["inputProfile"];
 
-const localInputDefinitions: Record<LocalInputProfile, { label: BilingualText; detail: BilingualText; selection: BilingualText }> = {
+const localInputDefinitions: Record<LocalInputProfile, { label: BilingualText; detail: BilingualText; selection: BilingualText; technical: BilingualText }> = {
   repository_working_tree: {
     label: bilingual("Source-code project", "程式碼專案"),
-    detail: bilingual("Reads only the selected working tree. Git history is excluded.", "只讀取選定的目前工作目錄，不包含 Git 版本紀錄。"),
-    selection: bilingual("Choose the repository root folder", "選擇程式碼專案根目錄"),
+    detail: bilingual("Check the files in one project folder. Git history stays out.", "檢查一個專案資料夾內的檔案，不會包含 Git 版本紀錄。"),
+    selection: bilingual("Choose the source-code folder", "選擇程式碼資料夾"),
+    technical: bilingual("Input profile: repository_working_tree. Every .git directory, including refs and hooks, is excluded from the saved copy.", "輸入格式：repository_working_tree。保存副本時會排除所有 .git 目錄，包括 refs 與 hooks。"),
   },
   iac_working_tree: {
     label: bilingual("Infrastructure-code project", "基礎設施程式碼專案"),
-    detail: bilingual("Reads the selected Terraform, JSON, and YAML deployment files without changing them.", "唯讀檢查選定的 Terraform、JSON 與 YAML 部署檔案。"),
-    selection: bilingual("Choose the infrastructure-code project folder", "選擇 IaC 專案根目錄"),
+    detail: bilingual("Check the Terraform, JSON, and YAML files in one project folder without changing them.", "檢查一個專案資料夾內的 Terraform、JSON 與 YAML 檔案，不會修改內容。"),
+    selection: bilingual("Choose the infrastructure-code folder", "選擇基礎設施程式碼資料夾"),
+    technical: bilingual("Input profile: iac_working_tree. The saved copy accepts Terraform, JSON, and YAML deployment files.", "輸入格式：iac_working_tree。保存副本接受 Terraform、JSON 與 YAML 部署檔案。"),
   },
   container_image_oci_layout: {
-    label: bilingual("Container image (OCI layout)", "容器映像（OCI 配置目錄）"),
-    detail: bilingual("Reviews one digest-bound OCI Image Layout without contacting a registry.", "離線檢查一份綁定精確內容指紋的 OCI 映像，不連接映像倉庫。"),
-    selection: bilingual("Choose the folder containing oci-layout, index.json, and blobs/", "選擇含 oci-layout、index.json 與 blobs/ 的根目錄"),
+    label: bilingual("Exported container image", "匯出的容器映像"),
+    detail: bilingual("Check one exported container image on this computer without signing in to a registry.", "在這台電腦上檢查一份匯出的容器映像，不必登入映像倉庫。"),
+    selection: bilingual("Choose the exported container-image folder", "選擇匯出的容器映像資料夾"),
+    technical: bilingual("Input profile: container_image_oci_layout. Choose one digest-bound OCI Image Layout containing oci-layout, index.json, and blobs/.", "輸入格式：container_image_oci_layout。請選擇一份綁定精確內容指紋、且包含 oci-layout、index.json 與 blobs/ 的 OCI Image Layout。"),
   },
   kubernetes_manifests: {
-    label: bilingual("Kubernetes manifest files", "Kubernetes 設定檔"),
-    detail: bilingual("Reviews the selected YAML and JSON manifests offline. It does not connect to a live cluster.", "離線檢查選定的 YAML 與 JSON 設定檔，不連線到正在運作的叢集。"),
-    selection: bilingual("Choose the Kubernetes manifests folder", "選擇 Kubernetes 設定檔根目錄"),
+    label: bilingual("Kubernetes configuration", "Kubernetes 設定"),
+    detail: bilingual("Check exported Kubernetes settings on this computer without connecting to the live cluster.", "在這台電腦上檢查匯出的 Kubernetes 設定，不會連線到正在運作的叢集。"),
+    selection: bilingual("Choose the Kubernetes configuration folder", "選擇 Kubernetes 設定資料夾"),
+    technical: bilingual("Input profile: kubernetes_manifests. The folder may contain Kubernetes YAML and JSON manifest files.", "輸入格式：kubernetes_manifests。資料夾可包含 Kubernetes YAML 與 JSON manifest 檔。"),
   },
   kubernetes_node_snapshot: {
-    label: bilingual("Kubernetes node settings snapshot", "Kubernetes 節點設定快照"),
-    detail: bilingual("Reads a bounded CIS node-settings snapshot without mounting the host filesystem.", "讀取有限範圍的 CIS 節點設定快照，不掛載主機檔案系統。"),
-    selection: bilingual("Choose the folder containing node-snapshot/", "選擇含 node-snapshot/ 的父目錄"),
+    label: bilingual("Exported Kubernetes node settings", "匯出的 Kubernetes 節點設定"),
+    detail: bilingual("Check an exported copy of one node's security settings on this computer.", "在這台電腦上檢查一份節點安全設定的匯出副本。"),
+    selection: bilingual("Choose the exported node-settings folder", "選擇匯出的節點設定資料夾"),
+    technical: bilingual("Input profile: kubernetes_node_snapshot. Choose the parent of node-snapshot/; the bounded CIS snapshot is read without mounting the host filesystem.", "輸入格式：kubernetes_node_snapshot。請選擇 node-snapshot/ 的父目錄；產品不掛載 host filesystem，只讀取有限範圍的 CIS 快照。"),
   },
 };
 
@@ -192,14 +197,14 @@ const localInputEngines: Record<LocalInputProfile, string> = {
 };
 
 const scopeModeLabels: Record<ScopeMode, { label: BilingualText; detail: BilingualText }> = {
-  inventory: { label: bilingual("Read-only inventory", "唯讀盤點"), detail: bilingual("Read asset names and identifiers only", "只讀取資產清單與識別資訊") },
+  inventory: { label: bilingual("Read-only inventory", "唯讀盤點"), detail: bilingual("Read the names of the selected items only", "只讀取已選項目的名稱") },
   configuration: { label: bilingual("Review settings", "檢查設定"), detail: bilingual("Read configuration or an attached snapshot without making changes", "唯讀檢查設定或已附加快照") },
-  local_artifact: { label: bilingual("Review the saved local copy", "檢查本機快照"), detail: bilingual("Read only the immutable copy attached to this case", "只讀取案件內不可變的本機快照") },
+  local_artifact: { label: bilingual("Review the saved local copy", "檢查本機副本"), detail: bilingual("Check the prepared copy without changing your project", "檢查準備好的副本，不會修改你的專案") },
   public_data: { label: bilingual("Use public records", "使用公開資料"), detail: bilingual("Use saved DNS, certificate, and similar public records only", "只使用 DNS、憑證等既有公開資料") },
   low_impact_external: { label: bilingual("Low-impact connection checks", "低影響連線檢查"), detail: bilingual("Send limited requests only to the confirmed target", "只對已確認目標發出受限連線") },
-  active_external: { label: bilingual("Approved active website tests", "已核准的主動網站測試"), detail: bilingual("Requires a traceable permission reference and exact test list", "需要可追溯的明確授權參考與精確測試清單") },
+  active_external: { label: bilingual("Approved active website tests", "已核准的主動網站測試"), detail: bilingual("Use only with written approval and a specific test list", "只在取得書面核准與指定測試清單時使用") },
   passive: { label: bilingual("Use public records", "使用公開資料"), detail: bilingual("Legacy-case name for the public-records mode", "相容舊案件的公開資料模式") },
-  active: { label: bilingual("Approved active website tests", "已核准的主動網站測試"), detail: bilingual("Legacy-case name for the active-testing mode", "相容舊案件的主動測試模式") },
+  active: { label: bilingual("Approved active website tests", "已核准的主動網站測試"), detail: bilingual("Use only with written approval and a specific test list", "只在取得書面核准與指定測試清單時使用") },
 };
 
 const externalActivities: Partial<Record<ScopeMode, ExternalActivity>> = {
@@ -222,54 +227,81 @@ const activityLabels: Record<ExternalActivity, BilingualText> = {
   active_external: bilingual("Approved active external tests", "已核准的主動外部測試"),
 };
 
+const coverageStatePlainCopy: Record<CoverageState, { short: BilingualText; description: BilingualText }> = {
+  discovered_authorized_scanned: {
+    short: bilingual("Finished", "已完成"),
+    description: bilingual("The selected checks for these items finished.", "這些項目的已選檢查都已完成。"),
+  },
+  discovered_not_authorized: {
+    short: bilingual("Choose checks", "選擇檢查方式"),
+    description: bilingual("These items are ready for you to choose checks in step 3.", "這些項目已整理好，請在步驟 3 選擇檢查方式。"),
+  },
+  authorized_incomplete: {
+    short: bilingual("Needs attention", "需要處理"),
+    description: bilingual("Some checks did not finish and can be continued.", "部分檢查尚未完成，可以繼續執行。"),
+  },
+  source_connected_none: {
+    short: bilingual("Nothing found", "沒有找到"),
+    description: bilingual("This source had nothing to add to the list this time.", "這個來源本次沒有內容可加入清單。"),
+  },
+  source_unavailable_unknown: {
+    short: bilingual("Connect source", "連接來源"),
+    description: bilingual("Connect this source to see what it contains.", "連接這個來源後，就能查看其中內容。"),
+  },
+  not_applicable: {
+    short: bilingual("Not included", "未納入"),
+    description: bilingual("This source is not included in the current scan.", "這個來源未納入目前的掃描。"),
+  },
+};
+
 const NUCLEI_TEMPLATE_REVISION = "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012";
 
 const pageCopy = {
-  headerEyebrow: bilingual("What to scan", "要檢查什麼"),
-  headerTitle: bilingual("Add what you want checked, then approve each boundary", "加入要檢查的東西，再逐項確認允許範圍"),
+  headerEyebrow: bilingual("Set up your scan", "設定這次掃描"),
+  headerTitle: bilingual("Bring everything you want to check into one place", "把想檢查的網站、系統與程式碼集中到一起"),
   headerDescription: bilingual(
-    "First let the product build a candidate list. Then confirm what it can see and exactly which checks are allowed. Missing visibility is unknown—not a pass.",
-    "先讓產品建立候選清單，再確認它看得到什麼，以及每一項到底允許哪些檢查。看不到就是未知，不是通過。",
+    "Add a website, cloud account, internal system, or local project. We'll organize everything into a clear list and suggest the right checks.",
+    "加入網站、雲端帳號、內部系統或本機專案；我們會整理成清楚清單，並建議適合的檢查。",
   ),
-  refresh: bilingual("Refresh candidates", "重新整理候選資產"),
+  refresh: bilingual("Find what I can scan", "整理可掃描項目"),
   refreshing: bilingual("Refreshing…", "正在重新確認…"),
-  journeyLabel: bilingual("Three steps for choosing scan coverage", "選擇掃描範圍的三個步驟"),
-  step1Short: bilingual("Add", "加入"),
-  step1Title: bilingual("Add what you want checked", "加入你要檢查的東西"),
-  step1Detail: bilingual("Use a saved file, a local folder, or temporary read-only cloud access.", "使用已保存的檔案、本機資料夾，或暫時的雲端唯讀存取。"),
-  step2Short: bilingual("See", "確認"),
-  step2Title: bilingual("Confirm what the product can see", "確認產品看得到什麼"),
-  step2Detail: bilingual("A candidate is something observed—not proof that it is yours or safe.", "候選資產只是目前觀察到的東西，不代表屬於你，也不代表安全。"),
-  step3Short: bilingual("Allow", "允許"),
-  step3Title: bilingual("Confirm allowed checks one item at a time", "逐項確認允許哪些檢查"),
-  step3Detail: bilingual("Nothing is authorized merely because you selected a card or candidate.", "選擇卡片或候選資產都不會自動授權。"),
+  journeyLabel: bilingual("Three steps to set up a scan", "設定掃描的三個步驟"),
+  step1Short: bilingual("Connect", "加入"),
+  step1Title: bilingual("Add what you want to protect", "加入想保護的內容"),
+  step1Detail: bilingual("Choose the easiest input: cloud, local files, an inventory, or targets already entered.", "選擇最方便的方式：雲端、本機檔案、盤點檔，或已輸入的目標。"),
+  step2Short: bilingual("Review", "查看"),
+  step2Title: bilingual("See everything in one list", "在同一份清單查看全部內容"),
+  step2Detail: bilingual("Check the names and sources, then move on when the list looks right.", "確認名稱與來源，清單看起來沒問題就繼續。"),
+  step3Short: bilingual("Choose", "選擇"),
+  step3Title: bilingual("Pick the checks you want to run", "選擇想執行的檢查"),
+  step3Detail: bilingual("Start with recommended settings and customize only when you need to.", "先用建議設定，需要時再打開進階選項。"),
   addEyebrow: bilingual("Step 1", "步驟 1"),
-  addTitle: bilingual("How can the product see it?", "產品要怎麼看得到？"),
-  addDescription: bilingual("Choose the input you already have. You can add more than one; scan permission always stays separate.", "選擇你現在已有的輸入；可以加入多種來源，但掃描許可永遠另外確認。"),
+  addTitle: bilingual("Add something to scan", "加入要掃描的內容"),
+  addDescription: bilingual("Choose the option that matches what you have now. You can always add another source later.", "選擇最符合你目前資料的方式；之後隨時都能再加入其他來源。"),
   providerTitle: bilingual("Cloud account", "雲端帳號"),
-  providerBody: bilingual("Connect short-lived, read-only access through the provider's official sign-in page.", "透過雲端服務商的官方登入頁連接短效唯讀存取。"),
-  providerOpen: bilingual("Set up cloud read-only access", "設定雲端唯讀存取"),
-  providerClose: bilingual("Close cloud access setup", "關閉雲端存取設定"),
-  snapshotTitle: bilingual("A saved JSON inventory", "已保存的 JSON 盤點檔"),
-  snapshotBody: bilingual("Attach one bounded export from a supported inventory source. The file is parsed locally.", "附加一份支援來源的有界盤點匯出；檔案只在本機解析。"),
-  snapshotOpen: bilingual("Choose a saved inventory", "選擇已保存的盤點檔"),
+  providerBody: bilingual("Sign in through AWS, Azure, Google Cloud, or Microsoft and turn cloud settings into a fix list.", "透過 AWS、Azure、Google Cloud 或 Microsoft 登入，把雲端設定整理成改善清單。"),
+  providerOpen: bilingual("Connect a cloud account", "連接雲端帳號"),
+  providerClose: bilingual("Close cloud setup", "關閉雲端設定"),
+  snapshotTitle: bilingual("An inventory file", "盤點檔"),
+  snapshotBody: bilingual("Already have a JSON export? Add it here and review the assets locally.", "已經有 JSON 匯出檔？直接加入並在本機整理資產。"),
+  snapshotOpen: bilingual("Add an inventory file", "加入盤點檔"),
   snapshotClose: bilingual("Close inventory form", "關閉盤點檔表單"),
-  workspaceTitle: bilingual("Source, IaC, container, or Kubernetes files", "程式碼、IaC、容器或 Kubernetes 檔案"),
-  workspaceBody: bilingual("Make an immutable local copy of only the folder you choose.", "只把你明確選擇的資料夾製成不可變本機副本。"),
-  workspaceOpen: bilingual("Choose local files", "選擇本機檔案"),
+  workspaceTitle: bilingual("Code, infrastructure, containers, or Kubernetes", "程式碼、基礎設施、容器或 Kubernetes"),
+  workspaceBody: bilingual("Choose a local folder and find issues without uploading the project.", "選擇本機資料夾，不必上傳專案就能找問題。"),
+  workspaceOpen: bilingual("Choose a project", "選擇專案"),
   workspaceClose: bilingual("Close local-files form", "關閉本機檔案表單"),
-  knownTargetsTitle: bilingual("Website, public IP, or internal system already named in this case", "案件中已填入的網站、公開 IP 或內部系統"),
-  knownTargetsBody: bilingual("Refresh the candidate list, then confirm each exact target in step 3. This does not contact the target.", "重新整理候選清單，再到步驟 3 確認每個精確目標；這不會連線到目標。"),
-  selectDoesNotAuthorizeTitle: bilingual("Adding an input or choosing a card does not authorize a scan", "加入輸入或選擇卡片都不會授權掃描"),
-  selectDoesNotAuthorizeBody: bilingual("The product only creates candidates here. Ownership, exact targets, scan type, network limits, and permission are confirmed separately in step 3.", "這裡只會建立候選資產；所有權、精確目標、檢查種類、網路限制與許可都要在步驟 3 另外確認。"),
-  situationSummary: bilingual("Show the next step for my situation", "查看不同情境的下一步"),
-  situationIntro: bilingual("The same three steps apply to every use case; only the input and permission boundary change.", "每種情境都走相同三步，差別只在輸入方式與需要確認的權限邊界。"),
+  knownTargetsTitle: bilingual("Website, IP, or internal system already added", "已加入的網站、IP 或內部系統"),
+  knownTargetsBody: bilingual("Turn the targets from your scan project into a review list.", "把掃描專案中的目標整理成可確認的清單。"),
+  selectDoesNotAuthorizeTitle: bilingual("How scan approval works", "掃描確認方式"),
+  selectDoesNotAuthorizeBody: bilingual("Adding something here only prepares the scan. Before a network check runs, you'll review the exact target, scan type, and limits in step 3.", "在這裡加入內容只會準備掃描；執行網路檢查前，你會在步驟 3 確認目標、檢查方式與限制。"),
+  situationSummary: bilingual("Not sure which option to choose?", "不確定該選哪一種？"),
+  situationIntro: bilingual("Find your situation below and follow the suggested path.", "在下方找到最接近的情況，照著建議方式開始。"),
 
   sourceEyebrow: bilingual("Saved inventory", "已保存的盤點檔"),
   sourceTitle: bilingual("Attach one saved JSON inventory", "附加一份已保存的 JSON 盤點檔"),
-  sourceIntro: bilingual("This is not a live sign-in or an unlimited discovery. The local core reads only the one JSON file you choose, up to 8 MiB, and accepts only the selected format.", "這不是即時登入，也不是無限制盤點。本機核心最多只讀取你選擇的一個 8 MiB JSON 檔，並且只接受指定格式。"),
+  sourceIntro: bilingual("Choose an inventory export you already have. We'll copy it into this scan project and organize the assets on this computer.", "選擇現有的盤點匯出檔；我們會複製到掃描專案，並在這台電腦上整理資產。"),
   noSecretsSnapshotTitle: bilingual("Remove passwords, tokens, private keys, and other secrets first", "請先移除密碼、token、私鑰與其他秘密值"),
-  noSecretsSnapshotBody: bilingual("Export only the inventory fields this case needs. Attaching a file creates candidates; it does not prove ownership, authorize a scan, or start one.", "請只匯出案件需要的盤點欄位。附加檔案只會建立候選資產，不會證明所有權、授權或啟動掃描。"),
+  noSecretsSnapshotBody: bilingual("Include only what you want checked. This step adds items to the list; you will confirm them before any network scan can run.", "只保留想檢查的內容。這一步只會把項目加入清單；任何網路掃描執行前，你都會再次確認。"),
   demoFileTitle: bilingual("Browser preview cannot read a local file", "瀏覽器預覽不會讀取本機檔案"),
   demoFileBody: bilingual("Open the signed desktop app to attach a real snapshot. This preview only shows the steps.", "請使用已簽章的桌面程式附加真實快照；目前預覽只會顯示步驟。"),
   sourceKind: bilingual("What produced this inventory?", "這份盤點檔來自哪裡？"),
@@ -277,13 +309,13 @@ const pageCopy = {
   snapshotFormatHelp: bilingual("The choice is limited by the source. The product never guesses with a general-purpose parser.", "格式會依來源限制；產品不會用通用解析器猜測。"),
   inputTechnicalSummary: bilingual("Technical input details", "輸入技術細節"),
   localEngineDetail: bilingual("Bound scanner engines: {engines}.", "綁定的掃描引擎：{engines}。"),
-  sourceLabel: bilingual("Name shown in this case", "案件中顯示的名稱"),
+  sourceLabel: bilingual("Name shown in this scan", "這次掃描中顯示的名稱"),
   sourceLabelPlaceholder: bilingual("Example: Production AWS inventory", "例如：正式環境 AWS 盤點"),
   sourceLabelHelp: bilingual("Use a recognizable name. Do not include credentials or secrets.", "請使用容易辨識的名稱，不要放入憑證或秘密值。"),
   jsonSnapshot: bilingual("JSON file", "JSON 檔案"),
   choosingPicker: bilingual("Opening the file picker…", "正在開啟檔案選擇器…"),
   chooseJson: bilingual("Choose one .json file", "選擇一份 .json 檔"),
-  snapshotPathHelp: bilingual("The product does not scan the folder or save the original path in the canonical case.", "產品不會掃描資料夾，也不會把原始路徑寫入正式案件紀錄。"),
+  snapshotPathHelp: bilingual("Only this file is copied. Its original folder location stays on this computer.", "只會複製這個檔案；原本的資料夾位置會留在這台電腦上。"),
   sourceAfterHelp: bilingual("After attaching it, refresh what the product can see.", "附加後仍要重新確認產品看得到什麼。"),
   connectSnapshot: bilingual("Copy and attach this inventory", "複製並附加這份盤點檔"),
   connectingSnapshot: bilingual("Attaching…", "正在附加…"),
@@ -294,50 +326,51 @@ const pageCopy = {
   sourceErrorPath: bilingual("Choose one JSON inventory first.", "請先明確選擇一份 JSON 快照。"),
 
   workspaceEyebrow: bilingual("Saved local copy", "保存本機副本"),
-  workspaceFormTitle: bilingual("Attach one exact type of local input", "附加一種明確類型的本機輸入"),
-  workspaceIntro: bilingual("The local core copies only the folder you choose, verifies its type, applies file-count, size, and depth limits, and fixes it to this case with content hashes.", "本機核心只會複製你選擇的資料夾、驗證類型、限制檔案數量、大小與深度，再用內容雜湊固定到案件。"),
-  gitWarningTitle: bilingual("Only .git metadata is excluded—remove secret files from the working tree first", "只會排除 .git metadata；請先移除工作樹裡的秘密檔案"),
-  gitWarningBody: bilingual("Git history, refs, hooks, and credentials inside .git are not opened or copied. Files such as .env, keys, or tokens elsewhere in the working tree are still content, so remove them first.", "所有名為 .git 的項目都不會被開啟或複製，因此 Git history、refs、hooks 與其中 credentials 不會進入快照；但工作樹裡的 .env、金鑰或 token 檔仍屬內容，請先移除。"),
+  workspaceFormTitle: bilingual("Choose the local project you want checked", "選擇想檢查的本機專案"),
+  workspaceIntro: bilingual("Pick one folder. The app prepares a private local copy for the scan and leaves your working files untouched.", "選擇一個資料夾；產品會準備掃描用的本機副本，不會動到你的工作檔案。"),
+  gitWarningTitle: bilingual("Remove passwords, keys, and tokens from this folder first", "請先移除這個資料夾裡的密碼、金鑰與 token"),
+  gitWarningBody: bilingual("The app leaves Git history out, but other files in this folder—including .env files—are copied for the scan. Remove secrets before you continue.", "產品不會包含 Git 版本紀錄，但會複製資料夾裡的其他檔案，包括 .env 檔。繼續前請先移除秘密值。"),
+  gitTechnicalBody: bilingual("Every .git directory is excluded, so Git history, refs, hooks, and credentials stored inside .git are not opened or copied.", "所有 .git 目錄都會排除，因此不會開啟或複製其中的 Git history、refs、hooks 與 credentials。"),
   localNoGrantTitle: bilingual("The input type is fixed, but attaching it does not grant scan permission", "輸入類型會固定，但附加動作不會授予掃描權限"),
   localNoGrantBody: bilingual("The case saves a snapshot ID, input type, content hash, and relative-path manifest—not the original host path. Confirm ownership and read-only local review in step 3.", "案件只保存快照 ID、輸入類型、內容雜湊與相對路徑 manifest，不保存原始主機路徑。請在步驟 3 確認所有權與本機唯讀檢查。"),
   demoFolderTitle: bilingual("Browser preview cannot read a local folder", "瀏覽器預覽不會讀取本機目錄"),
   demoFolderBody: bilingual("Open the signed desktop app to create a real local snapshot. This preview only shows the steps.", "請使用已簽章的桌面程式建立真實本機快照；目前預覽只會顯示步驟。"),
   inputType: bilingual("What are you attaching?", "你要附加什麼？"),
-  localLabel: bilingual("Name shown in this case", "案件中顯示的名稱"),
+  localLabel: bilingual("Name shown in this scan", "這次掃描中顯示的名稱"),
   localLabelPlaceholder: bilingual("Example: Production container image", "例如：Production container image"),
-  localLabelHelp: bilingual("Use a recognizable name. Do not include the host path or a secret.", "只用來辨識案件內的候選資產；不要放入主機路徑或秘密值。"),
+  localLabelHelp: bilingual("Use a name you will recognize later. Do not include passwords, keys, or tokens.", "使用之後容易辨識的名稱，不要放入密碼、金鑰或 token。"),
   localDirectory: bilingual("Folder to copy", "要複製的資料夾"),
-  localPathHelp: bilingual("Only the folder name is shown here. The canonical case does not save the original absolute path.", "畫面只顯示目錄名稱；canonical case 不保存原始絕對路徑。"),
+  localPathHelp: bilingual("Only the folder name is shown here. Its full location stays on this computer.", "這裡只會顯示資料夾名稱；完整位置會留在這台電腦上。"),
   workspaceAfterHelp: bilingual("After the copy is created, confirm ownership and allowed checks in step 3.", "建立副本後，仍要在步驟 3 確認所有權與允許的檢查。"),
-  attachWorkspace: bilingual("Create the immutable local copy", "建立不可變本機副本"),
+  attachWorkspace: bilingual("Prepare this project for scanning", "準備這份專案進行掃描"),
   attachingWorkspace: bilingual("Creating the copy…", "正在建立副本…"),
   folderFallback: bilingual("Selected folder", "已選取資料夾"),
   workspaceErrorPicker: bilingual("The local folder picker could not open. Nothing was read or copied.", "無法開啟本機目錄選擇器；沒有讀取或複製任何目錄。"),
-  workspaceErrorLabel: bilingual("Enter a name that identifies this local copy.", "請輸入能辨識這份工作樹的標籤。"),
-  workspaceErrorPath: bilingual("Choose one working-tree folder first.", "請先明確選擇一個目前工作目錄。"),
+  workspaceErrorLabel: bilingual("Enter a name for this project.", "請輸入這份專案的名稱。"),
+  workspaceErrorPath: bilingual("Choose one project folder first.", "請先選擇一個專案資料夾。"),
 
   seeEyebrow: bilingual("Step 2", "步驟 2"),
-  seeTitle: bilingual("Confirm what the product can see", "確認產品看得到什麼"),
-  seeDescription: bilingual("These are observations from the inputs above. A missing source stays unknown; an empty connected source means only that this input returned no candidates this time.", "以下內容來自上方輸入。缺少來源時仍是未知；已連接來源沒有候選，只代表這次輸入沒有回傳項目。"),
-  continueStep3: bilingual("Continue to step 3", "前往步驟 3"),
-  candidateAssets: bilingual("Candidates seen", "看到的候選資產"),
-  candidateDetail: bilingual("Observed from the inputs attached to this case", "來自這個案件已附加的輸入"),
+  seeTitle: bilingual("Review what we found", "查看整理結果"),
+  seeDescription: bilingual("Check the list below. If something is missing, add another source above; if it looks right, continue to choose the checks.", "確認下方清單；若少了什麼，就回上方再加來源。清單沒問題，就繼續選擇檢查方式。"),
+  continueStep3: bilingual("Choose scan settings", "選擇掃描方式"),
+  candidateAssets: bilingual("Items found", "找到的項目"),
+  candidateDetail: bilingual("Websites, systems, and projects in this scan", "這次掃描中的網站、系統與專案"),
   scannedAssets: bilingual("Checks completed", "已完成檢查"),
-  scannedDetail: bilingual("Permission was recorded and all planned work finished", "已留下許可，而且規劃工作完整完成"),
-  incompleteAssets: bilingual("Allowed, but incomplete", "已允許，但未完成"),
-  incompleteDetail: bilingual("Resume the work or resolve its execution problem", "需要續跑或排除執行問題"),
-  pendingAssets: bilingual("Need your confirmation", "需要你確認"),
-  pendingDetail: bilingual("No active check runs before confirmation", "確認前不會開始主動檢查"),
+  scannedDetail: bilingual("All selected checks for these items finished", "這些項目的所有已選檢查都已完成"),
+  incompleteAssets: bilingual("Needs attention", "需要處理"),
+  incompleteDetail: bilingual("Some checks did not finish; you can continue them", "部分檢查尚未完成，可以繼續執行"),
+  pendingAssets: bilingual("Not set up yet", "尚未設定"),
+  pendingDetail: bilingual("Choose checks for these items in step 3", "在步驟 3 為這些項目選擇檢查方式"),
   metricsLabel: bilingual("What the product can currently see", "產品目前看得到的摘要"),
-  unknownTitle: bilingual("{count} sources are still unknown", "{count} 個來源目前仍是未知"),
-  unknownBody: bilingual("No usable input is connected, so the product does not know whether assets exist. This is not zero assets and not a pass.", "沒有可用輸入，所以產品不知道是否存在資產。這不是零資產，也不是通過。"),
-  noneTitle: bilingual("{count} connected sources returned no candidates", "{count} 個已連接來源沒有回傳候選資產"),
-  noneBody: bilingual("The input was available and returned zero candidates at this moment. The statement applies only to that saved input and time.", "輸入可以使用，而且此刻回傳零個候選資產；這只代表該份輸入與時間點。"),
-  sourcesEyebrow: bilingual("Inputs and visibility", "輸入與可見範圍"),
-  sourcesTitle: bilingual("What each input reported", "每個輸入回報了什麼"),
+  unknownTitle: bilingual("{count} sources still need data", "{count} 個來源還需要資料"),
+  unknownBody: bilingual("Connect or import these sources to see what they contain.", "連接或匯入這些來源，就能查看其中內容。"),
+  noneTitle: bilingual("{count} connected sources found no items", "{count} 個已連接來源沒有找到項目"),
+  noneBody: bilingual("The source connected successfully but had nothing to add to this list right now.", "來源已成功連接，只是目前沒有內容可加入這份清單。"),
+  sourcesEyebrow: bilingual("Your sources", "你的資料來源"),
+  sourcesTitle: bilingual("Everything connected to this scan", "這次掃描已連接的內容"),
   noSourcesTitle: bilingual("No input has been attached yet", "尚未附加任何輸入"),
-  noSourcesBody: bilingual("Attach a bounded inventory or local copy in step 1, then refresh what the product can see.", "請先在步驟 1 附加有界盤點檔或本機副本，再重新確認產品看得到什麼。"),
-  assetsCount: bilingual("{count} candidates", "{count} 個候選資產"),
+  noSourcesBody: bilingual("Add an inventory file or local project in step 1, then refresh this list.", "請先在步驟 1 加入盤點檔或本機專案，再重新整理這份清單。"),
+  assetsCount: bilingual("{count} items", "{count} 個項目"),
   lastChecked: bilingual("Checked {date}", "確認時間 {date}"),
   notConnected: bilingual("Not connected", "尚未連接"),
   sourceTechnical: bilingual("Technical source details", "來源技術細節"),
@@ -348,17 +381,17 @@ const pageCopy = {
   coverageStateTechnical: bilingual("Coverage state", "涵蓋狀態"),
   coverageDetailsSummary: bilingual("Coverage states and filters", "涵蓋狀態與篩選條件"),
   coverageDetailsIntro: bilingual("Use these technical states when diagnosing why an item has or does not have results.", "排查為什麼某一項有結果或沒有結果時，可使用這些技術狀態。"),
-  showAll: bilingual("Show all candidates", "顯示所有候選資產"),
+  showAll: bilingual("Show all items", "顯示所有項目"),
 
   allowEyebrow: bilingual("Step 3", "步驟 3"),
-  allowTitle: bilingual("Confirm what may be checked—one item at a time", "逐項確認允許檢查什麼"),
-  allowDescription: bilingual("Choose a candidate, review the suggested read-only or network checks, and record the exact boundary. Selecting it does not authorize anything.", "選擇候選資產、確認建議的唯讀或網路檢查，再留下精確邊界；選取動作本身不會授權。"),
-  pendingNoticeTitle: bilingual("Some candidates still need your decision", "有候選資產仍需要你決定"),
-  pendingNoticeBody: bilingual("Before ownership is confirmed, the product keeps only existing inventory evidence and does not start connection probes or active vulnerability tests.", "確認所有權前，產品只保留既有盤點證據，不會啟動連線探測或主動弱點測試。"),
+  allowTitle: bilingual("Choose what to scan", "選擇要掃描的內容"),
+  allowDescription: bilingual("Select one or more items, choose the checks, and save. Recommended settings work for most scans; advanced controls are still available.", "選擇一個或多個項目、挑選檢查方式並儲存。大多數情況直接使用建議設定即可，進階控制仍完整保留。"),
+  pendingNoticeTitle: bilingual("Choose your first item below", "從下方選擇第一個項目"),
+  pendingNoticeBody: bilingual("Select an item to see the checks we recommend for it.", "選取項目後，就會看到我們建議的檢查方式。"),
   selectedCount: bilingual("{count} selected", "已選 {count} 項"),
   chooseAsset: bilingual("Choose {name}", "選取 {name}"),
-  incompatibleSelection: bilingual("External targets need their own exact network boundary. Finish or clear the current selection first.", "外部目標需要自己的精確網路邊界；請先完成或清除目前選取。"),
-  addPermission: bilingual("Select this item again to add a missing read-only permission.", "可以再次選取這一項，補上缺少的唯讀許可。"),
+  incompatibleSelection: bilingual("Set up each website or internal system separately. Finish or clear the current selection first.", "網站或內部系統需要逐一設定；請先完成或清除目前的選取。"),
+  addPermission: bilingual("Select this item again to finish its scan setup.", "再次選取這個項目，即可完成掃描設定。"),
   assetNext: bilingual("Next step", "下一步"),
   noOwner: bilingual("Owner not recorded", "尚未記錄負責人"),
   owner: bilingual("Owner", "負責人"),
@@ -375,32 +408,36 @@ const pageCopy = {
   exposed: bilingual("Source says public", "來源顯示為公開"),
   internal: bilingual("Source says internal", "來源顯示為內部"),
   exposureUnknown: bilingual("Unknown", "未知"),
-  clearSelection: bilingual("Clear selected candidates", "清除已選候選資產"),
-  grantEyebrow: bilingual("Exact permission", "精確許可"),
-  grantTitle: bilingual("Confirm ownership and allowed checks", "確認所有權與允許的檢查"),
-  grantDescription: bilingual("This creates permission only for the {count} candidates listed below. It does not start a scan.", "只會為下方 {count} 個候選資產建立許可，不會啟動掃描。"),
-  presetTitle: bilingual("Suggested checks are not permission", "建議檢查不是授權"),
-  presetBody: bilingual("The first selection may suggest checks that match the case goal and every selected item. You must still confirm ownership, checks, and boundaries before recording permission.", "首次選取時可能依案件目標與所有已選項目建議檢查；你仍須確認所有權、檢查與邊界，再明確記錄許可。"),
-  noCommonTitle: bilingual("These candidates do not share one permission type", "這些候選資產沒有共同的許可類型"),
-  noCommonBody: bilingual("Confirm external targets separately from cloud accounts and local copies so a network permission can never spill into another item.", "請把外部目標與雲端帳號、本機副本分開確認，避免網路許可套用到其他項目。"),
-  allowedQuestion: bilingual("Which checks do you allow?", "你允許哪些檢查？"),
+  clearSelection: bilingual("Clear selected items", "清除已選項目"),
+  grantEyebrow: bilingual("Scan choices", "掃描選項"),
+  grantTitle: bilingual("Set up checks for {count} selected items", "設定 {count} 個已選項目的檢查"),
+  grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then save. The scan starts only when you press Start on the progress page.", "確認建議內容與你有權執行這些檢查，再儲存；到掃描進度頁按下開始後才會正式執行。"),
+  presetTitle: bilingual("Recommended settings are ready", "建議設定已準備好"),
+  presetBody: bilingual("We picked a safe, useful starting point for the selected items. You can still change anything before saving.", "我們已依所選項目準備安全又實用的起始設定；儲存前仍可調整。"),
+  noCommonTitle: bilingual("These items need different scan setups", "這些項目需要不同的掃描設定"),
+  noCommonBody: bilingual("Set up websites and internal systems separately from cloud accounts and local projects.", "請把網站與內部系統，和雲端帳號與本機專案分開設定。"),
+  allowedQuestion: bilingual("What should we check?", "想檢查哪些內容？"),
 
-  externalEyebrow: bilingual("Exact network boundary", "精確網路邊界"),
-  externalTitle: bilingual("Set the limits for {name}", "設定 {name} 的限制"),
-  externalDescription: bilingual("The target must exactly match this candidate. Permission lasts 30 days and never accepts a wildcard.", "目標必須與此候選資產完全相符。許可保存 30 天，而且不接受萬用字元。"),
-  sourcePublic: bilingual("Source says public", "來源證明對外"),
-  sourceInternal: bilingual("Source says internal", "來源顯示非對外"),
-  sourceExposureUnknown: bilingual("Exposure unknown", "對外狀態未知"),
-  noDirectTitle: bilingual("Direct connection checks cannot be allowed for this candidate", "目前不能允許直接連線檢查"),
-  noDirectBody: bilingual("The source does not contain internet_exposed=true evidence. Public-record review remains available; a checkbox cannot override source evidence.", "來源沒有證據顯示它對外開放。你仍可選擇公開資料盤點，但不能用人工勾選覆寫來源證據。"),
-  internalGrantTitle: bilingual("An internal target needs explicit sensitive-network permission", "內部目標需要明確的敏感網路許可"),
-  internalGrantBody: bilingual("Direct checks stay blocked until you turn on the exact private-network permission below. Metadata endpoints remain blocked in every case.", "直接檢查會保持阻擋，直到你開啟下方的精確私網許可；雲端執行個體中繼資料位址在任何情況都仍禁止。"),
-  noTargetTitle: bilingual("This candidate has no exact network target", "這個候選資產沒有精確網路目標"),
-  noTargetBody: bilingual("Its identifiers are empty, wildcarded, or unsafe. Correct the input and refresh the candidates before recording network permission.", "identifier 是空值、萬用字元或格式不安全；請修正輸入並重新整理候選資產後再記錄網路許可。"),
+  externalEyebrow: bilingual("Ready to scan", "準備掃描"),
+  externalTitle: bilingual("Confirm {name}", "確認 {name}"),
+  externalDescription: bilingual("We've chosen conservative settings. Confirm this is your website or internal system, then save.", "我們已選好保守設定；確認這是你的網站或內部系統，再儲存即可。"),
+  advancedScanSettings: bilingual("Advanced scan settings", "進階掃描設定"),
+  advancedScanSettingsHelp: bilingual("Connection details, speed limits, and the active-test list", "連線細節、速度限制與主動測試清單"),
+  activeSetupTitle: bilingual("Active testing needs one more step", "主動測試還需要一個步驟"),
+  activeSetupBody: bilingual("Open Advanced scan settings and add the approved test list before saving.", "請打開「進階掃描設定」，加入已核准的測試清單後再儲存。"),
+  sourcePublic: bilingual("Public website", "公開網站"),
+  sourceInternal: bilingual("Internal system", "內部系統"),
+  sourceExposureUnknown: bilingual("Needs source details", "需要補充來源資料"),
+  noDirectTitle: bilingual("We cannot confirm that this system is open to the internet", "目前無法確認這個系統是否對外開放"),
+  noDirectBody: bilingual("You can still review public records. To connect directly, update the source information first.", "你仍可查看公開資料；若要直接連線，請先更新來源資料。"),
+  internalGrantTitle: bilingual("This is an internal system", "這是內部系統"),
+  internalGrantBody: bilingual("To connect from this computer, turn on the internal-network confirmation below.", "若要從這台電腦連線，請開啟下方的內部網路確認。"),
+  noTargetTitle: bilingual("Add one specific website or IP address first", "請先加入一個明確的網站或 IP 位址"),
+  noTargetBody: bilingual("Go back to the scan project, enter one complete address, then refresh this list.", "請回到掃描專案，輸入一個完整位址，再重新整理這份清單。"),
   declaredServiceTitle: bilingual("Prepared from the website URL—review before approving", "已依網站網址預填；核准前請重新確認"),
   declaredServiceBody: bilingual("The case suggested {protocol} port {port} and path {path}. Only protocol and port are prefilled below; the path is context, not permission. Confirm the exact live service yourself.", "案件依原始網址建議 {protocol}、連接埠 {port} 與路徑 {path}。下方只預填協定與連接埠；路徑只是提示，不是許可。請自行確認精確服務。"),
-  canonicalTarget: bilingual("Exact target", "精確目標"),
-  canonicalTargetHelp: bilingual("Only identifiers from this candidate are available; arbitrary input is not accepted.", "只列出這個候選資產原有的識別資訊，不接受任意輸入。"),
+  canonicalTarget: bilingual("Website or system to check", "要檢查的網站或系統"),
+  canonicalTargetHelp: bilingual("This value comes from the item you added. Return to the scan project if it needs to change.", "這個值來自你加入的項目；若要修改，請回到掃描專案。"),
   protocol: bilingual("Protocol", "傳輸協定"),
   protocolHelp: bilingual("The scanner cannot add another protocol while running.", "掃描工具不能在執行時自行擴充協定。"),
   ports: bilingual("Allowed ports", "允許的連接埠"),
@@ -419,38 +456,43 @@ const pageCopy = {
   templateValid: bilingual("{count} exact IDs.", "{count} 個精確 ID。"),
   templateInvalid: bilingual("Wildcard * is not accepted.", "不可使用萬用字元 *。"),
   prohibitedIntro: bilingual("The following capabilities always remain off:", "以下能力固定保持關閉："),
-  sensitiveTitle: bilingual("Allow this exact target to resolve to approved private, loopback, or link-local networks", "允許這個精確目標解析到已核准的私有、回送或本機連線網段"),
-  sensitiveBody: bilingual("Off by default. Metadata endpoints always remain blocked. This is recorded in the fixed permission and never adds another target.", "預設關閉；雲端執行個體中繼資料位址永遠禁止。這個選擇會記錄在固定許可中，而且不會加入其他目標。"),
-  ownershipTitle: bilingual("I confirmed that every listed item belongs to this authorized assessment", "我已確認列出的每一項都屬於本次合法評估範圍"),
-  ownershipBody: bilingual("A candidate source or similar name never proves ownership by itself.", "候選來源或名稱相似都不能自動證明所有權。"),
-  authorityRequired: bilingual("Permission reference (required)", "授權參考（必填）"),
-  scopeNote: bilingual("Scope note (optional)", "範圍備註（選填）"),
+  sensitiveTitle: bilingual("I confirm this scan may connect to the selected internal network", "我確認這次掃描可以連線到所選內部網路"),
+  sensitiveBody: bilingual("Turn this on only when the system owner approved access from this computer. Most public websites leave it off.", "只有系統負責人已核准從這台電腦存取時才開啟；一般公開網站不需要。"),
+  sensitiveTechnicalTitle: bilingual("Exact internal-network behavior", "內部網路的精確行為"),
+  sensitiveTechnicalBody: bilingual("This permits only the selected target to resolve to approved private, loopback, or link-local networks. Metadata endpoints remain blocked, and no additional target is added.", "只允許所選目標解析到已核准的 private、loopback 或 link-local 網段；metadata endpoints 仍保持阻擋，也不會加入其他目標。"),
+  ownershipTitle: bilingual("I confirm that I am allowed to scan every selected item", "我確認自己有權掃描每一個已選項目"),
+  externalOwnershipTitle: bilingual("I confirm this is my website or a system I am allowed to scan", "我確認這是我的網站，或是我有權掃描的系統"),
+  internalOwnershipTitle: bilingual("I confirm this is an internal system I am allowed to scan", "我確認這是我有權掃描的內部系統"),
+  ownershipBody: bilingual("If you are unsure, ask the system owner before continuing.", "如果不確定，請先向系統負責人確認。"),
+  authorityRequired: bilingual("Approval reference (required)", "核准紀錄（必填）"),
+  scopeNote: bilingual("Note (optional)", "備註（選填）"),
   authorityPlaceholder: bilingual("Example: ticket or contract number and approver", "例如：工單／合約編號與核准人"),
   notePlaceholder: bilingual("Example: internal approval for this read-only review", "例如：本次唯讀檢查的內部核准紀錄"),
-  authorityHelp: bilingual("Every network activity needs a traceable authority statement. Never enter a secret or credential here.", "任何網路活動都必須留下可追溯的授權聲明；不要在這裡填入秘密值或憑證。"),
+  authorityHelp: bilingual("Add the ticket, contract, or approver that confirms this scan. Never enter a password, key, or token here.", "填入可證明這次掃描已核准的工單、合約或核准人；不要放入密碼、金鑰或 token。"),
   noteHelp: bilingual("Never enter a secret or credential here.", "不要在這裡填入秘密值或憑證。"),
   activeAuthorityLength: bilingual("An active-test permission reference needs at least 8 characters.", "主動測試的授權參考至少需要 8 個字元。"),
-  grantBoundaryHelp: bilingual("Permission applies only to the listed candidates and checks.", "許可只套用到列出的候選資產與檢查。"),
-  saveGrant: bilingual("Record this exact permission", "記錄這份精確許可"),
+  grantBoundaryHelp: bilingual("Next, open Scan progress and press Start when you're ready.", "下一步到「掃描進度」，準備好時再按下開始。"),
+  saveGrant: bilingual("Save scan choices", "儲存掃描選項"),
   savingGrant: bilingual("Recording…", "正在記錄…"),
   defaultScopeNote: bilingual("The user confirmed ownership and the read-only boundary item by item in the local interface.", "使用者已在本機介面逐項確認資產所有權與唯讀範圍。"),
 
-  emptyUnknownTitle: bilingual("There are no candidates, and visibility is still unknown", "目前沒有候選資產，而且可見範圍仍是未知"),
+  emptyUnknownTitle: bilingual("No items yet because a source is still missing", "尚未看到項目，因為還缺少資料來源"),
   emptyUnknownBody: bilingual("At least one needed input is missing. Do not interpret the empty list as proof that the environment has no assets.", "至少一個需要的輸入尚未連接；不能把空清單解讀為環境沒有資產。"),
-  emptyNoneTitle: bilingual("The connected inputs returned no candidates this time", "已連接的輸入這次沒有回傳候選資產"),
+  emptyNoneTitle: bilingual("The connected sources found no items this time", "已連接的來源這次沒有找到項目"),
   emptyNoneBody: bilingual("The inputs were available and returned zero items. This is different from having no input and therefore no visibility.", "輸入確實可用且回傳零項；這與缺少輸入、因此無法看見的未知狀態不同。"),
-  emptyNeverTitle: bilingual("Candidate discovery has not run yet", "尚未執行候選資產盤點"),
+  emptyNeverTitle: bilingual("This list has not been refreshed yet", "這份清單尚未重新整理"),
   emptyNeverBody: bilingual("Attach an input in step 1, then refresh what the product can see.", "請先在步驟 1 附加輸入，再重新確認產品看得到什麼。"),
-  emptyFilterTitle: bilingual("No candidates match this technical filter", "這個技術篩選下沒有候選資產"),
-  emptyFilterBody: bilingual("Clear the filter to review the other candidates.", "請清除篩選以查看其他候選資產。"),
+  emptyFilterTitle: bilingual("No items match this filter", "沒有項目符合這個篩選條件"),
+  emptyFilterBody: bilingual("Clear the filter to review the other items.", "請清除篩選以查看其他項目。"),
 
-  grantsEyebrow: bilingual("Recorded network permissions", "已記錄的網路許可"),
-  grantsTitle: bilingual("Exact external boundaries already approved", "已核准的精確外部邊界"),
-  grantsDescription: bilingual("Each permission belongs to one case and one candidate. The runner may narrow it, but can never add targets, ports, rate, or tests.", "每份許可只屬於一個案件與候選資產。執行端可以縮小，但不能加入目標、連接埠、速率或測試。"),
-  grantsCount: bilingual("{count} permissions", "{count} 份許可"),
+  grantsEyebrow: bilingual("Saved scan access", "已儲存的掃描許可"),
+  grantsTitle: bilingual("Network checks already approved", "已確認的網路檢查"),
+  grantsDescription: bilingual("These saved choices keep future runs consistent. Open a record when you need the exact technical limits.", "這些選擇會讓後續掃描維持一致；需要時可打開紀錄查看精確技術限制。"),
+  grantsCount: bilingual("{count} saved setups", "{count} 份已儲存設定"),
+  grantTechnical: bilingual("View saved scan settings", "查看已儲存的掃描設定"),
   expires: bilingual("Expires {date}", "到期 {date}"),
-  sensitiveAllowed: bilingual("Approved sensitive networks", "允許已核准敏感網段"),
-  sensitiveBlocked: bilingual("Sensitive networks blocked", "敏感網段保持阻擋"),
+  sensitiveAllowed: bilingual("Internal network access allowed", "已允許內部網路存取"),
+  sensitiveBlocked: bilingual("Internal network access off", "未開啟內部網路存取"),
   targetTerm: bilingual("Target", "目標"),
   protocolPortsTerm: bilingual("Protocol and ports", "協定與連接埠"),
   noDirectPort: bilingual("No direct-connection port", "沒有直接連線連接埠"),
@@ -459,8 +501,8 @@ const pageCopy = {
   authorityTerm: bilingual("Permission reference", "授權參考"),
   approvalTerm: bilingual("Recorded by", "記錄者"),
   prohibitedAll: bilingual("Headless browser, out-of-band callback, fuzzing, file upload, denial of service, and credential attacks are all blocked.", "無頭瀏覽器、站外回呼、模糊測試、檔案上傳、阻斷服務與密碼攻擊全部禁止。"),
-  finalNoticeTitle: bilingual("Inventory and active checks have separate permission", "盤點與主動檢查分開授權"),
-  finalNoticeBody: bilingual("Saved DNS and certificate records can create candidates. Tools that contact a target still require an exact candidate, network boundary, limits, and permission in step 3.", "已保存的 DNS 與憑證紀錄可以建立候選資產；任何會接觸目標的工具仍須在步驟 3 確認精確候選、網路邊界、限制與許可。"),
+  finalNoticeTitle: bilingual("How local inventory and network scans differ", "本機盤點與網路掃描有什麼不同"),
+  finalNoticeBody: bilingual("Inventory files can be reviewed locally. Checks that connect to a website or network target use the exact settings and approval saved in step 3.", "盤點檔可以直接在本機整理；會連線到網站或網路目標的檢查，則使用步驟 3 儲存的明確設定與核准紀錄。"),
 } as const;
 
 const coverageJourneySteps = [
@@ -474,49 +516,49 @@ const useCaseNextSteps = [
     id: "website",
     icon: "external" as const,
     title: bilingual("A website or API that is already online", "已架好的網站或 API"),
-    detail: bilingual("Refresh the website candidate, select it in step 3, then confirm the exact protocol, port, rate, and allowed tests.", "重新整理網站候選資產，在步驟 3 選取它，再確認精確協定、連接埠、速率與允許的測試。"),
+    detail: bilingual("Use the website already added to this project, then choose it in step 3. Recommended web settings are filled in for you.", "使用專案中已加入的網站，再到步驟 3 選取；系統會幫你填好建議的網站掃描設定。"),
   },
   {
     id: "public-target",
     icon: "coverage" as const,
     title: bilingual("Public IP addresses or domains", "公開 IP 或網域"),
-    detail: bilingual("Review each public candidate separately. Public-record review and direct connection checks remain different permissions.", "逐一確認公開候選資產；公開資料盤點與直接連線檢查仍是不同許可。"),
+    detail: bilingual("Use the targets already added to this project, then choose whether to review public records or run a light connection check.", "使用專案中已加入的目標，再選擇查看公開資料或執行低影響連線檢查。"),
   },
   {
     id: "internal-it",
     icon: "lock" as const,
     title: bilingual("Internal IT systems", "內部 IT 環境"),
-    detail: bilingual("Select the exact internal candidate, then explicitly allow its approved sensitive-network boundary. Private access is never inferred.", "選取精確內部候選資產，再明確允許已核准的敏感網路邊界；產品永遠不會自行推定私網許可。"),
+    detail: bilingual("Choose the approved internal systems, confirm this computer can reach them, and use the suggested low-impact settings.", "選擇已核准的內部系統、確認這台電腦能連線，再使用建議的低影響設定。"),
   },
   {
     id: "source-code",
     icon: "file" as const,
     title: bilingual("Source code", "程式碼"),
-    detail: bilingual("Attach the exact working-tree folder, confirm the immutable copy, then allow read-only local review in step 3.", "附加精確工作目錄、確認不可變副本，再到步驟 3 允許本機唯讀檢查。"),
+    detail: bilingual("Choose the project folder, review what was added, then start the recommended local code checks.", "選擇專案資料夾、確認加入的內容，再開始建議的本機程式碼檢查。"),
   },
   {
     id: "infrastructure-code",
     icon: "file" as const,
     title: bilingual("Infrastructure code", "基礎設施程式碼"),
-    detail: bilingual("Attach the Terraform, JSON, or YAML project, then approve read-only review of that saved copy only.", "附加 Terraform、JSON 或 YAML 專案，再只允許唯讀檢查該保存副本。"),
+    detail: bilingual("Choose the Terraform, JSON, or YAML project and run the recommended configuration checks locally.", "選擇 Terraform、JSON 或 YAML 專案，在本機執行建議的設定檢查。"),
   },
   {
     id: "container",
     icon: "database" as const,
     title: bilingual("Container image", "容器映像"),
-    detail: bilingual("Attach one digest-bound OCI layout, then approve read-only review of that saved copy only.", "附加一份綁定精確內容指紋的 OCI 映像配置目錄，再只允許檢查該保存副本。"),
+    detail: bilingual("Choose an exported container image and review its packages, vulnerabilities, and software list locally.", "選擇匯出的容器映像，在本機查看套件、弱點與軟體清單。"),
   },
   {
     id: "kubernetes",
     icon: "shield" as const,
     title: bilingual("Kubernetes", "Kubernetes"),
-    detail: bilingual("Choose manifest files or a bounded node snapshot. Live-cluster access and offline files use separate permission boundaries.", "選擇設定檔或有限範圍的節點快照；連線叢集與離線檔案使用不同許可邊界。"),
+    detail: bilingual("Choose exported cluster or node settings, then run the recommended Kubernetes checks.", "選擇匯出的叢集或節點設定，再執行建議的 Kubernetes 檢查。"),
   },
   {
     id: "cloud",
     icon: "database" as const,
     title: bilingual("AWS, Azure, Google Cloud, or Microsoft 365", "AWS、Azure、Google Cloud 或 Microsoft 365"),
-    detail: bilingual("Connect one exact account or tenant with short-lived read-only access, refresh inventory, then confirm allowed reviews per candidate.", "以短效唯讀方式連接一個精確帳號或租用戶、重新盤點，再逐候選資產確認允許的檢查。"),
+    detail: bilingual("Sign in through the provider, import the cloud inventory, then choose the accounts and settings you want reviewed.", "透過服務商登入、匯入雲端盤點，再選擇想檢查的帳號與設定。"),
   },
 ];
 
@@ -535,10 +577,10 @@ const assetTypeLabels: Record<Asset["type"], BilingualText> = {
 };
 
 const authorizationStateLabels: Record<Asset["authorizationState"], BilingualText> = {
-  authorized: bilingual("Permission recorded", "已記錄許可"),
-  pending: bilingual("Needs your decision", "需要你決定"),
-  excluded: bilingual("Excluded from this case", "已從案件排除"),
-  unknown: bilingual("Ownership unknown", "所有權未知"),
+  authorized: bilingual("Ready to scan", "可以掃描"),
+  pending: bilingual("Choose checks first", "請先選擇檢查方式"),
+  excluded: bilingual("Not included in this scan", "未納入這次掃描"),
+  unknown: bilingual("Confirm who owns it", "請確認負責人"),
 };
 
 const prohibitedCapabilities = [
@@ -553,20 +595,20 @@ const prohibitedCapabilities = [
 const nextStepForAsset = (asset: Asset): BilingualText => {
   if (asset.platform === "external" && asset.internetExposed === false) {
     return bilingual(
-      "Confirm the exact internal target and explicitly allow its approved sensitive-network boundary.",
-      "確認精確內部目標，並明確允許已核准的敏感網路邊界。",
+      "Confirm this is your internal system, then use the recommended low-impact settings.",
+      "確認這是你的內部系統，再使用建議的低影響設定。",
     );
   }
   if (asset.platform === "external" && asset.type === "ip") {
     return bilingual(
-      "Choose public-record review or an exact, rate-limited connection check for this IP address.",
-      "為這個 IP 選擇公開資料盤點，或精確且受速率限制的連線檢查。",
+      "Choose public-record review or a light connection check for this IP address.",
+      "為這個 IP 選擇公開資料盤點，或低影響連線檢查。",
     );
   }
   if (asset.platform === "external") {
     return bilingual(
-      "Confirm the exact website or domain, protocol, ports, request limits, and allowed test type.",
-      "確認精確網站或網域、協定、連接埠、請求限制與允許的測試類型。",
+      "Confirm this is your website, then use the recommended scan settings.",
+      "確認這是你的網站，再使用建議的掃描設定。",
     );
   }
   if (asset.platform === "code") {
@@ -575,16 +617,16 @@ const nextStepForAsset = (asset: Asset): BilingualText => {
       : bilingual("Allow read-only review of this saved source-code copy.", "允許唯讀檢查這份已保存的程式碼副本。");
   }
   if (asset.platform === "container") {
-    return bilingual("Allow read-only review of this exact digest-bound image copy.", "允許唯讀檢查這份綁定精確內容指紋的映像副本。");
+    return bilingual("Confirm this is the container image you want checked.", "確認這是你想檢查的容器映像。");
   }
   if (asset.platform === "kubernetes") {
     return asset.localInputProfile
       ? bilingual("Allow offline review of this saved Kubernetes input only.", "只允許離線檢查這份已保存的 Kubernetes 輸入。")
-      : bilingual("Confirm read-only inventory and configuration access for this exact cluster.", "為這個精確叢集確認唯讀盤點與設定檢查權限。");
+      : bilingual("Confirm that this is the Kubernetes cluster you want checked.", "確認這是你想檢查的 Kubernetes 叢集。");
   }
   return bilingual(
-    "Confirm read-only inventory first, then separately allow the configuration review this case needs.",
-    "先確認唯讀盤點，再另外允許這個案件需要的設定檢查。",
+    "Confirm this is the cloud account you want checked, then choose the recommended read-only checks.",
+    "確認這是你想檢查的雲端帳號，再選擇建議的唯讀檢查。",
   );
 };
 
@@ -655,6 +697,7 @@ export function CoveragePage({
   const [templateRevision, setTemplateRevision] = useState(NUCLEI_TEMPLATE_REVISION);
   const [allowedTemplateIds, setAllowedTemplateIds] = useState("");
   const [allowSensitiveNetworks, setAllowSensitiveNetworks] = useState(false);
+  const [showAdvancedExternalSettings, setShowAdvancedExternalSettings] = useState(false);
 
   const counts = useMemo(
     () => Object.fromEntries(coverageStates.map((state) => [state, coverage.filter((item) => item.state === state).length])) as Record<CoverageState, number>,
@@ -734,6 +777,10 @@ export function CoveragePage({
     selectedExternalAsset?.declaredWebService?.protocol,
   ]);
 
+  useEffect(() => {
+    setShowAdvancedExternalSettings(false);
+  }, [externalActivity, selectedExternalAsset?.id]);
+
   const resetScopeForm = () => {
     setSelectedAssets([]);
     setScopeModes([]);
@@ -748,6 +795,7 @@ export function CoveragePage({
     setTemplateRevision(NUCLEI_TEMPLATE_REVISION);
     setAllowedTemplateIds("");
     setAllowSensitiveNetworks(false);
+    setShowAdvancedExternalSettings(false);
   };
 
   const toggleAsset = (assetId: string) => {
@@ -966,9 +1014,10 @@ export function CoveragePage({
           </article>
         </div>
 
-        <InlineNotice tone="info" title={text(pageCopy.selectDoesNotAuthorizeTitle)}>
+        <details className="coverage-situation-details">
+          <summary>{text(pageCopy.selectDoesNotAuthorizeTitle)}</summary>
           <p>{text(pageCopy.selectDoesNotAuthorizeBody)}</p>
-        </InlineNotice>
+        </details>
 
         <details className="coverage-situation-details">
           <summary>{text(pageCopy.situationSummary)}</summary>
@@ -1080,10 +1129,6 @@ export function CoveragePage({
             <p>{text(pageCopy.gitWarningBody)}</p>
           </InlineNotice>
 
-          <InlineNotice tone="info" title={text(pageCopy.localNoGrantTitle)}>
-            <p>{text(pageCopy.localNoGrantBody)}</p>
-          </InlineNotice>
-
           {!nativeMode && (
             <InlineNotice tone="info" title={text(pageCopy.demoFolderTitle)}>
               <p>{text(pageCopy.demoFolderBody)}</p>
@@ -1130,6 +1175,10 @@ export function CoveragePage({
 
           <details className="coverage-form-technical">
             <summary>{text(pageCopy.inputTechnicalSummary)}</summary>
+            <p>{text(pageCopy.gitTechnicalBody)}</p>
+            <p>{text(localInputDefinitions[workspaceInputProfile].technical)}</p>
+            <p><strong>{text(pageCopy.localNoGrantTitle)}</strong></p>
+            <p>{text(pageCopy.localNoGrantBody)}</p>
             <p>{text(pageCopy.localEngineDetail, { engines: localInputEngines[workspaceInputProfile] })}</p>
             <code>{workspaceInputProfile}</code>
           </details>
@@ -1283,15 +1332,19 @@ export function CoveragePage({
             <div className="scope-confirmation-panel__heading">
               <div>
                 <p className="eyebrow">{text(pageCopy.grantEyebrow)}</p>
-                <h3>{text(pageCopy.grantTitle)}</h3>
-                <p>{text(pageCopy.grantDescription, { count: formatNumber(selectedAssets.length) })}</p>
+                <h3>{text(pageCopy.grantTitle, { count: formatNumber(selectedAssets.length) })}</h3>
+                <p>{text(pageCopy.grantDescription)}</p>
               </div>
               <button className="icon-button" type="button" aria-label={text(pageCopy.clearSelection)} onClick={resetScopeForm}><Icon name="close" size={17} /></button>
             </div>
 
-            <InlineNotice tone="info" title={text(pageCopy.presetTitle)}>
-              <p>{text(pageCopy.presetBody)}</p>
-            </InlineNotice>
+            <div className="coverage-recommended-callout">
+              <span><Icon name="check" size={18} /></span>
+              <div>
+                <strong>{text(pageCopy.presetTitle)}</strong>
+                <p>{text(pageCopy.presetBody)}</p>
+              </div>
+            </div>
 
             {availableScopeModes.length === 0 ? (
               <InlineNotice tone="warning" title={text(pageCopy.noCommonTitle)}>
@@ -1342,16 +1395,6 @@ export function CoveragePage({
                   />
                 </div>
 
-                {selectedExternalAsset.declaredWebService && (
-                  <InlineNotice tone="info" title={text(pageCopy.declaredServiceTitle)}>
-                    <p>{text(pageCopy.declaredServiceBody, {
-                      protocol: selectedExternalAsset.declaredWebService.protocol.toUpperCase(),
-                      port: formatNumber(selectedExternalAsset.declaredWebService.port),
-                      path: selectedExternalAsset.declaredWebService.path,
-                    })}</p>
-                  </InlineNotice>
-                )}
-
                 {isDirectExternal && selectedExternalAsset.internetExposed === undefined && (
                   <InlineNotice tone="warning" title={text(pageCopy.noDirectTitle)}>
                     <p>{text(pageCopy.noDirectBody)}</p>
@@ -1370,7 +1413,30 @@ export function CoveragePage({
                   </InlineNotice>
                 )}
 
-                <div className="form-grid form-grid--two">
+                {externalActivity === "active_external" && (
+                  <InlineNotice tone="info" title={text(pageCopy.activeSetupTitle)}>
+                    <p>{text(pageCopy.activeSetupBody)}</p>
+                  </InlineNotice>
+                )}
+
+                <details
+                  className="coverage-form-technical coverage-scan-advanced"
+                  open={showAdvancedExternalSettings}
+                  onToggle={(event) => setShowAdvancedExternalSettings(event.currentTarget.open)}
+                >
+                  <summary>
+                    <span>{text(pageCopy.advancedScanSettings)}</span>
+                    <small>{text(pageCopy.advancedScanSettingsHelp)}</small>
+                  </summary>
+                  {selectedExternalAsset.declaredWebService && (
+                    <InlineNotice tone="info" title={text(pageCopy.declaredServiceTitle)}>
+                      <p>{text(pageCopy.declaredServiceBody, {
+                        protocol: selectedExternalAsset.declaredWebService.protocol.toUpperCase(),
+                        port: formatNumber(selectedExternalAsset.declaredWebService.port),
+                        path: selectedExternalAsset.declaredWebService.path,
+                      })}</p>
+                    </InlineNotice>
+                  )}
                   <label className="field">
                     <span>{text(pageCopy.canonicalTarget)}</span>
                     <select value={externalTarget} onChange={(event) => setExternalTarget(event.target.value)}>
@@ -1378,66 +1444,77 @@ export function CoveragePage({
                     </select>
                     <small>{text(pageCopy.canonicalTargetHelp)}</small>
                   </label>
-                  <label className="field">
-                    <span>{text(pageCopy.protocol)}</span>
-                    <select value={externalProtocol} onChange={(event) => setExternalProtocol(event.target.value as TransportProtocol)}>
-                      <option value="https">HTTPS</option>
-                      <option value="http">HTTP</option>
-                      <option value="tls">TLS</option>
-                      <option value="tcp">TCP</option>
-                      <option value="udp">UDP</option>
-                    </select>
-                    <small>{text(pageCopy.protocolHelp)}</small>
-                  </label>
-                  <label className="field">
-                    <span>{text(pageCopy.ports)}</span>
-                    <input value={externalPorts} onChange={(event) => setExternalPorts(event.target.value)} placeholder="443, 8443" inputMode="numeric" />
-                    <small>{parsedPorts === undefined
-                      ? text(pageCopy.portsInvalid)
-                      : text(pageCopy.portsValid, { count: formatNumber(parsedPorts.length) })}</small>
-                  </label>
-                  {externalActivity === "active_external" && <label className="field">
-                    <span>{text(pageCopy.policyRevision)}</span>
-                    <input value={templateRevision} readOnly aria-readonly="true" />
-                    <small>{text(templateRevisionPinned ? pageCopy.revisionValid : pageCopy.revisionInvalid)}</small>
-                  </label>}
-                </div>
-
-                <fieldset className="rate-policy-fieldset">
-                  <legend>{text(pageCopy.rateTitle)}</legend>
-                  <div className="rate-policy-grid">
-                    <label className="field"><span>{text(pageCopy.rps)}</span><input type="number" min={1} max={limits.rate} value={requestsPerSecond} onChange={(event) => setRequestsPerSecond(event.target.valueAsNumber)} /><small>{text(pageCopy.maximum, { value: formatNumber(limits.rate) })}</small></label>
-                    <label className="field"><span>{text(pageCopy.concurrency)}</span><input type="number" min={1} max={limits.concurrency} value={externalConcurrency} onChange={(event) => setExternalConcurrency(event.target.valueAsNumber)} /><small>{text(pageCopy.maximum, { value: formatNumber(limits.concurrency) })}</small></label>
-                    <label className="field"><span>{text(pageCopy.timeout)}</span><input type="number" min={1} max={limits.timeout} value={externalTimeout} onChange={(event) => setExternalTimeout(event.target.valueAsNumber)} /><small>{text(pageCopy.maximum, { value: formatNumber(limits.timeout) })}</small></label>
+                  <div className="form-grid form-grid--two">
+                    <label className="field">
+                      <span>{text(pageCopy.protocol)}</span>
+                      <select value={externalProtocol} onChange={(event) => setExternalProtocol(event.target.value as TransportProtocol)}>
+                        <option value="https">HTTPS</option>
+                        <option value="http">HTTP</option>
+                        <option value="tls">TLS</option>
+                        <option value="tcp">TCP</option>
+                        <option value="udp">UDP</option>
+                      </select>
+                      <small>{text(pageCopy.protocolHelp)}</small>
+                    </label>
+                    <label className="field">
+                      <span>{text(pageCopy.ports)}</span>
+                      <input value={externalPorts} onChange={(event) => setExternalPorts(event.target.value)} placeholder="443, 8443" inputMode="numeric" />
+                      <small>{parsedPorts === undefined
+                        ? text(pageCopy.portsInvalid)
+                        : text(pageCopy.portsValid, { count: formatNumber(parsedPorts.length) })}</small>
+                    </label>
+                    {externalActivity === "active_external" && <label className="field">
+                      <span>{text(pageCopy.policyRevision)}</span>
+                      <input value={templateRevision} readOnly aria-readonly="true" />
+                      <small>{text(templateRevisionPinned ? pageCopy.revisionValid : pageCopy.revisionInvalid)}</small>
+                    </label>}
                   </div>
-                </fieldset>
 
-                {externalActivity === "active_external" && <label className="field">
-                  <span>{text(pageCopy.templateIds)}</span>
-                  <textarea rows={3} value={allowedTemplateIds} onChange={(event) => setAllowedTemplateIds(event.target.value)} placeholder={text(pageCopy.templatePlaceholder)} />
-                  <small>{templateIdsValid
-                    ? text(pageCopy.templateValid, { count: formatNumber(parsedTemplateIds.length) })
-                    : text(pageCopy.templateInvalid)} {text(pageCopy.prohibitedIntro)}</small>
-                </label>}
+                  <fieldset className="rate-policy-fieldset">
+                    <legend>{text(pageCopy.rateTitle)}</legend>
+                    <div className="rate-policy-grid">
+                      <label className="field"><span>{text(pageCopy.rps)}</span><input type="number" min={1} max={limits.rate} value={requestsPerSecond} onChange={(event) => setRequestsPerSecond(event.target.valueAsNumber)} /><small>{text(pageCopy.maximum, { value: formatNumber(limits.rate) })}</small></label>
+                      <label className="field"><span>{text(pageCopy.concurrency)}</span><input type="number" min={1} max={limits.concurrency} value={externalConcurrency} onChange={(event) => setExternalConcurrency(event.target.valueAsNumber)} /><small>{text(pageCopy.maximum, { value: formatNumber(limits.concurrency) })}</small></label>
+                      <label className="field"><span>{text(pageCopy.timeout)}</span><input type="number" min={1} max={limits.timeout} value={externalTimeout} onChange={(event) => setExternalTimeout(event.target.valueAsNumber)} /><small>{text(pageCopy.maximum, { value: formatNumber(limits.timeout) })}</small></label>
+                    </div>
+                  </fieldset>
 
-                <div className="prohibited-template-list" aria-label={text(pageCopy.prohibitedIntro)}>
-                  {prohibitedCapabilities.map((item) => <span key={item.en}><Icon name="lock" size={13} />{text(item)}</span>)}
-                </div>
+                  {externalActivity === "active_external" && <label className="field">
+                    <span>{text(pageCopy.templateIds)}</span>
+                    <textarea rows={3} value={allowedTemplateIds} onChange={(event) => setAllowedTemplateIds(event.target.value)} placeholder={text(pageCopy.templatePlaceholder)} />
+                    <small>{templateIdsValid
+                      ? text(pageCopy.templateValid, { count: formatNumber(parsedTemplateIds.length) })
+                      : text(pageCopy.templateInvalid)} {text(pageCopy.prohibitedIntro)}</small>
+                  </label>}
 
-                <label className="toggle-row toggle-row--danger">
-                  <input type="checkbox" checked={allowSensitiveNetworks} onChange={(event) => setAllowSensitiveNetworks(event.target.checked)} />
-                  <span><strong>{text(pageCopy.sensitiveTitle)}</strong><small>{text(pageCopy.sensitiveBody)}</small></span>
-                </label>
+                  <div className="prohibited-template-list" aria-label={text(pageCopy.prohibitedIntro)}>
+                    {prohibitedCapabilities.map((item) => <span key={item.en}><Icon name="lock" size={13} />{text(item)}</span>)}
+                  </div>
+                  <InlineNotice tone="info" title={text(pageCopy.sensitiveTechnicalTitle)}>
+                    <p>{text(pageCopy.sensitiveTechnicalBody)}</p>
+                  </InlineNotice>
+                </details>
+
+                {isDirectExternal && selectedExternalAsset.internetExposed === false && (
+                  <label className="toggle-row toggle-row--danger">
+                    <input type="checkbox" checked={allowSensitiveNetworks} onChange={(event) => setAllowSensitiveNetworks(event.target.checked)} />
+                    <span><strong>{text(pageCopy.sensitiveTitle)}</strong><small>{text(pageCopy.sensitiveBody)}</small></span>
+                  </label>
+                )}
               </section>
             )}
 
             <div className="scope-confirmation-panel__assets">
-              {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{asset.locator}</small></span>)}
+              {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small></span>)}
             </div>
 
             <label className="toggle-row">
               <input type="checkbox" checked={ownershipConfirmed} onChange={(event) => setOwnershipConfirmed(event.target.checked)} />
-              <span><strong>{text(pageCopy.ownershipTitle)}</strong><small>{text(pageCopy.ownershipBody)}</small></span>
+              <span><strong>{text(selectedExternalAsset
+                ? selectedExternalAsset.internetExposed === false
+                  ? pageCopy.internalOwnershipTitle
+                  : pageCopy.externalOwnershipTitle
+                : pageCopy.ownershipTitle)}</strong><small>{text(pageCopy.ownershipBody)}</small></span>
             </label>
 
             <label className="field">
@@ -1556,15 +1633,18 @@ export function CoveragePage({
                     <div><strong>{asset?.name ?? grant.assetId}</strong><small>{text(activityLabels[scope.activity])} · {text(pageCopy.expires, { date: formatDateTime(scope.expiresAt) })}</small></div>
                     <StatusPill label={text(scope.allowSensitiveNetworks ? pageCopy.sensitiveAllowed : pageCopy.sensitiveBlocked)} tone={scope.allowSensitiveNetworks ? "warning" : "positive"} />
                   </div>
-                  <dl>
-                    <div><dt>{text(pageCopy.targetTerm)}</dt><dd><code>{scope.targetKind}:{scope.target}</code></dd></div>
-                    <div><dt>{text(pageCopy.protocolPortsTerm)}</dt><dd>{scope.protocol.toUpperCase()} · {scope.ports.length ? scope.ports.join(", ") : text(pageCopy.noDirectPort)}</dd></div>
-                    <div><dt>{text(pageCopy.rateTerm)}</dt><dd>{formatNumber(scope.ratePolicy.requestsPerSecond)} req/s · {formatNumber(scope.ratePolicy.concurrency)} concurrent · {formatNumber(scope.ratePolicy.timeoutSeconds)}s</dd></div>
-                    <div><dt>{text(pageCopy.templatesTerm)}</dt><dd><code>{scope.templatePolicy.revision}</code> · {formatNumber(scope.templatePolicy.allowedTemplateIds.length)} IDs</dd></div>
-                    <div><dt>{text(pageCopy.authorityTerm)}</dt><dd>{scope.assertedAuthority}</dd></div>
-                    <div><dt>{text(pageCopy.approvalTerm)}</dt><dd>{scope.approvedBy} · {formatDateTime(scope.approvedAt)}</dd></div>
-                  </dl>
-                  <p><Icon name="lock" size={13} /> {text(pageCopy.prohibitedAll)}</p>
+                  <details className="external-grant-card__technical">
+                    <summary>{text(pageCopy.grantTechnical)}</summary>
+                    <dl>
+                      <div><dt>{text(pageCopy.targetTerm)}</dt><dd><code>{scope.targetKind}:{scope.target}</code></dd></div>
+                      <div><dt>{text(pageCopy.protocolPortsTerm)}</dt><dd>{scope.protocol.toUpperCase()} · {scope.ports.length ? scope.ports.join(", ") : text(pageCopy.noDirectPort)}</dd></div>
+                      <div><dt>{text(pageCopy.rateTerm)}</dt><dd>{formatNumber(scope.ratePolicy.requestsPerSecond)} req/s · {formatNumber(scope.ratePolicy.concurrency)} concurrent · {formatNumber(scope.ratePolicy.timeoutSeconds)}s</dd></div>
+                      <div><dt>{text(pageCopy.templatesTerm)}</dt><dd><code>{scope.templatePolicy.revision}</code> · {formatNumber(scope.templatePolicy.allowedTemplateIds.length)} IDs</dd></div>
+                      <div><dt>{text(pageCopy.authorityTerm)}</dt><dd>{scope.assertedAuthority}</dd></div>
+                      <div><dt>{text(pageCopy.approvalTerm)}</dt><dd>{scope.approvedBy} · {formatDateTime(scope.approvedAt)}</dd></div>
+                    </dl>
+                    <p><Icon name="lock" size={13} /> {text(pageCopy.prohibitedAll)}</p>
+                  </details>
                 </article>
               );
             })}
@@ -1572,9 +1652,10 @@ export function CoveragePage({
         </section>
       )}
 
-      <InlineNotice tone="info" title={text(pageCopy.finalNoticeTitle)}>
+      <details className="coverage-situation-details">
+        <summary>{text(pageCopy.finalNoticeTitle)}</summary>
         <p>{text(pageCopy.finalNoticeBody)}</p>
-      </InlineNotice>
+      </details>
     </div>
   );
 }

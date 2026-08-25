@@ -9,8 +9,8 @@ const source = await readFile(
 
 test("the problem-review page has complete English and Traditional Chinese UI copy", () => {
   assert.match(source, /useI18n\(\)/u);
-  assert.match(source, /en:\s*"Start with what deserves attention/u);
-  assert.match(source, /zhTW:\s*"先看最值得處理的事/u);
+  assert.match(source, /en:\s*"Know what to fix first"/u);
+  assert.match(source, /zhTW:\s*"先知道該修什麼"/u);
   assert.doesNotMatch(
     source,
     /import\s*\{[^}]*formatDateTime[^}]*\}\s*from\s*"\.\.\/lib"/su,

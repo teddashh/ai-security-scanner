@@ -43,6 +43,116 @@
   word-break: break-word;
 }
 
+.page-technical-details--guide {
+  padding: 13px 15px;
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+.page-technical-details--guide > p {
+  margin: 10px 0 0;
+}
+
+.run-overview--single {
+  grid-template-columns: 1fr;
+}
+
+.page-technical-details--guide .export-disclosure-grid {
+  margin-top: 12px;
+}
+
+.page-technical-details--guide > .engine-state-ledger,
+.page-technical-details--guide > .page-diagnostic-metrics {
+  margin-top: 12px;
+}
+
+.page-outcome-metrics,
+.page-diagnostic-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.page-diagnostic-metrics .metric-card {
+  min-height: 112px;
+  box-shadow: none;
+}
+
+.export-summary--details > summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.export-summary--details > summary > span {
+  display: inline-flex;
+  flex-direction: column;
+  margin-left: 8px;
+}
+
+.export-summary--details > summary strong {
+  color: #fff;
+  font-size: 0.92rem;
+}
+
+.export-summary__note {
+  margin: 0;
+  padding: 14px 20px;
+  color: #bbcbce;
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.page-secondary-feature > summary {
+  cursor: pointer;
+  color: var(--ink-strong);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.page-secondary-feature__intro {
+  margin: 10px 0 18px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.export-advanced-formats {
+  margin-top: 18px;
+  padding-top: 15px;
+  border-top: 1px solid var(--line);
+}
+
+.export-advanced-formats .format-card:first-child {
+  grid-column: auto;
+}
+
+.export-row__technical {
+  max-width: 340px;
+  margin: 0;
+}
+
+.export-row__technical dl {
+  grid-template-columns: 1fr;
+}
+
+.export-row__technical .export-row__badges {
+  justify-content: flex-start;
+}
+
+.page-secondary-feature--workflow {
+  padding: 15px 17px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.page-secondary-feature--workflow .workflow-strip {
+  margin-top: 0;
+}
+
 @media (max-width: 620px) {
   .page-technical-details dl { grid-template-columns: 1fr; }
+  .page-outcome-metrics,
+  .page-diagnostic-metrics { grid-template-columns: 1fr; }
+  .export-row__technical { max-width: none; }
+  .export-row > .export-row__technical,
+  .export-row > .button { grid-column: 2; }
 }

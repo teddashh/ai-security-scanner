@@ -19,16 +19,16 @@ interface ProgressPageProps {
 }
 
 const copy = {
-  eyebrow: { en: "SCAN PROGRESS", zhTW: "掃描進度" },
-  title: { en: "See what is being checked", zhTW: "查看目前檢查到哪裡" },
+  eyebrow: { en: "LIVE SCAN", zhTW: "即時掃描" },
+  title: { en: "Follow your scan", zhTW: "掌握掃描進度" },
   description: {
-    en: "Each scanner reports its own outcome. Pausing or restarting never turns unfinished work into a completed check.",
-    zhTW: "每個掃描工具都會留下自己的結果；暫停或重新啟動時，未完成的工作不會被包裝成已完成。",
+    en: "See what is running, what has finished, and anything that needs your attention—all in one place.",
+    zhTW: "哪些正在檢查、哪些已經完成、哪裡需要你處理，一個畫面就看懂。",
   },
   emptyTitle: { en: "This case has not been scanned yet", zhTW: "這個案件還沒有開始掃描" },
   emptyDescription: {
-    en: "Confirm what you want to check and that you have permission first. Scanners that cannot run will still be recorded as not run—not as passed.",
-    zhTW: "請先確認要檢查的系統與授權範圍。無法執行的掃描工具仍會留下「未執行」紀錄，不會被寫成通過。",
+    en: "When you are ready, start the scan and follow every check here as results arrive.",
+    zhTW: "準備好後就開始掃描；每項檢查與新結果都會顯示在這裡。",
   },
   start: { en: "Start scan", zhTW: "開始掃描" },
   pause: { en: "Pause", zhTW: "暫停" },
@@ -41,69 +41,72 @@ const copy = {
   viewRun: { en: "View run", zhTW: "查看輪次" },
   latest: { en: "Latest · ", zhTW: "最新 · " },
   interruptedTitle: {
-    en: "The app closed before this run reached a final outcome",
-    zhTW: "應用程式關閉前，這一輪尚未完成",
+    en: "Your scan paused when the app closed",
+    zhTW: "應用程式關閉時，掃描已暫停",
   },
   interruptedBody: {
-    en: "{engines} stopped at their last saved checkpoint. Choose whether to continue the original approved work or cancel it. The app will not contact assets on its own after a restart.",
-    zhTW: "{engines} 已停在最後保存的進度。請選擇要繼續原本已授權的工作，或取消這一輪；應用程式重新啟動後不會自行接觸資產。",
+    en: "{count} checks are waiting. Continue where you left off, or cancel this scan and keep the results already saved.",
+    zhTW: "有 {count} 項檢查正在等待。你可以從中斷處繼續，或取消這次掃描並保留已存下的結果。",
   },
   resumeOriginal: { en: "Continue the original scope", zhTW: "繼續原本的範圍" },
   cancelKeepRecord: { en: "Cancel and keep the record", zhTW: "取消並保留紀錄" },
-  expiredTitle: { en: "Some scanner knowledge is past its support date", zhTW: "部分掃描工具的知識版本已超過支援日期" },
+  expiredTitle: { en: "Update needed before checking fixes again", zhTW: "再次確認修復前，需要先更新" },
   expiredBody: {
-    en: "The pinned versions for {engines} are past their stated support dates. Historical evidence remains readable. Update their manifests before relying on a new verification; this does not erase the case history.",
-    zhTW: "{engines} 使用的固定版本已超過宣告的支援日期。歷史證據仍可閱讀；再次確認修復前，請先更新這些工具的版本清單。案件歷史不會因此消失。",
+    en: "{count} checks need newer security knowledge. Your existing results stay available; update the scan tools before running a new comparison.",
+    zhTW: "有 {count} 項檢查需要更新資安知識。現有結果仍可查看；執行新的前後比較前，請先更新掃描工具。",
   },
   runIdTitle: { en: "Local scan run ID", zhTW: "本機掃描輪次 ID" },
   processed: { en: "{percent}% processed", zhTW: "已處理 {percent}%" },
   runSummary: {
-    en: "{covered} of {total} planned target assignments reached an engine outcome · Started {started}",
-    zhTW: "{covered}／{total} 個預定目標已有掃描工具結果 · 開始於 {started}",
+    en: "{covered} of {total} checks have reported a result · Started {started}",
+    zhTW: "{covered}／{total} 項檢查已有結果 · 開始於 {started}",
   },
   finished: { en: " · Ended {finished}", zhTW: " · 結束於 {finished}" },
   overallProgress: { en: "Overall scan progress", zhTW: "整體掃描進度" },
+  scanTechnicalDetails: { en: "Scan details and versions", zhTW: "掃描細節與版本" },
   knowledgeTitle: { en: "Knowledge dates used for this run", zhTW: "這一輪採用的知識日期" },
   legacyKnowledge: { en: "Not recorded per scanner in this older case", zhTW: "舊版案件未逐一記錄" },
   caseSnapshot: { en: "Case snapshot {date}", zhTW: "案件快照 {date}" },
   supportUntil: { en: " · Earliest supported through {date}", zhTW: " · 最早支援至 {date}" },
   legacySupport: { en: " · Support date not recorded in this older case", zhTW: " · 舊版案件未記錄支援日期" },
   noGuarantee: { en: ". This is not an ongoing guarantee of safety.", zhTW: "。這不是持續安全保證。" },
-  metricsAria: { en: "Scanner outcome summary", zhTW: "掃描工具結果摘要" },
+  metricsAria: { en: "Scan outcome summary", zhTW: "掃描結果摘要" },
   completed: { en: "Completed", zhTW: "已完成" },
-  completedDetail: { en: "Evidence, result processing, and cleanup finished", zhTW: "證據、結果整理與清理都已完成" },
-  partial: { en: "Partly completed", zhTW: "部分完成" },
-  partialDetail: { en: "Saved results exist, but coverage is incomplete", zhTW: "已有保存的結果，但涵蓋仍不完整" },
-  failedCancelled: { en: "Failed or cancelled", zhTW: "失敗或取消" },
-  failedCancelledDetail: { en: "Failures and user cancellations remain separate records", zhTW: "失敗與使用者取消會分開記錄" },
+  completedDetail: { en: "Results are ready to review", zhTW: "結果已準備好，可以查看" },
+  partial: { en: "Needs attention", zhTW: "需要處理" },
+  partialDetail: { en: "Some results arrived, but a check did not finish", zhTW: "已有部分結果，但仍有檢查尚未完成" },
+  failedCancelled: { en: "Stopped", zhTW: "已停止" },
+  failedCancelledDetail: { en: "A check stopped early or was cancelled", zhTW: "有檢查提早停止或已被取消" },
   notRun: { en: "Not run", zhTW: "未執行" },
-  notRunDetail: { en: "A reason is kept; no findings does not mean checked", zhTW: "會保留原因；沒有問題不代表已檢查" },
+  notRunDetail: { en: "Finish setup before running these checks", zhTW: "完成設定後，才能執行這些檢查" },
+  notRunTechnical: { en: "A check that did not run is not a passed check.", zhTW: "未執行的檢查不能視為已通過。" },
   ledgerAria: { en: "Counts for every scanner state", zhTW: "所有掃描工具狀態數量" },
   scannerStates: { en: "Scanner states", zhTW: "掃描工具狀態" },
   terminalCount: { en: "{done} of {total} have a clear final outcome", zhTW: "{done}／{total} 個已有明確最終結果" },
   incompleteTitle: { en: "This run did not cover everything", zhTW: "這一輪沒有完整涵蓋" },
   incompleteBody: {
-    en: "Partly completed, failed, cancelled, and not-run work have different causes. Existing findings can still be reviewed, but missing results must never be treated as safe.",
-    zhTW: "部分完成、失敗、取消與未執行各有不同原因。已有的問題仍可查看，但沒有結果的工具或資產不能解讀為安全。",
+    en: "Some checks did not finish. You can still review the results that arrived, then open a check below to see what needs attention.",
+    zhTW: "有些檢查沒有完成。你仍可先查看已收到的結果，再打開下方檢查項目，看看需要處理什麼。",
   },
-  workEyebrow: { en: "SCANNER WORK", zhTW: "掃描工具工作" },
-  workTitle: { en: "What each scanner did", zhTW: "每個掃描工具做了什麼" },
+  workEyebrow: { en: "CHECKS", zhTW: "檢查項目" },
+  workTitle: { en: "See every check", zhTW: "查看每一項檢查" },
   workDescription: {
-    en: "See the outcome and saved restart point here. Exact versions, identifiers, and technical errors stay available under details.",
-    zhTW: "這裡先顯示結果與可接續位置；精確版本、識別碼與技術錯誤仍保留在詳細資料中。",
+    en: "Each check shows its result, current step, and whether you need to do anything next.",
+    zhTW: "每項檢查都會顯示結果、目前進度，以及是否需要你接著處理。",
   },
-  workCount: { en: "{count} jobs", zhTW: "{count} 個工作" },
-  noWorkTitle: { en: "No scanner work was created for this run", zhTW: "這一輪沒有建立掃描工具工作" },
+  workCount: { en: "{count} checks", zhTW: "{count} 項檢查" },
+  noWorkTitle: { en: "No checks are ready yet", zhTW: "目前還沒有可執行的檢查" },
   noWorkDescription: {
-    en: "The plan created no runnable jobs. This is not a scan with zero problems.",
-    zhTW: "掃描計畫沒有建立可執行工作；這不代表掃描結果是零問題。",
+    en: "Return to scan setup and choose what you want to check. No checks means there are no results yet.",
+    zhTW: "請回到掃描設定，選擇想檢查的內容；目前沒有檢查，因此也還沒有結果。",
   },
-  notStarted: { en: "Scanner did not start", zhTW: "掃描工具沒有啟動" },
+  notStarted: { en: "This check did not start", zhTW: "這項檢查沒有開始" },
   notStartedReason: {
-    en: "This scanner could not start under the recorded conditions. Open technical details for the exact reason.",
-    zhTW: "這個掃描工具無法在當時條件下啟動；精確原因可在技術細節查看。",
+    en: "Open details to see what stopped it and what to try next.",
+    zhTW: "打開詳細資料，查看停止原因與可嘗試的下一步。",
   },
-  engineProgress: { en: "{engine} progress", zhTW: "{engine} 進度" },
+  checkLabel: { en: "Check {number}", zhTW: "檢查 {number}" },
+  checkProgress: { en: "Check progress", zhTW: "檢查進度" },
   currentStep: { en: "Current step: ", zhTW: "目前步驟：" },
   interruptedPhase: { en: "Stopped when the desktop app restarted", zhTW: "桌面程式重新啟動時中斷" },
   queuedResumePhase: { en: "Waiting to continue", zhTW: "等待繼續執行" },
@@ -118,11 +121,13 @@ const copy = {
   cleanup: { en: "Cleanup", zhTW: "環境清理" },
   cleanupDone: { en: "Done", zhTW: "完成" },
   cleanupPending: { en: "Still needed", zhTW: "仍待處理" },
-  legacyFindingUnknown: { en: "Finding count cannot be tied to this older evidence", zhTW: "舊版證據無法確認問題數量屬於哪個工具" },
+  legacyFindingUnknown: { en: "Problem count unavailable", zhTW: "目前無法取得問題數量" },
   findingCount: { en: "{count} findings", zhTW: "{count} 個問題" },
-  targetEvidence: { en: "{targets} targets · {evidence} raw evidence files", zhTW: "{targets} 個目標 · {evidence} 份原始證據" },
-  resumable: { en: "Can continue from saved progress", zhTW: "可從已保存的進度繼續" },
+  targets: { en: "Targets", zhTW: "目標數" },
+  rawEvidenceFiles: { en: "Raw evidence files", zhTW: "原始證據檔案" },
+  resumable: { en: "Can continue where it stopped", zhTW: "可從中斷處繼續" },
   technicalDetails: { en: "Technical status and errors", zhTW: "技術狀態與錯誤" },
+  scannerName: { en: "Scanner name", zhTW: "掃描工具名稱" },
   reportedPhase: { en: "Reported phase", zhTW: "回報階段" },
   errorCode: { en: "Error code", zhTW: "錯誤代碼" },
   scannerMessage: { en: "Scanner message", zhTW: "掃描工具訊息" },
@@ -207,7 +212,6 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
   );
   const showDateTime = (value?: string): string => value ? formatDateTime(value) : text(copy.noneReported);
   const showPlainDate = (value: string): string => formatDate(`${value}T12:00:00`);
-  const joinNames = (values: string[]): string => values.join(locale === "zh-TW" ? "、" : ", ");
   const phaseLabel = (engine: EngineRun): string => {
     if (engine.phase === "interrupted_restart") return text(copy.interruptedPhase);
     if (engine.phase === "queued_for_resume") return text(copy.queuedResumePhase);
@@ -312,7 +316,7 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
       {interruptedEngines.length > 0 && (
         <InlineNotice tone="warning" title={text(copy.interruptedTitle)}>
           <div className="interrupted-run-notice">
-            <p>{text(copy.interruptedBody, { engines: joinNames(interruptedEngines.map((engine) => engine.engineName)) })}</p>
+            <p>{text(copy.interruptedBody, { count: formatNumber(interruptedEngines.length) })}</p>
             <div className="button-group">
               <button className="button button--primary button--small" type="button" disabled={busy || !canResume} onClick={() => void onResume(selectedRun.id)}>
                 <Icon name="play" size={15} />{text(copy.resumeOriginal)}
@@ -327,16 +331,15 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
 
       {expiredSupportEngines.length > 0 && (
         <InlineNotice tone="warning" title={text(copy.expiredTitle)}>
-          <p>{text(copy.expiredBody, { engines: joinNames(expiredSupportEngines.map((engine) => engine.engineName)) })}</p>
+          <p>{text(copy.expiredBody, { count: formatNumber(expiredSupportEngines.length) })}</p>
         </InlineNotice>
       )}
 
-      <section className="run-overview">
+      <section className="run-overview run-overview--single">
         <div className="run-overview__copy">
           <div className="run-overview__meta">
             <StatusPill label={runMeta.label} tone={runMeta.tone} />
             <span>{selectedRun.label}</span>
-            <code title={text(copy.runIdTitle)}>{selectedRun.id}</code>
           </div>
           <h2>{text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
           <p>
@@ -349,19 +352,32 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
           </p>
           <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />
         </div>
-        <div className="knowledge-card">
-          <Icon name="clock" size={20} />
-          <span>{text(copy.knowledgeTitle)}</span>
-          <strong>{knowledgeRange}</strong>
-          <small>
-            {text(copy.caseSnapshot, { date: showDateTime(selectedRun.knowledgeDate) })}
-            {supportDeadlines.length
-              ? text(copy.supportUntil, { date: showPlainDate(supportDeadlines[0]!) })
-              : text(copy.legacySupport)}
-            {text(copy.noGuarantee)}
-          </small>
-        </div>
       </section>
+
+      <details className="page-technical-details page-technical-details--guide">
+        <summary>{text(copy.scanTechnicalDetails)}</summary>
+        <dl>
+          <div><dt>{text(copy.runIdTitle)}</dt><dd><code>{selectedRun.id}</code></dd></div>
+          <div><dt>{text(copy.knowledgeTitle)}</dt><dd>{knowledgeRange}</dd></div>
+        </dl>
+        <p>
+          {text(copy.caseSnapshot, { date: showDateTime(selectedRun.knowledgeDate) })}
+          {supportDeadlines.length
+            ? text(copy.supportUntil, { date: showPlainDate(supportDeadlines[0]!) })
+            : text(copy.legacySupport)}
+          {text(copy.noGuarantee)}
+        </p>
+        <div className="engine-state-ledger" aria-label={text(copy.ledgerAria)}>
+          <span>{text(copy.scannerStates)}</span>
+          {engineStates.map((state) => (
+            <span key={state} className="engine-state-ledger__item">
+              <StatusPill label={engineStatusMeta[state].label} tone={engineStatusMeta[state].tone} />
+              <b>{formatNumber(stateCounts[state])}</b>
+            </span>
+          ))}
+          <small>{text(copy.terminalCount, { done: formatNumber(terminalCount), total: formatNumber(selectedRun.engineRuns.length) })}</small>
+        </div>
+      </details>
 
       <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
         <MetricCard label={text(copy.completed)} value={formatNumber(stateCounts.completed)} detail={text(copy.completedDetail)} icon="check" tone="accent" />
@@ -369,17 +385,6 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
         <MetricCard label={text(copy.failedCancelled)} value={formatNumber(stateCounts.failed + stateCounts.cancelled)} detail={text(copy.failedCancelledDetail)} icon="stop" tone={stateCounts.failed ? "danger" : "default"} />
         <MetricCard label={text(copy.notRun)} value={formatNumber(stateCounts.not_executed)} detail={text(copy.notRunDetail)} icon="clock" tone={stateCounts.not_executed ? "warning" : "default"} />
       </section>
-
-      <div className="engine-state-ledger" aria-label={text(copy.ledgerAria)}>
-        <span>{text(copy.scannerStates)}</span>
-        {engineStates.map((state) => (
-          <span key={state} className="engine-state-ledger__item">
-            <StatusPill label={engineStatusMeta[state].label} tone={engineStatusMeta[state].tone} />
-            <b>{formatNumber(stateCounts[state])}</b>
-          </span>
-        ))}
-        <small>{text(copy.terminalCount, { done: formatNumber(terminalCount), total: formatNumber(selectedRun.engineRuns.length) })}</small>
-      </div>
 
       {incompleteCount > 0 && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
@@ -401,7 +406,7 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
           <EmptyState icon="progress" title={text(copy.noWorkTitle)} description={text(copy.noWorkDescription)} />
         ) : (
           <div className="engine-list">
-            {selectedRun.engineRuns.map((engine) => {
+            {selectedRun.engineRuns.map((engine, index) => {
               const meta = engineStatusMeta[engine.status];
               const checkpoint = engine.checkpoint;
               return (
@@ -409,7 +414,7 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
                   <div className="engine-row__identity">
                     <span className={`engine-icon engine-icon--${meta.tone}`}><Icon name={engineIcon(engine)} size={19} /></span>
                     <span>
-                      <strong>{engine.engineName}</strong>
+                      <strong>{text(copy.checkLabel, { number: formatNumber(index + 1) })}</strong>
                     </span>
                   </div>
                   <div className="engine-row__progress">
@@ -419,29 +424,35 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
                         <span><strong>{text(copy.notStarted)}</strong><small>{text(copy.notStartedReason)}</small></span>
                       </div>
                     ) : (
-                      <ProgressBar value={engine.progress} label={text(copy.engineProgress, { engine: engine.engineName })} tone={engine.status === "failed" ? "danger" : engine.status === "partial" ? "warning" : "accent"} />
-                    )}
-                    <div className="engine-phase-line">
-                      <span>{text(copy.currentStep)}<strong>{phaseLabel(engine)}</strong></span>
-                    </div>
-                    {checkpoint && (
-                      <div className="checkpoint-card">
-                        <div>
-                          <Icon name="database" size={15} />
-                          <strong>{text(copy.checkpoint)}</strong>
-                          <StatusPill label={executionStageMeta[checkpoint.stage].label} tone={engine.status === "failed" ? "danger" : engine.status === "partial" || engine.status === "paused" ? "warning" : "neutral"} />
-                        </div>
-                        <dl>
-                          <div><dt>{text(copy.attempt)}</dt><dd>#{formatNumber(checkpoint.attempt)}</dd></div>
-                          <div><dt>{text(copy.evidence)}</dt><dd>{text(copy.evidenceCount, { count: formatNumber(checkpoint.artifactCount) })}</dd></div>
-                          <div><dt>{text(copy.scopeLock)}</dt><dd>{checkpoint.scopeBound ? text(copy.scopeLocked) : text(copy.scopeNotCreated)}</dd></div>
-                          <div><dt>{text(copy.cleanup)}</dt><dd>{checkpoint.cleanupCompleted ? text(copy.cleanupDone) : text(copy.cleanupPending)}</dd></div>
-                        </dl>
-                        <p>{executionStageMeta[checkpoint.stage].description}</p>
-                      </div>
+                      <ProgressBar value={engine.progress} label={text(copy.checkProgress)} tone={engine.status === "failed" ? "danger" : engine.status === "partial" ? "warning" : "accent"} />
                     )}
                     <details className="page-technical-details">
                       <summary>{text(copy.technicalDetails)}</summary>
+                      <div className="engine-phase-line">
+                        <span>{text(copy.currentStep)}<strong>{phaseLabel(engine)}</strong></span>
+                      </div>
+                      {engine.status === "not_executed" && <p>{text(copy.notRunTechnical)}</p>}
+                      <dl>
+                        <div><dt>{text(copy.scannerName)}</dt><dd>{engine.engineName}</dd></div>
+                        <div><dt>{text(copy.targets)}</dt><dd>{formatNumber(engine.assetIds.length)}</dd></div>
+                        <div><dt>{text(copy.rawEvidenceFiles)}</dt><dd>{formatNumber(engine.rawArtifactCount)}</dd></div>
+                      </dl>
+                      {checkpoint && (
+                        <div className="checkpoint-card">
+                          <div>
+                            <Icon name="database" size={15} />
+                            <strong>{text(copy.checkpoint)}</strong>
+                            <StatusPill label={executionStageMeta[checkpoint.stage].label} tone={engine.status === "failed" ? "danger" : engine.status === "partial" || engine.status === "paused" ? "warning" : "neutral"} />
+                          </div>
+                          <dl>
+                            <div><dt>{text(copy.attempt)}</dt><dd>#{formatNumber(checkpoint.attempt)}</dd></div>
+                            <div><dt>{text(copy.evidence)}</dt><dd>{text(copy.evidenceCount, { count: formatNumber(checkpoint.artifactCount) })}</dd></div>
+                            <div><dt>{text(copy.scopeLock)}</dt><dd>{checkpoint.scopeBound ? text(copy.scopeLocked) : text(copy.scopeNotCreated)}</dd></div>
+                            <div><dt>{text(copy.cleanup)}</dt><dd>{checkpoint.cleanupCompleted ? text(copy.cleanupDone) : text(copy.cleanupPending)}</dd></div>
+                          </dl>
+                          <p>{executionStageMeta[checkpoint.stage].description}</p>
+                        </div>
+                      )}
                       <dl>
                         <div><dt>{text(copy.reportedPhase)}</dt><dd><code>{displayTechnicalDetail(engine.phase) ?? text(copy.noneReported)}</code></dd></div>
                         <div><dt>{text(copy.errorCode)}</dt><dd><code>{displayTechnicalDetail(engine.errorCode) ?? text(copy.noneReported)}</code></dd></div>
@@ -455,10 +466,6 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
                     <span>{engine.findingCountKnown === false
                       ? text(copy.legacyFindingUnknown)
                       : text(copy.findingCount, { count: formatNumber(engine.findingCount) })}</span>
-                    <span>{text(copy.targetEvidence, {
-                      targets: formatNumber(engine.assetIds.length),
-                      evidence: formatNumber(engine.rawArtifactCount),
-                    })}</span>
                     {engine.resumable && <small><Icon name="refresh" size={13} /> {text(copy.resumable)}</small>}
                   </div>
                   <details className="engine-provenance">
@@ -519,7 +526,6 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
               <span className="history-row__copy">
                 <strong>{run.label}</strong>
                 <span>{showDateTime(run.startedAt)} · {text(copy.historySnapshot, { date: showDateTime(run.knowledgeDate) })}</span>
-                <code>{run.id}</code>
               </span>
               <StatusPill label={runStatusMeta[run.status].label} tone={runStatusMeta[run.status].tone} />
               <b>{formatNumber(run.progress)}%</b>

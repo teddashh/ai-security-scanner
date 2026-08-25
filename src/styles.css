@@ -561,19 +561,6 @@ button.update-control:hover:not(:disabled) {
   border-width: 2px;
 }
 
-.knowledge-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 99px;
-  color: var(--muted);
-  background: var(--surface);
-  font-size: 0.72rem;
-  font-weight: 650;
-}
-
 .demo-banner {
   display: flex;
   min-height: 52px;
@@ -1925,12 +1912,14 @@ button.update-control:hover:not(:disabled) {
 .external-grant-card__header > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .external-grant-card__header strong { overflow: hidden; color: var(--ink-strong); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
 .external-grant-card__header small { color: var(--muted); font-size: 0.59rem; }
-.external-grant-card > dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 12px 0 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
-.external-grant-card > dl > div { min-width: 0; padding: 8px; background: rgba(255, 255, 255, 0.88); }
+.external-grant-card__technical { margin-top: 12px; }
+.external-grant-card__technical > summary { color: var(--teal); cursor: pointer; font-size: 0.62rem; font-weight: 750; }
+.external-grant-card__technical > dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 10px 0 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--line); }
+.external-grant-card__technical > dl > div { min-width: 0; padding: 8px; background: rgba(255, 255, 255, 0.88); }
 .external-grant-card dt { color: var(--muted); font-size: 0.53rem; }
 .external-grant-card dd { margin: 3px 0 0; overflow: hidden; color: var(--ink); font-size: 0.6rem; text-overflow: ellipsis; white-space: nowrap; }
 .external-grant-card code { font-size: 0.56rem; }
-.external-grant-card > p { display: flex; align-items: center; gap: 5px; margin: 10px 0 0; color: #6c5a7f; font-size: 0.57rem; }
+.external-grant-card__technical > p { display: flex; align-items: center; gap: 5px; margin: 10px 0 0; color: #6c5a7f; font-size: 0.57rem; }
 
 .table-wrap {
   width: 100%;
@@ -2956,7 +2945,7 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   .segmented-filter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .segmented-filter button { width: 100%; }
   .scope-mode-grid, .export-disclosure-grid { grid-template-columns: 1fr; }
-  .rate-policy-grid, .external-grant-card > dl { grid-template-columns: 1fr; }
+  .rate-policy-grid, .external-grant-card__technical > dl { grid-template-columns: 1fr; }
   .external-grant-card__header { grid-template-columns: auto minmax(0, 1fr); }
   .external-grant-card__header > .status-pill { grid-column: 2; justify-self: start; }
   .scope-confirmation-panel__heading { align-items: stretch; }

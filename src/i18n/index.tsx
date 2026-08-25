@@ -64,8 +64,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute(
       "content",
       locale === "en"
-        ? "ai-security-scanner — local-first, repeatable security assessment casework."
-        : "ai-security-scanner — 資料留在本機、可重跑、可交接、可複驗的資安健檢案件工作區。",
+        ? "Find security issues across websites, cloud, code, and internal systems—from one simple local app."
+        : "用一個簡單的本機工具，掃描網站、雲端、程式碼與內部系統的資安問題。",
     );
     persistLocalePreference(window.localStorage, locale);
   }, [locale]);

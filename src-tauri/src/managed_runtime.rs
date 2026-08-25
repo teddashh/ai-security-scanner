@@ -2098,13 +2098,15 @@ impl ManagedRuntimeManager {
             };
 
         // `--status` catches an unavailable WSL 2 kernel or Windows feature
-        // before Podman can begin importing the release image. `--list
-        // --quiet` exercises the same read-only inventory boundary Podman uses
-        // during machine initialization, without requiring a pre-existing
-        // distribution.
+        // before Podman can begin importing the release image. Pinned Podman
+        // 5.8.2's WSL provider then calls `wsl.exe -l --quiet` from
+        // `getAllWSLDistros` before machine initialization. Exercise that exact
+        // read-only command here so a missing or incomplete WSL installation is
+        // classified as a prerequisite failure instead of surfacing later as
+        // Podman's generic exit status 125.
         for arguments in [
             &[OsString::from("--status")][..],
-            &[OsString::from("--list"), OsString::from("--quiet")][..],
+            &[OsString::from("-l"), OsString::from("--quiet")][..],
         ] {
             let output = match self.commands.output(&command, arguments, COMMAND_TIMEOUT) {
                 Ok(output) => output,
@@ -5533,6 +5535,11 @@ fn windows_wsl_inventory_command_with_directories(
         OsString::from("NoDefaultCurrentDirectoryInExePath"),
         OsString::from("1"),
     );
+    // Pinned Podman 5.8.2 sets this on every WSL child. Mirroring it keeps the
+    // product's prerequisite and cleanup probes on the same output contract,
+    // while the decoder still accepts UTF-16LE from older inbox WSL builds that
+    // ignore the flag.
+    environment.insert(OsString::from("WSL_UTF8"), OsString::from("1"));
 
     Ok(ManagedRuntimeCommand {
         binary,
@@ -10159,6 +10166,51 @@ mod tests {
         assert!(!status.detail.contains(['\0', '\u{fffd}']));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_setup_classifies_podmans_exact_wsl_inventory_failure_before_download() {
+        let fixture = fixture();
+        fixture.commands.push(success(utf16le(
+            "Default Version: 2\r\nKernel version: 6.6.87.2\r\n",
+        )));
+        fixture.commands.push(failure(utf16le(
+            "Windows Subsystem for Linux is not installed. Run wsl.exe --install.\r\nFor more information visit https://aka.ms/wslinstall\r\n",
+        )));
+        let setup = ManagedRuntimeSetupController::default();
+
+        let error = fixture
+            .manager
+            .setup(&setup)
+            .expect_err("Podman's failing WSL inventory boundary must stop setup");
+
+        assert!(error.to_string().contains("not installed"));
+        assert_eq!(*fixture.downloader.calls.lock().expect("downloads"), 0);
+        assert_eq!(
+            fixture.commands.calls(),
+            vec![
+                vec![String::from("--status")],
+                vec![String::from("-l"), String::from("--quiet")],
+            ]
+        );
+        let status = setup.status().expect("failed setup status");
+        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
+        assert!(!status.active);
+        assert!(status.can_retry);
+        assert_eq!(status.received_bytes, 0);
+        assert_eq!(status.total_bytes, None);
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslNotInstalled)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::InstallWsl)
+        );
+        assert!(!status.detail.contains("status 125"));
+        assert!(!status.detail.contains("C:\\Windows"));
+        assert!(!status.detail.contains(['\0', '\u{fffd}']));
+    }
+
     #[test]
     fn windows_wsl_command_uses_verified_system_directories_not_managed_environment() {
         let temp = TempDir::new().expect("temporary root");
@@ -10216,7 +10268,11 @@ mod tests {
                 .canonicalize()
                 .expect("canonical provider home")
         );
-        assert_eq!(command.environment.len(), 4);
+        assert_eq!(command.environment.len(), 5);
+        assert_eq!(
+            command.environment.get(OsStr::new("WSL_UTF8")),
+            Some(&OsString::from("1"))
+        );
     }
 
     #[test]
@@ -10671,10 +10727,14 @@ mod tests {
                 Some(OsStr::new("System32"))
             );
             assert_eq!(wsl.working_directory, canonical_provider_home);
-            assert_eq!(wsl.environment.len(), 4);
+            assert_eq!(wsl.environment.len(), 5);
             assert_eq!(
                 wsl.environment
                     .get(OsStr::new("NoDefaultCurrentDirectoryInExePath")),
+                Some(&OsString::from("1"))
+            );
+            assert_eq!(
+                wsl.environment.get(OsStr::new("WSL_UTF8")),
                 Some(&OsString::from("1"))
             );
         }
@@ -10978,7 +11038,7 @@ mod tests {
         let platform_probe_calls = if cfg!(windows) { 2 } else { 0 };
         if cfg!(windows) {
             assert_eq!(calls[0], ["--status"]);
-            assert_eq!(calls[1], ["--list", "--quiet"]);
+            assert_eq!(calls[1], ["-l", "--quiet"]);
         }
         assert_eq!(
             calls[platform_probe_calls],

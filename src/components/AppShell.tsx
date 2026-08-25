@@ -11,6 +11,7 @@ import type {
   AppMode,
   AppSnapshot,
   AssessmentCase,
+  ManagedRuntimeSetupNextAction,
   ManagedRuntimeSetupPhase,
   ManagedRuntimeSetupStatus,
   PageId,
@@ -69,6 +70,14 @@ const runtimeIssueKeys = {
   storage: "runtime.prerequisite.storage",
   generic: "runtime.prerequisite.generic",
 } as const satisfies Record<RuntimeIssue, TranslationKey>;
+
+const runtimeRecoveryKeys = {
+  install_wsl: "runtime.recovery.installWsl",
+  enable_wsl_optional_features: "runtime.recovery.enableWsl",
+  update_wsl: "runtime.recovery.updateWsl",
+  restart_windows: "runtime.recovery.restartWindows",
+  retry_wsl_check: "runtime.recovery.retryWsl",
+} as const satisfies Record<ManagedRuntimeSetupNextAction, TranslationKey>;
 
 const casePhaseLabelKeys = {
   draft: "status.case.draft",
@@ -132,6 +141,9 @@ export function AppShell({
       ? "wsl"
       : classifyRuntimeIssue(runtime?.prerequisite, runtime?.detail, runtimeSetup?.detail)
   ];
+  const runtimeGuidance = runtimeSetup?.nextAction
+    ? runtimeRecoveryKeys[runtimeSetup.nextAction]
+    : runtimeIssue;
 
   useEffect(() => setMobileOpen(false), [page]);
 
@@ -241,7 +253,7 @@ export function AppShell({
               {!runtimeSetup?.active && (
                 <div className="runtime-setup__guidance">
                   <strong>{t("runtime.nextStep")}</strong>
-                  <small>{t(runtimeIssue)}</small>
+                  <small>{t(runtimeGuidance)}</small>
                 </div>
               )}
               {runtimeSetup && runtimeSetup.phase !== "idle" && (
@@ -320,7 +332,6 @@ export function AppShell({
               onCheck={onCheckForUpdate}
               onInstall={onInstallUpdate}
             />
-            <span className="knowledge-chip"><Icon name="clock" size={15} /> {t("shell.knowledgeDate")}</span>
           </div>
         </header>
 

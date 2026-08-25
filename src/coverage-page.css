@@ -220,6 +220,64 @@
   font-weight: 760;
 }
 
+.page--coverage .coverage-scan-advanced {
+  margin-block: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.page--coverage .coverage-scan-advanced > summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.page--coverage .coverage-scan-advanced > summary small {
+  color: var(--muted);
+  font-size: 0.61rem;
+  font-weight: 520;
+}
+
+.page--coverage .coverage-scan-advanced > .form-grid,
+.page--coverage .coverage-scan-advanced > .rate-policy-fieldset,
+.page--coverage .coverage-scan-advanced > .field,
+.page--coverage .coverage-scan-advanced > .prohibited-template-list,
+.page--coverage .coverage-scan-advanced > .toggle-row,
+.page--coverage .coverage-scan-advanced > .inline-notice {
+  margin-top: 14px;
+}
+
+.page--coverage .coverage-recommended-callout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #b8d8ce;
+  border-radius: 11px;
+  background: #f0faf6;
+}
+
+.page--coverage .coverage-recommended-callout > span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--teal);
+  background: #dff3eb;
+}
+
+.page--coverage .coverage-recommended-callout strong {
+  color: var(--ink-strong);
+  font-size: 0.72rem;
+}
+
+.page--coverage .coverage-recommended-callout p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.5;
+}
+
 .page--coverage .coverage-form-technical .field,
 .page--coverage .coverage-form-technical p {
   margin-top: 11px;

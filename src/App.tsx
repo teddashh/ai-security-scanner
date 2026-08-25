@@ -52,8 +52,8 @@ const recordTechnicalError = (context: string, error: unknown): void => {
 };
 
 const busyActionCopy = {
-  "runtime-setup": { en: "scan-engine setup", zhTW: "掃描引擎設定" },
-  create: { en: "case creation", zhTW: "建立案件" },
+  "runtime-setup": { en: "scan-tool setup", zhTW: "掃描工具設定" },
+  create: { en: "scan project creation", zhTW: "建立掃描專案" },
   "archive-case": { en: "case archiving", zhTW: "封存案件" },
   "delete-case": { en: "case-record deletion", zhTW: "刪除案件紀錄" },
   "delete-artifacts": { en: "evidence deletion", zhTW: "刪除證據" },
@@ -69,7 +69,7 @@ const busyActionCopy = {
   "finding-workflow": { en: "updating a problem", zhTW: "更新問題狀態" },
   "finding-group": { en: "grouping related problems", zhTW: "整理相關問題" },
   "finding-ungroup": { en: "removing a problem group", zhTW: "移除問題群組" },
-  export: { en: "case export", zhTW: "匯出案件" },
+  export: { en: "report export", zhTW: "匯出報告" },
   "verify-export": { en: "file integrity verification", zhTW: "驗證檔案完整性" },
 } as const;
 
@@ -125,7 +125,7 @@ export default function App() {
       if (!quiet) {
         pushToast({
           tone: "danger",
-          title: text({ en: "Cases could not be loaded", zhTW: "目前無法讀取案件" }),
+          title: text({ en: "Scan projects could not be loaded", zhTW: "目前無法讀取掃描專案" }),
           detail: text({
             en: "Nothing was changed. Keep the app open and try again.",
             zhTW: "這次沒有更動任何資料；請讓程式保持開啟並再試一次。",
@@ -202,8 +202,8 @@ export default function App() {
         tone: "danger",
         title: text({ en: "The app update did not finish", zhTW: "應用程式更新未完成" }),
         detail: text({
-          en: "Your cases were not changed. Check the connection and try again.",
-          zhTW: "案件沒有被更動；請確認網路連線後再試一次。",
+          en: "Your scan projects were not changed. Check the connection and try again.",
+          zhTW: "掃描專案沒有被更動；請確認網路連線後再試一次。",
         }),
       });
     }
@@ -339,10 +339,10 @@ export default function App() {
       recordTechnicalError("select case", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "This case could not be opened", zhTW: "目前無法開啟這個案件" }),
+        title: text({ en: "This scan project could not be opened", zhTW: "目前無法開啟這個掃描專案" }),
         detail: text({
-          en: "The current case was left unchanged. Try opening it again.",
-          zhTW: "目前案件沒有被更動；請再開啟一次。",
+          en: "The current scan project was left unchanged. Try opening it again.",
+          zhTW: "目前掃描專案沒有被更動；請再開啟一次。",
         }),
       });
     } finally {
@@ -360,10 +360,10 @@ export default function App() {
       pushToast({
         tone: result.mode === "native" ? "success" : "info",
         title: result.mode === "native"
-          ? text({ en: "Case created", zhTW: "案件已建立" })
-          : text({ en: "Demo case created", zhTW: "展示案件已建立" }),
+          ? text({ en: "Scan project created", zhTW: "掃描專案已建立" })
+          : text({ en: "Demo scan project created", zhTW: "展示掃描專案已建立" }),
         detail: result.mode === "native"
-          ? text({ en: "The case is saved on this device. No scan has started.", zhTW: "案件已保存在這台電腦；尚未開始任何掃描。" })
+          ? text({ en: "The scan project is saved on this device. No scan has started.", zhTW: "掃描專案已保存在這台電腦；尚未開始任何掃描。" })
           : text({ en: "It is saved only in this browser. No real target was contacted.", zhTW: "只保存在這個瀏覽器；沒有接觸任何真實目標。" }),
       });
       return true;
@@ -371,7 +371,7 @@ export default function App() {
       recordTechnicalError("create case", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The case was not created", zhTW: "案件沒有建立成功" }),
+        title: text({ en: "The scan project was not created", zhTW: "掃描專案沒有建立成功" }),
         detail: text({ en: "Review the highlighted fields and try again.", zhTW: "請檢查畫面標示的欄位後再試一次。" }),
       });
       return false;
@@ -407,7 +407,7 @@ export default function App() {
       pushToast({
         tone: "danger",
         title: text({ en: "The local work could not finish", zhTW: "本機工作未能完成" }),
-        detail: text({ en: "Saved case data was kept. Check the current step before trying again.", zhTW: "已保存的案件資料仍保留；請確認目前步驟後再試一次。" }),
+        detail: text({ en: "Saved scan data was kept. Check the current step before trying again.", zhTW: "已保存的掃描資料仍保留；請確認目前步驟後再試一次。" }),
       });
       return false;
     } finally {
@@ -631,7 +631,7 @@ export default function App() {
       return (
         <div className="loading-state" role="status">
           <span className="loading-spinner" aria-hidden="true" />
-          <strong>{text({ en: "Loading cases from this device…", zhTW: "正在讀取這台電腦上的案件…" })}</strong>
+          <strong>{text({ en: "Loading scan projects from this device…", zhTW: "正在讀取這台電腦上的掃描專案…" })}</strong>
           <span>{text({
             en: "If the desktop service is unavailable, the app will clearly switch to demo data.",
             zhTW: "如果桌面服務無法使用，產品會清楚切換成展示資料。",
@@ -643,6 +643,7 @@ export default function App() {
     if (page === "start") {
       return (
         <StartPage
+          locale={locale}
           copy={startPageCopy[locale]}
           setup={
             <RuntimeSetupAssistant
@@ -693,6 +694,10 @@ export default function App() {
           onDelete={deleteCase}
           onDeleteArtifacts={deleteCaseArtifacts}
           onDismissArtifactCleanup={dismissArtifactCleanup}
+          onStartNewScan={() => {
+            setSelectedUseCase(undefined);
+            navigate("start");
+          }}
           onSelect={(caseId) => void selectCase(caseId)}
           onContinue={() => navigate("coverage")}
           onOpenProgress={() => navigate("progress")}
@@ -709,14 +714,14 @@ export default function App() {
       return (
         <EmptyState
           icon="cases"
-          title={text({ en: "Create or choose a case first", zhTW: "請先建立或選擇案件" })}
+          title={text({ en: "Create or choose a scan project first", zhTW: "請先建立或選擇掃描專案" })}
           description={text({
-            en: "Targets, scans, evidence, and follow-up checks stay together in one repeatable case.",
-            zhTW: "目標、掃描、證據與後續確認都會保存在同一個可重跑案件裡。",
+            en: "Keep targets, results, reports, and follow-up checks together in one place.",
+            zhTW: "把目標、結果、報告與後續確認集中放在同一個地方。",
           })}
           action={
             <button className="button button--primary" type="button" onClick={() => navigate("cases")}>
-              {text({ en: "Go to cases", zhTW: "前往案件" })}
+              {text({ en: "Open my scans", zhTW: "開啟我的掃描" })}
             </button>
           }
         />

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useI18n, type BilingualText } from "../i18n";
@@ -9,6 +17,7 @@ import {
   providerEngineBindings,
   type Provider,
   type ProviderAuthorizationPath,
+  type ProviderCoordinateField,
 } from "../providerAuthorizationPolicy";
 import { EVENTS, scannerService } from "../services/scanner";
 import type {
@@ -42,59 +51,146 @@ interface FieldCopy {
 }
 
 const copy = {
-  emptyTitle: { en: "No cloud account is attached to this case", zhTW: "這個案件還沒有雲端帳號" },
+  emptyTitle: { en: "Add a cloud account to this scan", zhTW: "把雲端帳號加入這次掃描" },
   emptyBody: {
-    en: "Add an AWS, Azure, Google Cloud, or Microsoft 365 source first. Then you can connect temporary read-only access here.",
-    zhTW: "請先加入 AWS、Azure、Google Cloud 或 Microsoft 365 來源，再回到這裡連接短期唯讀存取。",
+    en: "Choose AWS, Azure, Google Cloud, or Microsoft 365 above. Then prepare its official sign-in here.",
+    zhTW: "請先在上方選擇 AWS、Azure、Google Cloud 或 Microsoft 365，再回到這裡準備官方登入。",
   },
-  eyebrow: { en: "Cloud read-only access", zhTW: "雲端唯讀存取" },
-  title: { en: "Let the scanner see this cloud account—without giving it control", zhTW: "讓掃描工具看得到這個雲端帳號，但不能控制它" },
+  eyebrow: { en: "CLOUD SCAN", zhTW: "掃描雲端" },
+  title: { en: "Prepare {provider} sign-in", zhTW: "準備登入 {provider}" },
   intro: {
-    en: "Sign in only on the provider's official website. This app never asks for a password, client secret, access key, or long-lived token.",
-    zhTW: "只在雲端服務商的官方網站登入。本程式不會要求密碼、用戶端密鑰、存取金鑰或長效權杖。",
+    en: "Use {provider}'s official sign-in to find risky settings, exposed resources, and access problems. The connection is read-only and expires automatically.",
+    zhTW: "透過 {provider} 官方登入，找出危險設定、暴露資源與權限問題。連線只有讀取權限，並會自動到期。",
   },
-  statusActive: { en: "Read-only access until {expires}", zhTW: "唯讀存取有效至 {expires}" },
+  statusActive: { en: "Connected until {expires}", zhTW: "已連接至 {expires}" },
   statusMissing: { en: "Not connected", zhTW: "尚未連接" },
-  demoTitle: { en: "Demo mode cannot sign in to a cloud account", zhTW: "展示模式不會登入雲端帳號" },
+  demoTitle: { en: "Use the desktop app to connect a real account", zhTW: "請使用桌面版連接真實帳號" },
   demoBody: {
-    en: "Open the signed desktop app for a real connection. This browser preview does not start a cloud sign-in session.",
-    zhTW: "請使用已簽章的桌面程式進行真實連接；這個瀏覽器預覽不會啟動任何雲端登入。",
+    en: "This preview uses sample data and will not open a cloud sign-in page.",
+    zhTW: "這個預覽只使用範例資料，不會開啟雲端登入頁。",
   },
-  sourceLabel: { en: "Cloud account for this case", zhTW: "這次要檢查的雲端帳號" },
+  sourceLabel: { en: "Account to scan", zhTW: "要掃描的帳號" },
   sourceHelp: {
-    en: "Choose the account, tenant, or organization already listed in this case. Access stays tied to this one source.",
-    zhTW: "選擇案件中已有的帳號、租用戶或組織。這次存取只會綁定這一個來源。",
+    en: "Choose the cloud account, tenant, or organization you added to this scan project.",
+    zhTW: "選擇你已加入這個掃描專案的雲端帳號、租用戶或組織。",
   },
-  connectedTitle: { en: "Read-only access is connected", zhTW: "唯讀存取已連接" },
+  connectedTitle: { en: "Cloud scan connected", zhTW: "雲端掃描已連接" },
   connectedBody: {
-    en: "The scanner can use this short-lived access only for the selected case and cloud source.",
-    zhTW: "掃描工具只能在這個案件與這個雲端來源使用這份短期存取。",
+    en: "This scan project can now check the selected account with short-lived, read-only access.",
+    zhTW: "這個掃描專案現在可以使用短期唯讀權限檢查所選帳號。",
   },
-  disconnect: { en: "Disconnect read-only access", zhTW: "中斷唯讀存取" },
-  choiceQuestion: { en: "How would you like to provide read-only access?", zhTW: "你想怎麼提供唯讀存取？" },
+  disconnect: { en: "Disconnect account", zhTW: "中斷帳號連線" },
+  connectCtaTitle: { en: "Prepare {provider} sign-in", zhTW: "準備登入 {provider}" },
+  connectCtaBody: {
+    en: "Ask IT for one small connection file—no passwords or keys. Choose it here, then sign in on the provider's official page.",
+    zhTW: "向 IT 取得一個不含密碼或金鑰的小型連線設定檔，在這裡選取後，再到雲端服務商的官方頁面登入。",
+  },
+  connectCta: { en: "Set up cloud sign-in", zhTW: "設定雲端登入" },
+  connectionDetailsSummary: { en: "Set up {provider} sign-in", zhTW: "設定 {provider} 登入" },
+  connectionDetailsIntro: {
+    en: "Your IT team prepares this once for your organization.",
+    zhTW: "這份設定由 IT 為組織準備一次即可。",
+  },
+  preparationStepsLabel: { en: "Three steps to connect a cloud account", zhTW: "連接雲端帳號的三個步驟" },
+  preparationStep1: {
+    en: "Ask IT for the connection setup file.",
+    zhTW: "向 IT 取得連線設定檔。",
+  },
+  preparationStep2: {
+    en: "Choose the file. It is checked locally and is not kept.",
+    zhTW: "選擇檔案；程式只在本機檢查，不會保存原檔。",
+  },
+  preparationStep3: {
+    en: "Continue to {provider}'s official sign-in page.",
+    zhTW: "前往 {provider} 官方登入頁。",
+  },
+  requestTitle: { en: "Ask IT for the setup file", zhTW: "向 IT 取得設定檔" },
+  requestIntro: {
+    en: "Send this short request to your IT or cloud admin:",
+    zhTW: "把這段簡短訊息傳給 IT 或雲端管理員：",
+  },
+  requestMessagePreferred: {
+    en: "Please send me the non-secret {provider} connection setup JSON for ai-security-scanner, using our existing read-only access.",
+    zhTW: "請提供 ai-security-scanner 使用的 {provider} 非機密 connection setup JSON，並使用組織既有的唯讀權限。",
+  },
+  requestMessageBootstrap: {
+    en: "Please send me the non-secret {provider} connection setup JSON for ai-security-scanner, for temporary read-only scan access.",
+    zhTW: "請提供 ai-security-scanner 使用的 {provider} 非機密 connection setup JSON，用來建立暫時的唯讀掃描權限。",
+  },
+  copyRequest: { en: "Copy request for IT", zhTW: "複製給 IT 的請求" },
+  requestCopied: { en: "Request copied", zhTW: "已複製請求" },
+  requestCopyFailed: {
+    en: "Copy was unavailable. Select the request and copy it manually.",
+    zhTW: "無法自動複製；請選取上方訊息並手動複製。",
+  },
+  requestExactDetails: { en: "See the JSON template for IT", zhTW: "查看給 IT 的 JSON 範本" },
+  registrationNote: {
+    en: "Your organization must supply its own public cloud app or role details. ai-security-scanner does not provide a shared OAuth registration.",
+    zhTW: "你的組織必須提供自己的雲端公開應用程式或角色資料；ai-security-scanner 不提供共用 OAuth 註冊。",
+  },
+  importTitle: { en: "Import the setup file", zhTW: "匯入設定檔" },
+  importBody: {
+    en: "Choose the file from IT. It is read once to fill the connection details, then discarded.",
+    zhTW: "選擇 IT 提供的檔案；程式只讀取一次、填入連線資料後就丟棄原檔。",
+  },
+  chooseSetupFile: { en: "Choose setup file", zhTW: "選擇設定檔" },
+  setupFileReady: {
+    en: "Setup ready. The non-secret details were added.",
+    zhTW: "設定完成。非機密資料已填入。",
+  },
+  continueTitlePreferred: { en: "Sign in with {provider}", zhTW: "登入 {provider}" },
+  continueTitleBootstrap: { en: "Review temporary access", zhTW: "查看暫時權限" },
+  continueBodyPreferred: {
+    en: "Your browser will open the provider's official page. Your password is entered there, never in this app.",
+    zhTW: "瀏覽器會開啟雲端服務商的官方頁面。密碼只在該頁面輸入，不會輸入本程式。",
+  },
+  continueBodyBootstrap: {
+    en: "Review the temporary read-only access first. After you confirm it, {provider}'s official sign-in opens.",
+    zhTW: "先查看將建立的暫時唯讀權限；確認後，才會開啟 {provider} 官方登入。",
+  },
+  continueWaiting: { en: "Import the setup file first", zhTW: "請先匯入設定檔" },
+  manualSummary: { en: "Enter details manually", zhTW: "手動輸入資料" },
+  manualIntro: {
+    en: "If IT cannot send a file, enter the same non-secret details here.",
+    zhTW: "如果 IT 無法提供檔案，也可以在這裡手動輸入相同的非機密資料。",
+  },
+  setupFileErrors: {
+    missing: { en: "Choose a setup JSON file to continue.", zhTW: "請選擇設定 JSON 檔案。" },
+    size: { en: "This file is too large. Ask IT for a setup JSON smaller than 64 KB.", zhTW: "檔案太大。請向 IT 索取小於 64 KB 的設定 JSON。" },
+    type: { en: "Choose a .json file. Other file types are not accepted.", zhTW: "請選擇 .json 檔案；不接受其他檔案類型。" },
+    json: { en: "This is not valid JSON. Ask IT to create the file again from the template.", zhTW: "這不是有效的 JSON。請 IT 依範本重新建立檔案。" },
+    shape: { en: "The setup file has an unexpected structure. Ask IT to use the template shown here.", zhTW: "設定檔結構不正確。請 IT 使用這裡顯示的範本。" },
+    schema: { en: "This setup file uses an unsupported version. Ask IT to use the current template.", zhTW: "這個設定檔版本不支援。請 IT 使用目前的範本。" },
+    provider: { en: "This setup file is for a different cloud provider. Choose the matching account or file.", zhTW: "這個設定檔屬於其他雲端服務商。請選擇相符的帳號或檔案。" },
+    method: { en: "The connection method in this file is not supported.", zhTW: "這個檔案指定的連接方式不支援。" },
+    forbidden: { en: "This file may contain a password, secret, token, key, or credential field, so it was not imported.", zhTW: "這個檔案可能包含密碼、秘密、token、金鑰或憑證欄位，因此沒有匯入。" },
+    fields: { en: "Required details are missing or extra fields were added. Ask IT to use the exact template shown here.", zhTW: "必要資料有缺漏，或檔案含有額外欄位。請 IT 使用這裡顯示的完整範本。" },
+    values: { en: "One or more account details are not in the expected format. Ask IT to check the values and try again.", zhTW: "一個或多個帳號資料格式不正確。請 IT 確認內容後再試一次。" },
+  },
+  choiceQuestion: { en: "Choose a connection method", zhTW: "選擇連接方式" },
   choiceHelp: {
-    en: "Choose the situation that matches what you have today. You can switch before starting sign-in.",
-    zhTW: "選擇最符合你現在狀況的一項；開始登入前都可以切換。",
+    en: "Choose the option your IT or cloud admin prepared. The setup file will match it.",
+    zhTW: "選擇 IT 或雲端管理員已準備的方式；連線設定檔會和它相符。",
   },
   choiceAria: { en: "Read-only access setup method", zhTW: "唯讀存取設定方式" },
   preferredBadge: { en: "Recommended", zhTW: "建議" },
-  preferredTitle: { en: "A · I already have read-only access", zhTW: "方式一 · 我已有唯讀存取" },
+  preferredTitle: { en: "Use my organization's sign-in", zhTW: "使用組織既有登入" },
   preferredBody: {
-    en: "Use an existing read-only role or public app registration. We will verify it before any scan starts.",
-    zhTW: "使用既有的唯讀角色或公開應用程式註冊；開始掃描前會先驗證它確實只有唯讀權限。",
+    en: "Best when IT has already prepared a read-only role or app for security checks.",
+    zhTW: "適合 IT 已經準備好資安檢查用的唯讀角色或應用程式。",
   },
-  bootstrapTitle: { en: "B · I can create temporary read-only access", zhTW: "方式二 · 我可以建立暫時唯讀存取" },
+  bootstrapTitle: { en: "Have IT create temporary scan access", zhTW: "由 IT 建立暫時掃描權限" },
   bootstrapBody: {
-    en: "Use the provider's official management page to create a dedicated, short-lived scanner identity. The scanner never receives administrator access.",
-    zhTW: "到雲端服務商的官方管理頁建立專用、短效的掃描身分；掃描工具不會取得管理員權限。",
+    en: "Choose this when IT wants separate read-only access that expires after the scan.",
+    zhTW: "適合 IT 希望使用獨立、並會在掃描後到期的唯讀權限。",
   },
-  formTitlePreferred: { en: "Connect existing {provider} read-only access", zhTW: "連接既有的 {provider} 唯讀存取" },
-  formTitleBootstrap: { en: "Prepare temporary {provider} read-only access", zhTW: "準備暫時的 {provider} 唯讀存取" },
+  formTitlePreferred: { en: "Details for existing {provider} access", zhTW: "既有 {provider} 存取所需資料" },
+  formTitleBootstrap: { en: "Details for temporary {provider} scan access", zhTW: "暫時 {provider} 掃描權限所需資料" },
   formIntro: {
-    en: "Only the non-secret account details needed for {provider} are shown below.",
-    zhTW: "下方只顯示 {provider} 真正需要、而且不是秘密值的帳號資料。",
+    en: "Complete every required non-secret field from your IT or cloud admin, then continue to {provider}.",
+    zhTW: "請填妥 IT 或雲端管理員提供的所有必要非機密資料，再前往 {provider}。",
   },
-  scopeTitle: { en: "What this lets the scanner check", zhTW: "這份存取會讓掃描工具檢查什麼" },
+  scopeTitle: { en: "What the cloud scan checks", zhTW: "雲端掃描會檢查什麼" },
   scope: {
     aws: {
       en: "Cloud resources, configuration, identities and access, security posture, and audit metadata in the selected AWS boundary.",
@@ -134,8 +230,8 @@ const copy = {
   technicalCheckouts: { en: "Maximum bounded credential checkouts", zhTW: "短期憑證最多可取用次數" },
   technicalFields: { en: "Non-secret request fields", zhTW: "非秘密請求欄位" },
   technicalBoundary: {
-    en: "The backend binds access to the exact case, source, provider profile, engine set, expiry, and checkout limit. It cannot be reused for another case or source.",
-    zhTW: "後端會把存取綁定到明確的案件、來源、服務商設定檔、引擎集合、到期時間與取用上限，不能跨案件或來源重用。",
+    en: "The backend binds access to this exact scan project, source, provider profile, engine set, expiry, and checkout limit. It cannot be reused for another scan project or source.",
+    zhTW: "後端會把存取綁定到這個掃描專案、來源、服務商設定檔、引擎集合、到期時間與取用上限，不能跨掃描專案或來源重用。",
   },
   protocolDevice: { en: "Provider-hosted device authorization", zhTW: "雲端服務商官方的裝置授權流程" },
   protocolPkce: { en: "Provider-hosted browser sign-in with a local PKCE callback", zhTW: "雲端服務商官方瀏覽器登入與本機 PKCE 回呼" },
@@ -151,25 +247,35 @@ const copy = {
     execute: { en: "The temporary setup did not finish. Its private cleanup record was kept so you can retry safely.", zhTW: "暫時存取沒有建立完成；私人清理紀錄已保留，可以安全重試。" },
     cleanup: { en: "Cleanup did not finish. The exact cleanup record is still available, so you can retry without widening the scope.", zhTW: "清理尚未完成；精確清理紀錄仍在，可以在不擴大範圍的情況下重試。" },
     untrustedUrl: { en: "The sign-in link was not an approved provider website, so nothing was opened.", zhTW: "登入連結不是核准的雲端服務商官方網站，因此沒有開啟任何頁面。" },
-    openUrl: { en: "Your system browser could not open the provider's official page. Copy the next step from the technical details or try again.", zhTW: "系統瀏覽器無法開啟雲端服務商的官方頁面；請查看技術細節中的下一步或再試一次。" },
+    openUrl: { en: "Your system browser could not open the provider's official page. This sign-in step remains here, so you can try again.", zhTW: "系統瀏覽器無法開啟雲端服務商的官方頁面；這個登入步驟仍會留在畫面上，可以再試一次。" },
   },
   notices: {
     authorized: { en: "Read-only access was verified. It stays only in this desktop session and expires automatically.", zhTW: "唯讀存取已驗證；它只留在這次桌面程式工作階段，並會自動到期。" },
     cancelled: { en: "Sign-in was cancelled. No scanner access was added.", zhTW: "本次登入已取消，沒有加入任何掃描存取。" },
-    revoked: { en: "Read-only access was disconnected. Existing evidence and case history were not changed.", zhTW: "唯讀存取已中斷；既有證據與案件歷史沒有被修改。" },
+    revoked: { en: "Read-only access was disconnected. Existing results and scan history were not changed.", zhTW: "唯讀存取已中斷；既有結果與掃描記錄沒有被修改。" },
     bootstrapped: { en: "Temporary read-only access was created and verified. Its exact cleanup record is ready.", zhTW: "暫時唯讀存取已建立並驗證；精確清理紀錄也已備妥。" },
     cleaned: { en: "Cleanup ran only for resources recorded by this temporary setup. Any credential still expiring remains tracked.", zhTW: "清理只處理這次暫時設定所記錄的資源；尚在到期中的憑證仍會持續追蹤。" },
   },
   promptEyebrow: { en: "Official provider sign-in", zhTW: "雲端服務商官方登入" },
   promptTitle: { en: "Finish sign-in in your browser", zhTW: "請在瀏覽器完成登入" },
-  promptBody: {
-    en: "The official page will ask you to choose an account and approve only the displayed read access. Return here when it is done.",
-    zhTW: "官方頁面會請你選擇帳號，並只同意畫面列出的讀取權限；完成後回到這裡即可。",
+  promptBodyDevice: {
+    en: "Open the official page, enter the one-time code shown below, choose your account, and approve only the displayed read access.",
+    zhTW: "開啟官方頁面，輸入下方一次性代碼、選擇帳號，並只同意畫面列出的讀取權限。",
+  },
+  promptBodyBrowser: {
+    en: "Open the official page, choose your account, and approve only the displayed read access. Return here when it is done.",
+    zhTW: "開啟官方頁面、選擇帳號，並只同意畫面列出的讀取權限；完成後回到這裡即可。",
   },
   openProvider: { en: "Open official sign-in page", zhTW: "開啟官方登入頁" },
   promptExpiry: { en: "Complete this step before {expires}.", zhTW: "請在 {expires} 前完成這一步。" },
-  promptTechnical: { en: "Device code and sign-in details", zhTW: "裝置代碼與登入細節" },
-  deviceCode: { en: "Device code", zhTW: "裝置代碼" },
+  promptTechnical: { en: "Sign-in protocol and safety details", zhTW: "登入協定與安全細節" },
+  deviceCode: { en: "One-time sign-in code", zhTW: "一次性登入代碼" },
+  copyDeviceCode: { en: "Copy code", zhTW: "複製代碼" },
+  deviceCodeCopied: { en: "Code copied", zhTW: "已複製代碼" },
+  deviceCodeCopyFailed: {
+    en: "Copy was unavailable. Select the code above and copy it manually.",
+    zhTW: "無法自動複製；請選取上方代碼並手動複製。",
+  },
   backendSafety: { en: "Provider safety note", zhTW: "雲端服務商安全提示" },
   cancel: { en: "Cancel this sign-in", zhTW: "取消本次登入" },
   unsafePromptTitle: { en: "The provider link could not be verified", zhTW: "無法驗證雲端服務商連結" },
@@ -191,6 +297,7 @@ const copy = {
     en: "Confirming authorizes only this fixed identity-creation plan. It does not authorize the scanner to write to or repair the target.",
     zhTW: "確認後只會授權這份固定的身分建立計畫；不會授權掃描工具寫入或修復目標。",
   },
+  editSetup: { en: "Change IT setup details", zhTW: "修改 IT 設定資料" },
   executePlan: { en: "Create temporary read-only access", zhTW: "建立暫時唯讀存取" },
   executingPlan: { en: "Creating read-only access…", zhTW: "正在建立唯讀存取…" },
   messagesTitle: { en: "The provider setup may need your attention", zhTW: "雲端服務商設定可能需要你操作" },
@@ -264,7 +371,7 @@ const copy = {
     },
     tenantId: {
       label: { en: "Tenant ID", zhTW: "租用戶識別碼" },
-      what: { en: "The UUID for the one Microsoft Entra tenant this case may inspect.", zhTW: "這個案件可檢查的單一 Microsoft Entra 租用戶 UUID。" },
+      what: { en: "The UUID for the Microsoft Entra tenant in this scan project.", zhTW: "這個掃描專案要檢查的 Microsoft Entra 租用戶 UUID。" },
       where: { en: "Microsoft Entra admin center → Overview → Tenant ID.", zhTW: "Microsoft Entra 系統管理中心 → 概觀（Overview）→ 租用戶識別碼（Tenant ID）。" },
       example: "11111111-2222-4333-8444-555555555555",
     },
@@ -288,7 +395,7 @@ const copy = {
     },
     gcpOrganizationId: {
       label: { en: "Google Cloud organization ID", zhTW: "Google Cloud 組織識別碼" },
-      what: { en: "The numeric identifier for the one organization this case may inspect.", zhTW: "這個案件可檢查的單一組織數字識別碼。" },
+      what: { en: "The numeric identifier for the organization in this scan project.", zhTW: "這個掃描專案要檢查的組織數字識別碼。" },
       where: { en: "Google Cloud console → IAM & Admin → Settings.", zhTW: "Google Cloud 控制台 → IAM 與管理（IAM & Admin）→ 設定（Settings）。" },
       example: "123456789012",
     },
@@ -310,11 +417,249 @@ const copy = {
 
 type PanelErrorKind = keyof typeof copy.errors;
 type PanelNoticeKind = keyof typeof copy.notices;
+type DeviceCodeCopyState = "idle" | "copied" | "failed";
+type CopyState = "idle" | "copied" | "failed";
+type SetupFileErrorKind = keyof typeof copy.setupFileErrors;
+type ConnectionMethod = "existing_read_only" | "temporary_read_only";
+
+interface ParsedConnectionSetup {
+  flow: ProviderAuthorizationPath;
+  details: Record<ProviderCoordinateField, string>;
+}
 
 interface PanelError {
   kind: PanelErrorKind;
   detail?: string;
 }
+
+const CONNECTION_SETUP_SCHEMA_VERSION = "1.0.0";
+const CONNECTION_SETUP_MAX_BYTES = 64 * 1024;
+const CONNECTION_SETUP_MAX_DEPTH = 4;
+const CONNECTION_SETUP_MAX_NODES = 64;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const GCP_CLIENT_ID_PATTERN = /^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/u;
+const GCP_PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/u;
+const AWS_REGION_PATTERN = /^(?:[a-z]{2}(?:-gov)?-[a-z]+-\d)$/u;
+const AWS_ROLE_NAME_PATTERN = /^[A-Za-z0-9+=,.@_/-]{1,64}$/u;
+const connectionSetupFileFields: Readonly<
+  Record<Provider, Readonly<Record<ProviderAuthorizationPath, readonly ProviderCoordinateField[]>>>
+> = {
+  aws: {
+    preferred: ["start_url", "region", "account_id", "role_name"],
+    bootstrap: ["start_url", "region", "account_id", "role_name"],
+  },
+  azure: {
+    preferred: ["tenant_id", "public_client_id", "subscription_id"],
+    bootstrap: ["tenant_id", "public_client_id", "subscription_id"],
+  },
+  gcp: {
+    preferred: ["public_client_id", "organization_id"],
+    bootstrap: ["public_client_id", "organization_id", "project_id"],
+  },
+  microsoft365: {
+    preferred: ["tenant_id", "public_client_id"],
+    bootstrap: ["tenant_id", "public_client_id"],
+  },
+};
+const FORBIDDEN_SETUP_FIELD_PARTS = new Set([
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "key",
+  "keys",
+  "credential",
+  "credentials",
+  "certificate",
+  "private",
+]);
+
+class ConnectionSetupFileError extends Error {
+  constructor(readonly kind: SetupFileErrorKind) {
+    super(kind);
+  }
+}
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+  && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+
+const sortedKeys = (value: Record<string, unknown>): string[] => Object.keys(value).sort();
+
+const sameKeys = (actual: readonly string[], expected: readonly string[]): boolean =>
+  actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+
+const fieldNameContainsSecret = (fieldName: string): boolean => {
+  const separated = fieldName.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toLocaleLowerCase("en-US");
+  return separated.split(/[^a-z0-9]+/u).some((part) => FORBIDDEN_SETUP_FIELD_PARTS.has(part));
+};
+
+const rejectSecretFieldsAndExcessiveNesting = (value: unknown): void => {
+  let nodes = 0;
+  const visit = (current: unknown, depth: number): void => {
+    nodes += 1;
+    if (nodes > CONNECTION_SETUP_MAX_NODES || depth > CONNECTION_SETUP_MAX_DEPTH) {
+      throw new ConnectionSetupFileError("shape");
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item, depth + 1);
+      return;
+    }
+    if (!isPlainRecord(current)) return;
+    for (const [key, item] of Object.entries(current)) {
+      if (fieldNameContainsSecret(key)) throw new ConnectionSetupFileError("forbidden");
+      visit(item, depth + 1);
+    }
+  };
+  visit(value, 0);
+};
+
+const flowForConnectionMethod = (method: unknown): ProviderAuthorizationPath => {
+  if (method === "existing_read_only") return "preferred";
+  if (method === "temporary_read_only") return "bootstrap";
+  throw new ConnectionSetupFileError("method");
+};
+
+const connectionMethodForFlow = (flow: ProviderAuthorizationPath): ConnectionMethod =>
+  flow === "preferred" ? "existing_read_only" : "temporary_read_only";
+
+const validateLoopbackRedirect = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    const port = Number(url.port);
+    return url.protocol === "http:"
+      && url.hostname === "127.0.0.1"
+      && Number.isInteger(port)
+      && port >= 49_152
+      && port <= 65_535
+      && url.pathname === "/oauth2/callback"
+      && !url.username
+      && !url.password
+      && !url.search
+      && !url.hash;
+  } catch {
+    return false;
+  }
+};
+
+const validateAwsStartUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLocaleLowerCase("en-US");
+    return url.protocol === "https:"
+      && (host === "awsapps.com" || host.endsWith(".awsapps.com"))
+      && (url.pathname === "/start" || url.pathname === "/start/")
+      && !url.username
+      && !url.password
+      && !url.search
+      && !url.hash;
+  } catch {
+    return false;
+  }
+};
+
+const validateConnectionValue = (
+  provider: Provider,
+  field: ProviderCoordinateField,
+  value: string,
+  details: Readonly<Record<string, string>>,
+): boolean => {
+  if (!value || value.length > 2_048) return false;
+  switch (field) {
+    case "start_url": return validateAwsStartUrl(value);
+    case "region": return AWS_REGION_PATTERN.test(value);
+    case "account_id": return /^[0-9]{12}$/u.test(value);
+    case "role_name": return AWS_ROLE_NAME_PATTERN.test(value);
+    case "role_arn": {
+      const match = /^arn:(?:aws|aws-us-gov|aws-cn):iam::([0-9]{12}):role\/[A-Za-z0-9+=,.@_/-]{1,64}$/u.exec(value);
+      return Boolean(match && match[1] === details.account_id);
+    }
+    case "tenant_id":
+    case "subscription_id": return UUID_PATTERN.test(value);
+    case "public_client_id": return provider === "gcp"
+      ? GCP_CLIENT_ID_PATTERN.test(value)
+      : UUID_PATTERN.test(value);
+    case "organization_id": return /^[0-9]+$/u.test(value);
+    case "project_id": return GCP_PROJECT_ID_PATTERN.test(value);
+    case "redirect_uri": return validateLoopbackRedirect(value);
+  }
+};
+
+const deriveAwsRoleArn = (region: string, accountId: string, roleName: string): string => {
+  const partition = region.startsWith("us-gov-") ? "aws-us-gov" : region.startsWith("cn-") ? "aws-cn" : "aws";
+  return `arn:${partition}:iam::${accountId}:role/${roleName}`;
+};
+
+const normalizeAndValidateDetails = (
+  provider: Provider,
+  flow: ProviderAuthorizationPath,
+  value: unknown,
+  requireExactKeys = true,
+): Record<ProviderCoordinateField, string> => {
+  if (!isPlainRecord(value)) throw new ConnectionSetupFileError("shape");
+  const expectedFields = [...providerAuthorizationRequiredFields[provider][flow]].sort();
+  if (requireExactKeys && !sameKeys(sortedKeys(value), expectedFields)) {
+    throw new ConnectionSetupFileError("fields");
+  }
+  const details = {} as Record<ProviderCoordinateField, string>;
+  for (const field of expectedFields) {
+    const raw = value[field];
+    if (typeof raw !== "string") throw new ConnectionSetupFileError("values");
+    details[field] = raw.trim();
+  }
+  for (const field of expectedFields) {
+    if (!validateConnectionValue(provider, field, details[field], details)) {
+      throw new ConnectionSetupFileError("values");
+    }
+  }
+  return details;
+};
+
+const normalizeConnectionSetupDetails = (
+  provider: Provider,
+  flow: ProviderAuthorizationPath,
+  value: unknown,
+  localGcpRedirectUri: string,
+): Record<ProviderCoordinateField, string> => {
+  if (!isPlainRecord(value)) throw new ConnectionSetupFileError("shape");
+  const expectedFields = [...connectionSetupFileFields[provider][flow]].sort();
+  if (!sameKeys(sortedKeys(value), expectedFields)) throw new ConnectionSetupFileError("fields");
+  const supplied = {} as Record<ProviderCoordinateField, string>;
+  for (const field of expectedFields) {
+    const raw = value[field];
+    if (typeof raw !== "string") throw new ConnectionSetupFileError("values");
+    supplied[field] = raw.trim();
+  }
+  if (provider === "aws") {
+    supplied.role_arn = deriveAwsRoleArn(supplied.region, supplied.account_id, supplied.role_name);
+  }
+  if (provider === "gcp") supplied.redirect_uri = localGcpRedirectUri;
+  return normalizeAndValidateDetails(provider, flow, supplied);
+};
+
+const parseConnectionSetup = (
+  content: string,
+  expectedProvider: Provider,
+  localGcpRedirectUri: string,
+): ParsedConnectionSetup => {
+  let value: unknown;
+  try {
+    value = JSON.parse(content.replace(/^\uFEFF/u, ""));
+  } catch {
+    throw new ConnectionSetupFileError("json");
+  }
+  rejectSecretFieldsAndExcessiveNesting(value);
+  if (!isPlainRecord(value)) throw new ConnectionSetupFileError("shape");
+  const expectedTopLevel = ["connection_method", "details", "provider", "schema_version"].sort();
+  if (!sameKeys(sortedKeys(value), expectedTopLevel)) throw new ConnectionSetupFileError("shape");
+  if (value.schema_version !== CONNECTION_SETUP_SCHEMA_VERSION) throw new ConnectionSetupFileError("schema");
+  if (value.provider !== expectedProvider) throw new ConnectionSetupFileError("provider");
+  const flow = flowForConnectionMethod(value.connection_method);
+  return {
+    flow,
+    details: normalizeConnectionSetupDetails(expectedProvider, flow, value.details, localGcpRedirectUri),
+  };
+};
 
 const providerBySourceKind: Partial<Record<ConnectedSource["kind"], Provider>> = {
   aws_organization: "aws",
@@ -329,6 +674,45 @@ const providerLabels: Record<Provider, string> = {
   gcp: "Google Cloud",
   microsoft365: "Microsoft 365",
 };
+
+const connectionSetupDetailsTemplate = (
+  provider: Provider,
+  flow: ProviderAuthorizationPath,
+): Record<string, string> => {
+  if (provider === "aws") {
+    const roleName = flow === "preferred" ? "SecurityAuditReader" : "AdministratorAccess";
+    return {
+      start_url: "https://company.awsapps.com/start",
+      region: "us-east-1",
+      account_id: "123456789012",
+      role_name: roleName,
+    };
+  }
+  if (provider === "azure") return {
+    tenant_id: "11111111-2222-4333-8444-555555555555",
+    public_client_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    subscription_id: "22222222-3333-4444-8555-666666666666",
+  };
+  if (provider === "microsoft365") return {
+    tenant_id: "11111111-2222-4333-8444-555555555555",
+    public_client_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  };
+  return {
+    public_client_id: "123456789012-example.apps.googleusercontent.com",
+    organization_id: "123456789012",
+    ...(flow === "bootstrap" ? { project_id: "security-scanner-access" } : {}),
+  };
+};
+
+const connectionSetupTemplate = (
+  provider: Provider,
+  flow: ProviderAuthorizationPath,
+): string => JSON.stringify({
+  schema_version: CONNECTION_SETUP_SCHEMA_VERSION,
+  provider,
+  connection_method: connectionMethodForFlow(flow),
+  details: connectionSetupDetailsTemplate(provider, flow),
+}, null, 2);
 
 const bootstrapCapabilities: Record<Provider, BootstrapRequest["capabilities"]> = {
   aws: ["inventory", "configuration", "identity_and_access", "security_posture", "audit_metadata"],
@@ -390,12 +774,18 @@ export function ProviderAuthorizationPanel({
   const [selectedSourceId, setSelectedSourceId] = useState(providerSources[0]?.id ?? "");
   const selectedSource = providerSources.find((source) => source.id === selectedSourceId) ?? providerSources[0];
   const provider = selectedSource ? providerBySourceKind[selectedSource.kind] : undefined;
-  const [flowMode, setFlowMode] = useState<ProviderAuthorizationPath>();
+  const [flowMode, setFlowMode] = useState<ProviderAuthorizationPath>("preferred");
+  const [connectionDetailsOpen, setConnectionDetailsOpen] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<PanelError>();
   const [notice, setNotice] = useState<PanelNoticeKind>();
   const [installed, setInstalled] = useState<InstalledProviderAuthorization>();
   const [prompt, setPrompt] = useState<ProviderAuthorizationPrompt>();
+  const [deviceCodeCopyState, setDeviceCodeCopyState] = useState<DeviceCodeCopyState>("idle");
+  const [requestCopyState, setRequestCopyState] = useState<CopyState>("idle");
+  const [setupFileError, setSetupFileError] = useState<SetupFileErrorKind>();
+  const [setupFileReady, setSetupFileReady] = useState(false);
+  const [manualDetailsUsed, setManualDetailsUsed] = useState(false);
   const pollTimer = useRef<number | undefined>(undefined);
   const schedulePollRef = useRef<(sessionId: string, delaySeconds: number) => void>(() => undefined);
 
@@ -437,13 +827,22 @@ export function ProviderAuthorizationPanel({
   useEffect(() => {
     if (!providerSources.some((source) => source.id === selectedSourceId)) {
       setSelectedSourceId(providerSources[0]?.id ?? "");
-      setFlowMode(undefined);
+      setFlowMode("preferred");
+      setConnectionDetailsOpen(false);
+      setSetupFileReady(false);
+      setManualDetailsUsed(false);
+      setSetupFileError(undefined);
+      setRequestCopyState("idle");
     }
   }, [providerSources, selectedSourceId]);
 
   useEffect(() => () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
   }, []);
+
+  useEffect(() => {
+    setDeviceCodeCopyState("idle");
+  }, [prompt?.session_id]);
 
   useEffect(() => {
     if (!nativeMode || !selectedSource) {
@@ -504,8 +903,138 @@ export function ProviderAuthorizationPanel({
   }, [provider, awsStartUrl, awsRegion, awsAccountId, awsRoleName, awsRoleArn, tenantId, publicClientId, subscriptionId, gcpOrganizationId, gcpProjectId, gcpRedirectUri]);
 
   useEffect(() => {
-    if (awsAccountId && awsRoleName) setAwsRoleArn(`arn:aws:iam::${awsAccountId}:role/${awsRoleName}`);
-  }, [awsAccountId, awsRoleName]);
+    if (awsRegion && awsAccountId && awsRoleName) {
+      setAwsRoleArn(deriveAwsRoleArn(awsRegion, awsAccountId, awsRoleName));
+    }
+  }, [awsRegion, awsAccountId, awsRoleName]);
+
+  const currentConnectionDetails = useMemo<Record<string, string>>(() => {
+    const details: Record<string, string> = {};
+    if (provider === "aws") Object.assign(details, {
+      start_url: awsStartUrl.trim(),
+      region: awsRegion.trim(),
+      account_id: awsAccountId.trim(),
+      role_name: awsRoleName.trim(),
+      role_arn: awsRoleArn.trim(),
+    });
+    if (provider === "azure") Object.assign(details, {
+      tenant_id: tenantId.trim(),
+      public_client_id: publicClientId.trim(),
+      subscription_id: subscriptionId.trim(),
+    });
+    if (provider === "microsoft365") Object.assign(details, {
+      tenant_id: tenantId.trim(),
+      public_client_id: publicClientId.trim(),
+    });
+    if (provider === "gcp") Object.assign(details, {
+      public_client_id: publicClientId.trim(),
+      organization_id: gcpOrganizationId.trim(),
+      ...(flowMode === "bootstrap" ? { project_id: gcpProjectId.trim() } : {}),
+      redirect_uri: gcpRedirectUri.trim(),
+    });
+    return details;
+  }, [
+    provider,
+    flowMode,
+    awsStartUrl,
+    awsRegion,
+    awsAccountId,
+    awsRoleName,
+    awsRoleArn,
+    tenantId,
+    publicClientId,
+    subscriptionId,
+    gcpOrganizationId,
+    gcpProjectId,
+    gcpRedirectUri,
+  ]);
+
+  const configurationReady = useMemo(() => {
+    if (!provider) return false;
+    try {
+      normalizeAndValidateDetails(provider, flowMode, currentConnectionDetails);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [provider, flowMode, currentConnectionDetails]);
+  const canContinue = configurationReady && (setupFileReady || manualDetailsUsed);
+
+  const markManualDetailsChanged = () => {
+    setSetupFileReady(false);
+    setManualDetailsUsed(true);
+    setSetupFileError(undefined);
+  };
+
+  const applyConnectionDetails = (
+    nextProvider: Provider,
+    nextFlow: ProviderAuthorizationPath,
+    details: Readonly<Record<ProviderCoordinateField, string>>,
+  ) => {
+    if (nextProvider === "aws") {
+      setAwsStartUrl(details.start_url);
+      setAwsRegion(details.region);
+      setAwsAccountId(details.account_id);
+      setAwsRoleName(details.role_name);
+      setAwsRoleArn(details.role_arn);
+    } else if (nextProvider === "azure") {
+      setTenantId(details.tenant_id);
+      setPublicClientId(details.public_client_id);
+      setSubscriptionId(details.subscription_id);
+    } else if (nextProvider === "microsoft365") {
+      setTenantId(details.tenant_id);
+      setPublicClientId(details.public_client_id);
+    } else {
+      setPublicClientId(details.public_client_id);
+      setGcpOrganizationId(details.organization_id);
+      setGcpProjectId(nextFlow === "bootstrap" ? details.project_id : "");
+      setGcpRedirectUri(details.redirect_uri);
+    }
+  };
+
+  const importConnectionSetup = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    setSetupFileReady(false);
+    setSetupFileError(undefined);
+    setRequestCopyState("idle");
+    try {
+      if (!file || !provider) throw new ConnectionSetupFileError("missing");
+      if (file.size > CONNECTION_SETUP_MAX_BYTES) throw new ConnectionSetupFileError("size");
+      const mediaType = file.type.toLocaleLowerCase("en-US");
+      if (!file.name.toLocaleLowerCase("en-US").endsWith(".json")
+        || (mediaType !== "" && mediaType !== "application/json" && mediaType !== "text/json")) {
+        throw new ConnectionSetupFileError("type");
+      }
+      const content = await file.text();
+      if (new TextEncoder().encode(content).byteLength > CONNECTION_SETUP_MAX_BYTES) {
+        throw new ConnectionSetupFileError("size");
+      }
+      const parsed = parseConnectionSetup(content, provider, gcpRedirectUri);
+      applyConnectionDetails(provider, parsed.flow, parsed.details);
+      setFlowMode(parsed.flow);
+      setConnectionDetailsOpen(false);
+      setManualDetailsUsed(false);
+      setBootstrapPlan(undefined);
+      setPrompt(undefined);
+      clearFeedback();
+      setSetupFileReady(true);
+    } catch (cause) {
+      setSetupFileError(cause instanceof ConnectionSetupFileError ? cause.kind : "json");
+    } finally {
+      input.value = "";
+    }
+  };
+
+  const copyItRequest = async (request: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(request);
+      setRequestCopyState("copied");
+    } catch {
+      setRequestCopyState("failed");
+    }
+  };
 
   const authorizationConfig = useCallback((): ProviderAuthorizationConfig => {
     if (!provider) throw new Error("provider source was not selected");
@@ -573,8 +1102,8 @@ export function ProviderAuthorizationPanel({
     schedulePollRef.current = schedulePoll;
   }, [schedulePoll]);
 
-  const beginPreferred = async (event: FormEvent) => {
-    event.preventDefault();
+  const beginPreferred = async (event?: FormEvent) => {
+    event?.preventDefault();
     if (!selectedSource || !provider) return;
     setWorking(true);
     clearFeedback();
@@ -588,6 +1117,7 @@ export function ProviderAuthorizationPanel({
         authorization: authorizationConfig(),
       });
       setPrompt(result.data);
+      setConnectionDetailsOpen(false);
       const initialDelay = result.data.flow === "device" ? result.data.prompt.poll_interval_seconds : 2;
       schedulePoll(result.data.session_id, initialDelay);
     } catch (beginError) {
@@ -634,14 +1164,15 @@ export function ProviderAuthorizationPanel({
     };
   };
 
-  const planBootstrap = async (event: FormEvent) => {
-    event.preventDefault();
+  const planBootstrap = async (event?: FormEvent) => {
+    event?.preventDefault();
     setWorking(true);
     clearFeedback();
     try {
       operatorConfig();
       const result = await scannerService.planProviderBootstrap(makeBootstrapRequest());
       setBootstrapPlan(result.data);
+      setConnectionDetailsOpen(false);
     } catch (planError) {
       showError("plan", planError);
     } finally {
@@ -716,6 +1247,17 @@ export function ProviderAuthorizationPanel({
     [bootstrapMessages],
   );
 
+  const copyPromptDeviceCode = async () => {
+    if (prompt?.flow !== "device") return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(prompt.prompt.user_code);
+      setDeviceCodeCopyState("copied");
+    } catch {
+      setDeviceCodeCopyState("failed");
+    }
+  };
+
   const openProviderLogin = async () => {
     if (!promptUrl) {
       showError("untrustedUrl");
@@ -739,6 +1281,11 @@ export function ProviderAuthorizationPanel({
   const chooseFlow = (nextFlow: ProviderAuthorizationPath) => {
     if (working || disabled) return;
     setFlowMode(nextFlow);
+    setConnectionDetailsOpen(false);
+    setSetupFileReady(false);
+    setManualDetailsUsed(false);
+    setSetupFileError(undefined);
+    setRequestCopyState("idle");
     setBootstrapPlan(undefined);
     setPrompt(undefined);
     clearFeedback();
@@ -747,7 +1294,12 @@ export function ProviderAuthorizationPanel({
   const changeSource = (sourceId: string) => {
     if (working || disabled) return;
     setSelectedSourceId(sourceId);
-    setFlowMode(undefined);
+    setFlowMode("preferred");
+    setConnectionDetailsOpen(false);
+    setSetupFileReady(false);
+    setManualDetailsUsed(false);
+    setSetupFileError(undefined);
+    setRequestCopyState("idle");
     setPrompt(undefined);
     setInstalled(undefined);
     setBootstrapPlan(undefined);
@@ -775,14 +1327,20 @@ export function ProviderAuthorizationPanel({
   const providerName = provider ? providerLabels[provider] : "—";
   const awsRoleField = flowMode === "bootstrap" ? copy.fields.awsRoleBootstrap : copy.fields.awsRolePreferred;
   const awsRoleArnField = flowMode === "bootstrap" ? copy.fields.awsRoleArnBootstrap : copy.fields.awsRoleArnPreferred;
+  const setupTemplate = provider ? connectionSetupTemplate(provider, flowMode) : "";
+  const requestMessage = text(
+    flowMode === "preferred" ? copy.requestMessagePreferred : copy.requestMessageBootstrap,
+    { provider: providerName },
+  );
+  const requestForIt = `${requestMessage}\n\n${text(copy.requestExactDetails)}:\n${setupTemplate}`;
 
   return (
     <section className="provider-auth-panel" aria-labelledby="provider-auth-title">
       <div className="section-heading section-heading--row">
         <div>
           <p className="eyebrow">{text(copy.eyebrow)}</p>
-          <h2 id="provider-auth-title">{text(copy.title)}</h2>
-          <p>{text(copy.intro)}</p>
+          <h2 id="provider-auth-title">{text(copy.title, { provider: providerName })}</h2>
+          <p>{text(copy.intro, { provider: providerName })}</p>
         </div>
         {installed
           ? <StatusPill label={text(copy.statusActive, { expires: formatDateTime(installed.expires_at) })} tone="positive" />
@@ -823,36 +1381,125 @@ export function ProviderAuthorizationPanel({
         </div>
       )}
 
-      <div className="provider-auth-choice-heading">
-        <h3 id="provider-auth-choice-title">{text(copy.choiceQuestion)}</h3>
-        <p>{text(copy.choiceHelp)}</p>
-      </div>
-      <div className="provider-auth-choice-grid" role="group" aria-labelledby="provider-auth-choice-title" aria-label={text(copy.choiceAria)}>
-        <button
-          type="button"
-          className={flowMode === "preferred" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
-          aria-pressed={flowMode === "preferred"}
-          disabled={working || disabled}
-          onClick={() => chooseFlow("preferred")}
-        >
-          <span className="provider-auth-choice__badge">{text(copy.preferredBadge)}</span>
-          <strong>{text(copy.preferredTitle)}</strong>
-          <span>{text(copy.preferredBody)}</span>
-        </button>
-        <button
-          type="button"
-          className={flowMode === "bootstrap" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
-          aria-pressed={flowMode === "bootstrap"}
-          disabled={working || disabled}
-          onClick={() => chooseFlow("bootstrap")}
-        >
-          <strong>{text(copy.bootstrapTitle)}</strong>
-          <span>{text(copy.bootstrapBody)}</span>
-        </button>
-      </div>
+      {!installed && !prompt && !bootstrapPlan && provider && (
+        <section className="provider-auth-details" aria-labelledby="provider-setup-title">
+          <div className="provider-setup-heading">
+            <h3 id="provider-setup-title">{text(copy.connectionDetailsSummary, { provider: providerName })}</h3>
+            <p>{text(copy.connectCtaBody)}</p>
+            <small>{text(copy.connectionDetailsIntro)}</small>
+          </div>
 
-      {flowMode && provider && (
-        <form className="provider-auth-form" onSubmit={flowMode === "preferred" ? beginPreferred : planBootstrap}>
+          <div className="provider-auth-choice-heading">
+            <h3 id="provider-auth-choice-title">{text(copy.choiceQuestion)}</h3>
+            <p>{text(copy.choiceHelp)}</p>
+          </div>
+          <div className="provider-auth-choice-grid" role="group" aria-labelledby="provider-auth-choice-title" aria-label={text(copy.choiceAria)}>
+            <button
+              type="button"
+              className={flowMode === "preferred" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
+              aria-pressed={flowMode === "preferred"}
+              disabled={working || disabled}
+              onClick={() => chooseFlow("preferred")}
+            >
+              <span className="provider-auth-choice__badge">{text(copy.preferredBadge)}</span>
+              <strong>{text(copy.preferredTitle)}</strong>
+              <span>{text(copy.preferredBody)}</span>
+            </button>
+            <button
+              type="button"
+              className={flowMode === "bootstrap" ? "provider-auth-choice provider-auth-choice--active" : "provider-auth-choice"}
+              aria-pressed={flowMode === "bootstrap"}
+              disabled={working || disabled}
+              onClick={() => chooseFlow("bootstrap")}
+            >
+              <strong>{text(copy.bootstrapTitle)}</strong>
+              <span>{text(copy.bootstrapBody)}</span>
+            </button>
+          </div>
+
+          <ol className="provider-preparation-steps provider-connection-steps" aria-label={text(copy.preparationStepsLabel)}>
+            <li>
+              <span aria-hidden="true">1</span>
+              <div>
+                <h3>{text(copy.requestTitle)}</h3>
+                <p>{text(copy.requestIntro)}</p>
+                <blockquote>{requestMessage}</blockquote>
+                <button className="button button--secondary button--small" type="button" disabled={working || disabled} onClick={() => void copyItRequest(requestForIt)}>
+                  {text(copy.copyRequest)}
+                </button>
+                {requestCopyState !== "idle" && (
+                  <small className={`provider-setup-status provider-setup-status--${requestCopyState}`} role="status">
+                    {text(requestCopyState === "copied" ? copy.requestCopied : copy.requestCopyFailed)}
+                  </small>
+                )}
+                <details className="provider-auth-technical provider-setup-template">
+                  <summary>{text(copy.requestExactDetails)}</summary>
+                  <p>{text(copy.registrationNote)}</p>
+                  <pre>{setupTemplate}</pre>
+                </details>
+              </div>
+            </li>
+            <li>
+              <span aria-hidden="true">2</span>
+              <div>
+                <h3>{text(copy.importTitle)}</h3>
+                <p>{text(copy.importBody)}</p>
+                <label className="button button--secondary button--small provider-file-picker">
+                  <Icon name="file" size={16} />
+                  {text(copy.chooseSetupFile)}
+                  <input
+                    className="visually-hidden"
+                    type="file"
+                    accept=".json,application/json"
+                    disabled={!nativeMode || working || disabled}
+                    onChange={(event) => void importConnectionSetup(event)}
+                  />
+                </label>
+                {setupFileReady && (
+                  <small className="provider-setup-status provider-setup-status--copied" role="status">
+                    <Icon name="check" size={15} />{text(copy.setupFileReady)}
+                  </small>
+                )}
+                {setupFileError && (
+                  <small className="provider-setup-status provider-setup-status--failed" role="alert">
+                    <Icon name="warning" size={15} />{text(copy.setupFileErrors[setupFileError])}
+                  </small>
+                )}
+              </div>
+            </li>
+            <li>
+              <span aria-hidden="true">3</span>
+              <div>
+                <h3>{text(
+                  flowMode === "preferred" ? copy.continueTitlePreferred : copy.continueTitleBootstrap,
+                  { provider: providerName },
+                )}</h3>
+                <p>{text(
+                  flowMode === "preferred" ? copy.continueBodyPreferred : copy.continueBodyBootstrap,
+                  { provider: providerName },
+                )}</p>
+                <button
+                  className="button button--primary button--small"
+                  type="button"
+                  disabled={!nativeMode || working || disabled || !canContinue}
+                  onClick={() => void (flowMode === "preferred" ? beginPreferred() : planBootstrap())}
+                >
+                  {working ? text(copy.working) : text(flowMode === "preferred" ? copy.submitPreferred : copy.submitBootstrap)}
+                  <Icon name="arrow" size={17} />
+                </button>
+                {!canContinue && <small className="provider-setup-status">{text(copy.continueWaiting)}</small>}
+              </div>
+            </li>
+          </ol>
+
+          <details
+            className="provider-manual-details"
+            open={connectionDetailsOpen}
+            onToggle={(event) => setConnectionDetailsOpen(event.currentTarget.open)}
+          >
+            <summary>{text(copy.manualSummary)}</summary>
+            <p>{text(copy.manualIntro)}</p>
+            <form className="provider-auth-form" onSubmit={flowMode === "preferred" ? beginPreferred : planBootstrap}>
           <div className="provider-auth-form__heading">
             <h3>{text(flowMode === "preferred" ? copy.formTitlePreferred : copy.formTitleBootstrap, { provider: providerName })}</h3>
             <p>{text(copy.formIntro, { provider: providerName })}</p>
@@ -869,27 +1516,27 @@ export function ProviderAuthorizationPanel({
               {provider === "aws" && <>
                 <label className="field field--wide">
                   <span>{text(copy.fields.awsStartUrl.label)}</span>
-                  <input required type="url" autoComplete="off" spellCheck={false} value={awsStartUrl} onChange={(event) => setAwsStartUrl(event.target.value)} placeholder={copy.fields.awsStartUrl.example} />
+                  <input required type="url" autoComplete="off" spellCheck={false} value={awsStartUrl} onChange={(event) => { markManualDetailsChanged(); setAwsStartUrl(event.target.value); }} placeholder={copy.fields.awsStartUrl.example} />
                   {fieldHelp(copy.fields.awsStartUrl)}
                 </label>
                 <label className="field">
                   <span>{text(copy.fields.awsRegion.label)}</span>
-                  <input required autoComplete="off" spellCheck={false} value={awsRegion} onChange={(event) => setAwsRegion(event.target.value)} placeholder={copy.fields.awsRegion.example} />
+                  <input required autoComplete="off" spellCheck={false} value={awsRegion} onChange={(event) => { markManualDetailsChanged(); setAwsRegion(event.target.value); }} placeholder={copy.fields.awsRegion.example} />
                   {fieldHelp(copy.fields.awsRegion)}
                 </label>
                 <label className="field">
                   <span>{text(copy.fields.awsAccountId.label)}</span>
-                  <input required inputMode="numeric" pattern="[0-9]{12}" autoComplete="off" value={awsAccountId} onChange={(event) => setAwsAccountId(event.target.value)} placeholder={copy.fields.awsAccountId.example} />
+                  <input required inputMode="numeric" pattern="[0-9]{12}" autoComplete="off" value={awsAccountId} onChange={(event) => { markManualDetailsChanged(); setAwsAccountId(event.target.value); }} placeholder={copy.fields.awsAccountId.example} />
                   {fieldHelp(copy.fields.awsAccountId)}
                 </label>
                 <label className="field">
                   <span>{text(awsRoleField.label)}</span>
-                  <input required pattern="[A-Za-z0-9+=,.@_/-]{1,64}" autoComplete="off" spellCheck={false} value={awsRoleName} onChange={(event) => setAwsRoleName(event.target.value)} placeholder={awsRoleField.example} />
+                  <input required pattern="[A-Za-z0-9+=,.@_/-]{1,64}" autoComplete="off" spellCheck={false} value={awsRoleName} onChange={(event) => { markManualDetailsChanged(); setAwsRoleName(event.target.value); }} placeholder={awsRoleField.example} />
                   {fieldHelp(awsRoleField)}
                 </label>
                 <label className="field field--wide">
                   <span>{text(awsRoleArnField.label)}</span>
-                  <input required autoComplete="off" spellCheck={false} value={awsRoleArn} onChange={(event) => setAwsRoleArn(event.target.value)} placeholder={awsRoleArnField.example} />
+                  <input required autoComplete="off" spellCheck={false} value={awsRoleArn} onChange={(event) => { markManualDetailsChanged(); setAwsRoleArn(event.target.value); }} placeholder={awsRoleArnField.example} />
                   {fieldHelp(awsRoleArnField)}
                 </label>
               </>}
@@ -897,18 +1544,18 @@ export function ProviderAuthorizationPanel({
               {(provider === "azure" || provider === "microsoft365") && <>
                 <label className="field">
                   <span>{text(copy.fields.tenantId.label)}</span>
-                  <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder={copy.fields.tenantId.example} />
+                  <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={tenantId} onChange={(event) => { markManualDetailsChanged(); setTenantId(event.target.value); }} placeholder={copy.fields.tenantId.example} />
                   {fieldHelp(copy.fields.tenantId)}
                 </label>
                 <label className="field">
                   <span>{text(copy.fields.publicClientId.label)}</span>
-                  <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => setPublicClientId(event.target.value)} placeholder={copy.fields.publicClientId.example} />
+                  <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => { markManualDetailsChanged(); setPublicClientId(event.target.value); }} placeholder={copy.fields.publicClientId.example} />
                   {fieldHelp(copy.fields.publicClientId)}
                 </label>
                 {provider === "azure" && (
                   <label className="field field--wide">
                     <span>{text(copy.fields.subscriptionId.label)}</span>
-                    <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={subscriptionId} onChange={(event) => setSubscriptionId(event.target.value)} placeholder={copy.fields.subscriptionId.example} />
+                    <input required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" autoComplete="off" spellCheck={false} value={subscriptionId} onChange={(event) => { markManualDetailsChanged(); setSubscriptionId(event.target.value); }} placeholder={copy.fields.subscriptionId.example} />
                     {fieldHelp(copy.fields.subscriptionId)}
                   </label>
                 )}
@@ -917,18 +1564,18 @@ export function ProviderAuthorizationPanel({
               {provider === "gcp" && <>
                 <label className="field field--wide">
                   <span>{text(copy.fields.gcpClientId.label)}</span>
-                  <input required pattern="[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => setPublicClientId(event.target.value)} placeholder={copy.fields.gcpClientId.example} />
+                  <input required pattern="[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com" autoComplete="off" spellCheck={false} value={publicClientId} onChange={(event) => { markManualDetailsChanged(); setPublicClientId(event.target.value); }} placeholder={copy.fields.gcpClientId.example} />
                   {fieldHelp(copy.fields.gcpClientId)}
                 </label>
                 <label className="field">
                   <span>{text(copy.fields.gcpOrganizationId.label)}</span>
-                  <input required inputMode="numeric" pattern="[0-9]+" autoComplete="off" value={gcpOrganizationId} onChange={(event) => setGcpOrganizationId(event.target.value)} placeholder={copy.fields.gcpOrganizationId.example} />
+                  <input required inputMode="numeric" pattern="[0-9]+" autoComplete="off" value={gcpOrganizationId} onChange={(event) => { markManualDetailsChanged(); setGcpOrganizationId(event.target.value); }} placeholder={copy.fields.gcpOrganizationId.example} />
                   {fieldHelp(copy.fields.gcpOrganizationId)}
                 </label>
                 {flowMode === "bootstrap" && (
                   <label className="field">
                     <span>{text(copy.fields.gcpProjectId.label)}</span>
-                    <input required pattern="[a-z][a-z0-9-]{4,28}[a-z0-9]" autoComplete="off" spellCheck={false} value={gcpProjectId} onChange={(event) => setGcpProjectId(event.target.value)} placeholder={copy.fields.gcpProjectId.example} />
+                    <input required pattern="[a-z][a-z0-9-]{4,28}[a-z0-9]" autoComplete="off" spellCheck={false} value={gcpProjectId} onChange={(event) => { markManualDetailsChanged(); setGcpProjectId(event.target.value); }} placeholder={copy.fields.gcpProjectId.example} />
                     {fieldHelp(copy.fields.gcpProjectId)}
                   </label>
                 )}
@@ -936,7 +1583,7 @@ export function ProviderAuthorizationPanel({
                   <span>{text(copy.fields.gcpRedirect.label)}</span>
                   <span className="field-inline">
                     <input readOnly aria-readonly="true" value={gcpRedirectUri} />
-                    <button className="button button--ghost button--small" type="button" disabled={working} onClick={() => setGcpRedirectUri(randomLoopback())}>{text(copy.regenerate)}</button>
+                    <button className="button button--ghost button--small" type="button" disabled={working} onClick={() => { markManualDetailsChanged(); setGcpRedirectUri(randomLoopback()); }}>{text(copy.regenerate)}</button>
                   </span>
                   {fieldHelp(copy.fields.gcpRedirect)}
                 </div>
@@ -969,36 +1616,54 @@ export function ProviderAuthorizationPanel({
 
           <div className="form-actions provider-auth-actions">
             <span />
-            <button className="button button--primary" type="submit" disabled={!nativeMode || working || disabled}>
+            <button className="button button--primary" type="submit" disabled={!nativeMode || working || disabled || !canContinue}>
               {working ? text(copy.working) : text(flowMode === "preferred" ? copy.submitPreferred : copy.submitBootstrap)}
               <Icon name="arrow" size={17} />
             </button>
           </div>
-        </form>
+            </form>
+          </details>
+        </section>
       )}
 
-      {error && !flowMode && (
+      {error && !connectionDetailsOpen && (
         <div className="provider-auth-error" role="alert">
           <p><Icon name="warning" size={16} />{text(copy.errors[error.kind])}</p>
           {error.detail && <details><summary>{text(copy.errorTechnical)}</summary><pre>{error.detail}</pre></details>}
         </div>
       )}
-      {notice && !flowMode && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
+      {notice && !connectionDetailsOpen && <p className="provider-auth-success" role="status"><Icon name="check" size={16} />{text(copy.notices[notice])}</p>}
 
       {prompt && (
         <section className="provider-prompt" aria-live="polite">
           <div>
             <p className="eyebrow">{text(copy.promptEyebrow)}</p>
             <h3>{text(copy.promptTitle)}</h3>
-            <p>{text(copy.promptBody)}</p>
+            <p>{text(prompt.flow === "device" ? copy.promptBodyDevice : copy.promptBodyBrowser)}</p>
           </div>
+          {prompt.flow === "device" && (
+            <div className="provider-device-code provider-device-code--primary">
+              <span>{text(copy.deviceCode)}</span>
+              <div className="provider-device-code__row">
+                <code>{prompt.prompt.user_code}</code>
+                <button className="button button--secondary button--small" type="button" onClick={() => void copyPromptDeviceCode()}>
+                  {text(copy.copyDeviceCode)}
+                </button>
+              </div>
+              {deviceCodeCopyState !== "idle" && (
+                <small className={`provider-device-code__status provider-device-code__status--${deviceCodeCopyState}`} role="status">
+                  {text(deviceCodeCopyState === "copied" ? copy.deviceCodeCopied : copy.deviceCodeCopyFailed)}
+                </small>
+              )}
+            </div>
+          )}
           {promptUrl
             ? <button className="button button--primary" type="button" onClick={() => void openProviderLogin()}>{text(copy.openProvider)} <Icon name="arrow" size={17} /></button>
             : <InlineNotice tone="warning" title={text(copy.unsafePromptTitle)}><p>{text(copy.unsafePromptBody)}</p></InlineNotice>}
           <p>{text(copy.promptExpiry, { expires: formatDateTime(prompt.prompt.expires_at) })}</p>
           <details className="provider-auth-technical provider-prompt__technical">
             <summary>{text(copy.promptTechnical)}</summary>
-            {prompt.flow === "device" && <div className="provider-device-code"><span>{text(copy.deviceCode)}</span><code>{prompt.prompt.user_code}</code></div>}
+            <p><strong>{text(copy.technicalFlow)}:</strong> {text(prompt.flow === "device" ? copy.protocolDevice : copy.protocolPkce)}</p>
             {promptSafetyNotice && <p><strong>{text(copy.backendSafety)}:</strong> {promptSafetyNotice}</p>}
           </details>
           <button className="button button--ghost button--small" type="button" onClick={() => void cancelPreferred()}>{text(copy.cancel)}</button>
@@ -1030,7 +1695,13 @@ export function ProviderAuthorizationPanel({
           </details>
           <div className="form-actions">
             <p><Icon name="warning" size={16} /> {text(copy.planConfirmBoundary)}</p>
-            <button className="button button--primary" type="button" disabled={working || disabled} onClick={() => void executeBootstrap()}>{working ? text(copy.executingPlan) : text(copy.executePlan)}</button>
+            <span className="button-row">
+              <button className="button button--ghost" type="button" disabled={working || disabled} onClick={() => {
+                setBootstrapPlan(undefined);
+                setConnectionDetailsOpen(true);
+              }}>{text(copy.editSetup)}</button>
+              <button className="button button--primary" type="button" disabled={working || disabled} onClick={() => void executeBootstrap()}>{working ? text(copy.executingPlan) : text(copy.executePlan)}</button>
+            </span>
           </div>
         </section>
       )}

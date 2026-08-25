@@ -55,9 +55,65 @@ test("technical detail is progressive and a website service remains a preset, no
   assert.ok(source.includes("路徑只是提示，不是許可"));
   assert.match(source, /internetExposed === false && allowSensitiveNetworks/);
   assert.match(source, /internetExposed === undefined/);
+
+  const advancedStart = source.indexOf('<details\n                  className="coverage-form-technical coverage-scan-advanced"');
+  const advancedEnd = source.indexOf("</details>", advancedStart);
+  assert.notEqual(advancedStart, -1);
+  assert.notEqual(advancedEnd, -1);
+  const advancedSettings = source.slice(advancedStart, advancedEnd);
+  for (const technicalControl of [
+    "pageCopy.declaredServiceTitle",
+    "pageCopy.canonicalTarget",
+    "pageCopy.protocol",
+    "pageCopy.ports",
+    "pageCopy.rateTitle",
+    "pageCopy.templateIds",
+    "pageCopy.sensitiveTechnicalBody",
+  ]) {
+    assert.ok(advancedSettings.includes(technicalControl), `${technicalControl} must stay behind advanced details`);
+  }
+  assert.ok(source.indexOf("pageCopy.sensitiveTitle", advancedEnd) > advancedEnd, "internal-network confirmation must remain visible");
+  assert.match(
+    source.slice(advancedEnd, source.indexOf("</section>", advancedEnd)),
+    /isDirectExternal && selectedExternalAsset\.internetExposed === false/,
+    "internal-network confirmation must not clutter public website setup",
+  );
+  assert.doesNotMatch(source.slice(advancedEnd, source.indexOf("</section>", advancedEnd)), /asset\.locator/);
 });
 
-test("every journey step is directly reachable and step 2 points to permission review", () => {
+test("the first layer uses plain-language scan choices in both locales", () => {
+  for (const [english, traditionalChinese] of [
+    ["Items found", "找到的項目"],
+    ["Not set up yet", "尚未設定"],
+    ["Recommended settings are ready", "建議設定已準備好"],
+    ["I confirm this is my website or a system I am allowed to scan", "我確認這是我的網站，或是我有權掃描的系統"],
+    ["I confirm this scan may connect to the selected internal network", "我確認這次掃描可以連線到所選內部網路"],
+  ]) {
+    assert.ok(source.includes(english), `missing plain-language English copy: ${english}`);
+    assert.ok(source.includes(traditionalChinese), `missing plain-language Traditional Chinese copy: ${traditionalChinese}`);
+  }
+  assert.ok(source.includes("setShowAdvancedExternalSettings(false)"));
+  assert.ok(!source.includes('setShowAdvancedExternalSettings(externalActivity === "active_external")'));
+});
+
+test("local-project formats stay available behind technical details", () => {
+  const workspaceStart = source.indexOf('id="workspace-snapshot-form"');
+  const technicalStart = source.indexOf('<details className="coverage-form-technical">', workspaceStart);
+  const technicalEnd = source.indexOf("</details>", technicalStart);
+  assert.notEqual(workspaceStart, -1);
+  assert.notEqual(technicalStart, -1);
+  assert.notEqual(technicalEnd, -1);
+  const visibleSetup = source.slice(workspaceStart, technicalStart);
+  const technicalSetup = source.slice(technicalStart, technicalEnd);
+  assert.ok(visibleSetup.includes("pageCopy.gitWarningBody"));
+  assert.ok(visibleSetup.includes("localInputDefinitions[workspaceInputProfile].detail"));
+  assert.ok(technicalSetup.includes("pageCopy.gitTechnicalBody"));
+  assert.ok(technicalSetup.includes("localInputDefinitions[workspaceInputProfile].technical"));
+  assert.ok(source.includes("Prepare this project for scanning"));
+  assert.ok(source.includes("準備這份專案進行掃描"));
+});
+
+test("every journey step is directly reachable and step 2 points to scan choices", () => {
   assert.ok(source.includes('href={`#coverage-step-${number}`}'));
   assert.ok(source.includes('href="#coverage-step-3"'));
   assert.ok(source.includes('scrollToCoverageStep("coverage-step-3")'));
@@ -65,8 +121,7 @@ test("every journey step is directly reachable and step 2 points to permission r
   assert.ok(source.includes('id="coverage-step-1"'));
   assert.ok(source.includes('id="coverage-step-2"'));
   assert.ok(source.includes('id="coverage-step-3"'));
-  assert.ok(source.includes("Continue to step 3"));
-  assert.ok(source.includes("前往步驟 3"));
+  assert.ok(source.includes("text(pageCopy.continueStep3)"));
 });
 
 test("the rendered Coverage tree has no hard-coded Traditional Chinese UI copy", () => {

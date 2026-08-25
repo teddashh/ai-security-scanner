@@ -47,11 +47,11 @@ test("English and Traditional Chinese locales cover the exact same message contr
 test("typed translators interpolate central and page-local bilingual copy", () => {
   assert.equal(
     i18n.translate("en", "runtime.badge.ready", { provider: "Podman" }),
-    "Scan environment ready · Podman",
+    "Local scan tools ready · Podman",
   );
   assert.equal(
     i18n.translate("zh-TW", "runtime.badge.ready", { provider: "Podman" }),
-    "掃描環境已就緒 · Podman",
+    "本機掃描工具已就緒 · Podman",
   );
 
   const localCopy = {

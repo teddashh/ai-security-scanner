@@ -12,7 +12,9 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   local application-data directory. It never changes the system `PATH`, invokes a package manager,
   enables an operating-system feature, or requests administrator privileges.
 - On Windows, setup first resolves the trusted `SystemRoot\System32\wsl.exe` boundary and runs
-  bounded, read-only `--status` and `--list --quiet` probes. A failed prerequisite check stops
+  bounded, read-only `--status` and `-l --quiet` probes, matching the inventory command used by the
+  pinned Podman WSL provider. The probe requests UTF-8 output while retaining bounded UTF-16LE
+  compatibility for older inbox WSL builds. A failed prerequisite check stops
   before any VM-image bytes are downloaded. It records one stable `failure_reason` and paired
   `next_action`: install WSL, enable its optional components, update WSL, restart Windows, or retry
   the check. Console output is accepted only as bounded UTF-8 or UTF-16LE; mixed or unsafe bytes are

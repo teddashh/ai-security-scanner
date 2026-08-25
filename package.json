@@ -2,7 +2,7 @@
   "name": "ai-security-scanner",
   "private": true,
   "version": "0.2.0",
-  "description": "Local-first, repeatable security assessment casework",
+  "description": "One guided desktop app for security checks across websites, cloud, code, networks, containers, and Kubernetes.",
   "license": "Apache-2.0",
   "author": "Ted Huang and ai-security-scanner contributors",
   "homepage": "https://github.com/teddashh/ai-security-scanner#readme",
