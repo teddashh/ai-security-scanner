@@ -170,11 +170,16 @@ async function main() {
   const packageJson = await readJson(path.join(PROJECT_ROOT, "package.json"));
   const version = typeof args.get("version") === "string" ? args.get("version") : packageJson.version;
   if (!isSemver(version)) {
-    throw new Error(`release version is not strict SemVer: ${version}`);
+    throw new Error(`release version is not native-compatible numeric SemVer: ${version}`);
   }
   const tag = typeof args.get("tag") === "string" ? args.get("tag") : `v${version}`;
   if (tag !== `v${version}`) {
     throw new Error(`tag ${tag} does not match version ${version}`);
+  }
+  const releaseChannel = packageJson.release?.channel;
+  const stableTarget = packageJson.release?.target;
+  if (!["prerelease", "stable"].includes(releaseChannel) || !isSemver(stableTarget)) {
+    throw new Error("package release channel or stable target is invalid");
   }
   const commit = typeof args.get("commit") === "string" ? args.get("commit") : git("rev-parse", "HEAD");
   if (!/^[0-9a-f]{40}$/u.test(commit)) {
@@ -230,6 +235,8 @@ async function main() {
     product: "ai-security-scanner",
     version,
     tag,
+    releaseChannel,
+    stableTarget,
     sourceRepository: `https://github.com/${repository}`,
     sourceCommit: commit,
     sourceDate,

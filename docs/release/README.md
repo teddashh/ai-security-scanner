@@ -1,11 +1,18 @@
 # Release pipeline
 
-The release workflow builds native Tauri installers from either a manual `main` preflight or a
-strict stable-version tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`,
-receives no publication privileges, creates no tag or GitHub Release, and preserves the finalized
-candidate as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag
-such as `v0.2.0` must exactly match the versions in `package.json`, `package-lock.json`,
+The release workflow builds native Tauri installers from either a manual `main` preflight or an
+exact numeric SemVer tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`, receives
+no publication privileges, creates no tag or GitHub Release, and preserves the finalized candidate
+as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag such as
+`v0.1.2` must exactly match the versions in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
+
+`package.json` declares whether that exact build uses the `prerelease` or `stable` publication
+channel. Preview builds publish with GitHub's pre-release flag and `make_latest: false`; stable
+builds publish as normal releases and become latest only after the same build, qualification,
+checksum, signature, and attestation path succeeds. Preview product versions remain numerically
+below their declared stable target so MSI, Debian, RPM, macOS, and the app updater can all upgrade
+forward without platform-specific version aliases.
 
 ## Produced installers
 
@@ -139,7 +146,8 @@ Each GitHub Release contains:
 - a GitHub build-provenance attestation over every published file.
 
 Release-line details are recorded in the source tree. See the current
-[`v0.2.0` product-completion notes](v0.2.0.md) and the historical
+[`v0.1.2` public testing notes](v0.1.2.md), the planned
+[`v0.2.0` stable completion notes](v0.2.0.md), and the historical
 [`v0.1.1` security and consistency repair notes](v0.1.1.md).
 
 All third-party engines remain separately acquired artifacts. No engine image, ruleset, feed,
@@ -179,7 +187,7 @@ First run the local metadata validator and normal implementation checks. Dispatc
 workflow from `main` before creating a tag:
 
 ```sh
-npm run release:validate -- --tag v0.2.0
+npm run release:validate -- --tag v0.1.2
 gh workflow run release.yml --ref main
 ```
 
@@ -190,16 +198,17 @@ its immutable `headSha`, and retain or download its `release-finalized` artifact
 commit—not a later `main` tip:
 
 ```sh
-git tag -a v0.2.0 <preflight-head-sha> -m "ai-security-scanner v0.2.0"
-git push origin v0.2.0
+git tag -a v0.1.2 <preflight-head-sha> -m "ai-security-scanner v0.1.2"
+git push origin v0.1.2
 ```
 
 The tag run rebuilds from the same commit rather than reusing preflight binaries. The GitHub Release
 is created only after all three platform builds, all three strict platform qualifications, both
 SBOMs, notices, checksum verification, signed updater-manifest assembly, finalized-candidate
-reverification, and provenance attestation succeed.
-It is published directly as a non-draft stable release; a failed preflight creates no tag or public
-release, and a failed tag prerequisite leaves no partial GitHub Release.
+reverification, and provenance attestation succeed. A source-declared preview is published as a
+non-draft pre-release and does not replace the latest stable release; a source-declared stable build
+is published as the latest stable release. A failed preflight creates no tag or public release, and
+a failed tag prerequisite leaves no partial GitHub Release.
 
 ## Verifying a downloaded artifact
 

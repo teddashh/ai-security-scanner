@@ -193,7 +193,7 @@ export function validatePlatformQualification(evidence, context = {}) {
   assert(evidence.qualificationState === contract.qualificationState, `${evidence.platform} qualification state is dishonest`);
 
   exactKeys(evidence.releaseIdentity, ["version", "tag", "sourceCommit"], "qualification release identity");
-  assert(isSemver(evidence.releaseIdentity.version), "qualification version is not stable SemVer");
+  assert(isSemver(evidence.releaseIdentity.version), "qualification version is not native-compatible numeric SemVer");
   assert(evidence.releaseIdentity.tag === `v${evidence.releaseIdentity.version}`, "qualification tag/version mismatch");
   assert(/^[0-9a-f]{40}$/u.test(evidence.releaseIdentity.sourceCommit), "qualification commit must be a full lowercase object id");
   if (context.version) assert(evidence.releaseIdentity.version === context.version, "qualification version differs from release");

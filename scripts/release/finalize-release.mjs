@@ -27,6 +27,35 @@ function assert(condition, message) {
 
 const RELEASE_COPY = new Map([
   [
+    "0.1.2",
+    {
+      updaterNotes:
+        "Public testing pre-release with simplified bilingual setup, typed immutable local-input snapshots, exact-scope AWS/Azure/GCP provider execution, and digest-pinned engine integration. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **Public testing pre-release.** Use this build to exercise the real desktop installer,",
+        "> one-time scan-tool setup, guided use cases, and end-to-end results flow. It is not the",
+        "> latest stable release and has not completed the planned formal QC/code review.",
+        "",
+        "This candidate includes the simplified English and Traditional Chinese product flow and",
+        "typed immutable snapshots for repository, IaC, OCI image-layout, Kubernetes manifest, and",
+        "node-configuration inputs.",
+        "",
+        "Provider discovery stays inside its released AWS Organizations, Azure subscription, or GCP",
+        "organization source boundary. Prowler execution is separately bound to one exact AWS account,",
+        "Azure subscription, or GCP project with provider-specific identity preflight and endpoint closure.",
+        "Other cloud engines retain their narrower released provider scope.",
+        "",
+        "The required 21-engine catalog is bound to immutable image, launcher, adapter, evidence,",
+        "coverage, license, and verification contracts. Scanner images remain separate artifacts",
+        "and are not bundled in the desktop installers.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "Unknown or partial scope remains visibly distinct from a completed or passing result.",
+        "",
+      ],
+    },
+  ],
+  [
     "0.2.0",
     {
       updaterNotes:
@@ -358,12 +387,18 @@ async function main() {
 
   const metadata = await readJson(path.join(directory, "release-metadata.json"));
   const tauriConfig = await readJson(tauriConfigPath);
+  const packageJson = await readJson(path.join(PROJECT_ROOT, "package.json"));
   const updaterPublicKey = tauriConfig.plugins?.updater?.pubkey;
   assert(
     typeof updaterPublicKey === "string" && updaterPublicKey.length >= 64,
     "tauri config has no embedded updater public key",
   );
   assert(metadata.version === version && metadata.tag === tag, "release metadata version/tag mismatch");
+  assert(
+    metadata.releaseChannel === packageJson.release?.channel &&
+      metadata.stableTarget === packageJson.release?.target,
+    "release metadata publication channel does not match the source package",
+  );
   assert(metadata.sourceCommit === commit, "release metadata commit mismatch");
   assert(
     metadata.security?.operatingSystemCodeSigning?.state === "not-configured" &&

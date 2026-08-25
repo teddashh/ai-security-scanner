@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { PROJECT_ROOT, readJson, runMain, sha256File } from "./lib.mjs";
+import { PROJECT_ROOT, isSemver, readJson, runMain, sha256File } from "./lib.mjs";
 import {
   createPlatformQualification,
   validatePlatformQualification,
@@ -383,6 +383,13 @@ async function createQualificationFixture(output, platform) {
 }
 
 async function main() {
+  for (const version of ["0.1.2", "0.2.0", "2.3.4"]) {
+    if (!isSemver(version)) throw new Error(`native-compatible release version was rejected: ${version}`);
+  }
+  for (const version of ["01.2.0", "0.02.0", "0.2.00", "0.2.0-rc.1", "0.2.0+build"]) {
+    if (isSemver(version)) throw new Error(`non-native release version was accepted: ${version}`);
+  }
+
   const temporaryRoot = path.join(PROJECT_ROOT, "target", "release-self-test");
   await mkdir(temporaryRoot, { recursive: true });
   const temporary = await mkdtemp(path.join(temporaryRoot, "run-"));
@@ -523,6 +530,8 @@ async function main() {
         product: "ai-security-scanner",
         version: VERSION,
         tag: TAG,
+        releaseChannel: "prerelease",
+        stableTarget: "0.2.0",
         sourceRepository: "https://github.com/teddashh/ai-security-scanner",
         sourceCommit: COMMIT,
         sourceDate: "2026-08-24T00:00:00Z",

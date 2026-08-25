@@ -16,6 +16,15 @@ function assert(condition, message) {
   }
 }
 
+function compareNumericSemver(left, right) {
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] - rightParts[index];
+  }
+  return 0;
+}
+
 function assertOrderedTokens(source, tokens, label) {
   let previous = -1;
   for (const token of tokens) {
@@ -51,11 +60,13 @@ function cargoLockPackageVersion(lock) {
   return packageRecord[1];
 }
 
-function validateReleaseMetadata(metadata, version, tag) {
+function validateReleaseMetadata(metadata, version, tag, releaseChannel, releaseTarget) {
   assert(metadata.schemaVersion === 1, "release metadata schemaVersion must be 1");
   assert(metadata.product === "ai-security-scanner", "release metadata product is incorrect");
   assert(metadata.version === version, "release metadata version is incorrect");
   assert(metadata.tag === tag, "release metadata tag is incorrect");
+  assert(metadata.releaseChannel === releaseChannel, "release metadata channel is incorrect");
+  assert(metadata.stableTarget === releaseTarget, "release metadata stable target is incorrect");
   assert(
     /^[0-9a-f]{40}$/u.test(metadata.sourceCommit),
     "release metadata sourceCommit must be a full lowercase Git object ID",
@@ -208,6 +219,12 @@ function validateReleaseWorkflow(workflow) {
     validate.outputs?.tag === "${{ steps.identity.outputs.tag }}",
     "release workflow must export its version-derived candidate tag",
   );
+  assert(
+    validate.outputs?.release_channel === "${{ steps.identity.outputs.release_channel }}" &&
+      validate.outputs?.prerelease === "${{ steps.identity.outputs.prerelease }}" &&
+      validate.outputs?.make_latest === "${{ steps.identity.outputs.make_latest }}",
+    "release workflow must export its source-declared publication channel",
+  );
   const identity = validate.steps?.find((step) => step.id === "identity");
   assert(identity && typeof identity.run === "string", "release workflow has no identity resolver");
   for (const required of [
@@ -216,6 +233,12 @@ function validateReleaseWorkflow(workflow) {
     '"refs/heads/main"',
     'event_commit="$(git rev-parse "${EVENT_SHA}^{commit}")"',
     '"${commit}" != "${event_commit}"',
+    'release_channel="$(node -p "require(\'./package.json\').release.channel")"',
+    'case "${release_channel}" in',
+    "isSemver(process.argv[1])",
+    "release_channel=%s",
+    "prerelease=%s",
+    "make_latest=%s",
   ]) {
     assert(identity.run.includes(required), `release identity resolver is missing: ${required}`);
   }
@@ -288,6 +311,14 @@ function validateReleaseWorkflow(workflow) {
   assert(
     attestation?.with?.["subject-path"] === "release-assets/**/*",
     "publication attestation must cover platform qualification JSON with every finalized file",
+  );
+  const publication = publish.steps?.find(
+    (step) => typeof step.uses === "string" && step.uses.includes("softprops/action-gh-release@"),
+  );
+  assert(
+    publication?.with?.prerelease === "${{ needs.validate.outputs.prerelease }}" &&
+      publication?.with?.make_latest === "${{ needs.validate.outputs.make_latest }}",
+    "GitHub Release publication must preserve the source-declared pre-release/latest channel",
   );
   for (const [jobName, job] of Object.entries(workflow.jobs)) {
     if (jobName === "publish") {
@@ -759,13 +790,37 @@ async function main() {
     "utf8",
   );
 
-  assert(isSemver(version), `package version is not strict SemVer: ${version}`);
+  assert(isSemver(version), `package version is not native-compatible numeric SemVer: ${version}`);
   assert(tag === `v${version}`, `tag ${tag} does not exactly match package version ${version}`);
+  const releaseChannel = packageJson.release?.channel;
+  const releaseTarget = packageJson.release?.target;
+  assert(
+    releaseChannel === "prerelease" || releaseChannel === "stable",
+    "package release channel must be prerelease or stable",
+  );
+  assert(isSemver(releaseTarget), "package release target must be native-compatible numeric SemVer");
+  if (releaseChannel === "prerelease") {
+    assert(
+      compareNumericSemver(version, releaseTarget) < 0,
+      "pre-release product version must sort below its planned stable target on native package managers",
+    );
+  } else {
+    assert(releaseTarget === version, "stable release target must equal the product version");
+  }
   assert(packageLock.version === version, "package-lock document version is out of sync");
   assert(packageLock.packages?.[""]?.version === version, "package-lock root version is out of sync");
   assert(tauri.version === version, "Tauri version is out of sync");
   assert(cargoPackageVersion(cargoToml) === version, "Cargo package version is out of sync");
   assert(cargoLockPackageVersion(cargoLock) === version, "Cargo.lock package version is out of sync");
+  const [major, minor, patch] = version.split(".").map(Number);
+  assert(
+    major <= 255 && minor <= 255 && patch <= 65_535,
+    "release version exceeds the Windows MSI native version bounds",
+  );
+  assert(
+    tauri.bundle?.windows?.wix?.version === undefined,
+    "numeric releases must derive their WiX version from the exact app version",
+  );
   assert(
     repositoryReadme.includes(`<!-- Release line: v${version}. -->`),
     "README release line is out of sync",
@@ -964,7 +1019,7 @@ async function main() {
 
   if (typeof args.get("metadata") === "string") {
     const metadata = await readJson(path.resolve(PROJECT_ROOT, args.get("metadata")));
-    validateReleaseMetadata(metadata, version, tag);
+    validateReleaseMetadata(metadata, version, tag, releaseChannel, releaseTarget);
   }
 
   process.stdout.write(

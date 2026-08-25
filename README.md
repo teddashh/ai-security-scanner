@@ -39,9 +39,9 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 ## Want the details?
 
-<!-- Release line: v0.2.0. -->
+<!-- Release line: v0.1.2. -->
 
-> **Project status:** `v0.2.0` is an active source candidate, not a published installer release. The source and demo are available now; detailed release evidence and remaining completion work are documented under [Release and evidence status](#release-and-evidence-status).
+> **Project status:** `v0.1.2` is the installable public preview on the way to `v0.2.0`. Use it to try the real desktop setup and guided scan flow; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 
@@ -232,13 +232,13 @@ docs/usability/              Real-person study protocol and evidence schema
 
 ### Release and evidence status
 
-The `v0.2.0` source candidate has completed automated cross-platform builds and fresh-host qualification, but the required live first-run study with an IAM-naive participant and the subsequent formal QC/code review have not. There is therefore no public `v0.2.0` tag or GitHub Release yet. Source text, screenshots, demo data, and automated tests must not be mistaken for that human-study evidence.
+`v0.1.2` is the public hands-on preview for the planned `v0.2.0` release. Its installers must complete automated cross-platform builds and fresh-host qualification before GitHub publishes the pre-release. The required live first-run study with an IAM-naive participant and the subsequent formal QC/code review still belong to the stable release process.
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 
-Manual workflow dispatch from `main` is preflight-only: it cannot create a tag or public GitHub Release. Publication requires an exact stable-version tag and all release checks. Apple Developer ID/notarization and Windows Authenticode are not configured, so operating systems may still show an unidentified-developer warning; Tauri updater signing is a separate integrity control and does not claim OS publisher identity.
+Manual workflow dispatch from `main` is preflight-only: it cannot create a tag or public GitHub Release. A tagged preview publishes with GitHub's **Pre-release** label and does not replace the latest stable release. Apple Developer ID/notarization and Windows Authenticode are not configured, so operating systems may still show an unidentified-developer warning; Tauri updater signing is a separate integrity control and does not claim OS publisher identity.
 
-Before `v0.2.0` publication, the project still requires:
+Before the stable `v0.2.0` publication, the project still requires:
 
 1. a genuine observed first-run study with a qualifying IAM-naive adult participant, using a clean supported desktop installation and a disposable cloud account;
 2. passing, redacted evidence validated against the exact candidate commit; and

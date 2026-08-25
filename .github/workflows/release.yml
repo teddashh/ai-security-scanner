@@ -26,6 +26,9 @@ jobs:
       tag: ${{ steps.identity.outputs.tag }}
       commit: ${{ steps.identity.outputs.commit }}
       source_date: ${{ steps.identity.outputs.source_date }}
+      release_channel: ${{ steps.identity.outputs.release_channel }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      make_latest: ${{ steps.identity.outputs.make_latest }}
     steps:
       - name: Check out the exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,10 +59,27 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
-          if [[ ! "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            printf 'Package version is not strict stable SemVer: %s\n' "${version}" >&2
+          if ! node --input-type=module -e \
+            'import { isSemver } from "./scripts/release/lib.mjs"; process.exit(isSemver(process.argv[1]) ? 0 : 1)' \
+            "${version}"; then
+            printf 'Package version is not native-compatible numeric SemVer: %s\n' "${version}" >&2
             exit 1
           fi
+          release_channel="$(node -p "require('./package.json').release.channel")"
+          case "${release_channel}" in
+            prerelease)
+              prerelease="true"
+              make_latest="false"
+              ;;
+            stable)
+              prerelease="false"
+              make_latest="true"
+              ;;
+            *)
+              printf 'Package release channel is not prerelease or stable: %s\n' "${release_channel}" >&2
+              exit 1
+              ;;
+          esac
           candidate_tag="v${version}"
           commit="$(git rev-parse HEAD)"
           event_commit="$(git rev-parse "${EVENT_SHA}^{commit}")"
@@ -90,6 +110,9 @@ jobs:
           printf 'tag=%s\n' "${candidate_tag}" >> "${GITHUB_OUTPUT}"
           printf 'commit=%s\n' "${commit}" >> "${GITHUB_OUTPUT}"
           printf 'source_date=%s\n' "${source_date}" >> "${GITHUB_OUTPUT}"
+          printf 'release_channel=%s\n' "${release_channel}" >> "${GITHUB_OUTPUT}"
+          printf 'prerelease=%s\n' "${prerelease}" >> "${GITHUB_OUTPUT}"
+          printf 'make_latest=%s\n' "${make_latest}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate versions, workflow syntax, and action pins
         env:
@@ -731,7 +754,7 @@ jobs:
         with:
           subject-path: release-assets/**/*
 
-      - name: Publish the non-draft public release
+      - name: Publish the non-draft public release with the declared channel
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
@@ -739,7 +762,7 @@ jobs:
           name: ai-security-scanner ${{ needs.validate.outputs.version }}
           body_path: release-assets/RELEASE_NOTES.md
           draft: false
-          prerelease: false
-          make_latest: true
+          prerelease: ${{ needs.validate.outputs.prerelease }}
+          make_latest: ${{ needs.validate.outputs.make_latest }}
           fail_on_unmatched_files: true
           files: release-assets/**/*
