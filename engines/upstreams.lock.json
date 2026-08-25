@@ -221,9 +221,17 @@
     },
     {
       "id": "greenbone/openvas-scanner",
-      "path": ".upstreams/greenbone/openvas-scanner-23.50.21",
+      "path": ".upstreams/greenbone/openvas-scanner",
       "remote": "https://github.com/greenbone/openvas-scanner",
       "branch": "main",
+      "revision": "dcd2be55045b6b63b4f954504d76cc26a09b583e",
+      "shallow": true
+    },
+    {
+      "id": "greenbone/openvas-scanner-23.50.21",
+      "path": ".upstreams/greenbone/openvas-scanner-23.50.21",
+      "remote": "https://github.com/greenbone/openvas-scanner",
+      "branch": "",
       "revision": "c3ae607ef632393b7919fb179d30b940d929f713",
       "shallow": true
     },
@@ -396,6 +404,14 @@
       "shallow": true
     },
     {
+      "id": "turbot/pipe-fittings",
+      "path": ".upstreams/turbot/pipe-fittings",
+      "remote": "https://github.com/turbot/pipe-fittings",
+      "branch": "",
+      "revision": "a5ad9a96275d58cb8d2cebe47ab7dd208021d830",
+      "shallow": false
+    },
+    {
       "id": "turbot/powerpipe",
       "path": ".upstreams/turbot/powerpipe",
       "remote": "https://github.com/turbot/powerpipe",
@@ -412,6 +428,22 @@
       "shallow": true
     },
     {
+      "id": "turbot/steampipe-plugin-aws",
+      "path": ".upstreams/turbot/steampipe-plugin-aws",
+      "remote": "https://github.com/turbot/steampipe-plugin-aws",
+      "branch": "",
+      "revision": "6e79b2dece502bc198310b39bd54bc95d2842c99",
+      "shallow": true
+    },
+    {
+      "id": "turbot/steampipe-postgres-fdw",
+      "path": ".upstreams/turbot/steampipe-postgres-fdw",
+      "remote": "https://github.com/turbot/steampipe-postgres-fdw",
+      "branch": "",
+      "revision": "6d1d957d1330582b7af34064eaa9f8fa196d2918",
+      "shallow": false
+    },
+    {
       "id": "usnistgov/OSCAL",
       "path": ".upstreams/usnistgov/OSCAL",
       "remote": "https://github.com/usnistgov/OSCAL",
@@ -426,6 +458,14 @@
       "branch": "main",
       "revision": "78650f02ad9321bb7b817846f8fbd4f2bcd620de",
       "shallow": true
+    },
+    {
+      "id": "virtio-fs/virtiofsd",
+      "path": ".upstreams/virtio-fs/virtiofsd",
+      "remote": "https://gitlab.com/virtio-fs/virtiofsd",
+      "branch": "",
+      "revision": "c2540f8db14caba81c1e37fba23fc7bf2cd7f0dd",
+      "shallow": false
     },
     {
       "id": "wazuh/wazuh",

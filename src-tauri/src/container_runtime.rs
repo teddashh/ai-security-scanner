@@ -799,11 +799,18 @@ impl Drop for ContainerIdFileGuard {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct RootlessContainerUser {
+    user_spec: String,
+    podman_userns: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerRunPlan {
     engine_id: String,
     container_name: String,
     image: PinnedImage,
     runtime_args: Vec<String>,
+    rootless_user: RootlessContainerUser,
     workspace: PathBuf,
     output: PathBuf,
     scope_file: PathBuf,
@@ -959,7 +966,7 @@ impl<'a> ContainerPlanBuilder<'a> {
         let credential_control_dir = canonical_mount_path(&self.directories.control, "control")?;
         let scope_file = canonical_mount_path(self.scope_file, "scope document")?;
         let scope_sha256 = hash_control_file(&scope_file)?;
-        let runtime_user = runtime_user_spec()?;
+        let rootless_user = runtime_user_mapping()?;
         let mut runtime_args = vec![
             "run".into(),
             "--name".into(),
@@ -967,7 +974,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             "--read-only".into(),
             "--cap-drop=ALL".into(),
             "--security-opt=no-new-privileges:true".into(),
-            format!("--user={runtime_user}"),
+            format!("--user={}", rootless_user.user_spec),
             "--pids-limit".into(),
             self.limits.pids.to_string(),
             "--memory".into(),
@@ -1049,6 +1056,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             container_name,
             image: self.image.clone(),
             runtime_args,
+            rootless_user,
             workspace,
             output,
             scope_file,
@@ -2231,8 +2239,12 @@ impl ContainerRuntime for ProcessContainerRuntime {
         self.verify_network(plan.network_policy())?;
         let mut secret = SecretFileGuard::create(plan.credential_control_dir(), credentials)?;
         let container_id_file = ContainerIdFileGuard::prepare(plan.credential_control_dir())?;
-        let runtime_args =
-            runtime_args_with_secret(plan, secret.as_ref(), Some(&container_id_file))?;
+        let runtime_args = runtime_args_with_secret(
+            plan,
+            self.context.provider,
+            secret.as_ref(),
+            Some(&container_id_file),
+        )?;
         let execution = (|| -> AppResult<RuntimeOutcome> {
             let mut command = Command::new(&self.context.binary);
             command.args(&runtime_args);
@@ -2671,12 +2683,43 @@ fn validate_run_plan_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
     validate_mount_directory(&plan.output, "output")?;
     validate_mount_directory(&plan.credential_control_dir, "credential control")?;
     validate_mount_file(&plan.scope_file, "scope document")?;
+    validate_run_plan_user_integrity(plan)?;
     validate_run_plan_network_integrity(plan)?;
     validate_run_plan_output_integrity(plan)?;
     let current_scope_sha256 = hash_control_file(&plan.scope_file)?;
     if current_scope_sha256 != plan.scope_sha256 {
         return Err(AppError::NotAuthorized(
             "scope document changed after the immutable run plan was built".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_run_plan_user_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
+    let image_reference = plan.image.reference();
+    let image_index = plan
+        .runtime_args
+        .iter()
+        .position(|argument| argument == &image_reference)
+        .ok_or_else(|| {
+            AppError::Runtime("container run plan lost its pinned image reference".into())
+        })?;
+    let launch_arguments = &plan.runtime_args[..image_index];
+    let expected_user = format!("--user={}", plan.rootless_user.user_spec);
+    let exact_user_count = launch_arguments
+        .iter()
+        .filter(|argument| *argument == &expected_user)
+        .count();
+    let user_option_count = launch_arguments
+        .iter()
+        .filter(|argument| argument.as_str() == "--user" || argument.starts_with("--user="))
+        .count();
+    let contains_user_namespace = launch_arguments
+        .iter()
+        .any(|argument| argument.as_str() == "--userns" || argument.starts_with("--userns="));
+    if exact_user_count != 1 || user_option_count != 1 || contains_user_namespace {
+        return Err(AppError::NotAuthorized(
+            "container run plan did not preserve its exact non-root user contract".into(),
         ));
     }
     Ok(())
@@ -2783,6 +2826,7 @@ fn hash_bounded_control_file(path: &Path, max_bytes: u64, label: &str) -> AppRes
 
 fn runtime_args_with_secret(
     plan: &ContainerRunPlan,
+    provider: RuntimeProvider,
     secret: Option<&SecretFileGuard>,
     container_id_file: Option<&ContainerIdFileGuard>,
 ) -> AppResult<Vec<String>> {
@@ -2796,6 +2840,9 @@ fn runtime_args_with_secret(
         })?;
     let mut arguments = plan.runtime_args.clone();
     let mut injected = Vec::new();
+    if provider.uses_podman_dialect() {
+        injected.push(format!("--userns={}", plan.rootless_user.podman_userns));
+    }
     if let Some(container_id_file) = container_id_file {
         injected.extend(["--cidfile".into(), container_id_file.argument()?]);
     }
@@ -2994,24 +3041,39 @@ fn valid_sha256_digest(value: &str) -> bool {
     })
 }
 
-#[cfg(unix)]
-fn runtime_user_spec() -> AppResult<String> {
-    // The case artifact tree is private to the desktop user. Running as that
-    // same non-root uid/gid lets the container read the explicit workspace and
-    // write only its case-scoped output without broadening host permissions.
-    let uid = unsafe { libc::geteuid() };
-    let gid = unsafe { libc::getegid() };
+fn rootless_user_mapping_for_ids(uid: u32, gid: u32) -> AppResult<RootlessContainerUser> {
     if uid == 0 {
         return Err(AppError::NotAuthorized(
             "scanner containers cannot be launched from a root-owned desktop process".into(),
         ));
     }
-    Ok(format!("{uid}:{gid}"))
+    Ok(RootlessContainerUser {
+        user_spec: format!("{uid}:{gid}"),
+        // Podman's default rootless user namespace maps the caller to
+        // container root. keep-id maps the machine/host caller to the exact
+        // non-root identity used by the scanner process instead, preserving
+        // access to its private bind-mounted case artifacts.
+        podman_userns: format!("keep-id:uid={uid},gid={gid}"),
+    })
+}
+
+#[cfg(unix)]
+fn runtime_user_mapping() -> AppResult<RootlessContainerUser> {
+    // The case artifact tree is private to the desktop user. Running as that
+    // same non-root uid/gid lets the container read the explicit workspace and
+    // write only its case-scoped output without broadening host permissions.
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+    rootless_user_mapping_for_ids(uid, gid)
 }
 
 #[cfg(not(unix))]
-fn runtime_user_spec() -> AppResult<String> {
-    Ok("65532:65532".into())
+fn runtime_user_mapping() -> AppResult<RootlessContainerUser> {
+    // WSL exposes Windows bind mounts to Podman's rootless machine user. Map
+    // that caller to the fixed non-root scanner identity inside the container;
+    // podman-machine --volume is redundant on WSL because drives are already
+    // projected below /mnt.
+    rootless_user_mapping_for_ids(65532, 65532)
 }
 
 fn validate_gateway_endpoint(value: &str) -> AppResult<()> {
@@ -3689,6 +3751,93 @@ esac\n",
     }
 
     #[test]
+    fn podman_execution_injects_exact_keep_id_mapping_but_docker_does_not() {
+        let (_temp, _store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("plan");
+        let expected_user = format!("--user={}", plan.rootless_user.user_spec);
+        let expected_userns = format!("--userns={}", plan.rootless_user.podman_userns);
+
+        for provider in [RuntimeProvider::ManagedLocal, RuntimeProvider::Podman] {
+            let arguments = runtime_args_with_secret(&plan, provider, None, None)
+                .expect("Podman-dialect arguments");
+            assert_eq!(
+                arguments
+                    .iter()
+                    .filter(|argument| *argument == &expected_userns)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                arguments
+                    .iter()
+                    .filter(|argument| *argument == &expected_user)
+                    .count(),
+                1
+            );
+        }
+
+        let docker = runtime_args_with_secret(&plan, RuntimeProvider::Docker, None, None)
+            .expect("Docker arguments");
+        assert!(docker.contains(&expected_user));
+        assert!(!docker.iter().any(|argument| {
+            argument.as_str() == "--userns" || argument.starts_with("--userns=")
+        }));
+    }
+
+    #[test]
+    fn fixed_windows_container_identity_has_an_exact_keep_id_mapping() {
+        let mapping = rootless_user_mapping_for_ids(65532, 65532).expect("mapping");
+        assert_eq!(mapping.user_spec, "65532:65532");
+        assert_eq!(mapping.podman_userns, "keep-id:uid=65532,gid=65532");
+        assert!(rootless_user_mapping_for_ids(0, 65532).is_err());
+    }
+
+    #[test]
+    fn mutated_run_plan_user_contract_fails_closed() {
+        let (_temp, _store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let mut plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("plan");
+        let user = plan
+            .runtime_args
+            .iter()
+            .position(|argument| argument.starts_with("--user="))
+            .expect("user argument");
+        plan.runtime_args[user] = "--user=0:0".into();
+
+        let error = validate_run_plan_integrity(&plan).expect_err("mutated user must fail closed");
+        assert!(error.to_string().contains("non-root user contract"));
+    }
+
+    #[test]
     fn credentials_use_a_short_lived_read_only_mount_not_process_environment() {
         let (_temp, _store, directories, scope, manifest, image) =
             plan_fixture(vec!["scanner".into(), "--json".into()]);
@@ -3720,7 +3869,9 @@ esac\n",
         let mut secret = SecretFileGuard::create(plan.credential_control_dir(), &credentials)
             .expect("secret channel")
             .expect("nonempty channel");
-        let arguments = runtime_args_with_secret(&plan, Some(&secret), None).expect("runtime args");
+        let arguments =
+            runtime_args_with_secret(&plan, RuntimeProvider::ManagedLocal, Some(&secret), None)
+                .expect("runtime args");
 
         assert_eq!(
             arguments

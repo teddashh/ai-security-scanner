@@ -75,6 +75,10 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   any untrusted grant of namespace-replacement rights. Each manager then retains a no-delete-share
   handle that pins the exact verified, non-reparse state-root object for its lifetime. An unsafe
   parent or pre-existing namespace is rejected rather than silently repaired.
+- Every private Windows file creation additionally pins and verifies its canonical immediate parent
+  before `CREATE_NEW`. The parent must retain that exact protected current-user-only inheritable
+  DACL; otherwise creation fails before any staging entry exists. The new child is then read back by
+  its exclusive handle and must have the exact protected, non-inheritable current-user-only DACL.
 - Command execution errors use fixed operation labels and never echo command arguments. Inventory
   and version probes retain 30-second bounds, stop/removal retain 90-second bounds, and first-time
   initialization plus start/readiness each receive separate 10-minute deadlines for cold AppleHV
@@ -82,12 +86,18 @@ explicit compatibility providers; they are not silently mixed with managed runs.
 - Runtime preflight and execution checkpoints persist typed command provenance: runtime version,
   release-manifest SHA-256, and machine-image SHA-256. Resume and cleanup can therefore reopen the
   exact older installation after an app update instead of guessing from `PATH`.
+- On Linux, first initialization mounts the canonical application-data directory at the identical
+  absolute path inside the QEMU machine. All execution workspaces are immutable snapshots below
+  that directory. Podman runs each engine with the desktop user's exact non-root uid/gid and an
+  explicit `keep-id` user namespace, so private `0700` case artifacts remain traversable without
+  widening their host permissions. The release bundles the static `virtiofsd` helper required for
+  this mount; it never falls back to a host-installed helper.
 
 The current platform providers are:
 
 | Host | Provider | Release payload | Host prerequisite |
 | --- | --- | --- | --- |
-| Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
+| Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, `virtiofsd`, and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
 | macOS Intel/Apple silicon | rootless Podman machine + AppleHV | Universal Podman, vfkit, and gvproxy | A supported macOS release with Apple virtualization support. |
 | Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2 must already be available. The app never enables Windows optional features. |
 
@@ -164,9 +174,11 @@ node runtime/vendor-managed-runtime.mjs \
 The tool reads `runtime/upstreams.lock.json`, enforces approved HTTPS origins, verifies every
 download by locked size and SHA-256, extracts without a shell, selects client files by exact content
 identity, and publishes the completed directory atomically. Linux QEMU is built for the locked
-`linux/amd64` platform from the locked QEMU and DTC sources in the pinned container builder. The
-vendor step rejects each of the launcher, real emulator, and `qemu-img` unless it is static ELF64,
-little-endian x86-64, and it functionally proves `qemu-img` create/resize/JSON-info before staging.
+`linux/amd64` platform from the locked QEMU and DTC sources in the pinned container builder;
+`virtiofsd` is independently built from its locked source and Cargo graph with a digest-pinned Rust
+builder. The vendor step rejects each of the launcher, real emulator, `qemu-img`, and `virtiofsd`
+unless it is static ELF64, little-endian x86-64. It verifies both helper versions and functionally
+proves `qemu-img` create/resize/JSON-info before staging.
 The native launcher probes KVM and changes only Podman's exact `-accel kvm -cpu host` arguments to
 `tcg/max` when KVM is unusable. The locked Linux build contract retains the x86_64 SeaBIOS, OVMF,
 and device firmware while excluding eight foreign-architecture firmware images that the

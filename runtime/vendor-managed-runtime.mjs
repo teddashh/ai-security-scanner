@@ -184,6 +184,32 @@ function excludedForeignQemuFirmware(lock) {
   return excluded;
 }
 
+function linuxVirtiofsdBuildContract(lock) {
+  const virtiofsd = requireObject(lock.linux_virtiofsd, 'Linux virtiofsd lock');
+  approvedUrl(virtiofsd.repository_url, 'virtiofsd repository');
+  requireText(virtiofsd.version, 'virtiofsd version');
+  const sourceRevision = requireText(virtiofsd.source_revision, 'virtiofsd source revision');
+  requireText(virtiofsd.license_spdx, 'virtiofsd license');
+  const sourceUrl = approvedUrl(virtiofsd.source_url, 'virtiofsd source URL');
+  if (!sourceUrl.pathname.includes(sourceRevision)) {
+    throw new Error('Linux virtiofsd source URL does not bind its exact source revision');
+  }
+  const contract = requireObject(virtiofsd.build_contract, 'Linux virtiofsd build contract');
+  if (
+    contract.build_platform !== 'linux/amd64' ||
+    contract.rust_version !== '1.91.1' ||
+    contract.rust_builder_image !==
+      'rust@sha256:d9f4b83fd097eaae5f9ace6d939e5a955dbbaa92804f9af4925f646cf9e46636' ||
+    contract.target !== 'x86_64-unknown-linux-musl' ||
+    contract.cargo_locked !== true ||
+    contract.static !== true ||
+    contract.exported_executable !== 'bin/virtiofsd'
+  ) {
+    throw new Error('Linux virtiofsd build contract must lock the static amd64 executable export');
+  }
+  return contract;
+}
+
 function validateLock(lock, targetName) {
   requireObject(lock, 'upstream lock');
   if (lock.schema_version !== '1') throw new Error('upstream lock schema is unsupported');
@@ -215,6 +241,7 @@ function validateLock(lock, targetName) {
     for (const [name, source] of [
       ['QEMU', requireObject(lock.linux_qemu, 'Linux QEMU lock')],
       ['DTC', requireObject(lock.linux_qemu_dtc, 'Linux QEMU DTC lock')],
+      ['virtiofsd', requireObject(lock.linux_virtiofsd, 'Linux virtiofsd lock')],
     ]) {
       approvedUrl(source.source_url, `${name} source URL`);
       requireSha256(source.source_sha256, `${name} source SHA-256`);
@@ -222,6 +249,7 @@ function validateLock(lock, targetName) {
       requireText(source.source_revision, `${name} source revision`);
     }
     excludedForeignQemuFirmware(lock);
+    linuxVirtiofsdBuildContract(lock);
     const gvproxyAsset = requireObject(gvproxy.asset, 'gvproxy asset');
     assetUrl(gvproxy.release_base_url, gvproxyAsset.name, 'gvproxy');
     requireSha256(gvproxyAsset.sha256, 'gvproxy asset SHA-256');
@@ -538,7 +566,13 @@ async function copyLockedClientFiles(extractedRoot, lockedFiles, stageRoot) {
   }
 }
 
-async function copyQemuOutput(qemuOutput, stageRoot, expectedVersion, excludedFirmware) {
+async function copyQemuOutput(
+  qemuOutput,
+  stageRoot,
+  expectedVersion,
+  excludedFirmware,
+  virtiofsd,
+) {
   const sourceFiles = await walkRegularFiles(qemuOutput, {
     rejectSymlinks: true,
     maximum: MAX_STAGED_FILES,
@@ -584,7 +618,12 @@ async function copyQemuOutput(qemuOutput, stageRoot, expectedVersion, excludedFi
     await copyFile(file.path, destination, fsConstants.COPYFILE_EXCL);
     await chmod(destination, destinationRelative.startsWith('bin/') ? 0o700 : 0o600);
   }
-  for (const required of ['bin/qemu-img', 'bin/qemu-system-x86_64', 'bin/qemu-system-x86_64.real']) {
+  for (const required of [
+    'bin/qemu-img',
+    'bin/qemu-system-x86_64',
+    'bin/qemu-system-x86_64.real',
+    'bin/virtiofsd',
+  ]) {
     const metadata = await stat(join(stageRoot, ...required.split('/')));
     if (!metadata.isFile()) throw new Error(`managed QEMU omitted ${required}`);
     const executable = await readElfExecutableContract(join(stageRoot, ...required.split('/')));
@@ -605,6 +644,14 @@ async function copyQemuOutput(qemuOutput, stageRoot, expectedVersion, excludedFi
   if (!imageToolVersion.stdout.includes(`qemu-img version ${expectedVersion}`)) {
     throw new Error('managed qemu-img version does not match the upstream lock');
   }
+  const virtiofsdVersion = await run(join(stageRoot, 'bin', 'virtiofsd'), ['--version']);
+  const expectedVirtiofsdVersion = requireText(
+    requireObject(virtiofsd, 'Linux virtiofsd lock').version,
+    'virtiofsd version',
+  );
+  if (!virtiofsdVersion.stdout.includes(`virtiofsd ${expectedVirtiofsdVersion}`)) {
+    throw new Error('managed virtiofsd version does not match the upstream lock');
+  }
   const imageTool = join(stageRoot, 'bin', 'qemu-img');
   const imageProbe = join(qemuOutput, `.qemu-img-probe-${randomUUID()}.qcow2`);
   try {
@@ -622,8 +669,10 @@ async function copyQemuOutput(qemuOutput, stageRoot, expectedVersion, excludedFi
 async function buildLinuxQemu(lock, workRoot, stageRoot) {
   const qemu = requireObject(lock.linux_qemu, 'Linux QEMU lock');
   const dtc = requireObject(lock.linux_qemu_dtc, 'Linux QEMU DTC lock');
+  const virtiofsd = requireObject(lock.linux_virtiofsd, 'Linux virtiofsd lock');
   const qemuArchive = join(workRoot, 'qemu-source.tar.xz');
   const dtcArchive = join(workRoot, 'dtc-source.tar.gz');
+  const virtiofsdArchive = join(workRoot, 'virtiofsd-source.tar.gz');
   await downloadLocked(
     approvedUrl(qemu.source_url, 'QEMU source URL').href,
     { sha256: qemu.source_sha256, size_bytes: qemu.source_size_bytes },
@@ -636,12 +685,21 @@ async function buildLinuxQemu(lock, workRoot, stageRoot) {
     dtcArchive,
     'DTC source',
   );
+  await downloadLocked(
+    approvedUrl(virtiofsd.source_url, 'virtiofsd source URL').href,
+    { sha256: virtiofsd.source_sha256, size_bytes: virtiofsd.source_size_bytes },
+    virtiofsdArchive,
+    'virtiofsd source',
+  );
   const qemuExtract = join(workRoot, 'qemu-source');
   const dtcExtract = join(workRoot, 'dtc-source');
+  const virtiofsdExtract = join(workRoot, 'virtiofsd-source');
   await extractWithTar(qemuArchive, qemuExtract);
   await extractWithTar(dtcArchive, dtcExtract);
+  await extractWithTar(virtiofsdArchive, virtiofsdExtract);
   const qemuRoot = await singleDirectory(qemuExtract, 'QEMU source');
   const dtcRoot = await singleDirectory(dtcExtract, 'DTC source');
+  const virtiofsdRoot = await singleDirectory(virtiofsdExtract, 'virtiofsd source');
   const dtcDestination = join(qemuRoot, 'subprojects', 'dtc');
   await rm(dtcDestination, { recursive: true, force: true });
   await mkdir(dirname(dtcDestination), { recursive: true, mode: 0o700 });
@@ -660,6 +718,8 @@ async function buildLinuxQemu(lock, workRoot, stageRoot) {
       join(SCRIPT_DIRECTORY, 'linux-qemu.Dockerfile'),
       '--build-context',
       `launcher=${SCRIPT_DIRECTORY}`,
+      '--build-context',
+      `virtiofsd=${virtiofsdRoot}`,
       '--output',
       `type=local,dest=${output}`,
       qemuRoot,
@@ -671,6 +731,7 @@ async function buildLinuxQemu(lock, workRoot, stageRoot) {
     stageRoot,
     requireText(qemu.version, 'QEMU version'),
     excludedForeignQemuFirmware(lock),
+    virtiofsd,
   );
 }
 
@@ -831,6 +892,18 @@ function componentInventory(lock, targetName, files, targets) {
         url: approvedUrl(dtc.source_url, 'DTC source URL').href,
         sha256: requireSha256(dtc.source_sha256, 'DTC source SHA-256'),
         size_bytes: requireSize(dtc.source_size_bytes, 'DTC source size'),
+      },
+    ));
+    const virtiofsd = requireObject(lock.linux_virtiofsd, 'Linux virtiofsd lock');
+    components.push(componentRecord(
+      virtiofsd,
+      'virtiofsd',
+      'Statically built rootless VirtioFS host-filesystem helper required by Podman QEMU machine mounts',
+      select('bin/virtiofsd'),
+      {
+        url: approvedUrl(virtiofsd.source_url, 'virtiofsd source URL').href,
+        sha256: requireSha256(virtiofsd.source_sha256, 'virtiofsd source SHA-256'),
+        size_bytes: requireSize(virtiofsd.source_size_bytes, 'virtiofsd source size'),
       },
     ));
   } else if (targetName === 'universal-apple-darwin') {

@@ -1878,7 +1878,7 @@ impl ManagedRuntimeManager {
             self.prove_machine(machine, target)?;
         } else {
             self.prepare_machine_ssh_identity_locked()?;
-            self.initialize_machine(&command, &image, &machine_name)?;
+            self.initialize_machine(&command, target, &image, &machine_name)?;
         }
         if let Some(setup) = setup {
             setup.check_cancelled()?;
@@ -2378,6 +2378,38 @@ impl ManagedRuntimeManager {
             .join(&self.loaded.sha256[..16])
     }
 
+    fn canonical_application_data_root(&self) -> AppResult<PathBuf> {
+        let application_data = self.state_root.parent().ok_or_else(|| {
+            AppError::Internal("managed runtime state has no application-data parent".into())
+        })?;
+        let application_data =
+            canonical_real_directory(application_data, "managed runtime application data")?;
+        let state_root = canonical_real_directory(&self.state_root, "managed runtime state")?;
+        if state_root.parent() != Some(application_data.as_path()) {
+            return Err(AppError::NotAuthorized(
+                "managed runtime state escaped its canonical application-data root".into(),
+            ));
+        }
+        Ok(application_data)
+    }
+
+    fn machine_application_data_volume(
+        &self,
+        target: &ManagedTarget,
+    ) -> AppResult<Option<OsString>> {
+        match target.operating_system {
+            ManagedOperatingSystem::Linux => {
+                let application_data = self.canonical_application_data_root()?;
+                Ok(Some(linux_machine_volume_spec(&application_data)?))
+            }
+            // Podman's AppleHV defaults already project /Users, /private, and
+            // /var/folders. WSL projects Windows drives below /mnt and ignores
+            // podman-machine --volume. Neither platform accepts the Linux
+            // source:target contract used by the QEMU provider here.
+            ManagedOperatingSystem::Macos | ManagedOperatingSystem::Windows => Ok(None),
+        }
+    }
+
     fn command_home(&self, target: &ManagedTarget) -> AppResult<PathBuf> {
         if target.operating_system != ManagedOperatingSystem::Macos {
             return Ok(self.provider_home());
@@ -2595,6 +2627,7 @@ impl ManagedRuntimeManager {
     fn initialize_machine(
         &self,
         command: &ManagedRuntimeCommand,
+        target: &ManagedTarget,
         image: &Path,
         machine_name: &str,
     ) -> AppResult<()> {
@@ -2606,7 +2639,7 @@ impl ManagedRuntimeManager {
         let cpus = self.loaded.manifest.resources.cpus.to_string();
         let memory = self.loaded.manifest.resources.memory_mb.to_string();
         let disk = self.loaded.manifest.resources.disk_size_gb.to_string();
-        let args = vec![
+        let mut args = vec![
             OsString::from("machine"),
             OsString::from("init"),
             OsString::from("--cpus"),
@@ -2616,10 +2649,15 @@ impl ManagedRuntimeManager {
             OsString::from("--disk-size"),
             OsString::from(disk),
             OsString::from("--rootful=false"),
+        ];
+        if let Some(volume) = self.machine_application_data_volume(target)? {
+            args.extend([OsString::from("--volume"), volume]);
+        }
+        args.extend([
             OsString::from("--image"),
             OsString::from(image),
             OsString::from(machine_name),
-        ];
+        ]);
         let output = self.run_command_args(
             ManagedCommandOperation::MachineInitialization,
             command,
@@ -4690,6 +4728,25 @@ fn machine_name(target: &ManagedTarget) -> String {
     name
 }
 
+fn linux_machine_volume_spec(application_data: &Path) -> AppResult<OsString> {
+    if !application_data.is_absolute() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime application-data mount must be absolute".into(),
+        ));
+    }
+    let rendered = application_data.to_str().ok_or_else(|| {
+        AppError::NotAvailable(
+            "managed runtime application-data mount is not representable for Podman".into(),
+        )
+    })?;
+    if rendered.contains([':', ',', '\n', '\r', '\0']) {
+        return Err(AppError::NotAuthorized(
+            "managed runtime application-data mount contains unsupported volume syntax".into(),
+        ));
+    }
+    Ok(OsString::from(format!("{rendered}:{rendered}")))
+}
+
 fn installation_directory_name(loaded: &LoadedManagedRuntimeManifest) -> String {
     format!(
         "{}-{}-{}",
@@ -5799,29 +5856,21 @@ fn canonical_real_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
 #[cfg(windows)]
 fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::{AsRawHandle, FromRawHandle};
-    use windows_sys::Wdk::Storage::FileSystem::NtSetSecurityObject;
-    use windows_sys::Win32::Foundation::{
-        FALSE, INVALID_HANDLE_VALUE, RtlNtStatusToDosError, TRUE,
-    };
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
     use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, InitializeSecurityDescriptor,
-        PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
-        SECURITY_DESCRIPTOR, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-        SetSecurityDescriptorOwner,
+        CONTAINER_INHERIT_ACE, InitializeSecurityDescriptor, OBJECT_INHERIT_ACE, SE_DACL_PROTECTED,
+        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
+        SetSecurityDescriptorDacl, SetSecurityDescriptorOwner,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CREATE_NEW, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_NONE,
-        WRITE_DAC,
     };
     use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
     let user = windows_current_user_sid()?;
     let creation_acl = windows_current_user_only_acl(&user)?;
-    // Use a separately provider-built and locally verified ACL for post-create
-    // enforcement so creation and enforcement never share mutable backing.
-    let enforcement_acl = windows_current_user_only_acl(&user)?;
 
     let mut descriptor = SECURITY_DESCRIPTOR::default();
     // SAFETY: descriptor is correctly sized writable storage and revision is
@@ -5899,6 +5948,16 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     } else {
         parent.canonicalize()?
     };
+    // A Windows filesystem can replace a caller-provided creation DACL with
+    // inherited ACEs even while reporting successful descriptor application.
+    // Pin and verify the exact immediate parent before creating any entry so
+    // an unsafe namespace fails closed with no transient secret file.
+    let parent_guard = open_windows_real_directory_security_handle(&canonical_parent)?;
+    let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    verify_windows_current_user_only_dacl_with_ace_flags(
+        &parent_guard,
+        u8::try_from(inheritance).expect("Windows inheritance flags fit in an ACE header"),
+    )?;
     let creation_path = canonical_parent.join(file_name);
     let mut encoded = creation_path.as_os_str().encode_wide().collect::<Vec<_>>();
     if encoded.contains(&0) {
@@ -5913,7 +5972,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     let raw = unsafe {
         CreateFileW(
             encoded.as_ptr(),
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | DELETE,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
             FILE_SHARE_NONE,
             &raw const attributes,
             CREATE_NEW,
@@ -5927,62 +5986,6 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     // SAFETY: CreateFileW returned a uniquely owned file handle.
     let file = unsafe { File::from_raw_handle(raw) };
     let secure = (|| {
-        let mut enforcement_descriptor = SECURITY_DESCRIPTOR::default();
-        // SAFETY: enforcement_descriptor is correctly sized writable storage.
-        if unsafe {
-            InitializeSecurityDescriptor(
-                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
-                SECURITY_DESCRIPTOR_REVISION,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: descriptor and the separately validated ACL are live for the
-        // native call below.
-        if unsafe {
-            SetSecurityDescriptorDacl(
-                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
-                TRUE,
-                enforcement_acl.as_ptr(),
-                FALSE,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: enforcement_descriptor is initialized. Setting the protected
-        // control bit makes the native modification descriptor authoritative
-        // instead of subject to parent auto-inheritance merging.
-        if unsafe {
-            SetSecurityDescriptorControl(
-                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
-                SE_DACL_PROTECTED,
-                SE_DACL_PROTECTED,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SetSecurityInfo routes file DACL changes through MARTA's automatic
-        // inheritance merge, which can preserve an inherited Everyone ACE even
-        // after reporting success. NtSetSecurityObject applies this absolute
-        // modification descriptor directly to the exact, exclusively opened,
-        // still-empty handle. The strict readback below remains authoritative.
-        // SAFETY: file owns a WRITE_DAC handle and enforcement_descriptor plus
-        // all of its ACL backing remain live for this synchronous native call.
-        let status = unsafe {
-            NtSetSecurityObject(
-                file.as_raw_handle(),
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
-            )
-        };
-        if status < 0 {
-            // SAFETY: status is the NTSTATUS returned by NtSetSecurityObject.
-            let error = unsafe { RtlNtStatusToDosError(status) };
-            return Err(io::Error::from_raw_os_error(error as i32));
-        }
         let information = windows_file_information(&file)?;
         if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
             || information.number_of_links != 1
@@ -6008,6 +6011,9 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
             ),
         });
     }
+    // Keep the no-share-delete parent handle live through the child's strict
+    // readback so its checked namespace component cannot be swapped mid-create.
+    drop(parent_guard);
     Ok(file)
 }
 
@@ -7904,6 +7910,26 @@ mod tests {
         assert!(init.contains(&"--rootful=false".into()));
         assert!(init.contains(&"--image".into()));
         assert!(!init.contains(&"--provider".into()));
+        let target = fixture.manager.loaded.target().expect("target");
+        let volume_values = init
+            .windows(2)
+            .filter_map(|arguments| (arguments[0] == "--volume").then_some(arguments[1].clone()))
+            .collect::<Vec<_>>();
+        if target.operating_system == ManagedOperatingSystem::Linux {
+            let application_data = fixture
+                .manager
+                .canonical_application_data_root()
+                .expect("canonical application data");
+            assert_eq!(
+                volume_values,
+                [linux_machine_volume_spec(&application_data)
+                    .expect("Linux volume")
+                    .to_string_lossy()
+                    .into_owned()]
+            );
+        } else {
+            assert!(volume_values.is_empty());
+        }
         assert!(
             !init
                 .iter()
@@ -7954,6 +7980,32 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn machine_application_data_volume_is_linux_only() {
+        let fixture = fixture();
+        let mut target = fixture.manager.loaded.target().expect("target").clone();
+
+        target.operating_system = ManagedOperatingSystem::Macos;
+        target.provider = ManagedMachineProvider::Applehv;
+        assert_eq!(
+            fixture
+                .manager
+                .machine_application_data_volume(&target)
+                .expect("macOS volume policy"),
+            None
+        );
+
+        target.operating_system = ManagedOperatingSystem::Windows;
+        target.provider = ManagedMachineProvider::Wsl;
+        assert_eq!(
+            fixture
+                .manager
+                .machine_application_data_volume(&target)
+                .expect("Windows volume policy"),
+            None
+        );
     }
 
     #[test]
@@ -8080,7 +8132,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_managed_ssh_identity_is_private_under_a_permissive_parent_dacl() {
+    fn windows_managed_ssh_identity_refuses_a_permissive_parent_before_creation() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -8107,36 +8159,43 @@ mod tests {
         drop(probe);
         fs::remove_file(&inherited_probe).expect("remove inherited ACL probe");
 
-        {
+        let error = {
             let _lock = fixture.manager.lock().expect("lifecycle lock");
             fixture
                 .manager
                 .prepare_machine_ssh_identity_locked()
-                .expect("generate protected identity");
-        }
+                .expect_err("permissive identity parent must fail closed")
+        };
 
         let public_identity = managed_ssh_public_key_path(&identity);
-        let private_file =
-            open_windows_managed_ssh_identity_file(&identity).expect("open private identity");
-        let public_file =
-            open_windows_managed_ssh_identity_file(&public_identity).expect("open public identity");
-        assert_eq!(
-            windows_file_information(&private_file)
-                .expect("private handle information")
-                .number_of_links,
-            1
-        );
-        assert_eq!(
-            windows_file_information(&public_file)
-                .expect("public handle information")
-                .number_of_links,
-            1
-        );
-        verify_windows_current_user_only_dacl(&private_file)
-            .expect("private key has a protected current-user-only DACL");
-        assert_eq!(
-            inspect_managed_ssh_identity(&identity).expect("inspect protected identity"),
-            ManagedSshIdentityState::Valid
+        let (private_temporary, public_temporary) =
+            managed_ssh_identity_temporary_paths(&identity).expect("temporary paths");
+        assert!(error.to_string().contains("DACL"));
+        for unexpected in [
+            &identity,
+            &public_identity,
+            &private_temporary,
+            &public_temporary,
+        ] {
+            assert!(
+                !private_entry_exists(unexpected).expect("inspect rejected identity path"),
+                "unsafe parent must not receive any identity entry: {}",
+                unexpected.display()
+            );
+        }
+        let parent = open_windows_real_directory_security_handle(identity_parent)
+            .expect("reopen permissive parent");
+        assert!(
+            verify_windows_current_user_only_dacl_with_ace_flags(
+                &parent,
+                u8::try_from(
+                    windows_sys::Win32::Security::OBJECT_INHERIT_ACE
+                        | windows_sys::Win32::Security::CONTAINER_INHERIT_ACE,
+                )
+                .expect("inheritance flags")
+            )
+            .is_err(),
+            "the rejected parent DACL must not be repaired as a side effect"
         );
     }
 

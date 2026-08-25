@@ -69,6 +69,25 @@
     "source_size_bytes": 205556,
     "stage_as": "subprojects/dtc"
   },
+  "linux_virtiofsd": {
+    "name": "virtiofsd",
+    "version": "1.14.0",
+    "repository_url": "https://gitlab.com/virtio-fs/virtiofsd",
+    "source_revision": "c2540f8db14caba81c1e37fba23fc7bf2cd7f0dd",
+    "license_spdx": "Apache-2.0 AND BSD-3-Clause",
+    "source_url": "https://gitlab.com/virtio-fs/virtiofsd/-/archive/c2540f8db14caba81c1e37fba23fc7bf2cd7f0dd/virtiofsd-c2540f8db14caba81c1e37fba23fc7bf2cd7f0dd.tar.gz",
+    "source_sha256": "0e0777abe4c574286f04a8a3ab63dfc04258d21a9f430d05f68ebade8996b3a7",
+    "source_size_bytes": 187457,
+    "build_contract": {
+      "build_platform": "linux/amd64",
+      "rust_version": "1.91.1",
+      "rust_builder_image": "rust@sha256:d9f4b83fd097eaae5f9ace6d939e5a955dbbaa92804f9af4925f646cf9e46636",
+      "target": "x86_64-unknown-linux-musl",
+      "cargo_locked": true,
+      "static": true,
+      "exported_executable": "bin/virtiofsd"
+    }
+  },
   "linux_gvproxy": {
     "name": "gvisor-tap-vsock gvproxy",
     "version": "0.8.8",

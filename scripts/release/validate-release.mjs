@@ -343,11 +343,15 @@ function validatePlatformQualificationSources(sources) {
     "xvfb-run",
     "apt-get purge",
     'const binary = path.join(runtimeRoot, "bin", "qemu-img")',
-    "execFileSync(binary, args",
+    "execFileSync(executable, args",
     "QEMU component does not bind the installed qemu-img file.",
     'run(["create", "-f", "qcow2", probe, "1G"])',
     'run(["resize", probe, "40G"])',
     'run(["info", "--output=json", probe])',
+    'const helper = path.join(runtimeRoot, "bin", "virtiofsd")',
+    "virtiofsd component does not bind the installed helper file.",
+    "Installed virtiofsd unexpectedly requires a host ELF interpreter.",
+    'runBinary(helper, ["--version"])',
     "assert_managed_ssh_identity",
     "data/containers/podman/machine/machine",
     ".machine.private-key-new",
@@ -448,6 +452,7 @@ function validatePlatformQualificationSources(sources) {
 
 function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
   const qemu = lock?.linux_qemu;
+  const virtiofsd = lock?.linux_virtiofsd;
   assert(
     qemu?.build_contract?.build_platform === "linux/amd64" &&
       qemu?.build_contract?.static === true &&
@@ -468,26 +473,78 @@ function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
         ]),
     "Linux managed QEMU lock must include the exact amd64 static executable exports",
   );
+  assert(
+    virtiofsd?.version === "1.14.0" &&
+      virtiofsd?.build_contract?.build_platform === "linux/amd64" &&
+      virtiofsd?.build_contract?.rust_version === "1.91.1" &&
+      virtiofsd?.build_contract?.rust_builder_image ===
+        "rust@sha256:d9f4b83fd097eaae5f9ace6d939e5a955dbbaa92804f9af4925f646cf9e46636" &&
+      virtiofsd?.build_contract?.target === "x86_64-unknown-linux-musl" &&
+      virtiofsd?.build_contract?.cargo_locked === true &&
+      virtiofsd?.build_contract?.static === true &&
+      virtiofsd?.build_contract?.exported_executable === "bin/virtiofsd",
+    "Linux managed virtiofsd lock must include the exact static amd64 build contract",
+  );
   for (const required of [
     'test "$TARGETPLATFORM" = "linux/amd64"',
     "--enable-tools",
     "samu -C build qemu-system-x86_64 qemu-img",
     "/stage/opt/managed-qemu/bin/qemu-img /bin/qemu-img",
+    "FROM rust@sha256:d9f4b83fd097eaae5f9ace6d939e5a955dbbaa92804f9af4925f646cf9e46636 AS virtiofsd-build",
+    "COPY --from=virtiofsd . /src/",
+    "cargo build --locked --release --target x86_64-unknown-linux-musl",
+    "release/virtiofsd /bin/virtiofsd",
   ]) {
     assert(dockerfile.includes(required), `Linux managed QEMU build is missing: ${required}`);
   }
   for (const required of [
-    "['bin/qemu-img', 'bin/qemu-system-x86_64', 'bin/qemu-system-x86_64.real']",
+    "'bin/virtiofsd'",
     "'--platform'",
     "'linux/amd64'",
+    "`virtiofsd=${virtiofsdRoot}`",
     "readElfExecutableContract",
     "executable.machine !== 62",
     "executable.hasInterpreter",
     "qemu-img version ${expectedVersion}",
+    "virtiofsd ${expectedVirtiofsdVersion}",
     "qemuFiles.map(bundledArtifact)",
+    "select('bin/virtiofsd')",
   ]) {
     assert(vendor.includes(required), `managed-runtime vendor contract is missing: ${required}`);
   }
+}
+
+function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntime) {
+  for (const required of [
+    "canonical_application_data_root",
+    "linux_machine_volume_spec",
+    'OsString::from("--volume")',
+    "self.initialize_machine(&command, target, &image, &machine_name)?",
+    "ManagedOperatingSystem::Macos | ManagedOperatingSystem::Windows => Ok(None)",
+    "machine_application_data_volume_is_linux_only",
+  ]) {
+    assert(
+      managedRuntime.includes(required),
+      `managed runtime execution contract is missing: ${required}`,
+    );
+  }
+  for (const required of [
+    'podman_userns: format!("keep-id:uid={uid},gid={gid}")',
+    "if provider.uses_podman_dialect()",
+    'format!("--userns={}", plan.rootless_user.podman_userns)',
+    "rootless_user_mapping_for_ids(65532, 65532)",
+    "validate_run_plan_user_integrity(plan)?",
+    "podman_execution_injects_exact_keep_id_mapping_but_docker_does_not",
+  ]) {
+    assert(
+      containerRuntime.includes(required),
+      `container rootless execution contract is missing: ${required}`,
+    );
+  }
+  assert(
+    containerRuntime.includes("matches!(self, Self::ManagedLocal | Self::Podman)"),
+    "keep-id injection must remain limited to Podman-dialect providers",
+  );
 }
 
 function validateEngineImageWorkflow(workflow, { image, tag, requiredPaths, sourceDateEpoch = null }) {
@@ -549,6 +606,14 @@ async function main() {
     path.join(PROJECT_ROOT, "runtime/vendor-managed-runtime.mjs"),
     "utf8",
   );
+  const managedRuntimeSource = await readFile(
+    path.join(PROJECT_ROOT, "src-tauri/src/managed_runtime.rs"),
+    "utf8",
+  );
+  const containerRuntimeSource = await readFile(
+    path.join(PROJECT_ROOT, "src-tauri/src/container_runtime.rs"),
+    "utf8",
+  );
 
   assert(isSemver(version), `package version is not strict SemVer: ${version}`);
   assert(tag === `v${version}`, `tag ${tag} does not exactly match package version ${version}`);
@@ -580,6 +645,7 @@ async function main() {
   );
   assert(
     releaseGuide.includes("resolves `bin/qemu-img` from the installed managed-runtime") &&
+      releaseGuide.includes("resolves `bin/virtiofsd` from that manifest") &&
       releaseGuide.includes("bounded raw bytes") &&
       releaseGuide.includes("both fixed staging names are absent") &&
       releaseGuide.includes("provider-home directory itself must be absent") &&
@@ -684,6 +750,7 @@ async function main() {
     managedRuntimeDockerfile,
     managedRuntimeVendor,
   );
+  validateManagedRuntimeExecutionContract(managedRuntimeSource, containerRuntimeSource);
   const qualificationSources = new Map();
   for (const name of [
     "qualify-linux.sh",

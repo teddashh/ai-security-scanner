@@ -100,13 +100,14 @@ node -e '
   }
   const digest = crypto.createHash("sha256").update(fs.readFileSync(binary)).digest("hex");
   if (digest !== record.sha256) throw new Error("Installed qemu-img differs from its runtime manifest.");
-  const run = (args) => execFileSync(binary, args, {
+  const runBinary = (executable, args) => execFileSync(executable, args, {
     cwd: workRoot,
     encoding: "utf8",
     env: { LANG: "C.UTF-8", LC_ALL: "C.UTF-8", PATH: "/usr/bin:/bin" },
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
   });
+  const run = (args) => runBinary(binary, args);
   const version = run(["--version"]);
   if (!version.includes(`qemu-img version ${components[0].version}`)) {
     throw new Error("Installed qemu-img version differs from the exact QEMU component.");
@@ -122,6 +123,48 @@ node -e '
     }
   } finally {
     fs.rmSync(probeRoot, { recursive: true, force: true });
+  }
+
+  const helperRecords = manifest.files.filter((item) => item.path === "bin/virtiofsd");
+  if (helperRecords.length !== 1) {
+    throw new Error("Installed managed runtime has no exact bundled virtiofsd file.");
+  }
+  const helperRecord = helperRecords[0];
+  const helperComponents = manifest.components.filter((item) => item.id === "virtiofsd");
+  if (helperComponents.length !== 1 || helperComponents[0].version !== "1.14.0") {
+    throw new Error("Installed runtime has no exact virtiofsd component identity.");
+  }
+  const helperArtifacts = helperComponents[0].artifacts.filter((item) =>
+    item.delivery === "bundled_file" && item.locator === helperRecord.path &&
+    item.sha256 === helperRecord.sha256 && item.size_bytes === helperRecord.size_bytes);
+  if (helperArtifacts.length !== 1) {
+    throw new Error("virtiofsd component does not bind the installed helper file.");
+  }
+  const helper = path.join(runtimeRoot, "bin", "virtiofsd");
+  const helperMetadata = fs.lstatSync(helper);
+  const helperBytes = fs.readFileSync(helper);
+  const helperDigest = crypto.createHash("sha256").update(helperBytes).digest("hex");
+  if (!helperMetadata.isFile() || helperMetadata.isSymbolicLink() ||
+      helperMetadata.size !== helperRecord.size_bytes || (helperMetadata.mode & 0o111) === 0 ||
+      fs.realpathSync(helper) !== helper || helperDigest !== helperRecord.sha256 ||
+      helperBytes.length < 64 || helperBytes.subarray(0, 4).toString("hex") !== "7f454c46" ||
+      helperBytes[4] !== 2 || helperBytes[5] !== 1 || helperBytes.readUInt16LE(18) !== 62) {
+    throw new Error("Installed virtiofsd is not the exact ELF64 x86-64 executable.");
+  }
+  const programOffset = Number(helperBytes.readBigUInt64LE(32));
+  const programEntrySize = helperBytes.readUInt16LE(54);
+  const programCount = helperBytes.readUInt16LE(56);
+  if (!Number.isSafeInteger(programOffset) || programEntrySize < 56 ||
+      programOffset + programEntrySize * programCount > helperBytes.length) {
+    throw new Error("Installed virtiofsd has a malformed ELF program-header table.");
+  }
+  for (let index = 0; index < programCount; index += 1) {
+    if (helperBytes.readUInt32LE(programOffset + index * programEntrySize) === 3) {
+      throw new Error("Installed virtiofsd unexpectedly requires a host ELF interpreter.");
+    }
+  }
+  if (!runBinary(helper, ["--version"]).includes("virtiofsd 1.14.0")) {
+    throw new Error("Installed virtiofsd version differs from its exact component.");
   }
 ' "${runtime_manifest}" "${runtime_root}" "${work_directory}"
 

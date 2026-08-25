@@ -69,11 +69,13 @@ new private data directory. Every platform must prove this exact sequence:
 The Linux qualification separately resolves `bin/qemu-img` from the installed managed-runtime
 manifest, proves its regular executable file size and SHA-256, binds it to the exact QEMU component
 and version, and runs create/resize/JSON-info against a disposable qcow2 file by that absolute path.
-It does not install or resolve a host `qemu-img`. On every platform, qualification also proves after
-start that the exact private-XDG `machine{,.pub}` Ed25519 identity exists with bounded single-link
-current-user protection and that both fixed staging names are absent. After uninstall, the exact
-release-digest provider-home directory itself must be absent; an existing but empty directory does
-not satisfy this check.
+It also resolves `bin/virtiofsd` from that manifest, binds its digest to the exact component and
+version, rejects a non-x86-64 ELF or any host interpreter dependency, and executes its version probe
+by absolute path. It does not install or resolve host QEMU or VirtioFS packages. On every platform,
+qualification also proves after start that the exact private-XDG `machine{,.pub}` Ed25519 identity
+exists with bounded single-link current-user protection and that both fixed staging names are absent.
+After uninstall, the exact release-digest provider-home directory itself must be absent; an existing
+but empty directory does not satisfy this check.
 
 The macOS qualification independently derives the stable `/tmp/assm1-<32-hex-namespace>` short
 home from the canonical state root, installed manifest digest, and effective uid. It requires a
