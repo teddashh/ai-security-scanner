@@ -5699,6 +5699,11 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     {
         return Err(io::Error::last_os_error());
     }
+    // Keep a pristine ACL outside the SECURITY_ATTRIBUTES descriptor backing.
+    // Filesystem creation can apply inheritance while consuming that mutable
+    // absolute descriptor; post-create enforcement must not reuse any storage
+    // the creation provider was allowed to canonicalize.
+    let enforcement_acl = acl.clone();
 
     let mut descriptor = SECURITY_DESCRIPTOR::default();
     // SAFETY: descriptor is correctly sized writable storage and revision is
@@ -5831,7 +5836,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
                 DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                acl.as_ptr().cast(),
+                enforcement_acl.as_ptr().cast(),
                 std::ptr::null(),
             )
         };
