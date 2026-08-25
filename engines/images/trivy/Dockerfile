@@ -23,7 +23,9 @@ ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOEXPERIMENT=jsonv2 SOURCE_DATE_EPOCH=178670
 ADD --checksum=sha256:285594b257470eb444fd2836be95a835565ee600382320c977b3993d8efbb767 \
     https://github.com/aquasecurity/trivy/archive/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994.tar.gz \
     /tmp/trivy-source.tar.gz
-RUN mkdir -p /src/trivy \
+RUN --mount=type=cache,id=ai-security-scanner-trivy-go-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=ai-security-scanner-trivy-go-build,target=/root/.cache/go-build,sharing=locked \
+    mkdir -p /src/trivy \
     && tar -xzf /tmp/trivy-source.tar.gz --strip-components=1 -C /src/trivy \
     && cd /src/trivy \
     && echo 'b0727b3c85888f77163ac9f6164869e9e8fc11cc6b8b6bafabbed92cf3288b9a  go.sum' | sha256sum -c - \
@@ -44,10 +46,10 @@ RUN echo '8cf3aaad2dde16ff1529445dab19c2e2a9adc457dbe8d2b02fdbce06b0f638dc  /tmp
 FROM scratch
 
 LABEL org.opencontainers.image.title="ai-security-scanner Trivy engine" \
-      org.opencontainers.image.description="Pinned-source Trivy with a checksum-verified offline vulnerability database" \
+      org.opencontainers.image.description="Pinned-source Trivy OS-package profile with a checksum-verified offline vulnerability database" \
       org.opencontainers.image.source="https://github.com/aquasecurity/trivy" \
       org.opencontainers.image.revision="e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994" \
-      org.opencontainers.image.version="0.74.0-1" \
+      org.opencontainers.image.version="0.74.0-2" \
       org.opencontainers.image.licenses="Apache-2.0" \
       io.ai-security-scanner.database-manifest="sha256:a61aa42edc534843230ca24ef72ef322a2da18d717c3de4b6277f4aac43926a1"
 

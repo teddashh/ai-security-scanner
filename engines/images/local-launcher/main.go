@@ -35,6 +35,13 @@ const (
 	maxSnapshotBytes    = 8 * 1024 * 1024
 	maxSnapshotFiles    = 32
 	linuxStatfsReadOnly = 1
+	inputMarkerFilename = ".ai-security-scanner-input.json"
+	inputMarkerSchema   = "ai-security-scanner.local-input/v1"
+	profileRepository   = "repository_working_tree"
+	profileIaC          = "iac_working_tree"
+	profileOCIImage     = "container_image_oci_layout"
+	profileKubernetes   = "kubernetes_manifests"
+	profileNodeSnapshot = "kubernetes_node_snapshot"
 )
 
 type invocation struct {
@@ -56,6 +63,11 @@ type nodeSnapshot struct {
 type nodeSnapshotFile struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
+}
+
+type localInputMarker struct {
+	SchemaVersion string `json:"schema_version"`
+	InputProfile  string `json:"input_profile"`
 }
 
 type boundedWriter struct {
@@ -110,11 +122,18 @@ func run(arguments []string) error {
 	if err := validateDirectory(*output, "output"); err != nil {
 		return err
 	}
+	inputProfile, err := loadInputProfile(*workspace)
+	if err != nil {
+		return err
+	}
+	if err := validateEngineInputProfile(*engineID, inputProfile); err != nil {
+		return err
+	}
 	if err := verifyEngineInputs(*engineID, *workspace); err != nil {
 		return err
 	}
 
-	planned, err := planInvocation(*engineID)
+	planned, err := planInvocation(*engineID, inputProfile)
 	if err != nil {
 		return err
 	}
@@ -190,7 +209,58 @@ func ensureOutputAbsent(path string) error {
 	return fmt.Errorf("evidence path already exists (%s, mode %s)", path, info.Mode())
 }
 
-func planInvocation(engineID string) (invocation, error) {
+func loadInputProfile(workspace string) (string, error) {
+	markerPath := filepath.Join(workspace, inputMarkerFilename)
+	info, err := os.Lstat(markerPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return profileRepository, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect local input marker: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() < 2 || info.Size() > 4*1024 {
+		return "", errors.New("local input marker is not a bounded regular file")
+	}
+	payload, err := os.ReadFile(markerPath)
+	if err != nil {
+		return "", fmt.Errorf("read local input marker: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var marker localInputMarker
+	if err := decoder.Decode(&marker); err != nil {
+		return "", fmt.Errorf("parse local input marker: %w", err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return "", fmt.Errorf("parse local input marker: %w", err)
+	}
+	if marker.SchemaVersion != inputMarkerSchema {
+		return "", errors.New("local input marker schema is invalid")
+	}
+	switch marker.InputProfile {
+	case profileIaC, profileOCIImage, profileKubernetes, profileNodeSnapshot:
+		return marker.InputProfile, nil
+	default:
+		return "", errors.New("local input marker profile is invalid")
+	}
+}
+
+func validateEngineInputProfile(engineID string, inputProfile string) error {
+	allowed := map[string]map[string]bool{
+		"semgrep":    {profileRepository: true},
+		"trufflehog": {profileRepository: true},
+		"trivy":      {profileRepository: true, profileIaC: true, profileOCIImage: true},
+		"grype":      {profileOCIImage: true},
+		"kubescape":  {profileKubernetes: true},
+		"kube-bench": {profileNodeSnapshot: true},
+	}
+	if !allowed[engineID][inputProfile] {
+		return fmt.Errorf("engine %s cannot consume local input profile %s", engineID, inputProfile)
+	}
+	return nil
+}
+
+func planInvocation(engineID string, inputProfile string) (invocation, error) {
 	fixedEnvironment := []string{
 		"HOME=/tmp/ai-security-scanner-home",
 		"LANG=C.UTF-8",
@@ -225,16 +295,31 @@ func planInvocation(engineID string) (invocation, error) {
 	case "trivy":
 		result.program = "/usr/local/bin/trivy"
 		result.outputPath = "/output/trivy.json"
-		result.arguments = []string{
-			"filesystem", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
-			"--skip-db-update", "--offline-scan", "--scanners", "vuln",
-			"--format", "json", "--output", result.outputPath, "/workspace",
+		if inputProfile == profileOCIImage {
+			result.arguments = []string{
+				"image", "--input", "/workspace",
+				"--cache-dir", "/opt/ai-security-scanner/trivy-cache",
+				"--cache-backend", "memory",
+				"--skip-db-update", "--skip-java-db-update", "--offline-scan",
+				"--pkg-types", "os", "--skip-version-check", "--disable-telemetry",
+				"--skip-vex-repo-update", "--scanners", "vuln",
+				"--format", "json", "--output", result.outputPath,
+			}
+		} else {
+			result.arguments = []string{
+				"filesystem", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
+				"--cache-backend", "memory",
+				"--skip-db-update", "--skip-java-db-update", "--offline-scan",
+				"--pkg-types", "os", "--skip-version-check", "--disable-telemetry",
+				"--skip-vex-repo-update", "--scanners", "vuln",
+				"--format", "json", "--output", result.outputPath, "/workspace",
+			}
 		}
 		result.environment = append(result.environment, "TRIVY_DISABLE_VEX_NOTICE=true")
 	case "grype":
 		result.program = "/usr/local/bin/grype"
 		result.outputPath = "/output/grype.json"
-		result.arguments = []string{"dir:/workspace", "--output", "json", "--file", result.outputPath}
+		result.arguments = []string{"oci-dir:/workspace", "--output", "json", "--file", result.outputPath}
 		result.environment = append(result.environment,
 			"GRYPE_CHECK_FOR_APP_UPDATE=false",
 			"GRYPE_DB_AUTO_UPDATE=false",

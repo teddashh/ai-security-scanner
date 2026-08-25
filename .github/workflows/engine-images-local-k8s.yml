@@ -21,6 +21,7 @@ on:
       - engines/images/kube-bench/**
       - '!engines/images/kube-bench/plan.json'
       - scripts/engine-image-evidence.mjs
+      - scripts/generate-oci-layout-fixture.mjs
       - scripts/prepare-offline-engine-data.mjs
   workflow_dispatch:
 
@@ -49,6 +50,13 @@ jobs:
             -w /src \
             golang:1.26.3-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d \
             sh -ceu 'test -z "$(gofmt -d main.go main_test.go)"; go test ./...'
+
+      - name: Reproduce the single-image OCI layout fixture
+        run: |
+          node scripts/generate-oci-layout-fixture.mjs
+          git diff --exit-code -- \
+            engines/images/local-launcher/testdata/oci-layout \
+            engines/images/local-launcher/testdata/oci-layout-source
 
   semgrep-native-cache:
     name: Prime Semgrep ${{ matrix.arch }} cache on a native runner
@@ -104,7 +112,7 @@ jobs:
       matrix:
         include:
           - engine: semgrep
-            tag: 1.174.0-1
+            tag: 1.174.0-2
             version: 1.174.0
             version_args: --version
             dockerfile: engines/images/semgrep/Dockerfile
@@ -113,7 +121,7 @@ jobs:
             output_kind: json
             offline_data: semgrep
           - engine: trufflehog
-            tag: 3.97.0-1
+            tag: 3.97.0-2
             version: 3.97.0
             version_args: --version
             dockerfile: engines/images/trufflehog/Dockerfile
@@ -122,25 +130,25 @@ jobs:
             output_kind: jsonl
             offline_data: none
           - engine: trivy
-            tag: 0.74.0-1
+            tag: 0.74.0-2
             version: 0.74.0
             version_args: --version
             dockerfile: engines/images/trivy/Dockerfile
-            workspace: engines/images/trivy/testdata
+            workspace: engines/images/local-launcher/testdata/oci-layout
             output_file: trivy.json
             output_kind: json
             offline_data: trivy
           - engine: grype
-            tag: 0.117.0-1
+            tag: 0.117.0-2
             version: 0.117.0
             version_args: version
             dockerfile: engines/images/grype/Dockerfile
-            workspace: engines/images/grype/testdata
+            workspace: engines/images/local-launcher/testdata/oci-layout
             output_file: grype.json
             output_kind: json
             offline_data: grype
           - engine: kubescape
-            tag: 4.0.12-1
+            tag: 4.0.12-2
             version: 4.0.12
             version_args: version
             dockerfile: engines/images/kubescape/Dockerfile
@@ -149,7 +157,7 @@ jobs:
             output_kind: json
             offline_data: none
           - engine: kube-bench
-            tag: 0.16.0-1
+            tag: 0.16.0-2
             version: 0.16.0
             version_args: version
             dockerfile: engines/images/kube-bench/Dockerfile
@@ -248,6 +256,17 @@ jobs:
             while IFS= read -r line; do
               test -z "${line}" || jq -e . <<<"${line}" >/dev/null
             done < "${output}/${OUTPUT_FILE}"
+          fi
+          if [ "${ENGINE}" = trivy ]; then
+            jq -e \
+              --arg imageID "sha256:8a67958da88c75f5703031bee7c99cf1e6bd2db77cbf70a2e1532bc64219c1bd" \
+              '.ArtifactType == "container_image" and .Metadata.ImageID == $imageID and all((.Results // [])[]; .Class != "lang-pkgs")' \
+              "${output}/${OUTPUT_FILE}" >/dev/null
+          elif [ "${ENGINE}" = grype ]; then
+            jq -e \
+              --arg imageID "sha256:8a67958da88c75f5703031bee7c99cf1e6bd2db77cbf70a2e1532bc64219c1bd" \
+              '.source.type == "image" and .source.target.imageID == $imageID and any(.matches[]; .artifact.name == "spring-core" and .artifact.version == "2.5.6.SEC03" and .artifact.type == "java-archive" and .artifact.language == "java")' \
+              "${output}/${OUTPUT_FILE}" >/dev/null
           fi
           evidence_sha256="sha256:$(sha256sum "${output}/${OUTPUT_FILE}" | cut -d ' ' -f 1)"
           {

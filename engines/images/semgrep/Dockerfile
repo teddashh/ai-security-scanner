@@ -88,7 +88,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Semgrep engine" \
       org.opencontainers.image.description="Pinned open-source Semgrep build with a project-owned offline rule pack" \
       org.opencontainers.image.source="https://github.com/semgrep/semgrep" \
       org.opencontainers.image.revision="a0c13f304151e531c7e7c00838076211a07a790c" \
-      org.opencontainers.image.version="1.174.0-1" \
+      org.opencontainers.image.version="1.174.0-2" \
       org.opencontainers.image.licenses="LGPL-2.1-or-later AND Apache-2.0" \
       io.ai-security-scanner.rules-sha256="2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3"
 

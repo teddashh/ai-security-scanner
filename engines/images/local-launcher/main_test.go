@@ -11,8 +11,13 @@ import (
 )
 
 func TestStaticPlansNeverUseShellNetworkOrUserArguments(t *testing.T) {
-	for _, engineID := range []string{"semgrep", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"} {
-		planned, err := planInvocation(engineID)
+	cases := map[string]string{
+		"semgrep": profileRepository, "trufflehog": profileRepository,
+		"trivy": profileOCIImage, "grype": profileOCIImage,
+		"kubescape": profileKubernetes, "kube-bench": profileNodeSnapshot,
+	}
+	for engineID, inputProfile := range cases {
+		planned, err := planInvocation(engineID, inputProfile)
 		if err != nil {
 			t.Fatalf("plan %s: %v", engineID, err)
 		}
@@ -37,7 +42,7 @@ func TestStaticPlansNeverUseShellNetworkOrUserArguments(t *testing.T) {
 }
 
 func TestTruffleHogIsFilesystemOnlyAndCannotVerify(t *testing.T) {
-	planned, err := planInvocation("trufflehog")
+	planned, err := planInvocation("trufflehog", profileRepository)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +53,7 @@ func TestTruffleHogIsFilesystemOnlyAndCannotVerify(t *testing.T) {
 }
 
 func TestKubescapeIsOfflineManifestOnly(t *testing.T) {
-	planned, err := planInvocation("kubescape")
+	planned, err := planInvocation("kubescape", profileKubernetes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +62,85 @@ func TestKubescapeIsOfflineManifestOnly(t *testing.T) {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("Kubescape plan lacks %q: %s", required, joined)
 		}
+	}
+}
+
+func TestTypedContainerPlansUseOCIImageLayout(t *testing.T) {
+	trivy, err := planInvocation("trivy", profileOCIImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"image", "--input", "/workspace",
+		"--cache-dir", "/opt/ai-security-scanner/trivy-cache",
+		"--cache-backend", "memory",
+		"--skip-db-update", "--skip-java-db-update", "--offline-scan",
+		"--pkg-types", "os", "--skip-version-check", "--disable-telemetry",
+		"--skip-vex-repo-update", "--scanners", "vuln",
+		"--format", "json", "--output", "/output/trivy.json",
+	}
+	if !reflect.DeepEqual(trivy.arguments, want) {
+		t.Fatalf("Trivy OCI boundary drifted:\n got: %#v\nwant: %#v", trivy.arguments, want)
+	}
+	grype, err := planInvocation("grype", profileOCIImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grype.arguments[0] != "oci-dir:/workspace" {
+		t.Fatalf("Grype did not use its fixed OCI layout source: %#v", grype.arguments)
+	}
+}
+
+func TestTrivyFilesystemProfilesAlsoKeepTheImmutableDatabaseReadOnly(t *testing.T) {
+	for _, profile := range []string{profileRepository, profileIaC} {
+		planned, err := planInvocation("trivy", profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{
+			"filesystem", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
+			"--cache-backend", "memory",
+			"--skip-db-update", "--skip-java-db-update", "--offline-scan",
+			"--pkg-types", "os", "--skip-version-check", "--disable-telemetry",
+			"--skip-vex-repo-update", "--scanners", "vuln",
+			"--format", "json", "--output", "/output/trivy.json", "/workspace",
+		}
+		if !reflect.DeepEqual(planned.arguments, want) {
+			t.Fatalf("Trivy profile %s boundary drifted:\n got: %#v\nwant: %#v", profile, planned.arguments, want)
+		}
+	}
+}
+
+func TestEngineProfilesRejectCrossTypeExecution(t *testing.T) {
+	for _, test := range []struct{ engine, profile string }{
+		{"grype", profileRepository},
+		{"kubescape", profileIaC},
+		{"kube-bench", profileKubernetes},
+		{"semgrep", profileOCIImage},
+	} {
+		if err := validateEngineInputProfile(test.engine, test.profile); err == nil {
+			t.Fatalf("%s accepted incompatible profile %s", test.engine, test.profile)
+		}
+	}
+}
+
+func TestInputMarkerIsStrictAndRepositoryDefaultsOnlyWhenAbsent(t *testing.T) {
+	root := t.TempDir()
+	if profile, err := loadInputProfile(root); err != nil || profile != profileRepository {
+		t.Fatalf("marker-free repository rejected: profile=%q err=%v", profile, err)
+	}
+	marker := `{"schema_version":"ai-security-scanner.local-input/v1","input_profile":"container_image_oci_layout"}`
+	if err := os.WriteFile(filepath.Join(root, inputMarkerFilename), []byte(marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if profile, err := loadInputProfile(root); err != nil || profile != profileOCIImage {
+		t.Fatalf("valid OCI marker rejected: profile=%q err=%v", profile, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, inputMarkerFilename), []byte(marker[:len(marker)-1]+`,"extra":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadInputProfile(root); err == nil {
+		t.Fatal("unknown marker field was accepted")
 	}
 }
 
