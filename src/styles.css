@@ -1279,6 +1279,7 @@ button.update-control:hover:not(:disabled) {
 
 .current-case-hero__meta {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   margin-bottom: 15px;
 }
