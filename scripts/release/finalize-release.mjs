@@ -17,11 +17,47 @@ import {
   ALL_UPDATER_TARGET_KEYS,
   updaterLayoutsFor,
 } from "./updater-layout.mjs";
+import { verifyPlatformQualificationFile } from "./platform-qualification.mjs";
 
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+const RELEASE_COPY = new Map([
+  [
+    "0.2.0",
+    {
+      updaterNotes:
+        "Product-completion line with typed immutable local-input snapshots, exact-scope AWS/Azure/GCP provider execution, and digest-pinned engine integration. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "This product-completion release adds typed immutable snapshots for repository, IaC, OCI",
+        "image-layout, Kubernetes manifest, and node-configuration inputs.",
+        "",
+        "Provider discovery stays inside its released AWS Organizations, Azure subscription, or GCP",
+        "organization source boundary. Prowler execution is separately bound to one exact AWS account,",
+        "Azure subscription, or GCP project with provider-specific identity preflight and endpoint closure.",
+        "Other cloud engines retain their narrower released provider scope.",
+        "",
+        "The required 21-engine catalog is bound to immutable image, launcher, adapter, evidence,",
+        "coverage, license, and verification contracts. Scanner images remain separate artifacts",
+        "and are not bundled in the desktop installers.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "Unknown or partial scope remains visibly distinct from a completed or passing result.",
+        "",
+      ],
+    },
+  ],
+]);
+
+function releaseCopyFor(version) {
+  return RELEASE_COPY.get(version) ?? {
+    updaterNotes:
+      "Signed ai-security-scanner application update. Existing local cases and historical provenance remain intact.",
+    releaseNotes: [],
+  };
 }
 
 async function regularFiles(directory, root = directory) {
@@ -363,16 +399,29 @@ async function main() {
   }
 
   const platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"];
+  const qualificationNames = (await regularFiles(directory))
+    .map((file) => file.relative)
+    .filter((name) => name.startsWith("platform-qualification-") && name.endsWith(".json"))
+    .sort();
+  assert(
+    JSON.stringify(qualificationNames) === JSON.stringify(platforms.map((platform) => `platform-qualification-${platform}.json`).sort()),
+    "release must contain exactly the three recognized platform qualification records",
+  );
   const installers = [];
   const sidecars = [];
   const updaters = [];
   const runtimeComponents = [];
+  const platformQualifications = [];
   for (const platform of platforms) {
     const verified = await verifyPlatformManifest(directory, platform, version, tag, commit);
     installers.push(...verified.installers);
     sidecars.push(...verified.sidecars);
     updaters.push(...verified.updaters);
     runtimeComponents.push(...(await verifyRuntimeEvidence(directory, platform)));
+    platformQualifications.push(await verifyPlatformQualificationFile(
+      path.join(directory, `platform-qualification-${platform}.json`),
+      { platform, version, tag, commit, releaseDirectory: directory },
+    ));
   }
   assert(installers.some((file) => file.endsWith(".deb")), "release has no Debian installer");
   assert(installers.some((file) => file.endsWith(".rpm")), "release has no RPM installer");
@@ -406,12 +455,10 @@ async function main() {
       ALL_UPDATER_TARGET_KEYS.every((target) => updatePlatforms[target]),
     "release updater manifest has incomplete platform coverage",
   );
+  const releaseCopy = releaseCopyFor(version);
   await writeJsonAtomic(path.join(directory, "latest.json"), {
     version,
-    notes:
-      version === "0.1.1"
-        ? "Security and consistency repair release. Existing local cases, historical evidence snapshots, and v0.1.0 cleanup obligations remain intact."
-        : "Signed ai-security-scanner application update. Existing local cases and historical provenance remain intact.",
+    notes: releaseCopy.updaterNotes,
     pub_date: metadata.sourceDate,
     platforms: updatePlatforms,
   });
@@ -425,17 +472,17 @@ async function main() {
     "",
     `Source: \`${commit}\``,
     "",
-    ...(version === "0.1.1"
-      ? [
-          "This patch release hardens container ownership controls, provider bootstrap recovery,",
-          "case revision concurrency, managed-runtime repair, historical evidence validation,",
-          "incomplete-result reporting, and exact artifact cleanup migration from v0.1.0.",
-          "",
-        ]
-      : []),
+    ...releaseCopy.releaseNotes,
     "These desktop installers are built for Linux x86-64, universal macOS (Intel + Apple silicon),",
     "and Windows x86-64. Verify the selected file against `SHA256SUMS.txt` and the public GitHub",
     "artifact attestation before installing.",
+    "",
+    "Fresh GitHub-hosted qualification jobs independently installed the Debian package, macOS DMG,",
+    "and Windows MSI. Linux and Windows completed managed-runtime install/start/status, a fixed",
+    "network-disabled Gitleaks container execution, stop, uninstall with image-cache purge, and",
+    "private-state cleanup. Hosted macOS completed install/status/uninstall and desktop startup,",
+    "but its nested-virtualization start and container execution are explicitly recorded as not run,",
+    "not passed. Exact runner-image and operation evidence is published per platform.",
     "",
     "> The current installers are not signed with Apple Developer ID or Windows Authenticode and",
     "> are not Apple-notarized. Application update payloads are separately signed with the updater",
@@ -479,7 +526,7 @@ async function main() {
   }
   await writeTextAtomic(path.join(directory, "SHA256SUMS.txt"), `${checksums.join("\n")}\n`);
   process.stdout.write(
-    `Finalized ${installers.length} installers, ${updaters.length} signed updater payloads, ${sidecars.length} first-party companion executables, and ${finalFiles.length} evidence files for ${tag}.\n`,
+    `Finalized ${installers.length} installers, ${updaters.length} signed updater payloads, ${sidecars.length} first-party companion executables, ${platformQualifications.length} hosted platform qualifications, and ${finalFiles.length} evidence files for ${tag}.\n`,
   );
 }
 

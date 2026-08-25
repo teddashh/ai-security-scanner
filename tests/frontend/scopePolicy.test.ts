@@ -24,7 +24,7 @@ test("configuration assessment requests the inventory prerequisite explicitly", 
   );
 });
 
-test("Kubernetes scope matches the catalog permissions required by Kubescape and kube-bench", () => {
+test("live Kubernetes and immutable Kubernetes inputs keep distinct permission contracts", () => {
   const asset = { platform: "kubernetes" as const, internetExposed: false };
 
   assert.deepEqual(permittedModes(asset), ["inventory", "configuration"]);
@@ -32,6 +32,16 @@ test("Kubernetes scope matches the catalog permissions required by Kubescape and
     "inventory",
     "configuration",
   ]);
+
+  const manifestSnapshot = {
+    ...asset,
+    localInputProfile: "kubernetes_manifests" as const,
+  };
+  assert.deepEqual(permittedModes(manifestSnapshot), ["local_artifact"]);
+  assert.deepEqual(
+    suggestedModesForAsset(["configuration_assessment"], manifestSnapshot),
+    ["local_artifact"],
+  );
 });
 
 test("an authorized asset remains selectable so a missing permission can be added", () => {

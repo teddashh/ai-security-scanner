@@ -1,8 +1,91 @@
-use crate::domain::{EngineManifest, Finding, FindingStatus, RawArtifact};
+use crate::domain::{Asset, EngineManifest, Finding, FindingStatus, RawArtifact};
 use crate::error::{AppError, AppResult};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
+
+/// Exact native provider identifiers for the assets authorized in one engine
+/// run. Candidate sets preserve collisions so adapters can fail closed instead
+/// of guessing when two assets expose the same identifier.
+#[derive(Debug, Clone, Default)]
+pub struct AdapterAssetIdentifierMap {
+    by_provider_and_identifier: BTreeMap<(String, String), BTreeSet<String>>,
+    by_identifier: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl AdapterAssetIdentifierMap {
+    pub fn from_assets(assets: &[Asset]) -> Self {
+        let mut result = Self::default();
+        for asset in assets {
+            let asset_id = asset.id.trim();
+            if asset_id.is_empty() {
+                continue;
+            }
+            for identifier in &asset.identifiers {
+                let Some(identifier_provider) =
+                    native_provider_for_namespace(&identifier.namespace)
+                else {
+                    continue;
+                };
+                if asset
+                    .provider
+                    .as_deref()
+                    .and_then(normalize_provider)
+                    .as_deref()
+                    != Some(identifier_provider)
+                {
+                    continue;
+                }
+                let value = identifier.value.trim();
+                if value.is_empty() {
+                    continue;
+                }
+                result
+                    .by_identifier
+                    .entry(value.to_owned())
+                    .or_default()
+                    .insert(asset_id.to_owned());
+                result
+                    .by_provider_and_identifier
+                    .entry((identifier_provider.to_owned(), value.to_owned()))
+                    .or_default()
+                    .insert(asset_id.to_owned());
+            }
+        }
+        result
+    }
+
+    pub(crate) fn candidates(
+        &self,
+        provider: Option<&str>,
+        identifier: &str,
+    ) -> Option<&BTreeSet<String>> {
+        let identifier = identifier.trim();
+        if identifier.is_empty() {
+            return None;
+        }
+        if let Some(provider) = provider.and_then(normalize_provider) {
+            return self
+                .by_provider_and_identifier
+                .get(&(provider, identifier.to_owned()));
+        }
+        self.by_identifier.get(identifier)
+    }
+}
+
+fn normalize_provider(provider: &str) -> Option<String> {
+    let provider = provider.trim().to_ascii_lowercase();
+    (!provider.is_empty()).then_some(provider)
+}
+
+fn native_provider_for_namespace(namespace: &str) -> Option<&'static str> {
+    match namespace.trim().to_ascii_lowercase().as_str() {
+        "aws_account_id" => Some("aws"),
+        "azure_subscription_id" => Some("azure"),
+        "gcp_project_id" => Some("gcp"),
+        _ => None,
+    }
+}
 
 pub struct AdapterInput<'a> {
     pub case_id: &'a str,
@@ -10,6 +93,7 @@ pub struct AdapterInput<'a> {
     pub engine_run_id: &'a str,
     pub manifest: &'a EngineManifest,
     pub asset_ids: &'a [String],
+    pub asset_identifier_map: &'a AdapterAssetIdentifierMap,
     pub artifact_root: &'a Path,
     pub raw_artifacts: &'a [RawArtifact],
 }
@@ -239,6 +323,8 @@ mod tests {
             adapter_version: "1".into(),
             supported_providers: vec![],
             supported_asset_kinds: vec![AssetKind::Repository],
+            input_contracts: vec![],
+            provider_execution_contracts: vec![],
             required_permissions: vec![ScanPermission::LocalArtifactRead],
             active_external: false,
             default_enabled: false,
@@ -309,16 +395,49 @@ mod tests {
     }
 
     #[test]
+    fn native_identifier_map_requires_an_explicit_matching_provider() {
+        let make_asset = |id: &str, provider: Option<&str>| Asset {
+            id: id.into(),
+            kind: AssetKind::CloudAccount,
+            name: id.into(),
+            provider: provider.map(str::to_owned),
+            region: None,
+            identifiers: vec![crate::domain::AssetIdentifier {
+                namespace: "aws_account_id".into(),
+                value: "111122223333".into(),
+            }],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: None,
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        };
+        let map = AdapterAssetIdentifierMap::from_assets(&[
+            make_asset("missing-provider", None),
+            make_asset("wrong-provider", Some("azure")),
+            make_asset("exact-provider", Some("AWS")),
+        ]);
+
+        assert_eq!(
+            map.candidates(Some("aws"), "111122223333"),
+            Some(&BTreeSet::from(["exact-provider".to_owned()]))
+        );
+    }
+
+    #[test]
     fn missing_adapter_returns_none_instead_of_fake_findings() {
         let manifest = manifest();
         let artifacts = vec![artifact()];
         let assets = vec!["asset-1".into()];
+        let asset_identifier_map = AdapterAssetIdentifierMap::default();
         let input = AdapterInput {
             case_id: "case-1",
             scan_run_id: "run-1",
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             asset_ids: &assets,
+            asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),
             raw_artifacts: &artifacts,
         };
@@ -344,12 +463,14 @@ mod tests {
         };
         let artifacts = vec![artifact];
         let assets = vec!["asset-1".into()];
+        let asset_identifier_map = AdapterAssetIdentifierMap::default();
         let input = AdapterInput {
             case_id: "case-1",
             scan_run_id: "run-1",
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             asset_ids: &assets,
+            asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),
             raw_artifacts: &artifacts,
         };
@@ -374,12 +495,14 @@ mod tests {
         };
         let artifacts = vec![artifact];
         let assets = vec!["asset-1".into()];
+        let asset_identifier_map = AdapterAssetIdentifierMap::default();
         let input = AdapterInput {
             case_id: "case-1",
             scan_run_id: "run-1",
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             asset_ids: &assets,
+            asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),
             raw_artifacts: &artifacts,
         };

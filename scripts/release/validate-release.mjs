@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import {
@@ -29,6 +29,16 @@ function cargoPackageVersion(toml) {
     throw new Error("src-tauri/Cargo.toml has no package version");
   }
   return version;
+}
+
+function cargoLockPackageVersion(lock) {
+  const packageRecord = lock.match(
+    /\[\[package\]\]\r?\nname = "ai-security-scanner"\r?\nversion = "([^"]+)"/u,
+  );
+  if (!packageRecord) {
+    throw new Error("Cargo.lock has no ai-security-scanner package version");
+  }
+  return packageRecord[1];
 }
 
 function validateReleaseMetadata(metadata, version, tag) {
@@ -192,17 +202,54 @@ function validateReleaseWorkflow(workflow) {
     assert(identity.run.includes(required), `release identity resolver is missing: ${required}`);
   }
 
+  const qualification = workflow.jobs?.qualification;
+  assert(qualification, "release workflow has no fresh-runner platform qualification job");
+  assert(
+    JSON.stringify(qualification.needs) === JSON.stringify(["validate", "build"]),
+    "platform qualification must consume identity and completed build artifacts in a separate job",
+  );
+  assert(qualification.permissions?.contents === "read", "platform qualification must remain read-only");
+  assert(Number.isInteger(qualification["timeout-minutes"]) && qualification["timeout-minutes"] >= 180, "platform qualification timeout cannot truncate managed runtime lifecycle proof");
+  assert(
+    JSON.stringify(qualification.strategy?.matrix?.include) === JSON.stringify([
+      { platform: "linux-x86_64", runner: "ubuntu-24.04" },
+      { platform: "macos-universal", runner: "macos-14" },
+      { platform: "windows-x86_64", runner: "windows-2025" },
+    ]),
+    "platform qualification matrix must use the exact three released hosted runner images",
+  );
+  assert(qualification["runs-on"] === "${{ matrix.runner }}", "platform qualification must run on its declared fresh matrix runner");
+  const qualificationSource = JSON.stringify(qualification);
+  for (const required of [
+    "release-${{ matrix.platform }}",
+    "qualify-linux.sh",
+    "qualify-macos.sh",
+    "qualify-windows.ps1",
+    "platform-qualification.mjs create",
+    "platform-qualification.mjs validate",
+    "platform-qualification-${{ matrix.platform }}.json",
+  ]) {
+    assert(qualificationSource.includes(required), `platform qualification job is missing: ${required}`);
+  }
+
   const assemble = workflow.jobs?.assemble;
   assert(assemble, "release workflow has no read-only assemble job");
   assert(
-    JSON.stringify(assemble.needs) === JSON.stringify(["validate", "supply-chain", "build"]),
-    "assemble job must depend on validation, supply-chain evidence, and every platform build",
+    JSON.stringify(assemble.needs) === JSON.stringify(["validate", "supply-chain", "build", "qualification"]),
+    "assemble job must depend on validation, supply-chain evidence, every platform build, and all qualifications",
   );
   assert(assemble.permissions?.contents === "read", "assemble job must remain read-only");
   assert(
     !Object.values(assemble.permissions ?? {}).includes("write"),
     "assemble job must not receive write permissions",
   );
+  const assembleSource = JSON.stringify(assemble);
+  for (const platform of ["linux-x86_64", "macos-universal", "windows-x86_64"]) {
+    assert(
+      assembleSource.includes(`platform-qualification-${platform}`),
+      `assemble job does not download ${platform} qualification evidence`,
+    );
+  }
 
   const publish = workflow.jobs?.publish;
   assert(publish, "release workflow has no publish job");
@@ -219,6 +266,11 @@ function validateReleaseWorkflow(workflow) {
   assert(publish.permissions?.contents === "write", "publish job needs contents: write");
   assert(publish.permissions?.["id-token"] === "write", "publish job needs id-token: write");
   assert(publish.permissions?.attestations === "write", "publish job needs attestations: write");
+  const attestation = publish.steps?.find((step) => step.name === "Attest every published file");
+  assert(
+    attestation?.with?.["subject-path"] === "release-assets/**/*",
+    "publication attestation must cover platform qualification JSON with every finalized file",
+  );
   for (const [jobName, job] of Object.entries(workflow.jobs)) {
     if (jobName === "publish") {
       continue;
@@ -236,6 +288,7 @@ function validateReleaseWorkflow(workflow) {
     "ubuntu-24.04",
     "macos-14",
     "windows-2022",
+    "windows-2025",
     "deb,rpm,appimage",
     "universal-apple-darwin",
     "nsis,msi",
@@ -254,9 +307,64 @@ function validateReleaseWorkflow(workflow) {
     "workflow_dispatch",
     "release-finalized",
     "verify-finalized-release.mjs",
+    "platform-qualification-linux-x86_64",
+    "platform-qualification-macos-universal",
+    "platform-qualification-windows-x86_64",
   ]) {
     assert(serialized.includes(required), `release workflow is missing required element: ${required}`);
   }
+}
+
+function validatePlatformQualificationSources(sources) {
+  const linux = sources.get("qualify-linux.sh");
+  const macos = sources.get("qualify-macos.sh");
+  const windows = sources.get("qualify-windows.ps1");
+  const evidence = sources.get("platform-qualification.mjs");
+  for (const [name, source] of sources) {
+    assert(typeof source === "string" && source.length > 0, `${name} is empty`);
+    assert(!/(?:docker|podman)\s+(?:run|pull)\b/iu.test(source), `${name} bypasses the fixed qualification CLI with an arbitrary container command`);
+  }
+  for (const required of [
+    "run_managed initial-status status",
+    "run_managed install install",
+    "run_managed start start",
+    "run_managed container-qualification qualify",
+    "run_managed stop stop",
+    "run_managed uninstall-purge uninstall --force --purge-image-cache",
+    "xvfb-run",
+    "apt-get purge",
+  ]) assert(linux.includes(required), `Linux qualification is missing: ${required}`);
+  for (const required of [
+    "run_managed initial-status status",
+    "run_managed install install",
+    "github_macos_hosted_nested_virtualization_unavailable",
+    "run_managed uninstall-purge uninstall --force --purge-image-cache",
+    "hdiutil attach",
+    'outcome: "not_run"',
+  ]) assert(macos.includes(required), `macOS qualification is missing: ${required}`);
+  assert(!macos.includes("run_managed start start"), "macOS hosted qualification must not claim a nested-virtualization start attempt");
+  for (const required of [
+    'Invoke-Managed "initial-status"',
+    'Invoke-Managed "install"',
+    'Invoke-Managed "start"',
+    'Invoke-Managed "container-qualification"',
+    'Invoke-Managed "stop"',
+    'Invoke-Managed "uninstall-purge"',
+    '"--purge-image-cache"',
+    '"msiexec.exe"',
+  ]) assert(windows.includes(required), `Windows qualification is missing: ${required}`);
+  for (const required of [
+    'engine_id === "gitleaks"',
+    'network === "none"',
+    "read_only_root === true",
+    'capabilities === "drop_all"',
+    "no_new_privileges === true",
+    "credential_count === 0",
+    "cleanup_removed === true",
+    "qualificationImageFromCatalog",
+    "installedManifestExactMatch",
+    "github-hosted",
+  ]) assert(evidence.includes(required), `strict platform qualification evidence is missing: ${required}`);
 }
 
 function validateEngineImageWorkflow(workflow, { image, tag, requiredPaths, sourceDateEpoch = null }) {
@@ -299,15 +407,38 @@ async function main() {
     path.join(PROJECT_ROOT, "src-tauri/capabilities/default.json"),
   );
   const cargoToml = await readFile(path.join(PROJECT_ROOT, "src-tauri/Cargo.toml"), "utf8");
+  const cargoLock = await readFile(path.join(PROJECT_ROOT, "Cargo.lock"), "utf8");
+  const repositoryReadme = await readFile(path.join(PROJECT_ROOT, "README.md"), "utf8");
+  const releaseGuide = await readFile(path.join(PROJECT_ROOT, "docs/release/README.md"), "utf8");
   const catalog = await readJson(path.join(PROJECT_ROOT, "engines/catalog.json"));
   const version = packageJson.version;
   const tag = typeof args.get("tag") === "string" ? args.get("tag") : `v${version}`;
+  const releaseLineNotes = await readFile(
+    path.join(PROJECT_ROOT, `docs/release/v${version}.md`),
+    "utf8",
+  );
 
   assert(isSemver(version), `package version is not strict SemVer: ${version}`);
   assert(tag === `v${version}`, `tag ${tag} does not exactly match package version ${version}`);
+  assert(packageLock.version === version, "package-lock document version is out of sync");
   assert(packageLock.packages?.[""]?.version === version, "package-lock root version is out of sync");
   assert(tauri.version === version, "Tauri version is out of sync");
   assert(cargoPackageVersion(cargoToml) === version, "Cargo package version is out of sync");
+  assert(cargoLockPackageVersion(cargoLock) === version, "Cargo.lock package version is out of sync");
+  assert(
+    repositoryReadme.includes(`> Release line: v${version}.`),
+    "README release line is out of sync",
+  );
+  assert(
+    releaseLineNotes.startsWith(`# v${version} `),
+    `docs/release/v${version}.md has the wrong release heading`,
+  );
+  assert(
+    releaseGuide.includes(`npm run release:validate -- --tag v${version}`) &&
+      releaseGuide.includes(`git tag -a v${version} <preflight-head-sha>`) &&
+      releaseGuide.includes(`git push origin v${version}`),
+    "release guide commands are out of sync",
+  );
   assert(packageJson.license === "Apache-2.0", "package.json license must be Apache-2.0");
   assert(
     packageJson.repository?.url === "git+https://github.com/teddashh/ai-security-scanner.git",
@@ -392,6 +523,19 @@ async function main() {
 
   const workflows = await validateWorkflowSyntaxAndPins();
   validateReleaseWorkflow(workflows.get("release.yml"));
+  const qualificationSources = new Map();
+  for (const name of [
+    "qualify-linux.sh",
+    "qualify-macos.sh",
+    "qualify-windows.ps1",
+    "platform-qualification.mjs",
+  ]) {
+    qualificationSources.set(
+      name,
+      await readFile(path.join(PROJECT_ROOT, "scripts", "release", name), "utf8"),
+    );
+  }
+  validatePlatformQualificationSources(qualificationSources);
 
   assert(Array.isArray(catalog) && catalog.length === 21, "engine catalog must contain 21 records");
   const incompleteEngines = catalog
@@ -413,8 +557,16 @@ async function main() {
     cwd: PROJECT_ROOT,
     stdio: "inherit",
   });
+  const releaseTestTemporaryRoot = path.join(PROJECT_ROOT, "target", "release-validation-tmp");
+  await mkdir(releaseTestTemporaryRoot, { recursive: true });
   execFileSync(process.execPath, [path.join(PROJECT_ROOT, "scripts", "engine-image-evidence.mjs"), "self-test"], {
     cwd: PROJECT_ROOT,
+    env: {
+      ...process.env,
+      TEMP: releaseTestTemporaryRoot,
+      TMP: releaseTestTemporaryRoot,
+      TMPDIR: releaseTestTemporaryRoot,
+    },
     stdio: "inherit",
   });
 

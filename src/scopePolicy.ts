@@ -1,6 +1,7 @@
 import type { AssessmentActivity, Asset, ScopeMode } from "./types";
 
-export const permittedModes = (asset: Pick<Asset, "platform">): ScopeMode[] => {
+export const permittedModes = (asset: Pick<Asset, "platform" | "localInputProfile">): ScopeMode[] => {
+  if (asset.localInputProfile) return ["local_artifact"];
   if (asset.platform === "external") return ["public_data", "low_impact_external", "active_external"];
   if (["code", "container"].includes(asset.platform)) return ["local_artifact"];
   if (asset.platform === "kubernetes") return ["inventory", "configuration"];
@@ -9,7 +10,7 @@ export const permittedModes = (asset: Pick<Asset, "platform">): ScopeMode[] => {
 
 export const suggestedModesForAsset = (
   requestedActivities: readonly AssessmentActivity[],
-  asset: Pick<Asset, "platform" | "internetExposed">,
+  asset: Pick<Asset, "platform" | "internetExposed" | "localInputProfile">,
 ): ScopeMode[] => {
   const available = new Set(permittedModes(asset));
   const requested = new Set(requestedActivities);
@@ -21,7 +22,11 @@ export const suggestedModesForAsset = (
     if (available.has("inventory")) suggested.push("inventory");
     suggested.push("configuration");
   }
-  if (requested.has("local_artifact_analysis") && available.has("local_artifact")) {
+  if (
+    available.has("local_artifact")
+    && (requested.has("local_artifact_analysis")
+      || (asset.localInputProfile && requested.has("configuration_assessment")))
+  ) {
     suggested.push("local_artifact");
   }
 

@@ -13,7 +13,7 @@ pub mod session;
 use crate::bootstrap::{BootstrapProvider, ReadOnlyCapability};
 use crate::container_runtime::{CredentialSource, ScannerCredential, ScannerCredentialSet};
 use crate::credential_vault::ReadOnlyCredentialSource;
-use crate::domain::SourceKind;
+use crate::domain::{Asset, AssetKind, SourceKind};
 use crate::error::{AppError, AppResult};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -30,9 +30,57 @@ const CAPABILITY_PREFIX: &str = "asscap_v1_";
 const CAPABILITY_RANDOM_BYTES: usize = 32;
 const MAX_AUTHORIZATION_LIFETIME: Duration = Duration::hours(1);
 const MAX_VERIFICATION_AGE: Duration = Duration::minutes(10);
-const MAX_CHECKOUTS: u8 = 8;
 const MAX_SECRET_BYTES: usize = 128 * 1024;
 pub const PROVIDER_DISCOVERY_ENGINE_ID: &str = "provider-native-discovery";
+/// One live capture can preserve at most this many provider records. GCP can
+/// turn every record into one exact-project Prowler execution, so its
+/// capability ceiling reserves one additional checkout for discovery itself.
+pub const PROVIDER_DISCOVERY_RECORD_LIMIT: usize = 1_000;
+pub const DEFAULT_PROVIDER_CHECKOUT_LIMIT: u16 = 8;
+pub const GCP_PROVIDER_CHECKOUT_LIMIT: u16 = PROVIDER_DISCOVERY_RECORD_LIMIT as u16 + 1;
+pub const PROVIDER_CHECKOUT_HARD_LIMIT: u16 = GCP_PROVIDER_CHECKOUT_LIMIT;
+/// Persisted, non-secret provider resource coordinate used to fail closed
+/// before a provider-bound engine is planned or receives credentials.
+pub const PROVIDER_RESOURCE_SCOPE_METADATA_KEY: &str = "provider_resource_scope";
+
+/// Requires a one-account AWS execution whose immutable account coordinate is
+/// exactly the account proven by the installed provider capability.
+pub fn validate_aws_execution_target(assets: &[Asset], resource_scope: &str) -> AppResult<()> {
+    let [asset] = assets else {
+        return Err(AppError::NotAuthorized(
+            "AWS engine execution must contain exactly one account asset".into(),
+        ));
+    };
+    if asset.kind != AssetKind::CloudAccount || asset.provider.as_deref() != Some("aws") {
+        return Err(AppError::NotAuthorized(
+            "AWS engine execution target is not an exact AWS account".into(),
+        ));
+    }
+    let mut account_ids = asset
+        .identifiers
+        .iter()
+        .filter(|identifier| identifier.namespace == "aws_account_id")
+        .map(|identifier| identifier.value.as_str());
+    let account_id = account_ids.next().ok_or_else(|| {
+        AppError::NotAuthorized(
+            "AWS account target has no exact provider account identifier".into(),
+        )
+    })?;
+    if account_ids.next().is_some()
+        || account_id.len() != 12
+        || !account_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(AppError::NotAuthorized(
+            "AWS account target has an ambiguous or malformed provider account identifier".into(),
+        ));
+    }
+    if resource_scope != format!("aws-account:{account_id}") {
+        return Err(AppError::NotAuthorized(
+            "AWS credential proof is bound to a different account than the execution target".into(),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -84,17 +132,26 @@ impl ProviderSourceProfile {
             ]
             .into_iter()
             .collect(),
-            // The released Azure and GCP token profiles currently feed only
-            // provider-native discovery. Upstream multi-cloud support is not
-            // an executable release contract for our AWS-only images.
             Self::AzureTenantReadOnlyAccessToken | Self::GcpOrganizationReadOnlyAccessToken => {
-                [PROVIDER_DISCOVERY_ENGINE_ID].into_iter().collect()
+                [PROVIDER_DISCOVERY_ENGINE_ID, "prowler"]
+                    .into_iter()
+                    .collect()
             }
             Self::Microsoft365TenantReadOnlyAccessToken => {
                 ["maester", PROVIDER_DISCOVERY_ENGINE_ID, "scubagear"]
                     .into_iter()
                     .collect()
             }
+        }
+    }
+
+    /// Checkout copies remain short-lived and case/source/engine-bound. The
+    /// higher GCP ceiling is only large enough for one bounded discovery plus
+    /// one exact-project execution per maximum discovery record.
+    pub const fn max_checkouts(self) -> u16 {
+        match self {
+            Self::GcpOrganizationReadOnlyAccessToken => GCP_PROVIDER_CHECKOUT_LIMIT,
+            _ => DEFAULT_PROVIDER_CHECKOUT_LIMIT,
         }
     }
 
@@ -260,7 +317,7 @@ pub struct SourceAuthorizationRequest {
     pub case_id: String,
     pub source_id: String,
     pub allowed_engine_ids: BTreeSet<String>,
-    pub max_checkouts: u8,
+    pub max_checkouts: u16,
     pub verified_authorization: VerifiedProviderAuthorization,
 }
 
@@ -346,7 +403,7 @@ pub struct SourceAuthorizationReceipt {
     pub expires_at: DateTime<Utc>,
     pub capability_handle: SourceCapabilityHandle,
     pub allowed_engine_ids: BTreeSet<String>,
-    pub max_checkouts: u8,
+    pub max_checkouts: u16,
     pub provider_verification: ProviderVerificationState,
     pub safety_notice: String,
 }
@@ -382,7 +439,7 @@ pub struct SourceAuthorizationRevocation {
     pub case_id: String,
     pub source_id: String,
     pub revoked_at: DateTime<Utc>,
-    pub completed_checkouts: u8,
+    pub completed_checkouts: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -399,7 +456,7 @@ pub struct InstalledSourceAuthorization {
     pub permissions: Vec<ReadOnlyCapability>,
     pub expires_at: DateTime<Utc>,
     pub allowed_engine_ids: BTreeSet<String>,
-    pub max_checkouts: u8,
+    pub max_checkouts: u16,
     pub provider_verification: ProviderVerificationState,
     pub safety_notice: String,
 }
@@ -435,8 +492,8 @@ struct StoredSourceAuthorization {
     permissions: Vec<ReadOnlyCapability>,
     expires_at: DateTime<Utc>,
     allowed_engine_ids: BTreeSet<String>,
-    max_checkouts: u8,
-    completed_checkouts: u8,
+    max_checkouts: u16,
+    completed_checkouts: u16,
     credentials: BTreeMap<String, Zeroizing<String>>,
 }
 
@@ -453,7 +510,7 @@ pub struct SourceAuthorizationBindings {
 
 struct InstalledBinding {
     receipt: SourceAuthorizationReceipt,
-    completed_checkouts: u8,
+    completed_checkouts: u16,
 }
 
 impl fmt::Debug for SourceAuthorizationBindings {
@@ -835,9 +892,10 @@ fn validate_request(request: &SourceAuthorizationRequest, now: DateTime<Utc>) ->
             "provider verification proof is stale, incomplete, or malformed".into(),
         ));
     }
-    if !(1..=MAX_CHECKOUTS).contains(&request.max_checkouts) {
+    let profile_checkout_limit = verified.profile.max_checkouts();
+    if !(1..=profile_checkout_limit).contains(&request.max_checkouts) {
         return Err(AppError::InvalidRequest(format!(
-            "source capability checkout limit must be between 1 and {MAX_CHECKOUTS}"
+            "source capability checkout limit for this provider profile must be between 1 and {profile_checkout_limit} (global hard limit {PROVIDER_CHECKOUT_HARD_LIMIT})"
         )));
     }
     if request.allowed_engine_ids.is_empty() {
@@ -1194,4 +1252,236 @@ fn read_u32(reader: &mut impl Read) -> AppResult<usize> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
     Ok(u32::from_be_bytes(bytes) as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::AssetIdentifier;
+
+    fn verified_for_limit_test(
+        profile: ProviderSourceProfile,
+        now: DateTime<Utc>,
+    ) -> VerifiedProviderAuthorization {
+        let (provider_identity, resource_scope, credential_key) = match profile {
+            ProviderSourceProfile::AwsOrganizationReadOnlySession => (
+                "arn:aws:sts::111122223333:assumed-role/security-audit-reader/session",
+                "aws-account:111122223333",
+                "AWS_ACCESS_KEY_ID",
+            ),
+            ProviderSourceProfile::AzureTenantReadOnlyAccessToken => (
+                "azure-reader@example.invalid",
+                "azure-subscription:33333333-3333-4333-8333-333333333333",
+                "AZURE_ACCESS_TOKEN",
+            ),
+            ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken => (
+                "reader@example.invalid",
+                "gcp-organization:123456789012",
+                "GOOGLE_OAUTH_ACCESS_TOKEN",
+            ),
+            ProviderSourceProfile::Microsoft365TenantReadOnlyAccessToken => (
+                "m365-reader@example.invalid",
+                "microsoft365-tenant:11111111-1111-4111-8111-111111111111",
+                "MSGRAPH_ACCESS_TOKEN",
+            ),
+        };
+        let expires_at = now + Duration::minutes(30);
+        let verification = ProviderVerificationState {
+            schema_version: "1.0.0".into(),
+            provider: profile.provider(),
+            profile,
+            authentication_method: "fixture_short_lived_token".into(),
+            provider_identity: provider_identity.into(),
+            subject_id: "fixture-subject".into(),
+            resource_scope: resource_scope.into(),
+            verified_at: now,
+            credential_expires_at: expires_at,
+            identity_endpoint: "https://provider.invalid/identity".into(),
+            permission_endpoints: vec!["https://provider.invalid/permissions".into()],
+            required_permissions_verified: vec!["inventory.read".into()],
+            prohibited_permissions_denied: vec!["inventory.write".into()],
+            provider_request_ids: vec!["fixture-request".into()],
+            evidence_sha256: "a".repeat(64),
+        };
+        let mut entries = vec![SecretEnvironmentValue::new(
+            credential_key,
+            Zeroizing::new("fixture-ephemeral-credential".into()),
+        )];
+        if profile == ProviderSourceProfile::AwsOrganizationReadOnlySession {
+            entries.extend([
+                SecretEnvironmentValue::new(
+                    "AWS_SECRET_ACCESS_KEY",
+                    Zeroizing::new("fixture-ephemeral-secret".into()),
+                ),
+                SecretEnvironmentValue::new(
+                    "AWS_SESSION_TOKEN",
+                    Zeroizing::new("fixture-ephemeral-session".into()),
+                ),
+            ]);
+        }
+        VerifiedProviderAuthorization::new_verified(
+            profile,
+            ReadOnlyCredentialSource::ProviderNative,
+            provider_identity.into(),
+            expires_at,
+            verification,
+            ProviderSecretMaterial::new(entries),
+        )
+        .unwrap()
+    }
+
+    fn aws_account_asset(id: &str, account_id: &str) -> Asset {
+        Asset {
+            id: id.into(),
+            kind: AssetKind::CloudAccount,
+            name: format!("AWS account {account_id}"),
+            provider: Some("aws".into()),
+            region: None,
+            identifiers: vec![AssetIdentifier {
+                namespace: "aws_account_id".into(),
+                value: account_id.into(),
+            }],
+            discovered_from: vec!["source-aws".into()],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: None,
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn aws_target_scope_requires_one_exact_matching_account() {
+        let account = aws_account_asset("asset-1", "111122223333");
+        validate_aws_execution_target(std::slice::from_ref(&account), "aws-account:111122223333")
+            .unwrap();
+
+        assert!(matches!(
+            validate_aws_execution_target(
+                std::slice::from_ref(&account),
+                "aws-account:444455556666"
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(matches!(
+            validate_aws_execution_target(
+                &[
+                    account.clone(),
+                    aws_account_asset("asset-2", "444455556666")
+                ],
+                "aws-account:111122223333"
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+
+        let mut ambiguous = account;
+        ambiguous.identifiers.push(AssetIdentifier {
+            namespace: "aws_account_id".into(),
+            value: "444455556666".into(),
+        });
+        assert!(matches!(
+            validate_aws_execution_target(&[ambiguous], "aws-account:111122223333"),
+            Err(AppError::NotAuthorized(_))
+        ));
+    }
+
+    #[test]
+    fn provider_checkout_limits_are_profile_bounded_with_a_global_hard_cap() {
+        let now = Utc::now();
+        assert_eq!(
+            ProviderSourceProfile::AwsOrganizationReadOnlySession.max_checkouts(),
+            8
+        );
+        assert_eq!(
+            ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken.max_checkouts(),
+            PROVIDER_DISCOVERY_RECORD_LIMIT as u16 + 1
+        );
+        assert_eq!(
+            ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken.max_checkouts(),
+            PROVIDER_CHECKOUT_HARD_LIMIT
+        );
+
+        let aws_too_many = SourceAuthorizationBindings::default().install(
+            SourceAuthorizationRequest {
+                case_id: "case-aws".into(),
+                source_id: "source-aws".into(),
+                allowed_engine_ids: BTreeSet::from(["prowler".into()]),
+                max_checkouts: 9,
+                verified_authorization: verified_for_limit_test(
+                    ProviderSourceProfile::AwsOrganizationReadOnlySession,
+                    now,
+                ),
+            },
+            now,
+        );
+        assert!(matches!(aws_too_many, Err(AppError::InvalidRequest(_))));
+
+        let gcp_too_many = SourceAuthorizationBindings::default().install(
+            SourceAuthorizationRequest {
+                case_id: "case-gcp-overflow".into(),
+                source_id: "source-gcp-overflow".into(),
+                allowed_engine_ids: BTreeSet::from(["prowler".into()]),
+                max_checkouts: PROVIDER_CHECKOUT_HARD_LIMIT + 1,
+                verified_authorization: verified_for_limit_test(
+                    ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken,
+                    now,
+                ),
+            },
+            now,
+        );
+        assert!(matches!(gcp_too_many, Err(AppError::InvalidRequest(_))));
+
+        let bindings = SourceAuthorizationBindings::default();
+        bindings
+            .install(
+                SourceAuthorizationRequest {
+                    case_id: "case-gcp-nine-projects".into(),
+                    source_id: "source-gcp-nine-projects".into(),
+                    allowed_engine_ids: BTreeSet::from([
+                        PROVIDER_DISCOVERY_ENGINE_ID.into(),
+                        "prowler".into(),
+                    ]),
+                    max_checkouts: 10,
+                    verified_authorization: verified_for_limit_test(
+                        ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken,
+                        now,
+                    ),
+                },
+                now,
+            )
+            .unwrap();
+        bindings
+            .checkout(
+                "case-gcp-nine-projects",
+                "source-gcp-nine-projects",
+                PROVIDER_DISCOVERY_ENGINE_ID,
+                now,
+            )
+            .unwrap();
+        for _ in 0..9 {
+            bindings
+                .checkout(
+                    "case-gcp-nine-projects",
+                    "source-gcp-nine-projects",
+                    "prowler",
+                    now,
+                )
+                .unwrap();
+        }
+        assert!(
+            bindings
+                .status("case-gcp-nine-projects", "source-gcp-nine-projects", now,)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            bindings.checkout(
+                "case-gcp-nine-projects",
+                "source-gcp-nine-projects",
+                "prowler",
+                now,
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+    }
 }

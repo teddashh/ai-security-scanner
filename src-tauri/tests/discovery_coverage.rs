@@ -389,6 +389,8 @@ fn manifest() -> EngineManifest {
         adapter_version: "1".into(),
         supported_providers: vec![],
         supported_asset_kinds: vec![AssetKind::CloudAccount],
+        input_contracts: vec![],
+        provider_execution_contracts: vec![],
         required_permissions: vec![ScanPermission::InventoryRead],
         active_external: false,
         default_enabled: true,

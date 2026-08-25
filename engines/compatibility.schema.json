@@ -301,6 +301,42 @@
         "network": { "$ref": "#/$defs/network" }
       }
     },
+    "inputContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_kind", "input_profile"],
+      "properties": {
+        "asset_kind": {
+          "enum": ["repository", "iac_project", "container_image", "kubernetes_cluster", "host"]
+        },
+        "input_profile": {
+          "enum": ["repository_working_tree", "iac_working_tree", "container_image_oci_layout", "kubernetes_manifests", "kubernetes_node_snapshot"]
+        }
+      }
+    },
+    "providerExecutionContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "asset_kind", "profile", "network_destinations"],
+      "properties": {
+        "provider": {
+          "enum": ["aws", "azure", "gcp", "microsoft365"]
+        },
+        "asset_kind": {
+          "enum": ["cloud_organization", "cloud_account", "subscription", "project", "tenant", "cloud_resource"]
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"
+        },
+        "network_destinations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "engine": {
       "type": "object",
       "additionalProperties": false,
@@ -349,6 +385,16 @@
           "items": {
             "enum": ["cloud_organization", "cloud_account", "subscription", "project", "tenant", "domain", "ip_address", "host", "web_service", "cloud_resource", "identity", "repository", "file_system", "iac_project", "container_image", "container_registry", "kubernetes_cluster", "other"]
           }
+        },
+        "input_contracts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/inputContract" }
+        },
+        "provider_execution_contracts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/providerExecutionContract" }
         },
         "required_permissions": {
           "type": "array",

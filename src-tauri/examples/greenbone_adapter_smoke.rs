@@ -1,4 +1,4 @@
-use ai_security_scanner_lib::adapter::AdapterInput;
+use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput};
 use ai_security_scanner_lib::adapters::builtin_adapter_registry;
 use ai_security_scanner_lib::domain::RawArtifact;
 use ai_security_scanner_lib::registry::EngineRegistry;
@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let assets = vec!["asset-greenbone-managed-socks-smoke".to_owned()];
     let artifacts = vec![artifact];
+    let asset_identifier_map = AdapterAssetIdentifierMap::default();
     let input = AdapterInput {
         case_id: "case-greenbone-managed-socks-smoke",
         scan_run_id: "run-greenbone-managed-socks-smoke",
@@ -64,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         asset_ids: &assets,
         artifact_root: &artifact_root,
         raw_artifacts: &artifacts,
+        asset_identifier_map: &asset_identifier_map,
     };
     let output = builtin_adapter_registry()?
         .normalize(&input)?

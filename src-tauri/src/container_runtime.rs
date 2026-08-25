@@ -3138,6 +3138,8 @@ mod tests {
             adapter_version: "1".into(),
             supported_providers: vec![],
             supported_asset_kinds: vec![AssetKind::Repository],
+            input_contracts: vec![],
+            provider_execution_contracts: vec![],
             required_permissions: vec![ScanPermission::LocalArtifactRead],
             active_external: false,
             default_enabled: false,

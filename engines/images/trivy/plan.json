@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trivy",
-    "tag": "0.74.0-1",
-    "digest": "sha256:9c44e2e9730e5f167991e13f67a6f75a671e04b391c037420597032b84f60826"
+    "tag": "0.74.0-2",
+    "digest": "sha256:5975b034216164f10d35049b214bbfb4d55c837adca5ae0e1cea73b1cd9901a2"
   },
   "build_recipe": {
     "source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
@@ -57,14 +57,29 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/trivy/Dockerfile",
-    "sha256": "sha256:3e03375b703a23f8af59f4f9709072ffdd50f79502bbe91d03decfe91b571c2c",
+    "sha256": "sha256:bb0b66441f3207f9d26aabbf23cc0a3ea35654a6aff3dba5af447020b6d5aadd",
     "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
+    "strategy": "Invoke the pinned source build with a fixed OS-package-only vulnerability profile against the read-only workspace and its embedded checksum-verified standard database; the Java database and every update path remain disabled.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
+    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
+  },
+  "analysis_profile": {
+    "scanner": "vulnerability",
+    "package_types": [
+      "os"
+    ],
+    "included": "Recognized operating-system packages in the backend-attested snapshot.",
+    "excluded": [
+      "Language packages and JAR dependencies",
+      "IaC misconfiguration",
+      "Secrets",
+      "Licenses"
+    ],
+    "java_database_embedded": false,
+    "complementary_container_engine": "grype"
   },
   "command": [
     "--engine",
@@ -94,23 +109,23 @@
     ],
     "network_mode": "disabled",
     "network_destinations": [],
-    "cache_path": "/tmp/ai-security-scanner-cache",
+    "cache_path": "/opt/ai-security-scanner/trivy-cache (immutable database); scan cache backend is memory",
     "updates": false,
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
-    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
+    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:cb5569464486b34be1b5e8cf1ba5fec7195a0d3c38457c8085b527bbe7e83332",
-      "linux/arm64": "sha256:4bad61c98caa4648a164c0142e94cd59c2b26fb71aebf5c5bdff614f5c8b71cd"
+      "linux/amd64": "sha256:c22542131460b5c2321141b3c184f9a01c5b7e451d5bc631518bd41a8bb76abb",
+      "linux/arm64": "sha256:124fe66db90319df4a9809fc6130609f2e0f8e79b2394704aa171f8316d9d4e1"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "trivy-image-evidence-32754480430-1",
-    "managed_smoke_evidence_sha256": "sha256:43d785f905deb088f350b89b3ec506154824109ea957b281e23da9f278e95466"
+    "evidence_artifact": "trivy-image-evidence-32809314088-1",
+    "managed_smoke_evidence_sha256": "sha256:6924501470d6eade85d5b4ca52d895ebc1d08ad17539927cc1aec0876769b335"
   }
 }

@@ -14,8 +14,10 @@ pub use artifact::{
     SNAPSHOT_ARTIFACT_METADATA_KEY, SNAPSHOT_REFERENCE_SCHEMA, SnapshotArtifactReference,
 };
 
-use crate::discovery::{ConnectorDiscovery, DiscoveryConnector, DiscoveryError};
-use crate::domain::{DataSource, SourceKind};
+use crate::discovery::{
+    ConnectorDiscovery, DiscoveredRelation, DiscoveryAssetRef, DiscoveryConnector, DiscoveryError,
+};
+use crate::domain::{AssetKind, DataSource, RelationKind, SourceKind};
 use artifact::{
     ingest_provider_response, ingest_selected_source, prepare_artifact_root,
     read_snapshot_reference, read_source_snapshot,
@@ -212,6 +214,9 @@ impl DiscoveryConnector for SnapshotConnector {
                     }));
                 combined.notices.extend(page_discovery.notices);
             }
+            if profile == ParserProfile::GcpResourceManagerProjects {
+                finalize_gcp_hierarchy(&mut combined)?;
+            }
             if successful_pages == 0 {
                 return Err(DiscoveryError::Connector(
                     "live provider capture contains no successful response page to parse".into(),
@@ -261,6 +266,131 @@ impl DiscoveryConnector for SnapshotConnector {
         );
         Ok(discovery)
     }
+}
+
+/// Cloud Resource Manager list operations return only direct children. Fold
+/// the fully captured, exact folder tree into an organization-to-project
+/// containment edge so the existing execution boundary can authorize only a
+/// project with one proven path to the verified organization.
+fn finalize_gcp_hierarchy(discovery: &mut ConnectorDiscovery) -> Result<(), DiscoveryError> {
+    #[derive(Clone)]
+    struct Identity {
+        kind: AssetKind,
+        provider: Option<String>,
+        namespace: String,
+        value: String,
+    }
+
+    let identities = discovery
+        .assets
+        .iter()
+        .map(|asset| {
+            (
+                asset.observation_key.clone(),
+                Identity {
+                    kind: asset.kind.clone(),
+                    provider: asset.provider.clone(),
+                    namespace: asset.stable_identifier.namespace.clone(),
+                    value: asset.stable_identifier.value.clone(),
+                },
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut parents = std::collections::BTreeMap::<String, Vec<(String, Vec<String>)>>::new();
+    for relation in &discovery.relations {
+        let (DiscoveryAssetRef::Observation(from), DiscoveryAssetRef::Observation(to)) =
+            (&relation.from, &relation.to)
+        else {
+            continue;
+        };
+        if relation.kind == RelationKind::Contains {
+            parents
+                .entry(to.clone())
+                .or_default()
+                .push((from.clone(), relation.evidence_ids.clone()));
+        }
+    }
+
+    let projects = identities
+        .iter()
+        .filter_map(|(key, identity)| {
+            (identity.kind == AssetKind::Project
+                && identity.provider.as_deref() == Some("gcp")
+                && identity.namespace == "gcp_project_id")
+                .then_some(key.clone())
+        })
+        .collect::<Vec<_>>();
+    let mut derived = Vec::new();
+    let mut expected_organization = None::<String>;
+    for project in projects {
+        let mut current = project.clone();
+        let mut visited = BTreeSet::new();
+        let mut evidence = BTreeSet::new();
+        loop {
+            if !visited.insert(current.clone()) || visited.len() > 64 {
+                return Err(DiscoveryError::Connector(
+                    "Google project hierarchy contains a cycle or exceeds its depth bound".into(),
+                ));
+            }
+            let Some(edges) = parents.get(&current) else {
+                return Err(DiscoveryError::Connector(
+                    "Google project has no complete path to one organization".into(),
+                ));
+            };
+            if edges.len() != 1 {
+                return Err(DiscoveryError::Connector(
+                    "Google project hierarchy has an ambiguous parent".into(),
+                ));
+            }
+            let (parent, edge_evidence) = &edges[0];
+            evidence.extend(edge_evidence.iter().cloned());
+            let identity = identities.get(parent).ok_or_else(|| {
+                DiscoveryError::Connector(
+                    "Google project hierarchy references an unknown parent".into(),
+                )
+            })?;
+            if identity.provider.as_deref() != Some("gcp") {
+                return Err(DiscoveryError::Connector(
+                    "Google project hierarchy crosses a provider boundary".into(),
+                ));
+            }
+            if identity.kind == AssetKind::CloudOrganization
+                && identity.namespace == "gcp_organization_id"
+                && identity.value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                if expected_organization
+                    .as_ref()
+                    .is_some_and(|expected| expected != &identity.value)
+                {
+                    return Err(DiscoveryError::Connector(
+                        "Google project capture resolves to multiple organizations".into(),
+                    ));
+                }
+                expected_organization = Some(identity.value.clone());
+                if parent != &current && current != project {
+                    derived.push(DiscoveredRelation {
+                        from: DiscoveryAssetRef::Observation(parent.clone()),
+                        to: DiscoveryAssetRef::Observation(project.clone()),
+                        kind: RelationKind::Contains,
+                        evidence_ids: evidence.into_iter().collect(),
+                    });
+                }
+                break;
+            }
+            if identity.kind != AssetKind::Other
+                || identity.namespace != "gcp_folder_id"
+                || identity.value.is_empty()
+                || !identity.value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(DiscoveryError::Connector(
+                    "Google project hierarchy contains an invalid folder parent".into(),
+                ));
+            }
+            current = parent.clone();
+        }
+    }
+    discovery.relations.extend(derived);
+    Ok(())
 }
 
 fn definition(kind: &SourceKind) -> ConnectorDescriptor {

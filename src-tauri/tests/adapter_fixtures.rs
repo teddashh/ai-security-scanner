@@ -1,10 +1,12 @@
-use ai_security_scanner_lib::adapter::{AdapterInput, AdapterOutput};
+use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, AdapterOutput};
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
-use ai_security_scanner_lib::domain::{FindingStatus, RawArtifact};
+use ai_security_scanner_lib::domain::{
+    Asset, AssetIdentifier, AssetKind, FindingStatus, RawArtifact,
+};
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 fn fixture(engine_id: &str) -> (&'static [u8], &'static str, &'static str) {
@@ -125,6 +127,27 @@ fn normalize_bytes(
     media_type: &str,
     run_id: &str,
 ) -> AdapterOutput {
+    let assets = if engine_id == "prowler" {
+        vec![authorized_asset(
+            "asset-1",
+            AssetKind::CloudAccount,
+            Some("aws"),
+            &[("aws_account_id", "123456789012")],
+        )]
+    } else {
+        vec![authorized_asset("asset-1", AssetKind::Other, None, &[])]
+    };
+    normalize_bytes_with_assets(engine_id, bytes, filename, media_type, run_id, &assets)
+}
+
+fn normalize_bytes_with_assets(
+    engine_id: &str,
+    bytes: &[u8],
+    filename: &str,
+    media_type: &str,
+    run_id: &str,
+    assets: &[Asset],
+) -> AdapterOutput {
     let temp = tempfile::tempdir().expect("temporary artifact root");
     std::fs::write(temp.path().join(filename), bytes).expect("write fixture artifact");
 
@@ -148,14 +171,20 @@ fn normalize_bytes(
             .expect("fixed timestamp"),
         contains_sensitive_data: matches!(engine_id, "gitleaks" | "trufflehog"),
     };
-    let assets = vec!["asset-1".to_owned()];
+    let asset_ids = assets
+        .iter()
+        .map(|asset| asset.id.clone())
+        .collect::<Vec<_>>();
+    let asset_identifier_map = AdapterAssetIdentifierMap::from_assets(assets);
     let raw_artifacts = vec![artifact];
+    let engine_run_id = format!("engine-run-{run_id}");
     let input = AdapterInput {
         case_id: "case-1",
         scan_run_id: run_id,
-        engine_run_id: &format!("engine-run-{run_id}"),
+        engine_run_id: &engine_run_id,
         manifest,
-        asset_ids: &assets,
+        asset_ids: &asset_ids,
+        asset_identifier_map: &asset_identifier_map,
         artifact_root: temp.path(),
         raw_artifacts: &raw_artifacts,
     };
@@ -164,6 +193,34 @@ fn normalize_bytes(
         .normalize(&input)
         .expect("normalization is contained")
         .expect("adapter is registered")
+}
+
+fn authorized_asset(
+    id: &str,
+    kind: AssetKind,
+    provider: Option<&str>,
+    identifiers: &[(&str, &str)],
+) -> Asset {
+    Asset {
+        id: id.into(),
+        kind,
+        name: id.into(),
+        provider: provider.map(str::to_owned),
+        region: None,
+        identifiers: identifiers
+            .iter()
+            .map(|(namespace, value)| AssetIdentifier {
+                namespace: (*namespace).into(),
+                value: (*value).into(),
+            })
+            .collect(),
+        discovered_from: vec![],
+        candidate: false,
+        owner_confirmed: true,
+        internet_exposed: None,
+        contains_sensitive_data: None,
+        metadata: BTreeMap::new(),
+    }
 }
 
 fn normalize_fixture(engine_id: &str) -> AdapterOutput {
@@ -257,6 +314,154 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
             }));
         }
     }
+}
+
+#[test]
+fn prowler_5_39_ocsf_maps_provider_native_accounts_to_canonical_assets() {
+    // Shape and field names are reduced from the pinned Prowler 5.39 OCSF
+    // serializer/fixtures: status_code, metadata.event_code,
+    // finding_info.analytic.uid, and cloud.account.uid/provider.
+    let bytes = include_bytes!("fixtures/adapters/prowler-5.39-multi-provider.ocsf.json");
+    let assets = vec![
+        authorized_asset(
+            "canonical-aws",
+            AssetKind::CloudAccount,
+            Some("aws"),
+            &[("aws_account_id", "123456789012")],
+        ),
+        authorized_asset(
+            "canonical-gcp",
+            AssetKind::Project,
+            Some("gcp"),
+            &[("gcp_project_id", "security-prod-123")],
+        ),
+        authorized_asset(
+            "canonical-azure",
+            AssetKind::Subscription,
+            Some("azure"),
+            &[(
+                "azure_subscription_id",
+                "11111111-2222-3333-4444-555555555555",
+            )],
+        ),
+        // Deliberately collides by value under another provider's native
+        // namespace. cloud.provider must keep the GCP record exact.
+        authorized_asset(
+            "canonical-azure-decoy",
+            AssetKind::Subscription,
+            Some("azure"),
+            &[("azure_subscription_id", "security-prod-123")],
+        ),
+    ];
+
+    let output = normalize_bytes_with_assets(
+        "prowler",
+        bytes,
+        "prowler-5.39-multi-provider.ocsf.json",
+        "application/json",
+        "run-1",
+        &assets,
+    );
+
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert!(output.warnings.is_empty());
+    assert_eq!(output.findings.len(), 3, "PASS and MANUAL are not failures");
+
+    let by_asset = output
+        .findings
+        .iter()
+        .map(|finding| (finding.asset_ids[0].as_str(), finding))
+        .collect::<BTreeMap<_, _>>();
+    assert!(
+        by_asset["canonical-aws"]
+            .tags
+            .iter()
+            .any(|tag| tag == "source-rule:accessanalyzer_enabled")
+    );
+    assert!(
+        by_asset["canonical-gcp"]
+            .tags
+            .iter()
+            .any(|tag| tag == "source-rule:iam_audit_logs_enabled"),
+        "finding_info.analytic.uid must be the fallback rule identity"
+    );
+    assert!(
+        by_asset["canonical-azure"]
+            .tags
+            .iter()
+            .any(|tag| tag == "source-rule:iam_subscription_owner_max_3")
+    );
+    assert!(!by_asset.contains_key("canonical-azure-decoy"));
+    assert!(by_asset.values().all(|finding| {
+        finding
+            .official_references
+            .iter()
+            .any(|reference| reference.starts_with("https://"))
+    }));
+
+    let serialized = serde_json::to_string(&output.findings).expect("serialize findings");
+    assert!(!serialized.contains("finding-instance-not-the-rule-id"));
+    assert!(!serialized.contains("ignored_pass"));
+    assert!(!serialized.contains("ignored_manual"));
+}
+
+#[test]
+fn prowler_native_identifier_collisions_fail_closed() {
+    let bytes = include_bytes!("fixtures/adapters/prowler-5.39-multi-provider.ocsf.json");
+    let assets = vec![
+        authorized_asset(
+            "canonical-aws",
+            AssetKind::CloudAccount,
+            Some("aws"),
+            &[("aws_account_id", "123456789012")],
+        ),
+        authorized_asset(
+            "canonical-gcp-a",
+            AssetKind::Project,
+            Some("gcp"),
+            &[("gcp_project_id", "security-prod-123")],
+        ),
+        authorized_asset(
+            "canonical-gcp-b",
+            AssetKind::Project,
+            Some("gcp"),
+            &[("gcp_project_id", "security-prod-123")],
+        ),
+        authorized_asset(
+            "canonical-azure",
+            AssetKind::Subscription,
+            Some("azure"),
+            &[(
+                "azure_subscription_id",
+                "11111111-2222-3333-4444-555555555555",
+            )],
+        ),
+    ];
+
+    let output = normalize_bytes_with_assets(
+        "prowler",
+        bytes,
+        "prowler-5.39-multi-provider.ocsf.json",
+        "application/json",
+        "run-1",
+        &assets,
+    );
+
+    assert!(!output.complete);
+    assert_eq!(output.findings.len(), 2);
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("ambiguous native asset identifier") })
+    );
+    assert!(output.findings.iter().all(|finding| {
+        finding.asset_ids == ["canonical-aws"] || finding.asset_ids == ["canonical-azure"]
+    }));
 }
 
 #[test]
@@ -473,6 +678,7 @@ fn artifact_path_escape_is_rejected_without_reading_outside_root() {
         contains_sensitive_data: false,
     };
     let assets = vec!["asset-1".into()];
+    let asset_identifier_map = AdapterAssetIdentifierMap::default();
     let artifacts = vec![artifact];
     let input = AdapterInput {
         case_id: "case-1",
@@ -480,6 +686,7 @@ fn artifact_path_escape_is_rejected_without_reading_outside_root() {
         engine_run_id: "engine-run-run-1",
         manifest,
         asset_ids: &assets,
+        asset_identifier_map: &asset_identifier_map,
         artifact_root: Path::new(temp.path()),
         raw_artifacts: &artifacts,
     };

@@ -15,22 +15,22 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
-    "tag": "2.0.31-aws9.2.0-1",
-    "digest": "sha256:329b662714311d83dfccd460bbb0b4efa61b02a90c3efdabddfb320970d967fe"
+    "tag": "2.0.31-aws9.2.0-4",
+    "digest": "sha256:76623585c6ef9668b5b327f51dfea93051511fc3a98097760485619931ced9c4"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
-    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32811911860",
+    "source_revision": "f611848a872bb41865ff00085ab3bd200e53deeb",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:f57bdd98b7c09952b5b34019f2a4aa896431a8df3b3fd97780f2f08b807b00ee",
-      "linux/arm64": "sha256:c9cf53268fafe48dcfd9652234da2a37dc7af72cad5fda6fa7f5aa2974b94049"
+      "linux/amd64": "sha256:90b9ab5326e1cb0a0e286e2d63a07b7507e5e979bf9866255c04850c90f76edb",
+      "linux/arm64": "sha256:92f9588a895d530086f45a9ed03974e96c3ff2dccbcec5082d16585361fa3d2f"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "cloudquery-image-evidence-32756618412-1"
+    "evidence_artifact": "cloudquery-image-evidence-32811911860-1"
   },
   "build_recipe": {
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
@@ -106,13 +106,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/cloudquery/Dockerfile",
-    "sha256": "sha256:0e46ebf3226541ed11c1871084b0087fa737c7d749d39566e4a6725d838102c7"
+    "sha256": "sha256:06fa50d4e0d52eb3599c709079223b2fa6736040cbd9d1e123741f36d744a29f"
   },
   "wrapper": {
     "required": true,
     "strategy": "Materialize only the fixed seven-table AWS IAM profile, execute embedded local plugins with no registry access, and retain bounded per-table NDJSON evidence without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
+    "launcher_sha256": "sha256:13a674029d7a9099cb1083175e38a2b8dee56e521b851531a8067bfda6229f5e"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

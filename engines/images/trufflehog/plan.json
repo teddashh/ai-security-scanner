@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trufflehog",
-    "tag": "3.97.0-1",
-    "digest": "sha256:d25dabbc3b78280d12de70e695c5a55325a8de148448d64249e922eba0794ce4"
+    "tag": "3.97.0-2",
+    "digest": "sha256:79f30364b389d8cfdad4a941d29f9bd01154d42d3915a8305bf10215cc1494d7"
   },
   "build_recipe": {
     "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
@@ -59,14 +59,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/trufflehog/Dockerfile",
-    "sha256": "sha256:ebec41f028735fdf92b86d9a2e2ea24f981c7b5b69ed29fed1890f0513129fb5",
+    "sha256": "sha256:8f9b2263ccd77dbe9b55b38f46564dfe6003b6cbebc75a1e598af9f8fdd9b938",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Accept only a fixed filesystem scan contract through the project-owned launcher; credential verification and network access remain disabled.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
+    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
   },
   "command": [
     "--engine",
@@ -101,18 +101,18 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
-    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
+    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:6957aa64f7b35a8b8d17bcf6b4cbdbdf8c279c62f842fec474d5681e6969a923",
-      "linux/arm64": "sha256:7fd602f4ea49e52004d6abb443f79cec6cbfaf719e83f5676f244e546ee63b7c"
+      "linux/amd64": "sha256:531dace45a623810ddb32b4ec8b0de5ae0452b1a3a298cbfdbd58ddb8f9f5640",
+      "linux/arm64": "sha256:de27f2d1d89f58cadc20e27f0af47d83b403c9121160c407099c3343aa3791ed"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "trufflehog-image-evidence-32754480430-1",
+    "evidence_artifact": "trufflehog-image-evidence-32809314088-1",
     "managed_smoke_evidence_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   }
 }

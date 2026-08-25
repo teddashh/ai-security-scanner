@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kube-bench",
-    "tag": "0.16.0-1",
-    "digest": "sha256:3e2488cb42b3c0e4fbd9067faa4227526a3938980d36c5aaba7c4a699cea0295"
+    "tag": "0.16.0-2",
+    "digest": "sha256:fc82c746e5eccaaca323157a78bc4710f41653d03953e011fef4299c48624a56"
   },
   "build_recipe": {
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
@@ -68,14 +68,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/kube-bench/Dockerfile",
-    "sha256": "sha256:343005ba179affff94305a1e238122264bd5d05adec804c155f7d9869377e3cb",
+    "sha256": "sha256:7b64d1ab3c96487dc1ca06ebbf13bb0f6fee87a34c7c5897798dfa4b4c86744e",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Accept only the reviewed immutable node-facts snapshot profile through the project-owned launcher.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
+    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
   },
   "command": [
     "--engine",
@@ -110,18 +110,18 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
-    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
+    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:87d6c46342dd5d9da910d612fa39c43bce197ab41ebbdeabfa248a5a0d879173",
-      "linux/arm64": "sha256:0bffa921777da0c923ea555fb5ab6a7cdfb2676c635648298b52c4fe900e5ed2"
+      "linux/amd64": "sha256:1df91cd3780ca8a46f3e3e4b0638efc40b30ed4c99280625e186890efcabeed0",
+      "linux/arm64": "sha256:0f098f342888e82a29243ea3138f60a312a82809f7b4b0bd68c7df0083454c4b"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "kube-bench-image-evidence-32754480430-1",
+    "evidence_artifact": "kube-bench-image-evidence-32809314088-1",
     "managed_smoke_evidence_sha256": "sha256:20bb64e12bb9ca4e5d57b6d9a93db12f5751ee5ba2f52982fac8aaf3a6d14afb"
   }
 }

@@ -1,21 +1,21 @@
 # ai-security-scanner engine catalog
 
-Status: v0.1.x catalog companion and research inventory; v0.1.0 engine artifacts with the v0.1.1 adapter contract
+Status: v0.2.0 catalog companion and research inventory; current engine artifacts with the v0.1.1 adapter contract
 
 Last updated: 2026-08-24
 
-This document explains the v0.1.0 engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. This prose never upgrades a non-runnable catalog entry or proves that an image or GitHub Release has been published.
+This document explains the v0.2.0 required-engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. This prose never upgrades a non-runnable catalog entry or proves that an image or GitHub Release has been published.
 
-Required-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting the v0.1.0 decision.
+Required-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting an earlier release decision.
 
 ## 1. Catalog states
 
-- **Required:** v0.1.0 commits to this engine or engine family through the full case lifecycle.
+- **Required:** v0.2.0 commits to this engine or engine family through the full case lifecycle.
 - **Integrated and runnable:** the catalog records `status: integrated`, `compatibility.runnable: true`, no blockers, an exact `sha256:` artifact digest, and a completed `allow` or `source_offer` disposition. Release validation rejects a Required engine that does not satisfy all of these conditions.
 - **ALLOW:** the engineering plan records `allow` for the exact project-managed artifact with its license texts, notices, and dependency obligations; this is not blanket legal advice.
 - **SOURCE_OFFER:** the engineering plan records copyleft corresponding-source material and a source-offer path for the exact project-managed artifact.
 - **UPSTREAM_PINNED:** the product retrieves an exact verified upstream image by digest rather than republishing it as a project-managed image. Its license and notices still apply.
-- **Research:** the repository remains available for evaluation but is not a v0.1.0 adapter commitment.
+- **Research:** the repository remains available for evaluation but is not a v0.2.0 adapter commitment.
 - **Blocked or non-runnable:** the catalog condition prevents release use, regardless of any friendlier wording in this document.
 
 An upstream source checkout is research material. It does not make an engine installed, integrated, safe, supported, or redistributable.
@@ -26,26 +26,38 @@ The machine-readable `engines/catalog.json` field `supported_providers` is autho
 release line. A non-empty list requires an exact provider match on the asset; a missing provider is never
 guessed. An empty list means provider-agnostic, not “all cloud providers.”
 
-| v0.1.0 engine images | Declared providers |
+| v0.2.0 engine images | Declared providers and released scope |
 |---|---|
-| CloudQuery, Steampipe, Prowler, ScoutSuite, Cloudsplaining | AWS only |
+| CloudQuery, Steampipe, ScoutSuite, Cloudsplaining | AWS only |
+| Prowler | AWS, Azure, and GCP, limited to the exact-scope narrow-IAM contracts below |
 | ScubaGear, Maester | Microsoft 365 only |
 | Local artifact, external-target, container, and Kubernetes engines | Provider-agnostic |
 
-Azure and GCP provider authorization currently feeds bounded provider-native discovery only. No
-Azure or GCP scanner image is included in the v0.1.0 catalog. In particular, Prowler's upstream provider
-support does not become product coverage until an exact credential consumer, provider endpoint
-closure, fixtures, published image, and verifiable release evidence are present.
+Prowler accepts exactly one selected native asset and one complete, case-scoped ephemeral credential
+profile. The launcher validates that credential against the selected native identifier before invoking
+only the matching narrow IAM profile; bootstrap credentials never enter the engine.
+
+| Provider | Exact asset | Launcher profile | Credential consumer | Fixed provider endpoint closure |
+|---|---|---|---|---|
+| AWS | One `cloud_account` identified by `aws_account_id` | `aws_iam_service_exact_account` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`; STS identity must equal the selected account | `iam.amazonaws.com:443`, `sts.us-east-1.amazonaws.com:443`, `ec2.us-east-1.amazonaws.com:443`, `organizations.us-east-1.amazonaws.com:443` |
+| Azure | One `subscription` identified by `azure_subscription_id` | `azure_iam_service_static_token_exact_subscription` | `AZURE_ACCESS_TOKEN`; ARM must return the selected subscription in `Enabled` state | `management.azure.com:443` |
+| GCP | One `project` identified by `gcp_project_id` | `gcp_iam_four_checks_exact_project` | `GOOGLE_OAUTH_ACCESS_TOKEN`; exact-project `testIamPermissions` must prove the required reads and deny pinned mutations, then Cloud Resource Manager must return the selected project in `ACTIVE` state and allow `getIamPolicy` | `cloudresourcemanager.googleapis.com:443` |
+
+Azure static-token and GCP exact-project execution come from six
+ai-security-scanner downstream runtime patches, bound to the patch applier and runtime-source pre/post
+SHA-256 values in the packaging plan; they are not native Prowler 5.39.1 behavior. No other cloud
+engine in this release acquires Azure or GCP coverage from Prowler's support: CloudQuery, Steampipe,
+ScoutSuite, and Cloudsplaining remain explicitly AWS-only.
 
 ## 2. Required engine families
 
 Every Required entry is admitted through the same manifest, pinned-artifact, runtime-policy, adapter, raw-output retention, canonical normalization, coverage-event, export-provenance, re-verification, and release-disposition contract. The final column below is a readable packaging summary; the current catalog record wins if source and prose ever differ.
 
-| Domain | Engine / repository | Pinned license record | v0.1.0 integration mode | Required authorization and boundary | Release disposition |
+| Domain | Engine / repository | Pinned license record | v0.2.0 integration mode | Required authorization and boundary | Release disposition |
 |---|---|---|---|---|---|
 | Cloud inventory | [CloudQuery](https://github.com/cloudquery/cloudquery) | MPL-2.0 | Managed OCI image with exact public CLI, AWS source plugin, and file destination source closure | Short-lived AWS read-only capability; fixed API and table allowlists | SOURCE_OFFER |
 | Cloud inventory | [Steampipe](https://github.com/turbot/steampipe) | AGPL-3.0-only | Managed OCI image with independently pinned AWS plugin/FDW components | Short-lived AWS read-only capability; fixed query and API allowlists | SOURCE_OFFER |
-| Cloud configuration | [Prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Managed OCI image with a fixed AWS profile | Short-lived AWS security-audit role; no bootstrap credential enters the engine | ALLOW |
+| Cloud configuration | [Prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Managed OCI image with exact AWS-account, Azure-subscription, and GCP-project narrow-IAM profiles; Azure/GCP behavior is supplied by six hash-bound downstream runtime patches | One complete short-lived provider credential for exactly one selected native asset; fixed provider endpoint closure; no bootstrap credential enters the engine | ALLOW |
 | Cloud configuration | [ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Managed OCI image built from pinned source | Short-lived AWS read-only capability and fixed endpoint closure | SOURCE_OFFER |
 | AWS IAM | [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Managed OCI image over bounded IAM evidence | AWS IAM read only or explicit local policy input | ALLOW |
 | Microsoft 365 | [ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 | Managed PowerShell/OCI image with pinned modules | Short-lived Microsoft Graph/service-specific read-only permission set | ALLOW |
@@ -59,25 +71,32 @@ Every Required entry is admitted through the same manifest, pinned-artifact, run
 | Secret scanning | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0 | Managed OCI image built from pinned source; filesystem mode only | Explicit source scope; verification, update, and engine network paths disabled | SOURCE_OFFER |
 | Infrastructure as code | [Checkov](https://github.com/bridgecrewio/checkov) | Apache-2.0 | Managed OCI image with read-only IaC mount | Explicit local/repository scope; external integrations disabled | ALLOW |
 | Infrastructure as code | [KICS](https://github.com/Checkmarx/kics) | Apache-2.0 | Exact verified upstream OCI image pulled by digest | Explicit local/repository scope | UPSTREAM_PINNED |
-| Container/package vulnerability | [Trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Managed OCI image with an immutable offline vulnerability database | Explicit artifact scope; automatic DB updates disabled | ALLOW |
-| Container vulnerability | [Grype](https://github.com/anchore/grype) | Apache-2.0 | Managed OCI image with a checksum-pinned offline vulnerability database | Explicit artifact or Syft SBOM scope; automatic DB updates disabled | ALLOW |
+| OS-package vulnerability | [Trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Managed OCI image with an immutable standard vulnerability database and fixed `--scanners vuln --pkg-types os` profile | Explicit backend-attested filesystem or OCI-layout scope; Java/language packages, JARs, IaC misconfiguration, secrets, and licenses excluded; all update paths disabled | ALLOW |
+| Container package vulnerability | [Grype](https://github.com/anchore/grype) | Apache-2.0 | Managed OCI image with a checksum-pinned offline vulnerability database and OS/language package cataloging, including JARs | Exactly one backend-validated OCI image layout; automatic DB and application updates disabled | ALLOW |
 | SBOM | [Syft](https://github.com/anchore/syft) | Apache-2.0 | Managed OCI image producing a preserved SBOM artifact | Explicit artifact scope and read-only inputs | ALLOW |
 | Kubernetes posture | [Kubescape](https://github.com/kubescape/kubescape) | Apache-2.0 | Managed OCI image with checksum-pinned offline framework inputs | Explicit local manifest scope; submission and host scanning disabled | ALLOW |
 | Kubernetes CIS | [kube-bench](https://github.com/aquasecurity/kube-bench) | Apache-2.0 | Managed OCI image over an immutable, digest-verified node configuration snapshot | Explicit snapshot scope; no privileged live-host mounts | ALLOW |
 
+Coverage follows the fixed managed profile, not the broad upstream product
+name. A completed Trivy run establishes only OS-package vulnerability coverage
+for packages it recognized in that snapshot; it must not mark language-package,
+JAR, IaC-misconfiguration, secret, or license coverage as scanned. For a
+container image, Grype supplies the complementary offline OS/language-package
+and JAR vulnerability path.
+
 ### 2.1 Greenbone components
 
-The Greenbone upstream family contains independently licensed programs and data. The v0.1.0 managed image intentionally uses only the scanner and exact feed inputs listed here; naming the broader family does not pull its other services into the release:
+The Greenbone upstream family contains independently licensed programs and data. The v0.2.0 managed image intentionally uses only the scanner and exact feed inputs listed here; naming the broader family does not pull its other services into the release:
 
 | Component | Official repository | Known license | Status |
 |---|---|---|---|
 | Scanner | [greenbone/openvas-scanner](https://github.com/greenbone/openvas-scanner) | GPL-2.0-only | Included as pinned `openvasd`; complete source and project patches ship in the image |
-| Manager | [greenbone/gvmd](https://github.com/greenbone/gvmd) | AGPL-3.0 | Not used or distributed by the v0.1.0 direct-scanner architecture |
+| Manager | [greenbone/gvmd](https://github.com/greenbone/gvmd) | AGPL-3.0 | Not used or distributed by the v0.2.0 direct-scanner architecture |
 | Web interface/API client | [greenbone/gsa](https://github.com/greenbone/gsa) | AGPL-3.0 | Not used or distributed; the local desktop supplies the case interface |
 | Scanner protocol daemon | [greenbone/ospd-openvas](https://github.com/greenbone/ospd-openvas) | AGPL-3.0 | Not used or distributed by the direct `openvasd` integration |
 | Feed synchronization | [greenbone/greenbone-feed-sync](https://github.com/greenbone/greenbone-feed-sync) | GPL-3.0 | Not used or distributed at runtime; the build imports one digest-pinned feed artifact containing upstream checksum/signature files |
 
-The v0.1.0 Greenbone image includes one digest-pinned Community Feed snapshot, its executable NASL source, data, declared GPL/ODbL license texts, exact revision, checksum manifest, and upstream detached signature. It performs no live feed download. A newer or different feed remains a new artifact and requires a fresh pin, terms decision, evidence set, and support window; source-code license alone never decides feed distribution.
+The v0.2.0 Greenbone image includes one digest-pinned Community Feed snapshot, its executable NASL source, data, declared GPL/ODbL license texts, exact revision, checksum manifest, and upstream detached signature. It performs no live feed download. A newer or different feed remains a new artifact and requires a fresh pin, terms decision, evidence set, and support window; source-code license alone never decides feed distribution.
 
 ## 3. Research repositories mentioned in the design
 
@@ -109,7 +128,7 @@ Research entries should be cloned or tracked for evaluation as requested, but mu
 
 These are not scanning engines but are part of the design or implementation research.
 
-| Project | Official repository | Known license | v0.1.0 relationship / caution |
+| Project | Official repository | Known license | v0.2.0 relationship / caution |
 |---|---|---|---|
 | OCSF schema | [ocsf/ocsf-schema](https://github.com/ocsf/ocsf-schema) | Apache-2.0 | Export/interchange coordinate implemented by project-owned mapping code; not the internal persistence model and not a compliance conclusion |
 | OSCAL | [usnistgov/OSCAL](https://github.com/usnistgov/OSCAL) | NIST publication terms | Assessment/control exchange coordinate implemented by project-owned mapping code; no formal assessment plan or audit is inferred |

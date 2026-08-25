@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
-    "tag": "1.174.0-1",
-    "digest": "sha256:7f95f2da43b4b2bf2611840456c04e0119332f812523e5a20fd442bc43643e89"
+    "tag": "1.174.0-2",
+    "digest": "sha256:dcfb11950ba0d33674cd9f5815bb2135ebedb37f1c05696adac386b3e8408b49"
   },
   "build_recipe": {
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
@@ -72,14 +72,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/semgrep/Dockerfile",
-    "sha256": "sha256:b7fba636793a050fb87318e81891d088fc22d8c5f74da252b511369e950d751a",
+    "sha256": "sha256:0fc8e0458627b75436a049c796ba9d30cc9249cf2067e1a6c9bbd2b63c5af18f",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Invoke the pinned source build through the project-owned launcher against only the read-only case workspace and embedded rule pack.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:f90874adfec52c86adf3f03ee727cf0e10371b554eb04f1d632fdf4d00614caf"
+    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
   },
   "command": [
     "--engine",
@@ -114,18 +114,18 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480430",
-    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
+    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:2ea154a1e7b76bba672ae254e313582c6ee3a56bf03068c02923114504d0c794",
-      "linux/arm64": "sha256:9b9826bfed267d16091f6c5857e89a1158fefdaab3dc9582161f3456867ccb59"
+      "linux/amd64": "sha256:4279a10a8adc9fcd60a7286af7474a47420a3cef71f65aeb76f7726aa90c0cac",
+      "linux/arm64": "sha256:a27e5bb7bfb796983c409798f5043dfc44adf2329d177b68a62e6aaacd251c8c"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "semgrep-image-evidence-32754480430-1",
-    "managed_smoke_evidence_sha256": "sha256:66c269fd590998aaf6a51c2431717df6bd30f686b14d325185b63fadda9c52bd"
+    "evidence_artifact": "semgrep-image-evidence-32809314088-1",
+    "managed_smoke_evidence_sha256": "sha256:52e3c90caff59a8f8ab9e57c577ab847fce0296d9fc09e2e1f35e018bcc2081d"
   }
 }

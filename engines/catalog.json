@@ -14,8 +14,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
-      "tag": "2.0.31-aws9.2.0-1",
-      "digest": "sha256:329b662714311d83dfccd460bbb0b4efa61b02a90c3efdabddfb320970d967fe",
+      "tag": "2.0.31-aws9.2.0-4",
+      "digest": "sha256:76623585c6ef9668b5b327f51dfea93051511fc3a98097760485619931ced9c4",
       "signature_identity": null
     },
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
@@ -151,8 +151,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
-      "tag": "2.4.5-1",
-      "digest": "sha256:e5bb87994921c23d5fb2771b779a7dff1c2e3fa822ac99bc6f9b48a80f680d9d",
+      "tag": "2.4.5-4",
+      "digest": "sha256:e851c557a6f873cdaf756daeddf9aba02ccaa6e3df38da7e9ac93133529740fd",
       "signature_identity": null
     },
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
@@ -274,9 +274,11 @@
     "id": "prowler",
     "display_name": "Prowler",
     "category": "cloud_configuration",
-    "description": "Assesses AWS IAM configuration with the scanner-owned us-east-1 profile.",
+    "description": "Assesses narrow IAM configuration for exactly one AWS account, Azure subscription, or GCP project.",
     "supported_providers": [
-      "aws"
+      "aws",
+      "azure",
+      "gcp"
     ],
     "repository_url": "https://github.com/prowler-cloud/prowler",
     "homepage_url": "https://prowler.com/",
@@ -284,8 +286,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
-      "tag": "5.39.1-1",
-      "digest": "sha256:4f90d576cae9190924f736a68775fade2563151980eff88281fa179714514664",
+      "tag": "5.39.1-5",
+      "digest": "sha256:59cd4dd393c152fea96ffc9c84b66af29ebf42e5dd4ffa8df45be4eebd454f4e",
       "signature_identity": null
     },
     "source_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
@@ -293,7 +295,38 @@
     "rule_version": "40ecbd035e5541bf099917c5033cceb8959c4737",
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
-      "cloud_account"
+      "cloud_account",
+      "subscription",
+      "project"
+    ],
+    "provider_execution_contracts": [
+      {
+        "provider": "aws",
+        "asset_kind": "cloud_account",
+        "profile": "aws_iam_service_exact_account",
+        "network_destinations": [
+          "iam.amazonaws.com:443",
+          "sts.us-east-1.amazonaws.com:443",
+          "ec2.us-east-1.amazonaws.com:443",
+          "organizations.us-east-1.amazonaws.com:443"
+        ]
+      },
+      {
+        "provider": "azure",
+        "asset_kind": "subscription",
+        "profile": "azure_iam_service_static_token_exact_subscription",
+        "network_destinations": [
+          "management.azure.com:443"
+        ]
+      },
+      {
+        "provider": "gcp",
+        "asset_kind": "project",
+        "profile": "gcp_iam_four_checks_exact_project",
+        "network_destinations": [
+          "cloudresourcemanager.googleapis.com:443"
+        ]
+      }
     ],
     "required_permissions": [
       "inventory_read",
@@ -307,7 +340,9 @@
       "iam.amazonaws.com:443",
       "sts.us-east-1.amazonaws.com:443",
       "ec2.us-east-1.amazonaws.com:443",
-      "organizations.us-east-1.amazonaws.com:443"
+      "organizations.us-east-1.amazonaws.com:443",
+      "management.azure.com:443",
+      "cloudresourcemanager.googleapis.com:443"
     ],
     "output_formats": [
       "ocsf-json"
@@ -322,7 +357,9 @@
     ],
     "status": "integrated",
     "notices": [
-      "Apache-2.0 permits redistribution with required notices."
+      "Apache-2.0 permits redistribution with required notices.",
+      "Each run is restricted to exactly one scoped provider asset: AWS IAM service, Azure IAM service over ARM only, or four allowlisted GCP IAM checks.",
+      "Azure static-token and GCP exact-project behavior comes from six ai-security-scanner downstream patches, bound to the applier and runtime-source pre/post SHA-256 values in the packaging plan; it is not native Prowler 5.39.1 behavior."
     ],
     "license": {
       "disposition": "allow",
@@ -347,9 +384,9 @@
       },
       "data": {
         "mode": "runtime_live",
-        "identifier": "AWS IAM configuration",
+        "identifier": "Exact-scope AWS, Azure, or GCP IAM configuration",
         "revision": null,
-        "acquisition_source": "AWS APIs authorized by the case-scoped read-only role"
+        "acquisition_source": "Provider APIs authorized by one case-scoped ephemeral AWS session, Azure ARM access token, or GCP OAuth access token"
       },
       "adapter": {
         "id": "ai-security-scanner:prowler",
@@ -369,14 +406,14 @@
       "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_live",
-        "identifier": "AWS IAM configuration",
+        "identifier": "Exact-scope AWS, Azure, or GCP IAM configuration",
         "version": null,
-        "acquisition_source": "AWS APIs authorized by the case-scoped read-only role",
+        "acquisition_source": "Provider APIs authorized by one case-scoped ephemeral AWS session, Azure ARM access token, or GCP OAuth access token",
         "pin_state": "runtime_live"
       },
       "wrapper": {
         "required": true,
-        "strategy": "Validate an AWS-only immutable scope and ephemeral session credentials, then invoke the fixed IAM profile without a shell.",
+        "strategy": "Validate exactly one AWS account, Azure subscription, or GCP project against one complete ephemeral provider credential profile, enforce provider-specific identity and read-only permission preflights, then invoke only the matching narrow IAM profile without a shell.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher"
       },
       "packaging_plan": "engines/images/prowler/plan.json"
@@ -402,7 +439,9 @@
           "iam.amazonaws.com:443",
           "sts.us-east-1.amazonaws.com:443",
           "ec2.us-east-1.amazonaws.com:443",
-          "organizations.us-east-1.amazonaws.com:443"
+          "organizations.us-east-1.amazonaws.com:443",
+          "management.azure.com:443",
+          "cloudresourcemanager.googleapis.com:443"
         ]
       }
     }
@@ -422,8 +461,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
-      "tag": "5.14.0-1",
-      "digest": "sha256:2035fadb2a4fc4bddd55b772c11ef0f0485ccbf855c20f1a7894b1f85b12e7df",
+      "tag": "5.14.0-4",
+      "digest": "sha256:a6341e57a40ceda93a9542a71151e6a5b08a4e5029e127f3cbc327701d47e0a3",
       "signature_identity": null
     },
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -558,8 +597,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
-      "tag": "0.9.1-1",
-      "digest": "sha256:f7d6185a45559619350728c09c6410435c4a117c35dd2a6ee4605421fc0364fb",
+      "tag": "0.9.1-4",
+      "digest": "sha256:fda95de48a49a71ada358161da455119b9cadd33f65ea81a508f46a9cd4ecea9",
       "signature_identity": null
     },
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
@@ -1489,8 +1528,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
-      "tag": "1.174.0-1",
-      "digest": "sha256:7f95f2da43b4b2bf2611840456c04e0119332f812523e5a20fd442bc43643e89",
+      "tag": "1.174.0-2",
+      "digest": "sha256:dcfb11950ba0d33674cd9f5815bb2135ebedb37f1c05696adac386b3e8408b49",
       "signature_identity": null
     },
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
@@ -1499,6 +1538,9 @@
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
       "repository"
+    ],
+    "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -1628,6 +1670,9 @@
     "supported_asset_kinds": [
       "repository"
     ],
+    "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" }
+    ],
     "required_permissions": [
       "local_artifact_read"
     ],
@@ -1737,7 +1782,7 @@
     "id": "trufflehog",
     "display_name": "TruffleHog",
     "category": "code_and_secrets",
-    "description": "Finds and optionally verifies exposed credentials in selected sources.",
+    "description": "Finds exposed credentials in selected repository working-tree snapshots without online verification.",
     "supported_providers": [],
     "repository_url": "https://github.com/trufflesecurity/trufflehog",
     "homepage_url": "https://trufflesecurity.com/trufflehog",
@@ -1745,8 +1790,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trufflehog",
-      "tag": "3.97.0-1",
-      "digest": "sha256:d25dabbc3b78280d12de70e695c5a55325a8de148448d64249e922eba0794ce4",
+      "tag": "3.97.0-2",
+      "digest": "sha256:79f30364b389d8cfdad4a941d29f9bd01154d42d3915a8305bf10215cc1494d7",
       "signature_identity": null
     },
     "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
@@ -1754,8 +1799,10 @@
     "rule_version": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
-      "repository",
-      "file_system"
+      "repository"
+    ],
+    "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -1883,6 +1930,10 @@
     "supported_asset_kinds": [
       "repository",
       "iac_project"
+    ],
+    "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" },
+      { "asset_kind": "iac_project", "input_profile": "iac_working_tree" }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -2021,6 +2072,10 @@
       "repository",
       "iac_project"
     ],
+    "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" },
+      { "asset_kind": "iac_project", "input_profile": "iac_working_tree" }
+    ],
     "required_permissions": [
       "local_artifact_read"
     ],
@@ -2137,7 +2192,7 @@
     "id": "trivy",
     "display_name": "Trivy",
     "category": "container_and_sbom",
-    "description": "Scans images, filesystems, repositories, IaC, and Kubernetes artifacts.",
+    "description": "Finds known vulnerabilities in recognized OS packages within immutable repository, IaC, and single-image OCI layout snapshots.",
     "supported_providers": [],
     "repository_url": "https://github.com/aquasecurity/trivy",
     "homepage_url": "https://trivy.dev/",
@@ -2145,8 +2200,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trivy",
-      "tag": "0.74.0-1",
-      "digest": "sha256:9c44e2e9730e5f167991e13f67a6f75a671e04b391c037420597032b84f60826",
+      "tag": "0.74.0-2",
+      "digest": "sha256:5975b034216164f10d35049b214bbfb4d55c837adca5ae0e1cea73b1cd9901a2",
       "signature_identity": null
     },
     "source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
@@ -2156,9 +2211,12 @@
     "supported_asset_kinds": [
       "repository",
       "iac_project",
-      "container_image",
-      "container_registry",
-      "kubernetes_cluster"
+      "container_image"
+    ],
+    "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" },
+      { "asset_kind": "iac_project", "input_profile": "iac_working_tree" },
+      { "asset_kind": "container_image", "input_profile": "container_image_oci_layout" }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -2184,7 +2242,10 @@
     ],
     "status": "integrated",
     "notices": [
-      "The vulnerability database snapshot is embedded and digest-recorded; update checks are disabled.",
+      "The standard vulnerability database snapshot is embedded and digest-recorded; standard DB, Java DB, VEX repository, version, and telemetry updates are disabled.",
+      "The fixed managed profile is vulnerability scanning with package type os only; language packages, JAR dependencies, IaC misconfiguration, secrets, and licenses are outside this Trivy integration's coverage.",
+      "Use the complementary managed Grype container profile for offline language-package and JAR vulnerability coverage.",
+      "The backend-attested input profile selects a fixed filesystem or OCI image-layout command; registry pulls and live Kubernetes access are not accepted.",
       "Runs against the read-only case workspace with engine networking disabled."
     ],
     "license": {
@@ -2204,7 +2265,7 @@
       },
       "rules": {
         "mode": "embedded",
-        "identifier": "Trivy analyzers and built-in checks",
+        "identifier": "Trivy OS-package analyzers",
         "revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
         "acquisition_source": "https://github.com/aquasecurity/trivy/commit/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994"
       },
@@ -2239,7 +2300,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
+        "strategy": "Invoke the pinned source build with a fixed OS-package-only vulnerability profile against the read-only workspace and its embedded checksum-verified standard database; the Java database and every update path remain disabled.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/trivy/plan.json"
@@ -2270,7 +2331,7 @@
     "id": "grype",
     "display_name": "Grype",
     "category": "container_and_sbom",
-    "description": "Finds known vulnerabilities in images, filesystems, and SBOMs.",
+    "description": "Finds known vulnerabilities in OS and language packages, including JAR dependencies, in a single immutable OCI image layout.",
     "supported_providers": [],
     "repository_url": "https://github.com/anchore/grype",
     "homepage_url": "https://github.com/anchore/grype",
@@ -2278,8 +2339,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-grype",
-      "tag": "0.117.0-1",
-      "digest": "sha256:40e14b19a119301a7cf6f7aef1ff17799ca8b2cc2e82e1959062ca7ffb243b76",
+      "tag": "0.117.0-2",
+      "digest": "sha256:a29ebddea3c0f79db4aad1aa854803d690749ee16fdb484d645a210036aef318",
       "signature_identity": null
     },
     "source_revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
@@ -2287,8 +2348,10 @@
     "rule_version": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
-      "container_image",
-      "container_registry"
+      "container_image"
+    ],
+    "input_contracts": [
+      { "asset_kind": "container_image", "input_profile": "container_image_oci_layout" }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -2314,6 +2377,8 @@
     "status": "integrated",
     "notices": [
       "The vulnerability database archive and extracted database are checksum-bound; automatic updates are disabled.",
+      "Accepts only a backend-validated, single-image OCI Image Layout and invokes Grype with oci-dir:/workspace.",
+      "The managed OCI smoke fixture proves offline Java archive cataloging and complements Trivy's intentionally OS-package-only profile.",
       "Runs against the read-only case workspace with engine networking disabled."
     ],
     "license": {
@@ -2368,7 +2433,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
+        "strategy": "Invoke the pinned source build against a backend-validated single-image OCI layout with the embedded checksum-verified database, retaining offline OS and language-package cataloging including JAR dependencies.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/grype/plan.json"
@@ -2417,6 +2482,9 @@
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
       "repository"
+    ],
+    "input_contracts": [
+      { "asset_kind": "repository", "input_profile": "repository_working_tree" }
     ],
     "required_permissions": [
       "local_artifact_read"
@@ -2526,7 +2594,7 @@
     "id": "kubescape",
     "display_name": "Kubescape",
     "category": "kubernetes",
-    "description": "Assesses Kubernetes resources and cluster configuration.",
+    "description": "Assesses an immutable local set of Kubernetes YAML or JSON manifests.",
     "supported_providers": [],
     "repository_url": "https://github.com/kubescape/kubescape",
     "homepage_url": "https://kubescape.io/",
@@ -2534,8 +2602,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kubescape",
-      "tag": "4.0.12-1",
-      "digest": "sha256:9b7b152974d24f2032d6325008af7337defec3733652b7d69aac9d147b8d8ae5",
+      "tag": "4.0.12-2",
+      "digest": "sha256:91e120637e9af33bc15bb4e4d1394e2648d7a7bc399a4546da8e09c9a619ce20",
       "signature_identity": null
     },
     "source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
@@ -2543,12 +2611,13 @@
     "rule_version": "a12188c49147bb6ec379b42a4159d3d5852634b8",
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
-      "kubernetes_cluster",
-      "iac_project"
+      "kubernetes_cluster"
+    ],
+    "input_contracts": [
+      { "asset_kind": "kubernetes_cluster", "input_profile": "kubernetes_manifests" }
     ],
     "required_permissions": [
-      "inventory_read",
-      "configuration_read"
+      "local_artifact_read"
     ],
     "active_external": false,
     "default_enabled": true,
@@ -2569,7 +2638,7 @@
     ],
     "status": "integrated",
     "notices": [
-      "The pinned NSA framework artifacts are embedded; scan input is an immutable case workspace snapshot.",
+      "The pinned NSA framework artifacts are embedded; scan input must be a backend-attested immutable Kubernetes manifest snapshot.",
       "Submission, telemetry, updates, and engine networking are disabled."
     ],
     "license": {
@@ -2663,8 +2732,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kube-bench",
-      "tag": "0.16.0-1",
-      "digest": "sha256:3e2488cb42b3c0e4fbd9067faa4227526a3938980d36c5aaba7c4a699cea0295",
+      "tag": "0.16.0-2",
+      "digest": "sha256:fc82c746e5eccaaca323157a78bc4710f41653d03953e011fef4299c48624a56",
       "signature_identity": null
     },
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
@@ -2672,11 +2741,13 @@
     "rule_version": "9f133cb7509ce1dbedfc860e94474588000e25ac",
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
-      "kubernetes_cluster",
       "host"
     ],
+    "input_contracts": [
+      { "asset_kind": "host", "input_profile": "kubernetes_node_snapshot" }
+    ],
     "required_permissions": [
-      "configuration_read"
+      "local_artifact_read"
     ],
     "active_external": false,
     "default_enabled": true,

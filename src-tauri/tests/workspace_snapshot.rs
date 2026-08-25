@@ -1,8 +1,12 @@
+use ai_security_scanner_lib::domain::AssetKind;
 use ai_security_scanner_lib::workspace_snapshot::{
-    WorkspaceSnapshotLimits, WorkspaceSnapshotReference, create_workspace_snapshot,
+    LOCAL_INPUT_PROFILE_FILENAME, WorkspaceInputProfile, WorkspaceSnapshotLimits,
+    WorkspaceSnapshotReference, create_workspace_snapshot, create_workspace_snapshot_with_profile,
     resolve_workspace_snapshot,
 };
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -52,6 +56,143 @@ fn snapshot_entries(artifact_root: &Path, case_id: &str) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+fn digest(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn deterministic_tar(path: &str, contents: &[u8]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_ustar();
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_mode(0o644);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_size(contents.len() as u64);
+    header.set_path(path).unwrap();
+    header.set_cksum();
+    builder.append(&header, Cursor::new(contents)).unwrap();
+    builder.finish().unwrap();
+    builder.into_inner().unwrap()
+}
+
+fn write_single_image_oci_layout(root: &Path) {
+    let blobs = root.join("blobs/sha256");
+    fs::create_dir_all(&blobs).unwrap();
+    fs::write(
+        root.join("oci-layout"),
+        br#"{"imageLayoutVersion":"1.0.0"}"#,
+    )
+    .unwrap();
+    let layer = deterministic_tar("app/package-lock.json", br#"{"lockfileVersion":3}"#);
+    let layer_digest = digest(&layer);
+    let config = serde_json::to_vec(&serde_json::json!({
+        "architecture": "amd64",
+        "os": "linux",
+        "rootfs": {"type": "layers", "diff_ids": [format!("sha256:{layer_digest}")]},
+        "config": {}
+    }))
+    .unwrap();
+    let config_digest = digest(&config);
+    fs::write(blobs.join(&config_digest), &config).unwrap();
+    fs::write(blobs.join(&layer_digest), &layer).unwrap();
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {
+            "mediaType": "application/vnd.oci.image.config.v1+json",
+            "digest": format!("sha256:{config_digest}"),
+            "size": config.len()
+        },
+        "layers": [{
+            "mediaType": "application/vnd.oci.image.layer.v1.tar",
+            "digest": format!("sha256:{layer_digest}"),
+            "size": layer.len()
+        }]
+    }))
+    .unwrap();
+    let manifest_digest = digest(&manifest);
+    fs::write(blobs.join(&manifest_digest), &manifest).unwrap();
+    let index = serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": format!("sha256:{manifest_digest}"),
+            "size": manifest.len()
+        }]
+    }))
+    .unwrap();
+    fs::write(root.join("index.json"), index).unwrap();
+}
+
+fn descriptor_digest(descriptor: &serde_json::Value) -> String {
+    descriptor["digest"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("sha256:")
+        .unwrap()
+        .to_owned()
+}
+
+fn rewrite_manifest(root: &Path, mutate: impl FnOnce(&mut serde_json::Value)) {
+    let mut index: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("index.json")).unwrap()).unwrap();
+    let descriptor = &mut index["manifests"][0];
+    let old_digest = descriptor_digest(descriptor);
+    let old_path = root.join("blobs/sha256").join(&old_digest);
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&old_path).unwrap()).unwrap();
+    mutate(&mut manifest);
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    let new_digest = digest(&bytes);
+    fs::write(root.join("blobs/sha256").join(&new_digest), &bytes).unwrap();
+    if new_digest != old_digest {
+        fs::remove_file(old_path).unwrap();
+    }
+    descriptor["digest"] = serde_json::Value::String(format!("sha256:{new_digest}"));
+    descriptor["size"] = serde_json::json!(bytes.len());
+    fs::write(root.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+}
+
+fn rewrite_config(root: &Path, mutate: impl FnOnce(&mut serde_json::Value)) {
+    rewrite_manifest(root, |manifest| {
+        let descriptor = &mut manifest["config"];
+        let old_digest = descriptor_digest(descriptor);
+        let old_path = root.join("blobs/sha256").join(&old_digest);
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&fs::read(&old_path).unwrap()).unwrap();
+        mutate(&mut config);
+        let bytes = serde_json::to_vec(&config).unwrap();
+        let new_digest = digest(&bytes);
+        fs::write(root.join("blobs/sha256").join(&new_digest), &bytes).unwrap();
+        if new_digest != old_digest {
+            fs::remove_file(old_path).unwrap();
+        }
+        descriptor["digest"] = serde_json::Value::String(format!("sha256:{new_digest}"));
+        descriptor["size"] = serde_json::json!(bytes.len());
+    });
+}
+
+fn expect_invalid_oci(mutator: impl FnOnce(&Path), message: &str) {
+    let (_temp, artifact_root, source) = roots();
+    write_single_image_oci_layout(&source);
+    mutator(&source);
+    let error = create_workspace_snapshot_with_profile(
+        &artifact_root,
+        "case-invalid-oci",
+        "source-invalid-oci",
+        &source,
+        WorkspaceInputProfile::ContainerImageOciLayout,
+        small_limits(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains(message),
+        "unexpected OCI validation error: {error}"
+    );
 }
 
 #[test]
@@ -154,6 +295,184 @@ fn snapshot_is_deterministic_private_source_grounded_and_working_tree_only() {
             0o400
         );
     }
+}
+
+#[test]
+fn typed_oci_layout_becomes_a_verified_container_asset_with_backend_marker() {
+    let (_temp, artifact_root, source) = roots();
+    write_single_image_oci_layout(&source);
+
+    let snapshot = create_workspace_snapshot_with_profile(
+        &artifact_root,
+        "case-oci",
+        "source-oci",
+        &source,
+        WorkspaceInputProfile::ContainerImageOciLayout,
+        small_limits(),
+    )
+    .expect("valid OCI layout snapshot");
+
+    assert_eq!(snapshot.asset.kind, AssetKind::ContainerImage);
+    assert_eq!(
+        snapshot.reference.input_profile,
+        WorkspaceInputProfile::ContainerImageOciLayout
+    );
+    assert_eq!(
+        snapshot.manifest.input_profile,
+        snapshot.reference.input_profile
+    );
+    assert!(
+        snapshot
+            .manifest
+            .files
+            .iter()
+            .any(|file| file.relative_path == LOCAL_INPUT_PROFILE_FILENAME)
+    );
+    assert!(!source.join(LOCAL_INPUT_PROFILE_FILENAME).exists());
+
+    let resolved = resolve_workspace_snapshot(&artifact_root, "case-oci", &snapshot.reference)
+        .expect("typed snapshot resolves");
+    let marker = fs::read_to_string(resolved.tree_path.join(LOCAL_INPUT_PROFILE_FILENAME)).unwrap();
+    assert!(marker.contains("container_image_oci_layout"));
+}
+
+#[test]
+fn typed_input_rejects_reserved_markers_wrong_profiles_and_tampered_oci_blobs() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(
+        source.join(LOCAL_INPUT_PROFILE_FILENAME),
+        b"attacker supplied",
+    )
+    .unwrap();
+    let reserved = create_workspace_snapshot_with_profile(
+        &artifact_root,
+        "case-reserved",
+        "source-reserved",
+        &source,
+        WorkspaceInputProfile::RepositoryWorkingTree,
+        small_limits(),
+    )
+    .unwrap_err();
+    assert!(reserved.to_string().contains("reserved backend marker"));
+
+    fs::remove_file(source.join(LOCAL_INPUT_PROFILE_FILENAME)).unwrap();
+    fs::write(source.join("README.txt"), b"not infrastructure as code").unwrap();
+    let wrong_profile = create_workspace_snapshot_with_profile(
+        &artifact_root,
+        "case-wrong-profile",
+        "source-wrong-profile",
+        &source,
+        WorkspaceInputProfile::IacWorkingTree,
+        small_limits(),
+    )
+    .unwrap_err();
+    assert!(wrong_profile.to_string().contains("contains no"));
+
+    fs::remove_file(source.join("README.txt")).unwrap();
+    write_single_image_oci_layout(&source);
+    let layer = fs::read_dir(source.join("blobs/sha256"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            fs::read(path).ok().is_some_and(|bytes| {
+                bytes
+                    .windows(b"package-lock.json".len())
+                    .any(|window| window == b"package-lock.json")
+            })
+        })
+        .unwrap();
+    fs::write(layer, b"changed after digest").unwrap();
+    let tampered = create_workspace_snapshot_with_profile(
+        &artifact_root,
+        "case-tampered-oci",
+        "source-tampered-oci",
+        &source,
+        WorkspaceInputProfile::ContainerImageOciLayout,
+        small_limits(),
+    )
+    .unwrap_err();
+    assert!(tampered.to_string().contains("does not match its blob"));
+}
+
+#[test]
+fn typed_oci_layout_rejects_media_rootfs_layer_tar_and_unreferenced_blob_drift() {
+    expect_invalid_oci(
+        |root| {
+            let mut index: serde_json::Value =
+                serde_json::from_slice(&fs::read(root.join("index.json")).unwrap()).unwrap();
+            index["manifests"][0]["mediaType"] =
+                serde_json::Value::String("application/octet-stream".into());
+            fs::write(root.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+        },
+        "manifest descriptor mediaType",
+    );
+
+    expect_invalid_oci(
+        |root| {
+            rewrite_config(root, |config| {
+                config["rootfs"]["diff_ids"] = serde_json::json!([])
+            })
+        },
+        "rootfs diff_ids",
+    );
+
+    expect_invalid_oci(
+        |root| {
+            rewrite_config(root, |config| {
+                config["rootfs"]["diff_ids"][0] =
+                    serde_json::Value::String(format!("sha256:{}", "0".repeat(64)));
+            });
+        },
+        "does not match its config diff_id",
+    );
+
+    expect_invalid_oci(
+        |root| {
+            rewrite_manifest(root, |manifest| {
+                let invalid_tar = b"not a tar archive";
+                let layer_descriptor = &mut manifest["layers"][0];
+                let old_layer_digest = descriptor_digest(layer_descriptor);
+                let new_layer_digest = digest(invalid_tar);
+                fs::write(
+                    root.join("blobs/sha256").join(&new_layer_digest),
+                    invalid_tar,
+                )
+                .unwrap();
+                fs::remove_file(root.join("blobs/sha256").join(old_layer_digest)).unwrap();
+                layer_descriptor["digest"] =
+                    serde_json::Value::String(format!("sha256:{new_layer_digest}"));
+                layer_descriptor["size"] = serde_json::json!(invalid_tar.len());
+
+                let config_descriptor = &mut manifest["config"];
+                let old_config_digest = descriptor_digest(config_descriptor);
+                let old_config_path = root.join("blobs/sha256").join(&old_config_digest);
+                let mut config: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&old_config_path).unwrap()).unwrap();
+                config["rootfs"]["diff_ids"][0] =
+                    serde_json::Value::String(format!("sha256:{new_layer_digest}"));
+                let config_bytes = serde_json::to_vec(&config).unwrap();
+                let new_config_digest = digest(&config_bytes);
+                fs::write(
+                    root.join("blobs/sha256").join(&new_config_digest),
+                    &config_bytes,
+                )
+                .unwrap();
+                fs::remove_file(old_config_path).unwrap();
+                config_descriptor["digest"] =
+                    serde_json::Value::String(format!("sha256:{new_config_digest}"));
+                config_descriptor["size"] = serde_json::json!(config_bytes.len());
+            });
+        },
+        "tar",
+    );
+
+    expect_invalid_oci(
+        |root| {
+            let bytes = b"unreferenced";
+            fs::write(root.join("blobs/sha256").join(digest(bytes)), bytes).unwrap();
+        },
+        "unreferenced blobs",
+    );
 }
 
 #[cfg(unix)]

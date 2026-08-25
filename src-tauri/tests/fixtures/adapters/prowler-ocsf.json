@@ -1,1 +1,89 @@
-[{"category_name":"Findings","class_name":"Compliance Finding","finding_info":{"title":"S3 bucket public access is not blocked","uid":"prowler-uid-1"},"resources":[{"uid":"arn:aws:s3:::example-bucket","name":"example-bucket"}],"severity":"High","unmapped":{"CheckID":"s3_bucket_level_public_access_block","Status":"FAIL","Severity":"high","AccountId":"asset-1"}}]
+[
+  {
+    "category_name": "Findings",
+    "class_name": "Detection Finding",
+    "metadata": {
+      "event_code": "s3_bucket_level_public_access_block",
+      "product": {
+        "name": "Prowler",
+        "uid": "prowler",
+        "vendor_name": "Prowler",
+        "version": "5.39.1"
+      },
+      "profiles": ["cloud", "datetime"],
+      "version": "1.5.0"
+    },
+    "finding_info": {
+      "analytic": {
+        "name": "s3_bucket_level_public_access_block",
+        "uid": "s3_bucket_level_public_access_block",
+        "type": "Rule",
+        "type_id": 1
+      },
+      "title": "S3 bucket public access is not blocked",
+      "uid": "provider-finding-instance-1"
+    },
+    "status": "New",
+    "status_code": "FAIL",
+    "severity": "High",
+    "cloud": {
+      "account": {
+        "name": "example-account",
+        "type": "AWS Account",
+        "type_id": 10,
+        "uid": "123456789012"
+      },
+      "provider": "aws",
+      "region": "us-east-1"
+    },
+    "resources": [
+      {
+        "name": "example-bucket",
+        "type": "AWS::S3::Bucket",
+        "uid": "arn:aws:s3:::example-bucket"
+      }
+    ],
+    "remediation": {
+      "desc": "Enable the account and bucket public-access blocks.",
+      "references": [
+        "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+      ]
+    },
+    "unmapped": {
+      "provider": "aws",
+      "provider_uid": "123456789012"
+    }
+  },
+  {
+    "metadata": {"event_code": "s3_bucket_policy_public_access_prohibited"},
+    "finding_info": {
+      "analytic": {"uid": "s3_bucket_policy_public_access_prohibited"},
+      "title": "Passing check",
+      "uid": "provider-finding-instance-2"
+    },
+    "status": "New",
+    "status_code": "PASS",
+    "severity": "High",
+    "cloud": {
+      "account": {"uid": "123456789012"},
+      "provider": "aws"
+    },
+    "resources": [{"uid": "arn:aws:s3:::passing-bucket"}]
+  },
+  {
+    "metadata": {"event_code": "account_maintain_current_contact_details"},
+    "finding_info": {
+      "analytic": {"uid": "account_maintain_current_contact_details"},
+      "title": "Manual check",
+      "uid": "provider-finding-instance-3"
+    },
+    "status": "New",
+    "status_code": "MANUAL",
+    "severity": "Medium",
+    "cloud": {
+      "account": {"uid": "123456789012"},
+      "provider": "aws"
+    },
+    "resources": [{"uid": "123456789012"}]
+  }
+]

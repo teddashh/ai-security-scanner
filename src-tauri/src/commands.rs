@@ -34,14 +34,18 @@ use crate::source_authorization::session::{
     BeginProviderAuthorizationRequest, ProviderAuthorizationConfig, ProviderAuthorizationProgress,
     ProviderAuthorizationPrompt, ProviderSessionPoll,
 };
+use crate::source_authorization::{
+    InstalledSourceAuthorization, PROVIDER_RESOURCE_SCOPE_METADATA_KEY, ProviderSourceProfile,
+    validate_aws_execution_target,
+};
 use crate::state::AppState;
 use crate::workspace_snapshot::{
-    WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WorkspaceSnapshotLimits, WorkspaceSnapshotReference,
-    create_workspace_snapshot, resolve_workspace_snapshot,
+    WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WorkspaceInputProfile, WorkspaceSnapshotLimits,
+    WorkspaceSnapshotReference, create_workspace_snapshot_with_profile, resolve_workspace_snapshot,
 };
 use crate::{
     container_runtime::{
-        CleanupOutcome, ContainerRuntime, NetworkPolicy, OwnedContainerCleanupRequest, PinnedImage,
+        CleanupOutcome, NetworkPolicy, OwnedContainerCleanupRequest, PinnedImage,
         ProcessContainerRuntime, ResourceLimits, RuntimeCommandProvenance, RuntimeProvider,
         ScannerCredentialSet, cleanup_orphaned_credentials,
     },
@@ -609,6 +613,10 @@ pub fn poll_provider_authorization(
                 serde_json::Value::String(verification.provider_identity),
             );
             metadata.insert(
+                PROVIDER_RESOURCE_SCOPE_METADATA_KEY.into(),
+                serde_json::Value::String(verification.resource_scope),
+            );
+            metadata.insert(
                 "verification_evidence_sha256".into(),
                 serde_json::Value::String(verification.evidence_sha256),
             );
@@ -683,7 +691,7 @@ pub struct ExecuteProviderBootstrapInput {
     pub execution: BootstrapExecutionRequest,
     pub source_id: String,
     pub allowed_engine_ids: BTreeSet<String>,
-    pub max_checkouts: u8,
+    pub max_checkouts: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -726,17 +734,29 @@ pub async fn execute_provider_bootstrap(
         .find(|source| source.id == input.source_id)
         .cloned()
         .ok_or_else(|| AppError::InvalidRequest("provider source does not exist".into()))?;
-    let expected_kind = match input.execution.bootstrap.provider {
-        crate::bootstrap::BootstrapProvider::Aws => SourceKind::AwsOrganization,
-        crate::bootstrap::BootstrapProvider::Azure => SourceKind::AzureTenant,
-        crate::bootstrap::BootstrapProvider::Gcp => SourceKind::GcpOrganization,
-        crate::bootstrap::BootstrapProvider::Microsoft365 => SourceKind::Microsoft365Tenant,
+    let (expected_kind, expected_profile) = match input.execution.bootstrap.provider {
+        crate::bootstrap::BootstrapProvider::Aws => (
+            SourceKind::AwsOrganization,
+            ProviderSourceProfile::AwsOrganizationReadOnlySession,
+        ),
+        crate::bootstrap::BootstrapProvider::Azure => (
+            SourceKind::AzureTenant,
+            ProviderSourceProfile::AzureTenantReadOnlyAccessToken,
+        ),
+        crate::bootstrap::BootstrapProvider::Gcp => (
+            SourceKind::GcpOrganization,
+            ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken,
+        ),
+        crate::bootstrap::BootstrapProvider::Microsoft365 => (
+            SourceKind::Microsoft365Tenant,
+            ProviderSourceProfile::Microsoft365TenantReadOnlyAccessToken,
+        ),
     };
     if source.kind != expected_kind
         || !source.read_only
         || input.allowed_engine_ids.is_empty()
         || input.max_checkouts == 0
-        || input.max_checkouts > 8
+        || input.max_checkouts > expected_profile.max_checkouts()
     {
         return Err(AppError::NotAuthorized(
             "bootstrap must bind an existing matching read-only source and bounded engines".into(),
@@ -850,6 +870,10 @@ fn connect_verified_provider_source(
     metadata.insert(
         "provider_identity".into(),
         serde_json::Value::String(verification.provider_identity.clone()),
+    );
+    metadata.insert(
+        PROVIDER_RESOURCE_SCOPE_METADATA_KEY.into(),
+        serde_json::Value::String(verification.resource_scope.clone()),
     );
     metadata.insert(
         "verification_evidence_sha256".into(),
@@ -1083,6 +1107,7 @@ pub fn attach_workspace_snapshot(
     case_id: Id,
     label: String,
     selected_path: String,
+    input_profile: WorkspaceInputProfile,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<AssessmentCase> {
@@ -1100,11 +1125,12 @@ pub fn attach_workspace_snapshot(
         ));
     }
     let source_id = new_id();
-    let snapshot = create_workspace_snapshot(
+    let snapshot = create_workspace_snapshot_with_profile(
         state.artifact_root(),
         &case_id,
         &source_id,
         selected_path,
+        input_profile,
         WorkspaceSnapshotLimits::default(),
     )?;
     // Re-resolve through the persisted reference before it enters the case.
@@ -1267,6 +1293,11 @@ fn perform_discovery(
             .get("verification_evidence_sha256")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
+        let persisted_resource_scope = source
+            .metadata
+            .get(PROVIDER_RESOURCE_SCOPE_METADATA_KEY)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         if authorization.case_id != case_id
             || authorization.source_id != source.id
             || authorization.source_kind != source.kind
@@ -1274,6 +1305,7 @@ fn perform_discovery(
             || authorization.provider_verification.profile != profile
             || authorization.provider_identity != persisted_identity
             || authorization.provider_verification.evidence_sha256 != persisted_proof
+            || authorization.provider_verification.resource_scope != persisted_resource_scope
             || !authorization
                 .allowed_engine_ids
                 .contains(crate::source_authorization::PROVIDER_DISCOVERY_ENGINE_ID)
@@ -2310,7 +2342,8 @@ fn provision_execution_network(
                 ScanPermission::LowImpactExternalConnection | ScanPermission::ActiveExternalTesting
             )
         });
-    if !direct_external && execution.manifest.network_destinations.is_empty() {
+    let exact_network_destinations = exact_execution_network_destinations(execution)?;
+    if !direct_external && exact_network_destinations.is_empty() {
         return Ok(None);
     }
     let now = Utc::now();
@@ -2456,7 +2489,7 @@ fn provision_execution_network(
             source_profile,
             manifest_id: execution.manifest.id.clone(),
             manifest_revision,
-            exact_destinations: execution.manifest.network_destinations.clone(),
+            exact_destinations: exact_network_destinations,
             expires_at,
         },
         now,
@@ -2464,6 +2497,41 @@ fn provision_execution_network(
     controller
         .provision_provider_service(&owner, &plan, now)
         .map(Some)
+}
+
+fn exact_execution_network_destinations(
+    execution: &PlannedEngineExecution,
+) -> AppResult<Vec<String>> {
+    if execution.manifest.provider_execution_contracts.is_empty() {
+        return Ok(execution.manifest.network_destinations.clone());
+    }
+    let [asset] = execution.assets.as_slice() else {
+        return Err(AppError::NotAuthorized(
+            "a provider-profile execution must contain exactly one asset".into(),
+        ));
+    };
+    let contract = execution
+        .manifest
+        .provider_execution_contract(asset.provider.as_deref(), &asset.kind)
+        .ok_or_else(|| {
+            AppError::NotAuthorized(
+                "execution asset has no exact provider profile in the frozen manifest".into(),
+            )
+        })?;
+    if contract.network_destinations.is_empty()
+        || contract.network_destinations.iter().any(|destination| {
+            !execution
+                .manifest
+                .network_destinations
+                .contains(destination)
+        })
+    {
+        return Err(AppError::EngineRegistry(format!(
+            "engine {} provider profile has an invalid network closure",
+            execution.manifest.id
+        )));
+    }
+    Ok(contract.network_destinations.clone())
 }
 
 fn locate_egress_gateway_binary() -> AppResult<std::path::PathBuf> {
@@ -2531,6 +2599,7 @@ fn resolve_execution_credentials(
             Ok(ScannerCredentialSet::default())
         };
     };
+    validate_installed_provider_authorization(state, &source, execution, Utc::now())?;
     state
         .source_authorizations
         .checkout_now(&execution.case_id, &source.id, &execution.manifest.id)
@@ -2549,24 +2618,209 @@ fn provider_egress_source(
             "provider-service egress has no connected attributable read-only source".into(),
         )
     })?;
+    let authorization = validate_installed_provider_authorization(state, &source, execution, now)?;
+    Ok((source, authorization))
+}
+
+fn validate_installed_provider_authorization(
+    state: &AppState,
+    source: &DataSource,
+    execution: &PlannedEngineExecution,
+    now: chrono::DateTime<Utc>,
+) -> AppResult<InstalledSourceAuthorization> {
     let authorization = state
         .source_authorizations
         .status(&execution.case_id, &source.id, now)?
         .ok_or_else(|| {
             AppError::NotAuthorized(
-                "provider-service egress has no live source authorization profile".into(),
+                "provider execution has no live source authorization profile".into(),
             )
         })?;
-    if authorization.source_kind != source.kind
+    let persisted_profile = source
+        .metadata
+        .get("provider_profile")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ProviderSourceProfile>(value).ok());
+    let persisted_identity = source
+        .metadata
+        .get("provider_identity")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let persisted_proof = source
+        .metadata
+        .get("verification_evidence_sha256")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if authorization.case_id != execution.case_id
+        || authorization.source_id != source.id
+        || authorization.source_kind != source.kind
+        || authorization.provider_verification.profile != authorization.profile
+        || persisted_profile != Some(authorization.profile)
+        || authorization.provider_identity != persisted_identity
+        || authorization.provider_verification.evidence_sha256 != persisted_proof
         || !authorization
             .allowed_engine_ids
             .contains(&execution.manifest.id)
     {
         return Err(AppError::NotAuthorized(
-            "provider-service source authorization does not bind this source and engine".into(),
+            "provider source authorization does not bind this source, proof, and engine".into(),
         ));
     }
-    Ok((source, authorization))
+    validate_provider_execution_target(state, source, execution, &authorization)?;
+    Ok(authorization)
+}
+
+fn validate_provider_execution_target(
+    state: &AppState,
+    source: &DataSource,
+    execution: &PlannedEngineExecution,
+    authorization: &InstalledSourceAuthorization,
+) -> AppResult<()> {
+    let persisted_resource_scope = source
+        .metadata
+        .get(PROVIDER_RESOURCE_SCOPE_METADATA_KEY)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AppError::NotAuthorized(
+                "provider source has no persisted verified resource scope".into(),
+            )
+        })?;
+    if persisted_resource_scope != authorization.provider_verification.resource_scope {
+        return Err(AppError::NotAuthorized(
+            "provider live authorization resource scope differs from its persisted proof".into(),
+        ));
+    }
+    let [asset] = execution.assets.as_slice() else {
+        return Err(AppError::NotAuthorized(
+            "provider execution must contain exactly one asset".into(),
+        ));
+    };
+    match source.kind {
+        SourceKind::AwsOrganization => {
+            if authorization.profile != ProviderSourceProfile::AwsOrganizationReadOnlySession {
+                return Err(AppError::NotAuthorized(
+                    "AWS execution does not use the verified organization read-only profile".into(),
+                ));
+            }
+            validate_aws_execution_target(&execution.assets, persisted_resource_scope)
+        }
+        SourceKind::AzureTenant => {
+            if authorization.profile != ProviderSourceProfile::AzureTenantReadOnlyAccessToken
+                || asset.kind != AssetKind::Subscription
+                || asset.provider.as_deref() != Some("azure")
+            {
+                return Err(AppError::NotAuthorized(
+                    "Azure execution does not match the verified subscription profile".into(),
+                ));
+            }
+            let subscription_id = unique_native_identifier(asset, "azure_subscription_id")?;
+            if !valid_azure_subscription_id(subscription_id)
+                || persisted_resource_scope != format!("azure-subscription:{subscription_id}")
+            {
+                return Err(AppError::NotAuthorized(
+                    "Azure execution subscription differs from its verified proof".into(),
+                ));
+            }
+            Ok(())
+        }
+        SourceKind::GcpOrganization => {
+            if authorization.profile != ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken
+                || asset.kind != AssetKind::Project
+                || asset.provider.as_deref() != Some("gcp")
+            {
+                return Err(AppError::NotAuthorized(
+                    "GCP execution does not match the verified organization profile".into(),
+                ));
+            }
+            let project_id = unique_native_identifier(asset, "gcp_project_id")?;
+            if !valid_gcp_project_id(project_id) {
+                return Err(AppError::NotAuthorized(
+                    "GCP execution project identifier is malformed".into(),
+                ));
+            }
+            let organization_id = persisted_resource_scope
+                .strip_prefix("gcp-organization:")
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 32
+                        && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .ok_or_else(|| {
+                    AppError::NotAuthorized(
+                        "GCP source proof is not bound to one organization".into(),
+                    )
+                })?;
+            let case = state.case_service().show_case(&execution.case_id)?;
+            let related = case.asset_relations.iter().any(|relation| {
+                relation.kind == crate::domain::RelationKind::Contains
+                    && relation.to_asset_id == asset.id
+                    && case.assets.iter().any(|parent| {
+                        parent.id == relation.from_asset_id
+                            && parent.kind == AssetKind::CloudOrganization
+                            && parent.provider.as_deref() == Some("gcp")
+                            && parent.discovered_from.contains(&source.id)
+                            && ["gcp_organization_id", "gcp_organization_number"]
+                                .iter()
+                                .any(|namespace| {
+                                    unique_native_identifier(parent, namespace).ok()
+                                        == Some(organization_id)
+                                })
+                    })
+            });
+            if !related {
+                return Err(AppError::NotAuthorized(
+                    "GCP project is not attributable to the verified organization".into(),
+                ));
+            }
+            Ok(())
+        }
+        SourceKind::Microsoft365Tenant => {
+            if authorization.profile != ProviderSourceProfile::Microsoft365TenantReadOnlyAccessToken
+                || asset.kind != AssetKind::Tenant
+                || asset.provider.as_deref() != Some("microsoft365")
+            {
+                return Err(AppError::NotAuthorized(
+                    "Microsoft 365 execution does not match the verified tenant profile".into(),
+                ));
+            }
+            let tenant_id = unique_native_identifier(asset, "microsoft_tenant_id")?;
+            if uuid::Uuid::parse_str(tenant_id).is_err()
+                || persisted_resource_scope != format!("microsoft365-tenant:{tenant_id}")
+            {
+                return Err(AppError::NotAuthorized(
+                    "Microsoft 365 execution tenant differs from its verified proof".into(),
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(AppError::NotAuthorized(
+            "provider execution source kind has no exact target contract".into(),
+        )),
+    }
+}
+
+fn unique_native_identifier<'a>(
+    asset: &'a crate::domain::Asset,
+    namespace: &str,
+) -> AppResult<&'a str> {
+    let mut values = asset
+        .identifiers
+        .iter()
+        .filter(|identifier| identifier.namespace == namespace)
+        .map(|identifier| identifier.value.as_str());
+    let value = values.next().ok_or_else(|| {
+        AppError::NotAuthorized(format!(
+            "asset {} lacks exact provider identifier {namespace}",
+            asset.id
+        ))
+    })?;
+    if values.next().is_some() {
+        return Err(AppError::NotAuthorized(format!(
+            "asset {} has an ambiguous provider identifier {namespace}",
+            asset.id
+        )));
+    }
+    Ok(value)
 }
 
 fn passive_service_egress_source(
@@ -2818,14 +3072,36 @@ fn resolve_execution_workspace(
     references.dedup_by(|left, right| left.storage_id == right.storage_id);
     if references.len() > 1 {
         return Err(AppError::NotAuthorized(
-            "authorized repository resolves to more than one immutable workspace snapshot".into(),
+            "authorized local asset resolves to more than one immutable input snapshot".into(),
         ));
     }
     let reference = references.into_iter().next().ok_or_else(|| {
         AppError::NotAuthorized(
-            "authorized repository has no immutable backend working-tree snapshot".into(),
+            "authorized local asset has no immutable backend input snapshot".into(),
         )
     })?;
+    if asset.kind != reference.input_profile.asset_kind() {
+        return Err(AppError::NotAuthorized(
+            "local asset kind conflicts with its backend-attested input profile".into(),
+        ));
+    }
+    let input_contract = execution
+        .manifest
+        .input_contracts
+        .iter()
+        .find(|contract| contract.asset_kind == asset.kind)
+        .ok_or_else(|| {
+            AppError::InvalidRequest(format!(
+                "engine {} has no typed input contract for the authorized local asset",
+                execution.manifest.id
+            ))
+        })?;
+    if input_contract.input_profile != reference.input_profile {
+        return Err(AppError::NotAuthorized(format!(
+            "engine {} input contract conflicts with the backend-attested snapshot profile",
+            execution.manifest.id
+        )));
+    }
     let expected_sha = asset
         .metadata
         .get("workspace_snapshot_sha256")

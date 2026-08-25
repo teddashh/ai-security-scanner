@@ -15,22 +15,22 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
-    "tag": "5.14.0-1",
-    "digest": "sha256:2035fadb2a4fc4bddd55b772c11ef0f0485ccbf855c20f1a7894b1f85b12e7df"
+    "tag": "5.14.0-4",
+    "digest": "sha256:a6341e57a40ceda93a9542a71151e6a5b08a4e5029e127f3cbc327701d47e0a3"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
-    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32811911860",
+    "source_revision": "f611848a872bb41865ff00085ab3bd200e53deeb",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:711ed867650ce47b808084f09d9522e3020c9138cb128d9dc54d34b39bfe9894",
-      "linux/arm64": "sha256:b92c16f2d9022431b2b37796c2339dd3106e86e0c0fa2c7fe6a5b00eead5746a"
+      "linux/amd64": "sha256:e7ba2ec2c2726e6e714198daa73f3697f090749f7c591ef836343331da9eaafd",
+      "linux/arm64": "sha256:b0cb93725fd95cc714ec30283782efdf11d5903f6cab6be8ad503172f1994472"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "scoutsuite-image-evidence-32756618412-1"
+    "evidence_artifact": "scoutsuite-image-evidence-32811911860-1"
   },
   "build_recipe": {
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
@@ -74,13 +74,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/scoutsuite/Dockerfile",
-    "sha256": "sha256:152a67f85cbc717e4c2eb0a138f202197c16e57982e883332c6c42baa82d4771"
+    "sha256": "sha256:9627f7a29b4c7a7ed3cf9536c7b00759042fc572a34392de3b9526323b2e17dd"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate an AWS-only scope, invoke the reduced IAM JSON profile without a shell, strip the report prefix, and bound the final JSON artifact.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
+    "launcher_sha256": "sha256:13a674029d7a9099cb1083175e38a2b8dee56e521b851531a8067bfda6229f5e"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

@@ -129,9 +129,11 @@ The orchestrator selects engines from the approved engine catalog based on the c
 Provider applicability is an exact release contract. A provider-bound manifest lists its released
 `supported_providers`; planning, resume, and coverage require an exact `Asset.provider` match and
 never infer a provider from asset kind or upstream marketing. An empty provider list means the
-engine is genuinely provider-agnostic. In the current release, CloudQuery, Steampipe, Prowler,
-ScoutSuite, and Cloudsplaining images are AWS-only. Azure and GCP authorization currently support
-provider-native discovery only; they must not be presented as released scanner-image coverage.
+engine is genuinely provider-agnostic. CloudQuery, Steampipe, ScoutSuite, and Cloudsplaining are
+AWS-only. The managed Prowler contract releases one narrow IAM profile for each of AWS, Azure, and
+GCP; every execution is bound to one exact account, subscription, or project and to that profile's
+fixed endpoint closure. Other Azure and GCP capabilities remain provider-native discovery only and
+must not be presented as released scanner-image coverage.
 
 Each engine runs independently and reports one of:
 
@@ -331,5 +333,10 @@ The product is complete only when all of the following have implementation and v
 - Claude/Codex repository skills install, start, inspect, and clean up through supported product interfaces.
 - Every distributed component has a reviewed manifest entry, license disposition, pinned artifact, SBOM entry, and required notices or source offer.
 - Supported platform installers and the managed runtime path behave as documented.
+- At least one qualifying IAM-naive person completes the observed first-run study on the exact
+  release candidate without facilitator takeover; the version-bound record, redacted observations,
+  artifact hashes, failures, assistance, and cleanup result satisfy
+  [the usability evidence protocol](usability/iam-naive-first-run.md). Automated or maintainer-only
+  walkthroughs never satisfy this requirement.
 
 Passing a subset of these requirements is progress, not a claim that the complete product has shipped.

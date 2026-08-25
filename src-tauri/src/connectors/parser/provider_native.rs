@@ -4,7 +4,7 @@
 
 use super::{AssetDraft, Collector, ParserProfile, array_at, metadata, string_at};
 use crate::discovery::DiscoveryError;
-use crate::domain::{AssetKind, RelationKind, SourceKind};
+use crate::domain::{AssetKind, RelationKind, SourceKind, valid_gcp_project_id};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde_json::Value;
@@ -227,9 +227,9 @@ pub(super) fn parse_json(
 }
 
 fn parse_azure(document: &Value, collector: &mut Collector<'_>) -> Result<(), DiscoveryError> {
-    let values = array_at(document, &["value"]).ok_or_else(|| {
-        DiscoveryError::Connector("Azure Resource Manager response omitted its value array".into())
-    })?;
+    let Some(values) = array_at(document, &["value"]) else {
+        return parse_azure_subscription_identity(document, collector);
+    };
     for (index, resource) in values.iter().enumerate() {
         let pointer = format!("/value/{index}");
         if !collector.count_record(&pointer) {
@@ -289,7 +289,58 @@ fn parse_azure(document: &Value, collector: &mut Collector<'_>) -> Result<(), Di
     Ok(())
 }
 
+fn parse_azure_subscription_identity(
+    document: &Value,
+    collector: &mut Collector<'_>,
+) -> Result<(), DiscoveryError> {
+    let subscription_id = string_at(document, &["subscriptionId"])
+        .filter(|value| looks_like_uuid(value))
+        .ok_or_else(|| {
+            DiscoveryError::Connector(
+                "Azure subscription identity omitted a valid subscriptionId".into(),
+            )
+        })?;
+    let state = string_at(document, &["state"]).ok_or_else(|| {
+        DiscoveryError::Connector("Azure subscription identity omitted its state".into())
+    })?;
+    if state != "Enabled" {
+        return Err(DiscoveryError::Connector(
+            "Azure subscription identity is not in the Enabled state".into(),
+        ));
+    }
+    if !collector.count_record("/") {
+        return Ok(());
+    }
+    collector.asset(
+        AssetDraft {
+            kind: AssetKind::Subscription,
+            name: string_at(document, &["displayName"]).unwrap_or(subscription_id),
+            provider: Some("azure"),
+            region: None,
+            namespace: "azure_subscription_id",
+            native_id: subscription_id,
+            additional_identifiers: vec![],
+            internet_exposed: None,
+            contains_sensitive_data: None,
+            metadata: metadata(&[
+                ("source_resource_type", Some("azure_subscription")),
+                ("lifecycle_state", Some(state)),
+            ]),
+        },
+        "/",
+    );
+    Ok(())
+}
+
 fn parse_gcp(document: &Value, collector: &mut Collector<'_>) -> Result<(), DiscoveryError> {
+    if document.get("folders").is_some() {
+        if document.get("projects").is_some() {
+            return Err(DiscoveryError::Connector(
+                "Google Resource Manager response mixed folder and project records".into(),
+            ));
+        }
+        return parse_gcp_folders(document, collector);
+    }
     let projects = match document.get("projects") {
         None if document.is_object() => return Ok(()),
         Some(Value::Array(projects)) => projects,
@@ -304,38 +355,33 @@ fn parse_gcp(document: &Value, collector: &mut Collector<'_>) -> Result<(), Disc
         if !collector.count_record(&pointer) {
             break;
         }
-        let Some(project_id) = string_at(project, &["projectId"]).filter(|value| {
-            !value.is_empty()
-                && value.len() <= 63
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        }) else {
-            collector.notice(format!(
-                "ignored Google project without a valid immutable project ID at {pointer}"
-            ));
-            continue;
-        };
-        let organization_id = string_at(project, &["parent"])
-            .and_then(|value| value.strip_prefix("organizations/"))
-            .filter(|value| value.bytes().all(|byte| byte.is_ascii_digit()));
-        let organization_key = organization_id.and_then(|native_id| {
-            collector.asset(
-                AssetDraft {
-                    kind: AssetKind::CloudOrganization,
-                    name: native_id,
-                    provider: Some("gcp"),
-                    region: None,
-                    namespace: "gcp_organization_id",
-                    native_id,
-                    additional_identifiers: vec![],
-                    internet_exposed: None,
-                    contains_sensitive_data: None,
-                    metadata: metadata(&[("source_resource_type", Some("gcp_organization"))]),
-                },
-                &pointer,
-            )
-        });
+        let project_id = string_at(project, &["projectId"])
+            .filter(|value| valid_gcp_project_id(value))
+            .ok_or_else(|| {
+                DiscoveryError::Connector(format!(
+                    "Google project at {pointer} omitted a valid immutable project ID"
+                ))
+            })?;
+        let project_number = string_at(project, &["name"])
+            .filter(|value| valid_gcp_numeric_name(value, "projects/"))
+            .ok_or_else(|| {
+                DiscoveryError::Connector(format!(
+                    "Google project at {pointer} omitted its numeric resource name"
+                ))
+            })?;
+        let state = string_at(project, &["state"])
+            .filter(|value| *value == "ACTIVE")
+            .ok_or_else(|| {
+                DiscoveryError::Connector(format!(
+                    "Google project at {pointer} is not in the ACTIVE state"
+                ))
+            })?;
+        let parent = string_at(project, &["parent"]).ok_or_else(|| {
+            DiscoveryError::Connector(format!(
+                "Google project at {pointer} omitted its exact hierarchy parent"
+            ))
+        })?;
+        let parent_key = gcp_parent_asset(parent, &pointer, collector)?;
         let project_key = collector.asset(
             AssetDraft {
                 kind: AssetKind::Project,
@@ -349,16 +395,149 @@ fn parse_gcp(document: &Value, collector: &mut Collector<'_>) -> Result<(), Disc
                 contains_sensitive_data: None,
                 metadata: metadata(&[
                     ("source_resource_type", Some("gcp_project")),
-                    ("lifecycle_state", string_at(project, &["state"])),
+                    ("lifecycle_state", Some(state)),
+                    ("numeric_resource_name", Some(project_number)),
                 ]),
             },
             &pointer,
         );
-        if let (Some(parent), Some(child)) = (&organization_key, &project_key) {
-            collector.relation(parent, child, RelationKind::Contains);
+        if let Some(child) = &project_key {
+            collector.relation(&parent_key, child, RelationKind::Contains);
         }
     }
     Ok(())
+}
+
+fn parse_gcp_folders(
+    document: &Value,
+    collector: &mut Collector<'_>,
+) -> Result<(), DiscoveryError> {
+    let folders = document
+        .get("folders")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            DiscoveryError::Connector("Google Resource Manager folders field is malformed".into())
+        })?;
+    for (index, folder) in folders.iter().enumerate() {
+        let pointer = format!("/folders/{index}");
+        if !collector.count_record(&pointer) {
+            break;
+        }
+        let name = string_at(folder, &["name"])
+            .filter(|value| valid_gcp_numeric_name(value, "folders/"))
+            .ok_or_else(|| {
+                DiscoveryError::Connector(format!(
+                    "Google folder at {pointer} omitted its numeric resource name"
+                ))
+            })?;
+        let folder_id = name.trim_start_matches("folders/");
+        let parent = string_at(folder, &["parent"]).ok_or_else(|| {
+            DiscoveryError::Connector(format!(
+                "Google folder at {pointer} omitted its exact hierarchy parent"
+            ))
+        })?;
+        let state = string_at(folder, &["state"])
+            .filter(|value| *value == "ACTIVE")
+            .ok_or_else(|| {
+                DiscoveryError::Connector(format!(
+                    "Google folder at {pointer} is not in the ACTIVE state"
+                ))
+            })?;
+        let parent_key = gcp_parent_asset(parent, &pointer, collector)?;
+        let folder_key = collector.asset(
+            AssetDraft {
+                kind: AssetKind::Other,
+                name: string_at(folder, &["displayName"]).unwrap_or(folder_id),
+                provider: Some("gcp"),
+                region: None,
+                namespace: "gcp_folder_id",
+                native_id: folder_id,
+                additional_identifiers: vec![],
+                internet_exposed: None,
+                contains_sensitive_data: None,
+                metadata: metadata(&[
+                    ("source_resource_type", Some("gcp_folder")),
+                    ("lifecycle_state", Some(state)),
+                    ("numeric_resource_name", Some(name)),
+                ]),
+            },
+            &pointer,
+        );
+        if let Some(child) = &folder_key {
+            collector.relation(&parent_key, child, RelationKind::Contains);
+        }
+    }
+    Ok(())
+}
+
+fn gcp_parent_asset(
+    parent: &str,
+    pointer: &str,
+    collector: &mut Collector<'_>,
+) -> Result<String, DiscoveryError> {
+    if let Some(organization_id) = parent
+        .strip_prefix("organizations/")
+        .filter(|value| valid_gcp_numeric_id(value))
+    {
+        return collector
+            .asset(
+                AssetDraft {
+                    kind: AssetKind::CloudOrganization,
+                    name: organization_id,
+                    provider: Some("gcp"),
+                    region: None,
+                    namespace: "gcp_organization_id",
+                    native_id: organization_id,
+                    additional_identifiers: vec![],
+                    internet_exposed: None,
+                    contains_sensitive_data: None,
+                    metadata: metadata(&[("source_resource_type", Some("gcp_organization"))]),
+                },
+                pointer,
+            )
+            .ok_or_else(|| {
+                DiscoveryError::Connector(format!(
+                    "Google hierarchy parent at {pointer} could not be represented"
+                ))
+            });
+    }
+    if let Some(folder_id) = parent
+        .strip_prefix("folders/")
+        .filter(|value| valid_gcp_numeric_id(value))
+    {
+        return collector
+            .asset(
+                AssetDraft {
+                    kind: AssetKind::Other,
+                    name: folder_id,
+                    provider: Some("gcp"),
+                    region: None,
+                    namespace: "gcp_folder_id",
+                    native_id: folder_id,
+                    additional_identifiers: vec![],
+                    internet_exposed: None,
+                    contains_sensitive_data: None,
+                    metadata: metadata(&[("source_resource_type", Some("gcp_folder"))]),
+                },
+                pointer,
+            )
+            .ok_or_else(|| {
+                DiscoveryError::Connector(format!(
+                    "Google hierarchy parent at {pointer} could not be represented"
+                ))
+            });
+    }
+    Err(DiscoveryError::Connector(format!(
+        "Google hierarchy parent at {pointer} is outside the organization/folder contract"
+    )))
+}
+
+fn valid_gcp_numeric_name(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(valid_gcp_numeric_id)
+}
+
+fn valid_gcp_numeric_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn parse_microsoft365(

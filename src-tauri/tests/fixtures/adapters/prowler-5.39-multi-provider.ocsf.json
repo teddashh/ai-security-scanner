@@ -1,0 +1,88 @@
+[
+  {
+    "metadata": {
+      "event_code": "accessanalyzer_enabled",
+      "product": {"name": "Prowler", "uid": "prowler", "version": "5.39.1"},
+      "profiles": ["cloud", "datetime"],
+      "version": "1.5.0"
+    },
+    "finding_info": {
+      "analytic": {"name": "accessanalyzer_enabled", "uid": "accessanalyzer_enabled", "type": "Rule", "type_id": 1},
+      "title": "IAM Access Analyzer is not enabled",
+      "uid": "aws-finding-instance-not-the-rule-id"
+    },
+    "status": "New",
+    "status_code": "FAIL",
+    "severity": "Low",
+    "cloud": {
+      "account": {"name": "production", "type": "AWS Account", "type_id": 10, "uid": "123456789012"},
+      "provider": "aws",
+      "region": "us-east-1"
+    },
+    "resources": [{"name": "AccessAnalyzer", "type": "Other", "uid": "arn:aws:access-analyzer:us-east-1:123456789012:analyzer/default"}],
+    "remediation": {"desc": "Enable Access Analyzer.", "references": ["https://docs.aws.amazon.com/IAM/latest/UserGuide/what-is-access-analyzer.html"]}
+  },
+  {
+    "metadata": {
+      "product": {"name": "Prowler", "uid": "prowler", "version": "5.39.1"},
+      "profiles": ["cloud", "datetime"],
+      "version": "1.5.0"
+    },
+    "finding_info": {
+      "analytic": {"name": "iam_audit_logs_enabled", "uid": "iam_audit_logs_enabled", "type": "Rule", "type_id": 1},
+      "title": "Audit logs are not enabled for all services",
+      "uid": "gcp-finding-instance-not-the-rule-id"
+    },
+    "status": "New",
+    "status_code": "FAIL",
+    "severity": "Medium",
+    "cloud": {
+      "account": {"name": "security-production", "type": "GCP Account", "type_id": 5, "uid": "security-prod-123"},
+      "provider": "gcp",
+      "region": "global"
+    },
+    "resources": [{"name": "security-production", "type": "Project", "uid": "security-prod-123"}],
+    "remediation": {"desc": "Enable the required audit logs.", "references": ["https://cloud.google.com/logging/docs/audit/configure-data-access"]}
+  },
+  {
+    "metadata": {
+      "event_code": "iam_subscription_owner_max_3",
+      "product": {"name": "Prowler", "uid": "prowler", "version": "5.39.1"},
+      "profiles": ["cloud", "datetime"],
+      "version": "1.5.0"
+    },
+    "finding_info": {
+      "analytic": {"name": "iam_subscription_owner_max_3", "uid": "iam_subscription_owner_max_3", "type": "Rule", "type_id": 1},
+      "title": "Subscription has too many owners",
+      "uid": "azure-finding-instance-not-the-rule-id"
+    },
+    "status": "New",
+    "status_code": "FAIL",
+    "severity": "High",
+    "cloud": {
+      "account": {"name": "Production", "type": "Azure AD Account", "type_id": 6, "uid": "11111111-2222-3333-4444-555555555555"},
+      "provider": "azure",
+      "region": "global"
+    },
+    "resources": [{"name": "Production", "type": "Subscription", "uid": "/subscriptions/11111111-2222-3333-4444-555555555555"}],
+    "remediation": {"desc": "Reduce subscription owners.", "references": ["https://learn.microsoft.com/azure/role-based-access-control/role-assignments-list-portal"]}
+  },
+  {
+    "metadata": {"event_code": "ignored_pass"},
+    "finding_info": {"analytic": {"uid": "ignored_pass"}, "title": "Passing record", "uid": "pass-instance"},
+    "status": "New",
+    "status_code": "PASS",
+    "severity": "Critical",
+    "cloud": {"account": {"uid": "security-prod-123"}, "provider": "gcp"},
+    "resources": [{"uid": "passing-resource"}]
+  },
+  {
+    "metadata": {"event_code": "ignored_manual"},
+    "finding_info": {"analytic": {"uid": "ignored_manual"}, "title": "Manual record", "uid": "manual-instance"},
+    "status": "New",
+    "status_code": "MANUAL",
+    "severity": "High",
+    "cloud": {"account": {"uid": "123456789012"}, "provider": "aws"},
+    "resources": [{"uid": "manual-resource"}]
+  }
+]

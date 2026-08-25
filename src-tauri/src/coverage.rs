@@ -317,6 +317,17 @@ pub fn assess_asset_coverage(
             incomplete_reasons.push(format!("{}=provider_incompatible", engine_run.engine_id));
             continue;
         }
+        if !manifest.provider_execution_contracts.is_empty()
+            && manifest
+                .provider_execution_contract(asset.provider.as_deref(), &asset.kind)
+                .is_none()
+        {
+            incomplete_reasons.push(format!(
+                "{}=provider_execution_contract_incompatible",
+                engine_run.engine_id
+            ));
+            continue;
+        }
         if !permissions_cover_manifest(&run_grants, manifest) {
             incomplete_reasons.push(format!("{}=scope_incompatible", engine_run.engine_id));
             continue;

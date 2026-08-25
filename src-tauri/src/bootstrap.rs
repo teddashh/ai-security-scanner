@@ -458,7 +458,7 @@ fn bootstrap_verify_operations(provider: BootstrapProvider) -> Vec<String> {
         BootstrapProvider::Gcp => vec![
             "oauth2:GET /v1/userinfo".into(),
             "cloudresourcemanager:GET /v3/organizations/{exact-id}".into(),
-            "cloudresourcemanager:organizations.testIamPermissions(required-read + prohibited-write)"
+            "cloudresourcemanager:organizations.testIamPermissions(discovery-read + organization-write denial)"
                 .into(),
         ],
         BootstrapProvider::Microsoft365 => vec![

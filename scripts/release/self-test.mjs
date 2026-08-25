@@ -11,9 +11,12 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { PROJECT_ROOT, readJson, runMain, sha256File } from "./lib.mjs";
+import {
+  createPlatformQualification,
+  validatePlatformQualification,
+} from "./platform-qualification.mjs";
 import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
 
 const VERSION = JSON.parse(
@@ -240,8 +243,160 @@ async function mergeFlat(source, destination) {
   }
 }
 
+async function createQualificationFixture(output, platform) {
+  const runtimeManifestFile = path.join(output, `managed-runtime-${platform}.manifest.json`);
+  const runtimeManifest = await readJson(runtimeManifestFile);
+  const manifestSha256 = await sha256File(runtimeManifestFile);
+  const target = runtimeManifest.targets[0];
+  const status = (phase, available) => ({
+    provider: "managed_local",
+    phase,
+    available,
+    runtime_version: runtimeManifest.runtime_version,
+    manifest_sha256: manifestSha256,
+    machine_image_sha256: target.machine_image.sha256,
+    operating_system: target.operating_system,
+    architecture: target.architecture,
+    machine_provider: target.provider,
+    prerequisite: null,
+    detail: `release self-test ${phase} status`,
+  });
+  const passed = (name, phase, available) => ({ name, outcome: "passed", status: status(phase, available) });
+  const qualificationRoot = path.join(output, `qualification-fixture-${platform}`);
+  await mkdir(qualificationRoot);
+  await copyFile(runtimeManifestFile, path.join(qualificationRoot, "installed-runtime-manifest.json"));
+  const installedPath = platform === "windows-x86_64" ? path.win32 : path.posix;
+  const prefix = platform === "windows-x86_64"
+    ? installedPath.join("C:\\fixture-installed", platform)
+    : installedPath.join("/fixture-installed", platform);
+  const extension = platform === "windows-x86_64" ? ".exe" : "";
+  const observations = {
+    installedLayout: {
+      pathsVerifiedAbsolute: true,
+      desktop: installedPath.join(prefix, `ai-security-scanner${extension}`),
+      cli: installedPath.join(prefix, `ai-security-scanner-cli${extension}`),
+      companions: [
+        { name: "ai-security-scanner-egress-gateway", path: installedPath.join(prefix, `ai-security-scanner-egress-gateway${extension}`) },
+        { name: "ai-security-scanner-bootstrap-broker", path: installedPath.join(prefix, `ai-security-scanner-bootstrap-broker${extension}`) },
+        { name: "ai-security-scanner-cli", path: installedPath.join(prefix, `ai-security-scanner-cli${extension}`) },
+      ],
+      runtimeManifestOriginalPath: installedPath.join(prefix, "managed-runtime", "manifest.json"),
+    },
+    desktopStartup: {
+      outcome: "passed",
+      observationSeconds: 12,
+      installedExecutable: installedPath.join(prefix, `ai-security-scanner${extension}`),
+    },
+    privateDataDirectory: platform === "windows-x86_64"
+      ? installedPath.join("C:\\fixture-private", platform)
+      : installedPath.join("/fixture-private", platform),
+    operations: platform === "macos-universal"
+      ? [
+          passed("initial_status", "not_installed", false),
+          passed("install", "installed", false),
+          passed("installed_status", "installed", false),
+          { name: "start", outcome: "unsupported", reason: "github_macos_hosted_nested_virtualization_unavailable" },
+          passed("uninstall_purge", "not_installed", false),
+          passed("final_status", "not_installed", false),
+        ]
+      : [
+          passed("initial_status", "not_installed", false),
+          passed("install", "installed", false),
+          passed("installed_status", "installed", false),
+          passed("start", "running", true),
+          passed("running_status", "running", true),
+          passed("stop", "stopped", false),
+          passed("stopped_status", "stopped", false),
+          passed("uninstall_purge", "not_installed", false),
+          passed("final_status", "not_installed", false),
+        ],
+    containerExecution: platform === "macos-universal"
+      ? { outcome: "not_run", reason: "github_macos_hosted_nested_virtualization_unavailable" }
+      : {
+          outcome: "passed",
+          result: {
+            schema_version: "1.0.0",
+            status: "passed",
+            qualification_kind: "managed_container_execution",
+            product_version: VERSION,
+            runtime: {
+              provider: "managed_local",
+              server_version: runtimeManifest.runtime_version,
+              command_provenance: {
+                kind: "managed_local",
+                runtime_version: runtimeManifest.runtime_version,
+                manifest_sha256: manifestSha256,
+                machine_image_sha256: target.machine_image.sha256,
+              },
+            },
+            container: {
+              engine_id: "gitleaks",
+              image: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+              network: "none",
+              read_only_root: true,
+              capabilities: "drop_all",
+              no_new_privileges: true,
+              credential_count: 0,
+              exit_code: 0,
+              cancelled: false,
+              created_object_id: "cd".repeat(32),
+              cleanup_removed: true,
+            },
+            evidence: {
+              scope_sha256: "10".repeat(32),
+              report_sha256: "11".repeat(32),
+              report_bytes: 2,
+              finding_count: 0,
+              stdout_sha256: "12".repeat(32),
+              stderr_sha256: "13".repeat(32),
+            },
+          },
+        },
+    cleanup: {
+      managedRuntimePurged: true,
+      machineImageCachePurged: true,
+      installerRemoved: true,
+      privateDataRemoved: true,
+    },
+    installedManifestSnapshot: "installed-runtime-manifest.json",
+  };
+  const observationsFile = path.join(qualificationRoot, "observations.json");
+  await writeFile(observationsFile, `${JSON.stringify(observations, null, 2)}\n`);
+  const runner = platform === "linux-x86_64"
+    ? { label: "ubuntu-24.04", os: "Linux", image: "ubuntu24" }
+    : platform === "macos-universal"
+      ? { label: "macos-14", os: "macOS", image: "macos14" }
+      : { label: "windows-2025", os: "Windows", image: "win25" };
+  await createPlatformQualification({
+    artifactDirectory: output,
+    observationsFile,
+    outputFile: path.join(output, `platform-qualification-${platform}.json`),
+    platform,
+    version: VERSION,
+    tag: TAG,
+    commit: COMMIT,
+    runnerLabel: runner.label,
+    environment: {
+      GITHUB_ACTIONS: "true",
+      RUNNER_ENVIRONMENT: "github-hosted",
+      RUNNER_OS: runner.os,
+      RUNNER_ARCH: "X64",
+      ImageOS: runner.image,
+      ImageVersion: "20260824.1",
+      GITHUB_WORKFLOW: "Release self-test fixture",
+      GITHUB_JOB: "qualification",
+      GITHUB_RUN_ID: "123456789",
+      GITHUB_RUN_ATTEMPT: "1",
+      GITHUB_SHA: COMMIT,
+    },
+  });
+  await rm(qualificationRoot, { recursive: true, force: true });
+}
+
 async function main() {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "ai-security-scanner-release-self-test-"));
+  const temporaryRoot = path.join(PROJECT_ROOT, "target", "release-self-test");
+  await mkdir(temporaryRoot, { recursive: true });
+  const temporary = await mkdtemp(path.join(temporaryRoot, "run-"));
   try {
     const signingKey = path.join(temporary, "updater-test.key");
     tauriSigner([
@@ -351,6 +506,9 @@ async function main() {
         ["msi", `ai-security-scanner_${VERSION}_x64_en-US.msi`],
       ], signingKey),
     ];
+    for (const [index, platform] of ["linux-x86_64", "macos-universal", "windows-x86_64"].entries()) {
+      await createQualificationFixture(outputs[index], platform);
+    }
     const release = path.join(temporary, "release-assets");
     await mkdir(release);
     for (const output of outputs) {
@@ -407,7 +565,7 @@ async function main() {
       })}\n`,
     );
 
-    run("finalize-release.mjs", [
+    const finalizeArguments = [
       "--dir",
       release,
       "--version",
@@ -418,7 +576,39 @@ async function main() {
       COMMIT,
       "--tauri-config",
       tauriConfig,
-    ]);
+    ];
+    const macQualification = path.join(release, "platform-qualification-macos-universal.json");
+    const hiddenMacQualification = `${macQualification}.missing`;
+    await rename(macQualification, hiddenMacQualification);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "missing platform qualification");
+    await rename(hiddenMacQualification, macQualification);
+    const linuxQualification = path.join(release, "platform-qualification-linux-x86_64.json");
+    const validLinuxQualification = await readFile(linuxQualification);
+    const tamperedQualification = JSON.parse(validLinuxQualification.toString("utf8"));
+    const expectedQualificationImage =
+      tamperedQualification.containerExecution.result.container.image;
+    tamperedQualification.cleanup.privateDataRemoved = false;
+    await writeFile(linuxQualification, `${JSON.stringify(tamperedQualification, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "dishonest platform qualification");
+    await writeFile(linuxQualification, validLinuxQualification);
+    const extendedQualification = JSON.parse(validLinuxQualification.toString("utf8"));
+    extendedQualification.unreleasedClaim = "must fail closed";
+    await writeFile(linuxQualification, `${JSON.stringify(extendedQualification, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "unknown qualification field");
+    await writeFile(linuxQualification, validLinuxQualification);
+    const relativePathQualification = JSON.parse(validLinuxQualification.toString("utf8"));
+    relativePathQualification.installedLayout.cli = "relative/ai-security-scanner-cli";
+    expectFailure(
+      () => validatePlatformQualification(relativePathQualification, { expectedQualificationImage }),
+      "relative installed path qualification",
+    );
+    const oversizedReportQualification = JSON.parse(validLinuxQualification.toString("utf8"));
+    oversizedReportQualification.containerExecution.result.evidence.report_bytes = 1024 * 1024 + 1;
+    expectFailure(
+      () => validatePlatformQualification(oversizedReportQualification, { expectedQualificationImage }),
+      "oversized container qualification report",
+    );
+    run("finalize-release.mjs", finalizeArguments);
     const finalizedVerificationArguments = [
       "--dir",
       release,
@@ -450,11 +640,19 @@ async function main() {
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
       latest.version !== VERSION ||
-      !latest.notes.includes("Security and consistency repair release") ||
-      !releaseNotes.includes("This patch release hardens container ownership controls") ||
+      !latest.notes.includes("typed immutable local-input snapshots") ||
+      !latest.notes.includes("exact-scope AWS/Azure/GCP provider execution") ||
+      !releaseNotes.includes("typed immutable snapshots for repository, IaC, OCI") ||
+      !releaseNotes.includes("The required 21-engine catalog is bound") ||
+      latest.notes.includes("repair release") ||
+      releaseNotes.includes("This patch release") ||
       !checksums.includes("ai-security-scanner-egress-gateway") ||
       !checksums.includes("ai-security-scanner-bootstrap-broker") ||
       !checksums.includes("ai-security-scanner-cli") ||
+      !checksums.includes("platform-qualification-linux-x86_64.json") ||
+      !checksums.includes("platform-qualification-macos-universal.json") ||
+      !checksums.includes("platform-qualification-windows-x86_64.json") ||
+      !releaseNotes.includes("nested-virtualization start and container execution are explicitly recorded as not run") ||
       Object.keys(latest.platforms).length !== 11 ||
       !latest.platforms["windows-x86_64-nsis"] ||
       !latest.platforms["windows-x86_64-msi"] ||
@@ -469,7 +667,7 @@ async function main() {
       throw new Error("finalized release did not preserve updater and companion executable evidence");
     }
     process.stdout.write(
-      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, and three exact managed-runtime evidence sets.\n",
+      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact managed-runtime evidence sets, and three strict hosted platform qualifications.\n",
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });

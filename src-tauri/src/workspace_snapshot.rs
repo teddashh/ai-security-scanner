@@ -6,14 +6,15 @@
 //! must obtain `selected_source_directory` through a trusted backend selection
 //! flow; no destination path is accepted from the frontend.
 
-use crate::domain::{Asset, AssetIdentifier, AssetKind};
+use crate::domain::{Asset, AssetIdentifier, LocalInputProfile};
 use crate::error::{AppError, AppResult};
+use flate2::read::MultiGzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
@@ -26,6 +27,8 @@ pub const WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA: &str =
 pub const WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY: &str =
     "ai_security_scanner.workspace_snapshot_reference";
 pub const WORKING_TREE_SEMANTICS: &str = "working_tree_only";
+pub const LOCAL_INPUT_PROFILE_FILENAME: &str = ".ai-security-scanner-input.json";
+pub const LOCAL_INPUT_PROFILE_SCHEMA: &str = "ai-security-scanner.local-input/v1";
 
 const SNAPSHOT_DIRECTORY: &str = "workspace-snapshots";
 const TREE_DIRECTORY: &str = "tree";
@@ -42,6 +45,18 @@ const HARD_MAX_DIRECTORIES: usize = 100_000;
 const HARD_MAX_TOTAL_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 const HARD_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const HARD_MAX_DEPTH: usize = 64;
+const OCI_IMAGE_INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
+const OCI_IMAGE_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
+const OCI_IMAGE_CONFIG_MEDIA_TYPE: &str = "application/vnd.oci.image.config.v1+json";
+const OCI_IMAGE_LAYER_TAR_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
+const OCI_IMAGE_LAYER_GZIP_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
+const OCI_MAX_LAYERS: usize = 4_096;
+const OCI_MAX_TAR_ENTRIES: usize = HARD_MAX_FILES;
+const OCI_MAX_UNCOMPRESSED_LAYER_BYTES: u64 = HARD_MAX_FILE_BYTES;
+
+/// Public API name retained for the snapshot boundary; engine manifests use
+/// the same domain enum so the planner and resolver cannot drift.
+pub type WorkspaceInputProfile = LocalInputProfile;
 
 /// Explicit resource limits applied before and during every copy.
 ///
@@ -107,6 +122,8 @@ pub struct WorkspaceSnapshotFile {
 pub struct WorkspaceSnapshotManifest {
     pub schema_version: String,
     pub content_semantics: String,
+    #[serde(default, skip_serializing_if = "WorkspaceInputProfile::is_repository")]
+    pub input_profile: WorkspaceInputProfile,
     pub excluded_entries: Vec<String>,
     pub directories: Vec<String>,
     pub files: Vec<WorkspaceSnapshotFile>,
@@ -122,6 +139,8 @@ pub struct WorkspaceSnapshotManifest {
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceSnapshotReference {
     pub schema_version: String,
+    #[serde(default, skip_serializing_if = "WorkspaceInputProfile::is_repository")]
+    pub input_profile: WorkspaceInputProfile,
     pub storage_id: String,
     pub snapshot_id: String,
     pub sha256: String,
@@ -159,6 +178,28 @@ pub fn create_workspace_snapshot(
     selected_source_directory: impl AsRef<Path>,
     limits: WorkspaceSnapshotLimits,
 ) -> AppResult<WorkspaceSnapshot> {
+    create_workspace_snapshot_with_profile(
+        artifact_root,
+        case_id,
+        source_id,
+        selected_source_directory,
+        WorkspaceInputProfile::RepositoryWorkingTree,
+        limits,
+    )
+}
+
+/// Copies one explicitly typed local input into the same immutable snapshot
+/// boundary used by repository scans. The profile is backend-authored and
+/// content-addressed so a scanner cannot reinterpret a repository as an image,
+/// node snapshot, or Kubernetes manifest set.
+pub fn create_workspace_snapshot_with_profile(
+    artifact_root: impl AsRef<Path>,
+    case_id: &str,
+    source_id: &str,
+    selected_source_directory: impl AsRef<Path>,
+    input_profile: WorkspaceInputProfile,
+    limits: WorkspaceSnapshotLimits,
+) -> AppResult<WorkspaceSnapshot> {
     validate_safe_id("case id", case_id)?;
     validate_safe_id("source id", source_id)?;
     let limits = limits.validate()?;
@@ -170,6 +211,7 @@ pub fn create_workspace_snapshot(
             "selected working tree and artifact root must not overlap".into(),
         ));
     }
+    validate_selected_input_profile(&selected_source, input_profile)?;
 
     let case_directory = ensure_private_child_directory(&artifact_root, case_id)?;
     let snapshots_directory = ensure_private_child_directory(&case_directory, SNAPSHOT_DIRECTORY)?;
@@ -189,6 +231,10 @@ pub fn create_workspace_snapshot(
         limits,
         &mut copy_state,
     )?;
+    validate_copied_input_files(&tree_path, &copy_state, input_profile)?;
+    if !input_profile.is_repository() {
+        write_input_profile_marker(&tree_path, input_profile, limits, &mut copy_state)?;
+    }
 
     copy_state.directories.sort();
     copy_state.files.sort_by(|left, right| {
@@ -199,6 +245,7 @@ pub fn create_workspace_snapshot(
     let manifest = WorkspaceSnapshotManifest {
         schema_version: WORKSPACE_SNAPSHOT_SCHEMA.into(),
         content_semantics: WORKING_TREE_SEMANTICS.into(),
+        input_profile,
         excluded_entries: vec![".git".into()],
         directory_count: copy_state.directories.len(),
         file_count: copy_state.files.len(),
@@ -241,6 +288,7 @@ pub fn create_workspace_snapshot(
     let snapshot_id = format!("{SNAPSHOT_ID_PREFIX}{snapshot_sha256}");
     let reference = WorkspaceSnapshotReference {
         schema_version: WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA.into(),
+        input_profile,
         storage_id,
         snapshot_id: snapshot_id.clone(),
         sha256: snapshot_sha256.clone(),
@@ -249,7 +297,7 @@ pub fn create_workspace_snapshot(
         total_bytes: manifest.total_bytes,
         working_tree_only: true,
     };
-    let asset = snapshot_asset(source_id, &snapshot_id, &snapshot_sha256);
+    let asset = snapshot_asset(source_id, &snapshot_id, &snapshot_sha256, input_profile);
     cleanup.disarm();
 
     Ok(WorkspaceSnapshot {
@@ -319,6 +367,7 @@ pub fn resolve_workspace_snapshot(
             "workspace snapshot contents do not match the immutable manifest".into(),
         ));
     }
+    validate_resolved_input_profile(&tree_path, reference.input_profile)?;
 
     Ok(ResolvedWorkspaceSnapshot {
         tree_path,
@@ -642,6 +691,7 @@ fn validate_manifest(
         && manifest.total_bytes == reference.total_bytes;
     if manifest.schema_version != WORKSPACE_SNAPSHOT_SCHEMA
         || manifest.content_semantics != WORKING_TREE_SEMANTICS
+        || manifest.input_profile != reference.input_profile
         || manifest.excluded_entries != [".git"]
         || !totals_match
     {
@@ -684,7 +734,511 @@ fn validate_manifest(
     Ok(())
 }
 
-fn snapshot_asset(source_id: &str, snapshot_id: &str, sha256: &str) -> Asset {
+fn validate_selected_input_profile(
+    selected_source: &Path,
+    input_profile: WorkspaceInputProfile,
+) -> AppResult<()> {
+    match fs::symlink_metadata(selected_source.join(LOCAL_INPUT_PROFILE_FILENAME)) {
+        Ok(_) => {
+            return Err(AppError::InvalidRequest(format!(
+                "selected local input contains the reserved backend marker {LOCAL_INPUT_PROFILE_FILENAME}"
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(AppError::InvalidRequest(format!(
+                "selected local input marker path could not be inspected: {error}"
+            )));
+        }
+    }
+
+    if input_profile == WorkspaceInputProfile::KubernetesNodeSnapshot {
+        let node_root = selected_source.join("node-snapshot");
+        let metadata = fs::symlink_metadata(&node_root).map_err(|error| {
+            AppError::InvalidRequest(format!(
+                "Kubernetes node input must contain a node-snapshot directory: {error}"
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(AppError::InvalidRequest(
+                "Kubernetes node input must contain a real node-snapshot directory".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_resolved_input_profile(
+    tree_path: &Path,
+    input_profile: WorkspaceInputProfile,
+) -> AppResult<()> {
+    let marker_path = tree_path.join(LOCAL_INPUT_PROFILE_FILENAME);
+    if input_profile.is_repository() {
+        return match fs::symlink_metadata(marker_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(AppError::Runtime(
+                "repository snapshot contains a reserved local input profile marker".into(),
+            )),
+        };
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Marker {
+        schema_version: String,
+        input_profile: WorkspaceInputProfile,
+    }
+
+    let bytes = read_bounded_stable_file(&marker_path, 4 * 1024)?;
+    let marker: Marker = serde_json::from_slice(&bytes)
+        .map_err(|_| AppError::Runtime("local input profile marker is invalid".into()))?;
+    if marker.schema_version != LOCAL_INPUT_PROFILE_SCHEMA || marker.input_profile != input_profile
+    {
+        return Err(AppError::Runtime(
+            "local input profile marker conflicts with its backend reference".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_copied_input_files(
+    tree_path: &Path,
+    state: &CopyState,
+    input_profile: WorkspaceInputProfile,
+) -> AppResult<()> {
+    let has_extension = |extensions: &[&str]| {
+        state.files.iter().any(|file| {
+            Path::new(&file.relative_path)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extensions
+                        .iter()
+                        .any(|expected| extension.eq_ignore_ascii_case(expected))
+                })
+        })
+    };
+    match input_profile {
+        WorkspaceInputProfile::RepositoryWorkingTree => Ok(()),
+        WorkspaceInputProfile::IacWorkingTree if !has_extension(&["tf", "json", "yaml", "yml"]) => {
+            Err(AppError::InvalidRequest(
+                "infrastructure-as-code input contains no .tf, .json, .yaml, or .yml file".into(),
+            ))
+        }
+        WorkspaceInputProfile::KubernetesManifests if !has_extension(&["json", "yaml", "yml"]) => {
+            Err(AppError::InvalidRequest(
+                "Kubernetes manifest input contains no .json, .yaml, or .yml file".into(),
+            ))
+        }
+        WorkspaceInputProfile::ContainerImageOciLayout => validate_oci_image_layout(tree_path),
+        WorkspaceInputProfile::KubernetesNodeSnapshot => {
+            let profile_path = tree_path.join("node-snapshot/profile.json");
+            let bytes = read_bounded_stable_file(&profile_path, 256 * 1024).map_err(|_| {
+                AppError::InvalidRequest(
+                    "Kubernetes node input requires node-snapshot/profile.json".into(),
+                )
+            })?;
+            let profile: Value = serde_json::from_slice(&bytes).map_err(|_| {
+                AppError::InvalidRequest(
+                    "Kubernetes node snapshot profile.json is not valid JSON".into(),
+                )
+            })?;
+            if profile.get("schema_version").and_then(Value::as_str) != Some("1.0.0")
+                || profile.get("profile").and_then(Value::as_str)
+                    != Some("cis-kubernetes-node-config")
+            {
+                return Err(AppError::InvalidRequest(
+                    "Kubernetes node snapshot profile identity is invalid".into(),
+                ));
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_oci_image_layout(tree_path: &Path) -> AppResult<()> {
+    let layout = read_bounded_json(tree_path, "oci-layout", 64 * 1024)?;
+    if layout.get("imageLayoutVersion").and_then(Value::as_str) != Some("1.0.0") {
+        return Err(AppError::InvalidRequest(
+            "OCI image layout must declare imageLayoutVersion 1.0.0".into(),
+        ));
+    }
+    let index = read_bounded_json(tree_path, "index.json", 16 * 1024 * 1024)?;
+    if index.get("schemaVersion").and_then(Value::as_u64) != Some(2) {
+        return Err(AppError::InvalidRequest(
+            "OCI image index must use schemaVersion 2".into(),
+        ));
+    }
+    require_oci_json_media_type(&index, OCI_IMAGE_INDEX_MEDIA_TYPE, "image index")?;
+    let manifests = index
+        .get("manifests")
+        .and_then(Value::as_array)
+        .filter(|manifests| manifests.len() == 1)
+        .ok_or_else(|| {
+            AppError::InvalidRequest(
+                "OCI image layout must select exactly one image manifest".into(),
+            )
+        })?;
+    require_oci_descriptor_media_type(
+        &manifests[0],
+        &[OCI_IMAGE_MANIFEST_MEDIA_TYPE],
+        "image manifest",
+    )?;
+    let mut referenced_blobs = BTreeSet::new();
+    referenced_blobs.insert(oci_descriptor_digest(&manifests[0])?.to_owned());
+    let manifest_bytes = verify_oci_descriptor(tree_path, &manifests[0], 16 * 1024 * 1024)?;
+    let manifest: Value = serde_json::from_slice(&manifest_bytes)
+        .map_err(|_| AppError::InvalidRequest("OCI image manifest is not valid JSON".into()))?;
+    if manifest.get("schemaVersion").and_then(Value::as_u64) != Some(2) {
+        return Err(AppError::InvalidRequest(
+            "OCI image manifest must use schemaVersion 2".into(),
+        ));
+    }
+    require_oci_json_media_type(&manifest, OCI_IMAGE_MANIFEST_MEDIA_TYPE, "image manifest")?;
+    let config = manifest.get("config").ok_or_else(|| {
+        AppError::InvalidRequest("OCI image manifest has no config descriptor".into())
+    })?;
+    require_oci_descriptor_media_type(config, &[OCI_IMAGE_CONFIG_MEDIA_TYPE], "image config")?;
+    referenced_blobs.insert(oci_descriptor_digest(config)?.to_owned());
+    let config_bytes = verify_oci_descriptor(tree_path, config, 16 * 1024 * 1024)?;
+    let config: Value = serde_json::from_slice(&config_bytes)
+        .map_err(|_| AppError::InvalidRequest("OCI image config is not valid JSON".into()))?;
+    validate_oci_platform(&config)?;
+    let layers = manifest
+        .get("layers")
+        .and_then(Value::as_array)
+        .filter(|layers| layers.len() <= OCI_MAX_LAYERS)
+        .ok_or_else(|| {
+            AppError::InvalidRequest("OCI image layer inventory is invalid or unbounded".into())
+        })?;
+    let diff_ids = config
+        .get("rootfs")
+        .and_then(Value::as_object)
+        .filter(|rootfs| rootfs.get("type").and_then(Value::as_str) == Some("layers"))
+        .and_then(|rootfs| rootfs.get("diff_ids"))
+        .and_then(Value::as_array)
+        .filter(|diff_ids| diff_ids.len() == layers.len())
+        .ok_or_else(|| {
+            AppError::InvalidRequest(
+                "OCI image config rootfs diff_ids do not match its layer inventory".into(),
+            )
+        })?;
+    let mut tar_entries = 0_usize;
+    for (layer, diff_id) in layers.iter().zip(diff_ids) {
+        let media_type = require_oci_descriptor_media_type(
+            layer,
+            &[
+                OCI_IMAGE_LAYER_TAR_MEDIA_TYPE,
+                OCI_IMAGE_LAYER_GZIP_MEDIA_TYPE,
+            ],
+            "image layer",
+        )?;
+        referenced_blobs.insert(oci_descriptor_digest(layer)?.to_owned());
+        let bytes = verify_oci_descriptor(tree_path, layer, HARD_MAX_FILE_BYTES)?;
+        let expected_diff_id = diff_id
+            .as_str()
+            .and_then(|digest| digest.strip_prefix("sha256:"))
+            .filter(|digest| valid_sha256(digest))
+            .ok_or_else(|| {
+                AppError::InvalidRequest(
+                    "OCI image config contains an invalid layer diff_id".into(),
+                )
+            })?;
+        validate_oci_layer_tar(&bytes, media_type, expected_diff_id, &mut tar_entries)?;
+    }
+    validate_exact_oci_blob_inventory(tree_path, &referenced_blobs)?;
+    Ok(())
+}
+
+fn require_oci_json_media_type<'a>(
+    value: &'a Value,
+    expected: &str,
+    kind: &str,
+) -> AppResult<&'a str> {
+    value
+        .get("mediaType")
+        .and_then(Value::as_str)
+        .filter(|media_type| *media_type == expected)
+        .ok_or_else(|| AppError::InvalidRequest(format!("OCI {kind} mediaType is invalid")))
+}
+
+fn require_oci_descriptor_media_type<'a>(
+    descriptor: &'a Value,
+    allowed: &[&str],
+    kind: &str,
+) -> AppResult<&'a str> {
+    descriptor
+        .get("mediaType")
+        .and_then(Value::as_str)
+        .filter(|media_type| allowed.contains(media_type))
+        .ok_or_else(|| {
+            AppError::InvalidRequest(format!("OCI {kind} descriptor mediaType is invalid"))
+        })
+}
+
+fn oci_descriptor_digest(descriptor: &Value) -> AppResult<&str> {
+    descriptor
+        .get("digest")
+        .and_then(Value::as_str)
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+        .filter(|digest| valid_sha256(digest))
+        .ok_or_else(|| AppError::InvalidRequest("OCI descriptor has an invalid digest".into()))
+}
+
+fn validate_oci_platform(config: &Value) -> AppResult<()> {
+    for key in ["architecture", "os"] {
+        let valid = config
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                !value.is_empty()
+                    && value.len() <= 64
+                    && value.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'_' | b'.' | b'-')
+                    })
+            });
+        if !valid {
+            return Err(AppError::InvalidRequest(format!(
+                "OCI image config {key} is invalid"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_oci_layer_tar(
+    bytes: &[u8],
+    media_type: &str,
+    expected_diff_id: &str,
+    total_entries: &mut usize,
+) -> AppResult<()> {
+    if media_type == OCI_IMAGE_LAYER_TAR_MEDIA_TYPE {
+        if sha256_bytes(bytes) != expected_diff_id {
+            return Err(AppError::InvalidRequest(
+                "OCI image layer does not match its config diff_id".into(),
+            ));
+        }
+        inspect_oci_tar(Cursor::new(bytes), total_entries)?;
+        return Ok(());
+    }
+
+    let reader =
+        DigestingBoundedReader::new(MultiGzDecoder::new(bytes), OCI_MAX_UNCOMPRESSED_LAYER_BYTES);
+    let reader = inspect_oci_tar(reader, total_entries)?;
+    let (actual_diff_id, _) = reader.finish()?;
+    if actual_diff_id != expected_diff_id {
+        return Err(AppError::InvalidRequest(
+            "OCI image layer does not match its config diff_id".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn inspect_oci_tar<R: Read>(reader: R, total_entries: &mut usize) -> AppResult<R> {
+    let mut archive = tar::Archive::new(reader);
+    let entries = archive.entries().map_err(|_| {
+        AppError::InvalidRequest("OCI image layer is not a valid tar archive".into())
+    })?;
+    for entry in entries {
+        let mut entry = entry.map_err(|_| {
+            AppError::InvalidRequest("OCI image layer contains an invalid tar entry".into())
+        })?;
+        *total_entries = total_entries.checked_add(1).ok_or_else(|| {
+            AppError::InvalidRequest("OCI image layer entry count overflowed".into())
+        })?;
+        if *total_entries > OCI_MAX_TAR_ENTRIES || entry.size() > HARD_MAX_FILE_BYTES {
+            return Err(AppError::InvalidRequest(
+                "OCI image layer tar inventory exceeds its safety bound".into(),
+            ));
+        }
+        let path = entry.path().map_err(|_| {
+            AppError::InvalidRequest("OCI image layer contains an invalid tar path".into())
+        })?;
+        if path.as_os_str().is_empty()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(AppError::InvalidRequest(
+                "OCI image layer contains a path outside its root".into(),
+            ));
+        }
+        io::copy(&mut entry, &mut io::sink()).map_err(|_| {
+            AppError::InvalidRequest("OCI image layer tar payload is invalid or unbounded".into())
+        })?;
+    }
+    let mut reader = archive.into_inner();
+    io::copy(&mut reader, &mut io::sink()).map_err(|_| {
+        AppError::InvalidRequest("OCI image layer tar trailer is invalid or unbounded".into())
+    })?;
+    Ok(reader)
+}
+
+struct DigestingBoundedReader<R> {
+    inner: R,
+    digest: Sha256,
+    bytes_read: u64,
+    limit: u64,
+}
+
+impl<R> DigestingBoundedReader<R> {
+    fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            digest: Sha256::new(),
+            bytes_read: 0,
+            limit,
+        }
+    }
+
+    fn finish(self) -> AppResult<(String, u64)> {
+        Ok((hex::encode(self.digest.finalize()), self.bytes_read))
+    }
+}
+
+impl<R: Read> Read for DigestingBoundedReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let remaining = self.limit.saturating_sub(self.bytes_read);
+        let request = buffer
+            .len()
+            .min(usize::try_from(remaining.saturating_add(1)).unwrap_or(buffer.len()));
+        let read = self.inner.read(&mut buffer[..request])?;
+        if u64::try_from(read).unwrap_or(u64::MAX) > remaining {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "OCI image layer exceeds its uncompressed byte limit",
+            ));
+        }
+        self.digest.update(&buffer[..read]);
+        self.bytes_read = self.bytes_read.saturating_add(read as u64);
+        Ok(read)
+    }
+}
+
+fn validate_exact_oci_blob_inventory(root: &Path, expected: &BTreeSet<String>) -> AppResult<()> {
+    let blob_root = root.join("blobs").join("sha256");
+    ensure_canonical_inside(&blob_root, root).map_err(|_| {
+        AppError::InvalidRequest("OCI image blob directory is missing or unsafe".into())
+    })?;
+    let mut actual = BTreeSet::new();
+    for entry in fs::read_dir(&blob_root).map_err(|_| {
+        AppError::InvalidRequest("OCI image blob directory cannot be enumerated".into())
+    })? {
+        let entry = entry.map_err(|_| {
+            AppError::InvalidRequest("OCI image blob directory contains an invalid entry".into())
+        })?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            AppError::InvalidRequest("OCI image blob name is not valid UTF-8".into())
+        })?;
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|_| AppError::InvalidRequest("OCI image blob cannot be inspected".into()))?;
+        if !valid_sha256(&name) || !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(AppError::InvalidRequest(
+                "OCI image blob inventory contains an unsafe entry".into(),
+            ));
+        }
+        actual.insert(name);
+    }
+    if &actual != expected {
+        return Err(AppError::InvalidRequest(
+            "OCI image layout contains missing or unreferenced blobs".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn read_bounded_json(root: &Path, relative_path: &str, max_bytes: u64) -> AppResult<Value> {
+    let path = root.join(relative_path);
+    ensure_canonical_inside(&path, root).map_err(|_| {
+        AppError::InvalidRequest(format!(
+            "local input is missing a safe regular {relative_path}"
+        ))
+    })?;
+    let bytes = read_bounded_stable_file(&path, max_bytes).map_err(|_| {
+        AppError::InvalidRequest(format!(
+            "local input is missing a bounded regular {relative_path}"
+        ))
+    })?;
+    serde_json::from_slice(&bytes).map_err(|_| {
+        AppError::InvalidRequest(format!("local input {relative_path} is not valid JSON"))
+    })
+}
+
+fn verify_oci_descriptor(root: &Path, descriptor: &Value, max_bytes: u64) -> AppResult<Vec<u8>> {
+    let digest = oci_descriptor_digest(descriptor)?;
+    let expected_size = descriptor
+        .get("size")
+        .and_then(Value::as_u64)
+        .filter(|size| *size > 0 && *size <= max_bytes)
+        .ok_or_else(|| AppError::InvalidRequest("OCI descriptor has an invalid size".into()))?;
+    let blob_path = root.join("blobs").join("sha256").join(digest);
+    ensure_canonical_inside(&blob_path, root).map_err(|_| {
+        AppError::InvalidRequest("OCI descriptor blob is missing or escaped the layout".into())
+    })?;
+    let bytes = read_bounded_stable_file(&blob_path, max_bytes).map_err(|_| {
+        AppError::InvalidRequest("OCI descriptor blob is not a bounded regular file".into())
+    })?;
+    if bytes.len() as u64 != expected_size || sha256_bytes(&bytes) != digest {
+        return Err(AppError::InvalidRequest(
+            "OCI descriptor size or SHA-256 does not match its blob".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn write_input_profile_marker(
+    tree_path: &Path,
+    input_profile: WorkspaceInputProfile,
+    limits: WorkspaceSnapshotLimits,
+    state: &mut CopyState,
+) -> AppResult<()> {
+    #[derive(Serialize)]
+    struct Marker {
+        schema_version: &'static str,
+        input_profile: WorkspaceInputProfile,
+    }
+
+    let mut bytes = serde_json::to_vec(&Marker {
+        schema_version: LOCAL_INPUT_PROFILE_SCHEMA,
+        input_profile,
+    })?;
+    bytes.push(b'\n');
+    let byte_length = u64::try_from(bytes.len())
+        .map_err(|_| AppError::Runtime("local input profile marker length overflowed".into()))?;
+    let total_bytes = state
+        .total_bytes
+        .checked_add(byte_length)
+        .ok_or_else(|| AppError::Runtime("workspace snapshot byte count overflowed".into()))?;
+    if state.files.len() >= limits.max_files || total_bytes > limits.max_total_bytes {
+        return Err(AppError::InvalidRequest(
+            "local input profile marker would exceed snapshot limits".into(),
+        ));
+    }
+    write_private_readonly_file(&tree_path.join(LOCAL_INPUT_PROFILE_FILENAME), &bytes)?;
+    state.files.push(WorkspaceSnapshotFile {
+        relative_path: LOCAL_INPUT_PROFILE_FILENAME.into(),
+        byte_length,
+        sha256: sha256_bytes(&bytes),
+    });
+    state.total_bytes = total_bytes;
+    Ok(())
+}
+
+fn snapshot_asset(
+    source_id: &str,
+    snapshot_id: &str,
+    sha256: &str,
+    input_profile: WorkspaceInputProfile,
+) -> Asset {
     let mut metadata = BTreeMap::new();
     metadata.insert(
         "workspace_snapshot_id".into(),
@@ -694,10 +1248,20 @@ fn snapshot_asset(source_id: &str, snapshot_id: &str, sha256: &str) -> Asset {
         "workspace_snapshot_sha256".into(),
         Value::String(sha256.into()),
     );
+    if !input_profile.is_repository() {
+        metadata.insert(
+            "local_input_profile".into(),
+            serde_json::to_value(input_profile).expect("local input profile serializes"),
+        );
+    }
     Asset {
         id: format!("{ASSET_ID_PREFIX}{sha256}"),
-        kind: AssetKind::Repository,
-        name: format!("Local working-tree snapshot {}", &sha256[..12]),
+        kind: input_profile.asset_kind(),
+        name: format!(
+            "Local {} snapshot {}",
+            input_profile.display_name(),
+            &sha256[..12]
+        ),
         provider: None,
         region: None,
         identifiers: vec![AssetIdentifier {

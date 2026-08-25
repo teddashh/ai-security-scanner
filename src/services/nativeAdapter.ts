@@ -27,6 +27,7 @@ import type {
   FindingGroup,
   FindingGroupEvent,
   FindingWorkflowState,
+  LocalInputProfile,
   RunStatus,
   ScopeGrant,
   ScopeMode,
@@ -76,6 +77,7 @@ interface NativeAsset {
   owner_confirmed: boolean;
   internet_exposed?: boolean | null;
   contains_sensitive_data?: boolean | null;
+  metadata?: Record<string, unknown>;
 }
 
 interface NativeExternalScope {
@@ -455,7 +457,7 @@ const platformFromAsset = (asset: NativeAsset): CloudPlatform => {
   if (asset.kind === "subscription") return "azure";
   if (asset.kind === "project") return "gcp";
   if (asset.kind === "tenant") return "m365";
-  if (["repository", "file_system", "iac_project"].includes(asset.kind)) return "code";
+  if (["repository", "file_system", "iac_project", "host"].includes(asset.kind)) return "code";
   if (["container_image", "container_registry"].includes(asset.kind)) return "container";
   if (asset.kind === "kubernetes_cluster") return "kubernetes";
   return "external";
@@ -482,6 +484,21 @@ const mapAssetType = (kind: string): AssetType => {
     kubernetes_cluster: "cluster",
   };
   return types[kind] ?? "service";
+};
+
+const localInputProfiles: LocalInputProfile[] = [
+  "repository_working_tree",
+  "iac_working_tree",
+  "container_image_oci_layout",
+  "kubernetes_manifests",
+  "kubernetes_node_snapshot",
+];
+
+const localInputProfileFromAsset = (asset: NativeAsset): LocalInputProfile | undefined => {
+  const profile = asset.metadata?.local_input_profile;
+  return typeof profile === "string" && localInputProfiles.includes(profile as LocalInputProfile)
+    ? profile as LocalInputProfile
+    : undefined;
 };
 
 const mapCoverageState = (status: string): CoverageState => {
@@ -807,6 +824,7 @@ export const adaptNativeCase = (
       allowedModes: unique(grants.map((grant) => mapScopeMode(grant.permission))),
       findingCount: findingCount.get(asset.id) ?? 0,
       lastObservedAt: entry?.observed_at ?? undefined,
+      localInputProfile: localInputProfileFromAsset(asset),
     };
   });
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));

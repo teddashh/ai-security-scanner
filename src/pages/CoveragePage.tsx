@@ -148,6 +148,35 @@ const parserProfileLabels: Record<SnapshotParserProfile, string> = {
 
 const allSourceKinds = Object.keys(sourceDefinitions) as SourceKind[];
 const coverageStates = Object.keys(coverageMeta) as CoverageState[];
+type LocalInputProfile = AttachWorkspaceSnapshotInput["inputProfile"];
+
+const localInputDefinitions: Record<LocalInputProfile, { label: string; detail: string; selection: string }> = {
+  repository_working_tree: {
+    label: "Repository working tree",
+    detail: "供 Semgrep、Gitleaks、TruffleHog、Trivy 與 Syft 讀取目前工作樹；不包含 Git history。",
+    selection: "選擇 repository 根目錄",
+  },
+  iac_working_tree: {
+    label: "Infrastructure-as-code tree",
+    detail: "供 Checkov、KICS 與本機 artifact scanners 讀取 Terraform／JSON／YAML。",
+    selection: "選擇 IaC 專案根目錄",
+  },
+  container_image_oci_layout: {
+    label: "OCI image layout",
+    detail: "供 Trivy 與 Grype 離線掃描單一、digest-bound 的 OCI Image Layout。",
+    selection: "選擇含 oci-layout、index.json 與 blobs/ 的根目錄",
+  },
+  kubernetes_manifests: {
+    label: "Kubernetes manifests",
+    detail: "供 Kubescape 離線掃描明確選取的 YAML／JSON manifests；不連線到 live cluster。",
+    selection: "選擇 Kubernetes manifests 根目錄",
+  },
+  kubernetes_node_snapshot: {
+    label: "Kubernetes node snapshot",
+    detail: "供 kube-bench 讀取受限 CIS node 設定快照；不掛載 host filesystem。",
+    selection: "選擇含 node-snapshot/ 的父目錄",
+  },
+};
 
 const scopeModeLabels: Record<ScopeMode, { label: string; detail: string }> = {
   inventory: { label: "唯讀盤點", detail: "只讀取資產清單與識別資訊" },
@@ -222,7 +251,8 @@ export function CoveragePage({
   const [selectedPath, setSelectedPath] = useState("");
   const [choosingSnapshot, setChoosingSnapshot] = useState(false);
   const [sourceFormError, setSourceFormError] = useState<string>();
-  const [workspaceLabel, setWorkspaceLabel] = useState("Local working tree");
+  const [workspaceLabel, setWorkspaceLabel] = useState("Local repository working tree");
+  const [workspaceInputProfile, setWorkspaceInputProfile] = useState<LocalInputProfile>("repository_working_tree");
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState("");
   const [choosingWorkspace, setChoosingWorkspace] = useState(false);
   const [workspaceFormError, setWorkspaceFormError] = useState<string>();
@@ -440,7 +470,7 @@ export function CoveragePage({
       const path = await onChooseWorkspace();
       if (path) setSelectedWorkspacePath(path);
     } catch {
-      setWorkspaceFormError("無法開啟本機目錄選擇器；沒有讀取或複製任何目錄。");
+      setWorkspaceFormError("無法開啟本機輸入目錄選擇器；沒有讀取或複製任何目錄。");
     } finally {
       setChoosingWorkspace(false);
     }
@@ -461,6 +491,7 @@ export function CoveragePage({
       caseId,
       label: workspaceLabel.trim(),
       selectedPath: selectedWorkspacePath,
+      inputProfile: workspaceInputProfile,
     });
   };
 
@@ -478,7 +509,7 @@ export function CoveragePage({
             </button>
             <button className="button button--secondary" type="button" disabled={busy} aria-expanded={showWorkspaceForm} aria-controls="workspace-snapshot-form" onClick={() => { setShowWorkspaceForm((value) => !value); setShowSourceForm(false); }}>
               <Icon name={showWorkspaceForm ? "close" : "database"} size={18} />
-              {showWorkspaceForm ? "關閉工作樹表單" : "加入本機工作樹"}
+              {showWorkspaceForm ? "關閉本機輸入表單" : "附加本機掃描輸入"}
             </button>
             <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStartDiscovery()}>
               <Icon name="refresh" size={18} />
@@ -564,36 +595,53 @@ export function CoveragePage({
       {showWorkspaceForm && (
         <form id="workspace-snapshot-form" className="source-connect-panel" aria-labelledby="workspace-snapshot-title" onSubmit={attachWorkspace}>
           <div className="section-heading">
-            <p className="eyebrow">Immutable working-tree snapshot</p>
-            <h2 id="workspace-snapshot-title">附加一份本機 working-tree 副本</h2>
-            <p>後端只複製你明確選取的目錄，套用檔案數、單檔大小、總容量與深度上限，完成後以內容雜湊固定成不可變案件證據。</p>
+            <p className="eyebrow">Immutable local scan input</p>
+            <h2 id="workspace-snapshot-title">附加一份有明確類型的本機掃描輸入</h2>
+            <p>後端只複製你明確選取的目錄，驗證所選類型，套用檔案數、單檔大小、總容量與深度上限，再以內容雜湊固定成不可變案件證據。</p>
           </div>
 
           <InlineNotice tone="warning" title="只排除 .git metadata；先移除工作樹內的秘密檔案">
             <p>所有名為 .git 的項目都不會被開啟或複製，因此 Git history、refs、hooks 與其中 credentials 不會進入快照；但工作樹裡的 .env、金鑰或 token 檔若存在仍屬內容，請先移除。</p>
           </InlineNotice>
 
-          <InlineNotice tone="info" title="這個動作不會授予掃描範圍">
-            <p>案件只保存後端產生的快照 ID、內容雜湊與相對路徑 manifest，不保存原始主機路徑。產生的 repository 候選資產仍需由你另外確認所有權與允許範圍。</p>
+          <InlineNotice tone="info" title="輸入類型固定，但這個動作不會授予掃描範圍">
+            <p>案件只保存後端產生的快照 ID、輸入類型、內容雜湊與相對路徑 manifest，不保存原始主機路徑。產生的候選資產仍需由你另外確認所有權與本機 artifact 唯讀範圍。</p>
           </InlineNotice>
 
           {!nativeMode && (
             <InlineNotice tone="info" title="展示模式不會讀取本機目錄">
-              <p>請在 Tauri 桌面版中建立真實 working-tree 快照；目前畫面只用來預覽流程。</p>
+              <p>請在 Tauri 桌面版中建立真實本機輸入快照；目前畫面只用來預覽流程。</p>
             </InlineNotice>
           )}
 
           <div className="form-grid form-grid--two">
             <label className="field">
-              <span>工作樹標籤</span>
-              <input required maxLength={120} value={workspaceLabel} onChange={(event) => setWorkspaceLabel(event.target.value)} placeholder="例如：frontend production working tree" />
+              <span>輸入類型</span>
+              <select
+                value={workspaceInputProfile}
+                onChange={(event) => {
+                  const next = event.target.value as LocalInputProfile;
+                  setWorkspaceInputProfile(next);
+                  setSelectedWorkspacePath("");
+                  setWorkspaceFormError(undefined);
+                }}
+              >
+                {(Object.keys(localInputDefinitions) as LocalInputProfile[]).map((inputProfile) => (
+                  <option key={inputProfile} value={inputProfile}>{localInputDefinitions[inputProfile].label}</option>
+                ))}
+              </select>
+              <small>{localInputDefinitions[workspaceInputProfile].detail}</small>
+            </label>
+            <label className="field">
+              <span>本機輸入標籤</span>
+              <input required maxLength={120} value={workspaceLabel} onChange={(event) => setWorkspaceLabel(event.target.value)} placeholder="例如：production image OCI layout" />
               <small>只用來辨識案件內的候選資產；請勿放入主機路徑或秘密。</small>
             </label>
             <div className="field">
-              <span id="workspace-directory-label">Working-tree 目錄</span>
+              <span id="workspace-directory-label">本機輸入目錄</span>
               <button className="snapshot-picker" type="button" disabled={!nativeMode || busy || choosingWorkspace} aria-describedby="workspace-directory-help" onClick={() => void chooseWorkspace()}>
                 <Icon name="database" size={18} />
-                <span>{selectedWorkspacePath ? fileNameFromPath(selectedWorkspacePath) : choosingWorkspace ? "正在開啟選擇器…" : "選擇一個工作目錄"}</span>
+                <span>{selectedWorkspacePath ? fileNameFromPath(selectedWorkspacePath) : choosingWorkspace ? "正在開啟選擇器…" : localInputDefinitions[workspaceInputProfile].selection}</span>
                 <Icon name="chevron" size={16} />
               </button>
               <small id="workspace-directory-help">畫面只顯示目錄名稱；canonical case 不保存原始絕對路徑。</small>
@@ -605,7 +653,7 @@ export function CoveragePage({
           <div className="form-actions">
             <p><Icon name="lock" size={16} /> 建立快照後仍需在下方逐項確認所有權與範圍。</p>
             <button className="button button--primary" type="submit" disabled={!nativeMode || busy || choosingWorkspace || !workspaceLabel.trim() || !selectedWorkspacePath}>
-              {busy ? "建立快照中…" : "建立不可變工作樹快照"}
+              {busy ? "建立快照中…" : "建立不可變本機輸入快照"}
               <Icon name="arrow" size={17} />
             </button>
           </div>

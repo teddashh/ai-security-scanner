@@ -536,10 +536,13 @@ connected source visibility
 
 The plan records why an engine was included or excluded. Exclusion contributes to coverage, not a pass result.
 
-Provider-native discovery is independently released from scanner images. Azure and GCP access
-tokens currently bind only `provider-native-discovery`; they cannot be checked out by the AWS-only
-CloudQuery, Steampipe, Prowler, ScoutSuite, or Cloudsplaining images. Upstream multi-provider
-support does not widen this binding without provider-specific wrapper and release evidence.
+Provider-native discovery is independently released from scanner images. The released Prowler
+wrapper has three separate exact-scope profiles: one AWS account, one Azure subscription, or one
+GCP project per execution. Each profile has its own native identifier validation, short-lived
+credential shape, provider preflight, and fixed endpoint closure. CloudQuery, Steampipe,
+ScoutSuite, and Cloudsplaining remain AWS-only. Neither Prowler's other upstream provider support
+nor another engine's upstream multi-provider support widens a case/source binding without an exact
+provider-specific wrapper contract and release evidence.
 
 Public-data-only discovery and direct network contact are separate capabilities. DNS and certificate transparency queries may be permitted without contacting a target; port probing, header retrieval, and vulnerability templates require the corresponding direct-contact grant.
 

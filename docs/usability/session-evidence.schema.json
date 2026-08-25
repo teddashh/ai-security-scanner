@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/docs/usability/session-evidence.schema.json",
+  "title": "ai-security-scanner IAM-naive first-run session evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "studyId",
+    "sessionId",
+    "product",
+    "participant",
+    "facilitator",
+    "session",
+    "tasks",
+    "artifacts",
+    "comprehension",
+    "cleanup",
+    "decision",
+    "attestations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "studyId": { "const": "iam-naive-first-run/v1" },
+    "sessionId": { "$ref": "#/$defs/id" },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "sourceCommit", "installerSha256", "os", "osVersion", "architecture", "runtimeProvider"],
+      "properties": {
+        "name": { "const": "ai-security-scanner" },
+        "version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$", "maxLength": 64 },
+        "sourceCommit": { "$ref": "#/$defs/gitSha" },
+        "installerSha256": { "$ref": "#/$defs/sha256" },
+        "os": { "enum": ["linux", "macos", "windows"] },
+        "osVersion": { "$ref": "#/$defs/text" },
+        "architecture": { "enum": ["x86_64", "aarch64"] },
+        "runtimeProvider": { "enum": ["managed_local"] }
+      }
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pseudonymousId", "adult", "consentRecorded", "priorProductExposure", "securityBackground", "cloudIamExperience", "synthetic"],
+      "properties": {
+        "pseudonymousId": { "$ref": "#/$defs/id" },
+        "adult": { "const": true },
+        "consentRecorded": { "const": true },
+        "priorProductExposure": { "const": "none" },
+        "securityBackground": { "const": "none" },
+        "cloudIamExperience": { "const": "cannot-create-or-explain-role" },
+        "synthetic": { "const": false }
+      }
+    },
+    "facilitator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pseudonymousId", "relationship", "conflictDisclosed"],
+      "properties": {
+        "pseudonymousId": { "$ref": "#/$defs/id" },
+        "relationship": { "enum": ["independent-observer", "project-maintainer"] },
+        "conflictDisclosed": { "type": "boolean" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "startedAt", "endedAt", "cleanInstall", "emptyDataDirectory", "disposableAwsAccount", "promptVersion"],
+      "properties": {
+        "mode": { "const": "observed-live" },
+        "startedAt": { "$ref": "#/$defs/dateTime" },
+        "endedAt": { "$ref": "#/$defs/dateTime" },
+        "cleanInstall": { "const": true },
+        "emptyDataDirectory": { "const": true },
+        "disposableAwsAccount": { "const": true },
+        "promptVersion": { "const": "iam-naive-first-run/v1" }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": { "$ref": "#/$defs/task" }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "comprehension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unknownIsNotGreen", "coverageStatesExplained", "noComplianceClaim", "nextExpertIdentified", "participantWords"],
+      "properties": {
+        "unknownIsNotGreen": { "type": "boolean" },
+        "coverageStatesExplained": { "type": "boolean" },
+        "noComplianceClaim": { "type": "boolean" },
+        "nextExpertIdentified": { "type": "boolean" },
+        "participantWords": { "$ref": "#/$defs/text" }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bootstrapCredentialCleared", "scannerIdentityInspected", "oldSessionsAndKeysReviewed", "runtimeCleanupInspected", "secretExposureObserved"],
+      "properties": {
+        "bootstrapCredentialCleared": { "type": "boolean" },
+        "scannerIdentityInspected": { "type": "boolean" },
+        "oldSessionsAndKeysReviewed": { "type": "boolean" },
+        "runtimeCleanupInspected": { "type": "boolean" },
+        "secretExposureObserved": { "type": "boolean" }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "decidedAt", "evaluatorId", "rationale", "unresolvedBlockers"],
+      "properties": {
+        "outcome": { "enum": ["pass", "fail", "inconclusive"] },
+        "decidedAt": { "$ref": "#/$defs/dateTime" },
+        "evaluatorId": { "$ref": "#/$defs/id" },
+        "rationale": { "$ref": "#/$defs/text" },
+        "unresolvedBlockers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/text" }
+        }
+      }
+    },
+    "attestations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["participantConfirmedAt", "facilitatorAttestedAt", "recordCreatedAt"],
+      "properties": {
+        "participantConfirmedAt": { "$ref": "#/$defs/dateTime" },
+        "facilitatorAttestedAt": { "$ref": "#/$defs/dateTime" },
+        "recordCreatedAt": { "$ref": "#/$defs/dateTime" }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$" },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "dateTime": { "type": "string", "format": "date-time", "maxLength": 64 },
+    "text": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "sha256", "sizeBytes", "capturedAt", "redacted", "containsSecrets", "retentionReference"],
+      "properties": {
+        "role": { "enum": ["consent-record", "observer-notes", "interaction-record", "case-export", "application-logs", "cloud-audit-cleanup"] },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 10737418240 },
+        "capturedAt": { "$ref": "#/$defs/dateTime" },
+        "redacted": { "type": "boolean" },
+        "containsSecrets": { "const": false },
+        "retentionReference": { "$ref": "#/$defs/text" }
+      }
+    },
+    "assistance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "category", "detail"],
+      "properties": {
+        "at": { "$ref": "#/$defs/dateTime" },
+        "category": { "enum": ["repeat-neutral-prompt", "think-aloud-reminder", "lab-recovery", "operational-instruction", "takeover"] },
+        "detail": { "$ref": "#/$defs/text" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "location", "severity", "detail"],
+      "properties": {
+        "at": { "$ref": "#/$defs/dateTime" },
+        "location": { "$ref": "#/$defs/text" },
+        "severity": { "enum": ["note", "friction", "blocking", "critical"] },
+        "detail": { "$ref": "#/$defs/text" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "startedAt", "endedAt", "outcome", "attempts", "assistance", "observations"],
+      "properties": {
+        "id": { "enum": ["install_and_start", "create_case", "prepare_runtime", "connect_aws", "confirm_scope", "run_assessment", "interpret_coverage", "prepare_handoff", "inspect_cleanup"] },
+        "startedAt": { "$ref": "#/$defs/dateTime" },
+        "endedAt": { "$ref": "#/$defs/dateTime" },
+        "outcome": { "enum": ["completed", "blocked", "abandoned"] },
+        "attempts": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "assistance": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/assistance" } },
+        "observations": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/observation" } }
+      }
+    }
+  }
+}

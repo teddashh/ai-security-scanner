@@ -24,7 +24,7 @@ use crate::domain::{
     EngineRunStatus, Finding, FindingDiffStatus, FindingGroup, FindingGroupAction,
     FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id, ManifestStatus,
     OrganizationProfile, RawArtifact, ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus,
-    SourceKind, VerificationComparison, new_id,
+    SourceKind, VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export::{
@@ -37,6 +37,7 @@ use crate::external_scope::{
 };
 use crate::orchestrator::{ExecutionCheckpoint, ExecutionReport, ExecutionStage};
 use crate::registry::EngineRegistry;
+use crate::source_authorization::PROVIDER_RESOURCE_SCOPE_METADATA_KEY;
 use crate::storage::Storage;
 use crate::workspace_snapshot::{
     WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA,
@@ -1042,14 +1043,13 @@ impl<'a> CaseService<'a> {
                 .chars()
                 .all(|character| character.is_ascii_hexdigit())
             || !snapshot.reference.working_tree_only
-            || snapshot.asset.kind != crate::domain::AssetKind::Repository
+            || snapshot.asset.kind != snapshot.reference.input_profile.asset_kind()
             || !snapshot.asset.candidate
             || snapshot.asset.owner_confirmed
             || snapshot.asset.discovered_from.len() != 1
         {
             return Err(AppError::InvalidRequest(
-                "workspace snapshot is not a backend-created unauthorized repository candidate"
-                    .into(),
+                "local input snapshot is not a backend-created unauthorized typed candidate".into(),
             ));
         }
         let source_id = snapshot.asset.discovered_from[0].clone();
@@ -1075,7 +1075,7 @@ impl<'a> CaseService<'a> {
         }
         case.data_sources.push(DataSource {
             id: source_id.clone(),
-            kind: SourceKind::GitRepository,
+            kind: snapshot.reference.input_profile.source_kind(),
             label,
             status: SourceConnectionStatus::Connected,
             connected_at: Some(Utc::now()),
@@ -1419,6 +1419,7 @@ impl<'a> CaseService<'a> {
             let execution_groups = if manifest
                 .required_permissions
                 .contains(&ScanPermission::LocalArtifactRead)
+                || !manifest.supported_providers.is_empty()
             {
                 assets
                     .into_iter()
@@ -3475,8 +3476,8 @@ fn compatible_authorized_assets<'a>(
     case.assets
         .iter()
         .filter(|asset| asset.owner_confirmed && !asset.candidate)
-        .filter(|asset| manifest.supported_asset_kinds.contains(&asset.kind))
-        .filter(|asset| manifest.supports_provider(asset.provider.as_deref()))
+        .filter(|asset| manifest.supports_asset(asset))
+        .filter(|asset| provider_target_metadata_matches(case, manifest, asset))
         .filter(|asset| {
             let grants = effective
                 .iter()
@@ -3497,6 +3498,142 @@ fn compatible_authorized_assets<'a>(
                     }))
         })
         .collect()
+}
+
+/// Provider discovery attribution is broader than scanner authorization. A
+/// provider asset enters a plan only when its native identity and attributable
+/// source agree with the provider-signed proof persisted for that source.
+/// Runtime credential checkout independently revalidates the same relation.
+fn provider_target_metadata_matches(
+    case: &AssessmentCase,
+    manifest: &EngineManifest,
+    asset: &Asset,
+) -> bool {
+    if manifest.supported_providers.is_empty() {
+        return true;
+    }
+    let Some(provider) = asset.provider.as_deref() else {
+        return false;
+    };
+    if !manifest
+        .supported_providers
+        .iter()
+        .any(|supported| supported == provider)
+    {
+        return false;
+    }
+    let (source_kind, expected_scope) = match provider {
+        "aws" => {
+            let Some(account_id) = exact_asset_identifier(asset, "aws_account_id") else {
+                return false;
+            };
+            if asset.kind != AssetKind::CloudAccount
+                || account_id.len() != 12
+                || !account_id.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return false;
+            }
+            (
+                SourceKind::AwsOrganization,
+                format!("aws-account:{account_id}"),
+            )
+        }
+        "azure" => {
+            let Some(subscription_id) = exact_asset_identifier(asset, "azure_subscription_id")
+            else {
+                return false;
+            };
+            if asset.kind != AssetKind::Subscription
+                || !valid_azure_subscription_id(subscription_id)
+            {
+                return false;
+            }
+            (
+                SourceKind::AzureTenant,
+                format!("azure-subscription:{subscription_id}"),
+            )
+        }
+        "gcp" => {
+            let Some(project_id) = exact_asset_identifier(asset, "gcp_project_id") else {
+                return false;
+            };
+            if asset.kind != AssetKind::Project || !valid_gcp_project_id(project_id) {
+                return false;
+            }
+            // The GCP credential proof is organization-bound; the exact
+            // project binding is completed after selecting its unique source.
+            (SourceKind::GcpOrganization, String::new())
+        }
+        "microsoft365" => {
+            let Some(tenant_id) = exact_asset_identifier(asset, "microsoft_tenant_id") else {
+                return false;
+            };
+            if asset.kind != AssetKind::Tenant || uuid::Uuid::parse_str(tenant_id).is_err() {
+                return false;
+            }
+            (
+                SourceKind::Microsoft365Tenant,
+                format!("microsoft365-tenant:{tenant_id}"),
+            )
+        }
+        _ => return false,
+    };
+    let mut attributable_sources = case.data_sources.iter().filter(|source| {
+        asset.discovered_from.contains(&source.id)
+            && source.kind == source_kind
+            && source.read_only
+            && source.status == SourceConnectionStatus::Connected
+    });
+    let Some(source) = attributable_sources.next() else {
+        return false;
+    };
+    if attributable_sources.next().is_some() {
+        return false;
+    }
+    let Some(proof_scope) = source
+        .metadata
+        .get(PROVIDER_RESOURCE_SCOPE_METADATA_KEY)
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    if provider != "gcp" {
+        return proof_scope == expected_scope;
+    }
+    let Some(organization_id) = proof_scope.strip_prefix("gcp-organization:") else {
+        return false;
+    };
+    if organization_id.is_empty()
+        || organization_id.len() > 32
+        || !organization_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return false;
+    }
+    case.asset_relations.iter().any(|relation| {
+        relation.kind == crate::domain::RelationKind::Contains
+            && relation.to_asset_id == asset.id
+            && case.assets.iter().any(|parent| {
+                parent.id == relation.from_asset_id
+                    && parent.kind == AssetKind::CloudOrganization
+                    && parent.provider.as_deref() == Some("gcp")
+                    && parent.discovered_from.contains(&source.id)
+                    && ["gcp_organization_id", "gcp_organization_number"]
+                        .iter()
+                        .any(|namespace| {
+                            exact_asset_identifier(parent, namespace) == Some(organization_id)
+                        })
+            })
+    })
+}
+
+fn exact_asset_identifier<'a>(asset: &'a Asset, namespace: &str) -> Option<&'a str> {
+    let mut values = asset
+        .identifiers
+        .iter()
+        .filter(|identifier| identifier.namespace == namespace)
+        .map(|identifier| identifier.value.as_str());
+    let value = values.next()?;
+    values.next().is_none().then_some(value)
 }
 
 fn engine_unavailable(
@@ -3743,6 +3880,27 @@ fn comparable_scope_contract_sha256(
             .collect::<Vec<_>>();
         grant_documents.sort_by_key(|left| left.to_string());
 
+        let provider_execution = if manifest.provider_execution_contracts.is_empty() {
+            Value::Null
+        } else {
+            let contract = manifest
+                .provider_execution_contract(asset.provider.as_deref(), &asset.kind)
+                .ok_or_else(|| {
+                    AppError::EngineRegistry(format!(
+                        "engine {} has no provider execution contract for asset {}",
+                        manifest.id, asset.id
+                    ))
+                })?;
+            let mut destinations = contract.network_destinations.clone();
+            destinations.sort();
+            serde_json::json!({
+                "provider": contract.provider,
+                "asset_kind": enum_key(&contract.asset_kind),
+                "profile": contract.profile,
+                "network_destinations": destinations,
+            })
+        };
+
         asset_documents.push(serde_json::json!({
             "id": asset.id,
             "kind": enum_key(&asset.kind),
@@ -3750,6 +3908,7 @@ fn comparable_scope_contract_sha256(
             "region": asset.region,
             "identifiers": identifiers,
             "grants": grant_documents,
+            "provider_execution": provider_execution,
         }));
     }
     asset_documents.sort_by(|left, right| {
@@ -4977,7 +5136,7 @@ mod tests {
     use crate::domain::{
         AssessmentActivity, AssetIdentifier, AssetKind, Confidence, CoverageStatus, DataClass,
         EngineCategory, EngineCompatibility, Evidence, EvidenceKind, FindingStatus, ImageReference,
-        ManifestStatus, Severity,
+        ManifestStatus, ProviderExecutionContract, Severity,
     };
     use crate::export::RedactionProfile;
     use chrono::Duration;
@@ -5073,6 +5232,89 @@ mod tests {
             let asset_id = case.assets[0].id.clone();
             (case, asset_id)
         }
+
+        fn discovered_aws_accounts(
+            &self,
+            case_id: &str,
+            credential_account_id: &str,
+            discovered_account_ids: &[&str],
+        ) -> (AssessmentCase, Vec<Id>) {
+            let service = self.service();
+            let source = service
+                .upsert_source(
+                    case_id,
+                    SourceMutation {
+                        id: None,
+                        kind: SourceKind::AwsOrganization,
+                        label: "AWS organization".into(),
+                        status: SourceConnectionStatus::Connected,
+                        read_only: true,
+                        metadata: BTreeMap::from([(
+                            PROVIDER_RESOURCE_SCOPE_METADATA_KEY.into(),
+                            Value::String(format!("aws-account:{credential_account_id}")),
+                        )]),
+                    },
+                )
+                .unwrap();
+            let assets = discovered_account_ids
+                .iter()
+                .enumerate()
+                .map(|(index, account_id)| DiscoveredAsset {
+                    observation_key: format!("aws-account-{index}"),
+                    kind: AssetKind::CloudAccount,
+                    name: format!("AWS account {account_id}"),
+                    provider: Some("aws".into()),
+                    region: None,
+                    stable_identifier: AssetIdentifier {
+                        namespace: "aws_account_id".into(),
+                        value: (*account_id).into(),
+                    },
+                    additional_identifiers: vec![],
+                    internet_exposed: None,
+                    contains_sensitive_data: None,
+                    metadata: BTreeMap::new(),
+                })
+                .collect();
+            service
+                .reconcile_discovery_batch(
+                    case_id,
+                    &DiscoveryBatch {
+                        source_id: source.id,
+                        source_kind: SourceKind::AwsOrganization,
+                        connector_id: "aws-organizations-list-accounts".into(),
+                        connector_version: "1".into(),
+                        observed_at: Utc::now(),
+                        assets,
+                        relations: vec![],
+                        notices: vec![],
+                    },
+                )
+                .unwrap();
+            let case = service.show_case(case_id).unwrap();
+            let asset_ids = discovered_account_ids
+                .iter()
+                .map(|account_id| {
+                    case.assets
+                        .iter()
+                        .find(|asset| {
+                            asset.identifiers.iter().any(|identifier| {
+                                identifier.namespace == "aws_account_id"
+                                    && identifier.value == *account_id
+                            })
+                        })
+                        .unwrap()
+                        .id
+                        .clone()
+                })
+                .collect();
+            (case, asset_ids)
+        }
+
+        fn discovered_aws_account(&self, case_id: &str, account_id: &str) -> (AssessmentCase, Id) {
+            let (case, mut asset_ids) =
+                self.discovered_aws_accounts(case_id, account_id, &[account_id]);
+            (case, asset_ids.remove(0))
+        }
     }
 
     fn write_legacy_artifact_deletion_obligation(
@@ -5113,6 +5355,8 @@ mod tests {
             adapter_version: "1".into(),
             supported_providers: vec![],
             supported_asset_kinds: vec![AssetKind::CloudResource],
+            input_contracts: vec![],
+            provider_execution_contracts: vec![],
             required_permissions: vec![ScanPermission::ConfigurationRead],
             active_external: false,
             default_enabled: true,
@@ -5205,6 +5449,36 @@ mod tests {
             baseline,
             comparable_scope_contract_sha256(&manifest, &[&changed_target], &[grant])
                 .expect("changed target contract")
+        );
+    }
+
+    #[test]
+    fn comparable_scope_contract_tracks_provider_profile_and_network_closure() {
+        let mut manifest = comparison_scope_manifest();
+        manifest.supported_providers = vec!["aws".into()];
+        manifest.supported_asset_kinds = vec![AssetKind::CloudAccount];
+        manifest.provider_execution_contracts = vec![ProviderExecutionContract {
+            provider: "aws".into(),
+            asset_kind: AssetKind::CloudAccount,
+            profile: "aws_iam".into(),
+            network_destinations: vec!["iam.amazonaws.com:443".into()],
+        }];
+        let mut asset = comparison_scope_asset();
+        asset.kind = AssetKind::CloudAccount;
+        asset.identifiers = vec![AssetIdentifier {
+            namespace: "aws_account_id".into(),
+            value: "111122223333".into(),
+        }];
+        let grant = comparison_scope_grant();
+        let baseline =
+            comparable_scope_contract_sha256(&manifest, &[&asset], std::slice::from_ref(&grant))
+                .expect("baseline provider scope contract");
+
+        manifest.provider_execution_contracts[0].profile = "aws_iam_changed".into();
+        assert_ne!(
+            baseline,
+            comparable_scope_contract_sha256(&manifest, &[&asset], &[grant])
+                .expect("changed provider profile contract")
         );
     }
 
@@ -6794,13 +7068,7 @@ mod tests {
     fn runnable_engines_execute_while_unknown_engines_remain_durable_not_executed_records() {
         let fixture = Fixture::new();
         let case = fixture.create();
-        let (mut discovered, asset_id) =
-            fixture.discovered_asset(&case.id, AssetKind::CloudAccount);
-        discovered.assets[0].provider = Some("aws".into());
-        fixture
-            .storage
-            .save_case(&mut discovered, "test.aws_provider_attributed")
-            .unwrap();
+        let (_, asset_id) = fixture.discovered_aws_account(&case.id, "111122223333");
         let service = fixture.service();
         service
             .approve_scope(
@@ -6852,23 +7120,22 @@ mod tests {
 
     #[test]
     fn aws_only_cloud_images_never_guess_azure_gcp_or_missing_asset_providers() {
-        let aws_engine_ids = [
-            "cloudquery",
-            "steampipe",
-            "prowler",
-            "scoutsuite",
-            "cloudsplaining",
-        ];
+        let aws_engine_ids = ["cloudquery", "steampipe", "scoutsuite", "cloudsplaining"];
         for provider in [Some("aws"), Some("azure"), Some("gcp"), None] {
             let fixture = Fixture::new();
             let case = fixture.create();
-            let (mut discovered, asset_id) =
-                fixture.discovered_asset(&case.id, AssetKind::CloudAccount);
-            discovered.assets[0].provider = provider.map(str::to_owned);
-            fixture
-                .storage
-                .save_case(&mut discovered, "test.provider_attributed")
-                .unwrap();
+            let asset_id = if provider == Some("aws") {
+                fixture.discovered_aws_account(&case.id, "111122223333").1
+            } else {
+                let (mut discovered, asset_id) =
+                    fixture.discovered_asset(&case.id, AssetKind::CloudAccount);
+                discovered.assets[0].provider = provider.map(str::to_owned);
+                fixture
+                    .storage
+                    .save_case(&mut discovered, "test.provider_attributed")
+                    .unwrap();
+                asset_id
+            };
             let service = fixture.service();
             service
                 .approve_scope(
@@ -6911,16 +7178,207 @@ mod tests {
     }
 
     #[test]
+    fn aws_organization_child_without_an_exact_account_capability_is_not_executable() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let (_, asset_ids) = fixture.discovered_aws_accounts(
+            &case.id,
+            "111122223333",
+            &["111122223333", "444455556666"],
+        );
+        let service = fixture.service();
+        service
+            .approve_scopes(
+                &case.id,
+                asset_ids
+                    .iter()
+                    .map(|asset_id| ScopeApprovalRequest {
+                        asset_id: asset_id.clone(),
+                        permissions: vec![ScanPermission::InventoryRead],
+                        confirmed_by: "Owner".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].assets.len(), 1);
+        assert_eq!(plan.executable[0].assets[0].id, asset_ids[0]);
+        assert!(
+            !plan.executable[0]
+                .assets
+                .iter()
+                .any(|asset| asset.id == asset_ids[1])
+        );
+    }
+
+    #[test]
+    fn provider_bound_engine_splits_exactly_bound_accounts_into_independent_executions() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let (_, first_asset_id) = fixture.discovered_aws_account(&case.id, "111122223333");
+        let (_, second_asset_id) = fixture.discovered_aws_account(&case.id, "444455556666");
+        let service = fixture.service();
+        service
+            .approve_scopes(
+                &case.id,
+                [&first_asset_id, &second_asset_id]
+                    .into_iter()
+                    .map(|asset_id| ScopeApprovalRequest {
+                        asset_id: asset_id.clone(),
+                        permissions: vec![ScanPermission::InventoryRead],
+                        confirmed_by: "Owner".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 2);
+        assert!(
+            plan.executable
+                .iter()
+                .all(|execution| execution.assets.len() == 1)
+        );
+        let planned_asset_ids = plan
+            .executable
+            .iter()
+            .map(|execution| execution.assets[0].id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            planned_asset_ids,
+            BTreeSet::from([first_asset_id.as_str(), second_asset_id.as_str()])
+        );
+    }
+
+    #[test]
+    fn microsoft365_provider_engine_keeps_exactly_one_tenant_per_execution() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let service = fixture.service();
+        let tenant_identifiers = [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ];
+        for (index, tenant_id) in tenant_identifiers.into_iter().enumerate() {
+            let source = service
+                .upsert_source(
+                    &case.id,
+                    SourceMutation {
+                        id: None,
+                        kind: SourceKind::Microsoft365Tenant,
+                        label: format!("Microsoft 365 tenant {index}"),
+                        status: SourceConnectionStatus::Connected,
+                        read_only: true,
+                        metadata: BTreeMap::from([(
+                            PROVIDER_RESOURCE_SCOPE_METADATA_KEY.into(),
+                            Value::String(format!("microsoft365-tenant:{tenant_id}")),
+                        )]),
+                    },
+                )
+                .unwrap();
+            service
+                .reconcile_discovery_batch(
+                    &case.id,
+                    &DiscoveryBatch {
+                        source_id: source.id,
+                        source_kind: SourceKind::Microsoft365Tenant,
+                        connector_id: "test-m365".into(),
+                        connector_version: "1".into(),
+                        observed_at: Utc::now(),
+                        assets: vec![DiscoveredAsset {
+                            observation_key: format!("tenant-{index}"),
+                            kind: AssetKind::Tenant,
+                            name: format!("Tenant {index}"),
+                            provider: Some("microsoft365".into()),
+                            region: None,
+                            stable_identifier: AssetIdentifier {
+                                namespace: "microsoft_tenant_id".into(),
+                                value: tenant_id.into(),
+                            },
+                            additional_identifiers: vec![],
+                            internet_exposed: None,
+                            contains_sensitive_data: None,
+                            metadata: BTreeMap::new(),
+                        }],
+                        relations: vec![],
+                        notices: vec![],
+                    },
+                )
+                .unwrap();
+        }
+        let tenant_asset_ids = service
+            .show_case(&case.id)
+            .unwrap()
+            .assets
+            .into_iter()
+            .map(|asset| asset.id)
+            .collect::<Vec<_>>();
+        service
+            .approve_scopes(
+                &case.id,
+                tenant_asset_ids
+                    .iter()
+                    .map(|asset_id| ScopeApprovalRequest {
+                        asset_id: asset_id.clone(),
+                        permissions: vec![
+                            ScanPermission::InventoryRead,
+                            ScanPermission::ConfigurationRead,
+                        ],
+                        confirmed_by: "Tenant administrator".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["scubagear".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 2);
+        assert!(
+            plan.executable
+                .iter()
+                .all(|execution| execution.assets.len() == 1)
+        );
+    }
+
+    #[test]
     fn resume_revalidates_the_manifest_provider_contract() {
         let fixture = Fixture::new();
         let case = fixture.create();
-        let (mut discovered, asset_id) =
-            fixture.discovered_asset(&case.id, AssetKind::CloudAccount);
-        discovered.assets[0].provider = Some("aws".into());
-        fixture
-            .storage
-            .save_case(&mut discovered, "test.aws_provider_attributed")
-            .unwrap();
+        let (_, asset_id) = fixture.discovered_aws_account(&case.id, "111122223333");
         let service = fixture.service();
         service
             .approve_scope(

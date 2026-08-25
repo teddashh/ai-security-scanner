@@ -13,6 +13,105 @@
     "acquisition_source": "https://github.com/prowler-cloud/prowler/commit/40ecbd035e5541bf099917c5033cceb8959c4737",
     "local_research_checkout": ".upstreams/prowler-cloud/prowler"
   },
+  "downstream_runtime_patches": {
+    "origin": "ai_security_scanner_downstream",
+    "base_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
+    "application_phase": "image_build",
+    "test_hunks_installed": false,
+    "applier": {
+      "path": "engines/images/prowler/apply-runtime-patches.py",
+      "sha256": "sha256:d426548962bf0801eee7bc6b2db36e37daef2445d7157687d591c9b7cff007b5"
+    },
+    "series": {
+      "path": "engines/images/prowler/patches/series",
+      "sha256": "sha256:a8cf6ca3d9de3328454cc91c36abda9e71d0df7ba9b35b5420ec93a8c1931c8e"
+    },
+    "patches": [
+      {
+        "path": "engines/images/prowler/patches/0001-azure-static-access-token-iam-only.patch",
+        "sha256": "sha256:bf6059a33443e9f1fa459c6360346829170ee56e0775260f8a42f56dcb53c73c",
+        "runtime_files": [
+          "prowler/providers/azure/azure_provider.py",
+          "prowler/providers/azure/lib/arguments/arguments.py",
+          "prowler/providers/common/provider.py"
+        ],
+        "purpose": "Adds non-refreshing Azure ARM static-token authentication, exact subscription resolution, and IAM-only service enforcement."
+      },
+      {
+        "path": "engines/images/prowler/patches/0002-gcp-exact-project-lookups.patch",
+        "sha256": "sha256:7a22e58b3c700813e3b7e814dd04254dd90ddbdbdfbccd917c3b477e487c2fcb",
+        "runtime_files": [
+          "prowler/providers/gcp/gcp_provider.py"
+        ],
+        "purpose": "Replaces ambient GCP project listing and default discovery with all-or-nothing exact requested-project lookups."
+      },
+      {
+        "path": "engines/images/prowler/patches/0003-gcp-disable-ambient-organization-search.patch",
+        "sha256": "sha256:136335c3b7defd5a167aa6d07633bcb8f5c99c6f98b398eff01fc15d11a417d1",
+        "runtime_files": [
+          "prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py"
+        ],
+        "purpose": "Disables ambient GCP organization search so the four-check profile uses only exact project get and getIamPolicy calls."
+      },
+      {
+        "path": "engines/images/prowler/patches/0004-gcp-disable-provider-organization-lookup.patch",
+        "sha256": "sha256:ffef7b02808bbb85f1f7d28ab3c453237b33cde45729daa51feb37633e1fd79a",
+        "runtime_files": [
+          "prowler/providers/gcp/gcp_provider.py"
+        ],
+        "purpose": "Skips provider-level parent organization enrichment whenever an exact GCP project ID is supplied."
+      },
+      {
+        "path": "engines/images/prowler/patches/0005-azure-disable-tenant-enumeration.patch",
+        "sha256": "sha256:00f40971d80137612b5327a8b7e31de6b05b08dd8239f1bd635339ae6325f80b",
+        "runtime_files": [
+          "prowler/lib/outputs/finding.py",
+          "prowler/providers/azure/azure_provider.py"
+        ],
+        "purpose": "Replaces Azure tenant enumeration with exact subscription tenant attribution and preserves attributable findings without fabricating an organization ID."
+      },
+      {
+        "path": "engines/images/prowler/patches/0006-azure-require-enabled-subscription.patch",
+        "sha256": "sha256:47b4202cdfe545b699fbe0b0dfc3e5d249d94e9d00cf7d61388405071e5aaeba",
+        "runtime_files": [
+          "prowler/providers/azure/azure_provider.py"
+        ],
+        "purpose": "Rejects an exact Azure subscription unless ARM reports the case-sensitive Enabled state before Prowler can run."
+      }
+    ],
+    "runtime_files": [
+      {
+        "path": "prowler/lib/outputs/finding.py",
+        "pre_sha256": "sha256:00ed79bee5e32239d3cce4943c70df33dbfe3f85056deb750ad11f2073613cce",
+        "post_sha256": "sha256:71d5665f11c27a3dc69660ac61b747264066c6791ba65014c50ba80105902749"
+      },
+      {
+        "path": "prowler/providers/azure/azure_provider.py",
+        "pre_sha256": "sha256:8e54390485d31feeb5e114db2c24933f3c73a4f22f2532b5c18583f9520c9cbb",
+        "post_sha256": "sha256:51cef0e3e7ed819144959f62389d3eb169b97aa37baf37aab66d4c290d21bf14"
+      },
+      {
+        "path": "prowler/providers/azure/lib/arguments/arguments.py",
+        "pre_sha256": "sha256:fc48fdd229d5760f5675f06032e05df8e54ee8777dd04a60aecc093615474068",
+        "post_sha256": "sha256:afb7c9b47f1b9b2354774579121db4f1c26d6b03112a3d0407fb4f14ad8625af"
+      },
+      {
+        "path": "prowler/providers/common/provider.py",
+        "pre_sha256": "sha256:cf043f096173ba685f5cb57aff653ded25ec54d58300e7afbaf1fd77841a6a4c",
+        "post_sha256": "sha256:4fe43b204884910bfbceac5ebb3e0b2898c9c044b18d241b566cc9a53ae6cf04"
+      },
+      {
+        "path": "prowler/providers/gcp/gcp_provider.py",
+        "pre_sha256": "sha256:9ae2691559660ca902ab3b282fb1a5611bb47ca11f3118d34500dac847770c77",
+        "post_sha256": "sha256:c30756aaaa1ce3739c6bf2a023b4ab633656c767f1e6fa1e84ba4ff9fff1c34f"
+      },
+      {
+        "path": "prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py",
+        "pre_sha256": "sha256:029725c008bf0ed0d6c8cdb8ba1a378d40e584dc49ee40e021c4955e4e5688f3",
+        "post_sha256": "sha256:379876877311fe2f4aa17bb9d5b132c85baaf2081210aebf6da59472cc11c9fe"
+      }
+    ]
+  },
   "verified_upstream_artifact": {
     "repository": "public.ecr.aws/prowler-cloud/prowler",
     "tag": "5.39.1",
@@ -24,33 +123,108 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
-    "tag": "5.39.1-1",
-    "digest": "sha256:4f90d576cae9190924f736a68775fade2563151980eff88281fa179714514664"
+    "tag": "5.39.1-5",
+    "digest": "sha256:59cd4dd393c152fea96ffc9c84b66af29ebf42e5dd4ffa8df45be4eebd454f4e"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
-    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32811911860",
+    "source_revision": "f611848a872bb41865ff00085ab3bd200e53deeb",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:a2d27de1ee3d1bd21b2816fb83a386578209319d52f4a9b3d722899ec2bccb49",
-      "linux/arm64": "sha256:af1febcce1950ca1cb086e13698f9b2406ac75549b91b983a50dc60447849688"
+      "linux/amd64": "sha256:18ad0a0a48652a407e498ec4f53f859ee8e80752dfb1ca4f8c4429e0a93432c5",
+      "linux/arm64": "sha256:e200e1dc0f2e72d9065eda89883b3808b8753299927fe409c2231f1d2823c501"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "prowler-image-evidence-32756618412-1"
+    "evidence_artifact": "prowler-image-evidence-32811911860-1"
   },
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/prowler/Dockerfile",
-    "sha256": "sha256:b4386072379682a19f0394d40abdd72bb7746729367b0b0f35f2849928b0a935"
+    "sha256": "sha256:351b2f664909e9b3c366477a4d1a523d60915d3fced011913ec8f54f81f38989"
   },
   "wrapper": {
     "required": true,
-    "strategy": "Validate an AWS-only immutable scope and ephemeral session credential closure, then invoke the fixed IAM profile without a shell.",
+    "strategy": "Validate exactly one AWS account, Azure subscription, or GCP project against one complete ephemeral provider credential profile, enforce provider-specific identity and read-only permission preflights, then invoke only the matching narrow IAM profile without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
+    "launcher_sha256": "sha256:13a674029d7a9099cb1083175e38a2b8dee56e521b851531a8067bfda6229f5e"
+  },
+  "provider_execution_contracts": [
+    {
+      "provider": "aws",
+      "asset_kind": "cloud_account",
+      "profile": "aws_iam_service_exact_account",
+      "network_destinations": [
+        "iam.amazonaws.com:443",
+        "sts.us-east-1.amazonaws.com:443",
+        "ec2.us-east-1.amazonaws.com:443",
+        "organizations.us-east-1.amazonaws.com:443"
+      ]
+    },
+    {
+      "provider": "azure",
+      "asset_kind": "subscription",
+      "profile": "azure_iam_service_static_token_exact_subscription",
+      "network_destinations": [
+        "management.azure.com:443"
+      ]
+    },
+    {
+      "provider": "gcp",
+      "asset_kind": "project",
+      "profile": "gcp_iam_four_checks_exact_project",
+      "network_destinations": [
+        "cloudresourcemanager.googleapis.com:443"
+      ]
+    }
+  ],
+  "knowledge_input": {
+    "kind": "runtime_live",
+    "identifier": "Exact-scope AWS, Azure, or GCP IAM configuration",
+    "version": null,
+    "acquisition_source": "Provider APIs authorized by one case-scoped ephemeral AWS session, Azure ARM access token, or GCP OAuth access token",
+    "pin_state": "runtime_live"
+  },
+  "data_acquisition": {
+    "mode": "runtime_live",
+    "scope_cardinality": "exactly_one_asset",
+    "credential_lifetime": "launcher_enforced_ephemeral_five_to_sixty_minutes",
+    "providers": [
+      {
+        "provider": "aws",
+        "asset_kind": "cloud_account",
+        "native_identifier": "aws_account_id",
+        "credential_keys": [
+          "AWS_ACCESS_KEY_ID",
+          "AWS_SECRET_ACCESS_KEY",
+          "AWS_SESSION_TOKEN"
+        ],
+        "identity_check": "STS GetCallerIdentity account equals the exact scoped account",
+        "profile": "aws_iam_service_exact_account"
+      },
+      {
+        "provider": "azure",
+        "asset_kind": "subscription",
+        "native_identifier": "azure_subscription_id",
+        "credential_keys": [
+          "AZURE_ACCESS_TOKEN"
+        ],
+        "identity_check": "ARM subscription GET returns the exact scoped subscription in Enabled state",
+        "profile": "azure_iam_service_static_token_exact_subscription"
+      },
+      {
+        "provider": "gcp",
+        "asset_kind": "project",
+        "native_identifier": "gcp_project_id",
+        "credential_keys": [
+          "GOOGLE_OAUTH_ACCESS_TOKEN"
+        ],
+        "identity_check": "projects.testIamPermissions on the exact project proves required reads and denies pinned mutations; project GET returns the exact scoped project in ACTIVE state and getIamPolicy succeeds",
+        "profile": "gcp_iam_four_checks_exact_project"
+      }
+    ]
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -60,7 +234,9 @@
       "iam.amazonaws.com:443",
       "sts.us-east-1.amazonaws.com:443",
       "ec2.us-east-1.amazonaws.com:443",
-      "organizations.us-east-1.amazonaws.com:443"
+      "organizations.us-east-1.amazonaws.com:443",
+      "management.azure.com:443",
+      "cloudresourcemanager.googleapis.com:443"
     ],
     "updates": false,
     "telemetry": false

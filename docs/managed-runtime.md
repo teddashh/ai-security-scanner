@@ -55,6 +55,7 @@ ai-security-scanner-cli runtime managed install
 ai-security-scanner-cli runtime managed start
 ai-security-scanner-cli runtime managed stop
 ai-security-scanner-cli runtime managed update
+ai-security-scanner-cli runtime managed qualify
 ai-security-scanner-cli runtime managed uninstall
 ```
 
@@ -68,6 +69,16 @@ For an unpackaged CLI build, use
 `AI_SECURITY_SCANNER_MANAGED_RUNTIME_BUNDLE`. Without a bundle override, the CLI searches only its
 known packaged resource locations and then reopens a single verified private installation. Multiple
 installed versions require a durable exact manifest digest and otherwise fail closed.
+
+`qualify` has no image, command, network, or credential arguments. It starts the verified managed
+runtime, retrieves the release-fixed Gitleaks digest, and executes the built-in qualification
+fixture through the same container-plan path used by scans. That plan has a read-only root,
+drop-all capabilities, no-new-privileges, no credentials, and `network=none`; the image pull occurs
+before the isolated container starts. Success is emitted only after the expected empty JSON report
+is hashed and the created container is removed by its immutable runtime ID. The machine-readable
+result binds the runtime manifest and machine-image digests, engine image, scope digest, report and
+capture digests, exit status, and cleanup outcome. This proves release-runtime execution and
+cleanup, not assessment coverage.
 
 ## Engine output exhaustion protection
 

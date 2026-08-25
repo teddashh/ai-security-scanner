@@ -4,7 +4,7 @@ The release workflow builds native Tauri installers from either a manual `main` 
 strict stable-version tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`,
 receives no publication privileges, creates no tag or GitHub Release, and preserves the finalized
 candidate as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag
-such as `v0.1.1` must exactly match the versions in `package.json`, `package-lock.json`,
+such as `v0.2.0` must exactly match the versions in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
 
 ## Produced installers
@@ -45,6 +45,38 @@ observation window fails that platform build. This is
 separate from source compilation and provides release-specific install/start evidence; it is not
 a claim that every end-user machine or every security assessment will behave identically.
 
+The build-runner observation is preserved, then a separate qualification matrix starts on fresh
+GitHub-hosted `ubuntu-24.04`, `macos-14`, and `windows-2025` machines. Each job downloads only its
+named `release-<platform>` artifact and independently installs the Debian package, DMG, or MSI. It
+locates the installed desktop, all three companion executables, and the packaged managed-runtime
+manifest; the installed manifest must byte-hash to the release copy. Every CLI operation uses a
+new private data directory. Linux and Windows must prove this exact sequence:
+
+1. initial `not_installed` status;
+2. managed payload install and independent `installed` status;
+3. real managed machine start and `running` status;
+4. the built-in fixed Gitleaks container qualification (immutable catalog digest, no network,
+   read-only root, all capabilities dropped, no-new-privileges, zero credentials, and exact
+   container cleanup);
+5. real machine stop and `stopped` status; and
+6. forced uninstall with the exact machine-image cache purged, final `not_installed` status,
+   package removal, and private-directory removal.
+
+GitHub-hosted macOS does not expose the nested virtualization needed by the packaged machine
+provider. Its job still installs the DMG, proves desktop startup, records initial/install/status,
+and proves uninstall/purge and private cleanup. Machine start and container execution are recorded
+as `unsupported`/`not_run` with reason
+`github_macos_hosted_nested_virtualization_unavailable`; they are never reported as passing.
+
+Each runner emits one strict `platform-qualification-<platform>.json`. The record is bound to the
+exact version, candidate tag, 40-character source commit, source artifact name, installer bytes and
+SHA-256, hosted runner label and machine-image version, installed/release runtime-manifest SHA-256,
+all released managed machine-image URLs/digests/sizes, ordered raw CLI status documents, desktop
+startup result, fixed container result (where supported), and cleanup results. Unknown fields,
+missing operations, caller-selected commands/images, inconsistent status phases, digest changes,
+and a false cleanup claim fail closed. Finalization requires all three records; the global checksum
+index and GitHub provenance attestation cover them like every other published release file.
+
 The workflow compiles all three real companion executables before every desktop build; no placeholder binary is kept
 in Git. For a local native desktop check, run:
 
@@ -72,11 +104,13 @@ Each GitHub Release contains:
 - explicit SBOM entries with the digest and role of each platform companion executable;
 - `THIRD_PARTY_NOTICES.txt`, `ENGINE_NOTICES.md`, and machine-readable engine notices;
 - `release-metadata.json` and `release-assets.json` for automated consumers;
+- strict `platform-qualification-<platform>.json` evidence for Linux, macOS, and Windows;
 - the signed updater payloads, their detached `.sig` files, and `latest.json`;
 - the project license and release notes; and
 - a GitHub build-provenance attestation over every published file.
 
-Patch-release details are recorded in the source tree; see the
+Release-line details are recorded in the source tree. See the current
+[`v0.2.0` product-completion notes](v0.2.0.md) and the historical
 [`v0.1.1` security and consistency repair notes](v0.1.1.md).
 
 All third-party engines remain separately acquired artifacts. No engine image, ruleset, feed,
@@ -116,23 +150,25 @@ First run the local metadata validator and normal implementation checks. Dispatc
 workflow from `main` before creating a tag:
 
 ```sh
-npm run release:validate -- --tag v0.1.1
+npm run release:validate -- --tag v0.2.0
 gh workflow run release.yml --ref main
 ```
 
-The preflight executes the same Linux, universal macOS, and Windows build matrix, including fresh
-package installation and desktop startup observations. Wait for that dispatch to succeed, record
+The preflight executes the same Linux, universal macOS, and Windows build matrix, preserves its
+desktop startup observations, and then runs the independent hosted qualification matrix described
+above. Wait for that dispatch to succeed, record
 its immutable `headSha`, and retain or download its `release-finalized` artifact. Tag that exact
 commit—not a later `main` tip:
 
 ```sh
-git tag -a v0.1.1 <preflight-head-sha> -m "ai-security-scanner v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 <preflight-head-sha> -m "ai-security-scanner v0.2.0"
+git push origin v0.2.0
 ```
 
 The tag run rebuilds from the same commit rather than reusing preflight binaries. The GitHub Release
-is created only after all three platform builds, both SBOMs, notices, checksum verification, signed
-updater-manifest assembly, finalized-candidate reverification, and provenance attestation succeed.
+is created only after all three platform builds, all three strict platform qualifications, both
+SBOMs, notices, checksum verification, signed updater-manifest assembly, finalized-candidate
+reverification, and provenance attestation succeed.
 It is published directly as a non-draft stable release; a failed preflight creates no tag or public
 release, and a failed tag prerequisite leaves no partial GitHub Release.
 

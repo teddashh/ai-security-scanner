@@ -130,10 +130,18 @@ export interface ConnectSourceSnapshotInput {
   selectedPath: string;
 }
 
+export type LocalInputProfile =
+  | "repository_working_tree"
+  | "iac_working_tree"
+  | "container_image_oci_layout"
+  | "kubernetes_manifests"
+  | "kubernetes_node_snapshot";
+
 export interface AttachWorkspaceSnapshotInput {
   caseId: string;
   label: string;
   selectedPath: string;
+  inputProfile: LocalInputProfile;
 }
 
 export type ProviderSourceProfile =
@@ -392,6 +400,7 @@ export interface Asset {
   findingCount: number;
   lastObservedAt?: string;
   tags?: string[];
+  localInputProfile?: LocalInputProfile;
 }
 
 export type ExternalActivity = "passive_public_discovery" | "low_impact_external" | "active_external";

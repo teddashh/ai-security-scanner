@@ -462,7 +462,7 @@ export const scannerService = {
   async chooseWorkspaceDirectory(): Promise<string | null> {
     if (!hasTauriRuntime()) return null;
     const selected = await open({
-      title: "選擇要建立不可變快照的 working tree",
+      title: "選擇要建立不可變快照的本機掃描輸入目錄",
       multiple: false,
       directory: true,
     });
@@ -473,7 +473,7 @@ export const scannerService = {
     return actionResult(
       COMMANDS.attachWorkspaceSnapshot,
       { ...input },
-      "有界 working-tree 副本已附加到本機案件；尚未授予所有權或掃描範圍。",
+      "有界、明確類型的本機輸入已附加到案件；尚未授予所有權或掃描範圍。",
       "展示模式不會讀取或複製你選擇的工作目錄。",
     );
   },

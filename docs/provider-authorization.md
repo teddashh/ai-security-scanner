@@ -27,14 +27,31 @@ The live client uses only these fixed read operations:
 
 - AWS Organizations `ListAccounts` at the fixed `organizations.us-east-1.amazonaws.com` endpoint, signed with the verified short-lived role session.
 - Azure Resource Manager `List Resources` for the exact verified subscription.
-- Google Cloud Resource Manager `projects.list` for the exact verified organization.
+- Google Cloud Resource Manager `folders.list` and `projects.list`, breadth-first from the exact verified organization and then from each provider-returned child folder.
 - Microsoft Graph `organization` plus a bounded `users` projection for the verified tenant.
 
-Every operation has fixed fields, response-size and record limits, at most eight successful pages, one retry for a short transient-status allowlist, a two-minute aggregate deadline, and strict provider-host/path/query validation for continuation links. Redirects and environment proxies remain disabled. `cancel_discovery` sets the case-bound cancellation flag; the worker checks it before each request and retry.
+Every operation has fixed fields, response-size and record limits, at most eight successful pages, one retry for a short transient-status allowlist, a two-minute aggregate deadline, and strict provider-host/path/query validation for continuation links. Google list APIs return direct children only, so discovery exhausts `nextPageToken` independently for folders and projects at every exact parent. Every returned `parent` must equal the requested organization/folder and every folder/project must be `ACTIVE`; a mismatched parent, duplicate identity/token, non-active resource, pending parent beyond the page bound, or any unexhausted pagination makes the capture partial/failed rather than complete. Redirects and environment proxies remain disabled. `cancel_discovery` sets the case-bound cancellation flag; the worker checks it before each request and retry.
 
 The raw response body is synced first to a private `0600` SHA-256-addressed file. Only then may the capture client inspect a pagination token. The case stores a non-secret manifest of immutable page references, HTTP statuses, operations, hashes, and capture completeness. The ordinary source-specific snapshot connector reopens and verifies those files and performs canonical parsing and candidate-only reconciliation. There is no in-memory asset shortcut around the artifact boundary.
 
-A complete response with no supported records is `connected but empty`, never scanned or green. Expired/missing authorization becomes `needs_reauthorization`; transport, malformed-response, unsafe-pagination, storage, cancellation, and partial-capture outcomes remain failed/unknown coverage. Already captured pages and prior assets are retained. After restart, raw evidence remains available for offline re-parsing, but the process-memory capability is absent and a new live request requires reauthorization.
+A complete response with no supported resource records is `connected but empty`, never scanned or green. Azure still retains the exact verified `Enabled` subscription as an attributable subscription asset when its resource inventory is empty; the resource record count remains zero. Expired/missing authorization becomes `needs_reauthorization`; transport, malformed-response, unsafe-pagination, storage, cancellation, and partial-capture outcomes remain failed/unknown coverage. Already captured pages and prior assets are retained. After restart, raw evidence remains available for offline re-parsing, but the process-memory capability is absent and a new live request requires reauthorization.
+
+## Released source boundaries
+
+Every live capability belongs to exactly one `case_id + source_id`. A source holds one exact live
+provider proof at a time; authorizing another native provider coordinate requires another explicit
+source rather than widening the existing proof.
+
+| Provider source | Released boundary | Current limit and execution rule |
+|---|---|---|
+| AWS Organizations | One Organizations-enabled caller account per source. Standalone-account onboarding is not a released source profile. | `ListAccounts` may discover organization members, but every scanner execution still requires a short-lived caller credential whose STS account equals that one exact account. A child member therefore needs its own exact-caller source/capability before it can run; organization enumeration alone never authorizes the child. |
+| Azure | One exact tenant plus subscription coordinate per source. | ARM must return that exact subscription with case-sensitive `state == Enabled`. Each Prowler execution contains one subscription; another subscription requires another source/capability. |
+| Google Cloud | One exact organization per source. Organization-less project onboarding is not a released source profile. | Discovery is bounded to 1,000 provider records and Prowler splits approved projects into one exact-project execution each. The capability hard cap is 1,001 checkouts: one discovery plus at most one execution per bounded record. |
+| Microsoft 365 | One exact tenant per source. | Discovery and M365 scanners cannot reuse the tenant capability for another tenant; another tenant requires another source/capability. |
+
+AWS, Azure, and Microsoft 365 retain the smaller eight-checkout ceiling. The higher GCP ceiling is
+not a reusable session or an unbounded allowance: expiry, exact case/source/engine checks, exact
+asset planning, and revocation remain mandatory for every checkout.
 
 ## Operator prerequisites
 
@@ -68,11 +85,17 @@ The accepted scan principal has exactly the built-in Reader role (`acdd72a7-3385
 
 Register a Google OAuth Desktop client and supply its real client ID, numeric organization ID, and an exact random-port loopback redirect URI. The backend binds that loopback listener before returning the authorization URL, uses PKCE S256 plus state, and receives the code directly from the browser callback. The code never passes through the webview.
 
-The backend verifies Google user identity, the exact organization resource, required organization/project reads, and denial of pinned mutations with `organizations.testIamPermissions`.
+The backend verifies Google user identity and the exact organization resource. It calls `organizations.testIamPermissions` only for permissions whose resource is that organization: `resourcemanager.organizations.get`, `resourcemanager.folders.list`, and `resourcemanager.projects.list`, plus denial of `resourcemanager.organizations.setIamPolicy`. The discovery reads cover the complete folder/project hierarchy without claiming that project-scoped permissions were proved at the organization boundary.
+
+Immediately before Prowler starts, the cloud launcher calls `projects.testIamPermissions` on the single immutable project in the execution scope. It requires `resourcemanager.projects.get` and `resourcemanager.projects.getIamPolicy`, and rejects credentials that hold the pinned project mutations (`resourcemanager.projects.setIamPolicy`, `resourcemanager.projects.delete`, `iam.serviceAccounts.create`, or `iam.serviceAccountKeys.create`). It then performs the exact `projects.get` and `projects.getIamPolicy` reads; a missing permission, a prohibited mutation, a mismatched/inactive project, or a failed live read stops the engine.
 
 - [OAuth 2.0 for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)
 - [Google OAuth 2.0 overview](https://developers.google.com/identity/protocols/oauth2)
 - [organizations.testIamPermissions](https://cloud.google.com/resource-manager/reference/rest/v3/organizations/testIamPermissions)
+- [folders.list](https://cloud.google.com/resource-manager/reference/rest/v3/folders/list)
+- [projects.list](https://cloud.google.com/resource-manager/reference/rest/v3/projects/list)
+- [projects.testIamPermissions](https://cloud.google.com/resource-manager/reference/rest/v3/projects/testIamPermissions)
+- [projects.getIamPolicy](https://cloud.google.com/resource-manager/reference/rest/v3/projects/getIamPolicy)
 
 ### Microsoft 365 preferred flow
 
@@ -98,7 +121,7 @@ The native application exposes these Tauri commands and matching methods in `src
 - `cleanup_provider_bootstrap`: reauthenticates in the isolated broker and updates every exact cleanup item durably.
 - `list_provider_bootstrap_cleanup`: returns only operation/provider/case/schema/status/count/timestamp summaries; resource IDs, endpoints, and credentials remain backend-only. The CLI exposes the same projection through `bootstrap cleanup-list CASE_ID` and `bootstrap cleanup-show CASE_ID OPERATION_ID`.
 
-The Assets and coverage view exposes both paths without accepting a password or client secret. It binds the selected case source to a fixed engine set and at most eight one-shot checkouts, shows only the non-secret user code or PKCE authorization URL, polls at the provider-supplied interval, and makes revocation visible. Provider links are opened by the operating-system browser through Tauri's opener capability. Both the frontend validator and the Tauri permission scope restrict those links to the AWS, Microsoft, and Google provider hosts used by these flows.
+The Assets and coverage view exposes both paths without accepting a password or client secret. It binds the selected case source to a fixed engine set and the provider-specific bounded checkout ceiling described above, shows only the non-secret user code or PKCE authorization URL, polls at the provider-supplied interval, and makes revocation visible. Provider links are opened by the operating-system browser through Tauri's opener capability. Both the frontend validator and the Tauri permission scope restrict those links to the AWS, Microsoft, and Google provider hosts used by these flows.
 
 The bootstrap tab first shows the immutable operation list, provider endpoint hosts, embedded template hash, expiry, and cleanup obligations. Only a separate confirmation starts the isolated process. That confirmation is an authorization boundary for a provider mutation, not a development or release gate.
 

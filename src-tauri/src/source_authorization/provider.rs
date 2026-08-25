@@ -1070,6 +1070,11 @@ fn verify_azure_token(
             "Azure Resource Manager returned a different subscription identity".into(),
         ));
     }
+    if subscription.state != "Enabled" {
+        return Err(AppError::NotAuthorized(
+            "Azure Resource Manager subscription is not in the Enabled state".into(),
+        ));
+    }
     let assignments_endpoint = format!(
         "{MICROSOFT_ARM_ROOT}/subscriptions/{subscription_id}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&%24filter=assignedTo%28%27{}%27%29",
         identity.principal_id
@@ -1371,8 +1376,8 @@ fn verify_gcp_token_with_identity(
             "Google Cloud returned a different organization identity".into(),
         ));
     }
-    let required = gcp_required_permissions();
-    let prohibited = gcp_prohibited_permissions();
+    let required = gcp_organization_required_permissions();
+    let prohibited = gcp_organization_prohibited_permissions();
     let all_permissions = required
         .iter()
         .chain(prohibited.iter())
@@ -1896,29 +1901,22 @@ fn aws_prohibited_permissions() -> Vec<String> {
     .collect()
 }
 
-fn gcp_required_permissions() -> Vec<String> {
+fn gcp_organization_required_permissions() -> Vec<String> {
     [
         "resourcemanager.organizations.get",
-        "resourcemanager.projects.get",
-        "cloudasset.assets.searchAllResources",
-        "iam.roles.get",
+        "resourcemanager.folders.list",
+        "resourcemanager.projects.list",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect()
 }
 
-fn gcp_prohibited_permissions() -> Vec<String> {
-    [
-        "resourcemanager.organizations.setIamPolicy",
-        "resourcemanager.projects.setIamPolicy",
-        "iam.serviceAccounts.create",
-        "iam.serviceAccountKeys.create",
-        "resourcemanager.projects.delete",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
+fn gcp_organization_prohibited_permissions() -> Vec<String> {
+    ["resourcemanager.organizations.setIamPolicy"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
 fn normalize_scopes(scopes: &str) -> Vec<String> {
@@ -2542,6 +2540,7 @@ struct MicrosoftOrganization {
 #[serde(rename_all = "camelCase")]
 struct AzureSubscription {
     subscription_id: String,
+    state: String,
 }
 
 #[derive(Deserialize)]
@@ -2590,6 +2589,19 @@ struct GoogleTestIamPermissions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gcp_organization_permission_probe_covers_recursive_discovery_only() {
+        let required = gcp_organization_required_permissions()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert!(required.contains("resourcemanager.organizations.get"));
+        assert!(required.contains("resourcemanager.folders.list"));
+        assert!(required.contains("resourcemanager.projects.list"));
+        assert!(!required.contains("resourcemanager.projects.get"));
+        assert!(!required.contains("resourcemanager.projects.getIamPolicy"));
+        assert!(!required.contains("resourcemanager.projects.setIamPolicy"));
+    }
 
     #[test]
     fn hmac_matches_rfc_4231_vector() {

@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { formatDateTime } from "../lib";
+import {
+  providerCheckoutLimits,
+  providerEngineBindings,
+  type Provider,
+} from "../providerAuthorizationPolicy";
 import { EVENTS, scannerService } from "../services/scanner";
 import type {
   BootstrapOperatorConfig,
@@ -16,8 +21,6 @@ import type {
 import { Icon } from "./Icon";
 import { InlineNotice } from "./Shared";
 import { StatusPill } from "./StatusPill";
-
-type Provider = "aws" | "azure" | "gcp" | "microsoft365";
 
 interface ProviderAuthorizationPanelProps {
   caseId: string;
@@ -39,15 +42,6 @@ const providerLabels: Record<Provider, string> = {
   azure: "Azure",
   gcp: "Google Cloud",
   microsoft365: "Microsoft 365",
-};
-
-const engineBindings: Record<Provider, string[]> = {
-  // This remains an exact subset of ProviderSourceProfile::allowed_engine_ids;
-  // adding an engine here never widens the provider-side read-only profile.
-  aws: ["provider-native-discovery", "cloudquery", "steampipe", "prowler", "scoutsuite", "cloudsplaining"],
-  azure: ["provider-native-discovery"],
-  gcp: ["provider-native-discovery"],
-  microsoft365: ["provider-native-discovery", "scubagear", "maester"],
 };
 
 const bootstrapCapabilities: Record<Provider, BootstrapRequest["capabilities"]> = {
@@ -294,8 +288,8 @@ export function ProviderAuthorizationPanel({
       const result = await scannerService.beginProviderAuthorization({
         case_id: caseId,
         source_id: selectedSource.id,
-        allowed_engine_ids: engineBindings[provider],
-        max_checkouts: 8,
+        allowed_engine_ids: [...providerEngineBindings[provider]],
+        max_checkouts: providerCheckoutLimits[provider],
         authorization: authorizationConfig(),
       });
       setPrompt(result.data);
@@ -385,8 +379,8 @@ export function ProviderAuthorizationPanel({
           operator: operatorConfig(),
         },
         sourceId: selectedSource.id,
-        allowedEngineIds: engineBindings[provider],
-        maxCheckouts: 8,
+        allowedEngineIds: [...providerEngineBindings[provider]],
+        maxCheckouts: providerCheckoutLimits[provider],
       });
       setInstalled(result.data.authorization);
       setBootstrapOperation({ id: result.data.operationId, cleanupPath: result.data.cleanupLedgerPath });
@@ -513,8 +507,8 @@ export function ProviderAuthorizationPanel({
 
         <div className="form-actions">
           <p><Icon name="lock" size={16} /> {provider
-            ? engineBindings[provider].filter((id) => id !== "provider-native-discovery").join("、") || "目前僅 provider-native discovery；尚無 released scanner image"
-            : "固定引擎集合"}；最多 8 次 checkout。</p>
+            ? providerEngineBindings[provider].filter((id) => id !== "provider-native-discovery").join("、") || "目前僅 provider-native discovery；尚無 released scanner image"
+            : "固定引擎集合"}；本次 capability 最多 {provider ? providerCheckoutLimits[provider].toLocaleString("en-US") : "—"} 次有界 checkout。</p>
           <div className="button-group">
             {installed && <button className="button button--ghost" type="button" disabled={working || disabled} onClick={() => void revokePreferred()}>撤銷記憶體 capability</button>}
             <button className="button button--primary" type="submit" disabled={!nativeMode || working || disabled || !provider}>{working ? "處理中…" : flowMode === "preferred" ? "開始 provider 登入" : "產生固定 bootstrap plan"}<Icon name="arrow" size={17} /></button>

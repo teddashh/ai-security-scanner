@@ -1,4 +1,4 @@
-use crate::adapter::{AdapterInput, AdapterRegistry};
+use crate::adapter::{AdapterAssetIdentifierMap, AdapterInput, AdapterRegistry};
 use crate::artifact_store::{ArtifactContext, ArtifactStore, RunDirectories};
 use crate::container_runtime::{
     CancellationToken, CleanupOutcome, ContainerPlanBuilder, ContainerRuntime, NetworkPolicy,
@@ -535,12 +535,14 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             .iter()
             .map(|asset| asset.id.clone())
             .collect();
+        let asset_identifier_map = AdapterAssetIdentifierMap::from_assets(request.assets);
         let input = AdapterInput {
             case_id: request.case_id,
             scan_run_id: request.scan_run_id,
             engine_run_id: request.engine_run_id,
             manifest: request.manifest,
             asset_ids: &asset_ids,
+            asset_identifier_map: &asset_identifier_map,
             artifact_root: &report.artifact_root,
             raw_artifacts: &report.raw_artifacts,
         };
@@ -622,9 +624,9 @@ fn validate_execution_scope<'a>(
                 asset.id
             )));
         }
-        if !manifest.supported_asset_kinds.contains(&asset.kind) {
+        if !manifest.supports_asset(asset) {
             return Err(AppError::InvalidRequest(format!(
-                "engine {} does not support asset {} of kind {:?}",
+                "engine {} does not support the provider and kind contract for asset {} ({:?})",
                 manifest.id, asset.id, asset.kind
             )));
         }
@@ -912,6 +914,8 @@ mod tests {
             } else {
                 AssetKind::Repository
             }],
+            input_contracts: vec![],
+            provider_execution_contracts: vec![],
             required_permissions: vec![if active_external {
                 ScanPermission::ActiveExternalTesting
             } else {

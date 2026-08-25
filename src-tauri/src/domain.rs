@@ -112,6 +112,57 @@ pub enum AssetKind {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalInputProfile {
+    #[default]
+    RepositoryWorkingTree,
+    IacWorkingTree,
+    ContainerImageOciLayout,
+    KubernetesManifests,
+    KubernetesNodeSnapshot,
+}
+
+impl LocalInputProfile {
+    pub fn is_repository(&self) -> bool {
+        matches!(self, Self::RepositoryWorkingTree)
+    }
+
+    pub fn asset_kind(self) -> AssetKind {
+        match self {
+            Self::RepositoryWorkingTree => AssetKind::Repository,
+            Self::IacWorkingTree => AssetKind::IacProject,
+            Self::ContainerImageOciLayout => AssetKind::ContainerImage,
+            Self::KubernetesManifests => AssetKind::KubernetesCluster,
+            Self::KubernetesNodeSnapshot => AssetKind::Host,
+        }
+    }
+
+    pub fn source_kind(self) -> SourceKind {
+        match self {
+            Self::RepositoryWorkingTree => SourceKind::GitRepository,
+            _ => SourceKind::FileSystem,
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::RepositoryWorkingTree => "repository working tree",
+            Self::IacWorkingTree => "infrastructure-as-code working tree",
+            Self::ContainerImageOciLayout => "OCI image layout",
+            Self::KubernetesManifests => "Kubernetes manifest tree",
+            Self::KubernetesNodeSnapshot => "Kubernetes node configuration snapshot",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EngineInputContract {
+    pub asset_kind: AssetKind,
+    pub input_profile: LocalInputProfile,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetIdentifier {
     pub namespace: String,
@@ -368,6 +419,14 @@ pub struct EngineManifest {
     /// exact `Asset.provider` match and never guesses a missing provider.
     pub supported_providers: Vec<String>,
     pub supported_asset_kinds: Vec<AssetKind>,
+    #[serde(default)]
+    pub input_contracts: Vec<EngineInputContract>,
+    /// Provider-specific execution closure for a multi-provider engine. A
+    /// contract binds one exact provider/asset-kind pair to the product-owned
+    /// launcher profile and the only provider endpoints that profile may use.
+    /// Single-provider and provider-agnostic manifests may leave this empty.
+    #[serde(default)]
+    pub provider_execution_contracts: Vec<ProviderExecutionContract>,
     pub required_permissions: Vec<ScanPermission>,
     pub active_external: bool,
     pub default_enabled: bool,
@@ -381,6 +440,15 @@ pub struct EngineManifest {
     pub compatibility: EngineCompatibility,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderExecutionContract {
+    pub provider: String,
+    pub asset_kind: AssetKind,
+    pub profile: String,
+    pub network_destinations: Vec<String>,
+}
+
 impl EngineManifest {
     /// Empty means provider-agnostic. Provider-bound releases require an exact
     /// provider identity on the asset; missing or differently cased values are
@@ -392,6 +460,30 @@ impl EngineManifest {
                     .iter()
                     .any(|supported| supported == provider)
             })
+    }
+
+    /// Returns the exact provider execution contract for one asset. When a
+    /// manifest declares contracts, provider and asset kind are a pair rather
+    /// than two independent allowlists; this prevents, for example, treating
+    /// an Azure subscription profile as an AWS cloud-account profile.
+    pub fn provider_execution_contract(
+        &self,
+        asset_provider: Option<&str>,
+        asset_kind: &AssetKind,
+    ) -> Option<&ProviderExecutionContract> {
+        let provider = asset_provider?;
+        self.provider_execution_contracts
+            .iter()
+            .find(|contract| contract.provider == provider && contract.asset_kind == *asset_kind)
+    }
+
+    pub fn supports_asset(&self, asset: &Asset) -> bool {
+        self.supported_asset_kinds.contains(&asset.kind)
+            && self.supports_provider(asset.provider.as_deref())
+            && (self.provider_execution_contracts.is_empty()
+                || self
+                    .provider_execution_contract(asset.provider.as_deref(), &asset.kind)
+                    .is_some())
     }
 
     /// Returns the release-contract reason that prevents this manifest from being dispatched.
@@ -1067,9 +1159,42 @@ pub struct ScopeDecision {
     pub external_scope: Option<ExternalScopeRequest>,
 }
 
+/// Provider-native identifiers are part of the executable security boundary,
+/// so discovery, planning, credential checkout, and the managed launcher use
+/// the same canonical syntax rather than merely accepting parseable values.
+pub fn valid_azure_subscription_id(value: &str) -> bool {
+    uuid::Uuid::parse_str(value)
+        .ok()
+        .is_some_and(|parsed| parsed.to_string() == value)
+}
+
+pub fn valid_gcp_project_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (6..=30).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_native_identifiers_require_canonical_exact_syntax() {
+        assert!(valid_azure_subscription_id(
+            "11111111-2222-3333-4444-555555555555"
+        ));
+        assert!(!valid_azure_subscription_id(
+            "11111111-2222-3333-4444-55555555555A"
+        ));
+        assert!(valid_gcp_project_id("audit-project-123"));
+        assert!(!valid_gcp_project_id("-audit-project"));
+        assert!(!valid_gcp_project_id("audit-project-"));
+        assert!(!valid_gcp_project_id("A-project"));
+    }
 
     #[test]
     fn new_case_is_local_draft_without_implicit_coverage() {

@@ -1,4 +1,5 @@
 use ai_security_scanner_lib::adapters::builtin_adapter_registry;
+use ai_security_scanner_lib::artifact_store::{ArtifactContext, ArtifactStore};
 use ai_security_scanner_lib::bootstrap::executor::{
     bootstrap_cleanup_obligation_summary, list_bootstrap_cleanup_obligations,
 };
@@ -9,15 +10,16 @@ use ai_security_scanner_lib::case_service::{
 };
 use ai_security_scanner_lib::connectors::SnapshotConnectorRegistry;
 use ai_security_scanner_lib::container_runtime::{
-    CleanupOutcome, ContainerRuntime, OwnedContainerCleanupRequest, PinnedImage,
-    ProcessContainerRuntime, RuntimeCommandProvenance, RuntimeProvider,
+    CancellationToken, CleanupOutcome, ContainerPlanBuilder, ContainerRuntime, NetworkPolicy,
+    OwnedContainerCleanupRequest, PinnedImage, ProcessContainerRuntime, ResourceLimits,
+    RuntimeCommandProvenance, RuntimePreflight, RuntimeProvider, ScannerCredentialSet,
     cleanup_orphaned_credentials,
 };
 use ai_security_scanner_lib::demo::build_demo_case;
 use ai_security_scanner_lib::discovery::run_connector;
 use ai_security_scanner_lib::domain::{
     AssessmentActivity, CaseStatus, CreateCaseRequest, DataClass, DistributionMode, EngineManifest,
-    EngineRunStatus, FindingStatus, ScanPermission, SourceConnectionStatus, SourceKind,
+    EngineRunStatus, FindingStatus, ScanPermission, SourceConnectionStatus, SourceKind, new_id,
 };
 use ai_security_scanner_lib::error::{AppError, AppResult};
 use ai_security_scanner_lib::export::{ExportOptions, RedactionProfile, verify_case_bundle};
@@ -40,6 +42,14 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const MANAGED_RUNTIME_QUALIFICATION_ENGINE_ID: &str = "gitleaks";
+const MANAGED_RUNTIME_QUALIFICATION_IMAGE: &str = concat!(
+    "ghcr.io/gitleaks/gitleaks@",
+    "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+);
+const MANAGED_RUNTIME_QUALIFICATION_REPORT: &str = "gitleaks.json";
+const MAX_MANAGED_RUNTIME_QUALIFICATION_REPORT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(name = "ai-security-scanner")]
@@ -651,6 +661,8 @@ enum ManagedRuntimeCliCommand {
     },
     /// Install, prove, and start the runtime bundled with this app version.
     Update,
+    /// Run the release-fixed, network-disabled managed-container qualification.
+    Qualify,
     /// Remove only this app's exact managed machine and private payload.
     Uninstall {
         /// Stop even when owned engine containers are still running.
@@ -2034,6 +2046,9 @@ fn execute_managed_runtime_command(
             serde_json::to_value(manager.stop(mode)?)
         }
         ManagedRuntimeCliCommand::Update => serde_json::to_value(manager.update()?),
+        ManagedRuntimeCliCommand::Qualify => {
+            return execute_managed_runtime_qualification(&manager, data_dir);
+        }
         ManagedRuntimeCliCommand::Uninstall {
             force,
             purge_image_cache,
@@ -2054,6 +2069,277 @@ fn execute_managed_runtime_command(
             "managed runtime result could not be encoded: {error}"
         ))
     })
+}
+
+fn execute_managed_runtime_qualification(
+    manager: &ManagedRuntimeManager,
+    data_dir: &Path,
+) -> AppResult<Value> {
+    let runtime = ProcessContainerRuntime::from_managed(manager.start()?)?;
+    let preflight = runtime.preflight()?;
+    let engines = EngineRegistry::load_builtin()?;
+    execute_fixed_managed_container_qualification(
+        &runtime,
+        preflight,
+        &engines,
+        &data_dir.join("qualification-artifacts"),
+    )
+}
+
+fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
+    runtime: &R,
+    preflight: RuntimePreflight,
+    engines: &EngineRegistry,
+    evidence_root: &Path,
+) -> AppResult<Value> {
+    if preflight.provider != RuntimeProvider::ManagedLocal
+        || !matches!(
+            preflight.command_provenance,
+            RuntimeCommandProvenance::ManagedLocal { .. }
+        )
+    {
+        return Err(AppError::NotAuthorized(
+            "managed-container qualification requires verified managed-local command provenance"
+                .into(),
+        ));
+    }
+
+    let manifest = engines
+        .get(MANAGED_RUNTIME_QUALIFICATION_ENGINE_ID)
+        .ok_or_else(|| {
+            AppError::EngineRegistry(
+                "managed-container qualification engine is absent from the built-in catalog".into(),
+            )
+        })?;
+    let expected_command = [
+        "dir",
+        "/workspace",
+        "--report-format",
+        "json",
+        "--report-path",
+        "/output/gitleaks.json",
+        "--no-banner",
+    ];
+    if manifest.command.len() != expected_command.len()
+        || !manifest
+            .command
+            .iter()
+            .zip(expected_command)
+            .all(|(actual, expected)| actual == expected)
+        || manifest.active_external
+        || !manifest.network_destinations.is_empty()
+        || manifest.required_permissions != [ScanPermission::LocalArtifactRead]
+    {
+        return Err(AppError::EngineRegistry(
+            "managed-container qualification manifest differs from its fixed offline contract"
+                .into(),
+        ));
+    }
+    let image = PinnedImage::from_manifest(manifest)?;
+    if image.reference() != MANAGED_RUNTIME_QUALIFICATION_IMAGE {
+        return Err(AppError::EngineRegistry(
+            "managed-container qualification image differs from the release-fixed digest".into(),
+        ));
+    }
+
+    let store = ArtifactStore::open(evidence_root)?;
+    let context = ArtifactContext {
+        case_id: "release-qualification".into(),
+        scan_run_id: new_id(),
+        engine_run_id: new_id(),
+    };
+    let directories = store.prepare_run(&context, 1)?;
+    fs::write(
+        directories.workspace.join("qualification.txt"),
+        b"ai-security-scanner managed runtime qualification\n",
+    )?;
+    let scope = store.write_control_json(
+        &directories,
+        "scope.json",
+        &json!({
+            "schema_version": "1.0.0",
+            "qualification_kind": "managed_container_execution",
+            "case_id": context.case_id,
+            "scan_run_id": context.scan_run_id,
+            "engine_run_id": context.engine_run_id,
+            "engine_id": MANAGED_RUNTIME_QUALIFICATION_ENGINE_ID,
+            "asset": { "kind": "repository", "path": "/workspace" },
+            "permissions": ["local_artifact_read"],
+            "network": "disabled"
+        }),
+    )?;
+    let capture = store.prepare_capture(&directories)?;
+    let limits = ResourceLimits {
+        memory_mb: 512,
+        pids: 64,
+        cpu_millis: 1000,
+        tmpfs_mb: 32,
+        output_bytes: 8 * 1024 * 1024,
+    };
+    let network_policy = NetworkPolicy::Disabled;
+    let credentials = ScannerCredentialSet::default();
+    let plan = ContainerPlanBuilder::new(
+        manifest,
+        &image,
+        &directories,
+        &scope.path,
+        &limits,
+        &network_policy,
+        &credentials,
+        &context.case_id,
+        &context.scan_run_id,
+        &context.engine_run_id,
+        1,
+    )
+    .build()?;
+    let runtime_args = plan.runtime_args();
+    let network_none = runtime_args
+        .windows(2)
+        .filter(|pair| pair[0] == "--network" && pair[1] == "none")
+        .count()
+        == 1;
+    if plan.network_policy() != &NetworkPolicy::Disabled
+        || runtime_args
+            .iter()
+            .filter(|arg| *arg == "--read-only")
+            .count()
+            != 1
+        || runtime_args
+            .iter()
+            .filter(|arg| *arg == "--cap-drop=ALL")
+            .count()
+            != 1
+        || runtime_args
+            .iter()
+            .filter(|arg| *arg == "--security-opt=no-new-privileges:true")
+            .count()
+            != 1
+        || runtime_args.iter().any(|arg| arg == "--env")
+        || !network_none
+        || !credentials.is_empty()
+    {
+        return Err(AppError::NotAuthorized(
+            "managed-container qualification plan lost its fixed isolation contract".into(),
+        ));
+    }
+
+    runtime.verify_network(&network_policy)?;
+    runtime.pull(&image)?;
+    let mut created_container = None;
+    let run_result = runtime.run(
+        &plan,
+        &credentials,
+        &CancellationToken::default(),
+        &capture,
+        &mut created_container,
+    );
+    let created_object_id = created_container
+        .as_ref()
+        .map(|created| created.immutable_id().to_owned());
+    let cleanup_result = created_container
+        .as_ref()
+        .map(|created| runtime.cleanup(plan.ownership(), Some(created)));
+    let (outcome, cleanup) = match (run_result, cleanup_result) {
+        (Ok(outcome), Some(Ok(cleanup))) => (outcome, cleanup),
+        (Ok(_), None) => {
+            return Err(AppError::Runtime(
+                "managed-container qualification returned without a created-object identity".into(),
+            ));
+        }
+        (Ok(_), Some(Err(cleanup))) => return Err(cleanup),
+        (Err(run), Some(Err(cleanup))) => {
+            return Err(AppError::Runtime(format!(
+                "{run}; managed-container qualification cleanup also failed: {cleanup}"
+            )));
+        }
+        (Err(run), _) => return Err(run),
+    };
+    if outcome.cancelled || outcome.exit_code != Some(0) {
+        return Err(AppError::Runtime(format!(
+            "managed-container qualification did not complete successfully: exit={:?}, cancelled={}",
+            outcome.exit_code, outcome.cancelled
+        )));
+    }
+    if !cleanup.removed {
+        return Err(AppError::Runtime(
+            "managed-container qualification could not prove removal of its created container"
+                .into(),
+        ));
+    }
+
+    let report_path = directories
+        .output
+        .join(MANAGED_RUNTIME_QUALIFICATION_REPORT);
+    let report_metadata = fs::symlink_metadata(&report_path).map_err(|error| {
+        AppError::Runtime(format!(
+            "managed-container qualification report is unavailable: {error}"
+        ))
+    })?;
+    if report_metadata.file_type().is_symlink()
+        || !report_metadata.is_file()
+        || report_metadata.len() > MAX_MANAGED_RUNTIME_QUALIFICATION_REPORT_BYTES
+    {
+        return Err(AppError::Runtime(
+            "managed-container qualification report must be a bounded regular file".into(),
+        ));
+    }
+    let report_bytes = fs::read(&report_path)?;
+    let findings = serde_json::from_slice::<Vec<Value>>(&report_bytes).map_err(|error| {
+        AppError::Runtime(format!(
+            "managed-container qualification report is malformed: {error}"
+        ))
+    })?;
+    if !findings.is_empty() {
+        return Err(AppError::Runtime(
+            "managed-container qualification fixture unexpectedly produced findings".into(),
+        ));
+    }
+    let report = store.describe_file(&context, &report_path, "application/json", false)?;
+    let stdout = store.describe_file(
+        &context,
+        &capture.stdout,
+        "text/plain; charset=utf-8",
+        false,
+    )?;
+    let stderr = store.describe_file(
+        &context,
+        &capture.stderr,
+        "text/plain; charset=utf-8",
+        false,
+    )?;
+
+    Ok(json!({
+        "schema_version": "1.0.0",
+        "status": "passed",
+        "qualification_kind": "managed_container_execution",
+        "product_version": env!("CARGO_PKG_VERSION"),
+        "runtime": {
+            "provider": preflight.provider,
+            "server_version": preflight.server_version,
+            "command_provenance": preflight.command_provenance,
+        },
+        "container": {
+            "engine_id": MANAGED_RUNTIME_QUALIFICATION_ENGINE_ID,
+            "image": image.reference(),
+            "network": "none",
+            "read_only_root": true,
+            "capabilities": "drop_all",
+            "no_new_privileges": true,
+            "credential_count": 0,
+            "exit_code": outcome.exit_code,
+            "cancelled": outcome.cancelled,
+            "created_object_id": created_object_id.expect("successful runtime returns identity"),
+            "cleanup_removed": cleanup.removed,
+        },
+        "evidence": {
+            "scope_sha256": scope.sha256,
+            "report_sha256": report.sha256,
+            "report_bytes": report.byte_length,
+            "finding_count": findings.len(),
+            "stdout_sha256": stdout.sha256,
+            "stderr_sha256": stderr.sha256,
+        }
+    }))
 }
 
 /// Reconstructs only the runtime recorded by a cleanup-pending checkpoint.
@@ -2299,7 +2585,23 @@ fn print_value(value: &(impl Serialize + ?Sized), compact: bool) -> AppResult<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ai_security_scanner_lib::container_runtime::{
+        FakeContainerRuntime, FakeRunBehavior, RuntimeCall,
+    };
     use clap::CommandFactory;
+
+    fn managed_qualification_preflight() -> RuntimePreflight {
+        RuntimePreflight {
+            provider: RuntimeProvider::ManagedLocal,
+            server_version: "5.8.0".into(),
+            security_options: "rootless".into(),
+            command_provenance: RuntimeCommandProvenance::ManagedLocal {
+                runtime_version: "5.8.0".into(),
+                manifest_sha256: "a".repeat(64),
+                machine_image_sha256: "b".repeat(64),
+            },
+        }
+    }
 
     #[test]
     fn parses_supported_data_classes() {
@@ -2340,6 +2642,8 @@ mod tests {
         .unwrap();
         let install =
             Cli::try_parse_from(["ai-security-scanner", "runtime", "managed", "install"]).unwrap();
+        let qualify =
+            Cli::try_parse_from(["ai-security-scanner", "runtime", "managed", "qualify"]).unwrap();
         let status =
             Cli::try_parse_from(["ai-security-scanner", "runtime", "managed", "status"]).unwrap();
         let doctor = Cli::try_parse_from(["ai-security-scanner", "doctor"]).unwrap();
@@ -2347,8 +2651,141 @@ mod tests {
         assert!(command_requires_exclusive_data_directory(&delete.command));
         assert!(command_requires_exclusive_data_directory(&cleanup.command));
         assert!(command_requires_exclusive_data_directory(&install.command));
+        assert!(command_requires_exclusive_data_directory(&qualify.command));
         assert!(!command_requires_exclusive_data_directory(&status.command));
         assert!(!command_requires_exclusive_data_directory(&doctor.command));
+    }
+
+    #[test]
+    fn fixed_managed_container_qualification_runs_offline_and_cleans_up() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(0),
+            stdout: b"qualification stdout\n".to_vec(),
+            stderr: b"qualification stderr\n".to_vec(),
+            output_files: BTreeMap::from([("gitleaks.json".into(), b"[]\n".to_vec())]),
+        });
+        let engines = EngineRegistry::load_builtin().expect("catalog");
+
+        let result = execute_fixed_managed_container_qualification(
+            &runtime,
+            managed_qualification_preflight(),
+            &engines,
+            &temporary.path().join("qualification"),
+        )
+        .expect("qualification");
+
+        assert_eq!(result.pointer("/status"), Some(&json!("passed")));
+        assert_eq!(
+            result.pointer("/runtime/provider"),
+            Some(&json!("managed_local"))
+        );
+        assert_eq!(
+            result.pointer("/container/image"),
+            Some(&json!(MANAGED_RUNTIME_QUALIFICATION_IMAGE))
+        );
+        assert_eq!(
+            result.pointer("/container/cleanup_removed"),
+            Some(&json!(true))
+        );
+        assert_eq!(result.pointer("/evidence/finding_count"), Some(&json!(0)));
+        let calls = runtime.calls();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0], RuntimeCall::VerifyNetwork("disabled".into()));
+        assert_eq!(
+            calls[1],
+            RuntimeCall::Pull(MANAGED_RUNTIME_QUALIFICATION_IMAGE.into())
+        );
+        let RuntimeCall::Run(run_name) = &calls[2] else {
+            panic!("expected fixed runtime run");
+        };
+        let RuntimeCall::Cleanup(cleanup_name) = &calls[3] else {
+            panic!("expected fixed runtime cleanup");
+        };
+        assert_eq!(run_name, cleanup_name);
+    }
+
+    #[test]
+    fn fixed_managed_container_qualification_fails_closed_on_cleanup_error() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            output_files: BTreeMap::from([("gitleaks.json".into(), b"[]\n".to_vec())]),
+        });
+        runtime.set_fail_cleanup(true);
+        let engines = EngineRegistry::load_builtin().expect("catalog");
+
+        let error = execute_fixed_managed_container_qualification(
+            &runtime,
+            managed_qualification_preflight(),
+            &engines,
+            &temporary.path().join("qualification"),
+        )
+        .expect_err("cleanup failure must fail qualification");
+
+        assert!(error.to_string().contains("fake cleanup failure"));
+    }
+
+    #[test]
+    fn fixed_managed_container_qualification_rejects_compatibility_runtime() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let runtime = FakeContainerRuntime::default();
+        let engines = EngineRegistry::load_builtin().expect("catalog");
+        let preflight = RuntimePreflight {
+            provider: RuntimeProvider::Docker,
+            server_version: "compatibility".into(),
+            security_options: "unknown".into(),
+            command_provenance: RuntimeCommandProvenance::Compatibility,
+        };
+
+        let error = execute_fixed_managed_container_qualification(
+            &runtime,
+            preflight,
+            &engines,
+            &temporary.path().join("qualification"),
+        )
+        .expect_err("compatibility runtime must not qualify as managed-local");
+
+        assert!(
+            error
+                .to_string()
+                .contains("managed-local command provenance")
+        );
+        assert!(runtime.calls().is_empty());
+    }
+
+    #[test]
+    fn fixed_managed_container_qualification_rejects_findings_after_cleanup() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            output_files: BTreeMap::from([(
+                "gitleaks.json".into(),
+                br#"[{"RuleID":"unexpected"}]"#.to_vec(),
+            )]),
+        });
+        let engines = EngineRegistry::load_builtin().expect("catalog");
+
+        let error = execute_fixed_managed_container_qualification(
+            &runtime,
+            managed_qualification_preflight(),
+            &engines,
+            &temporary.path().join("qualification"),
+        )
+        .expect_err("unexpected finding must fail qualification");
+
+        assert!(error.to_string().contains("unexpectedly produced findings"));
+        assert!(matches!(
+            runtime.calls().last(),
+            Some(RuntimeCall::Cleanup(_))
+        ));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use super::provider::{
     begin_microsoft_native_authorization, complete_gcp_native_authorization,
     poll_aws_native_authorization, poll_microsoft_native_authorization,
 };
-use super::{SourceAuthorizationRequest, VerifiedProviderAuthorization};
+use super::{ProviderSourceProfile, SourceAuthorizationRequest, VerifiedProviderAuthorization};
 use crate::error::{AppError, AppResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ pub struct BeginProviderAuthorizationRequest {
     pub case_id: String,
     pub source_id: String,
     pub allowed_engine_ids: BTreeSet<String>,
-    pub max_checkouts: u8,
+    pub max_checkouts: u16,
     pub authorization: ProviderAuthorizationConfig,
 }
 
@@ -107,7 +107,7 @@ struct BindingRequest {
     case_id: String,
     source_id: String,
     allowed_engine_ids: BTreeSet<String>,
-    max_checkouts: u8,
+    max_checkouts: u16,
 }
 
 enum PendingProviderSession {
@@ -413,13 +413,27 @@ impl ProviderAuthorizationSessions {
 }
 
 fn validate_binding_request(request: &BeginProviderAuthorizationRequest) -> AppResult<()> {
+    let profile = match &request.authorization {
+        ProviderAuthorizationConfig::Aws { .. } => {
+            ProviderSourceProfile::AwsOrganizationReadOnlySession
+        }
+        ProviderAuthorizationConfig::Azure { .. } => {
+            ProviderSourceProfile::AzureTenantReadOnlyAccessToken
+        }
+        ProviderAuthorizationConfig::Gcp { .. } => {
+            ProviderSourceProfile::GcpOrganizationReadOnlyAccessToken
+        }
+        ProviderAuthorizationConfig::Microsoft365 { .. } => {
+            ProviderSourceProfile::Microsoft365TenantReadOnlyAccessToken
+        }
+    };
     if request.case_id.is_empty()
         || request.case_id.len() > 128
         || request.source_id.is_empty()
         || request.source_id.len() > 128
         || request.allowed_engine_ids.is_empty()
         || request.max_checkouts == 0
-        || request.max_checkouts > 8
+        || request.max_checkouts > profile.max_checkouts()
     {
         return Err(AppError::InvalidRequest(
             "provider authorization binding is incomplete or outside limits".into(),

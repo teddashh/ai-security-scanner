@@ -15,22 +15,22 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
-    "tag": "0.9.1-1",
-    "digest": "sha256:f7d6185a45559619350728c09c6410435c4a117c35dd2a6ee4605421fc0364fb"
+    "tag": "0.9.1-4",
+    "digest": "sha256:fda95de48a49a71ada358161da455119b9cadd33f65ea81a508f46a9cd4ecea9"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32756618412",
-    "source_revision": "1ca91b4892ad6d135b87ddaaeb10465b8817bc18",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32811911860",
+    "source_revision": "f611848a872bb41865ff00085ab3bd200e53deeb",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:851e6644787c902a616c7115a069d522f7ab7e9add5caa7f0fcb72a72cb35fb0",
-      "linux/arm64": "sha256:b2ca4faa472390762b68dbd993079572403863c75ef5080ea922e26f1523ede0"
+      "linux/amd64": "sha256:00461a597c8d305ddd2b4b6b7c8ca961dfc4eba1f1e73101e5a0277fd5476332",
+      "linux/arm64": "sha256:2cffb8a61eb638dba429c50cdbbbc7da114c0678c78aae6929764842f649c1a2"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "cloudsplaining-image-evidence-32756618412-1"
+    "evidence_artifact": "cloudsplaining-image-evidence-32811911860-1"
   },
   "build_recipe": {
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
@@ -68,13 +68,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/cloudsplaining/Dockerfile",
-    "sha256": "sha256:31ee2838a9e40f2619d357b9693db2f346b0b3fe1257611c947517da9758af8e"
+    "sha256": "sha256:e4c524bc3768a179f0a4ac63b191cf4ae6122f935197a44c4d956289ae01f0f5"
   },
   "wrapper": {
     "required": true,
     "strategy": "Download AWS IAM authorization details with ephemeral session credentials and scan only that bounded local JSON without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-cloud-launcher",
-    "launcher_sha256": "sha256:954d9c0ba42f1d48428dc4e1f9336aaa89d6541cc5013dc74625102dcfa432f3"
+    "launcher_sha256": "sha256:13a674029d7a9099cb1083175e38a2b8dee56e521b851531a8067bfda6229f5e"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

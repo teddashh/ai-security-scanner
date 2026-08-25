@@ -103,6 +103,7 @@ struct SourceRecord {
     source_severity: String,
     location: String,
     asset_hint: Option<String>,
+    asset_provider: Option<String>,
     confidence: Confidence,
     evidence_kind: EvidenceKind,
     references: Vec<String>,
@@ -359,7 +360,12 @@ fn normalize_artifacts(
             }
             processed_records += 1;
             let warnings_before_resolution = output.warnings.len();
-            let asset_id = resolve_asset(&record, input.asset_ids, &mut output.warnings);
+            let asset_id = resolve_asset(
+                &record,
+                input.asset_ids,
+                input.asset_identifier_map,
+                &mut output.warnings,
+            );
             if output.warnings.len() > warnings_before_resolution {
                 output.complete = false;
             }
@@ -1026,10 +1032,16 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             );
             continue;
         };
-        let status = string_any(object, &["Status", "status"])
+        // Prowler 5.39 OCSF uses status="New" for finding lifecycle state;
+        // PASS/FAIL/MANUAL is carried by the top-level status_code field.
+        let status = string_any(object, &["status_code", "StatusCode"])
+            .or_else(|| string_any(object, &["Status", "status"]))
             .or_else(|| nested_string(value, &["unmapped", "Status"]))
             .or_else(|| nested_string(value, &["unmapped", "status"]));
-        if status.as_deref().is_some_and(is_pass) {
+        if status
+            .as_deref()
+            .is_some_and(|status| is_pass(status) || status.eq_ignore_ascii_case("manual"))
+        {
             continue;
         }
         if !status.as_deref().is_some_and(is_failure) {
@@ -1039,9 +1051,11 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             );
             continue;
         }
-        let rule = string_any(object, &["CheckID", "check_id"])
+        let rule = nested_string(value, &["metadata", "event_code"])
+            .or_else(|| nested_string(value, &["finding_info", "analytic", "uid"]))
+            .or_else(|| string_any(object, &["CheckID", "check_id"]))
             .or_else(|| nested_string(value, &["unmapped", "CheckID"]))
-            .or_else(|| nested_string(value, &["finding_info", "uid"]));
+            .or_else(|| nested_string(value, &["unmapped", "check_id"]));
         let Some(rule_id) = rule else {
             push_warning(
                 warnings,
@@ -1058,18 +1072,23 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         let location = first_resource_location(value)
             .or_else(|| nested_string(value, &["unmapped", "ResourceId"]))
             .unwrap_or_else(|| "cloud-resource".into());
-        records.push(record!(
+        let mut record = record!(
             pointer,
             rule_id,
             title,
             severity_text,
             location,
-            nested_string(value, &["unmapped", "AccountId"]),
+            nested_string(value, &["cloud", "account", "uid"])
+                .or_else(|| nested_string(value, &["unmapped", "provider_uid"]))
+                .or_else(|| nested_string(value, &["unmapped", "AccountId"])),
             Confidence::High,
             EvidenceKind::Configuration,
             references_from(value),
             vec!["format:ocsf".into()],
-        ));
+        );
+        record.asset_provider = nested_string(value, &["cloud", "provider"])
+            .or_else(|| nested_string(value, &["unmapped", "provider"]));
+        records.push(record);
     }
     records
 }
@@ -2022,6 +2041,7 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
         asset_hint: draft
             .asset_hint
             .map(|value| safe_text(&value, MAX_SHORT_TEXT)),
+        asset_provider: None,
         confidence: draft.confidence,
         evidence_kind: draft.evidence_kind,
         references: draft.references,
@@ -2032,12 +2052,49 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
 fn resolve_asset(
     record: &SourceRecord,
     allowed_assets: &[String],
+    asset_identifier_map: &crate::adapter::AdapterAssetIdentifierMap,
     warnings: &mut Vec<String>,
 ) -> Option<String> {
-    if let Some(hint) = &record.asset_hint
-        && allowed_assets.iter().any(|asset| asset == hint)
-    {
-        return Some(hint.clone());
+    if let Some(hint) = &record.asset_hint {
+        if record.asset_provider.is_none() && allowed_assets.iter().any(|asset| asset == hint) {
+            return Some(hint.clone());
+        }
+
+        if let Some(candidates) =
+            asset_identifier_map.candidates(record.asset_provider.as_deref(), hint)
+        {
+            let authorized = candidates
+                .iter()
+                .filter(|candidate| allowed_assets.iter().any(|asset| asset == *candidate))
+                .collect::<Vec<_>>();
+            if authorized.len() == 1 {
+                return authorized.first().map(|asset| (*asset).clone());
+            }
+            if authorized.len() > 1 {
+                push_warning(
+                    warnings,
+                    format!(
+                        "record {} matched an ambiguous native asset identifier and was not normalized",
+                        safe_text(&record.rule_id, 120)
+                    ),
+                );
+                return None;
+            }
+        }
+
+        // A provider-qualified OCSF account is authoritative. Falling back to
+        // the only selected asset would silently misattribute a provider or
+        // account mismatch.
+        if record.asset_provider.is_some() {
+            push_warning(
+                warnings,
+                format!(
+                    "record {} had no exact authorized provider identifier match and was not normalized",
+                    safe_text(&record.rule_id, 120)
+                ),
+            );
+            return None;
+        }
     }
     if allowed_assets.len() == 1 {
         return allowed_assets.first().cloned();
@@ -2260,6 +2317,8 @@ fn references_from(value: &Value) -> Vec<String> {
         "/guideline",
         "/help",
         "/HelpUrl",
+        "/remediation/references",
+        "/unmapped/related_url",
         "/info/reference",
         "/extra/metadata/references",
         "/vulnerability/dataSource",

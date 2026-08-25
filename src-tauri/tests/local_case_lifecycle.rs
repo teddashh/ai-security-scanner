@@ -19,19 +19,24 @@ use ai_security_scanner_lib::orchestrator::{
 use ai_security_scanner_lib::registry::EngineRegistry;
 use ai_security_scanner_lib::storage::Storage;
 use ai_security_scanner_lib::workspace_snapshot::{
-    WorkspaceSnapshotLimits, WorkspaceSnapshotReference, create_workspace_snapshot,
-    resolve_workspace_snapshot,
+    WorkspaceInputProfile, WorkspaceSnapshotLimits, WorkspaceSnapshotReference,
+    create_workspace_snapshot, create_workspace_snapshot_with_profile, resolve_workspace_snapshot,
 };
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 const GITLEAKS_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/gitleaks.json");
 const KICS_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kics.json");
 const CHECKOV_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/checkov.json");
 const SYFT_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/syft.json");
+const TRIVY_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/trivy.json");
+const GRYPE_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/grype.json");
+const KUBESCAPE_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kubescape.json");
+const KUBE_BENCH_FIXTURE: &[u8] = include_bytes!("fixtures/adapters/kube-bench.json");
 
 fn output_filename(engine_id: &str) -> &'static str {
     match engine_id {
@@ -39,6 +44,10 @@ fn output_filename(engine_id: &str) -> &'static str {
         "kics" => "kics.json",
         "checkov" => "checkov.json",
         "syft" => "syft.json",
+        "trivy" => "trivy.json",
+        "grype" => "grype.json",
+        "kubescape" => "kubescape.json",
+        "kube-bench" => "kube-bench.json",
         other => panic!("no lifecycle fixture output for {other}"),
     }
 }
@@ -49,6 +58,10 @@ fn baseline_output(engine_id: &str) -> &'static [u8] {
         "kics" => KICS_FIXTURE,
         "checkov" => CHECKOV_FIXTURE,
         "syft" => SYFT_FIXTURE,
+        "trivy" => TRIVY_FIXTURE,
+        "grype" => GRYPE_FIXTURE,
+        "kubescape" => KUBESCAPE_FIXTURE,
+        "kube-bench" => KUBE_BENCH_FIXTURE,
         other => panic!("no lifecycle fixture bytes for {other}"),
     }
 }
@@ -166,6 +179,93 @@ fn make_workspace(root: &Path, name: &str, marker: &str) -> PathBuf {
     )
     .expect("working tree source file");
     workspace
+}
+
+fn write_oci_layout(root: &Path) {
+    let blobs = root.join("blobs/sha256");
+    fs::create_dir_all(&blobs).unwrap();
+    fs::write(
+        root.join("oci-layout"),
+        br#"{"imageLayoutVersion":"1.0.0"}"#,
+    )
+    .unwrap();
+    let contents = b"typed lifecycle layer";
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_ustar();
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_mode(0o644);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_size(contents.len() as u64);
+    header.set_path("app/fixture.txt").unwrap();
+    header.set_cksum();
+    builder.append(&header, Cursor::new(contents)).unwrap();
+    builder.finish().unwrap();
+    let layer = builder.into_inner().unwrap();
+    let layer_digest = hex::encode(Sha256::digest(&layer));
+    let config = serde_json::to_vec(&serde_json::json!({
+        "architecture": "amd64",
+        "os": "linux",
+        "rootfs": {"type": "layers", "diff_ids": [format!("sha256:{layer_digest}")]},
+        "config": {}
+    }))
+    .unwrap();
+    let config_digest = hex::encode(Sha256::digest(&config));
+    fs::write(blobs.join(&config_digest), &config).unwrap();
+    fs::write(blobs.join(&layer_digest), &layer).unwrap();
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {
+            "mediaType": "application/vnd.oci.image.config.v1+json",
+            "digest": format!("sha256:{config_digest}"),
+            "size": config.len()
+        },
+        "layers": [{
+            "mediaType": "application/vnd.oci.image.layer.v1.tar",
+            "digest": format!("sha256:{layer_digest}"),
+            "size": layer.len()
+        }]
+    }))
+    .unwrap();
+    let manifest_digest = hex::encode(Sha256::digest(&manifest));
+    fs::write(blobs.join(&manifest_digest), &manifest).unwrap();
+    fs::write(
+        root.join("index.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [{
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": format!("sha256:{manifest_digest}"),
+                "size": manifest.len()
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_node_snapshot(root: &Path) {
+    let node = root.join("node-snapshot");
+    fs::create_dir_all(&node).unwrap();
+    let config = b"kind: KubeletConfiguration\n";
+    fs::write(node.join("kubelet-config.yaml"), config).unwrap();
+    fs::write(
+        node.join("profile.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "1.0.0",
+            "profile": "cis-kubernetes-node-config",
+            "captured_at": "2026-08-24T12:00:00Z",
+            "files": [{
+                "path": "kubelet-config.yaml",
+                "sha256": format!("sha256:{}", hex::encode(Sha256::digest(config)))
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -556,5 +656,163 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
             .map(|entry| entry.engine_id.as_str())
             .collect::<BTreeSet<_>>(),
         unavailable_ids.iter().map(String::as_str).collect()
+    );
+}
+
+#[test]
+fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
+    let temporary = tempfile::tempdir().expect("typed lifecycle temporary directory");
+    let storage = Storage::open(temporary.path().join("typed-casework.db")).unwrap();
+    let engines = EngineRegistry::load_builtin().unwrap();
+    let adapters = builtin_adapter_registry().unwrap();
+    let artifacts = ArtifactStore::open(temporary.path().join("typed-artifacts")).unwrap();
+    let artifact_root = artifacts.root().to_path_buf();
+    let service = CaseService::new(
+        &storage,
+        &engines,
+        &adapters,
+        &artifact_root,
+        temporary.path().join("typed-integrity-key"),
+    );
+    let case = service
+        .create_case(&CreateCaseRequest {
+            title: "Typed local inputs".into(),
+            organization_name: "Example organization".into(),
+            employee_range: "1-10".into(),
+            data_classes: vec![],
+            requested_activities: vec![],
+            source_kinds: vec![],
+            not_applicable_source_kinds: vec![],
+            declared_assets: vec![],
+            notes: None,
+        })
+        .unwrap();
+
+    let selected = temporary.path().join("typed-selected-inputs");
+    let oci = selected.join("oci");
+    let manifests = selected.join("manifests");
+    let node = selected.join("node");
+    fs::create_dir_all(&oci).unwrap();
+    fs::create_dir_all(&manifests).unwrap();
+    fs::create_dir_all(&node).unwrap();
+    write_oci_layout(&oci);
+    fs::write(
+        manifests.join("pod.yaml"),
+        b"apiVersion: v1\nkind: Pod\nmetadata:\n  name: fixture\n",
+    )
+    .unwrap();
+    write_node_snapshot(&node);
+
+    let mut references = BTreeMap::<String, WorkspaceSnapshotReference>::new();
+    for (source_id, label, path, profile) in [
+        (
+            "typed-oci-source",
+            "OCI image",
+            oci,
+            WorkspaceInputProfile::ContainerImageOciLayout,
+        ),
+        (
+            "typed-kubernetes-source",
+            "Kubernetes manifests",
+            manifests,
+            WorkspaceInputProfile::KubernetesManifests,
+        ),
+        (
+            "typed-node-source",
+            "Kubernetes node",
+            node,
+            WorkspaceInputProfile::KubernetesNodeSnapshot,
+        ),
+    ] {
+        let snapshot = create_workspace_snapshot_with_profile(
+            &artifact_root,
+            &case.id,
+            source_id,
+            path,
+            profile,
+            WorkspaceSnapshotLimits::default(),
+        )
+        .unwrap();
+        references.insert(snapshot.asset.id.clone(), snapshot.reference.clone());
+        service
+            .attach_workspace_snapshot(&case.id, label, snapshot)
+            .unwrap();
+    }
+
+    let attached = service.show_case(&case.id).unwrap();
+    assert_eq!(attached.assets.len(), 3);
+    assert!(
+        attached.data_sources.iter().all(|source| {
+            source.kind == ai_security_scanner_lib::domain::SourceKind::FileSystem
+        })
+    );
+    for asset in &attached.assets {
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id: asset.id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Typed input owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+    }
+
+    let plan = service
+        .plan_scan(
+            &case.id,
+            ScanPlanRequest {
+                engine_ids: ["trivy", "grype", "kubescape", "kube-bench"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            },
+        )
+        .unwrap();
+    assert!(plan.not_executed.is_empty());
+    assert_eq!(plan.executable.len(), 4);
+    assert!(plan.executable.iter().all(|execution| {
+        execution.assets.len() == 1
+            && execution.manifest.input_contracts.iter().any(|contract| {
+                contract.asset_kind == execution.assets[0].kind
+                    && contract.input_profile == references[&execution.assets[0].id].input_profile
+            })
+    }));
+
+    let runtime = FakeContainerRuntime::default();
+    let orchestrator = Orchestrator::new(&runtime, &artifacts, &adapters);
+    for execution in &plan.executable {
+        let resolved = resolve_workspace_snapshot(
+            &artifact_root,
+            &case.id,
+            &references[&execution.assets[0].id],
+        )
+        .unwrap();
+        let report = execute_fixture(
+            &orchestrator,
+            &runtime,
+            execution,
+            &resolved.tree_path,
+            baseline_output(&execution.manifest.id).to_vec(),
+        );
+        assert_report_provenance(&artifact_root, execution, &report);
+        service
+            .apply_execution_report(&case.id, &DurableExecutionReport::from(&report))
+            .unwrap();
+    }
+
+    let completed = service.show_case(&case.id).unwrap();
+    assert_eq!(completed.findings.len(), 4);
+    assert!(
+        completed
+            .coverage
+            .iter()
+            .filter(|entry| entry.asset_id.is_some())
+            .all(|entry| entry.status == CoverageStatus::DiscoveredAuthorizedScanned)
     );
 }
