@@ -3766,12 +3766,16 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
         .and_then(|prefix| prefix.checked_add(sid_length))
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACE size overflowed"))?;
     // SAFETY: IsValidSid established both SID pointers as valid.
-    if usize::from(header.AceSize) != expected_ace_size
-        || unsafe { EqualSid(ace_sid, user.as_ptr()) } == 0
-    {
+    let sid_matches_current_user = unsafe { EqualSid(ace_sid, user.as_ptr()) } != 0;
+    if usize::from(header.AceSize) != expected_ace_size || !sid_matches_current_user {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "file DACL is not restricted to the current Windows user",
+            format!(
+                "file DACL is not restricted to the current Windows user \
+                 (ACE size {}, expected {expected_ace_size}, SID match {sid_matches_current_user}, \
+                 descriptor control {control:#06x})",
+                header.AceSize
+            ),
         ));
     }
     Ok(())
