@@ -3538,53 +3538,77 @@ fn windows_file_information(file: &File) -> io::Result<WindowsFileInformation> {
 
 #[cfg(windows)]
 fn windows_owner_dacl_security_descriptor(file: &File) -> io::Result<Vec<usize>> {
+    use std::ffi::c_void;
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
     use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, GetKernelObjectSecurity, OWNER_SECURITY_INFORMATION,
+        DACL_SECURITY_INFORMATION, GetSecurityDescriptorLength, IsValidSecurityDescriptor,
+        OWNER_SECURITY_INFORMATION,
     };
 
+    struct LocalSecurityDescriptor(*mut c_void);
+
+    impl Drop for LocalSecurityDescriptor {
+        fn drop(&mut self) {
+            // SAFETY: GetSecurityInfo allocated this descriptor with LocalAlloc.
+            unsafe {
+                LocalFree(self.0);
+            }
+        }
+    }
+
     let requested = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
-    let mut required = 0_u32;
-    // SAFETY: the null/zero probe is documented for obtaining the security
-    // descriptor size; required is valid writable storage.
-    let probe = unsafe {
-        GetKernelObjectSecurity(
+    let mut raw_descriptor = std::ptr::null_mut();
+    // SAFETY: file owns a live filesystem handle; all unused optional outputs
+    // are null and raw_descriptor is writable output storage. GetSecurityInfo
+    // returns the descriptor in LocalAlloc storage owned by this function.
+    let status = unsafe {
+        GetSecurityInfo(
             file.as_raw_handle(),
+            SE_FILE_OBJECT,
             requested,
             std::ptr::null_mut(),
-            0,
-            &raw mut required,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut raw_descriptor,
         )
     };
-    let probe_error = io::Error::last_os_error();
-    if probe != 0
-        || required == 0
-        || probe_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
-    {
-        return Err(if probe_error.raw_os_error().is_some() {
-            probe_error
-        } else {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Windows returned an invalid file security descriptor size",
-            )
-        });
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
     }
-    let mut descriptor = vec![0_usize; (required as usize).div_ceil(std::mem::size_of::<usize>())];
+    if raw_descriptor.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned a null file security descriptor",
+        ));
+    }
+    let descriptor_guard = LocalSecurityDescriptor(raw_descriptor);
+    // SAFETY: a successful GetSecurityInfo returned this live descriptor.
+    if unsafe { IsValidSecurityDescriptor(descriptor_guard.0) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid file security descriptor",
+        ));
+    }
+    // SAFETY: IsValidSecurityDescriptor established a valid descriptor.
+    let required = unsafe { GetSecurityDescriptorLength(descriptor_guard.0) } as usize;
+    if required == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an empty file security descriptor",
+        ));
+    }
+    let mut descriptor = vec![0_usize; required.div_ceil(std::mem::size_of::<usize>())];
     // SAFETY: descriptor is pointer-aligned and provides at least required
-    // writable bytes; the file handle has READ_CONTROL through FILE_GENERIC_READ.
-    if unsafe {
-        GetKernelObjectSecurity(
-            file.as_raw_handle(),
-            requested,
-            descriptor.as_mut_ptr().cast(),
+    // writable bytes; descriptor_guard owns that many readable source bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            descriptor_guard.0.cast::<u8>(),
+            descriptor.as_mut_ptr().cast::<u8>(),
             required,
-            &raw mut required,
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error());
+        );
     }
     Ok(descriptor)
 }
@@ -5625,9 +5649,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
-    use windows_sys::Win32::Security::Authorization::{
-        SE_FILE_OBJECT, SetNamedSecurityInfoW, SetSecurityInfo,
-    };
+    use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, DACL_SECURITY_INFORMATION,
         InitializeAcl, InitializeSecurityDescriptor, PROTECTED_DACL_SECURITY_INFORMATION,
@@ -5637,7 +5659,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use windows_sys::Win32::Storage::FileSystem::{
         CREATE_NEW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
         FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, WRITE_DAC,
+        FILE_SHARE_NONE, WRITE_DAC,
     };
     use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
@@ -5762,7 +5784,7 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
         CreateFileW(
             encoded.as_ptr(),
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | DELETE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_SHARE_NONE,
             &raw const attributes,
             CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL,
@@ -5776,31 +5798,12 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     let file = unsafe { File::from_raw_handle(raw) };
     let secure = (|| {
         // CreateFileW may preserve the ACL entries while clearing the DACL
-        // protection control bit. First replace the DACL through the exact
-        // still-empty handle. Filesystem inheritance protection is then
-        // applied through the filesystem's named security provider while this
-        // original handle remains open. The original handle is verified below;
-        // no caller can write bytes until both operations are proven.
+        // protection control bit. Replace the DACL and its inheritance policy
+        // through the exact, exclusively opened, still-empty filesystem handle.
+        // No caller can write bytes until the same handle is verified below.
         let status = unsafe {
             SetSecurityInfo(
                 file.as_raw_handle(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                acl.as_ptr().cast(),
-                std::ptr::null(),
-            )
-        };
-        if status != 0 {
-            return Err(io::Error::from_raw_os_error(status as i32));
-        }
-        // SAFETY: encoded is the live NUL-terminated canonical creation path;
-        // the original handle remains open and shares access for the security
-        // provider. ACL and SID backing storage remain live for this call.
-        let status = unsafe {
-            SetNamedSecurityInfoW(
-                encoded.as_ptr(),
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                 std::ptr::null_mut(),
