@@ -1,0 +1,58 @@
+name: Promote signed managed image candidate
+description: Create a previously absent version tag only after its candidate digest has verified same-revision provenance.
+
+inputs:
+  image:
+    description: Fully-qualified GHCR image name without tag or digest.
+    required: true
+  tag:
+    description: Human-readable managed version tag.
+    required: true
+  digest:
+    description: Exact signed candidate or safely reused index digest.
+    required: true
+  source-revision:
+    description: Exact repository revision executing the publication workflow.
+    required: true
+  github-token:
+    description: Repository token with package read/write and attestation read access.
+    required: true
+
+outputs:
+  digest:
+    description: Verified digest bound to the immutable version tag.
+    value: ${{ steps.promote.outputs.digest }}
+  promoted:
+    description: Whether this invocation created the version tag.
+    value: ${{ steps.promote.outputs.promoted }}
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate the promotion operation
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - name: Promote once or verify the same immutable binding
+      id: promote
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GHCR_TOKEN: ${{ inputs.github-token }}
+      run: >-
+        node scripts/engine-image-evidence.mjs promote-publication
+        --image "${{ inputs.image }}"
+        --tag "${{ inputs.tag }}"
+        --digest "${{ inputs.digest }}"
+        --source-revision "${{ inputs.source-revision }}"
+        --repository "${GITHUB_REPOSITORY}"
+        --workflow-ref "${GITHUB_WORKFLOW_REF}"
+        --username "${GITHUB_ACTOR}"
+
+    - name: Remove promotion credentials
+      if: always()
+      shell: bash
+      run: docker logout ghcr.io

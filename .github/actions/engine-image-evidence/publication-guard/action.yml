@@ -1,0 +1,48 @@
+name: Guard immutable managed image version
+description: Reuse a same-revision signed index or authorize a unique candidate build without mutating a version tag.
+
+inputs:
+  image:
+    description: Fully-qualified GHCR image name without tag or digest.
+    required: true
+  tag:
+    description: Human-readable managed version tag.
+    required: true
+  source-revision:
+    description: Exact repository revision executing the publication workflow.
+    required: true
+  github-token:
+    description: Repository token with package read/write and attestation read access.
+    required: true
+
+outputs:
+  mode:
+    description: build when the version is absent; reuse when the same signed revision already owns it.
+    value: ${{ steps.preflight.outputs.mode }}
+  should_build:
+    description: Whether a fresh uniquely-tagged candidate must be built.
+    value: ${{ steps.preflight.outputs.should_build }}
+  digest:
+    description: Existing verified index digest in reuse mode; empty in build mode.
+    value: ${{ steps.preflight.outputs.digest }}
+  candidate_tag:
+    description: Run-unique non-version tag which may receive newly built bytes.
+    value: ${{ steps.preflight.outputs.candidate_tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the immutable version without mutation
+      id: preflight
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GHCR_TOKEN: ${{ inputs.github-token }}
+      run: >-
+        node scripts/engine-image-evidence.mjs publication-preflight
+        --image "${{ inputs.image }}"
+        --tag "${{ inputs.tag }}"
+        --source-revision "${{ inputs.source-revision }}"
+        --repository "${GITHUB_REPOSITORY}"
+        --workflow-ref "${GITHUB_WORKFLOW_REF}"
+        --username "${GITHUB_ACTOR}"

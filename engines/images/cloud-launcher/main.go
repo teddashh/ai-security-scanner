@@ -641,6 +641,71 @@ func verifyGCPProject(client httpDoer, root, accessToken, expectedProjectID stri
 		return errors.New("GCP project verifier lacks an exact target or token")
 	}
 	base := strings.TrimSuffix(root, "/")
+	requiredPermissions := []string{
+		"resourcemanager.projects.get",
+		"resourcemanager.projects.getIamPolicy",
+	}
+	prohibitedPermissions := []string{
+		"resourcemanager.projects.setIamPolicy",
+		"resourcemanager.projects.delete",
+		"iam.serviceAccounts.create",
+		"iam.serviceAccountKeys.create",
+	}
+	requestedPermissions := append(append([]string{}, requiredPermissions...), prohibitedPermissions...)
+	permissionBody, err := json.Marshal(struct {
+		Permissions []string `json:"permissions"`
+	}{Permissions: requestedPermissions})
+	if err != nil {
+		return errors.New("GCP project permission request is invalid")
+	}
+	permissionRequest, err := http.NewRequest(
+		http.MethodPost,
+		base+"/v3/projects/"+expectedProjectID+":testIamPermissions",
+		bytes.NewReader(permissionBody),
+	)
+	if err != nil || permissionRequest.URL.User != nil || permissionRequest.URL.Fragment != "" {
+		return errors.New("GCP project permission endpoint is invalid")
+	}
+	permissionRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	permissionRequest.Header.Set("Accept", "application/json")
+	permissionRequest.Header.Set("Content-Type", "application/json")
+	permissionPayload, err := performProviderRequest(client, permissionRequest, "GCP project permission")
+	if err != nil {
+		return err
+	}
+	permissionObject, err := uniqueJSONObject(permissionPayload)
+	if err != nil {
+		return errors.New("GCP project permission response is malformed")
+	}
+	var grantedPermissions []string
+	if raw, exists := permissionObject["permissions"]; exists && json.Unmarshal(raw, &grantedPermissions) != nil {
+		return errors.New("GCP project permission response has a malformed permissions array")
+	}
+	requested := make(map[string]struct{}, len(requestedPermissions))
+	for _, permission := range requestedPermissions {
+		requested[permission] = struct{}{}
+	}
+	granted := make(map[string]struct{}, len(grantedPermissions))
+	for _, permission := range grantedPermissions {
+		if _, exists := requested[permission]; !exists {
+			return errors.New("GCP project permission response contains an unexpected permission")
+		}
+		if _, exists := granted[permission]; exists {
+			return errors.New("GCP project permission response contains a duplicate permission")
+		}
+		granted[permission] = struct{}{}
+	}
+	for _, permission := range requiredPermissions {
+		if _, exists := granted[permission]; !exists {
+			return fmt.Errorf("GCP project credential is missing required permission %s", permission)
+		}
+	}
+	for _, permission := range prohibitedPermissions {
+		if _, exists := granted[permission]; exists {
+			return fmt.Errorf("GCP project credential permits prohibited mutation %s", permission)
+		}
+	}
+
 	projectRequest, err := http.NewRequest(http.MethodGet, base+"/v3/projects/"+expectedProjectID, nil)
 	if err != nil || projectRequest.URL.User != nil || projectRequest.URL.Fragment != "" {
 		return errors.New("GCP project identity endpoint is invalid")

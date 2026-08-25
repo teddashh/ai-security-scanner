@@ -5,6 +5,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 
+import { validateProwlerCatalogContract } from "./prowler-catalog-contract.mjs";
+
 const root = resolve(import.meta.dirname, "..");
 const catalogPath = resolve(root, "engines/catalog.json");
 const schemaPath = resolve(root, "engines/compatibility.schema.json");
@@ -45,7 +47,7 @@ const managedImageRepositoryPrefix = "ghcr.io/teddashh/ai-security-scanner-engin
 const managedLocalK8sIds = ["semgrep", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"];
 const managedLocalK8sContracts = new Map([
   ["semgrep", {
-    tag: "1.174.0-1",
+    tag: "1.174.0-2",
     planKind: "managed_build",
     license: { disposition: "source_offer", sourceOfferPath: "engines/images/semgrep/SOURCE-OFFER.md" },
     immutableDockerfileInputs: [
@@ -57,7 +59,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["trufflehog", {
-    tag: "3.97.0-1",
+    tag: "3.97.0-2",
     planKind: "managed_build",
     license: { disposition: "source_offer", sourceOfferPath: "engines/images/trufflehog/SOURCE-OFFER.md" },
     immutableDockerfileInputs: [
@@ -67,7 +69,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["trivy", {
-    tag: "0.74.0-1",
+    tag: "0.74.0-2",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -79,7 +81,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["grype", {
-    tag: "0.117.0-1",
+    tag: "0.117.0-2",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -92,7 +94,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["kubescape", {
-    tag: "4.0.12-1",
+    tag: "4.0.12-2",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -106,7 +108,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["kube-bench", {
-    tag: "0.16.0-1",
+    tag: "0.16.0-2",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -155,6 +157,13 @@ const digestPattern = /^sha256:[0-9a-f]{64}$/;
 const revisionPattern = /^[0-9a-f]{40}$/;
 const isoDatePattern = /^(\d{4})-(\d{2})-(\d{2})$/;
 const planKinds = new Set(["upstream_image", "managed_build", "managed_rebase", "managed_source_image", "multi_component_build"]);
+const localInputProfilesByAssetKind = new Map([
+  ["repository", "repository_working_tree"],
+  ["iac_project", "iac_working_tree"],
+  ["container_image", "container_image_oci_layout"],
+  ["kubernetes_cluster", "kubernetes_manifests"],
+  ["host", "kubernetes_node_snapshot"],
+]);
 const errors = [];
 
 function isIsoDate(value) {
@@ -211,7 +220,7 @@ function parseWorkflow(relative) {
   }
 }
 
-function resolveEvidenceStepEngines(job, step, label) {
+function resolveEvidenceStepEngines(workflow, job, step, label) {
   const configuredEngine = step?.with?.engine;
   if (typeof configuredEngine !== "string") {
     errors.push(`${label}: common evidence action requires an engine input`);
@@ -223,6 +232,15 @@ function resolveEvidenceStepEngines(job, step, label) {
     const matrixEngines = Array.isArray(include)
       ? include.map((entry) => entry?.engine)
       : Array.isArray(direct) ? direct : [];
+    if (matrixEngines.length === 0 && typeof job?.strategy?.matrix === "string" &&
+        job.strategy.matrix.includes("needs.changes.outputs.matrix")) {
+      try {
+        const configuredMatrix = JSON.parse(workflow?.env?.CLOUD_ENGINE_MATRIX ?? "null");
+        matrixEngines.push(...(Array.isArray(configuredMatrix) ? configuredMatrix.map((entry) => entry?.engine) : []));
+      } catch {
+        errors.push(`${label}: dynamic cloud matrix contract is not valid JSON`);
+      }
+    }
     if (matrixEngines.length === 0 || matrixEngines.some((id) => typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) {
       errors.push(`${label}: matrix.engine must resolve to a non-empty static engine list`);
       return [];
@@ -238,6 +256,28 @@ function resolveEvidenceStepEngines(job, step, label) {
 
 function validateManagedImageEvidence(catalogEntries) {
   const expectedManagedIds = managedEvidenceEngineIds;
+  const guardActionPath = resolve(root, ".github/actions/engine-image-evidence/publication-guard/action.yml");
+  const promotionActionPath = resolve(root, ".github/actions/engine-image-evidence/promote/action.yml");
+  const guardActionText = existsSync(guardActionPath) ? readFileSync(guardActionPath, "utf8") : "";
+  const promotionActionText = existsSync(promotionActionPath) ? readFileSync(promotionActionPath, "utf8") : "";
+  for (const [label, text, required] of [
+    ["managed image publication guard", guardActionText, [
+      "publication-preflight",
+      "GHCR_TOKEN: ${{ inputs.github-token }}",
+      "candidate_tag",
+    ]],
+    ["managed image version promotion", promotionActionText, [
+      "uses: docker/login-action@",
+      "password: ${{ inputs.github-token }}",
+      "promote-publication",
+      "if: always()",
+      "run: docker logout ghcr.io",
+    ]],
+  ]) {
+    if (!text || required.some((needle) => !text.includes(needle))) {
+      errors.push(`${label} action is missing or does not preserve its fail-closed authentication contract`);
+    }
+  }
   if (expectedManagedIds.length !== 19 || new Set(expectedManagedIds).size !== 19) {
     errors.push("managed evidence contract must enumerate exactly 19 unique engines");
   }
@@ -253,11 +293,14 @@ function validateManagedImageEvidence(catalogEntries) {
     if (!Array.isArray(paths)) {
       errors.push(`${relative}: push.paths must be a static list`);
     } else {
-      for (const requiredPath of [
+      for (const forbiddenPath of [
         ".github/actions/engine-image-evidence/**",
         "scripts/engine-image-evidence.mjs",
+        relative,
       ]) {
-        if (!paths.includes(requiredPath)) errors.push(`${relative}: push.paths must watch ${requiredPath}`);
+        if (paths.includes(forbiddenPath)) {
+          errors.push(`${relative}: evidence/workflow-only change must not auto-republish immutable version tags (${forbiddenPath})`);
+        }
       }
     }
 
@@ -270,6 +313,12 @@ function validateManagedImageEvidence(catalogEntries) {
     let evidenceStepCount = 0;
     for (const [jobId, job] of Object.entries(jobs)) {
       const steps = Array.isArray(job?.steps) ? job.steps : [];
+      for (const [index, step] of steps.entries()) {
+        if (typeof step?.run === "string" && step.run.includes("docker buildx imagetools create") &&
+            step.run.includes('${IMAGE}:${IMAGE_TAG}')) {
+          errors.push(`${relative}:jobs.${jobId}.steps[${index}]: workflow must not directly mutate a managed version tag`);
+        }
+      }
       const buildIndexes = steps
         .map((step, index) => typeof step?.uses === "string" && step.uses.startsWith("docker/build-push-action@") ? index : -1)
         .filter((index) => index >= 0);
@@ -281,6 +330,14 @@ function validateManagedImageEvidence(catalogEntries) {
         }
         if (buildStep?.with?.provenance !== false || buildStep?.with?.sbom !== false) {
           errors.push(`${label}: docker/build-push-action must set provenance: false and sbom: false`);
+        }
+        if (buildStep?.with?.push === true) {
+          const guardIndex = steps.findIndex((candidate, index) =>
+            index < buildIndex && candidate?.uses === "./.github/actions/engine-image-evidence/publication-guard");
+          if (guardIndex < 0 || buildStep?.if !== "steps.guard.outputs.should_build == 'true'" ||
+              buildStep?.with?.tags !== "${{ env.IMAGE }}:${{ steps.guard.outputs.candidate_tag }}") {
+            errors.push(`${label}: publishing build must be guarded and write only its run-unique candidate tag`);
+          }
         }
       }
       const publishingBuildIndexes = buildIndexes.filter((index) => steps[index]?.with?.push === true);
@@ -302,7 +359,7 @@ function validateManagedImageEvidence(catalogEntries) {
             errors.push(`${label}: common evidence action requires non-empty ${input}`);
           }
         }
-        const evidenceEngineIds = resolveEvidenceStepEngines(job, evidenceStep, label);
+        const evidenceEngineIds = resolveEvidenceStepEngines(workflow, job, evidenceStep, label);
         workflowIds.push(...evidenceEngineIds);
 
         const permissions = job?.permissions ?? workflow.permissions;
@@ -325,16 +382,40 @@ function validateManagedImageEvidence(catalogEntries) {
             candidate.run.includes('printf \'digest=%s\\n\' "${index_digest}" >> "${GITHUB_OUTPUT}"'));
           if (nativePromotionIndex < 0) {
             errors.push(`${label}: evidence action must follow a docker/build-push-action publication or the exact Greenbone native-manifest promotion step`);
-          } else if (evidenceStep?.with?.digest !== "${{ steps.publish.outputs.digest }}") {
-            errors.push(`${label}: Greenbone evidence digest must reference the promoted index output`);
+          } else if (evidenceStep?.with?.digest !== "${{ needs.guard.outputs.digest || steps.publish.outputs.digest }}") {
+            errors.push(`${label}: Greenbone evidence digest must select only a verified reuse or the candidate index output`);
           }
         } else {
           const expectedDigestInputs = precedingPublishingBuildIndexes
             .map((index) => steps[index]?.id)
             .filter((id) => typeof id === "string" && id.length > 0)
-            .map((id) => `\${{ steps.${id}.outputs.digest }}`);
+            .flatMap((id) => [
+              `\${{ steps.${id}.outputs.digest }}`,
+              `\${{ steps.guard.outputs.digest || steps.${id}.outputs.digest }}`,
+            ]);
           if (!expectedDigestInputs.includes(evidenceStep?.with?.digest)) {
             errors.push(`${label}: digest must reference a preceding publication step output`);
+          }
+        }
+
+        const promotionIndex = steps.findIndex((candidate, index) =>
+          index > evidenceIndex && candidate?.uses === "./.github/actions/engine-image-evidence/promote");
+        if (promotionIndex < 0) {
+          errors.push(`${label}: immutable version promotion must follow signed evidence`);
+        } else {
+          const promotion = steps[promotionIndex];
+          if (promotion?.with?.image !== evidenceStep?.with?.image ||
+              promotion?.with?.tag !== evidenceStep?.with?.tag ||
+              promotion?.with?.digest !== evidenceStep?.with?.digest ||
+              promotion?.with?.["source-revision"] !== evidenceStep?.with?.["source-revision"] ||
+              promotion?.with?.["github-token"] !== evidenceStep?.with?.["github-token"]) {
+            errors.push(`${label}: promotion must bind the same image, tag, digest, revision, and token as evidence`);
+          }
+          const anonymousVersionCheck = steps.slice(promotionIndex + 1).find((candidate) =>
+            typeof candidate?.run === "string" && candidate.run.includes("docker logout ghcr.io") &&
+            candidate.run.includes('imagetools inspect "${IMAGE}:${IMAGE_TAG}"'));
+          if (!anonymousVersionCheck) {
+            errors.push(`${label}: promoted version tag must be anonymously re-resolved to its exact digest`);
           }
         }
 
@@ -891,9 +972,12 @@ function validatePublishedGreenboneImage(plan, planRelative, engine) {
     "!engines/images/greenbone/plan.json",
     smokeRelative,
     "managedSmokeEvidenceSha256",
-    "nativeImageIdentityMatchesFinal: true",
+    "nativeImageIdentityMatchesFinal: $native_identity_matches",
+    "reusedSignedIndex: ($native_identity_matches | not)",
     "Push the exact smoke-tested native image",
-    "Promote the exact smoke-tested native manifests",
+    "Assemble the exact smoke-tested native candidate index",
+    "engine-image-evidence/publication-guard",
+    "engine-image-evidence/promote",
     ".publishedImage.digest",
     ".publishedImage.digest == $final_digest",
     ".imageIdentity.id == $registry.config.digest",
@@ -1700,11 +1784,56 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   if (updateProcedure !== "docs/engine-maintenance.md" || !existsSync(resolve(root, updateProcedure ?? ""))) {
     errors.push(`${label}: update_procedure must resolve to docs/engine-maintenance.md`);
   }
-  const expectedProviders = managedCloudIds.has(engine.id)
-    ? ["aws"]
+  const expectedProviders = engine.id === "prowler"
+    ? ["aws", "azure", "gcp"]
+    : managedCloudIds.has(engine.id)
+      ? ["aws"]
     : managedM365Ids.has(engine.id) ? ["microsoft365"] : [];
   if (!deepEqual(engine.supported_providers, expectedProviders)) {
     errors.push(`${label}: supported_providers must disclose only providers consumed by this released image`);
+  }
+  const permissions = new Set(engine.required_permissions ?? []);
+  const inputContracts = engine.input_contracts ?? [];
+  const providerContracts = engine.provider_execution_contracts ?? [];
+  if ((engine.supported_providers?.length ?? 0) > 1 && providerContracts.length === 0) {
+    errors.push(`${label}: a multi-provider engine requires exact provider execution contracts`);
+  }
+  if ((engine.supported_providers?.length ?? 0) === 0 && providerContracts.length > 0) {
+    errors.push(`${label}: a provider-agnostic engine cannot declare provider execution contracts`);
+  }
+  if (providerContracts.length > 0) {
+    const contractProviders = providerContracts.map((contract) => contract.provider);
+    const contractAssetKinds = providerContracts.map((contract) => contract.asset_kind);
+    const contractProfiles = providerContracts.map((contract) => contract.profile);
+    const contractDestinations = providerContracts.flatMap((contract) => contract.network_destinations ?? []);
+    if (!deepEqual(sortedUnique(contractProviders), sortedUnique(engine.supported_providers ?? [])) ||
+        new Set(contractProviders).size !== providerContracts.length ||
+        !deepEqual(sortedUnique(contractAssetKinds), sortedUnique(engine.supported_asset_kinds ?? [])) ||
+        new Set(contractAssetKinds).size !== providerContracts.length ||
+        new Set(contractProfiles).size !== providerContracts.length ||
+        !deepEqual(sortedUnique(contractDestinations), sortedUnique(engine.network_destinations ?? []))) {
+      errors.push(`${label}: provider execution contracts must uniquely cover the provider, asset-kind, profile, and network declarations`);
+    }
+    for (const [index, contract] of providerContracts.entries()) {
+      if (typeof contract.profile !== "string" || !/^[a-z0-9][a-z0-9_-]{2,63}$/.test(contract.profile) ||
+          !Array.isArray(contract.network_destinations) || contract.network_destinations.length === 0 ||
+          new Set(contract.network_destinations).size !== contract.network_destinations.length) {
+        errors.push(`${label}.provider_execution_contracts[${index}]: malformed profile or destination closure`);
+      }
+    }
+  }
+  if (permissions.has("local_artifact_read")) {
+    const expectedContracts = (engine.supported_asset_kinds ?? []).map((assetKind) => ({
+      asset_kind: assetKind,
+      input_profile: localInputProfilesByAssetKind.get(assetKind),
+    }));
+    if (expectedContracts.some((contract) => contract.input_profile === undefined)) {
+      errors.push(`${label}: local-artifact engine declares an asset kind without a backend input profile`);
+    } else if (!deepEqual(inputContracts, expectedContracts)) {
+      errors.push(`${label}: input_contracts must bind every supported asset kind to its exact backend profile`);
+    }
+  } else if (inputContracts.length > 0) {
+    errors.push(`${label}: non-local engine cannot declare a local input contract`);
   }
   if (!revisionPattern.test(engine.source_revision ?? "")) errors.push(`${label}.source_revision: exact 40-character commit is required`);
   if (engine.source_revision !== engine.provenance?.engine?.source_revision) errors.push(`${label}: top-level and provenance source revisions differ`);
@@ -1727,7 +1856,6 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
     errors.push(`${label}: source_offer_path must be null unless disposition is source_offer`);
   }
   if (engine.active_external) {
-    const permissions = new Set(engine.required_permissions ?? []);
     if (!permissions.has("low_impact_external_connection") && !permissions.has("active_external_testing")) {
       errors.push(`${label}: active external engine requires an external-connection permission`);
     }
@@ -1763,6 +1891,9 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   }
   const plan = parseJson(planPath);
   if (!plan) continue;
+  if (engine.id === "prowler") {
+    errors.push(...validateProwlerCatalogContract({ engine, plan, projectRoot: root }));
+  }
   if (!planKinds.has(plan.plan_kind)) errors.push(`${planRelative}: unsupported plan kind ${plan.plan_kind}`);
   if (plan.engine_id !== engine.id) errors.push(`${planRelative}: engine id does not match catalog`);
   for (const field of ["knowledge_date", "support_until", "maintenance_owner", "update_procedure"]) {
@@ -1842,8 +1973,10 @@ if (!existsSync(cloudWorkflowPath)) {
   if (!/^\s*workflow_dispatch:\s*$/m.test(workflowText)) {
     errors.push("managed cloud publication workflow must retain workflow_dispatch");
   }
-  if (!/^\s*-\s*["']?\.github\/workflows\/engine-images-cloud\.yml["']?\s*$/m.test(workflowText)) {
-    errors.push("managed cloud publication workflow must rebuild when its release contract changes");
+  if (/^\s*-\s*["']?\.github\/workflows\/engine-images-cloud\.yml["']?\s*$/m.test(workflowText) ||
+      /^\s*-\s*["']?\.github\/actions\/engine-image-evidence\/\*\*["']?\s*$/m.test(workflowText) ||
+      /^\s*-\s*["']?scripts\/engine-image-evidence\.mjs["']?\s*$/m.test(workflowText)) {
+    errors.push("managed cloud workflow/evidence-only changes must not auto-republish immutable version tags");
   }
   for (const engineId of managedCloudIds) {
     const positive = new RegExp(`^\\s*-\\s*["']?engines/images/${engineId}/\\*\\*["']?\\s*$`, "m");

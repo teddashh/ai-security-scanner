@@ -319,7 +319,7 @@ func TestAzureSubscriptionPreflightRejectsDisabledSubscription(t *testing.T) {
 	}
 }
 
-func TestGCPProjectPreflightUsesOnlyExactGetAndIAMPolicy(t *testing.T) {
+func TestGCPProjectPreflightPinsPermissionsAndUsesOnlyExactProjectReads(t *testing.T) {
 	const projectID = "audit-project-123"
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -328,6 +328,13 @@ func TestGCPProjectPreflightUsesOnlyExactGetAndIAMPolicy(t *testing.T) {
 			t.Error("GCP bearer token was not passed through the fixed header")
 		}
 		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v3/projects/"+projectID+":testIamPermissions":
+			body, _ := io.ReadAll(request.Body)
+			expected := `{"permissions":["resourcemanager.projects.get","resourcemanager.projects.getIamPolicy","resourcemanager.projects.setIamPolicy","resourcemanager.projects.delete","iam.serviceAccounts.create","iam.serviceAccountKeys.create"]}`
+			if string(body) != expected {
+				t.Errorf("unexpected GCP permission body %q", body)
+			}
+			_, _ = io.WriteString(writer, `{"permissions":["resourcemanager.projects.get","resourcemanager.projects.getIamPolicy"]}`)
 		case request.Method == http.MethodGet && request.URL.Path == "/v3/projects/"+projectID:
 			_, _ = io.WriteString(writer, `{"name":"projects/fixture","projectId":"`+projectID+`","state":"ACTIVE"}`)
 		case request.Method == http.MethodPost && request.URL.Path == "/v1/projects/"+projectID+":getIamPolicy":
@@ -345,8 +352,67 @@ func TestGCPProjectPreflightUsesOnlyExactGetAndIAMPolicy(t *testing.T) {
 	if err := verifyGCPProject(server.Client(), server.URL, "gcp-token", projectID); err != nil {
 		t.Fatalf("exact GCP project was rejected: %v", err)
 	}
-	if requests != 2 {
-		t.Fatalf("expected exactly two bounded GCP preflight calls, got %d", requests)
+	if requests != 3 {
+		t.Fatalf("expected exactly three bounded GCP preflight calls, got %d", requests)
+	}
+}
+
+func TestGCPProjectPreflightFailsClosedWhenExactIAMPolicyReadIsDenied(t *testing.T) {
+	const projectID = "audit-project-123"
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v3/projects/"+projectID+":testIamPermissions":
+			_, _ = io.WriteString(writer, `{"permissions":["resourcemanager.projects.get","resourcemanager.projects.getIamPolicy"]}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/v3/projects/"+projectID:
+			_, _ = io.WriteString(writer, `{"name":"projects/987654321","projectId":"`+projectID+`","state":"ACTIVE"}`)
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/projects/"+projectID+":getIamPolicy":
+			http.Error(writer, "denied", http.StatusForbidden)
+		default:
+			http.Error(writer, "unexpected", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	err := verifyGCPProject(server.Client(), server.URL, "gcp-token", projectID)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		t.Fatalf("missing projects.getIamPolicy permission was not rejected: %v", err)
+	}
+	if requests != 3 {
+		t.Fatalf("expected permission, exact identity, then IAM-policy preflight, got %d calls", requests)
+	}
+}
+
+func TestGCPProjectPreflightFailsClosedOnMissingReadOrGrantedMutation(t *testing.T) {
+	const projectID = "audit-project-123"
+	for name, permissions := range map[string]string{
+		"missing-read":               `{"permissions":["resourcemanager.projects.get"]}`,
+		"set-project-policy":         `{"permissions":["resourcemanager.projects.get","resourcemanager.projects.getIamPolicy","resourcemanager.projects.setIamPolicy"]}`,
+		"delete-project":             `{"permissions":["resourcemanager.projects.get","resourcemanager.projects.getIamPolicy","resourcemanager.projects.delete"]}`,
+		"create-service-account":     `{"permissions":["resourcemanager.projects.get","resourcemanager.projects.getIamPolicy","iam.serviceAccounts.create"]}`,
+		"create-service-account-key": `{"permissions":["resourcemanager.projects.get","resourcemanager.projects.getIamPolicy","iam.serviceAccountKeys.create"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests++
+				if request.Method != http.MethodPost || request.URL.Path != "/v3/projects/"+projectID+":testIamPermissions" {
+					http.Error(writer, "unexpected", http.StatusBadRequest)
+					return
+				}
+				_, _ = io.WriteString(writer, permissions)
+			}))
+			defer server.Close()
+
+			err := verifyGCPProject(server.Client(), server.URL, "gcp-token", projectID)
+			if err == nil {
+				t.Fatal("unsafe GCP project permission set was accepted")
+			}
+			if requests != 1 {
+				t.Fatalf("unsafe permission set reached live project reads after %d calls", requests)
+			}
+		})
 	}
 }
 

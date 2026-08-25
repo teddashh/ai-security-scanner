@@ -5,14 +5,11 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/engine-images-m365.yml
-      - .github/actions/engine-image-evidence/**
       - engines/images/m365-launcher/**
       - engines/images/scubagear/**
       - "!engines/images/scubagear/plan.json"
       - engines/images/maester/**
       - "!engines/images/maester/plan.json"
-      - scripts/engine-image-evidence.mjs
   workflow_dispatch:
 
 permissions:
@@ -67,23 +64,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Guard the immutable managed version tag
+        id: guard
+        uses: ./.github/actions/engine-image-evidence/publication-guard
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and publish the immutable multi-platform image
         id: build
+        if: steps.guard.outputs.should_build == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          tags: ${{ env.IMAGE }}:${{ steps.guard.outputs.candidate_tag }}
           provenance: false
           sbom: false
           cache-from: type=gha,scope=engine-${{ matrix.engine }}
           cache-to: type=gha,mode=max,scope=engine-${{ matrix.engine }}
 
+      - name: Publish anonymous pull access
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="${IMAGE#ghcr.io/teddashh/}"
+          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
+
       - name: Verify anonymous multi-platform access
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
         run: |
           docker logout ghcr.io
           docker buildx imagetools inspect "${IMAGE}@${DIGEST}"
@@ -92,7 +107,7 @@ jobs:
 
       - name: Run the anonymous amd64 smoke contract
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
         run: |
           docker pull --platform linux/amd64 "${IMAGE}@${DIGEST}"
           user="$(docker image inspect "${IMAGE}@${DIGEST}" --format '{{.Config.User}}')"
@@ -115,7 +130,7 @@ jobs:
 
       - name: Record publication and smoke evidence
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
           REVISION: ${{ github.sha }}
         run: |
           manifest="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}")"
@@ -140,9 +155,27 @@ jobs:
           engine: ${{ matrix.engine }}
           image: ${{ env.IMAGE }}
           tag: ${{ env.IMAGE_TAG }}
-          digest: ${{ steps.build.outputs.digest }}
+          digest: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
           source-revision: ${{ github.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote the signed candidate without overwriting a version
+        id: promote
+        uses: ./.github/actions/engine-image-evidence/promote
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify anonymous immutable version access
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          docker logout ghcr.io
+          resolved="$(docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{json .Manifest.Digest}}' | jq -er 'select(test("^sha256:[0-9a-f]{64}$"))')"
+          test "${resolved}" = "${DIGEST}"
 
       - name: Upload publication and signed supply-chain evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

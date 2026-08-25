@@ -5,17 +5,9 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/engine-image-greenbone.yml
-      - .github/actions/engine-image-evidence/**
       - engines/images/greenbone/**
       - '!engines/images/greenbone/plan.json'
       - engines/images/greenbone-launcher/**
-      - scripts/engine-image-evidence.mjs
-      - src-tauri/Cargo.toml
-      - src-tauri/examples/greenbone_adapter_smoke.rs
-      - src-tauri/src/adapters/**
-      - src-tauri/src/bin/egress_gateway.rs
-      - Cargo.lock
   workflow_dispatch:
 
 permissions:
@@ -37,8 +29,30 @@ env:
   NOTUS_REVISION: 4635b37aecd2d968680c7609a7fb61e5d780ce93
 
 jobs:
+  guard:
+    name: Guard the immutable managed version tag
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.guard.outputs.mode }}
+      should_build: ${{ steps.guard.outputs.should_build }}
+      digest: ${{ steps.guard.outputs.digest }}
+      candidate_tag: ${{ steps.guard.outputs.candidate_tag }}
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve the version before any native build
+        id: guard
+        uses: ./.github/actions/engine-image-evidence/publication-guard
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
   native:
     name: Native build and real smoke (${{ matrix.platform }})
+    needs: guard
+    if: needs.guard.outputs.should_build == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -188,25 +202,31 @@ jobs:
 
   publish:
     name: Publish pinned native manifests and preserve evidence
-    needs: native
+    needs:
+      - guard
+      - native
+    if: always() && needs.guard.result == 'success' && (needs.native.result == 'success' || needs.native.result == 'skipped')
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download amd64 native evidence
+        if: needs.guard.outputs.should_build == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: greenbone-native-amd64-${{ github.run_id }}-${{ github.run_attempt }}
           path: native-evidence/amd64
 
       - name: Download arm64 native evidence
+        if: needs.guard.outputs.should_build == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: greenbone-native-arm64-${{ github.run_id }}-${{ github.run_attempt }}
           path: native-evidence/arm64
 
       - name: Verify native evidence identities
+        if: needs.guard.outputs.should_build == 'true'
         shell: bash
         run: |
           for architecture in amd64 arm64; do
@@ -259,19 +279,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Promote the exact smoke-tested native manifests
+      - name: Assemble the exact smoke-tested native candidate index
         id: publish
+        if: needs.guard.outputs.should_build == 'true'
         shell: bash
         run: |
           amd64_digest="$(jq -er '.publishedImage.digest | select(test("^sha256:[0-9a-f]{64}$"))' native-evidence/amd64/native-digest.json)"
           arm64_digest="$(jq -er '.publishedImage.digest | select(test("^sha256:[0-9a-f]{64}$"))' native-evidence/arm64/native-digest.json)"
           test "${amd64_digest}" != "${arm64_digest}"
           docker buildx imagetools create \
-            --tag "${IMAGE}:${IMAGE_TAG}" \
+            --tag "${IMAGE}:${{ needs.guard.outputs.candidate_tag }}" \
             "${IMAGE}@${amd64_digest}" \
             "${IMAGE}@${arm64_digest}"
           index_digest="$(
-            docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{json .Manifest.Digest}}' |
+            docker buildx imagetools inspect "${IMAGE}:${{ needs.guard.outputs.candidate_tag }}" --format '{{json .Manifest.Digest}}' |
               jq -er 'select(test("^sha256:[0-9a-f]{64}$"))'
           )"
           docker buildx imagetools inspect "${IMAGE}@${index_digest}" --raw > promoted-index.json
@@ -295,7 +316,8 @@ jobs:
         id: anonymous
         shell: bash
         env:
-          INDEX_DIGEST: ${{ steps.publish.outputs.digest }}
+          INDEX_DIGEST: ${{ needs.guard.outputs.digest || steps.publish.outputs.digest }}
+          SHOULD_BUILD: ${{ needs.guard.outputs.should_build }}
         run: |
           [[ "${INDEX_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           mkdir -p package-evidence
@@ -310,12 +332,14 @@ jobs:
             docker pull --platform "linux/${platform}" "${IMAGE}@${final_digest}"
             docker image inspect "${IMAGE}@${final_digest}" > "${RUNNER_TEMP}/final-${platform}-inspect.json"
             docker buildx imagetools inspect "${IMAGE}@${final_digest}" --raw > "${RUNNER_TEMP}/final-${platform}-manifest.json"
-            jq -e \
-              --arg final_digest "${final_digest}" \
-              --slurpfile final "${RUNNER_TEMP}/final-${platform}-inspect.json" \
-              --slurpfile manifest "${RUNNER_TEMP}/final-${platform}-manifest.json" \
-              '($final[0][0]) as $image | ($manifest[0]) as $registry | .publishedImage.digest == $final_digest and .imageIdentity.id == $registry.config.digest and .imageIdentity.architecture == $image.Architecture and .imageIdentity.os == $image.Os and .imageIdentity.rootFsDiffIds == $image.RootFS.Layers and (.imageIdentity.config | {User, Env, Cmd, ArgsEscaped, Volumes, WorkingDir, Entrypoint, Labels}) == ($image.Config | {User, Env, Cmd, ArgsEscaped, Volumes, WorkingDir, Entrypoint, Labels})' \
-              "native-evidence/${platform}/native-digest.json"
+            if [ "${SHOULD_BUILD}" = true ]; then
+              jq -e \
+                --arg final_digest "${final_digest}" \
+                --slurpfile final "${RUNNER_TEMP}/final-${platform}-inspect.json" \
+                --slurpfile manifest "${RUNNER_TEMP}/final-${platform}-manifest.json" \
+                '($final[0][0]) as $image | ($manifest[0]) as $registry | .publishedImage.digest == $final_digest and .imageIdentity.id == $registry.config.digest and .imageIdentity.architecture == $image.Architecture and .imageIdentity.os == $image.Os and .imageIdentity.rootFsDiffIds == $image.RootFS.Layers and (.imageIdentity.config | {User, Env, Cmd, ArgsEscaped, Volumes, WorkingDir, Entrypoint, Labels}) == ($image.Config | {User, Env, Cmd, ArgsEscaped, Volumes, WorkingDir, Entrypoint, Labels})' \
+                "native-evidence/${platform}/native-digest.json"
+            fi
           done
           test "$(docker image inspect "${IMAGE}@${final_amd64_digest}" --format '{{.Config.User}}')" = '65532:65532'
           KEEP_GREENBONE_SMOKE=1 \
@@ -342,7 +366,8 @@ jobs:
             --arg feed_revision "${FEED_REVISION}" \
             --arg notus_revision "${NOTUS_REVISION}" \
             --arg xml_sha256 "sha256:${xml_sha256}" \
-            '{schemaVersion: 1, engine: "greenbone", image: $image, tag: $tag, digest: $index_digest, indexDigest: $index_digest, platformDigests: {"linux/amd64": $amd64_digest, "linux/arm64": $arm64_digest}, sourceRevision: $source_revision, sourceDateEpoch: $source_date_epoch, public: true, anonymousPullVerified: true, managedSmokeEvidenceSha256: $xml_sha256, nativeImageIdentityMatchesFinal: true, upstream: {scannerRevision: $scanner_revision, scannerSourceSha256: "47cbc7fbff0e19c4533f48c6e7287298f1466d1556f0fc4a7177c37506a3d5e8", feedRevision: $feed_revision, feedVersion: "202608240615-community", notusRevision: $notus_revision}, managedProxy: {kind: "socks5h", directEgressDenied: true, unauthorizedPortDenied: true}, realScan: {selectedOid: "1.3.6.1.4.1.25623.1.0.108252", authorizedTarget: "172.29.251.10:8080/tcp", xmlResults: 5, actionableAlarms: 1, adapterFindings: 1, adapterWarnings: 0, xmlSha256: $xml_sha256}}' \
+            --argjson native_identity_matches "${SHOULD_BUILD}" \
+            '{schemaVersion: 1, engine: "greenbone", image: $image, tag: $tag, digest: $index_digest, indexDigest: $index_digest, platformDigests: {"linux/amd64": $amd64_digest, "linux/arm64": $arm64_digest}, sourceRevision: $source_revision, sourceDateEpoch: $source_date_epoch, public: true, anonymousPullVerified: true, managedSmokeEvidenceSha256: $xml_sha256, nativeImageIdentityMatchesFinal: $native_identity_matches, reusedSignedIndex: ($native_identity_matches | not), upstream: {scannerRevision: $scanner_revision, scannerSourceSha256: "47cbc7fbff0e19c4533f48c6e7287298f1466d1556f0fc4a7177c37506a3d5e8", feedRevision: $feed_revision, feedVersion: "202608240615-community", notusRevision: $notus_revision}, managedProxy: {kind: "socks5h", directEgressDenied: true, unauthorizedPortDenied: true}, realScan: {selectedOid: "1.3.6.1.4.1.25623.1.0.108252", authorizedTarget: "172.29.251.10:8080/tcp", xmlResults: 5, actionableAlarms: 1, adapterFindings: 1, adapterWarnings: 0, xmlSha256: $xml_sha256}}' \
             > package-evidence/greenbone-image-manifest.json
           printf 'amd64_digest=%s\n' "${final_amd64_digest}" >> "${GITHUB_OUTPUT}"
           printf 'arm64_digest=%s\n' "${final_arm64_digest}" >> "${GITHUB_OUTPUT}"
@@ -354,14 +379,33 @@ jobs:
           engine: greenbone
           image: ${{ env.IMAGE }}
           tag: ${{ env.IMAGE_TAG }}
-          digest: ${{ steps.publish.outputs.digest }}
+          digest: ${{ needs.guard.outputs.digest || steps.publish.outputs.digest }}
           source-revision: ${{ github.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote the signed candidate without overwriting a version
+        id: promote
+        uses: ./.github/actions/engine-image-evidence/promote
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ needs.guard.outputs.digest || steps.publish.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify anonymous immutable version access
+        shell: bash
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          docker logout ghcr.io
+          resolved="$(docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{json .Manifest.Digest}}' | jq -er 'select(test("^sha256:[0-9a-f]{64}$"))')"
+          test "${resolved}" = "${DIGEST}"
 
       - name: Record the released index and smoke evidence
         shell: bash
         env:
-          DIGEST: ${{ steps.publish.outputs.digest }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
           XML_SHA256: ${{ steps.anonymous.outputs.xml_sha256 }}
         run: |
           printf 'Published `%s@%s`\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_STEP_SUMMARY}"
