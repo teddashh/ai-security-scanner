@@ -6,11 +6,126 @@ import type {
   CreateCaseInput,
   EngineManifest,
 } from "../types";
+import { getActiveLocale } from "../i18n/core";
 
 const DEMO_NOTICE =
   "目前顯示的是內建展示資料，尚未連接本機掃描核心；任何結果都不是實際掃描或安全判定。";
 
 export { DEMO_NOTICE };
+
+export const getDemoNotice = (): string => getActiveLocale() === "en"
+  ? "This is built-in demo data. The local scan service is not connected, and nothing shown here is a real scan or security conclusion."
+  : DEMO_NOTICE;
+
+const demoEnglishTranslations: Record<string, string> = {
+  "2 個候選網域尚未取得主動掃描授權。": "Two candidate domains do not yet have permission for active testing.",
+  "AWS 雲端安全／資料治理": "AWS cloud security / data governance",
+  "BlockPublicAccess 設定未套用至所有層級。": "BlockPublicAccess is not enabled at every level.",
+  "Conditional Access policy coverage 未涵蓋所有使用者。": "Conditional Access policy coverage does not include every user.",
+  "Git 歷史中疑似包含仍有效的雲端金鑰": "Git history may contain an active cloud access key",
+  "Gitleaks 在歷史 commit 中識別出符合雲端 access key 格式的字串。": "Gitleaks found a string in an earlier commit that matches a cloud access-key format.",
+  "IAM credential report 顯示 MFA active=false。": "The IAM credential report shows MFA active=false.",
+  "IAM／身分安全": "IAM / identity security",
+  "Kubernetes API 驗證範圍未完成": "Kubernetes API verification did not finish",
+  "Kubernetes short-lived token 已過期。": "The short-lived Kubernetes token expired.",
+  "Kubernetes 平台安全": "Kubernetes platform security",
+  "M365 設定未能證明所有使用者均由 Conditional Access 阻擋 legacy authentication。": "The M365 configuration does not prove that Conditional Access blocks legacy authentication for every user.",
+  "Microsoft Graph API 限流；可從此引擎續跑。": "Microsoft Graph rate-limited the request; this scanner can resume from its saved point.",
+  "Northstar Labs（展示）": "Northstar Labs (demo)",
+  "Northstar 初步安全健檢": "Northstar initial security review",
+  "Root access key 已停用": "Root access key disabled",
+  "ScubaGear 完成；Maester 因 API 限流僅完成 72%。": "ScubaGear completed; Maester reached 72% before an API rate limit.",
+  "Trivy 在基底映像中識別出有修補版本可用的高風險套件。": "Trivy found a high-risk package in the base image with a fixed version available.",
+  "Web／平台安全": "Web / platform security",
+  "主動弱點測試": "Active vulnerability testing",
+  "候選資產": "Candidate assets",
+  "兩項觀察都會影響高權限帳號遭濫用的可能性；群組只方便交接，不會合併或刪除原始 finding。": "Both observations affect the chance of privileged-account abuse. This group is only for handoff and does not merge or delete the original findings.",
+  "公開 DNS 與憑證紀錄": "Public DNS and certificate records",
+  "公開服務仍接受過時 TLS 設定": "A public service still accepts outdated TLS settings",
+  "初步健檢 #2": "Initial review #2",
+  "原規則 0.0.0.0/0 已移除；本次證據顯示只允許應用子網。": "The original 0.0.0.0/0 rule was removed; current evidence allows only the application subnet.",
+  "可能降低傳輸保護強度，並增加舊式攻擊或相容性降級風險。": "This may weaken transport protection and increase exposure to older attacks or downgrade behavior.",
+  "同一身分在本次 credential report 仍顯示 MFA inactive。": "The current credential report still shows MFA inactive for the same identity.",
+  "問卷明確記錄此案件不使用 Azure；這是適用性聲明，不是掃描成功。": "The questionnaire says Azure is not used in this case. That is an applicability statement, not a successful scan.",
+  "外部攻擊面": "Public websites and IP addresses",
+  "外部檢查觀察到較弱的加密套件仍可協商。": "The external check observed that a weaker cipher suite can still be negotiated.",
+  "客戶匯出儲存桶可能允許公開讀取": "A customer-export bucket may allow public reads",
+  "容器弱點": "Container vulnerabilities",
+  "容器映像包含高風險系統套件弱點": "A container image contains a high-risk system-package vulnerability",
+  "容器與 SBOM": "Containers and software inventory",
+  "容器／DevSecOps": "Containers / DevSecOps",
+  "尚未連接資料來源": "No data source connected",
+  "尚未連接資料來源的展示案件。": "A demo case with no connected data source.",
+  "展示 CVE：系統套件已有 fixed version。": "Demo CVE: a fixed version is available for this system package.",
+  "展示公開資料政策，不會發出真實請求。": "Demo public-data policy; no real request is sent.",
+  "展示案件尚未連接任何資料來源；目前沒有實際掃描結果。": "This demo case has no connected source and no real scan results.",
+  "展示案件建立器": "Demo case builder",
+  "展示目標，不會發出真實網路請求。": "Demo target; no real network request is sent.",
+  "展示資料": "Demo data",
+  "展示資料：外部端點回傳可列舉內容的 HTTP 回應。": "Demo data: an external endpoint returned an HTTP response with listable content.",
+  "展示資料：弱式 cipher suite 可協商。": "Demo data: a weak cipher suite can be negotiated.",
+  "工作於 31% 時因 token expired 中止。": "Work stopped at 31% because the token expired.",
+  "已掃描 6 個使用者選取的 repositories。": "Scanned six repositories selected by the user.",
+  "已檢查提供的帳務匯出，未發現其他供應商線索。": "The provided billing export was checked and did not identify another provider.",
+  "已盤點 3 個帳號與 18 項核心資產。": "Inventoried three accounts and 18 core assets.",
+  "已遮罩：AKIA••••••••7Q2P，位於過往 commit。": "Redacted: AKIA••••••••7Q2P in an earlier commit.",
+  "帳務來源": "Billing source",
+  "平台團隊": "Platform team",
+  "憑證遭竊時，攻擊者可能直接取得生產環境的廣泛權限。": "If the credential is stolen, an attacker may gain broad access to the production environment.",
+  "應用團隊": "Application team",
+  "應用安全／雲端 IAM": "Application security / cloud IAM",
+  "找到 4 個候選網域，其中 2 個尚未確認主動測試範圍。": "Found four candidate domains; active-testing scope is not confirmed for two of them.",
+  "掃描權杖於驗證期間過期，本次無法確認匿名存取設定。": "The scan token expired during verification, so anonymous-access settings could not be confirmed.",
+  "新映像與更新後的弱點資料庫首次觀察到此項問題。": "This problem was first observed with the new image and updated vulnerability database.",
+  "未連接 GCP 資料來源；此處不是通過或無資產。": "No GCP data source is connected. This is not a pass and does not mean there are no assets.",
+  "本機使用者": "Local user",
+  "本次 token 過期，無法與基準證據作有效比較。": "The token expired, so this run cannot be reliably compared with the baseline evidence.",
+  "機密": "Secrets",
+  "產品團隊": "Product team",
+  "用來展示資產盤點、涵蓋清冊、finding 與複驗差異的本機案件。": "A local demo case showing asset inventory, coverage, findings, and before-and-after verification.",
+  "目前顯示的是內建展示資料，尚未連接本機掃描核心；任何結果都不是實際掃描或安全判定。": "This is built-in demo data. The local scan service is not connected, and nothing shown here is a real scan or security conclusion.",
+  "相同檢查已不再觀察到有效 root access key。": "The same check no longer observes an active root access key.",
+  "程式碼": "Source code",
+  "第二辦公室盤點": "Second-office inventory",
+  "至少一個具有高權限的 IAM 身分未觀察到可用的 MFA 裝置。": "At least one privileged IAM identity has no observed active MFA device.",
+  "舊式驗證可能繞過現代 MFA 與條件式存取保護。": "Legacy authentication may bypass modern MFA and Conditional Access protections.",
+  "若服務可達且弱點路徑成立，可能造成未授權程式執行或資料暴露。": "If the service is reachable and the vulnerable path is present, unauthorized code execution or data exposure may be possible.",
+  "若權限確實有效，未授權人員可能取得含個人資料的匯出檔案。": "If the permission is effective, an unauthorized person may access exports containing personal data.",
+  "若金鑰仍有效，取得 repository 的人可能存取雲端資源。": "If the key is still active, anyone with repository access may be able to reach cloud resources.",
+  "設定與外部觀測證據仍存在，尚未看到有效修正。": "Configuration and external-observation evidence remain; no effective fix has been observed.",
+  "請 AWS 與資料治理專家先確認實際 bucket policy、使用情境與相依服務，再規劃收斂公開權限。": "Ask AWS and data-governance owners to confirm the effective bucket policy, use case, and dependent services before reducing public access.",
+  "請 IAM 管理者人工確認身分用途與登入方式，先處理可互動登入的高權限帳號。": "Ask an IAM owner to confirm the identity's purpose and sign-in method, prioritizing privileged accounts that allow interactive sign-in.",
+  "請 Kubernetes 管理者更新短效唯讀權杖後，從 Kubescape 工作續跑。": "Ask a Kubernetes owner to renew the short-lived read-only token, then resume the Kubescape work.",
+  "請 M365 身分管理者核對登入記錄與現行例外，再規劃逐步阻擋。": "Ask an M365 identity owner to review sign-in logs and current exceptions before planning a staged block.",
+  "請 Web／平台工程師先確認客戶端相容性，再停用弱式套件並重新驗證。": "Ask a web or platform engineer to confirm client compatibility before disabling weak cipher suites and verifying again.",
+  "請容器維護者更新基底映像、重新建置，並由本案件複驗相同 image digest。": "Ask the container owner to update the base image, rebuild it, and use this case to verify the new fixed digest.",
+  "請應用與雲端管理者先驗證並撤銷該金鑰，再處理 Git 歷史與秘密管理流程。": "Ask application and cloud owners to validate and revoke the key before addressing Git history and secret-management practices.",
+  "資料來源可用，但此案件未發現 Terraform state。": "The data source was available, but no Terraform state was found for this case.",
+  "資料團隊": "Data team",
+  "資料庫安全群組不再對外開放": "Database security group is no longer public",
+  "這不是已確認的弱點，也不能當成通過；需要恢復唯讀權限後完成檢查。": "This is not a confirmed vulnerability or a pass. Restore read-only access to finish the check.",
+  "部分帳號仍可能使用舊式驗證": "Some accounts may still use legacy authentication",
+  "雲端盤點": "Cloud inventory",
+  "雲端設定": "Cloud configuration",
+  "雲端設定顯示公開存取保護未完整啟用，外部檢查亦觀察到可存取回應。": "Cloud configuration shows incomplete public-access protection, and an external check also observed a reachable response.",
+  "高權限身分保護需要一起檢視": "Review privileged-identity protections together",
+  "高權限身分缺少完整 MFA 保護": "A privileged identity does not have complete MFA protection",
+};
+
+const localizeBuiltInDemo = <T,>(value: T): T => {
+  if (getActiveLocale() !== "en") return clone(value);
+  const visit = (candidate: unknown): unknown => {
+    if (typeof candidate === "string") return demoEnglishTranslations[candidate] ?? candidate;
+    if (Array.isArray(candidate)) return candidate.map(visit);
+    if (candidate && typeof candidate === "object") {
+      return Object.fromEntries(
+        Object.entries(candidate).map(([key, nested]) => [key, visit(nested)]),
+      );
+    }
+    return candidate;
+  };
+  return visit(value) as T;
+};
 
 const sampleCase: AssessmentCase = {
   id: "case-demo-northstar",
@@ -996,15 +1111,17 @@ const clone = <T,>(value: T): T => structuredClone(value);
 
 export const getDemoSnapshot = (selectedCaseId = sampleCase.id): AppSnapshot => {
   const storedCases = loadStoredDemoCases();
-  const cases = [sampleCase, draftCase, ...storedCases];
-  const selected = cases.find((item) => item.id === selectedCaseId) ?? sampleCase;
-  const workspace = selected.id === sampleCase.id ? clone(demoWorkspace) : blankWorkspace(clone(selected));
+  const cases = [...localizeBuiltInDemo([sampleCase, draftCase]), ...storedCases];
+  const selected = cases.find((item) => item.id === selectedCaseId) ?? localizeBuiltInDemo(sampleCase);
+  const workspace = selected.id === sampleCase.id
+    ? localizeBuiltInDemo(demoWorkspace)
+    : localizeBuiltInDemo(blankWorkspace(clone(selected)));
 
   return {
     cases: clone(cases),
     selectedCaseId: selected.id,
     workspace,
-    engineManifests: clone(demoEngineManifests),
+    engineManifests: localizeBuiltInDemo(demoEngineManifests),
     generatedAt: new Date().toISOString(),
     provenance: "demo",
   };
@@ -1044,5 +1161,5 @@ export const createStoredDemoCase = (input: CreateCaseInput): AssessmentCase => 
 };
 
 export const getDemoWorkspace = (caseId: string): CaseWorkspace => {
-  return getDemoSnapshot(caseId).workspace ?? blankWorkspace(draftCase);
+  return getDemoSnapshot(caseId).workspace ?? localizeBuiltInDemo(blankWorkspace(draftCase));
 };

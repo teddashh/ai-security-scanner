@@ -1,0 +1,195 @@
+.runtime-assistant {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid #bfd6cf;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #fbfdfb, #f0f7f3);
+  box-shadow: var(--shadow-sm);
+}
+
+.runtime-assistant--ready,
+.runtime-assistant--demo {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 16px 18px;
+}
+
+.runtime-assistant--ready {
+  border-color: #b8d6c3;
+  background: #edf7f0;
+}
+
+.runtime-assistant--demo {
+  border-color: #c9dde6;
+  background: var(--blue-soft);
+}
+
+.runtime-assistant--failed {
+  border-color: #e7c27f;
+  background: linear-gradient(135deg, #fffdf8, #fff5e5);
+}
+
+.runtime-assistant__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.runtime-assistant__icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  border-radius: 13px;
+  color: var(--teal);
+  background: var(--teal-soft);
+}
+
+.runtime-assistant--failed .runtime-assistant__icon {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.runtime-assistant--ready .runtime-assistant__icon {
+  color: #2f6e57;
+  background: #dcefe2;
+}
+
+.runtime-assistant__header .eyebrow {
+  margin: 1px 0 7px;
+}
+
+.runtime-assistant__header h2 {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 1.22rem;
+}
+
+.runtime-assistant__header p:last-child,
+.runtime-assistant--ready p,
+.runtime-assistant--demo p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.runtime-assistant__status {
+  display: grid;
+  gap: 7px;
+  padding: 13px 15px;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.runtime-assistant__status strong {
+  font-size: 0.8rem;
+}
+
+.runtime-assistant__status span {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.runtime-assistant__status progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--teal);
+}
+
+.runtime-assistant__recovery {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.runtime-assistant__recovery ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 1.35rem;
+  color: var(--ink);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.runtime-assistant__command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #f5f7f6;
+}
+
+.runtime-assistant__command code,
+.runtime-assistant__technical code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.runtime-assistant__recovery > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.runtime-assistant__copy-error {
+  margin: -6px 0 0;
+  color: var(--danger);
+  font-size: 0.74rem;
+}
+
+.runtime-assistant__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.runtime-assistant__technical {
+  border-top: 1px solid rgba(126, 143, 137, 0.25);
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.runtime-assistant__technical summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.runtime-assistant__technical code {
+  display: block;
+  max-height: 9rem;
+  margin-top: 9px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 600px) {
+  .runtime-assistant {
+    padding: 17px;
+  }
+
+  .runtime-assistant__command {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .runtime-assistant__actions > .button,
+  .runtime-assistant__command > .button {
+    width: 100%;
+  }
+}

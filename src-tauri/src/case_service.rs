@@ -20,11 +20,12 @@ use crate::discovery::{
 use crate::domain::{
     ArtifactCleanupObligation, AssessmentCase, Asset, AssetIdentifier, AssetKind, CaseExport,
     CaseStatus, CaseSummary, CoverageStatus, CreateCaseRequest, DataSource, DeclaredAssetInput,
-    DeclaredAssetKind, DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun,
-    EngineRunStatus, Finding, FindingDiffStatus, FindingGroup, FindingGroupAction,
-    FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id, ManifestStatus,
-    OrganizationProfile, RawArtifact, ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus,
-    SourceKind, VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
+    DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput, DistributionMode,
+    EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus, Finding, FindingDiffStatus,
+    FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation, FindingStatus,
+    FindingWorkflowEvent, Id, ManifestStatus, OrganizationProfile, RawArtifact, ScanPermission,
+    ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
+    valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export::{
@@ -2896,24 +2897,33 @@ fn normalize_declared_assets(inputs: &[DeclaredAssetInput]) -> AppResult<Vec<Dis
     let mut assets = Vec::with_capacity(inputs.len());
     let mut identities = BTreeSet::new();
     for input in inputs {
+        if input.web_service.is_some() && input.kind != DeclaredAssetKind::ExternalTarget {
+            return Err(AppError::InvalidRequest(
+                "website service context is only valid for one external hostname or address".into(),
+            ));
+        }
         let (kind, namespace, value, internet_exposed) = match input.kind {
             DeclaredAssetKind::ExternalTarget => {
                 let target = CanonicalTarget::parse(&input.value)?;
+                let internet_exposed = input.internet_exposed.unwrap_or(true);
                 match target {
-                    CanonicalTarget::Hostname(hostname) => {
-                        (AssetKind::Domain, "dns_name", hostname, Some(true))
-                    }
+                    CanonicalTarget::Hostname(hostname) => (
+                        AssetKind::Domain,
+                        "dns_name",
+                        hostname,
+                        Some(internet_exposed),
+                    ),
                     CanonicalTarget::Address(address) => (
                         AssetKind::IpAddress,
                         "ip_address",
                         address.to_string(),
-                        Some(true),
+                        Some(internet_exposed),
                     ),
                     CanonicalTarget::Network(network) => (
                         AssetKind::IpAddress,
                         "ip_network",
                         network.to_string(),
-                        Some(true),
+                        Some(internet_exposed),
                     ),
                 }
             }
@@ -2951,6 +2961,18 @@ fn normalize_declared_assets(inputs: &[DeclaredAssetInput]) -> AppResult<Vec<Dis
             "questionnaire_kind".into(),
             Value::String(enum_key(&input.kind)),
         );
+        if let Some(service) = input.web_service.as_ref() {
+            if namespace == "ip_network" {
+                return Err(AppError::InvalidRequest(
+                    "website service context must identify one hostname or address, not a network"
+                        .into(),
+                ));
+            }
+            metadata.insert(
+                "declared_web_service".into(),
+                validate_declared_web_service(service)?,
+            );
+        }
         assets.push(DiscoveredAsset {
             observation_key: format!("declared-{}", assets.len() + 1),
             kind,
@@ -2968,6 +2990,33 @@ fn normalize_declared_assets(inputs: &[DeclaredAssetInput]) -> AppResult<Vec<Dis
         });
     }
     Ok(assets)
+}
+
+fn validate_declared_web_service(service: &DeclaredWebServiceInput) -> AppResult<Value> {
+    if service.port == 0 {
+        return Err(AppError::InvalidRequest(
+            "website service port must be between 1 and 65535".into(),
+        ));
+    }
+    if service.path.is_empty()
+        || service.path.chars().count() > 2_048
+        || !service.path.starts_with('/')
+        || service.path.contains(['?', '#'])
+        || service.path.chars().any(char::is_control)
+    {
+        return Err(AppError::InvalidRequest(
+            "website service path must be one bounded path without query or fragment data".into(),
+        ));
+    }
+    let protocol = match service.protocol {
+        DeclaredWebProtocol::Http => "http",
+        DeclaredWebProtocol::Https => "https",
+    };
+    Ok(serde_json::json!({
+        "protocol": protocol,
+        "port": service.port,
+        "path": service.path,
+    }))
 }
 
 fn validate_declared_locator(label: &str, value: &str, maximum: usize) -> AppResult<String> {
@@ -5678,18 +5727,26 @@ mod tests {
                     DeclaredAssetInput {
                         kind: DeclaredAssetKind::ExternalTarget,
                         value: "App.Example.Test.".into(),
+                        internet_exposed: None,
+                        web_service: None,
                     },
                     DeclaredAssetInput {
                         kind: DeclaredAssetKind::Repository,
                         value: "https://github.com/example/service".into(),
+                        internet_exposed: None,
+                        web_service: None,
                     },
                     DeclaredAssetInput {
                         kind: DeclaredAssetKind::ContainerImage,
                         value: format!("registry.example/app@sha256:{}", "a".repeat(64)),
+                        internet_exposed: None,
+                        web_service: None,
                     },
                     DeclaredAssetInput {
                         kind: DeclaredAssetKind::KubernetesCluster,
                         value: "production-eks".into(),
+                        internet_exposed: None,
+                        web_service: None,
                     },
                 ],
                 notes: None,
@@ -5758,8 +5815,123 @@ mod tests {
         request.declared_assets.push(DeclaredAssetInput {
             kind: DeclaredAssetKind::ContainerImage,
             value: "registry.example/app:latest".into(),
+            internet_exposed: None,
+            web_service: None,
         });
         assert!(fixture.service().create_case(&request).is_err());
+        assert!(fixture.service().list_cases().unwrap().is_empty());
+    }
+
+    #[test]
+    fn questionnaire_can_record_internal_target_intent_without_authorizing_it() {
+        let fixture = Fixture::new();
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Internal IT review".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "10.20.30.40".into(),
+                    internet_exposed: Some(false),
+                    web_service: None,
+                }],
+                notes: None,
+            })
+            .unwrap();
+
+        assert_eq!(case.assets.len(), 1);
+        assert_eq!(case.assets[0].internet_exposed, Some(false));
+        assert!(case.scope_grants.is_empty());
+    }
+
+    #[test]
+    fn questionnaire_can_prefill_a_website_service_without_authorizing_it() {
+        let fixture = Fixture::new();
+        let case = fixture
+            .service()
+            .create_case(&CreateCaseRequest {
+                title: "Deployed website review".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "app.example.test".into(),
+                    internet_exposed: Some(true),
+                    web_service: Some(DeclaredWebServiceInput {
+                        protocol: DeclaredWebProtocol::Https,
+                        port: 8443,
+                        path: "/login".into(),
+                    }),
+                }],
+                notes: None,
+            })
+            .unwrap();
+
+        assert_eq!(case.assets.len(), 1);
+        assert_eq!(
+            case.assets[0].metadata.get("declared_web_service"),
+            Some(&serde_json::json!({
+                "protocol": "https",
+                "port": 8443,
+                "path": "/login",
+            }))
+        );
+        assert!(
+            case.scope_grants.is_empty(),
+            "a website preset must never authorize scanning"
+        );
+    }
+
+    #[test]
+    fn questionnaire_rejects_unsafe_or_misplaced_website_context() {
+        let fixture = Fixture::new();
+        let base = || CreateCaseRequest {
+            title: "Website context validation".into(),
+            organization_name: "Example Co".into(),
+            employee_range: "2-49".into(),
+            data_classes: vec![],
+            requested_activities: vec![],
+            source_kinds: vec![],
+            not_applicable_source_kinds: vec![],
+            declared_assets: vec![],
+            notes: None,
+        };
+
+        let mut unsafe_path = base();
+        unsafe_path.declared_assets.push(DeclaredAssetInput {
+            kind: DeclaredAssetKind::ExternalTarget,
+            value: "app.example.test".into(),
+            internet_exposed: Some(true),
+            web_service: Some(DeclaredWebServiceInput {
+                protocol: DeclaredWebProtocol::Https,
+                port: 443,
+                path: "/login?token=secret".into(),
+            }),
+        });
+        assert!(fixture.service().create_case(&unsafe_path).is_err());
+
+        let mut misplaced = base();
+        misplaced.declared_assets.push(DeclaredAssetInput {
+            kind: DeclaredAssetKind::Repository,
+            value: "https://github.com/example/service".into(),
+            internet_exposed: None,
+            web_service: Some(DeclaredWebServiceInput {
+                protocol: DeclaredWebProtocol::Https,
+                port: 443,
+                path: "/".into(),
+            }),
+        });
+        assert!(fixture.service().create_case(&misplaced).is_err());
         assert!(fixture.service().list_cases().unwrap().is_empty());
     }
 

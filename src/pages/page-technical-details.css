@@ -1,0 +1,48 @@
+.page-technical-details {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 0.62rem;
+}
+
+.page-technical-details summary {
+  width: fit-content;
+  color: var(--teal);
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.page-technical-details dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+  margin: 9px 0 0;
+}
+
+.page-technical-details dl > div {
+  min-width: 0;
+}
+
+.page-technical-details dt {
+  color: var(--subtle);
+  font-size: 0.56rem;
+}
+
+.page-technical-details dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.page-technical-details code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 620px) {
+  .page-technical-details dl { grid-template-columns: 1fr; }
+}

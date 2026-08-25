@@ -4,10 +4,11 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import {
   createStoredDemoCase,
-  DEMO_NOTICE,
+  getDemoNotice,
   getDemoSnapshot,
   getDemoWorkspace,
 } from "../data/demo";
+import { getActiveLocale } from "../i18n/core";
 import type {
   AppSnapshot,
   AttachWorkspaceSnapshotInput,
@@ -42,6 +43,7 @@ import type {
   ManagedRuntimeSetupStatus,
 } from "../types";
 import {
+  adaptManagedRuntimeSetupStatus,
   adaptNativeCase,
   adaptNativeExport,
   adaptNativeExportPreview,
@@ -52,6 +54,7 @@ import {
   type NativeCaseExport,
   type NativeExportPreview,
   type NativeEngineManifest,
+  type NativeManagedRuntimeSetupStatus,
 } from "./nativeAdapter";
 
 export const COMMANDS = {
@@ -120,45 +123,19 @@ const errorMessage = (error: unknown): string => {
   try {
     return JSON.stringify(error);
   } catch {
-    return "未知錯誤";
+    return "Unknown error";
   }
 };
 
+const serviceText = (en: string, zhTW: string): string =>
+  getActiveLocale() === "en" ? en : zhTW;
+
 const nativeResult = <T,>(data: T): ServiceResult<T> => ({ data, mode: "native" });
 
-const demoResult = <T,>(data: T, reason?: string): ServiceResult<T> => ({
-  data,
-  mode: "demo",
-  notice: reason ? `${DEMO_NOTICE}（本機核心回應：${reason}）` : DEMO_NOTICE,
-});
-
-interface NativeManagedRuntimeSetupStatus {
-  phase: ManagedRuntimeSetupStatus["phase"];
-  active: boolean;
-  cancel_requested: boolean;
-  received_bytes: number;
-  total_bytes: number | null;
-  progress_percent: number | null;
-  resumed_from_bytes: number;
-  can_cancel: boolean;
-  can_retry: boolean;
-  detail: string;
-}
-
-const adaptManagedRuntimeSetupStatus = (
-  status: NativeManagedRuntimeSetupStatus,
-): ManagedRuntimeSetupStatus => ({
-  phase: status.phase,
-  active: status.active,
-  cancelRequested: status.cancel_requested,
-  receivedBytes: status.received_bytes,
-  totalBytes: status.total_bytes ?? undefined,
-  progressPercent: status.progress_percent ?? undefined,
-  resumedFromBytes: status.resumed_from_bytes,
-  canCancel: status.can_cancel,
-  canRetry: status.can_retry,
-  detail: status.detail,
-});
+const demoResult = <T,>(data: T, reason?: string): ServiceResult<T> => {
+  if (reason) console.warn("[ai-security-scanner] desktop service unavailable", reason);
+  return { data, mode: "demo", notice: getDemoNotice() };
+};
 
 const demoRuntimeSetupStatus = (): ManagedRuntimeSetupStatus => ({
   phase: "idle",
@@ -168,7 +145,10 @@ const demoRuntimeSetupStatus = (): ManagedRuntimeSetupStatus => ({
   resumedFromBytes: 0,
   canCancel: false,
   canRetry: true,
-  detail: "展示模式不會下載或啟動容器執行環境。",
+  detail: serviceText(
+    "Demo mode does not download or start a scan environment.",
+    "展示模式不會下載或啟動掃描環境。",
+  ),
 });
 
 const getNativeManifests = async (): Promise<NativeEngineManifest[]> => {
@@ -292,7 +272,10 @@ export const scannerService = {
   async setupManagedRuntime(): Promise<ServiceResult<ActionResponse>> {
     if (!hasTauriRuntime()) return demoResult({
       accepted: false,
-      message: "展示模式不會安裝或啟動容器執行環境。",
+      message: serviceText(
+        "Demo mode does not install or start a scan environment.",
+        "展示模式不會安裝或啟動掃描環境。",
+      ),
     });
     try {
       const response = await invoke<{ accepted: boolean; message: string }>(COMMANDS.setupManagedRuntime);
@@ -325,7 +308,19 @@ export const scannerService = {
         requested_activities: input.requestedActivities,
         source_kinds: plannedSourceKinds(input.platforms),
         not_applicable_source_kinds: plannedNotApplicableSourceKinds(input.platforms),
-        declared_assets: input.knownAssets,
+        declared_assets: input.knownAssets.map(({ internetExposure, webService, ...asset }) => ({
+          ...asset,
+          internet_exposed: internetExposure === undefined
+            ? null
+            : internetExposure === "public",
+          web_service: webService
+            ? {
+              protocol: webService.protocol,
+              port: webService.port,
+              path: webService.path,
+            }
+            : null,
+        })),
         notes: input.description ?? null,
       },
     });
@@ -429,20 +424,23 @@ export const scannerService = {
     return actionResult(
       COMMANDS.startDiscovery,
       { caseId },
-      "案件已進入盤點階段。",
-      "展示模式不會連接或盤點任何真實資料來源。",
+      serviceText("The case is now finding assets.", "案件已開始尋找資產。"),
+      serviceText("Demo mode does not connect to or inventory a real data source.", "展示模式不會連接或盤點任何真實資料來源。"),
     );
   },
 
   async cancelDiscovery(caseId: string): Promise<ServiceResult<boolean>> {
-    if (!hasTauriRuntime()) return demoResult(false, "展示模式沒有執行中的真實盤點工作。");
+    if (!hasTauriRuntime()) return demoResult(false, serviceText(
+      "Demo mode has no real inventory work to cancel.",
+      "展示模式沒有執行中的真實盤點工作。",
+    ));
     return nativeResult(await invoke<boolean>(COMMANDS.cancelDiscovery, { caseId }));
   },
 
   async chooseSourceSnapshot(): Promise<string | null> {
     if (!hasTauriRuntime()) return null;
     const selected = await open({
-      title: "選擇一份來源 JSON 快照",
+      title: serviceText("Choose a source JSON snapshot", "選擇一份來源 JSON 快照"),
       multiple: false,
       directory: false,
       filters: [{ name: "JSON snapshot", extensions: ["json"] }],
@@ -454,15 +452,24 @@ export const scannerService = {
     return actionResult(
       COMMANDS.connectSourceSnapshot,
       { ...input },
-      "來源快照已複製進本機案件；尚未自動授權或啟動掃描。",
-      "展示模式不會讀取、複製或解析你選擇的檔案。",
+      serviceText(
+        "The source snapshot was copied into the local case. It did not grant permission or start a scan.",
+        "來源快照已複製進本機案件；尚未授權或啟動掃描。",
+      ),
+      serviceText(
+        "Demo mode does not read, copy, or parse the file you selected.",
+        "展示模式不會讀取、複製或解析你選擇的檔案。",
+      ),
     );
   },
 
   async chooseWorkspaceDirectory(): Promise<string | null> {
     if (!hasTauriRuntime()) return null;
     const selected = await open({
-      title: "選擇要建立不可變快照的本機掃描輸入目錄",
+      title: serviceText(
+        "Choose the folder to copy into a read-only scan snapshot",
+        "選擇要複製成唯讀掃描快照的資料夾",
+      ),
       multiple: false,
       directory: true,
     });
@@ -473,8 +480,14 @@ export const scannerService = {
     return actionResult(
       COMMANDS.attachWorkspaceSnapshot,
       { ...input },
-      "有界、明確類型的本機輸入已附加到案件；尚未授予所有權或掃描範圍。",
-      "展示模式不會讀取或複製你選擇的工作目錄。",
+      serviceText(
+        "The selected local input was attached to the case as a bounded snapshot. This did not grant ownership or scan permission.",
+        "選定的本機輸入已用有限範圍的快照附加到案件；這不會授予所有權或掃描權限。",
+      ),
+      serviceText(
+        "Demo mode does not read or copy the folder you selected.",
+        "展示模式不會讀取或複製你選擇的資料夾。",
+      ),
     );
   },
 
@@ -521,19 +534,36 @@ export const scannerService = {
         decisions: input.assetIds.map((assetId) => ({
           asset_id: assetId,
           permissions,
-          confirmed_by: "本機使用者",
+          confirmed_by: serviceText("Local user", "本機使用者"),
           authorization_reference: needsReference || input.externalScope ? input.confirmation : null,
           notes: input.confirmation,
           external_scope: externalScope,
         })),
       },
-      "選取的資產範圍已記錄；尚未自動啟動掃描。",
-      "展示模式只呈現範圍流程，不會建立真實掃描授權。",
+      serviceText(
+        "The selected target and permission boundary were recorded. No scan started automatically.",
+        "已記錄選定目標與權限範圍；尚未自動開始掃描。",
+      ),
+      serviceText(
+        "Demo mode only shows the permission flow and does not create real scan permission.",
+        "展示模式只呈現權限流程，不會建立真實掃描授權。",
+      ),
     );
   },
 
   async startScan(caseId: string): Promise<ServiceResult<ActionResponse>> {
-    return actionResult(COMMANDS.startScan, { caseId }, "本機已依資產與有效授權自動選擇所有適用引擎；不具執行條件者會明確標為未執行。", "展示模式不會啟動容器或對任何目標發出請求。");
+    return actionResult(
+      COMMANDS.startScan,
+      { caseId },
+      serviceText(
+        "The app selected every applicable scanner from the assets and current permissions. Anything that cannot run is marked Not run.",
+        "產品已依資產與目前權限選擇所有適用掃描工具；無法執行的項目會明確標成「未執行」。",
+      ),
+      serviceText(
+        "Demo mode does not start a container or contact a target.",
+        "展示模式不會啟動容器，也不會接觸任何目標。",
+      ),
+    );
   },
 
   async updateFindingWorkflow(input: FindingWorkflowUpdateInput): Promise<ServiceResult<ActionResponse>> {
@@ -549,8 +579,14 @@ export const scannerService = {
           expires_at: input.expiresAt ?? null,
         },
       },
-      "Finding 處理決定已寫入不可變歷程；原始證據沒有變更。",
-      "展示模式不會建立真實的 finding 處理決定。",
+      serviceText(
+        "The decision was added to the finding history. Original evidence was not changed.",
+        "這項決定已加入問題歷程；原始證據沒有變更。",
+      ),
+      serviceText(
+        "Demo mode does not save a real finding decision.",
+        "展示模式不會保存真實的問題處理決定。",
+      ),
     );
   },
 
@@ -566,8 +602,14 @@ export const scannerService = {
           grouped_by: input.groupedBy,
         },
       },
-      "相關 findings 已建立可逆群組；每筆 fingerprint、證據與原始 artifact 仍獨立保留。",
-      "展示模式只呈現群組，不會改寫展示 findings。",
+      serviceText(
+        "The related findings were grouped for presentation. Every fingerprint, evidence item, and original artifact remains separate.",
+        "相關問題已建立可移除的呈現群組；每筆指紋、證據與原始檔案仍分開保留。",
+      ),
+      serviceText(
+        "Demo mode only shows the group and does not rewrite demo findings.",
+        "展示模式只呈現群組，不會改寫展示問題。",
+      ),
     );
   },
 
@@ -582,33 +624,62 @@ export const scannerService = {
           reason: input.reason,
         },
       },
-      "群組已移除；所有 findings 與不可變群組歷程仍保留。",
-      "展示模式不會變更展示群組。",
+      serviceText(
+        "The presentation group was removed. Every finding and the group history remain available.",
+        "呈現群組已移除；所有問題與群組歷程仍保留。",
+      ),
+      serviceText("Demo mode does not change demo groups.", "展示模式不會變更展示群組。"),
     );
   },
 
   async pauseScan(caseId: string, runId: string): Promise<ServiceResult<ActionResponse>> {
-    return actionResult(COMMANDS.pauseScan, { caseId, runId }, "指定掃描輪次已暫停。", "展示模式沒有可暫停的真實掃描工作。");
+    return actionResult(
+      COMMANDS.pauseScan,
+      { caseId, runId },
+      serviceText("The selected scan was paused.", "選定的掃描已暫停。"),
+      serviceText("Demo mode has no real scan to pause.", "展示模式沒有可暫停的真實掃描。"),
+    );
   },
 
   async resumeScan(caseId: string, runId: string): Promise<ServiceResult<ActionResponse>> {
-    return actionResult(COMMANDS.resumeScan, { caseId, runId }, "指定掃描輪次已重新排入佇列。", "展示模式沒有可續跑的真實掃描工作。");
+    return actionResult(
+      COMMANDS.resumeScan,
+      { caseId, runId },
+      serviceText("The selected scan was queued to continue.", "選定的掃描已排入佇列，準備繼續。"),
+      serviceText("Demo mode has no real scan to resume.", "展示模式沒有可繼續的真實掃描。"),
+    );
   },
 
   async cancelScan(caseId: string, runId: string): Promise<ServiceResult<ActionResponse>> {
-    return actionResult(COMMANDS.cancelScan, { caseId, runId }, "指定掃描輪次已取消，案件標記為需要處理。", "展示模式沒有可取消的真實掃描工作。");
+    return actionResult(
+      COMMANDS.cancelScan,
+      { caseId, runId },
+      serviceText("The selected scan was cancelled and the case now needs attention.", "選定的掃描已取消，案件現在需要處理。"),
+      serviceText("Demo mode has no real scan to cancel.", "展示模式沒有可取消的真實掃描。"),
+    );
   },
 
   async startRescan(caseId: string, baselineRunId: string): Promise<ServiceResult<ActionResponse>> {
-    return actionResult(COMMANDS.startRescan, { caseId, baselineRunId }, "複驗工作已建立。", "展示模式不會執行複驗；目前差異均為明確標記的樣本資料。");
+    return actionResult(
+      COMMANDS.startRescan,
+      { caseId, baselineRunId },
+      serviceText("The follow-up scan was created.", "後續確認掃描已建立。"),
+      serviceText(
+        "Demo mode does not run a follow-up scan; every comparison shown is marked sample data.",
+        "展示模式不會執行後續確認掃描；目前差異都已標成樣本資料。",
+      ),
+    );
   },
 
   async archiveCase(caseId: string): Promise<ServiceResult<ActionResponse>> {
     return actionResult(
       COMMANDS.archiveCase,
       { caseId },
-      "案件已封存；資料仍保留在本機，且不會再排入新工作。",
-      "展示模式不會變更本機案件狀態。",
+      serviceText(
+        "The case was archived. Its local data remains available, and no new work will be added.",
+        "案件已封存；本機資料仍保留，而且不會再加入新工作。",
+      ),
+      serviceText("Demo mode does not change local case status.", "展示模式不會變更本機案件狀態。"),
     );
   },
 
@@ -616,7 +687,10 @@ export const scannerService = {
     if (!hasTauriRuntime()) {
       return demoResult({
         accepted: false,
-        message: "展示模式不會刪除任何本機案件或檔案。",
+        message: serviceText(
+          "Demo mode does not delete a local case or file.",
+          "展示模式不會刪除任何本機案件或檔案。",
+        ),
         databaseRecordDeleted: false,
         artifacts: {
           caseId,
@@ -635,8 +709,14 @@ export const scannerService = {
         requiresExplicitConfirmation: response.artifacts.requires_explicit_confirmation,
       };
       const artifactDetail = artifacts.exists
-        ? `案件資料庫紀錄已刪除；證據檔仍保留於 ${artifacts.exactPath}，必須另行明確確認後才能清理。`
-        : "案件資料庫紀錄已刪除；目前沒有需要清理的案件證據目錄。";
+        ? serviceText(
+          `The case record was deleted. Evidence remains at ${artifacts.exactPath} until you separately confirm cleanup.`,
+          `案件紀錄已刪除；證據仍保留在 ${artifacts.exactPath}，必須另外確認才能清理。`,
+        )
+        : serviceText(
+          "The case record was deleted. There is no remaining case evidence folder to clean up.",
+          "案件紀錄已刪除；目前沒有需要清理的案件證據資料夾。",
+        );
       return nativeResult({
         accepted: response.database_record_deleted,
         message: artifactDetail,
@@ -664,10 +744,10 @@ export const scannerService = {
     }
     const response = await invoke<NativeCaseArtifactCleanupResult>(COMMANDS.deleteCaseArtifacts, { ...input });
     if (response.recoverable) {
-      throw new Error("本機核心回傳不符合不可復原刪除契約的結果。");
+      throw new Error("The local service returned a result that violates the permanent-deletion contract.");
     }
     if (response.exact_path !== input.exactPath) {
-      throw new Error("本機核心回傳的證據清理路徑與已確認計畫不一致。");
+      throw new Error("The evidence-cleanup path returned by the local service did not match the confirmed plan.");
     }
     return nativeResult({
       removed: response.removed,
@@ -685,7 +765,10 @@ export const scannerService = {
       return nativeResult(adaptNativeExportPreview(preview));
     }
     const run = workspace.runs[0];
-    if (!run) throw new Error("展示案件沒有可預覽的掃描執行。");
+    if (!run) throw new Error(serviceText(
+      "This demo case has no scan run to preview.",
+      "這個展示案件沒有可預覽的掃描紀錄。",
+    ));
     const engineRuns = workspace.runs.flatMap((item) => item.engineRuns);
     const evidence = workspace.findings.flatMap((finding) => finding.evidence);
     const rawArtifactCount = engineRuns.reduce((total, engine) => total + engine.rawArtifactCount, 0);
@@ -718,7 +801,10 @@ export const scannerService = {
       rawArtifactsIncluded,
       rawArtifactsOmitted: rawArtifactCount - rawArtifactsIncluded,
       sensitiveRawArtifactsOmitted: 0,
-      sensitiveDataWarning: "這是展示資料的近似預覽；DEMO_ONLY_NOT_A_SCAN 檔不含正式案件包或可驗證原始證據。",
+      sensitiveDataWarning: serviceText(
+        "This is an approximate demo preview. A DEMO_ONLY_NOT_A_SCAN file is not a signed case package and contains no verifiable original evidence.",
+        "這是展示資料的近似預覽；DEMO_ONLY_NOT_A_SCAN 檔不是正式案件包，也不含可驗證的原始證據。",
+      ),
     });
   },
 
@@ -731,7 +817,7 @@ export const scannerService = {
         .replace(/^-|-$/g, "")
         .slice(0, 80) || "assessment-case";
       const destination = await save({
-        title: "匯出 ai-security-scanner 案件",
+        title: serviceText("Export ai-security-scanner case", "匯出 ai-security-scanner 案件"),
         defaultPath: `${safeName}.${fileType.suffix}`,
         filters: [{ name: fileType.label, extensions: fileType.extensions }],
       });
@@ -750,12 +836,22 @@ export const scannerService = {
   async verifyCaseExport(path: string): Promise<ServiceResult<ActionResponse>> {
     if (!hasTauriRuntime()) return demoResult({
       accepted: false,
-      message: "展示檔沒有正式本機簽章，不能視為完整性驗證結果。",
+      message: serviceText(
+        "A demo file has no real local signature and cannot produce an integrity result.",
+        "展示檔沒有正式本機簽章，不能視為完整性驗證結果。",
+      ),
     });
     try {
       const response = await invoke<{ accepted?: boolean; message?: string } | boolean>(COMMANDS.verifyCaseExport, { path });
       const accepted = typeof response === "boolean" ? response : response.accepted ?? true;
-      return nativeResult({ accepted, message: typeof response === "boolean" ? (response ? "完整性驗證通過。" : "完整性驗證失敗。") : response.message ?? "完整性驗證完成。" });
+      return nativeResult({
+        accepted,
+        message: typeof response === "boolean"
+          ? response
+            ? serviceText("Integrity verification passed.", "完整性驗證通過。")
+            : serviceText("Integrity verification failed.", "完整性驗證失敗。")
+          : response.message ?? serviceText("Integrity verification finished.", "完整性驗證完成。"),
+      });
     } catch (error) {
       return nativeResult({ accepted: false, message: errorMessage(error) });
     }
@@ -764,7 +860,10 @@ export const scannerService = {
   async chooseCaseBundle(): Promise<string | null> {
     if (!hasTauriRuntime()) return null;
     const selected = await open({
-      title: "選擇要驗證的 ai-security-scanner 案件包",
+      title: serviceText(
+        "Choose an ai-security-scanner case package to verify",
+        "選擇要驗證的 ai-security-scanner 案件包",
+      ),
       multiple: false,
       directory: false,
       filters: [{ name: "Signed case bundle", extensions: ["gz"] }],
@@ -804,7 +903,7 @@ const downloadDemoExport = (
 ): void => {
   const demoPayload = {
     provenance: "DEMO_ONLY_NOT_A_SCAN",
-    warning: DEMO_NOTICE,
+    warning: getDemoNotice(),
     requestedFormat: input.format,
     case: workspace.case,
     coverage: workspace.coverage,

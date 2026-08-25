@@ -35,6 +35,7 @@ const MAX_BUNDLE_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_BUNDLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_MACHINE_IMAGE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES: u64 = 1024 * 1024;
+const MAX_COMMAND_DIAGNOSTIC_CHARS: usize = 4096;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -415,6 +416,7 @@ pub struct ManagedRuntimeStatus {
 pub enum ManagedRuntimeSetupPhase {
     Idle,
     Install,
+    Prerequisite,
     Download,
     Init,
     Start,
@@ -422,6 +424,36 @@ pub enum ManagedRuntimeSetupPhase {
     Completed,
     Failed,
     Cancelled,
+}
+
+/// Stable setup failure categories for UI localization and automation.
+///
+/// These values deliberately describe only conclusions the product can prove
+/// from read-only prerequisite checks. They never imply that the product
+/// enabled a Windows feature or elevated itself.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ManagedRuntimeSetupFailureReason {
+    #[serde(rename = "windows_wsl_not_installed")]
+    WslNotInstalled,
+    #[serde(rename = "windows_wsl_optional_feature_disabled")]
+    WslOptionalFeatureDisabled,
+    #[serde(rename = "windows_wsl_update_required")]
+    WslUpdateRequired,
+    #[serde(rename = "windows_restart_required")]
+    RestartRequired,
+    #[serde(rename = "windows_wsl_command_failed")]
+    WslCommandFailed,
+}
+
+/// Stable next actions paired with [`ManagedRuntimeSetupFailureReason`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedRuntimeSetupNextAction {
+    InstallWsl,
+    EnableWslOptionalFeatures,
+    UpdateWsl,
+    RestartWindows,
+    RetryWslCheck,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -438,6 +470,10 @@ pub struct ManagedRuntimeSetupStatus {
     pub resumed_from_bytes: u64,
     pub can_cancel: bool,
     pub can_retry: bool,
+    /// Machine-readable failure category. `None` outside a failed setup.
+    pub failure_reason: Option<ManagedRuntimeSetupFailureReason>,
+    /// Machine-readable user action. `None` outside a failed setup.
+    pub next_action: Option<ManagedRuntimeSetupNextAction>,
     pub detail: String,
 }
 
@@ -453,6 +489,8 @@ impl Default for ManagedRuntimeSetupStatus {
             resumed_from_bytes: 0,
             can_cancel: false,
             can_retry: true,
+            failure_reason: None,
+            next_action: None,
             detail: "managed runtime setup has not started".into(),
         }
     }
@@ -472,7 +510,7 @@ impl ManagedRuntimeSetupController {
     pub fn status(&self) -> AppResult<ManagedRuntimeSetupStatus> {
         self.status
             .lock()
-            .map(|status| status.clone())
+            .map(|status| public_managed_runtime_setup_status(status.clone()))
             .map_err(|_| {
                 AppError::Internal("managed runtime setup status lock was poisoned".into())
             })
@@ -498,6 +536,8 @@ impl ManagedRuntimeSetupController {
             resumed_from_bytes: 0,
             can_cancel: true,
             can_retry: false,
+            failure_reason: None,
+            next_action: None,
             detail: "installing and verifying the release-managed runtime payload".into(),
         };
         Ok(())
@@ -517,7 +557,7 @@ impl ManagedRuntimeSetupController {
             // A stale cancel must never poison the next setup attempt.
             self.cancel_requested.store(false, Ordering::Release);
         }
-        Ok(status.clone())
+        Ok(public_managed_runtime_setup_status(status.clone()))
     }
 
     fn set_phase(
@@ -577,6 +617,21 @@ impl ManagedRuntimeSetupController {
         self.finish(ManagedRuntimeSetupPhase::Failed, detail.into())
     }
 
+    fn record_failure(
+        &self,
+        reason: ManagedRuntimeSetupFailureReason,
+        action: ManagedRuntimeSetupNextAction,
+        detail: impl Into<String>,
+    ) -> AppResult<()> {
+        let mut status = self.status.lock().map_err(|_| {
+            AppError::Internal("managed runtime setup status lock was poisoned".into())
+        })?;
+        status.failure_reason = Some(reason);
+        status.next_action = Some(action);
+        status.detail = detail.into();
+        Ok(())
+    }
+
     fn finish_cancelled(&self) -> AppResult<()> {
         self.finish(
             ManagedRuntimeSetupPhase::Cancelled,
@@ -598,10 +653,34 @@ impl ManagedRuntimeSetupController {
         status.cancel_requested = false;
         status.can_cancel = false;
         status.can_retry = phase != ManagedRuntimeSetupPhase::Completed;
-        status.detail = detail;
+        if phase != ManagedRuntimeSetupPhase::Failed {
+            status.failure_reason = None;
+            status.next_action = None;
+        }
+        if phase != ManagedRuntimeSetupPhase::Failed || status.failure_reason.is_none() {
+            status.detail = detail;
+        }
         self.cancel_requested.store(false, Ordering::Release);
         Ok(())
     }
+}
+
+/// Keeps the serialized/Tauri status contract internally consistent while a
+/// worker is unwinding a classified failure. `record_failure` intentionally
+/// stores the recovery pair before returning its error so `finish_failed` can
+/// preserve it, but a concurrent poll must not observe that pair while the
+/// public phase is still `prerequisite` (or while cancellation wins the race).
+fn public_managed_runtime_setup_status(
+    mut status: ManagedRuntimeSetupStatus,
+) -> ManagedRuntimeSetupStatus {
+    let has_complete_failed_recovery = status.phase == ManagedRuntimeSetupPhase::Failed
+        && status.failure_reason.is_some()
+        && status.next_action.is_some();
+    if !has_complete_failed_recovery {
+        status.failure_reason = None;
+        status.next_action = None;
+    }
+    status
 }
 
 fn setup_cancelled_error() -> AppError {
@@ -1893,6 +1972,15 @@ impl ManagedRuntimeManager {
         self.install_locked()?;
         let target = self.loaded.target()?;
         let command = self.runtime_command(target)?;
+        if target.operating_system == ManagedOperatingSystem::Windows {
+            if let Some(setup) = setup {
+                setup.set_phase(
+                    ManagedRuntimeSetupPhase::Prerequisite,
+                    "checking whether Windows has WSL 2 ready for the isolated scanner",
+                )?;
+            }
+            self.require_windows_wsl_prerequisite_locked(target, &command, setup)?;
+        }
         if let Some(setup) = setup {
             setup.set_phase(
                 ManagedRuntimeSetupPhase::Download,
@@ -1952,6 +2040,89 @@ impl ManagedRuntimeManager {
         }
         self.wait_for_server(&command, MACHINE_START_TIMEOUT, setup)?;
         Ok(command)
+    }
+
+    /// Proves the Windows-owned WSL boundary before downloading the release
+    /// machine image. The check is intentionally read-only: this product never
+    /// requests elevation, installs WSL, enables optional features, or updates
+    /// Windows on the user's behalf.
+    fn require_windows_wsl_prerequisite_locked(
+        &self,
+        target: &ManagedTarget,
+        managed_command: &ManagedRuntimeCommand,
+        setup: Option<&ManagedRuntimeSetupController>,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(());
+        }
+        if target.provider != ManagedMachineProvider::Wsl {
+            return Err(AppError::NotAuthorized(
+                "managed Windows runtime target did not use the WSL provider".into(),
+            ));
+        }
+
+        let directories = match windows_system_directories() {
+            Ok(directories) => directories,
+            Err(_) => {
+                return fail_windows_wsl_prerequisite(
+                    setup,
+                    WindowsWslPrerequisiteFailure::command_failed(None),
+                );
+            }
+        };
+        let wsl_binary = directories.system32.join("wsl.exe");
+        match fs::symlink_metadata(&wsl_binary) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return fail_windows_wsl_prerequisite(
+                    setup,
+                    WindowsWslPrerequisiteFailure::not_installed(None),
+                );
+            }
+            Err(_) => {
+                return fail_windows_wsl_prerequisite(
+                    setup,
+                    WindowsWslPrerequisiteFailure::command_failed(None),
+                );
+            }
+            Ok(_) => {}
+        }
+        let command =
+            match windows_wsl_inventory_command_with_directories(managed_command, &directories) {
+                Ok(command) => command,
+                Err(_) => {
+                    return fail_windows_wsl_prerequisite(
+                        setup,
+                        WindowsWslPrerequisiteFailure::command_failed(None),
+                    );
+                }
+            };
+
+        // `--status` catches an unavailable WSL 2 kernel or Windows feature
+        // before Podman can begin importing the release image. `--list
+        // --quiet` exercises the same read-only inventory boundary Podman uses
+        // during machine initialization, without requiring a pre-existing
+        // distribution.
+        for arguments in [
+            &[OsString::from("--status")][..],
+            &[OsString::from("--list"), OsString::from("--quiet")][..],
+        ] {
+            let output = match self.commands.output(&command, arguments, COMMAND_TIMEOUT) {
+                Ok(output) => output,
+                Err(_) => {
+                    return fail_windows_wsl_prerequisite(
+                        setup,
+                        WindowsWslPrerequisiteFailure::command_failed(None),
+                    );
+                }
+            };
+            if !output.status.success() {
+                return fail_windows_wsl_prerequisite(
+                    setup,
+                    classify_windows_wsl_prerequisite_failure(&output),
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn stop(&self, mode: ManagedStopMode) -> AppResult<ManagedRuntimeStatus> {
@@ -5105,6 +5276,162 @@ fn installation_directory_name(loaded: &LoadedManagedRuntimeManifest) -> String 
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsWslPrerequisiteFailure {
+    reason: ManagedRuntimeSetupFailureReason,
+    action: ManagedRuntimeSetupNextAction,
+    exit_code: Option<i32>,
+}
+
+impl WindowsWslPrerequisiteFailure {
+    fn not_installed(exit_code: Option<i32>) -> Self {
+        Self {
+            reason: ManagedRuntimeSetupFailureReason::WslNotInstalled,
+            action: ManagedRuntimeSetupNextAction::InstallWsl,
+            exit_code,
+        }
+    }
+
+    fn optional_feature_disabled(exit_code: Option<i32>) -> Self {
+        Self {
+            reason: ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled,
+            action: ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures,
+            exit_code,
+        }
+    }
+
+    fn update_required(exit_code: Option<i32>) -> Self {
+        Self {
+            reason: ManagedRuntimeSetupFailureReason::WslUpdateRequired,
+            action: ManagedRuntimeSetupNextAction::UpdateWsl,
+            exit_code,
+        }
+    }
+
+    fn restart_required(exit_code: Option<i32>) -> Self {
+        Self {
+            reason: ManagedRuntimeSetupFailureReason::RestartRequired,
+            action: ManagedRuntimeSetupNextAction::RestartWindows,
+            exit_code,
+        }
+    }
+
+    fn command_failed(exit_code: Option<i32>) -> Self {
+        Self {
+            reason: ManagedRuntimeSetupFailureReason::WslCommandFailed,
+            action: ManagedRuntimeSetupNextAction::RetryWslCheck,
+            exit_code,
+        }
+    }
+
+    fn detail(self) -> String {
+        let status = self
+            .exit_code
+            .map(|code| format!(" The read-only WSL check exited with code {code}."))
+            .unwrap_or_default();
+        match self.reason {
+            ManagedRuntimeSetupFailureReason::WslNotInstalled => format!(
+                "Windows Subsystem for Linux (WSL 2) is not installed.{status} Install WSL 2 in Windows, then retry. ai-security-scanner did not change Windows settings."
+            ),
+            ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled => format!(
+                "Windows has not made the features required by WSL 2 available.{status} Enable Windows Subsystem for Linux and Virtual Machine Platform, restart Windows if prompted, then retry. ai-security-scanner did not change Windows settings."
+            ),
+            ManagedRuntimeSetupFailureReason::WslUpdateRequired => format!(
+                "WSL 2 needs an update before the isolated scanner can start.{status} Update WSL in Windows, then retry. ai-security-scanner did not install the update."
+            ),
+            ManagedRuntimeSetupFailureReason::RestartRequired => format!(
+                "Windows must restart to finish preparing WSL 2.{status} Restart Windows, reopen ai-security-scanner, then retry."
+            ),
+            ManagedRuntimeSetupFailureReason::WslCommandFailed => format!(
+                "Windows could not confirm that WSL 2 is ready.{status} Open Windows Terminal, run `wsl.exe --status`, resolve the reported Windows issue, then retry. ai-security-scanner did not change Windows settings."
+            ),
+        }
+    }
+}
+
+fn fail_windows_wsl_prerequisite(
+    setup: Option<&ManagedRuntimeSetupController>,
+    failure: WindowsWslPrerequisiteFailure,
+) -> AppResult<()> {
+    let detail = failure.detail();
+    if let Some(setup) = setup {
+        setup.record_failure(failure.reason, failure.action, detail.clone())?;
+    }
+    Err(AppError::NotAvailable(detail))
+}
+
+fn classify_windows_wsl_prerequisite_failure(
+    output: &ManagedCommandOutput,
+) -> WindowsWslPrerequisiteFailure {
+    let diagnostic = [output.stdout.as_slice(), output.stderr.as_slice()]
+        .into_iter()
+        .filter_map(safe_command_diagnostic)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_uppercase();
+    let exit_code = output.status.code();
+
+    // WSL retains these symbolic names and hexadecimal codes outside its
+    // localized prose. Prefer narrowly actionable classifications and fall
+    // back to a generic, read-only retry action for every unknown result.
+    if diagnostic_contains_any(
+        &diagnostic,
+        &[
+            "ERROR_SUCCESS_REBOOT_REQUIRED",
+            "ERROR_SUCCESS_RESTART_REQUIRED",
+            "0X80070BC2",
+            "0X80070BC3",
+            // Inbox WSL can surface this after CBS stages WSL features but a
+            // real Windows restart has not completed the transaction.
+            "0XC004000D",
+        ],
+    ) {
+        WindowsWslPrerequisiteFailure::restart_required(exit_code)
+    } else if diagnostic_contains_any(
+        &diagnostic,
+        &[
+            "WSL_E_WSL_NOT_INSTALLED",
+            "WSL_E_NOT_INSTALLED",
+            "WSL_NOT_INSTALLED",
+            "AKA.MS/WSLINSTALL",
+        ],
+    ) {
+        WindowsWslPrerequisiteFailure::not_installed(exit_code)
+    } else if diagnostic_contains_any(
+        &diagnostic,
+        &[
+            "WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED",
+            "WSL_E_VIRTUAL_MACHINE_PLATFORM_REQUIRED",
+            "HCS_E_HYPERV_NOT_INSTALLED",
+            "0X8007019E",
+            "0X8004032D",
+            "0X80370102",
+        ],
+    ) {
+        WindowsWslPrerequisiteFailure::optional_feature_disabled(exit_code)
+    } else if diagnostic_contains_any(
+        &diagnostic,
+        &[
+            "WSL_E_KERNEL_UPDATE_REQUIRED",
+            "WSL_E_WSL2_KERNEL_NOT_FOUND",
+            "WSL_E_PLUGIN_REQUIRES_UPDATE",
+            "WSL_E_VERSION_OUTDATED",
+            "WSL_E_WSL2_NEEDED",
+            "WSL_E_INVALID_USAGE",
+            "INVALID COMMAND LINE OPTION: --STATUS",
+            "0X800701BC",
+        ],
+    ) {
+        WindowsWslPrerequisiteFailure::update_required(exit_code)
+    } else {
+        WindowsWslPrerequisiteFailure::command_failed(exit_code)
+    }
+}
+
+fn diagnostic_contains_any(diagnostic: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| diagnostic.contains(needle))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WindowsSystemDirectories {
     system_root: PathBuf,
@@ -5218,34 +5545,7 @@ fn windows_wsl_inventory_command_with_directories(
 }
 
 fn parse_windows_wsl_distribution_inventory(bytes: &[u8]) -> AppResult<Vec<String>> {
-    if bytes.len() as u64 > MAX_COMMAND_OUTPUT_BYTES {
-        return Err(AppError::Runtime(
-            "managed Windows WSL distribution inventory was oversized".into(),
-        ));
-    }
-    let decoded = if let Some(encoded) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
-        std::str::from_utf8(encoded)
-            .map(str::to_owned)
-            .map_err(|_| {
-                AppError::Runtime(
-                    "managed Windows WSL distribution inventory was not valid UTF-8".into(),
-                )
-            })?
-    } else if let Some(encoded) = bytes.strip_prefix(&[0xff, 0xfe]) {
-        decode_windows_wsl_utf16le(encoded)?
-    } else if bytes.starts_with(&[0xfe, 0xff]) {
-        return Err(AppError::Runtime(
-            "managed Windows WSL distribution inventory used unsupported UTF-16BE".into(),
-        ));
-    } else if let Ok(decoded) = std::str::from_utf8(bytes) {
-        if decoded.contains('\0') {
-            decode_windows_wsl_utf16le(bytes)?
-        } else {
-            decoded.to_owned()
-        }
-    } else {
-        decode_windows_wsl_utf16le(bytes)?
-    };
+    let decoded = decode_windows_command_text(bytes, "managed Windows WSL distribution inventory")?;
 
     if decoded.contains(['\0', '\u{feff}']) {
         return Err(AppError::Runtime(
@@ -5282,11 +5582,39 @@ fn parse_windows_wsl_distribution_inventory(bytes: &[u8]) -> AppResult<Vec<Strin
     Ok(distributions)
 }
 
-fn decode_windows_wsl_utf16le(bytes: &[u8]) -> AppResult<String> {
+/// Decodes the encodings emitted by Windows console applications when their
+/// output is redirected to a pipe. WSL commonly uses UTF-16LE for localized
+/// text, sometimes without a BOM; modern builds may emit UTF-8 instead.
+fn decode_windows_command_text(bytes: &[u8], label: &str) -> AppResult<String> {
+    if bytes.len() as u64 > MAX_COMMAND_OUTPUT_BYTES {
+        return Err(AppError::Runtime(format!("{label} was oversized")));
+    }
+    if let Some(encoded) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        std::str::from_utf8(encoded)
+            .map(str::to_owned)
+            .map_err(|_| AppError::Runtime(format!("{label} was not valid UTF-8")))
+    } else if let Some(encoded) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        decode_windows_utf16le(encoded, label)
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        Err(AppError::Runtime(format!(
+            "{label} used unsupported UTF-16BE"
+        )))
+    } else if let Ok(decoded) = std::str::from_utf8(bytes) {
+        if decoded.contains('\0') {
+            decode_windows_utf16le(bytes, label)
+        } else {
+            Ok(decoded.to_owned())
+        }
+    } else {
+        decode_windows_utf16le(bytes, label)
+    }
+}
+
+fn decode_windows_utf16le(bytes: &[u8], label: &str) -> AppResult<String> {
     if !bytes.len().is_multiple_of(2) {
-        return Err(AppError::Runtime(
-            "managed Windows WSL distribution inventory had invalid UTF-16LE length".into(),
-        ));
+        return Err(AppError::Runtime(format!(
+            "{label} had invalid UTF-16LE length"
+        )));
     }
     let code_units = bytes
         .as_chunks::<2>()
@@ -5294,11 +5622,8 @@ fn decode_windows_wsl_utf16le(bytes: &[u8]) -> AppResult<String> {
         .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect::<Vec<_>>();
-    String::from_utf16(&code_units).map_err(|_| {
-        AppError::Runtime(
-            "managed Windows WSL distribution inventory was not valid UTF-16LE".into(),
-        )
-    })
+    String::from_utf16(&code_units)
+        .map_err(|_| AppError::Runtime(format!("{label} was not valid UTF-16LE")))
 }
 
 fn unicode_code_point_is_noncharacter(character: char) -> bool {
@@ -5310,13 +5635,80 @@ fn require_success(operation: &str, output: &ManagedCommandOutput) -> AppResult<
     if output.status.success() {
         return Ok(());
     }
-    let detail = String::from_utf8_lossy(&output.stderr);
-    let detail: String = detail.chars().take(4096).collect();
+    let detail = safe_command_diagnostic(&output.stderr)
+        .or_else(|| safe_command_diagnostic(&output.stdout))
+        .unwrap_or_else(|| "No readable diagnostic was returned.".into());
     Err(AppError::Runtime(format!(
         "{operation} failed with status {}: {}",
-        output.status,
-        detail.trim()
+        output.status, detail
     )))
+}
+
+/// Returns a bounded single-line diagnostic or `None` when the child output
+/// cannot be decoded without replacement characters or unsafe controls. Raw
+/// bytes are never interpolated into an application error.
+fn safe_command_diagnostic(bytes: &[u8]) -> Option<String> {
+    if !windows_command_text_has_known_encoding(bytes) {
+        return None;
+    }
+    let decoded = decode_windows_command_text(bytes, "managed runtime command diagnostic").ok()?;
+    let mut sanitized = String::new();
+    let mut previous_was_space = true;
+    for (retained, character) in decoded.chars().enumerate() {
+        if retained == MAX_COMMAND_DIAGNOSTIC_CHARS {
+            break;
+        }
+        if character == '\u{fffd}'
+            || character == '\u{feff}'
+            || unicode_code_point_is_noncharacter(character)
+            || (character.is_control() && !character.is_whitespace())
+        {
+            return None;
+        }
+        if character.is_whitespace() {
+            if !previous_was_space {
+                sanitized.push(' ');
+                previous_was_space = true;
+            }
+        } else {
+            sanitized.push(character);
+            previous_was_space = false;
+        }
+    }
+    let sanitized = sanitized.trim().to_owned();
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
+fn windows_command_text_has_known_encoding(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xef, 0xbb, 0xbf]) || bytes.starts_with(&[0xff, 0xfe]) {
+        return true;
+    }
+    if bytes.starts_with(&[0xfe, 0xff]) || !bytes.len().is_multiple_of(2) {
+        return std::str::from_utf8(bytes).is_ok_and(|text| !text.contains('\0'));
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return !text.contains('\0') || looks_like_unmarked_utf16le_console_text(bytes);
+    }
+    looks_like_unmarked_utf16le_console_text(bytes)
+}
+
+fn looks_like_unmarked_utf16le_console_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(2) {
+        return false;
+    }
+    let pairs = bytes.len() / 2;
+    let odd_nuls = bytes
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|byte| **byte == 0)
+        .count();
+    let even_nuls = bytes.iter().step_by(2).filter(|byte| **byte == 0).count();
+    let has_utf16_ascii_signal = odd_nuls > 0 && odd_nuls * 8 >= pairs && even_nuls * 8 < pairs;
+    let has_mixed_ascii_prefix = bytes
+        .split(|byte| !byte.is_ascii_graphic() && *byte != b' ')
+        .any(|run| run.len() >= 8);
+    has_utf16_ascii_signal && !has_mixed_ascii_prefix
 }
 
 fn bounded_utf8<'a>(bytes: &'a [u8], label: &str) -> AppResult<&'a str> {
@@ -8550,6 +8942,8 @@ mod tests {
         // the fixture tree.
         _temp: TempDir,
         commands: Arc<FakeCommands>,
+        #[cfg(windows)]
+        downloader: Arc<FakeDownloader>,
         image: Vec<u8>,
     }
 
@@ -8664,13 +9058,15 @@ mod tests {
             resources,
             loaded,
             commands.clone(),
-            downloader,
+            downloader.clone(),
         )
         .expect("manager");
         Fixture {
             _temp: temp,
             manager,
             commands,
+            #[cfg(windows)]
+            downloader,
             image,
         }
     }
@@ -8695,6 +9091,17 @@ mod tests {
 
     #[cfg(not(windows))]
     fn push_windows_wsl_absent(_commands: &FakeCommands) {}
+
+    #[cfg(windows)]
+    fn push_windows_wsl_ready(commands: &FakeCommands) {
+        commands.push(success(utf16le(
+            "Default Version: 2\r\nKernel version: 6.6.87.2\r\n",
+        )));
+        commands.push(success(Vec::new()));
+    }
+
+    #[cfg(not(windows))]
+    fn push_windows_wsl_ready(_commands: &FakeCommands) {}
 
     #[cfg(windows)]
     fn windows_fixture_vhd_path(
@@ -9577,6 +9984,182 @@ mod tests {
     }
 
     #[test]
+    fn windows_console_diagnostics_decode_utf16le_and_reject_mixed_garbage() {
+        let localized =
+            "Windows 子系統尚未就緒。\r\nError code: Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED\r\n";
+        assert_eq!(
+            safe_command_diagnostic(&utf16le(localized)).as_deref(),
+            Some("Windows 子系統尚未就緒。 Error code: Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED")
+        );
+        let mut bom = vec![0xff, 0xfe];
+        bom.extend_from_slice(&utf16le(localized));
+        assert!(
+            safe_command_diagnostic(&bom)
+                .expect("UTF-16LE BOM diagnostic")
+                .contains("Windows 子系統")
+        );
+        assert_eq!(
+            safe_command_diagnostic(b"plain UTF-8 diagnostic\r\nsecond line").as_deref(),
+            Some("plain UTF-8 diagnostic second line")
+        );
+
+        let mut mixed = b"Error command C:\\Windows\\System32\\wsl.exe: ".to_vec();
+        mixed.extend_from_slice(&utf16le("子系統尚未就緒"));
+        assert!(safe_command_diagnostic(&mixed).is_none());
+        assert!(safe_command_diagnostic(b"unsafe\0control").is_none());
+
+        let output = failure(mixed);
+        let error = require_success("managed runtime machine initialization", &output)
+            .expect_err("mixed console encodings must fail without raw output");
+        let message = error.to_string();
+        assert!(message.contains("No readable diagnostic was returned"));
+        assert!(!message.contains("wsl.exe"));
+        assert!(!message.contains(['\0', '\u{fffd}']));
+    }
+
+    #[test]
+    fn windows_wsl_prerequisite_classifier_maps_stable_codes_to_actions() {
+        let cases = [
+            (
+                "錯誤碼: Wsl/WSL_E_WSL_NOT_INSTALLED",
+                ManagedRuntimeSetupFailureReason::WslNotInstalled,
+                ManagedRuntimeSetupNextAction::InstallWsl,
+            ),
+            (
+                "請執行 wsl.exe --install。https://aka.ms/wslinstall",
+                ManagedRuntimeSetupFailureReason::WslNotInstalled,
+                ManagedRuntimeSetupNextAction::InstallWsl,
+            ),
+            (
+                "錯誤碼: Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED",
+                ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled,
+                ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures,
+            ),
+            (
+                "錯誤: 0x800701bc",
+                ManagedRuntimeSetupFailureReason::WslUpdateRequired,
+                ManagedRuntimeSetupNextAction::UpdateWsl,
+            ),
+            (
+                "Error code: Wsl/WSL_E_INVALID_USAGE",
+                ManagedRuntimeSetupFailureReason::WslUpdateRequired,
+                ManagedRuntimeSetupNextAction::UpdateWsl,
+            ),
+            (
+                "Error: ERROR_SUCCESS_REBOOT_REQUIRED",
+                ManagedRuntimeSetupFailureReason::RestartRequired,
+                ManagedRuntimeSetupNextAction::RestartWindows,
+            ),
+            (
+                "Error code: Wsl/Service/E_UNEXPECTED",
+                ManagedRuntimeSetupFailureReason::WslCommandFailed,
+                ManagedRuntimeSetupNextAction::RetryWslCheck,
+            ),
+        ];
+
+        for (diagnostic, reason, action) in cases {
+            let output = failure(utf16le(diagnostic));
+            let classified = classify_windows_wsl_prerequisite_failure(&output);
+            assert_eq!(classified.reason, reason, "{diagnostic}");
+            assert_eq!(classified.action, action, "{diagnostic}");
+            assert_eq!(classified.exit_code, Some(1));
+        }
+    }
+
+    #[test]
+    fn windows_wsl_prerequisite_failure_persists_machine_readable_recovery() {
+        let controller = ManagedRuntimeSetupController::default();
+        controller.begin().expect("begin setup");
+        controller
+            .set_phase(
+                ManagedRuntimeSetupPhase::Prerequisite,
+                "checking Windows WSL 2",
+            )
+            .expect("prerequisite phase");
+        let failure = WindowsWslPrerequisiteFailure::update_required(Some(1));
+        let error = fail_windows_wsl_prerequisite(Some(&controller), failure)
+            .expect_err("missing prerequisite");
+
+        // The worker has recorded the classified pair internally so the
+        // terminal failure can preserve it, but concurrent Tauri polling must
+        // not receive recovery fields before the public phase becomes failed.
+        let unwinding = controller.status().expect("unwinding status");
+        assert_eq!(unwinding.phase, ManagedRuntimeSetupPhase::Prerequisite);
+        assert!(unwinding.active);
+        assert_eq!(unwinding.failure_reason, None);
+        assert_eq!(unwinding.next_action, None);
+        let encoded_unwinding =
+            serde_json::to_value(&unwinding).expect("serialize unwinding setup status");
+        assert_eq!(encoded_unwinding["failure_reason"], serde_json::Value::Null);
+        assert_eq!(encoded_unwinding["next_action"], serde_json::Value::Null);
+
+        controller
+            .finish_failed(error.to_string())
+            .expect("finish failed setup");
+
+        let status = controller.status().expect("failed status");
+        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
+        assert!(!status.active);
+        assert!(status.can_retry);
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslUpdateRequired)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::UpdateWsl)
+        );
+        assert!(status.detail.contains("needs an update"));
+        assert!(!status.detail.contains("operation is not available yet"));
+        let encoded = serde_json::to_value(&status).expect("serialize setup status");
+        assert_eq!(encoded["phase"], "failed");
+        assert_eq!(encoded["failure_reason"], "windows_wsl_update_required");
+        assert_eq!(encoded["next_action"], "update_wsl");
+
+        controller.begin().expect("retry begins cleanly");
+        let retried = controller.status().expect("retry status");
+        assert_eq!(retried.phase, ManagedRuntimeSetupPhase::Install);
+        assert_eq!(retried.failure_reason, None);
+        assert_eq!(retried.next_action, None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_setup_checks_wsl_before_machine_image_download() {
+        let fixture = fixture();
+        fixture.commands.push(failure(utf16le(
+            "此應用程式需要適用於 Linux 的 Windows 子系統選用元件。\r\nError code: Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED\r\n",
+        )));
+        let setup = ManagedRuntimeSetupController::default();
+
+        let error = fixture
+            .manager
+            .setup(&setup)
+            .expect_err("unavailable WSL must stop setup before download");
+
+        assert!(error.to_string().contains("Windows settings"));
+        assert_eq!(*fixture.downloader.calls.lock().expect("downloads"), 0);
+        assert_eq!(
+            fixture.commands.calls(),
+            vec![vec![String::from("--status")]]
+        );
+        let status = setup.status().expect("failed setup status");
+        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
+        assert_eq!(status.received_bytes, 0);
+        assert_eq!(status.total_bytes, None);
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures)
+        );
+        assert!(!status.detail.contains("wsl.exe"));
+        assert!(!status.detail.contains(['\0', '\u{fffd}']));
+    }
+
+    #[test]
     fn windows_wsl_command_uses_verified_system_directories_not_managed_environment() {
         let temp = TempDir::new().expect("temporary root");
         let system_root = temp.path().join("trusted-windows-root");
@@ -10380,6 +10963,7 @@ mod tests {
     #[test]
     fn start_acquires_exact_image_initializes_rootless_machine_and_preflights() {
         let fixture = fixture();
+        push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         fixture.commands.push(success(Vec::new()));
         fixture
@@ -10391,8 +10975,16 @@ mod tests {
         let command = fixture.manager.start().expect("start");
         assert_eq!(command.runtime_version(), "5.8.2");
         let calls = fixture.commands.calls();
-        assert_eq!(calls[0], ["machine", "list", "--format", "json"]);
-        let init = &calls[1];
+        let platform_probe_calls = if cfg!(windows) { 2 } else { 0 };
+        if cfg!(windows) {
+            assert_eq!(calls[0], ["--status"]);
+            assert_eq!(calls[1], ["--list", "--quiet"]);
+        }
+        assert_eq!(
+            calls[platform_probe_calls],
+            ["machine", "list", "--format", "json"]
+        );
+        let init = &calls[platform_probe_calls + 1];
         assert_eq!(&init[..2], ["machine", "init"]);
         assert!(init.contains(&"--rootful=false".into()));
         assert!(init.contains(&"--image".into()));
@@ -10422,18 +11014,26 @@ mod tests {
                 .iter()
                 .any(|argument| argument == "sudo" || argument == "sh")
         );
-        assert_eq!(calls[3][..3], ["machine", "start", "--quiet"]);
-        assert_eq!(calls[4], ["version", "--format", "{{.Server.Version}}"]);
         assert_eq!(
-            fixture.commands.timeouts(),
-            [
-                COMMAND_TIMEOUT,
-                MACHINE_INIT_TIMEOUT,
-                COMMAND_TIMEOUT,
-                MACHINE_START_TIMEOUT,
-                COMMAND_TIMEOUT,
-            ]
+            calls[platform_probe_calls + 3][..3],
+            ["machine", "start", "--quiet"]
         );
+        assert_eq!(
+            calls[platform_probe_calls + 4],
+            ["version", "--format", "{{.Server.Version}}"]
+        );
+        let mut expected_timeouts = vec![];
+        if cfg!(windows) {
+            expected_timeouts.extend([COMMAND_TIMEOUT, COMMAND_TIMEOUT]);
+        }
+        expected_timeouts.extend([
+            COMMAND_TIMEOUT,
+            MACHINE_INIT_TIMEOUT,
+            COMMAND_TIMEOUT,
+            MACHINE_START_TIMEOUT,
+            COMMAND_TIMEOUT,
+        ]);
+        assert_eq!(fixture.commands.timeouts(), expected_timeouts);
         let cached = fixture
             .manager
             .machine_image_path(fixture.manager.loaded.target().expect("target"));
@@ -10564,6 +11164,7 @@ mod tests {
             b"not-an-openssh-public-key\n",
         )
         .expect("corrupt public half");
+        push_windows_wsl_ready(&fixture.commands);
         fixture
             .commands
             .push(success(machine_json(&fixture.manager, false)));
@@ -10575,7 +11176,10 @@ mod tests {
 
         assert!(error.to_string().contains("refusing to rotate"));
         assert_eq!(fs::read(&identity).unwrap(), private_before);
-        assert_eq!(fixture.commands.calls().len(), 1);
+        assert_eq!(
+            fixture.commands.calls().len(),
+            if cfg!(windows) { 3 } else { 1 }
+        );
     }
 
     #[cfg(unix)]
@@ -10912,6 +11516,7 @@ mod tests {
     #[test]
     fn observable_setup_reaches_verified_completed_state() {
         let fixture = fixture();
+        push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         fixture.commands.push(success(Vec::new()));
         fixture
@@ -10932,6 +11537,8 @@ mod tests {
         assert_eq!(setup_status.received_bytes, fixture.image.len() as u64);
         assert_eq!(setup_status.total_bytes, Some(fixture.image.len() as u64));
         assert_eq!(setup_status.progress_percent, Some(100.0));
+        assert_eq!(setup_status.failure_reason, None);
+        assert_eq!(setup_status.next_action, None);
     }
 
     #[test]
@@ -10948,6 +11555,7 @@ mod tests {
             "DiskSize": (40_u64 * 1024 * 1024 * 1024).to_string()
         }]))
         .expect("json");
+        push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(inventory));
         assert!(fixture.manager.start().is_err());
     }

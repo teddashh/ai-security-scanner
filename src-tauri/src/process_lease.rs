@@ -60,6 +60,16 @@ impl DataDirectoryExclusiveLease {
     }
 }
 
+impl Drop for DataDirectoryExclusiveLease {
+    fn drop(&mut self) {
+        // On Unix, flock locks belong to the open file description. A child
+        // forked by another thread can briefly inherit a duplicate descriptor,
+        // so closing only our descriptor would not release the lease until the
+        // child execs. Explicitly unlock while this owner is being dropped.
+        let _ = FileExt::unlock(&self._file);
+    }
+}
+
 fn open_regular_lock_file(path: &Path) -> AppResult<File> {
     #[cfg(unix)]
     let file = {
@@ -108,6 +118,19 @@ mod tests {
         ));
         drop(first);
         DataDirectoryExclusiveLease::acquire(temporary.path()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_the_lease_unlocks_an_inherited_file_description() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first = DataDirectoryExclusiveLease::acquire(temporary.path()).unwrap();
+        let inherited_descriptor = first._file.try_clone().unwrap();
+
+        drop(first);
+
+        DataDirectoryExclusiveLease::acquire(temporary.path()).unwrap();
+        drop(inherited_descriptor);
     }
 
     #[cfg(unix)]

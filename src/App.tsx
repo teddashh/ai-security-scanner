@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
 import { Icon } from "./components/Icon";
+import { RuntimeSetupAssistant } from "./components/RuntimeSetupAssistant";
 import { EmptyState } from "./components/Shared";
-import { DEMO_NOTICE } from "./data/demo";
+import { getDemoNotice } from "./data/demo";
+import { useI18n } from "./i18n";
 import { CasesPage } from "./pages/CasesPage";
 import { CoveragePage } from "./pages/CoveragePage";
 import { ExportPage } from "./pages/ExportPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { ProgressPage } from "./pages/ProgressPage";
+import { StartPage } from "./pages/StartPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import {
   checkForAppUpdate,
@@ -16,6 +19,8 @@ import {
   type AppUpdateState,
 } from "./services/appUpdater";
 import { EVENTS, scannerService, type ActionResponse } from "./services/scanner";
+import { startPageCopy, type UseCaseDefinition } from "./useCases";
+import { displaySafeTechnicalDetail } from "./technicalDetails";
 import type {
   AppMode,
   AppSnapshot,
@@ -34,24 +39,51 @@ import type {
 
 const pageFromHash = (): PageId => {
   const value = window.location.hash.replace(/^#\/?/, "") as PageId;
-  return ["cases", "coverage", "progress", "findings", "export", "verification"].includes(value)
+  return ["start", "cases", "coverage", "progress", "findings", "export", "verification"].includes(value)
     ? value
-    : "cases";
+    : "start";
 };
 
-const describeError = (error: unknown): string => {
-  if (error instanceof Error) return error.message;
-  return typeof error === "string" ? error : "本機核心未能完成這項工作。";
+const recordTechnicalError = (context: string, error: unknown): void => {
+  console.error(
+    `[ai-security-scanner] ${context}`,
+    displaySafeTechnicalDetail(error) ?? "No display-safe technical detail was available.",
+  );
 };
+
+const busyActionCopy = {
+  "runtime-setup": { en: "scan-engine setup", zhTW: "掃描引擎設定" },
+  create: { en: "case creation", zhTW: "建立案件" },
+  "archive-case": { en: "case archiving", zhTW: "封存案件" },
+  "delete-case": { en: "case-record deletion", zhTW: "刪除案件紀錄" },
+  "delete-artifacts": { en: "evidence deletion", zhTW: "刪除證據" },
+  rescan: { en: "the follow-up scan", zhTW: "複驗掃描" },
+  "connect-source": { en: "source connection", zhTW: "連接資料來源" },
+  "attach-workspace": { en: "local-file attachment", zhTW: "附加本機檔案" },
+  discovery: { en: "asset discovery", zhTW: "盤點資產" },
+  scope: { en: "permission confirmation", zhTW: "確認授權範圍" },
+  "start-scan": { en: "starting the scan", zhTW: "開始掃描" },
+  "pause-scan": { en: "pausing the scan", zhTW: "暫停掃描" },
+  "resume-scan": { en: "resuming the scan", zhTW: "繼續掃描" },
+  "cancel-scan": { en: "cancelling the scan", zhTW: "取消掃描" },
+  "finding-workflow": { en: "updating a problem", zhTW: "更新問題狀態" },
+  "finding-group": { en: "grouping related problems", zhTW: "整理相關問題" },
+  "finding-ungroup": { en: "removing a problem group", zhTW: "移除問題群組" },
+  export: { en: "case export", zhTW: "匯出案件" },
+  "verify-export": { en: "file integrity verification", zhTW: "驗證檔案完整性" },
+} as const;
+
+const unknownBusyActionCopy = { en: "the current task", zhTW: "目前工作" } as const;
 
 const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
 
 export default function App() {
+  const { locale, text, formatNumber } = useI18n();
   const [page, setPage] = useState<PageId>(pageFromHash);
   const [snapshot, setSnapshot] = useState<AppSnapshot>();
   const [mode, setMode] = useState<AppMode>(scannerService.isNative() ? "native" : "demo");
-  const [notice, setNotice] = useState<string | undefined>(scannerService.isNative() ? undefined : DEMO_NOTICE);
+  const [notice, setNotice] = useState<string | undefined>(scannerService.isNative() ? undefined : getDemoNotice());
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string>();
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -60,10 +92,15 @@ export default function App() {
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
   const [focusedFindingId, setFocusedFindingId] = useState<string>();
   const [verificationBaselineRunId, setVerificationBaselineRunId] = useState<string>();
+  const [selectedUseCase, setSelectedUseCase] = useState<{
+    definition: UseCaseDefinition;
+    selectionKey: number;
+  }>();
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     phase: scannerService.isNative() ? "checking" : "unavailable",
   });
   const toastId = useRef(0);
+  const snapshotLocale = useRef(locale);
 
   const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
     const id = ++toastId.current;
@@ -78,16 +115,37 @@ export default function App() {
 
   const loadSnapshot = useCallback(async (caseId?: string, quiet = false) => {
     if (!quiet) setLoading(true);
-    const result = await scannerService.getSnapshot(caseId);
-    applyServiceMeta(result);
-    setSnapshot(result.data);
-    setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
-    if (!quiet) setLoading(false);
-  }, [applyServiceMeta]);
+    try {
+      const result = await scannerService.getSnapshot(caseId);
+      applyServiceMeta(result);
+      setSnapshot(result.data);
+      setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
+    } catch (error) {
+      recordTechnicalError("load local cases", error);
+      if (!quiet) {
+        pushToast({
+          tone: "danger",
+          title: text({ en: "Cases could not be loaded", zhTW: "目前無法讀取案件" }),
+          detail: text({
+            en: "Nothing was changed. Keep the app open and try again.",
+            zhTW: "這次沒有更動任何資料；請讓程式保持開啟並再試一次。",
+          }),
+        });
+      }
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, [applyServiceMeta, pushToast, text]);
 
   useEffect(() => {
     void loadSnapshot();
   }, [loadSnapshot]);
+
+  useEffect(() => {
+    if (snapshotLocale.current === locale) return;
+    snapshotLocale.current = locale;
+    if (snapshot) void loadSnapshot(snapshot.selectedCaseId, true);
+  }, [loadSnapshot, locale, snapshot?.selectedCaseId]);
 
   useEffect(() => {
     if (!scannerService.isNative()) return;
@@ -139,13 +197,17 @@ export default function App() {
     try {
       await installAppUpdate(version, setAppUpdate);
     } catch (error) {
+      recordTechnicalError("install update", error);
       pushToast({
         tone: "danger",
-        title: "應用程式更新未完成",
-        detail: describeError(error),
+        title: text({ en: "The app update did not finish", zhTW: "應用程式更新未完成" }),
+        detail: text({
+          en: "Your cases were not changed. Check the connection and try again.",
+          zhTW: "案件沒有被更動；請確認網路連線後再試一次。",
+        }),
       });
     }
-  }, [pushToast]);
+  }, [pushToast, text]);
 
   const setupManagedRuntime = async () => {
     setBusyAction("runtime-setup");
@@ -156,17 +218,37 @@ export default function App() {
       setRuntimeSetup(setupResult.data);
       await loadSnapshot(snapshot?.selectedCaseId, true);
       const cancelled = setupResult.data.phase === "cancelled";
+      if (!result.data.accepted && !cancelled) {
+        window.location.hash = "start";
+        setPage("start");
+      }
       pushToast({
         tone: result.data.accepted ? "success" : "warning",
         title: result.data.accepted
-          ? "隔離執行環境已就緒"
+          ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
           : cancelled
-            ? "已取消隔離執行環境設定"
-            : "隔離執行環境尚未就緒，可再次重試",
-        detail: result.data.message,
+            ? text({ en: "Scan-engine setup was stopped", zhTW: "已停止掃描引擎設定" })
+            : text({ en: "One setup step still needs attention", zhTW: "設定還有一個步驟需要處理" }),
+        detail: result.data.accepted
+          ? text({
+            en: "You can continue with your chosen check.",
+            zhTW: "現在可以繼續設定你選擇的檢查。",
+          })
+          : text({
+            en: "Follow the step shown on the start page, then check again.",
+            zhTW: "請照首頁顯示的步驟處理，再重新檢查。",
+          }),
       });
     } catch (error) {
-      pushToast({ tone: "danger", title: "隔離執行環境設定失敗，可再次重試", detail: describeError(error) });
+      recordTechnicalError("prepare managed runtime", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "Scan-engine setup could not start", zhTW: "掃描引擎設定無法開始" }),
+        detail: text({
+          en: "Nothing was changed. Return to the setup card and try again.",
+          zhTW: "這次沒有變更任何設定；請回到設定卡片再試一次。",
+        }),
+      });
     } finally {
       setBusyAction(undefined);
     }
@@ -180,12 +262,23 @@ export default function App() {
       if (result.data.cancelRequested) {
         pushToast({
           tone: "info",
-          title: "正在取消隔離執行環境設定",
-          detail: "已送出取消要求；已下載的部分會保留，重試時可續傳。",
+          title: text({ en: "Stopping scan-engine setup", zhTW: "正在停止掃描引擎設定" }),
+          detail: text({
+            en: "The completed part of the download will be kept for the next attempt.",
+            zhTW: "已完成的下載會保留，下次可以接著使用。",
+          }),
         });
       }
     } catch (error) {
-      pushToast({ tone: "danger", title: "取消要求未送出", detail: describeError(error) });
+      recordTechnicalError("cancel managed runtime setup", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "Setup could not be stopped yet", zhTW: "目前無法停止設定" }),
+        detail: text({
+          en: "Setup is still safe to leave running. Try the stop button again in a moment.",
+          zhTW: "設定仍可安全繼續；請稍後再按一次停止。",
+        }),
+      });
     }
   };
 
@@ -211,10 +304,14 @@ export default function App() {
       }),
     ).catch((error: unknown) => {
       if (!disposed) {
+        recordTechnicalError("subscribe to desktop status", error);
         pushToast({
           tone: "warning",
-          title: "即時狀態通知未完整連接",
-          detail: `${describeError(error)}；可重新開啟案件以重試。`,
+          title: text({ en: "Live status is temporarily unavailable", zhTW: "即時狀態暫時無法使用" }),
+          detail: text({
+            en: "Saved work is unaffected. Reopen the case to refresh its status.",
+            zhTW: "已保存的工作不受影響；重新開啟案件即可更新狀態。",
+          }),
         });
       }
     });
@@ -223,7 +320,7 @@ export default function App() {
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [loadSnapshot, pushToast, snapshot?.selectedCaseId]);
+  }, [loadSnapshot, pushToast, snapshot?.selectedCaseId, text]);
 
   const navigate = (target: PageId) => {
     if (target !== "findings") setFocusedFindingId(undefined);
@@ -239,7 +336,15 @@ export default function App() {
       applyServiceMeta(result);
       setSnapshot((current) => current ? { ...current, selectedCaseId: caseId, workspace: result.data } : current);
     } catch (error) {
-      pushToast({ tone: "danger", title: "無法切換案件", detail: describeError(error) });
+      recordTechnicalError("select case", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "This case could not be opened", zhTW: "目前無法開啟這個案件" }),
+        detail: text({
+          en: "The current case was left unchanged. Try opening it again.",
+          zhTW: "目前案件沒有被更動；請再開啟一次。",
+        }),
+      });
     } finally {
       setLoading(false);
     }
@@ -251,14 +356,24 @@ export default function App() {
       const result = await scannerService.createCase(input);
       applyServiceMeta(result);
       await loadSnapshot(result.data.id, true);
+      setSelectedUseCase(undefined);
       pushToast({
         tone: result.mode === "native" ? "success" : "info",
-        title: result.mode === "native" ? "案件已建立" : "展示案件已建立",
-        detail: result.mode === "native" ? "資料保存在本機案件核心。" : "只保存在瀏覽器 localStorage，沒有啟動掃描。",
+        title: result.mode === "native"
+          ? text({ en: "Case created", zhTW: "案件已建立" })
+          : text({ en: "Demo case created", zhTW: "展示案件已建立" }),
+        detail: result.mode === "native"
+          ? text({ en: "The case is saved on this device. No scan has started.", zhTW: "案件已保存在這台電腦；尚未開始任何掃描。" })
+          : text({ en: "It is saved only in this browser. No real target was contacted.", zhTW: "只保存在這個瀏覽器；沒有接觸任何真實目標。" }),
       });
       return true;
     } catch (error) {
-      pushToast({ tone: "danger", title: "案件建立失敗", detail: describeError(error) });
+      recordTechnicalError("create case", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The case was not created", zhTW: "案件沒有建立成功" }),
+        detail: text({ en: "Review the highlighted fields and try again.", zhTW: "請檢查畫面標示的欄位後再試一次。" }),
+      });
       return false;
     } finally {
       setBusyAction(undefined);
@@ -275,14 +390,25 @@ export default function App() {
       applyServiceMeta(result);
       pushToast({
         tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
-        title: result.data.accepted ? "已送出本機工作" : result.mode === "demo" ? "展示模式未執行" : "工作未啟動",
-        detail: result.data.message,
+        title: result.data.accepted
+          ? text({ en: "Local work started", zhTW: "本機工作已開始" })
+          : result.mode === "demo"
+            ? text({ en: "Demo mode did not run a scan", zhTW: "展示模式沒有執行掃描" })
+            : text({ en: "The work did not start", zhTW: "工作尚未開始" }),
+        detail: result.data.accepted
+          ? text({ en: "Open Scan progress to follow each scanner.", zhTW: "可到「掃描進度」查看每個工具的狀態。" })
+          : text({ en: "No target was contacted. Check the current step and try again.", zhTW: "沒有接觸任何目標；請確認目前步驟後再試一次。" }),
       });
       if (result.data.snapshot) setSnapshot(result.data.snapshot);
       else if (result.mode === "native") await loadSnapshot(snapshot?.selectedCaseId, true);
       return result.data.accepted;
     } catch (error) {
-      pushToast({ tone: "danger", title: "本機工作失敗", detail: describeError(error) });
+      recordTechnicalError(`run action ${key}`, error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The local work could not finish", zhTW: "本機工作未能完成" }),
+        detail: text({ en: "Saved case data was kept. Check the current step before trying again.", zhTW: "已保存的案件資料仍保留；請確認目前步驟後再試一次。" }),
+      });
       return false;
     } finally {
       setBusyAction(undefined);
@@ -303,8 +429,14 @@ export default function App() {
       applyServiceMeta(result);
       pushToast({
         tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
-        title: result.data.accepted ? "案件紀錄已刪除" : result.mode === "demo" ? "展示模式未刪除" : "案件未刪除",
-        detail: result.data.message,
+        title: result.data.accepted
+          ? text({ en: "Case record deleted", zhTW: "案件紀錄已刪除" })
+          : result.mode === "demo"
+            ? text({ en: "Demo mode did not delete the case", zhTW: "展示模式沒有刪除案件" })
+            : text({ en: "The case was not deleted", zhTW: "案件沒有被刪除" }),
+        detail: result.data.accepted
+          ? text({ en: "Local evidence is still present until you confirm its separate cleanup.", zhTW: "本機證據仍保留，直到你另外確認清理為止。" })
+          : text({ en: "No case data was changed.", zhTW: "案件資料沒有被更動。" }),
       });
       if (result.data.accepted) {
         setArtifactCleanupPlan(result.data.artifacts);
@@ -313,7 +445,12 @@ export default function App() {
       }
       return result.data.accepted;
     } catch (error) {
-      pushToast({ tone: "danger", title: "案件刪除失敗", detail: describeError(error) });
+      recordTechnicalError("delete case", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The case was not deleted", zhTW: "案件沒有被刪除" }),
+        detail: text({ en: "Nothing was changed. Confirm the exact case name and try again.", zhTW: "這次沒有更動資料；請確認完整案件名稱後再試一次。" }),
+      });
       return false;
     } finally {
       setBusyAction(undefined);
@@ -334,14 +471,27 @@ export default function App() {
       setArtifactCleanupPlan((current) => current ? { ...current, exists: false } : current);
       pushToast({
         tone: result.data.removed ? "warning" : "info",
-        title: result.data.removed ? "案件證據已永久移除" : "證據目錄未移除",
+        title: result.data.removed
+          ? text({ en: "Case evidence was permanently deleted", zhTW: "案件證據已永久刪除" })
+          : text({ en: "The evidence folder was not deleted", zhTW: "證據資料夾沒有被刪除" }),
         detail: result.data.removed
-          ? `${result.data.exactPath} 已刪除且不可復原。`
-          : `${result.data.exactPath} 已不存在或未被移除。`,
+          ? text(
+            { en: "{path} was deleted and cannot be recovered.", zhTW: "{path} 已刪除，而且無法復原。" },
+            { path: result.data.exactPath },
+          )
+          : text(
+            { en: "{path} was already absent or was left unchanged.", zhTW: "{path} 原本就不存在，或這次沒有被移除。" },
+            { path: result.data.exactPath },
+          ),
       });
       return result.data.removed;
     } catch (error) {
-      pushToast({ tone: "danger", title: "證據清理失敗", detail: describeError(error) });
+      recordTechnicalError("delete case artifacts", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The evidence folder was not deleted", zhTW: "證據資料夾沒有被刪除" }),
+        detail: text({ en: "Nothing was removed. Check the exact path and confirmation, then try again.", zhTW: "這次沒有移除任何檔案；請確認精確路徑與確認文字後再試一次。" }),
+      });
       return false;
     } finally {
       setBusyAction(undefined);
@@ -397,7 +547,11 @@ export default function App() {
       );
       applyServiceMeta(result);
       if (!result.data) {
-        pushToast({ tone: "info", title: "已取消匯出", detail: "沒有建立或寫出任何檔案。" });
+        pushToast({
+          tone: "info",
+          title: text({ en: "Export cancelled", zhTW: "已取消匯出" }),
+          detail: text({ en: "No file was created or written.", zhTW: "沒有建立或寫出任何檔案。" }),
+        });
         return;
       }
       const exported = result.data;
@@ -410,13 +564,26 @@ export default function App() {
       } : current);
       pushToast({
         tone: result.mode === "native" ? "success" : "info",
-        title: result.mode === "native" ? "案件已匯出" : "已下載展示檔",
+        title: result.mode === "native"
+          ? text({ en: "Case exported", zhTW: "案件已匯出" })
+          : text({ en: "Demo file downloaded", zhTW: "展示檔已下載" }),
         detail: result.mode === "native"
-          ? `${exported.fileName} 已寫入本機選擇的位置。`
-          : "檔案開頭明確標示 DEMO_ONLY_NOT_A_SCAN，不能當成掃描報告。",
+          ? text(
+            { en: "{fileName} was written to the location you selected.", zhTW: "{fileName} 已寫入你選擇的位置。" },
+            { fileName: exported.fileName },
+          )
+          : text({
+            en: "The file is marked DEMO_ONLY_NOT_A_SCAN and is not a scan report.",
+            zhTW: "檔案已標示 DEMO_ONLY_NOT_A_SCAN，不能當成掃描報告。",
+          }),
       });
     } catch (error) {
-      pushToast({ tone: "danger", title: "案件匯出失敗", detail: describeError(error) });
+      recordTechnicalError("export case", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The case was not exported", zhTW: "案件沒有匯出成功" }),
+        detail: text({ en: "No output file was written. Choose a destination and try again.", zhTW: "沒有寫出檔案；請選擇目的地後再試一次。" }),
+      });
     } finally {
       setBusyAction(undefined);
     }
@@ -424,14 +591,31 @@ export default function App() {
 
   const verifyExport = async (path: string) => {
     setBusyAction("verify-export");
-    const result = await scannerService.verifyCaseExport(path);
-    applyServiceMeta(result);
-    setBusyAction(undefined);
-    pushToast({
-      tone: result.data.accepted ? "success" : "info",
-      title: result.data.accepted ? "完整性驗證完成" : "無法驗證展示檔",
-      detail: result.data.message,
-    });
+    try {
+      const result = await scannerService.verifyCaseExport(path);
+      applyServiceMeta(result);
+      pushToast({
+        tone: result.data.accepted ? "success" : "info",
+        title: result.data.accepted
+          ? text({ en: "Integrity check complete", zhTW: "完整性檢查完成" })
+          : text({ en: "This demo file cannot be verified", zhTW: "這份展示檔無法驗證" }),
+        detail: result.data.accepted
+          ? text({ en: "The case package matches its signed integrity record.", zhTW: "案件包與簽署的完整性紀錄一致。" })
+          : text({ en: "No real case package was changed.", zhTW: "沒有更動任何真實案件包。" }),
+      });
+    } catch (error) {
+      recordTechnicalError("verify case export", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "The file could not be verified", zhTW: "目前無法驗證這個檔案" }),
+        detail: text({
+          en: "The file was not changed. Choose it again, or ask the sender for a new case package.",
+          zhTW: "檔案沒有被更動；請重新選擇，或請寄件者提供新的案件包。",
+        }),
+      });
+    } finally {
+      setBusyAction(undefined);
+    }
   };
 
   const verifyReceivedExport = async () => {
@@ -447,9 +631,39 @@ export default function App() {
       return (
         <div className="loading-state" role="status">
           <span className="loading-spinner" aria-hidden="true" />
-          <strong>正在讀取本機案件…</strong>
-          <span>若本機核心尚未提供，將明確切換為展示資料。</span>
+          <strong>{text({ en: "Loading cases from this device…", zhTW: "正在讀取這台電腦上的案件…" })}</strong>
+          <span>{text({
+            en: "If the desktop service is unavailable, the app will clearly switch to demo data.",
+            zhTW: "如果桌面服務無法使用，產品會清楚切換成展示資料。",
+          })}</span>
         </div>
+      );
+    }
+
+    if (page === "start") {
+      return (
+        <StartPage
+          copy={startPageCopy[locale]}
+          setup={
+            <RuntimeSetupAssistant
+              locale={locale}
+              mode={mode}
+              runtime={snapshot?.runtime}
+              status={runtimeSetup}
+              busy={busyAction === "runtime-setup" || runtimeSetup?.active}
+              onSetup={() => void setupManagedRuntime()}
+              onCancel={() => void cancelManagedRuntimeSetup()}
+            />
+          }
+          onChoose={(definition) => {
+            setSelectedUseCase((current) => ({
+              definition,
+              selectionKey: (current?.selectionKey ?? 0) + 1,
+            }));
+            navigate("cases");
+          }}
+          onOpenExistingCase={snapshot?.cases.length ? () => navigate("cases") : undefined}
+        />
       );
     }
 
@@ -458,6 +672,8 @@ export default function App() {
         <CasesPage
           cases={snapshot?.cases ?? []}
           selectedCase={selectedCase}
+          selectedUseCase={selectedUseCase?.definition.id}
+          selectionKey={selectedUseCase?.selectionKey}
           assetCount={workspace?.assets.length ?? 0}
           findingCount={workspace?.findings.length ?? 0}
           unknownSourceCount={workspace?.coverage.filter((item) => item.state === "source_unavailable_unknown").length ?? 0}
@@ -468,6 +684,10 @@ export default function App() {
           busy={["create", "archive-case", "delete-case", "delete-artifacts", "rescan"].includes(busyAction ?? "")}
           artifactCleanupPlan={artifactCleanupPlan}
           artifactCleanupResult={artifactCleanupResult}
+          onClearPreset={() => {
+            setSelectedUseCase(undefined);
+            navigate("start");
+          }}
           onCreate={createCase}
           onArchive={(caseId) => runAction("archive-case", () => scannerService.archiveCase(caseId))}
           onDelete={deleteCase}
@@ -489,9 +709,16 @@ export default function App() {
       return (
         <EmptyState
           icon="cases"
-          title="先建立或選擇案件"
-          description="資產、掃描與 findings 都必須保存在一個可重跑的 Assessment Case 中。"
-          action={<button className="button button--primary" type="button" onClick={() => navigate("cases")}>回到案件</button>}
+          title={text({ en: "Create or choose a case first", zhTW: "請先建立或選擇案件" })}
+          description={text({
+            en: "Targets, scans, evidence, and follow-up checks stay together in one repeatable case.",
+            zhTW: "目標、掃描、證據與後續確認都會保存在同一個可重跑案件裡。",
+          })}
+          action={
+            <button className="button button--primary" type="button" onClick={() => navigate("cases")}>
+              {text({ en: "Go to cases", zhTW: "前往案件" })}
+            </button>
+          }
         />
       );
     }
@@ -548,14 +775,17 @@ export default function App() {
             onUpdateWorkflow={(input) => executeAction("finding-workflow", () => scannerService.updateFindingWorkflow({ caseId: currentCaseId, ...input }))}
             onGroupFindings={(input) => executeAction("finding-group", () => scannerService.groupFindings({
               caseId: currentCaseId,
-              groupedBy: "本機使用者",
+              groupedBy: text({ en: "Local user", zhTW: "本機使用者" }),
               ...input,
             }))}
             onUngroupFindings={(groupId) => runAction("finding-ungroup", () => scannerService.ungroupFindings({
               caseId: currentCaseId,
               groupId,
-              removedBy: "本機使用者",
-              reason: "使用者從 Findings 畫面移除呈現群組；原始 findings 與證據完整保留。",
+              removedBy: text({ en: "Local user", zhTW: "本機使用者" }),
+              reason: text({
+                en: "The user removed this presentation group from the Problems found page; original findings and evidence remain unchanged.",
+                zhTW: "使用者從「發現的問題」頁面移除這個呈現群組；原始問題與證據完整保留。",
+              }),
             }))}
             onOpenCoverage={() => navigate("coverage")}
             onOpenProgress={() => navigate("progress")}
@@ -605,7 +835,7 @@ export default function App() {
         loading={loading}
         onNavigate={navigate}
         onSelectCase={(caseId) => void selectCase(caseId)}
-        demoNotice={notice ?? DEMO_NOTICE}
+        demoNotice={notice ?? getDemoNotice()}
         appUpdate={appUpdate}
         onCheckForUpdate={() => void checkAppUpdate()}
         onInstallUpdate={(version) => void installUpdate(version)}
@@ -618,18 +848,40 @@ export default function App() {
         {content}
       </AppShell>
 
-      <div className="toast-region" aria-live="polite" aria-label="應用程式通知">
+      <div
+        className="toast-region"
+        aria-live="polite"
+        aria-label={text({ en: "Application notifications", zhTW: "應用程式通知" })}
+      >
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast toast--${toast.tone}`}>
             <Icon name={toast.tone === "success" ? "check" : toast.tone === "danger" || toast.tone === "warning" ? "warning" : "info"} size={19} />
             <div><strong>{toast.title}</strong>{toast.detail && <span>{toast.detail}</span>}</div>
-            <button type="button" aria-label="關閉通知" onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))}><Icon name="close" size={16} /></button>
+            <button
+              type="button"
+              aria-label={text({ en: "Close notification", zhTW: "關閉通知" })}
+              onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))}
+            ><Icon name="close" size={16} /></button>
           </div>
         ))}
       </div>
 
-      {busyAction && <span className="sr-only" role="status">正在處理 {busyAction}</span>}
-      {currentRun?.status === "running" && <span className="sr-only" aria-live="polite">掃描目前進度 {currentRun.progress}%</span>}
+      {busyAction && (
+        <span className="sr-only" role="status">
+          {text(
+            { en: "Working on {action}", zhTW: "正在處理：{action}" },
+            { action: text(busyActionCopy[busyAction as keyof typeof busyActionCopy] ?? unknownBusyActionCopy) },
+          )}
+        </span>
+      )}
+      {currentRun?.status === "running" && (
+        <span className="sr-only" aria-live="polite">
+          {text(
+            { en: "Current scan progress: {progress}%", zhTW: "目前掃描進度：{progress}%" },
+            { progress: formatNumber(currentRun.progress, { maximumFractionDigits: 1 }) },
+          )}
+        </span>
+      )}
     </>
   );
 }

@@ -1,6 +1,7 @@
 export type AppMode = "native" | "demo";
 
 export type PageId =
+  | "start"
   | "cases"
   | "coverage"
   | "progress"
@@ -81,6 +82,14 @@ export type KnownAssetKind =
 export interface KnownAssetInput {
   kind: KnownAssetKind;
   value: string;
+  /** Questionnaire intent only. It never authorizes private-network access. */
+  internetExposure?: "public" | "internal";
+  /** Website context only. It is a later scope-form preset, never authorization. */
+  webService?: {
+    protocol: "http" | "https";
+    port: number;
+    path: string;
+  };
 }
 
 export type CoverageState =
@@ -401,6 +410,11 @@ export interface Asset {
   lastObservedAt?: string;
   tags?: string[];
   localInputProfile?: LocalInputProfile;
+  declaredWebService?: {
+    protocol: "http" | "https";
+    port: number;
+    path: string;
+  };
 }
 
 export type ExternalActivity = "passive_public_discovery" | "low_impact_external" | "active_external";
@@ -821,6 +835,7 @@ export interface AppSnapshot {
 export type ManagedRuntimeSetupPhase =
   | "idle"
   | "install"
+  | "prerequisite"
   | "download"
   | "init"
   | "start"
@@ -828,6 +843,20 @@ export type ManagedRuntimeSetupPhase =
   | "completed"
   | "failed"
   | "cancelled";
+
+export type ManagedRuntimeSetupFailureReason =
+  | "windows_wsl_not_installed"
+  | "windows_wsl_optional_feature_disabled"
+  | "windows_wsl_update_required"
+  | "windows_restart_required"
+  | "windows_wsl_command_failed";
+
+export type ManagedRuntimeSetupNextAction =
+  | "install_wsl"
+  | "enable_wsl_optional_features"
+  | "update_wsl"
+  | "restart_windows"
+  | "retry_wsl_check";
 
 export interface ManagedRuntimeSetupStatus {
   phase: ManagedRuntimeSetupPhase;
@@ -839,6 +868,8 @@ export interface ManagedRuntimeSetupStatus {
   resumedFromBytes: number;
   canCancel: boolean;
   canRetry: boolean;
+  failureReason?: ManagedRuntimeSetupFailureReason;
+  nextAction?: ManagedRuntimeSetupNextAction;
   detail: string;
 }
 

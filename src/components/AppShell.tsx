@@ -1,5 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 
+import {
+  classifyRuntimeIssue,
+  useI18n,
+  type RuntimeIssue,
+  type TranslationKey,
+} from "../i18n";
 import { cx, phaseMeta } from "../lib";
 import type {
   AppMode,
@@ -14,28 +20,69 @@ import { AppUpdateControl } from "./AppUpdateControl";
 import { Icon, type IconName } from "./Icon";
 import { StatusPill } from "./StatusPill";
 
-const navigation: Array<{ id: PageId; label: string; hint: string; icon: IconName }> = [
-  { id: "cases", label: "案件", hint: "建立與選擇案件", icon: "cases" },
-  { id: "coverage", label: "資產與涵蓋", hint: "視野與授權範圍", icon: "coverage" },
-  { id: "progress", label: "掃描進度", hint: "引擎工作狀態", icon: "progress" },
-  { id: "findings", label: "問題清單", hint: "優先事項與證據", icon: "findings" },
-  { id: "export", label: "案件匯出", hint: "可交接案件包", icon: "export" },
-  { id: "verification", label: "複驗比較", hint: "修復前後差異", icon: "verification" },
-];
+const navigation = [
+  { id: "start", labelKey: "nav.start.label", hintKey: "nav.start.hint", icon: "spark" },
+  { id: "cases", labelKey: "nav.cases.label", hintKey: "nav.cases.hint", icon: "cases" },
+  { id: "coverage", labelKey: "nav.coverage.label", hintKey: "nav.coverage.hint", icon: "coverage" },
+  { id: "progress", labelKey: "nav.progress.label", hintKey: "nav.progress.hint", icon: "progress" },
+  { id: "findings", labelKey: "nav.findings.label", hintKey: "nav.findings.hint", icon: "findings" },
+  { id: "export", labelKey: "nav.export.label", hintKey: "nav.export.hint", icon: "export" },
+  { id: "verification", labelKey: "nav.verification.label", hintKey: "nav.verification.hint", icon: "verification" },
+] as const satisfies ReadonlyArray<{
+  id: PageId;
+  labelKey: TranslationKey;
+  hintKey: TranslationKey;
+  icon: IconName;
+}>;
 
-const runtimeSetupLabels: Record<ManagedRuntimeSetupPhase, string> = {
-  idle: "尚未開始",
-  install: "安裝並驗證執行環境",
-  download: "下載執行環境映像",
-  init: "初始化隔離虛擬機",
-  start: "啟動隔離虛擬機",
-  verify: "驗證服務可用性",
-  completed: "設定完成",
-  failed: "設定失敗",
-  cancelled: "已取消，可續傳重試",
-};
+const runtimeSetupLabelKeys = {
+  idle: "runtime.phase.idle.label",
+  install: "runtime.phase.install.label",
+  prerequisite: "runtime.phase.prerequisite.label",
+  download: "runtime.phase.download.label",
+  init: "runtime.phase.init.label",
+  start: "runtime.phase.start.label",
+  verify: "runtime.phase.verify.label",
+  completed: "runtime.phase.completed.label",
+  failed: "runtime.phase.failed.label",
+  cancelled: "runtime.phase.cancelled.label",
+} as const satisfies Record<ManagedRuntimeSetupPhase, TranslationKey>;
 
-const exactBytes = (value: number): string => `${new Intl.NumberFormat("zh-TW").format(value)} bytes`;
+const runtimeSetupDetailKeys = {
+  idle: "runtime.phase.idle.detail",
+  install: "runtime.phase.install.detail",
+  prerequisite: "runtime.phase.prerequisite.detail",
+  download: "runtime.phase.download.detail",
+  init: "runtime.phase.init.detail",
+  start: "runtime.phase.start.detail",
+  verify: "runtime.phase.verify.detail",
+  completed: "runtime.phase.completed.detail",
+  failed: "runtime.phase.failed.detail",
+  cancelled: "runtime.phase.cancelled.detail",
+} as const satisfies Record<ManagedRuntimeSetupPhase, TranslationKey>;
+
+const runtimeIssueKeys = {
+  wsl: "runtime.prerequisite.wsl",
+  virtualization: "runtime.prerequisite.virtualization",
+  permission: "runtime.prerequisite.permission",
+  network: "runtime.prerequisite.network",
+  storage: "runtime.prerequisite.storage",
+  generic: "runtime.prerequisite.generic",
+} as const satisfies Record<RuntimeIssue, TranslationKey>;
+
+const casePhaseLabelKeys = {
+  draft: "status.case.draft",
+  discovering: "status.case.discovering",
+  scope_review: "status.case.scopeReview",
+  ready: "status.case.ready",
+  scanning: "status.case.scanning",
+  needs_attention: "status.case.needsAttention",
+  ready_for_handoff: "status.case.readyForHandoff",
+  verifying: "status.case.verifying",
+  archived: "status.case.archived",
+  complete: "status.case.complete",
+  verification_due: "status.case.verificationDue",
+} as const satisfies Record<AssessmentCase["phase"], TranslationKey>;
 
 interface AppShellProps {
   children: ReactNode;
@@ -66,7 +113,6 @@ export function AppShell({
   loading,
   onNavigate,
   onSelectCase,
-  demoNotice,
   appUpdate,
   onCheckForUpdate,
   onInstallUpdate,
@@ -77,24 +123,33 @@ export function AppShell({
   onCancelRuntime,
 }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { locale, setLocale, t, formatNumber } = useI18n();
+
+  const exactBytes = (value: number): string =>
+    t("common.bytes", { value: formatNumber(value) });
+  const runtimeIssue = runtimeIssueKeys[
+    runtimeSetup?.failureReason
+      ? "wsl"
+      : classifyRuntimeIssue(runtime?.prerequisite, runtime?.detail, runtimeSetup?.detail)
+  ];
 
   useEffect(() => setMobileOpen(false), [page]);
 
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#main-content">跳到主要內容</a>
+      <a className="skip-link" href="#main-content">{t("shell.skipToContent")}</a>
 
-      <aside className={cx("sidebar", mobileOpen && "sidebar--open")} aria-label="主要導覽">
+      <aside className={cx("sidebar", mobileOpen && "sidebar--open")} aria-label={t("shell.primaryNavigation")}>
         <div className="brand">
           <span className="brand__mark"><Icon name="shield" size={22} /></span>
           <span className="brand__copy">
             <strong>ai-security-scanner</strong>
-            <small>local casework</small>
+            <small>{t("shell.brandSubtitle")}</small>
           </span>
           <button
             className="icon-button sidebar__close"
             type="button"
-            aria-label="關閉導覽"
+            aria-label={t("shell.closeNavigation")}
             onClick={() => setMobileOpen(false)}
           >
             <Icon name="close" />
@@ -102,7 +157,7 @@ export function AppShell({
         </div>
 
         <div className="sidebar__case">
-          <label htmlFor="case-switcher">目前案件</label>
+          <label htmlFor="case-switcher">{t("shell.currentCase")}</label>
           <div className="select-wrap select-wrap--dark">
             <select
               id="case-switcher"
@@ -110,7 +165,7 @@ export function AppShell({
               onChange={(event) => onSelectCase(event.target.value)}
               disabled={loading || cases.length === 0}
             >
-              {cases.length === 0 && <option value="">尚無案件</option>}
+              {cases.length === 0 && <option value="">{t("shell.noCases")}</option>}
               {cases.map((assessmentCase) => (
                 <option key={assessmentCase.id} value={assessmentCase.id}>
                   {assessmentCase.name}
@@ -121,11 +176,30 @@ export function AppShell({
           </div>
           {selectedCase && (
             <StatusPill
-              label={phaseMeta[selectedCase.phase].label}
+              label={t(casePhaseLabelKeys[selectedCase.phase])}
               tone={phaseMeta[selectedCase.phase].tone}
               className="sidebar__phase"
             />
           )}
+        </div>
+
+        <div className="language-switcher" role="group" aria-label={t("language.label")}>
+          <button
+            type="button"
+            className={cx(locale === "en" && "language-switcher__active")}
+            aria-pressed={locale === "en"}
+            onClick={() => setLocale("en")}
+          >
+            {t("language.english")}
+          </button>
+          <button
+            type="button"
+            className={cx(locale === "zh-TW" && "language-switcher__active")}
+            aria-pressed={locale === "zh-TW"}
+            onClick={() => setLocale("zh-TW")}
+          >
+            {t("language.traditionalChinese")}
+          </button>
         </div>
 
         <nav className="nav-list">
@@ -139,8 +213,8 @@ export function AppShell({
             >
               <Icon name={item.icon} size={20} />
               <span>
-                <strong>{item.label}</strong>
-                <small>{item.hint}</small>
+                <strong>{t(item.labelKey)}</strong>
+                <small>{t(item.hintKey)}</small>
               </span>
             </button>
           ))}
@@ -150,41 +224,45 @@ export function AppShell({
           <div className="privacy-note">
             <Icon name="lock" size={17} />
             <span>
-              <strong>資料留在本機</strong>
-              <small>只有你主動匯出時才會離開</small>
+              <strong>{t("shell.privacy.title")}</strong>
+              <small>{t("shell.privacy.detail")}</small>
             </span>
           </div>
           <span className={cx("runtime-badge", mode === "native" && runtime?.available ? "runtime-badge--native" : "runtime-badge--demo")}>
             <span aria-hidden="true" />
             {mode === "native"
               ? runtime?.available
-                ? `隔離執行環境已就緒 · ${runtime.provider}`
-                : `隔離執行環境未就緒 · ${runtime?.phase ?? "unknown"}`
-              : "展示模式"}
+                ? t("runtime.badge.ready", { provider: runtime.provider })
+                : t("runtime.badge.needsSetup")
+              : t("runtime.badge.demo")}
           </span>
           {mode === "native" && runtime && !runtime.available && (
             <div className="runtime-setup" aria-live="polite">
-              <small>{runtime.detail}</small>
-              {runtime.prerequisite && <small>必要條件：{runtime.prerequisite}</small>}
+              {!runtimeSetup?.active && (
+                <div className="runtime-setup__guidance">
+                  <strong>{t("runtime.nextStep")}</strong>
+                  <small>{t(runtimeIssue)}</small>
+                </div>
+              )}
               {runtimeSetup && runtimeSetup.phase !== "idle" && (
                 <div className="runtime-setup__progress" role="status">
-                  <strong>{runtimeSetupLabels[runtimeSetup.phase]}</strong>
-                  <small>{runtimeSetup.detail}</small>
+                  <strong>{t(runtimeSetupLabelKeys[runtimeSetup.phase])}</strong>
+                  <small>{t(runtimeSetupDetailKeys[runtimeSetup.phase])}</small>
                   {runtimeSetup.totalBytes !== undefined && (
                     <>
                       <progress
                         max={runtimeSetup.totalBytes}
                         value={Math.min(runtimeSetup.receivedBytes, runtimeSetup.totalBytes)}
-                        aria-label="隔離執行環境映像下載進度"
+                        aria-label={t("runtime.download.progress")}
                       />
                       <small className="runtime-setup__bytes">
                         {exactBytes(runtimeSetup.receivedBytes)} / {exactBytes(runtimeSetup.totalBytes)}
                         {runtimeSetup.progressPercent !== undefined
-                          ? ` · ${runtimeSetup.progressPercent.toFixed(2)}%`
+                          ? ` · ${formatNumber(runtimeSetup.progressPercent, { maximumFractionDigits: 2 })}%`
                           : ""}
                       </small>
                       {runtimeSetup.resumedFromBytes > 0 && (
-                        <small>已從 {exactBytes(runtimeSetup.resumedFromBytes)} 的部分檔續傳</small>
+                        <small>{t("runtime.download.resumed", { bytes: exactBytes(runtimeSetup.resumedFromBytes) })}</small>
                       )}
                     </>
                   )}
@@ -198,14 +276,14 @@ export function AppShell({
                   onClick={onCancelRuntime}
                 >
                   <Icon name="close" size={15} />
-                  {runtimeSetup.cancelRequested ? "正在取消…" : "取消設定並保留下載進度"}
+                  {runtimeSetup.cancelRequested ? t("runtime.cancel.pending") : t("runtime.cancel.action")}
                 </button>
               ) : (
                 <button className="button button--small" type="button" disabled={runtimeBusy} onClick={onSetupRuntime}>
                   <Icon name="progress" size={15} />
                   {runtimeSetup?.canRetry && ["failed", "cancelled"].includes(runtimeSetup.phase)
-                    ? "重試設定（可續傳）"
-                    : "設定隔離執行環境"}
+                    ? t("runtime.setup.retry")
+                    : t("runtime.setup.action")}
                 </button>
               )}
             </div>
@@ -216,7 +294,7 @@ export function AppShell({
       {mobileOpen && (
         <button
           className="sidebar-backdrop"
-          aria-label="關閉導覽"
+          aria-label={t("shell.closeNavigation")}
           type="button"
           onClick={() => setMobileOpen(false)}
         />
@@ -227,13 +305,13 @@ export function AppShell({
           <button
             className="icon-button topbar__menu"
             type="button"
-            aria-label="開啟導覽"
+            aria-label={t("shell.openNavigation")}
             onClick={() => setMobileOpen(true)}
           >
             <Icon name="menu" />
           </button>
           <div className="topbar__context">
-            <span>{navigation.find((item) => item.id === page)?.label}</span>
+            <span>{t(navigation.find((item) => item.id === page)?.labelKey ?? "nav.start.label")}</span>
             {selectedCase && <strong>{selectedCase.name}</strong>}
           </div>
           <div className="topbar__right">
@@ -242,7 +320,7 @@ export function AppShell({
               onCheck={onCheckForUpdate}
               onInstall={onInstallUpdate}
             />
-            <span className="knowledge-chip"><Icon name="clock" size={15} /> 知識日期依案件記錄</span>
+            <span className="knowledge-chip"><Icon name="clock" size={15} /> {t("shell.knowledgeDate")}</span>
           </div>
         </header>
 
@@ -250,8 +328,8 @@ export function AppShell({
           <div className="demo-banner" role="status">
             <Icon name="spark" size={19} />
             <div>
-              <strong>{selectedCase?.isDemo ? "目前是展示案件，不是真實掃描" : "展示資料，不是真實掃描"}</strong>
-              <span>{demoNotice}</span>
+              <strong>{selectedCase?.isDemo ? t("shell.demo.selectedTitle") : t("shell.demo.title")}</strong>
+              <span>{t("shell.demo.fallback")}</span>
             </div>
           </div>
         )}

@@ -1,3 +1,4 @@
+import { useI18n, type Translator } from "../i18n";
 import type { AppUpdateState } from "../services/appUpdater";
 import { Icon } from "./Icon";
 
@@ -7,38 +8,45 @@ interface AppUpdateControlProps {
   onInstall: (version: string) => void;
 }
 
-const progressLabel = (state: AppUpdateState): string => {
-  if (state.phase === "installing") return "正在驗證並安裝…";
-  if (state.phase === "restarting") return "即將重新啟動…";
+const progressLabel = (
+  state: AppUpdateState,
+  t: Translator,
+  formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string,
+): string => {
+  if (state.phase === "installing") return t("update.installing");
+  if (state.phase === "restarting") return t("update.restarting");
   if (state.totalBytes && state.downloadedBytes !== undefined) {
     const percent = Math.min(100, Math.floor((state.downloadedBytes / state.totalBytes) * 100));
-    return `下載更新 ${percent}%`;
+    return t("update.downloadingPercent", { percent: formatNumber(percent) });
   }
-  return "正在下載更新…";
+  return t("update.downloading");
 };
 
 export function AppUpdateControl({ state, onCheck, onInstall }: AppUpdateControlProps) {
+  const { t, formatNumber } = useI18n();
+
   if (state.phase === "unavailable") return null;
 
   if (["downloading", "installing", "restarting"].includes(state.phase)) {
     return (
       <span className="update-control update-control--busy" role="status">
         <span className="loading-spinner" aria-hidden="true" />
-        {progressLabel(state)}
+        {progressLabel(state, t, formatNumber)}
       </span>
     );
   }
 
   if (state.phase === "available" && state.availableVersion) {
+    const availableVersion = state.availableVersion;
     return (
       <button
         className="update-control update-control--available"
         type="button"
-        title="更新只會替換已簽章的應用程式版本；既有案件與歷史 provenance 不會被改寫。"
-        onClick={() => onInstall(state.availableVersion!)}
+        title={t("update.availableHelp")}
+        onClick={() => onInstall(availableVersion)}
       >
         <Icon name="download" size={15} />
-        更新至 {state.availableVersion}
+        {t("update.available", { version: availableVersion })}
       </button>
     );
   }
@@ -48,11 +56,11 @@ export function AppUpdateControl({ state, onCheck, onInstall }: AppUpdateControl
       <button
         className="update-control update-control--error"
         type="button"
-        title={state.message}
+        title={t("update.errorHelp")}
         onClick={onCheck}
       >
         <Icon name="warning" size={15} />
-        更新檢查失敗，重試
+        {t("update.error")}
       </button>
     );
   }
@@ -63,10 +71,14 @@ export function AppUpdateControl({ state, onCheck, onInstall }: AppUpdateControl
       type="button"
       disabled={state.phase === "checking"}
       onClick={onCheck}
-      title={state.currentVersion ? `目前版本 ${state.currentVersion}` : "檢查已簽章的應用程式更新"}
+      title={state.currentVersion
+        ? t("update.currentHelp", { version: state.currentVersion })
+        : t("update.checkHelp")}
     >
       <Icon name={state.phase === "current" ? "check" : "refresh"} size={15} />
-      {state.phase === "checking" ? "正在檢查更新…" : `版本 ${state.currentVersion ?? "—"}`}
+      {state.phase === "checking"
+        ? t("update.checking")
+        : t("update.version", { version: state.currentVersion ?? t("common.unknownVersion") })}
     </button>
   );
 }

@@ -1146,6 +1146,29 @@ pub enum DeclaredAssetKind {
 pub struct DeclaredAssetInput {
     pub kind: DeclaredAssetKind,
     pub value: String,
+    /// Questionnaire intent only. Private targets still require an explicit
+    /// sensitive-network scope grant before any network execution.
+    #[serde(default)]
+    pub internet_exposed: Option<bool>,
+    /// Optional website context used only to prefill a later explicit scope
+    /// decision. It never creates a scope grant.
+    #[serde(default)]
+    pub web_service: Option<DeclaredWebServiceInput>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclaredWebProtocol {
+    Http,
+    Https,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredWebServiceInput {
+    pub protocol: DeclaredWebProtocol,
+    pub port: u16,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -244,6 +244,41 @@ a {
   margin: 10px 2px 0;
 }
 
+.language-switcher {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin: 0 17px 10px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.language-switcher button {
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 7px;
+  color: #9db2b8;
+  background: transparent;
+  font: inherit;
+  font-size: 0.71rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.language-switcher button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.language-switcher button.language-switcher__active {
+  color: #17343a;
+  background: var(--accent-bright);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+}
+
 .nav-list {
   display: flex;
   flex: 1;
@@ -391,6 +426,21 @@ a {
 .runtime-setup .button {
   width: 100%;
   justify-content: center;
+}
+
+.runtime-setup__guidance {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid rgba(201, 239, 113, 0.22);
+  border-radius: 8px;
+  color: #c8d6d8;
+  background: rgba(201, 239, 113, 0.07);
+}
+
+.runtime-setup__guidance strong {
+  color: #eaf5d4;
+  font-size: 0.72rem;
 }
 
 .runtime-setup__progress {

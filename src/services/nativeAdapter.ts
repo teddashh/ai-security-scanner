@@ -28,6 +28,10 @@ import type {
   FindingGroupEvent,
   FindingWorkflowState,
   LocalInputProfile,
+  ManagedRuntimeSetupFailureReason,
+  ManagedRuntimeSetupNextAction,
+  ManagedRuntimeSetupPhase,
+  ManagedRuntimeSetupStatus,
   RunStatus,
   ScopeGrant,
   ScopeMode,
@@ -36,6 +40,13 @@ import type {
   TransportProtocol,
   VerificationSummary,
 } from "../types";
+import { getActiveLocale } from "../i18n/core";
+
+const adapterText = (en: string, zhTW: string): string =>
+  getActiveLocale() === "en" ? en : zhTW;
+
+const localizedList = (values: string[]): string =>
+  values.join(getActiveLocale() === "en" ? ", " : "、");
 
 /** Snake-case DTOs emitted by src-tauri/src/domain.rs. */
 export interface NativeCaseSummary {
@@ -402,6 +413,56 @@ export interface NativeAppSnapshot {
   engine_count: number;
 }
 
+export interface NativeManagedRuntimeSetupStatus {
+  phase: ManagedRuntimeSetupPhase;
+  active: boolean;
+  cancel_requested: boolean;
+  received_bytes: number;
+  total_bytes: number | null;
+  progress_percent: number | null;
+  resumed_from_bytes: number;
+  can_cancel: boolean;
+  can_retry: boolean;
+  failure_reason: ManagedRuntimeSetupFailureReason | null;
+  next_action: ManagedRuntimeSetupNextAction | null;
+  detail: string;
+}
+
+const managedRuntimeRecoveryActions = {
+  windows_wsl_not_installed: "install_wsl",
+  windows_wsl_optional_feature_disabled: "enable_wsl_optional_features",
+  windows_wsl_update_required: "update_wsl",
+  windows_restart_required: "restart_windows",
+  windows_wsl_command_failed: "retry_wsl_check",
+} as const satisfies Record<ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupNextAction>;
+
+/**
+ * Adapts the snake-case Tauri DTO and enforces its terminal-failure contract.
+ * A stale or partially mismatched recovery pair is deliberately hidden rather
+ * than presenting the user with the wrong Windows instruction.
+ */
+export const adaptManagedRuntimeSetupStatus = (
+  status: NativeManagedRuntimeSetupStatus,
+): ManagedRuntimeSetupStatus => {
+  const hasValidRecovery = status.phase === "failed"
+    && status.failure_reason !== null
+    && managedRuntimeRecoveryActions[status.failure_reason] === status.next_action;
+  return {
+    phase: status.phase,
+    active: status.active,
+    cancelRequested: status.cancel_requested,
+    receivedBytes: status.received_bytes,
+    totalBytes: status.total_bytes ?? undefined,
+    progressPercent: status.progress_percent ?? undefined,
+    resumedFromBytes: status.resumed_from_bytes,
+    canCancel: status.can_cancel,
+    canRetry: status.can_retry,
+    failureReason: hasValidRecovery ? status.failure_reason ?? undefined : undefined,
+    nextAction: hasValidRecovery ? status.next_action ?? undefined : undefined,
+    detail: status.detail,
+  };
+};
+
 const unique = <T,>(values: T[]): T[] => [...new Set(values)];
 
 const phaseMap: Record<string, CasePhase> = {
@@ -499,6 +560,28 @@ const localInputProfileFromAsset = (asset: NativeAsset): LocalInputProfile | und
   return typeof profile === "string" && localInputProfiles.includes(profile as LocalInputProfile)
     ? profile as LocalInputProfile
     : undefined;
+};
+
+export const adaptDeclaredWebServiceMetadata = (
+  metadata: Record<string, unknown> | undefined,
+): Asset["declaredWebService"] | undefined => {
+  const raw = metadata?.declared_web_service;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const candidate = raw as Record<string, unknown>;
+  const protocol = candidate.protocol;
+  const port = candidate.port;
+  const path = candidate.path;
+  if (
+    (protocol !== "http" && protocol !== "https")
+    || !Number.isInteger(port)
+    || (port as number) < 1
+    || (port as number) > 65_535
+    || typeof path !== "string"
+    || path.length > 2_048
+    || !path.startsWith("/")
+    || /[?#\u0000-\u001f\u007f]/u.test(path)
+  ) return undefined;
+  return { protocol, port: port as number, path };
 };
 
 const mapCoverageState = (status: string): CoverageState => {
@@ -733,8 +816,8 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
     id: manifest.id,
     name: manifest.display_name,
     category: manifest.category,
-    version: manifest.engine_version ?? manifest.rule_version ?? "未回報",
-    imageDigest: manifest.image?.digest ?? "未提供映像摘要",
+    version: manifest.engine_version ?? manifest.rule_version ?? adapterText("Not reported", "未回報"),
+    imageDigest: manifest.image?.digest ?? adapterText("No image digest", "未提供映像摘要"),
     license: manifest.license_spdx,
     redistribution: distribution,
     platforms,
@@ -825,6 +908,7 @@ export const adaptNativeCase = (
       findingCount: findingCount.get(asset.id) ?? 0,
       lastObservedAt: entry?.observed_at ?? undefined,
       localInputProfile: localInputProfileFromAsset(asset),
+      declaredWebService: adaptDeclaredWebServiceMetadata(asset.metadata),
     };
   });
   const assetById = new Map(assets.map((asset) => [asset.id, asset]));
@@ -838,7 +922,7 @@ export const adaptNativeCase = (
       fingerprint: finding.fingerprint,
       assetId: finding.asset_ids[0] ?? "unknown-asset",
       assetIds: finding.asset_ids,
-      assetName: assetNames.join("、") || "未知資產",
+      assetName: localizedList(assetNames) || adapterText("Unknown asset", "未知資產"),
       title: finding.title,
       summary: finding.plain_language_summary,
       impact: finding.possible_impact,
@@ -925,8 +1009,8 @@ export const adaptNativeCase = (
         engineId: engineRun.engine_id,
         engineName: manifest?.name ?? engineRun.engine_id,
         category: manifest?.category ?? "unknown",
-        version: engineRun.engine_version ?? manifest?.version ?? "未回報",
-        digest: engineRun.image_digest ?? manifest?.imageDigest ?? "未提供映像摘要",
+        version: engineRun.engine_version ?? manifest?.version ?? adapterText("Not reported", "未回報"),
+        digest: engineRun.image_digest ?? manifest?.imageDigest ?? adapterText("No image digest", "未提供映像摘要"),
         ruleVersion: engineRun.rule_version ?? undefined,
         adapterVersion: engineRun.adapter_version,
         manifestSchemaVersion: engineRun.manifest_schema_version ?? undefined,
@@ -960,7 +1044,9 @@ export const adaptNativeCase = (
         rawArtifactCount: engineRun.raw_artifact_ids?.length ?? 0,
         findingCount: exactFindingCount,
         findingCountKnown: !hasLegacyUnattributedEvidence,
-        message: engineRun.error_message ?? (engineRun.error_code ? `錯誤代碼：${engineRun.error_code}` : engineRun.phase),
+        message: engineRun.error_message ?? (engineRun.error_code
+          ? adapterText(`Error code: ${engineRun.error_code}`, `錯誤代碼：${engineRun.error_code}`)
+          : engineRun.phase),
         errorCode: engineRun.error_code ?? undefined,
         checkpoint: parseCheckpoint(engineRun.resume_token, engineRun),
         resumable: Boolean(engineRun.resume_token) && ["paused", "failed", "partial", "cancelled"].includes(status),
@@ -974,7 +1060,7 @@ export const adaptNativeCase = (
     return {
       id: run.id,
       caseId: run.case_id,
-      label: `第 ${run.sequence} 次掃描`,
+      label: adapterText(`Scan ${run.sequence}`, `第 ${run.sequence} 次掃描`),
       verificationBaselineRunId: run.verification_baseline_run_id ?? undefined,
       status: runStatus(engineRuns),
       progress: engineRuns.length > 0
@@ -1042,7 +1128,11 @@ export const adaptNativeCase = (
           id: `${comparison.id}-${index}`,
           findingId: diff.current_finding_id ?? diff.baseline_finding_id ?? undefined,
           title: sourceFinding?.title ?? diff.fingerprint,
-          assetName: sourceFinding?.asset_ids.map((id) => assetById.get(id)?.name).filter(Boolean).join("、") || "未知資產",
+          assetName: localizedList(
+            sourceFinding?.asset_ids
+              .map((id) => assetById.get(id)?.name)
+              .filter((name): name is string => Boolean(name)) ?? [],
+          ) || adapterText("Unknown asset", "未知資產"),
           state: statusMap[diff.status] ?? "unverifiable",
           beforeSeverity: diff.baseline_severity ? mapSeverity(diff.baseline_severity) : undefined,
           afterSeverity: diff.current_severity ? mapSeverity(diff.current_severity) : undefined,

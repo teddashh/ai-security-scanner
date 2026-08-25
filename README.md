@@ -1,168 +1,198 @@
 # ai-security-scanner
 
-`ai-security-scanner` is a local-first desktop workspace for repeatable security assessment cases. It discovers candidate assets, records explicit scan scope, dispatches appropriate open-source engines, preserves evidence, translates findings into plain language, exports a handoff package, and compares a later verification run with the original case.
+[繁體中文說明](README.zh-TW.md)
 
-It does **not** promise that an organization is secure. It does **not** produce an ISO 27001 or NIST audit score. Framework references are coordinates that help a user and a security professional discuss a finding; they are not compliance conclusions.
+`ai-security-scanner` is a local-first desktop application that turns a security check into a repeatable case. Tell it what you want to inspect, confirm the exact scope, run the applicable open-source engines in an isolated local environment, review the evidence in plain language, export a handoff package, and compare a later verification run with the original result.
 
-> Release line: v0.2.0. This source tree prepares the product-completion line with typed immutable local-input snapshots, exact-source provider discovery, exact-asset AWS/Azure/GCP Prowler execution, the local case and evidence lifecycle, CLI, six-view desktop interface, managed runtime, and clearly labeled synthetic demo data. [`engines/catalog.json`](engines/catalog.json) is authoritative for each engine's integration status, runnable state, provider applicability, immutable artifact, adapter, knowledge window, and license disposition. Source text alone does not prove that a GitHub Release, engine image, platform package, or required usability study was completed; published artifacts carry the signed evidence described in the [release documentation](docs/release/README.md). An engine is runnable only after its manifest, runtime, parser, evidence path, coverage behavior, export, and verification path work end to end.
+It does **not** promise that an organization is secure, replace a qualified security professional, or produce an ISO 27001 or NIST certification score. A framework reference is a coordinate for discussion, not a compliance conclusion. “No finding” is also not the same as “everything was checked.”
 
-## Product flow
+> Release line: v0.2.0. This is a source candidate, not a published release. Automated cross-platform build and fresh-host qualification have completed, but the required live first-run study with an IAM-naive participant and the subsequent formal QC/code review have not. There is therefore no public `v0.2.0` tag or GitHub Release yet. Source text, screenshots, demo data, and automated tests must not be mistaken for that human-study evidence.
 
-1. Create an assessment case and describe the organization and data types.
-2. Connect inventory sources using provider-hosted read-only authorization where possible.
-3. Discover candidate assets from sources that were actually connected.
-4. Confirm asset ownership and the allowed scan mode per asset.
-5. Automatically run only the engines applicable to those assets and permissions.
-6. Preserve raw evidence and normalize every result into the canonical finding model.
-7. Show a short priority view without hiding the complete finding list, and let a reviewer group related findings without merging them.
-8. Export a local evidence package for any chosen security professional.
+## Start with what you want to check
+
+You do not need to choose scanner names. Choose the situation that sounds like yours:
+
+| Use case | What you bring | What the product does—and its boundary |
+| --- | --- | --- |
+| A website or API that is already online | An exact URL, proof that you may test it, and the allowed scan intensity | Checks approved reachable services and vulnerabilities with target/rate limits. It does not test business logic or replace a penetration test. |
+| External IP addresses or domains | Exact public IPs/domains, ownership or authorization evidence, and exclusions | Checks only the approved targets. It does not expand into neighboring addresses or call an unreachable target secure. |
+| An internal IT environment | Exact internal targets or configuration snapshots, a reachable test location, limits, and IT-owner approval | Runs bounded checks against approved systems or analyzes attached evidence. It does not sweep an undefined private network, install agents, or change devices. |
+| Source code you have written | A read-only local project or repository snapshot | Checks code and secret patterns locally. It does not upload code, push changes, or verify discovered secrets against live services. |
+| Infrastructure as code | Terraform, CloudFormation, Kubernetes YAML, or another local IaC project | Checks selected files for risky defaults and configuration mistakes. It does not deploy or modify them. |
+| AWS, Azure, GCP, or Microsoft 365 | One exact account, subscription, project, or tenant plus permission to assess it | Uses a provider-hosted, short-lived, read-only sign-in path. It does not ask a scanner for administrator access or change cloud settings. |
+| A container image | One exact local image artifact or OCI layout with a fixed digest | Finds known vulnerable packages and produces an SBOM with pinned offline data. It does not run the image, log in to a registry, or scan an ambiguous `latest` tag. |
+| Kubernetes configuration | Selected manifests or an approved immutable node-configuration snapshot | Checks workload posture and the bounded node CIS profile. It does not request cluster-admin access, mount a live host, or provide continuous runtime monitoring. |
+
+Choosing a use case prepares the next setup screen; it never authorizes a scan. The application still requires exact targets, ownership, allowed activity, and limits before contacting a system. Other areas stay available in the same case, so this simpler start does not reduce product scope.
+
+## What a complete case looks like
+
+1. Choose what you want to check and create a case.
+2. Add an exact local artifact, target list, or provider source.
+3. Confirm ownership and what kind of contact is allowed for each target.
+4. Let the application choose only the engines that match those assets and permissions.
+5. Keep raw evidence and normalized findings together in the local case.
+6. Review urgent items without hiding the complete finding list.
+7. See the difference between scanned, incomplete, not authorized, not applicable, and unknown coverage.
+8. Export a local handoff package for an independent security professional.
 9. Re-run the same case after remediation and compare resolved, persistent, new, changed, and unverifiable results.
 
-The coverage ledger deliberately distinguishes “a source was checked and nothing was found” from “no source was connected, so the state is unknown,” and from a reasoned questionnaire declaration that an area is not applicable. Unknown or not-applicable scope is never presented as a green result. Known targets entered during case creation remain untrusted candidates, and requested assessment activities remain intent—not scan authorization.
+A source that was checked and contained no assets is different from a source that was never connected. The coverage ledger preserves that distinction and never paints unknown coverage green.
 
-## Required engine families
+## Privacy, credentials, and scan authorization
 
-The v0.2.0 required-engine catalog covers:
+- Case data and raw evidence stay on the workstation unless the user explicitly exports them.
+- Scanner engines never receive administrator credentials.
+- Cloud access prefers the provider's official short-lived, read-only authorization flow. Any administrative bootstrap work runs in a separate one-shot broker and is not passed to scanners.
+- Public and internal targets require a traceable, asset-level authorization record. Discovery is not silently treated as permission for active testing.
+- Engines run rootless in isolated containers with read-only inputs, no Docker socket, no host root, limited resources, and narrowly declared network destinations.
+- The product offers explanations and verification guidance, not one-click remediation.
+- AI integrations may explain status or use the constrained local CLI. They cannot widen scope, receive secrets, authorize a target, or bypass the same product controls.
 
-- Cloud inventory: CloudQuery, Steampipe
-- Cloud configuration and IAM: Prowler, ScoutSuite, Cloudsplaining
-- Microsoft 365: ScubaGear, Maester
-- External attack surface: Naabu, httpx, Nuclei, Greenbone
-- Code and secrets: Semgrep, Gitleaks, TruffleHog
-- Infrastructure as code: Checkov, KICS
-- Containers and SBOM: Trivy, Grype, Syft
-- Kubernetes: Kubescape, kube-bench
+Read the [threat model](docs/threat-model.md), [provider authorization contract](docs/provider-authorization.md), and [security policy](SECURITY.md) before using the project with sensitive systems. Report vulnerabilities according to `SECURITY.md`, not in a public issue.
 
-Each third-party tool remains an independently licensed process or container. See [the engine catalog](docs/engine-catalog.md) and [third-party inventory](THIRD_PARTY.md). A public Git repository is not, by itself, permission to redistribute every binary, image, feed, template, database, or trademark.
+## Managed isolated runtime
 
-## Repository layout
+Installed desktop packages carry a pinned, product-managed Podman machine client and platform helpers. The user does not separately install Docker, Podman, Python, PowerShell modules, vulnerability databases, or individual engine CLIs.
 
-```text
-src/                         React desktop UI (six primary views)
-src-tauri/                   Rust/Tauri local case service and CLI
-engines/catalog.json         Versioned engine registry metadata
-docs/product-spec.md         Final product requirements and completion criteria
-docs/architecture.md         Process boundaries, domain model, IPC, and runtime design
-docs/threat-model.md         Credential, scanner, evidence, export, and AI boundaries
-docs/engine-catalog.md       Required and research engine inventory
-THIRD_PARTY.md               License and redistribution review ledger
-.upstreams/                  Local shallow clones; intentionally ignored by Git
-```
+First setup verifies the packaged runtime and checks host prerequisites **before** downloading the checksum-locked machine image. It then initializes a private rootless machine and reports each step. Downloads can be cancelled and resumed. The application does not modify the system `PATH`, run a package manager, enable operating-system features, or request administrator privileges for this runtime.
+
+On Windows, a failed WSL check is shown as one plain-language next action: install WSL, enable its optional components, update it, restart Windows, or retry the check. The setup card can copy the applicable Microsoft command, such as `wsl --install --no-distribution` or `wsl --update`, and links to Microsoft's instructions. The application does not execute those privileged operating-system changes itself. A missing WSL prerequisite therefore stops setup before the roughly 257 MB machine-image download begins.
+
+| Desktop host | Managed provider | Host prerequisite |
+| --- | --- | --- |
+| Linux x86-64 | Rootless Podman machine with packaged QEMU | None; KVM is used when available, otherwise slower QEMU software emulation is used. |
+| macOS Intel or Apple silicon | Rootless Podman machine with Apple virtualization | A supported macOS release with Apple virtualization support. |
+| Windows x86-64 | Rootless Podman machine with WSL | WSL 2. If it is unavailable, setup stops before the image download and shows the exact Windows action; the application never enables optional features itself. |
+
+Docker or a user-installed Podman can be selected only as an explicitly labeled compatibility provider; they are not required or silently mixed with managed runs. See the [managed runtime contract](docs/managed-runtime.md) for lifecycle, recovery, verification, and exact cleanup behavior.
+
+## Included assessment families
+
+The required `v0.2.0` catalog covers these end-to-end engine families:
+
+- cloud inventory: CloudQuery and Steampipe;
+- cloud configuration and identity: Prowler, ScoutSuite, and Cloudsplaining;
+- Microsoft 365: ScubaGear and Maester;
+- external surface and network vulnerability checks: Naabu, httpx, Nuclei, and Greenbone;
+- source code and secrets: Semgrep, Gitleaks, and TruffleHog;
+- infrastructure as code: Checkov and KICS;
+- container packages and SBOMs: Trivy, Grype, and Syft; and
+- Kubernetes posture: Kubescape and kube-bench.
+
+Each engine is a separately licensed process or container with a pinned artifact, rules/data provenance, permission profile, parser, evidence path, coverage behavior, export mapping, and verification path. The machine-readable [`engines/catalog.json`](engines/catalog.json) is authoritative for whether an engine is integrated, runnable, applicable to a provider, within its knowledge window, and approved for a particular distribution mode. A repository URL or friendly sentence never upgrades a blocked catalog entry.
+
+See the [engine catalog guide](docs/engine-catalog.md) and [third-party inventory](THIRD_PARTY.md). Third-party code, images, templates, rules, feeds, and vulnerability databases keep their own licenses and are not relicensed by this project.
+
+## Demo mode
+
+Running the Vite interface in a browser shows a clearly marked synthetic demo. It does not start a scanner and it does not represent a real assessment. Native desktop builds use the Rust local case service and managed runtime.
 
 ## Local development
 
-Prerequisites for a source checkout:
+Source-checkout prerequisites:
 
-- Node.js 24+
-- Rust 1.98 (the release and CI toolchain)
-- Tauri platform dependencies for desktop compilation
+- Node.js 24 or newer;
+- Rust 1.98, matching the release and CI toolchain; and
+- Tauri's platform build dependencies when compiling the desktop shell.
 
-Supported desktop installers include the release-pinned `managed_local` runtime, so an end user
-does not separately install Docker, Podman, Python, PowerShell modules, databases, or individual
-engine CLIs. A developer may still use an existing Docker or Podman installation as an explicitly
-labeled compatibility provider.
+Install dependencies and verify the web interface:
 
-Every installer also places `ai-security-scanner-cli` beside the desktop executable, and each
-GitHub Release publishes a separately downloadable copy for every supported platform. Installers
-do not add the CLI to `PATH`. Live scan controls remain in the desktop process so its capability
-session and worker state cannot diverge from a second process; the CLI handles local planning,
-inspection, export, verification records, managed-runtime lifecycle, and exact cleanup.
-
-Install and build the web interface:
-
-```bash
-npm install
+```sh
+npm ci
+npm run test:frontend
 npm run typecheck
 npm run build
 ```
 
-Run the core and CLI test suite without desktop system libraries:
+Run the Rust core and CLI suite without desktop system libraries:
 
-```bash
+```sh
 cargo test --workspace --no-default-features --features cli
 ```
 
-Inspect local runtime readiness:
+Start the browser demo:
 
-```bash
+```sh
+npm run dev
+```
+
+Start a native desktop development build after installing Tauri's platform packages:
+
+```sh
+npm run tauri dev
+```
+
+## Local CLI
+
+Every desktop installer places `ai-security-scanner-cli` beside the application executable. It is intentionally not added to `PATH`. Live scan controls stay in the desktop process so its authorization capability and worker state cannot diverge from a second process. The CLI handles local planning, inspection, export, verification records, managed-runtime lifecycle, and exact cleanup.
+
+Inspect readiness from a source checkout:
+
+```sh
 cargo run --package ai-security-scanner \
   --no-default-features --features cli \
   --bin ai-security-scanner-cli -- doctor
 ```
 
-Create, inspect, and remove a reversible handoff group (the canonical findings and evidence are never deleted):
+For an unpackaged CLI, stage the exact target runtime and pass it explicitly:
 
-```bash
-cargo run --package ai-security-scanner \
-  --no-default-features --features cli \
-  --bin ai-security-scanner-cli -- finding group \
-  --case-id CASE_ID --title "Related access observations" \
-  --finding-id FINDING_A,FINDING_B \
-  --rationale "Review the shared access path together" \
-  --grouped-by "local reviewer"
-cargo run --package ai-security-scanner \
-  --no-default-features --features cli \
-  --bin ai-security-scanner-cli -- finding groups CASE_ID
-cargo run --package ai-security-scanner \
-  --no-default-features --features cli \
-  --bin ai-security-scanner-cli -- finding ungroup \
-  --case-id CASE_ID --group-id GROUP_ID \
-  --removed-by "local reviewer" --reason "relationship disproven"
-```
-
-For a source checkout, first stage the exact host runtime and pass its location explicitly to the
-unpackaged CLI (installed desktop releases resolve their packaged resource automatically):
-
-```bash
+```sh
 node runtime/vendor-managed-runtime.mjs \
   --target x86_64-unknown-linux-gnu \
   --output runtime/staged/managed-runtime
+
 cargo run --package ai-security-scanner \
   --no-default-features --features cli \
   --bin ai-security-scanner-cli -- \
   --managed-runtime-bundle runtime/staged/managed-runtime \
   runtime managed install
-cargo run --package ai-security-scanner \
-  --no-default-features --features cli \
-  --bin ai-security-scanner-cli -- \
-  --managed-runtime-bundle runtime/staged/managed-runtime \
-  runtime managed start
 ```
 
-See [the managed runtime contract](docs/managed-runtime.md) for supported platforms, immutable
-vendor locks, lifecycle, recovery, and exact cleanup behavior.
+See [the CLI and agent skill](.codex/skills/ai-security-scanner/SKILL.md) for constrained operational workflows. That skill cannot handle credentials, approve or widen scope, contact an unapproved target, or perform remediation.
 
-Start the desktop development build after installing Tauri's platform packages:
+## Repository layout
 
-```bash
-npm run tauri dev
+```text
+src/                         React desktop interface
+src-tauri/                   Rust/Tauri local case service and CLI
+engines/catalog.json         Authoritative versioned engine registry
+mappings/                    Versioned control and export mappings
+bootstrap/                   Fixed provider read-only bootstrap definitions
+docs/product-spec.md         Final requirements and completion criteria
+docs/architecture.md         Process boundaries, domain model, IPC, and runtime design
+docs/threat-model.md         Credential, scanner, evidence, export, and AI boundaries
+docs/usability/              Real-person study protocol and evidence schema
+.upstreams/                  Local shallow research clones; ignored by Git
 ```
 
-The browser-only Vite view intentionally switches to a bannered synthetic demo. Demo output is labeled as demo data and never presented as an actual scan.
+## Release and evidence status
 
-## Security boundaries
+The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 
-- No scanner engine is allowed to receive administrative credentials.
-- Provider read-only authorization is preferred. The administrative fallback belongs in a separate bootstrap broker that may only create and validate a short-lived read-only scan role, then destroy high-privilege material and guide revocation of sessions and keys.
-- Active external tools require an explicit asset-level authorization record. Discovery and low-impact connection are not silently treated as permission for active testing.
-- Engine processes run without a Docker socket, without host root, with a read-only root filesystem and narrowly scoped mounts and network destinations.
-- Findings and raw evidence remain local unless the user explicitly exports them.
-- AI skills may explain, inspect status, and call the same constrained CLI. They cannot bypass scope, receive secrets, run unauthorized scans, or perform remediation.
-- The product offers advice and verification guidance, never one-click remediation.
+Manual workflow dispatch from `main` is preflight-only: it cannot create a tag or public GitHub Release. Publication requires an exact stable-version tag and all release checks. Apple Developer ID/notarization and Windows Authenticode are not configured, so operating systems may still show an unidentified-developer warning; Tauri updater signing is a separate integrity control and does not claim OS publisher identity.
 
-Please report security issues according to [SECURITY.md](SECURITY.md), not in a public issue.
+Before `v0.2.0` publication, the project still requires:
+
+1. a genuine observed first-run study with a qualifying IAM-naive adult participant, using a clean supported desktop installation and a disposable cloud account;
+2. passing, redacted evidence validated against the exact candidate commit; and
+3. formal QC and code review after that product study.
+
+Automated tests, contributor walkthroughs, and generated evidence cannot substitute for the participant. See the [study protocol](docs/usability/iam-naive-first-run.md) and [release pipeline](docs/release/README.md).
 
 ## Documentation
 
 - [Product specification](docs/product-spec.md)
 - [Architecture](docs/architecture.md)
 - [Threat model](docs/threat-model.md)
+- [Provider authorization](docs/provider-authorization.md)
 - [Engine catalog](docs/engine-catalog.md)
 - [Managed local runtime](docs/managed-runtime.md)
 - [Release and signed updater](docs/release/README.md)
+- [IAM-naive first-run study](docs/usability/iam-naive-first-run.md)
 - [Third-party inventory](THIRD_PARTY.md)
 - [Contributing](CONTRIBUTING.md)
 
-## License
+## Contributing and license
 
-The project-owned source code is licensed under Apache-2.0. Third-party engines, templates, feeds, rules, and vulnerability databases retain their own licenses and are not relicensed by this repository.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and follow the repository's scope, evidence, fixture, license, and security-boundary requirements. The project-owned source is licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses.

@@ -1,3 +1,4 @@
+import { getActiveLocale, translateActiveStatic, type StaticTranslationKey } from "./i18n/core";
 import type {
   CasePhase,
   CloudPlatform,
@@ -18,7 +19,7 @@ export const formatDateTime = (value?: string): string => {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-Hant-TW", {
+  return new Intl.DateTimeFormat(getActiveLocale(), {
     month: "short",
     day: "numeric",
     hour: "2-digit",
@@ -30,153 +31,200 @@ export const formatDate = (value?: string): string => {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-Hant-TW", {
+  return new Intl.DateTimeFormat(getActiveLocale(), {
     year: "numeric",
     month: "short",
     day: "numeric",
   }).format(date);
 };
 
+const labelMeta = (labelKey: StaticTranslationKey, tone: string) => ({
+  get label() { return translateActiveStatic(labelKey); },
+  tone,
+});
+
+const descriptiveMeta = (
+  labelKey: StaticTranslationKey,
+  descriptionKey: StaticTranslationKey,
+) => ({
+  get label() { return translateActiveStatic(labelKey); },
+  get description() { return translateActiveStatic(descriptionKey); },
+});
+
+const descriptiveToneMeta = (
+  labelKey: StaticTranslationKey,
+  descriptionKey: StaticTranslationKey,
+  tone: string,
+) => ({
+  get label() { return translateActiveStatic(labelKey); },
+  get description() { return translateActiveStatic(descriptionKey); },
+  tone,
+});
+
+const coverageStatusMeta = (
+  labelKey: StaticTranslationKey,
+  shortLabelKey: StaticTranslationKey,
+  descriptionKey: StaticTranslationKey,
+  tone: string,
+) => ({
+  get label() { return translateActiveStatic(labelKey); },
+  get shortLabel() { return translateActiveStatic(shortLabelKey); },
+  get description() { return translateActiveStatic(descriptionKey); },
+  tone,
+});
+
 export const coverageMeta: Record<
   CoverageState,
   { label: string; shortLabel: string; tone: string; description: string }
 > = {
-  discovered_authorized_scanned: {
-    label: "已發現、已授權、已掃描",
-    shortLabel: "已掃描",
-    tone: "positive",
-    description: "已確認資產與範圍，掃描工作完整執行。",
-  },
-  discovered_not_authorized: {
-    label: "已發現，但未授權",
-    shortLabel: "待授權",
-    tone: "warning",
-    description: "知道資產存在，但尚未取得所需掃描範圍。",
-  },
-  authorized_incomplete: {
-    label: "已授權，但掃描未完成",
-    shortLabel: "未完成",
-    tone: "danger",
-    description: "已有合法範圍，但掃描失敗或只完成一部分。",
-  },
-  source_connected_none: {
-    label: "已接來源，沒有發現",
-    shortLabel: "未發現",
-    tone: "neutral",
-    description: "資料來源可用，這次沒有從該來源發現資產。",
-  },
-  source_unavailable_unknown: {
-    label: "沒有資料來源，狀況未知",
-    shortLabel: "未知",
-    tone: "unknown",
-    description: "沒有視野；絕對不能解讀為安全或沒有資產。",
-  },
-  not_applicable: {
-    label: "本案件明確不適用",
-    shortLabel: "不適用",
-    tone: "neutral",
-    description: "使用者已記錄不適用理由；這不是掃描成功或安全結論。",
-  },
+  discovered_authorized_scanned: coverageStatusMeta(
+    "status.coverage.scanned.label",
+    "status.coverage.scanned.short",
+    "status.coverage.scanned.description",
+    "positive",
+  ),
+  discovered_not_authorized: coverageStatusMeta(
+    "status.coverage.unauthorized.label",
+    "status.coverage.unauthorized.short",
+    "status.coverage.unauthorized.description",
+    "warning",
+  ),
+  authorized_incomplete: coverageStatusMeta(
+    "status.coverage.incomplete.label",
+    "status.coverage.incomplete.short",
+    "status.coverage.incomplete.description",
+    "danger",
+  ),
+  source_connected_none: coverageStatusMeta(
+    "status.coverage.none.label",
+    "status.coverage.none.short",
+    "status.coverage.none.description",
+    "neutral",
+  ),
+  source_unavailable_unknown: coverageStatusMeta(
+    "status.coverage.unknown.label",
+    "status.coverage.unknown.short",
+    "status.coverage.unknown.description",
+    "unknown",
+  ),
+  not_applicable: coverageStatusMeta(
+    "status.coverage.notApplicable.label",
+    "status.coverage.notApplicable.short",
+    "status.coverage.notApplicable.description",
+    "neutral",
+  ),
 };
 
-export const engineStatusMeta: Record<
-  EngineRunStatus,
-  { label: string; tone: string }
-> = {
-  pending: { label: "等待中", tone: "neutral" },
-  running: { label: "執行中", tone: "info" },
-  paused: { label: "已暫停", tone: "warning" },
-  completed: { label: "已完成", tone: "positive" },
-  partial: { label: "部分完成", tone: "warning" },
-  failed: { label: "失敗", tone: "danger" },
-  not_executed: { label: "未執行", tone: "unknown" },
-  cancelled: { label: "已取消", tone: "neutral" },
+export const engineStatusMeta: Record<EngineRunStatus, { label: string; tone: string }> = {
+  pending: labelMeta("status.engine.pending", "neutral"),
+  running: labelMeta("status.engine.running", "info"),
+  paused: labelMeta("status.engine.paused", "warning"),
+  completed: labelMeta("status.engine.completed", "positive"),
+  partial: labelMeta("status.engine.partial", "warning"),
+  failed: labelMeta("status.engine.failed", "danger"),
+  not_executed: labelMeta("status.engine.notExecuted", "unknown"),
+  cancelled: labelMeta("status.engine.cancelled", "neutral"),
 };
 
 export const executionStageMeta: Record<ExecutionStage, { label: string; description: string }> = {
-  planned: { label: "已規劃", description: "執行範圍已固定，尚未開始環境檢查。" },
-  preflight: { label: "環境檢查", description: "正在確認容器執行環境與唯讀輸入。" },
-  pulling_image: { label: "準備映像", description: "正在取得已釘選摘要的引擎映像。" },
-  running: { label: "引擎執行", description: "隔離的引擎工作正在執行。" },
-  capturing_artifacts: { label: "收集證據", description: "正在保存原始輸出與內容雜湊。" },
-  adapting_artifacts: { label: "正規化結果", description: "正在把引擎輸出轉為 canonical findings。" },
-  captured_awaiting_adapter: { label: "等待正規化", description: "原始證據已保存，可從 adapter 步驟恢復。" },
-  cleanup_pending: { label: "等待清理", description: "結果已保存，仍需清理隔離容器。" },
-  completed: { label: "完成檢查點", description: "證據、正規化與容器清理均已完成。" },
-  cancelled: { label: "取消檢查點", description: "使用者取消工作；保留取消前已持久化的狀態。" },
-  failed: { label: "失敗檢查點", description: "工作失敗；最後錯誤與可恢復位置已保存。" },
+  planned: descriptiveMeta("status.stage.planned.label", "status.stage.planned.description"),
+  preflight: descriptiveMeta("status.stage.preflight.label", "status.stage.preflight.description"),
+  pulling_image: descriptiveMeta("status.stage.pullingImage.label", "status.stage.pullingImage.description"),
+  running: descriptiveMeta("status.stage.running.label", "status.stage.running.description"),
+  capturing_artifacts: descriptiveMeta("status.stage.capturing.label", "status.stage.capturing.description"),
+  adapting_artifacts: descriptiveMeta("status.stage.adapting.label", "status.stage.adapting.description"),
+  captured_awaiting_adapter: descriptiveMeta(
+    "status.stage.awaitingAdapter.label",
+    "status.stage.awaitingAdapter.description",
+  ),
+  cleanup_pending: descriptiveMeta(
+    "status.stage.cleanupPending.label",
+    "status.stage.cleanupPending.description",
+  ),
+  completed: descriptiveMeta("status.stage.completed.label", "status.stage.completed.description"),
+  cancelled: descriptiveMeta("status.stage.cancelled.label", "status.stage.cancelled.description"),
+  failed: descriptiveMeta("status.stage.failed.label", "status.stage.failed.description"),
 };
 
 export const runStatusMeta: Record<RunStatus, { label: string; tone: string }> = {
-  queued: { label: "等待中", tone: "neutral" },
-  running: { label: "掃描中", tone: "info" },
-  paused: { label: "已暫停", tone: "warning" },
-  completed: { label: "已完成", tone: "positive" },
-  partial: { label: "部分完成", tone: "warning" },
-  failed: { label: "失敗", tone: "danger" },
-  cancelled: { label: "已取消", tone: "neutral" },
+  queued: labelMeta("status.run.queued", "neutral"),
+  running: labelMeta("status.run.running", "info"),
+  paused: labelMeta("status.run.paused", "warning"),
+  completed: labelMeta("status.run.completed", "positive"),
+  partial: labelMeta("status.run.partial", "warning"),
+  failed: labelMeta("status.run.failed", "danger"),
+  cancelled: labelMeta("status.run.cancelled", "neutral"),
 };
 
 export const severityMeta: Record<Severity, { label: string; tone: string }> = {
-  critical: { label: "嚴重", tone: "critical" },
-  high: { label: "高", tone: "danger" },
-  medium: { label: "中", tone: "warning" },
-  low: { label: "低", tone: "info" },
-  info: { label: "待確認", tone: "neutral" },
+  critical: labelMeta("status.severity.critical", "critical"),
+  high: labelMeta("status.severity.high", "danger"),
+  medium: labelMeta("status.severity.medium", "warning"),
+  low: labelMeta("status.severity.low", "info"),
+  info: labelMeta("status.severity.info", "neutral"),
 };
 
 export const confidenceMeta: Record<Confidence, string> = {
-  high: "高信心",
-  medium: "中等信心",
-  low: "低信心",
+  get high() { return translateActiveStatic("status.confidence.high"); },
+  get medium() { return translateActiveStatic("status.confidence.medium"); },
+  get low() { return translateActiveStatic("status.confidence.low"); },
 };
 
 export const workflowMeta: Record<FindingWorkflowState, string> = {
-  unreviewed: "尚未檢視",
-  expert_review_requested: "已請專家複核",
-  confirmed: "已人工確認",
-  unconfirmed: "尚未人工確認",
-  assigned: "已交付負責人",
-  false_positive: "確認為誤報",
-  remediation_reported: "已回報修復",
-  remediated_pending_verification: "已修復，等待複驗",
-  verified_resolved: "複驗已解決",
+  get unreviewed() { return translateActiveStatic("status.workflow.unreviewed"); },
+  get expert_review_requested() { return translateActiveStatic("status.workflow.expertReview"); },
+  get confirmed() { return translateActiveStatic("status.workflow.confirmed"); },
+  get unconfirmed() { return translateActiveStatic("status.workflow.unconfirmed"); },
+  get assigned() { return translateActiveStatic("status.workflow.assigned"); },
+  get false_positive() { return translateActiveStatic("status.workflow.falsePositive"); },
+  get remediation_reported() { return translateActiveStatic("status.workflow.remediationReported"); },
+  get remediated_pending_verification() { return translateActiveStatic("status.workflow.pendingVerification"); },
+  get verified_resolved() { return translateActiveStatic("status.workflow.resolved"); },
 };
 
 export const diffMeta: Record<DiffState, { label: string; tone: string; description: string }> = {
-  resolved: { label: "已消失", tone: "positive", description: "基準存在，本次已未再觀察到。" },
-  persistent: { label: "仍然存在", tone: "danger", description: "基準與本次都觀察到相同問題。" },
-  new: { label: "新出現", tone: "warning", description: "本次首次出現，或新範圍首次發現。" },
-  unverifiable: {
-    label: "無法驗證",
-    tone: "unknown",
-    description: "因權限、範圍或引擎狀態改變而無法比較。",
-  },
+  resolved: descriptiveToneMeta("status.diff.resolved.label", "status.diff.resolved.description", "positive"),
+  persistent: descriptiveToneMeta(
+    "status.diff.persistent.label",
+    "status.diff.persistent.description",
+    "danger",
+  ),
+  new: descriptiveToneMeta("status.diff.new.label", "status.diff.new.description", "warning"),
+  unverifiable: descriptiveToneMeta(
+    "status.diff.unverifiable.label",
+    "status.diff.unverifiable.description",
+    "unknown",
+  ),
 };
 
 export const phaseMeta: Record<CasePhase, { label: string; tone: string }> = {
-  draft: { label: "草稿", tone: "neutral" },
-  discovering: { label: "盤點中", tone: "info" },
-  scope_review: { label: "範圍確認", tone: "warning" },
-  ready: { label: "可開始掃描", tone: "positive" },
-  scanning: { label: "掃描中", tone: "info" },
-  needs_attention: { label: "需要處理", tone: "warning" },
-  ready_for_handoff: { label: "可交接", tone: "positive" },
-  verifying: { label: "複驗中", tone: "info" },
-  archived: { label: "已封存", tone: "neutral" },
-  complete: { label: "初檢完成", tone: "positive" },
-  verification_due: { label: "等待複驗", tone: "warning" },
+  draft: labelMeta("status.case.draft", "neutral"),
+  discovering: labelMeta("status.case.discovering", "info"),
+  scope_review: labelMeta("status.case.scopeReview", "warning"),
+  ready: labelMeta("status.case.ready", "positive"),
+  scanning: labelMeta("status.case.scanning", "info"),
+  needs_attention: labelMeta("status.case.needsAttention", "warning"),
+  ready_for_handoff: labelMeta("status.case.readyForHandoff", "positive"),
+  verifying: labelMeta("status.case.verifying", "info"),
+  archived: labelMeta("status.case.archived", "neutral"),
+  complete: labelMeta("status.case.complete", "positive"),
+  verification_due: labelMeta("status.case.verificationDue", "warning"),
 };
 
+const platform = (labelKey: StaticTranslationKey, abbreviation: string) => ({
+  get label() { return translateActiveStatic(labelKey); },
+  abbreviation,
+});
+
 export const platformMeta: Record<CloudPlatform, { label: string; abbreviation: string }> = {
-  aws: { label: "AWS", abbreviation: "AWS" },
-  azure: { label: "Azure", abbreviation: "AZ" },
-  gcp: { label: "Google Cloud", abbreviation: "GCP" },
-  m365: { label: "Microsoft 365", abbreviation: "365" },
-  external: { label: "外部攻擊面", abbreviation: "WEB" },
-  code: { label: "程式碼與 IaC", abbreviation: "CODE" },
-  container: { label: "容器與 SBOM", abbreviation: "IMG" },
-  kubernetes: { label: "Kubernetes", abbreviation: "K8S" },
+  aws: platform("platform.aws", "AWS"),
+  azure: platform("platform.azure", "AZ"),
+  gcp: platform("platform.gcp", "GCP"),
+  m365: platform("platform.m365", "365"),
+  external: platform("platform.external", "WEB"),
+  code: platform("platform.code", "CODE"),
+  container: platform("platform.container", "IMG"),
+  kubernetes: platform("platform.kubernetes", "K8S"),
 };
 
 export const percentage = (part: number, total: number): number =>

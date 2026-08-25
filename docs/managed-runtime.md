@@ -11,11 +11,18 @@ explicit compatibility providers; they are not silently mixed with managed runs.
 - The app verifies the resource bundle before copying it to a versioned directory under its own
   local application-data directory. It never changes the system `PATH`, invokes a package manager,
   enables an operating-system feature, or requests administrator privileges.
+- On Windows, setup first resolves the trusted `SystemRoot\System32\wsl.exe` boundary and runs
+  bounded, read-only `--status` and `--list --quiet` probes. A failed prerequisite check stops
+  before any VM-image bytes are downloaded. It records one stable `failure_reason` and paired
+  `next_action`: install WSL, enable its optional components, update WSL, restart Windows, or retry
+  the check. Console output is accepted only as bounded UTF-8 or UTF-16LE; mixed or unsafe bytes are
+  never interpolated into UI errors. The app does not elevate, enable features, update WSL, or
+  restart Windows.
 - The VM image is downloaded from the exact HTTPS URL pinned in the release manifest. Bounded
   resumable downloads are accepted only from approved GitHub release hosts and are committed only
   after the locked size and SHA-256 match.
-- Desktop first-run setup exposes one authoritative operation at a time. Its `install`, `download`,
-  `init`, `start`, and `verify` phases are queryable, and the download phase reports the exact
+- Desktop first-run setup exposes one authoritative operation at a time. Its `install`,
+  `prerequisite`, `download`, `init`, `start`, and `verify` phases are queryable, and the download phase reports the exact
   received bytes, locked total bytes, and derived percentage after every bounded chunk. A separate
   cancel command sets an atomic cancellation request without waiting for the lifecycle lock.
 - Cancellation retains the private `*.download-part` regular file. The next setup validates its
@@ -152,7 +159,7 @@ The current platform providers are:
 | --- | --- | --- | --- |
 | Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, `virtiofsd`, and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
 | macOS Intel/Apple silicon | rootless Podman machine + AppleHV | Universal Podman, vfkit, and gvproxy | A supported macOS release with Apple virtualization support. |
-| Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2 must already be available. The app never enables Windows optional features. |
+| Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2. If it is unavailable, setup stops before image download and reports the exact user action. The app never enables Windows optional features. |
 
 ## Lifecycle
 
@@ -163,6 +170,14 @@ The desktop invokes `setup_managed_runtime` in a blocking worker while independe
 `get_managed_runtime_setup_status`; `cancel_managed_runtime_setup` only signals that worker and
 returns the current status immediately. This separation keeps the window responsive and makes a
 single active setup observable without starting a competing setup operation.
+
+The setup-status JSON uses `phase: "prerequisite"` while checking Windows. A failed Windows check
+returns one of `windows_wsl_not_installed`, `windows_wsl_optional_feature_disabled`,
+`windows_wsl_update_required`, `windows_restart_required`, or `windows_wsl_command_failed` in
+`failure_reason`, paired with `install_wsl`, `enable_wsl_optional_features`, `update_wsl`,
+`restart_windows`, or `retry_wsl_check` in `next_action`. Both fields are `null` outside a failed
+setup. Human-facing clients localize those stable values and keep the bounded diagnostic in an
+optional technical-details view.
 
 The standalone development CLI exposes the same durable lifecycle:
 
