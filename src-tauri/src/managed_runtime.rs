@@ -5109,7 +5109,7 @@ fn windows_basic_ace_sid(
             "managed runtime namespace ancestor has a malformed bounded SID",
         ));
     }
-    let sid: PSID = sid_bytes.cast_mut().cast();
+    let sid: PSID = sid_bytes.cast();
     // SAFETY: the SID header-derived length was proven to be exactly bounded by the ACE.
     if unsafe { IsValidSid(sid) } == 0 {
         return Err(io::Error::new(
