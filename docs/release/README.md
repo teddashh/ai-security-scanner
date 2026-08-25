@@ -46,11 +46,11 @@ separate from source compilation and provides release-specific install/start evi
 a claim that every end-user machine or every security assessment will behave identically.
 
 The build-runner observation is preserved, then a separate qualification matrix starts on fresh
-GitHub-hosted `ubuntu-24.04`, `macos-14`, and `windows-2025` machines. Each job downloads only its
+GitHub-hosted `ubuntu-24.04`, `macos-15-intel`, and `windows-2025` machines. Each job downloads only its
 named `release-<platform>` artifact and independently installs the Debian package, DMG, or MSI. It
 locates the installed desktop, all three companion executables, and the packaged managed-runtime
 manifest; the installed manifest must byte-hash to the release copy. Every CLI operation uses a
-new private data directory. Linux and Windows must prove this exact sequence:
+new private data directory. Every platform must prove this exact sequence:
 
 1. initial `not_installed` status;
 2. managed payload install and independent `installed` status;
@@ -62,17 +62,18 @@ new private data directory. Linux and Windows must prove this exact sequence:
 6. forced uninstall with the exact machine-image cache purged, final `not_installed` status,
    package removal, and private-directory removal.
 
-GitHub-hosted macOS does not expose the nested virtualization needed by the packaged machine
-provider. Its job still installs the DMG, proves desktop startup, records initial/install/status,
-and proves uninstall/purge and private cleanup. Machine start and container execution are recorded
-as `unsupported`/`not_run` with reason
-`github_macos_hosted_nested_virtualization_unavailable`; they are never reported as passing.
+The universal macOS package is still built on `macos-14`, while its independent qualification runs
+the Intel slice on `macos-15-intel`. That fresh job must start the packaged AppleHV machine and run
+the same fixed container probe as Linux and Windows. There is no host-limited or skipped release
+state: if the hosted runner cannot complete the real lifecycle, the qualification and release fail.
+This is exact release evidence from the recorded runner image, not a promise about future hosted
+runner capabilities or every end-user Mac.
 
 Each runner emits one strict `platform-qualification-<platform>.json`. The record is bound to the
 exact version, candidate tag, 40-character source commit, source artifact name, installer bytes and
 SHA-256, hosted runner label and machine-image version, installed/release runtime-manifest SHA-256,
 all released managed machine-image URLs/digests/sizes, ordered raw CLI status documents, desktop
-startup result, fixed container result (where supported), and cleanup results. Unknown fields,
+startup result, fixed container result, and cleanup results. Unknown fields,
 missing operations, caller-selected commands/images, inconsistent status phases, digest changes,
 and a false cleanup claim fail closed. Finalization requires all three records; the global checksum
 index and GitHub provenance attestation cover them like every other published release file.

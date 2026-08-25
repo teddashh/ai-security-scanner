@@ -170,6 +170,14 @@ function validateReleaseWorkflow(workflow) {
   assert(workflow.permissions?.contents === "read", "release workflow default contents permission must be read");
   const build = workflow.jobs?.build;
   assert(build, "release workflow has no platform build job");
+  const macosBuildTarget = build.strategy?.matrix?.include?.find(
+    (target) => target.platform === "macos-universal",
+  );
+  assert(
+    macosBuildTarget?.runner === "macos-14" &&
+      macosBuildTarget?.managed_runtime_target === "universal-apple-darwin",
+    "universal macOS packaging must remain on the macos-14 build runner",
+  );
   const macosBuild = build.steps?.find((step) => step.name === "Build universal macOS installer");
   assert(
     typeof macosBuild?.run === "string" && macosBuild.run.includes("--bundles app,dmg"),
@@ -213,7 +221,7 @@ function validateReleaseWorkflow(workflow) {
   assert(
     JSON.stringify(qualification.strategy?.matrix?.include) === JSON.stringify([
       { platform: "linux-x86_64", runner: "ubuntu-24.04" },
-      { platform: "macos-universal", runner: "macos-14" },
+      { platform: "macos-universal", runner: "macos-15-intel" },
       { platform: "windows-x86_64", runner: "windows-2025" },
     ]),
     "platform qualification matrix must use the exact three released hosted runner images",
@@ -287,6 +295,7 @@ function validateReleaseWorkflow(workflow) {
   for (const required of [
     "ubuntu-24.04",
     "macos-14",
+    "macos-15-intel",
     "windows-2022",
     "windows-2025",
     "deb,rpm,appimage",
@@ -337,12 +346,16 @@ function validatePlatformQualificationSources(sources) {
   for (const required of [
     "run_managed initial-status status",
     "run_managed install install",
-    "github_macos_hosted_nested_virtualization_unavailable",
+    "run_managed start start",
+    "run_managed running-status status",
+    "run_managed container-qualification qualify",
+    "run_managed stop stop",
+    "run_managed stopped-status status",
     "run_managed uninstall-purge uninstall --force --purge-image-cache",
+    "runtime managed stop --force",
+    "runtime managed uninstall --force --purge-image-cache",
     "hdiutil attach",
-    'outcome: "not_run"',
   ]) assert(macos.includes(required), `macOS qualification is missing: ${required}`);
-  assert(!macos.includes("run_managed start start"), "macOS hosted qualification must not claim a nested-virtualization start attempt");
   for (const required of [
     'Invoke-Managed "initial-status"',
     'Invoke-Managed "install"',
@@ -364,7 +377,16 @@ function validatePlatformQualificationSources(sources) {
     "qualificationImageFromCatalog",
     "installedManifestExactMatch",
     "github-hosted",
+    "macos-15-intel",
   ]) assert(evidence.includes(required), `strict platform qualification evidence is missing: ${required}`);
+  for (const forbidden of [
+    "host_limited",
+    "not_run",
+    "github_macos_hosted_nested_virtualization_unavailable",
+  ]) {
+    assert(!macos.includes(forbidden), `macOS qualification retains a bypass state: ${forbidden}`);
+    assert(!evidence.includes(forbidden), `platform evidence validator retains a bypass state: ${forbidden}`);
+  }
 }
 
 function validateEngineImageWorkflow(workflow, { image, tag, requiredPaths, sourceDateEpoch = null }) {
@@ -438,6 +460,18 @@ async function main() {
       releaseGuide.includes(`git tag -a v${version} <preflight-head-sha>`) &&
       releaseGuide.includes(`git push origin v${version}`),
     "release guide commands are out of sync",
+  );
+  assert(
+    releaseGuide.includes("`macos-15-intel`") &&
+      releaseGuide.includes("Every platform must prove this exact sequence") &&
+      !releaseGuide.includes("github_macos_hosted_nested_virtualization_unavailable") &&
+      !releaseGuide.includes("`not_run`"),
+    "release guide does not require a real Intel-hosted macOS runtime qualification",
+  );
+  assert(
+    releaseLineNotes.includes("macOS 15 Intel") &&
+      releaseLineNotes.includes("network-disabled Gitleaks container probe"),
+    "release-line notes omit the full macOS managed-runtime qualification contract",
   );
   assert(packageJson.license === "Apache-2.0", "package.json license must be Apache-2.0");
   assert(

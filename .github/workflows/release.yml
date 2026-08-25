@@ -503,7 +503,7 @@ jobs:
           - platform: linux-x86_64
             runner: ubuntu-24.04
           - platform: macos-universal
-            runner: macos-14
+            runner: macos-15-intel
           - platform: windows-x86_64
             runner: windows-2025
     runs-on: ${{ matrix.runner }}
@@ -534,7 +534,7 @@ jobs:
           release-input
           "${RUNNER_TEMP}/ai-security-scanner-platform-qualification-evidence"
 
-      - name: Independently install and host-limit qualify the macOS DMG
+      - name: Independently install and qualify the macOS DMG
         if: matrix.platform == 'macos-universal'
         shell: bash
         run: >-

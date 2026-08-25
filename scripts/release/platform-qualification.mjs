@@ -19,13 +19,19 @@ const PLATFORM_CONTRACTS = Object.freeze({
     runnerOs: "Linux",
     runnerArch: "X64",
     qualificationState: "passed",
+    targetOperatingSystem: "linux",
+    targetArchitecture: "x86_64",
+    targetProvider: "qemu",
   }),
   "macos-universal": Object.freeze({
     bundleType: "dmg",
-    runnerLabel: "macos-14",
+    runnerLabel: "macos-15-intel",
     runnerOs: "macOS",
     runnerArch: "X64",
-    qualificationState: "host_limited",
+    qualificationState: "passed",
+    targetOperatingSystem: "macos",
+    targetArchitecture: "x86_64",
+    targetProvider: "applehv",
   }),
   "windows-x86_64": Object.freeze({
     bundleType: "msi",
@@ -33,6 +39,9 @@ const PLATFORM_CONTRACTS = Object.freeze({
     runnerOs: "Windows",
     runnerArch: "X64",
     qualificationState: "passed",
+    targetOperatingSystem: "windows",
+    targetArchitecture: "x86_64",
+    targetProvider: "wsl",
   }),
 });
 
@@ -53,27 +62,17 @@ const STATUS_KEYS = [
   "runtime_version",
 ];
 
-const LIFECYCLE_OPERATION_NAMES = Object.freeze({
-  full: Object.freeze([
-    "initial_status",
-    "install",
-    "installed_status",
-    "start",
-    "running_status",
-    "stop",
-    "stopped_status",
-    "uninstall_purge",
-    "final_status",
-  ]),
-  macos: Object.freeze([
-    "initial_status",
-    "install",
-    "installed_status",
-    "start",
-    "uninstall_purge",
-    "final_status",
-  ]),
-});
+const LIFECYCLE_OPERATION_NAMES = Object.freeze([
+  "initial_status",
+  "install",
+  "installed_status",
+  "start",
+  "running_status",
+  "stop",
+  "stopped_status",
+  "uninstall_purge",
+  "final_status",
+]);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -161,11 +160,9 @@ function qualificationImageFromCatalog(catalog) {
   return `${engine.image.repository}@${engine.image.digest}`;
 }
 
-function validateOperations(operations, platform, runtime, target) {
-  const macos = platform === "macos-universal";
-  const expectedNames = macos ? LIFECYCLE_OPERATION_NAMES.macos : LIFECYCLE_OPERATION_NAMES.full;
+function validateOperations(operations, runtime, target) {
   assert(Array.isArray(operations), "managed lifecycle operations must be an array");
-  assert(JSON.stringify(operations.map((operation) => operation?.name)) === JSON.stringify(expectedNames), "managed lifecycle operation order is incomplete or unexpected");
+  assert(JSON.stringify(operations.map((operation) => operation?.name)) === JSON.stringify(LIFECYCLE_OPERATION_NAMES), "managed lifecycle operation order is incomplete or unexpected");
   const expectedPhases = new Map([
     ["initial_status", ["not_installed", false]],
     ["install", ["installed", false]],
@@ -178,12 +175,6 @@ function validateOperations(operations, platform, runtime, target) {
     ["final_status", ["not_installed", false]],
   ]);
   for (const operation of operations) {
-    if (macos && operation.name === "start") {
-      exactKeys(operation, ["name", "outcome", "reason"], "macOS start operation");
-      assert(operation.outcome === "unsupported", "macOS hosted start must be recorded as unsupported, not passed");
-      assert(operation.reason === "github_macos_hosted_nested_virtualization_unavailable", "macOS hosted start limitation is not the released reason");
-      continue;
-    }
     exactKeys(operation, ["name", "outcome", "status"], `${operation.name} operation`);
     assert(operation.outcome === "passed", `${operation.name} operation did not pass`);
     const [phase, available] = expectedPhases.get(operation.name);
@@ -252,6 +243,9 @@ export function validatePlatformQualification(evidence, context = {}) {
     requireInteger(image.bytes, `machine image ${index} bytes`, 1);
   }
   exactKeys(evidence.runtime.selectedTarget, ["operatingSystem", "architecture", "provider", "sha256"], "selected runtime target");
+  assert(evidence.runtime.selectedTarget.operatingSystem === contract.targetOperatingSystem, "selected runtime target operating system is incorrect for the qualification platform");
+  assert(evidence.runtime.selectedTarget.architecture === contract.targetArchitecture, "selected runtime target architecture is incorrect for the qualification runner");
+  assert(evidence.runtime.selectedTarget.provider === contract.targetProvider, "selected runtime target provider is incorrect for the qualification platform");
   const target = evidence.runtime.machineImages.find((image) => image.operatingSystem === evidence.runtime.selectedTarget.operatingSystem && image.architecture === evidence.runtime.selectedTarget.architecture && image.provider === evidence.runtime.selectedTarget.provider && image.sha256 === evidence.runtime.selectedTarget.sha256);
   assert(target, "selected runtime target is absent from the exact machine-image inventory");
 
@@ -262,18 +256,12 @@ export function validatePlatformQualification(evidence, context = {}) {
 
   exactKeys(evidence.managedRuntime, ["privateDataDirectory", "operations"], "managed runtime qualification");
   requireAbsolutePath(evidence.managedRuntime.privateDataDirectory, evidence.platform, "managed runtime private data directory");
-  validateOperations(evidence.managedRuntime.operations, evidence.platform, evidence.runtime, evidence.runtime.selectedTarget);
+  validateOperations(evidence.managedRuntime.operations, evidence.runtime, evidence.runtime.selectedTarget);
 
-  if (evidence.platform === "macos-universal") {
-    exactKeys(evidence.containerExecution, ["outcome", "reason"], "macOS container execution");
-    assert(evidence.containerExecution.outcome === "not_run", "macOS hosted container execution must not be recorded as passed");
-    assert(evidence.containerExecution.reason === "github_macos_hosted_nested_virtualization_unavailable", "macOS container limitation reason is incorrect");
-  } else {
-    exactKeys(evidence.containerExecution, ["outcome", "result"], "container execution");
-    assert(evidence.containerExecution.outcome === "passed", "managed container execution did not pass");
-    assert(typeof context.expectedQualificationImage === "string", "validator has no released qualification image identity");
-    validateContainerResult(evidence.containerExecution.result, evidence.runtime, evidence.runtime.selectedTarget, evidence.releaseIdentity.version, context.expectedQualificationImage);
-  }
+  exactKeys(evidence.containerExecution, ["outcome", "result"], "container execution");
+  assert(evidence.containerExecution.outcome === "passed", "managed container execution did not pass");
+  assert(typeof context.expectedQualificationImage === "string", "validator has no released qualification image identity");
+  validateContainerResult(evidence.containerExecution.result, evidence.runtime, evidence.runtime.selectedTarget, evidence.releaseIdentity.version, context.expectedQualificationImage);
 
   exactKeys(evidence.cleanup, ["managedRuntimePurged", "machineImageCachePurged", "installerRemoved", "privateDataRemoved"], "qualification cleanup");
   assert(Object.values(evidence.cleanup).every((value) => value === true), "qualification cleanup is incomplete");

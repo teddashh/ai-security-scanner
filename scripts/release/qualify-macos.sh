@@ -18,10 +18,20 @@ mount_point="${RUNNER_TEMP}/ai-security-scanner-platform-qualification-mount"
 installed_app="/Applications/ai-security-scanner Platform Qualification.app"
 data_directory="${RUNNER_TEMP}/ai-security-scanner-platform-qualification-macos-data"
 mounted=false
+desktop_pid=""
+cli=""
 
 cleanup_on_exit() {
   status=$?
   set +e
+  if [[ -n "${desktop_pid}" ]] && kill -0 "${desktop_pid}" 2>/dev/null; then
+    kill "${desktop_pid}" >/dev/null 2>&1
+    wait "${desktop_pid}" >/dev/null 2>&1
+  fi
+  if [[ -x "${cli}" && -d "${data_directory}" ]]; then
+    "${cli}" --json --data-dir "${data_directory}" runtime managed stop --force >/dev/null 2>&1 || true
+    "${cli}" --json --data-dir "${data_directory}" runtime managed uninstall --force --purge-image-cache >/dev/null 2>&1 || true
+  fi
   if [[ "${mounted}" == true ]]; then /usr/bin/hdiutil detach "${mount_point}" >/dev/null; fi
   for exact_path in "${installed_app}" "${data_directory}" "${mount_point}"; do
     case "${exact_path}" in
@@ -78,6 +88,7 @@ if ! kill -0 "${desktop_pid}" 2>/dev/null; then
 fi
 kill "${desktop_pid}"
 wait "${desktop_pid}" || true
+desktop_pid=""
 
 mkdir -m 700 -- "${data_directory}"
 run_managed() {
@@ -89,8 +100,11 @@ run_managed() {
 run_managed initial-status status
 run_managed install install
 run_managed installed-status status
-# GitHub's hosted macOS runner does not expose nested virtualization. A start
-# attempt would test that host limitation, not the packaged managed runtime.
+run_managed start start
+run_managed running-status status
+run_managed container-qualification qualify
+run_managed stop stop
+run_managed stopped-status status
 run_managed uninstall-purge uninstall --force --purge-image-cache
 run_managed final-status status
 
@@ -118,7 +132,6 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 const read = (name) => JSON.parse(readFileSync(path.join(process.env.QUAL_WORK_DIRECTORY, `${name}.json`), "utf8"));
 const passed = (name, file) => ({ name, outcome: "passed", status: read(file) });
-const limitation = "github_macos_hosted_nested_virtualization_unavailable";
 const observations = {
   installedLayout: {
     pathsVerifiedAbsolute: true,
@@ -137,11 +150,14 @@ const observations = {
     passed("initial_status", "initial-status"),
     passed("install", "install"),
     passed("installed_status", "installed-status"),
-    { name: "start", outcome: "unsupported", reason: limitation },
+    passed("start", "start"),
+    passed("running_status", "running-status"),
+    passed("stop", "stop"),
+    passed("stopped_status", "stopped-status"),
     passed("uninstall_purge", "uninstall-purge"),
     passed("final_status", "final-status"),
   ],
-  containerExecution: { outcome: "not_run", reason: limitation },
+  containerExecution: { outcome: "passed", result: read("container-qualification") },
   cleanup: { managedRuntimePurged: true, machineImageCachePurged: true, installerRemoved: true, privateDataRemoved: true },
   installedManifestSnapshot: "installed-runtime-manifest.json",
 };
