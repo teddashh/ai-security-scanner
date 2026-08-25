@@ -52,6 +52,28 @@ const MAX_SSH_PUBLIC_KEY_BYTES: u64 = 4 * 1024;
 const PODMAN_MACHINE_IDENTITY_NAME: &str = "machine";
 const MANAGED_SSH_KEY_COMMENT: &str = "ai-security-scanner-managed-runtime";
 #[cfg(unix)]
+const LINUX_SHORT_RUNTIME_BASE: &str = "/tmp";
+#[cfg(unix)]
+const LINUX_SHORT_RUNTIME_PREFIX: &str = "assm1-";
+#[cfg(unix)]
+const LINUX_SHORT_RUNTIME_DIGEST_HEX_CHARS: usize = 32;
+#[cfg(unix)]
+const PODMAN_LINUX_MAX_SOCKET_PATH_BYTES: usize = 103;
+#[cfg(unix)]
+const PODMAN_LINUX_RUNTIME_DIRECTORY: &str = "podman";
+#[cfg(unix)]
+const PODMAN_GVPROXY_SOCKET_SUFFIX: &str = "-gvproxy.sock";
+#[cfg(unix)]
+const PODMAN_GVPROXY_LOG_NAME: &str = "gvproxy.log";
+#[cfg(unix)]
+const PODMAN_VIRTIOFS_SOCKET_NAME: &str = "virtiofschar0";
+#[cfg(unix)]
+const PODMAN_VIRTIOFS_PID_NAME: &str = "virtiofschar0.pid";
+#[cfg(unix)]
+const LINUX_VIRTIOFS_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(unix)]
+const LINUX_VIRTIOFS_CLEANUP_POLL: Duration = Duration::from_millis(25);
+#[cfg(unix)]
 const MACOS_SHORT_HOME_BASE: &str = "/tmp";
 #[cfg(unix)]
 const MACOS_SHORT_HOME_PREFIX: &str = "assm1-";
@@ -2013,7 +2035,7 @@ impl ManagedRuntimeManager {
                 require_success("managed runtime machine removal", &output)?;
             }
             self.prove_windows_wsl_distribution_absent_locked(target, &command, &machine_name)?;
-            self.remove_command_home_after_machine_removal_locked(target)?;
+            self.remove_temporary_command_state_after_machine_removal_locked(target)?;
             if private_entry_exists(&provider_home)? {
                 remove_private_tree(&provider_home, &self.state_root.join("provider-home"))?;
             }
@@ -2252,8 +2274,8 @@ impl ManagedRuntimeManager {
         let config = provider_home.join("config");
         let data = provider_home.join("data");
         let cache = provider_home.join("cache");
-        let run = provider_home.join("run");
-        for directory in [&provider_home, &config, &data, &cache, &run] {
+        let persistent_run = provider_home.join("run");
+        for directory in [&provider_home, &config, &data, &cache, &persistent_run] {
             ensure_managed_private_directory(directory)?;
         }
         let containers = config.join("containers");
@@ -2261,6 +2283,7 @@ impl ManagedRuntimeManager {
         self.write_containers_config(&containers.join("containers.conf"), &install, target)?;
 
         let command_home = self.command_home(target)?;
+        let runtime_directory = self.runtime_directory(target, &persistent_run)?;
         let windows_directories = if target.operating_system == ManagedOperatingSystem::Windows {
             Some(windows_system_directories()?)
         } else {
@@ -2281,7 +2304,7 @@ impl ManagedRuntimeManager {
         );
         environment.insert(
             OsString::from("XDG_RUNTIME_DIR"),
-            run.as_os_str().to_owned(),
+            runtime_directory.as_os_str().to_owned(),
         );
         environment.insert(OsString::from("APPDATA"), config.as_os_str().to_owned());
         environment.insert(OsString::from("LOCALAPPDATA"), data.as_os_str().to_owned());
@@ -2410,6 +2433,48 @@ impl ManagedRuntimeManager {
         }
     }
 
+    fn runtime_directory(
+        &self,
+        target: &ManagedTarget,
+        persistent_run: &Path,
+    ) -> AppResult<PathBuf> {
+        if target.operating_system != ManagedOperatingSystem::Linux {
+            return Ok(persistent_run.to_path_buf());
+        }
+        #[cfg(unix)]
+        {
+            let runtime = self.linux_short_runtime_directory()?;
+            let socket = linux_podman_gvproxy_socket_path(&runtime, &machine_name(target));
+            use std::os::unix::ffi::OsStrExt;
+            if socket.as_os_str().as_bytes().len() > PODMAN_LINUX_MAX_SOCKET_PATH_BYTES {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime Linux gvproxy socket exceeds Podman's safe path budget".into(),
+                ));
+            }
+            ensure_linux_short_runtime_directory_at(
+                &runtime,
+                Path::new(LINUX_SHORT_RUNTIME_BASE),
+                effective_uid(),
+            )?;
+            Ok(runtime)
+        }
+        #[cfg(not(unix))]
+        Err(AppError::NotAvailable(
+            "managed runtime Linux command isolation is unavailable on this host".into(),
+        ))
+    }
+
+    #[cfg(unix)]
+    fn linux_short_runtime_directory(&self) -> AppResult<PathBuf> {
+        let state_root = canonical_real_directory(&self.state_root, "managed runtime state")?;
+        Ok(linux_short_runtime_path(
+            Path::new(LINUX_SHORT_RUNTIME_BASE),
+            &state_root,
+            &self.loaded.sha256,
+            effective_uid(),
+        ))
+    }
+
     fn command_home(&self, target: &ManagedTarget) -> AppResult<PathBuf> {
         if target.operating_system != ManagedOperatingSystem::Macos {
             return Ok(self.provider_home());
@@ -2441,30 +2506,47 @@ impl ManagedRuntimeManager {
         ))
     }
 
-    fn remove_command_home_after_machine_removal_locked(
+    fn remove_temporary_command_state_after_machine_removal_locked(
         &self,
         target: &ManagedTarget,
     ) -> AppResult<()> {
-        if target.operating_system != ManagedOperatingSystem::Macos {
-            return Ok(());
+        match target.operating_system {
+            ManagedOperatingSystem::Linux => {
+                #[cfg(unix)]
+                {
+                    let runtime = self.linux_short_runtime_directory()?;
+                    remove_linux_short_runtime_directory_at(
+                        &runtime,
+                        Path::new(LINUX_SHORT_RUNTIME_BASE),
+                        effective_uid(),
+                    )
+                }
+                #[cfg(not(unix))]
+                Err(AppError::NotAvailable(
+                    "managed runtime Linux command cleanup is unavailable on this host".into(),
+                ))
+            }
+            ManagedOperatingSystem::Macos => {
+                #[cfg(unix)]
+                {
+                    let state_root =
+                        canonical_real_directory(&self.state_root, "managed runtime state")?;
+                    let effective_uid = effective_uid();
+                    let home = macos_short_home_path(
+                        Path::new(MACOS_SHORT_HOME_BASE),
+                        &state_root,
+                        &self.loaded.sha256,
+                        effective_uid,
+                    );
+                    remove_macos_short_home_directory(&home, effective_uid)
+                }
+                #[cfg(not(unix))]
+                Err(AppError::NotAvailable(
+                    "managed runtime macOS command cleanup is unavailable on this host".into(),
+                ))
+            }
+            ManagedOperatingSystem::Windows => Ok(()),
         }
-        #[cfg(unix)]
-        {
-            let state_root = canonical_real_directory(&self.state_root, "managed runtime state")?;
-            // SAFETY: geteuid has no preconditions and does not dereference memory.
-            let effective_uid = unsafe { libc::geteuid() };
-            let home = macos_short_home_path(
-                Path::new(MACOS_SHORT_HOME_BASE),
-                &state_root,
-                &self.loaded.sha256,
-                effective_uid,
-            );
-            remove_macos_short_home_directory(&home, effective_uid)
-        }
-        #[cfg(not(unix))]
-        Err(AppError::NotAvailable(
-            "managed runtime macOS command cleanup is unavailable on this host".into(),
-        ))
     }
 
     /// Podman 5.8.2 resolves `define.DefaultIdentityName` beneath its XDG data
@@ -4983,6 +5065,445 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 #[cfg(unix)]
+fn effective_uid() -> libc::uid_t {
+    // SAFETY: geteuid has no preconditions and does not dereference memory.
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(unix)]
+fn linux_short_runtime_path(
+    base: &Path,
+    canonical_state_root: &Path,
+    manifest_sha256: &str,
+    effective_uid: libc::uid_t,
+) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+
+    let state_bytes = canonical_state_root.as_os_str().as_bytes();
+    let mut digest = Sha256::new();
+    digest.update(b"ai-security-scanner-linux-xdg-runtime-v1\0");
+    digest.update(effective_uid.to_be_bytes());
+    digest.update((state_bytes.len() as u64).to_be_bytes());
+    digest.update(state_bytes);
+    digest.update((manifest_sha256.len() as u64).to_be_bytes());
+    digest.update(manifest_sha256.as_bytes());
+    let encoded = hex::encode(digest.finalize());
+    base.join(format!(
+        "{LINUX_SHORT_RUNTIME_PREFIX}{}",
+        &encoded[..LINUX_SHORT_RUNTIME_DIGEST_HEX_CHARS]
+    ))
+}
+
+#[cfg(unix)]
+fn linux_podman_gvproxy_socket_path(runtime: &Path, machine_name: &str) -> PathBuf {
+    runtime
+        .join(PODMAN_LINUX_RUNTIME_DIRECTORY)
+        .join(format!("{machine_name}{PODMAN_GVPROXY_SOCKET_SUFFIX}"))
+}
+
+#[cfg(unix)]
+fn verify_linux_temporary_base(base: &Path) -> AppResult<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let metadata = fs::symlink_metadata(base)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux temporary base must be a real directory".into(),
+        ));
+    }
+    if base.canonicalize()? != base {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux temporary base must be canonical".into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(base).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime Linux temporary base could not be opened without following links: {error}"
+        ))
+    })?;
+    let opened = directory.metadata()?;
+    if !opened.is_dir() || opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux temporary base changed while it was being verified".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_linux_short_runtime_directory_at(
+    path: &Path,
+    base: &Path,
+    effective_uid: libc::uid_t,
+) -> AppResult<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    verify_linux_temporary_base(base)?;
+    if path.parent() != Some(base) {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux short-runtime path escaped its exact temporary base".into(),
+        ));
+    }
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    verify_linux_short_runtime_directory(path, effective_uid)
+}
+
+#[cfg(unix)]
+fn verify_linux_short_runtime_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux short runtime must be a real directory".into(),
+        ));
+    }
+    if metadata.uid() != effective_uid || metadata.mode() & 0o7777 != 0o700 {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux short runtime has unsafe ownership or permissions".into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime Linux short runtime could not be opened without following links: {error}"
+        ))
+    })?;
+    let opened = directory.metadata()?;
+    if !opened.is_dir()
+        || opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.uid() != effective_uid
+        || opened.mode() & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux short runtime changed while it was being verified".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_linux_podman_runtime_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let metadata = fs::symlink_metadata(path)?;
+    let mode = metadata.mode() & 0o7777;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != effective_uid
+        || mode & 0o700 != 0o700
+        || mode & !0o755 != 0
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux Podman runtime directory is unsafe".into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime Linux Podman runtime directory could not be opened without following links: {error}"
+        ))
+    })?;
+    let opened = directory.metadata()?;
+    if !opened.is_dir()
+        || opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.uid() != effective_uid
+        || opened.mode() & 0o7777 != mode
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux Podman runtime directory changed while it was being verified"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_expected_linux_gvproxy_log(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mode = metadata.mode() & 0o7777;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != effective_uid
+        || mode & 0o600 != 0o600
+        || mode & !0o666 != 0
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux gvproxy log is not an expected current-user single-link regular file"
+                .into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime Linux gvproxy log could not be opened without following links: {error}"
+        ))
+    })?;
+    let opened = file.metadata()?;
+    if !opened.is_file()
+        || opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.nlink() != 1
+        || opened.uid() != effective_uid
+        || opened.mode() & 0o7777 != mode
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux gvproxy log changed while it was being verified".into(),
+        ));
+    }
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_expected_linux_virtiofs_pid(path: &Path, effective_uid: libc::uid_t) -> AppResult<File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o7777 != 0o600
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux virtiofsd pid is not an expected current-user single-link mode-0600 regular file"
+                .into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime Linux virtiofsd pid could not be opened without following links: {error}"
+        ))
+    })?;
+    verify_opened_linux_virtiofs_pid(path, &file, &metadata, effective_uid)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn verify_opened_linux_virtiofs_pid(
+    path: &Path,
+    file: &File,
+    expected: &fs::Metadata,
+    effective_uid: libc::uid_t,
+) -> AppResult<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let current = fs::symlink_metadata(path)?;
+    let opened = file.metadata()?;
+    if current.file_type().is_symlink()
+        || !current.is_file()
+        || current.dev() != expected.dev()
+        || current.ino() != expected.ino()
+        || current.nlink() != 1
+        || current.uid() != effective_uid
+        || current.mode() & 0o7777 != 0o600
+        || !opened.is_file()
+        || opened.dev() != current.dev()
+        || opened.ino() != current.ino()
+        || opened.nlink() != 1
+        || opened.uid() != effective_uid
+        || opened.mode() & 0o7777 != 0o600
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux virtiofsd pid changed while it was being verified".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn wait_for_unlocked_linux_virtiofs_pid(
+    path: &Path,
+    effective_uid: libc::uid_t,
+    timeout: Duration,
+) -> AppResult<Option<File>> {
+    use std::os::fd::AsRawFd;
+
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let file = open_expected_linux_virtiofs_pid(path, effective_uid)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        // SAFETY: file owns a valid descriptor; flock neither retains the pointer nor
+        // accesses memory. The acquired lock remains held by this File until cleanup.
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            verify_opened_linux_virtiofs_pid(path, &file, &metadata, effective_uid)?;
+            return Ok(Some(file));
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(error.into());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(AppError::Runtime(
+                "managed runtime Linux virtiofsd remained live after exact machine removal".into(),
+            ));
+        }
+        thread::sleep(LINUX_VIRTIOFS_CLEANUP_POLL.min(deadline.saturating_duration_since(now)));
+    }
+}
+
+#[cfg(unix)]
+fn verify_linux_virtiofs_socket(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_socket()
+        || metadata.nlink() != 1
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux virtiofsd socket is not the expected current-user single-link mode-0700 Unix socket"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_expected_linux_virtiofs_residue(
+    podman: &Path,
+    effective_uid: libc::uid_t,
+    timeout: Duration,
+) -> AppResult<()> {
+    let pid_path = podman.join(PODMAN_VIRTIOFS_PID_NAME);
+    let socket_path = podman.join(PODMAN_VIRTIOFS_SOCKET_NAME);
+    let Some(pid_file) = wait_for_unlocked_linux_virtiofs_pid(&pid_path, effective_uid, timeout)?
+    else {
+        if private_entry_exists(&socket_path)? {
+            return Err(AppError::NotAuthorized(
+                "managed runtime Linux virtiofsd socket had no exact pid-lock ownership proof"
+                    .into(),
+            ));
+        }
+        return Ok(());
+    };
+
+    match fs::symlink_metadata(&socket_path) {
+        Ok(_) => {
+            verify_linux_virtiofs_socket(&socket_path, effective_uid)?;
+            fs::remove_file(&socket_path)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let expected = pid_file.metadata()?;
+    verify_opened_linux_virtiofs_pid(&pid_path, &pid_file, &expected, effective_uid)?;
+    fs::remove_file(&pid_path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_linux_short_runtime_directory_at(
+    path: &Path,
+    base: &Path,
+    effective_uid: libc::uid_t,
+) -> AppResult<()> {
+    verify_linux_temporary_base(base)?;
+    if path.parent() != Some(base) {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux short-runtime cleanup escaped its exact temporary base".into(),
+        ));
+    }
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    verify_linux_short_runtime_directory(path, effective_uid)?;
+
+    let podman = path.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_name() != OsStr::new(PODMAN_LINUX_RUNTIME_DIRECTORY) {
+            return Err(AppError::NotAuthorized(
+                "managed runtime Linux short runtime contained an unexpected entry after machine removal"
+                    .into(),
+            ));
+        }
+    }
+    match fs::symlink_metadata(&podman) {
+        Ok(_) => {
+            verify_linux_podman_runtime_directory(&podman, effective_uid)?;
+            for entry in fs::read_dir(&podman)? {
+                let entry = entry?;
+                if !matches!(
+                    entry.file_name().to_str(),
+                    Some(PODMAN_GVPROXY_LOG_NAME)
+                        | Some(PODMAN_VIRTIOFS_SOCKET_NAME)
+                        | Some(PODMAN_VIRTIOFS_PID_NAME)
+                ) {
+                    return Err(AppError::NotAuthorized(
+                        "managed runtime Linux Podman runtime directory contained an unexpected entry after machine removal"
+                            .into(),
+                    ));
+                }
+            }
+            remove_expected_linux_virtiofs_residue(
+                &podman,
+                effective_uid,
+                LINUX_VIRTIOFS_CLEANUP_TIMEOUT,
+            )?;
+            remove_expected_linux_gvproxy_log(
+                &podman.join(PODMAN_GVPROXY_LOG_NAME),
+                effective_uid,
+            )?;
+            if fs::read_dir(&podman)?.next().transpose()?.is_some() {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime Linux Podman runtime directory was not empty after exact log cleanup"
+                        .into(),
+                ));
+            }
+            fs::remove_dir(&podman)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    if fs::read_dir(path)?.next().transpose()?.is_some() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime Linux short runtime was not empty after machine removal".into(),
+        ));
+    }
+    fs::remove_dir(path)?;
+    sync_directory(base)
+}
+
+#[cfg(unix)]
 fn macos_short_home_path(
     base: &Path,
     canonical_state_root: &Path,
@@ -6835,6 +7356,19 @@ mod tests {
         image: Vec<u8>,
     }
 
+    #[cfg(all(unix, target_os = "linux"))]
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let Ok(runtime) = self.manager.linux_short_runtime_directory() {
+                let _ = remove_linux_short_runtime_directory_at(
+                    &runtime,
+                    Path::new(LINUX_SHORT_RUNTIME_BASE),
+                    effective_uid(),
+                );
+            }
+        }
+    }
+
     fn fixture() -> Fixture {
         let temp = tempfile::tempdir().expect("temp");
         let resources = temp.path().join("resources");
@@ -7005,6 +7539,255 @@ mod tests {
         assert!(names.contains("assm1-linux-arm64-0123456789ab"));
         assert!(names.contains("assm1-macos-arm64-0123456789ab"));
         assert!(names.contains("assm1-win-x64-0123456789ab"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_short_runtime_is_domain_separated_private_and_socket_bounded() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = TempDir::new().expect("temporary root");
+        let base = temp.path().join("short-runtimes");
+        let first_state = temp.path().join("first-state");
+        let second_state = temp.path().join("second-state");
+        for directory in [&base, &first_state, &second_state] {
+            ensure_private_directory(directory).expect("private directory");
+        }
+        let first_state = canonical_real_directory(&first_state, "first test state").unwrap();
+        let second_state = canonical_real_directory(&second_state, "second test state").unwrap();
+        let effective_uid = effective_uid();
+        let first_manifest = "a".repeat(64);
+        let second_manifest = "b".repeat(64);
+
+        let runtime = linux_short_runtime_path(&base, &first_state, &first_manifest, effective_uid);
+        assert_eq!(
+            runtime,
+            linux_short_runtime_path(&base, &first_state, &first_manifest, effective_uid)
+        );
+        assert_ne!(
+            runtime,
+            linux_short_runtime_path(&base, &second_state, &first_manifest, effective_uid)
+        );
+        assert_ne!(
+            runtime,
+            linux_short_runtime_path(&base, &first_state, &second_manifest, effective_uid)
+        );
+        assert_ne!(
+            runtime,
+            linux_short_runtime_path(
+                &base,
+                &first_state,
+                &first_manifest,
+                effective_uid.wrapping_add(1)
+            )
+        );
+        assert_ne!(
+            runtime,
+            macos_short_home_path(&base, &first_state, &first_manifest, effective_uid),
+            "Linux and macOS temporary namespaces must use different hash domains"
+        );
+        assert_eq!(runtime.parent(), Some(base.as_path()));
+        assert_eq!(
+            runtime.file_name().unwrap().as_bytes().len(),
+            LINUX_SHORT_RUNTIME_PREFIX.len() + LINUX_SHORT_RUNTIME_DIGEST_HEX_CHARS
+        );
+
+        ensure_linux_short_runtime_directory_at(&runtime, &base, effective_uid)
+            .expect("create short runtime");
+        ensure_linux_short_runtime_directory_at(&runtime, &base, effective_uid)
+            .expect("reuse short runtime");
+        let metadata = fs::symlink_metadata(&runtime).unwrap();
+        assert!(metadata.is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(metadata.uid(), effective_uid);
+        assert_eq!(metadata.mode() & 0o7777, 0o700);
+
+        let production_runtime = linux_short_runtime_path(
+            Path::new(LINUX_SHORT_RUNTIME_BASE),
+            &first_state,
+            &first_manifest,
+            effective_uid,
+        );
+        let longest_socket = linux_podman_gvproxy_socket_path(
+            &production_runtime,
+            &"m".repeat(MAX_MACHINE_NAME_BYTES),
+        );
+        assert_eq!(longest_socket.as_os_str().as_bytes().len(), 94);
+        assert!(longest_socket.as_os_str().as_bytes().len() <= PODMAN_LINUX_MAX_SOCKET_PATH_BYTES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_short_runtime_cleanup_is_exact_and_unsafe_entries_fail_closed() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+        use std::os::unix::net::UnixListener;
+
+        let temp = TempDir::new().expect("temporary root");
+        let base = temp.path().join("short-runtimes");
+        let state = temp.path().join("state");
+        ensure_private_directory(&base).unwrap();
+        ensure_private_directory(&state).unwrap();
+        let state = canonical_real_directory(&state, "test state").unwrap();
+        let effective_uid = effective_uid();
+
+        let runtime = linux_short_runtime_path(&base, &state, &"a".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&runtime, &base, effective_uid).unwrap();
+        let podman = runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+        fs::create_dir(&podman).unwrap();
+        fs::set_permissions(&podman, fs::Permissions::from_mode(0o750)).unwrap();
+        let log = podman.join(PODMAN_GVPROXY_LOG_NAME);
+        fs::write(&log, b"pinned gvproxy log\n").unwrap();
+        fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
+        let virtiofs_pid = podman.join(PODMAN_VIRTIOFS_PID_NAME);
+        fs::write(&virtiofs_pid, b"12345\n").unwrap();
+        fs::set_permissions(&virtiofs_pid, fs::Permissions::from_mode(0o600)).unwrap();
+        let virtiofs_socket = podman.join(PODMAN_VIRTIOFS_SOCKET_NAME);
+        let listener = UnixListener::bind(&virtiofs_socket).unwrap();
+        drop(listener);
+        fs::set_permissions(&virtiofs_socket, fs::Permissions::from_mode(0o700)).unwrap();
+        remove_linux_short_runtime_directory_at(&runtime, &base, effective_uid)
+            .expect("remove exact Podman, gvproxy, and unlocked virtiofsd residue");
+        assert!(!private_entry_exists(&runtime).unwrap());
+
+        let unexpected = linux_short_runtime_path(&base, &state, &"b".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&unexpected, &base, effective_uid).unwrap();
+        let podman = unexpected.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+        fs::create_dir(&podman).unwrap();
+        fs::set_permissions(&podman, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(podman.join("unexpected.sock"), b"must remain").unwrap();
+        let error = remove_linux_short_runtime_directory_at(&unexpected, &base, effective_uid)
+            .expect_err("unexpected Podman entry must fail closed");
+        assert!(error.to_string().contains("unexpected entry"));
+        assert_eq!(
+            fs::read(podman.join("unexpected.sock")).unwrap(),
+            b"must remain"
+        );
+        assert!(unexpected.is_dir());
+
+        let linked_log_runtime =
+            linux_short_runtime_path(&base, &state, &"c".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&linked_log_runtime, &base, effective_uid).unwrap();
+        let podman = linked_log_runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+        fs::create_dir(&podman).unwrap();
+        fs::set_permissions(&podman, fs::Permissions::from_mode(0o755)).unwrap();
+        let outside = temp.path().join("outside-log");
+        fs::write(&outside, b"outside remains").unwrap();
+        symlink(&outside, podman.join(PODMAN_GVPROXY_LOG_NAME)).unwrap();
+        assert!(
+            remove_linux_short_runtime_directory_at(&linked_log_runtime, &base, effective_uid)
+                .is_err()
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"outside remains");
+        assert!(
+            fs::symlink_metadata(podman.join(PODMAN_GVPROXY_LOG_NAME))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let hard_link_runtime =
+            linux_short_runtime_path(&base, &state, &"d".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&hard_link_runtime, &base, effective_uid).unwrap();
+        let podman = hard_link_runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+        fs::create_dir(&podman).unwrap();
+        fs::set_permissions(&podman, fs::Permissions::from_mode(0o755)).unwrap();
+        let outside = temp.path().join("outside-hard-link");
+        fs::write(&outside, b"hard link remains").unwrap();
+        fs::hard_link(&outside, podman.join(PODMAN_GVPROXY_LOG_NAME)).unwrap();
+        assert!(
+            remove_linux_short_runtime_directory_at(&hard_link_runtime, &base, effective_uid)
+                .is_err()
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"hard link remains");
+        assert_eq!(
+            fs::symlink_metadata(podman.join(PODMAN_GVPROXY_LOG_NAME))
+                .unwrap()
+                .nlink(),
+            2
+        );
+
+        let locked_runtime =
+            linux_short_runtime_path(&base, &state, &"e".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&locked_runtime, &base, effective_uid).unwrap();
+        let podman = locked_runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+        fs::create_dir(&podman).unwrap();
+        fs::set_permissions(&podman, fs::Permissions::from_mode(0o755)).unwrap();
+        let pid = podman.join(PODMAN_VIRTIOFS_PID_NAME);
+        fs::write(&pid, b"12345\n").unwrap();
+        fs::set_permissions(&pid, fs::Permissions::from_mode(0o600)).unwrap();
+        let locked_pid = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&pid)
+            .unwrap();
+        // SAFETY: locked_pid owns a valid descriptor for this test fixture.
+        assert_eq!(
+            unsafe { libc::flock(locked_pid.as_raw_fd(), libc::LOCK_EX) },
+            0
+        );
+        let started = Instant::now();
+        let error = remove_expected_linux_virtiofs_residue(
+            &podman,
+            effective_uid,
+            Duration::from_millis(50),
+        )
+        .expect_err("a live virtiofsd pid lock must not be removed");
+        assert!(error.to_string().contains("remained live"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(pid.is_file());
+        drop(locked_pid);
+        remove_linux_short_runtime_directory_at(&locked_runtime, &base, effective_uid)
+            .expect("cleanup succeeds after the exact pid lock is released");
+
+        let unproven_socket_runtime =
+            linux_short_runtime_path(&base, &state, &"f".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&unproven_socket_runtime, &base, effective_uid)
+            .unwrap();
+        let podman = unproven_socket_runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+        fs::create_dir(&podman).unwrap();
+        fs::set_permissions(&podman, fs::Permissions::from_mode(0o755)).unwrap();
+        let socket = podman.join(PODMAN_VIRTIOFS_SOCKET_NAME);
+        let listener = UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            remove_expected_linux_virtiofs_residue(
+                &podman,
+                effective_uid,
+                Duration::from_millis(50)
+            )
+            .is_err()
+        );
+        assert!(socket.exists());
+        drop(listener);
+
+        let permissive = linux_short_runtime_path(&base, &state, &"e".repeat(64), effective_uid);
+        fs::create_dir(&permissive).unwrap();
+        fs::set_permissions(&permissive, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            ensure_linux_short_runtime_directory_at(&permissive, &base, effective_uid).is_err()
+        );
+        assert!(
+            remove_linux_short_runtime_directory_at(&permissive, &base, effective_uid).is_err()
+        );
+
+        let linked = linux_short_runtime_path(&base, &state, &"0".repeat(64), effective_uid);
+        let outside_directory = temp.path().join("outside-directory");
+        ensure_private_directory(&outside_directory).unwrap();
+        symlink(&outside_directory, &linked).unwrap();
+        assert!(ensure_linux_short_runtime_directory_at(&linked, &base, effective_uid).is_err());
+        assert!(remove_linux_short_runtime_directory_at(&linked, &base, effective_uid).is_err());
+        assert!(
+            fs::symlink_metadata(&linked)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(outside_directory.is_dir());
+
+        let escaped = base.join("nested").join("assm1-escaped");
+        assert!(ensure_linux_short_runtime_directory_at(&escaped, &base, effective_uid).is_err());
     }
 
     #[cfg(unix)]
@@ -7500,6 +8283,22 @@ mod tests {
             .manager
             .runtime_command(target)
             .expect("private provider home");
+        #[cfg(target_os = "linux")]
+        let linux_runtime = {
+            use std::os::unix::fs::PermissionsExt;
+
+            let runtime = fixture
+                .manager
+                .linux_short_runtime_directory()
+                .expect("Linux short runtime");
+            let podman = runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+            fs::create_dir(&podman).expect("Podman runtime directory");
+            fs::set_permissions(&podman, fs::Permissions::from_mode(0o755)).unwrap();
+            let log = podman.join(PODMAN_GVPROXY_LOG_NAME);
+            fs::write(&log, b"pinned gvproxy residue\n").unwrap();
+            fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
+            runtime
+        };
         let identity = fixture.manager.machine_ssh_identity_path();
         let image = {
             let _lock = fixture.manager.lock().expect("lifecycle lock");
@@ -7528,6 +8327,8 @@ mod tests {
         assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
         assert!(!fixture.manager.install_directory().exists());
         assert!(!fixture.manager.provider_home().exists());
+        #[cfg(target_os = "linux")]
+        assert!(!private_entry_exists(&linux_runtime).unwrap());
         assert!(!private_entry_exists(&identity).unwrap());
         assert!(!private_entry_exists(&managed_ssh_public_key_path(&identity)).unwrap());
         assert!(!private_entry_exists(&private_temporary).unwrap());
@@ -7555,6 +8356,22 @@ mod tests {
             .manager
             .runtime_command(target)
             .expect("private provider home");
+        #[cfg(target_os = "linux")]
+        let linux_runtime_after_machine_removal = {
+            use std::os::unix::fs::PermissionsExt;
+
+            let runtime = fixture
+                .manager
+                .linux_short_runtime_directory()
+                .expect("Linux short runtime");
+            let podman = runtime.join(PODMAN_LINUX_RUNTIME_DIRECTORY);
+            fs::create_dir(&podman).expect("Podman runtime directory");
+            fs::set_permissions(&podman, fs::Permissions::from_mode(0o755)).unwrap();
+            let log = podman.join(PODMAN_GVPROXY_LOG_NAME);
+            fs::write(&log, b"pinned gvproxy residue after machine stop\n").unwrap();
+            fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
+            runtime
+        };
         let identity = fixture.manager.machine_ssh_identity_path();
         let image = {
             let _lock = fixture.manager.lock().expect("lifecycle lock");
@@ -7588,6 +8405,8 @@ mod tests {
         assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
         assert!(!fixture.manager.install_directory().exists());
         assert!(!fixture.manager.provider_home().exists());
+        #[cfg(target_os = "linux")]
+        assert!(!private_entry_exists(&linux_runtime_after_machine_removal).unwrap());
         assert!(!private_entry_exists(&identity).unwrap());
         assert_eq!(fs::read(&image).unwrap(), fixture.image);
         let calls = fixture.commands.calls();
@@ -7626,6 +8445,11 @@ mod tests {
             .manager
             .runtime_command(target)
             .expect("private provider home");
+        #[cfg(target_os = "linux")]
+        let linux_runtime = fixture
+            .manager
+            .linux_short_runtime_directory()
+            .expect("Linux short runtime");
         let identity = fixture.manager.machine_ssh_identity_path();
         let image = {
             let _lock = fixture.manager.lock().expect("lifecycle lock");
@@ -7654,6 +8478,8 @@ mod tests {
         assert!(error.to_string().contains("exact removal failed"));
         assert!(fixture.manager.install_directory().exists());
         assert!(fixture.manager.provider_home().exists());
+        #[cfg(target_os = "linux")]
+        assert!(private_entry_exists(&linux_runtime).unwrap());
         assert!(identity.is_file());
         assert_eq!(fs::read(&image).unwrap(), fixture.image);
         assert_eq!(fixture.commands.calls().len(), 2);
@@ -8536,6 +9362,37 @@ mod tests {
             fixture.manager.machine_ssh_identity_path(),
             xdg_data_home.join("containers/podman/machine/machine")
         );
+        let xdg_runtime_directory = PathBuf::from(
+            command
+                .environment
+                .get(OsStr::new("XDG_RUNTIME_DIR"))
+                .expect("XDG runtime directory"),
+        );
+        if target.operating_system == ManagedOperatingSystem::Linux {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt;
+
+                assert_eq!(
+                    xdg_runtime_directory,
+                    fixture
+                        .manager
+                        .linux_short_runtime_directory()
+                        .expect("deterministic Linux short runtime")
+                );
+                assert_eq!(xdg_runtime_directory.parent(), Some(Path::new("/tmp")));
+                verify_linux_short_runtime_directory(&xdg_runtime_directory, effective_uid())
+                    .expect("private Linux short runtime");
+                let socket =
+                    linux_podman_gvproxy_socket_path(&xdg_runtime_directory, &machine_name(target));
+                assert!(socket.as_os_str().as_bytes().len() <= PODMAN_LINUX_MAX_SOCKET_PATH_BYTES);
+            }
+        } else {
+            assert_eq!(
+                xdg_runtime_directory,
+                fixture.manager.provider_home().join("run")
+            );
+        }
         if target.operating_system == ManagedOperatingSystem::Macos {
             assert_ne!(command_home, fixture.manager.provider_home());
             #[cfg(unix)]

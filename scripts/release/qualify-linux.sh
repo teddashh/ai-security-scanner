@@ -180,6 +180,34 @@ if [[ "${desktop_status}" -ne 124 ]]; then
 fi
 
 mkdir -m 700 -- "${data_directory}"
+short_runtime="$(node -e '
+  const crypto = require("crypto");
+  const fs = require("fs");
+  const path = require("path");
+  const state = Buffer.from(path.join(fs.realpathSync(process.argv[1]), "managed-runtime"));
+  const manifest = crypto.createHash("sha256").update(fs.readFileSync(process.argv[2])).digest("hex");
+  const u32 = Buffer.alloc(4);
+  u32.writeUInt32BE(process.geteuid());
+  const u64 = (value) => {
+    const buffer = Buffer.alloc(8);
+    buffer.writeBigUInt64BE(BigInt(value));
+    return buffer;
+  };
+  const namespace = crypto.createHash("sha256")
+    .update(Buffer.from("ai-security-scanner-linux-xdg-runtime-v1\0"))
+    .update(u32)
+    .update(u64(state.length))
+    .update(state)
+    .update(u64(Buffer.byteLength(manifest)))
+    .update(Buffer.from(manifest))
+    .digest("hex")
+    .slice(0, 32);
+  process.stdout.write(`/tmp/assm1-${namespace}`);
+' "${data_directory}" "${runtime_manifest}")"
+if [[ -e "${short_runtime}" || -L "${short_runtime}" ]]; then
+  printf 'Linux qualification did not begin with a fresh exact short XDG runtime directory.\n' >&2
+  exit 1
+fi
 run_managed() {
   output_name="$1"
   shift
@@ -224,17 +252,71 @@ assert_managed_ssh_identity() {
 }
 
 run_managed initial-status status
+if [[ -e "${short_runtime}" || -L "${short_runtime}" ]]; then
+  printf 'Initial managed status created the Linux short XDG runtime directory before installation.\n' >&2
+  exit 1
+fi
 run_managed install install
+if [[ -e "${short_runtime}" || -L "${short_runtime}" ]]; then
+  printf 'Managed payload installation created the Linux short XDG runtime directory before a Podman command.\n' >&2
+  exit 1
+fi
 run_managed installed-status status
+[[ -d "${short_runtime}" && ! -L "${short_runtime}" ]]
+[[ "$(stat -c '%u' "${short_runtime}")" == "$(id -u)" ]]
+[[ "$(stat -c '%a' "${short_runtime}")" == "700" ]]
+podman_runtime="${short_runtime}/podman"
+[[ -d "${podman_runtime}" && ! -L "${podman_runtime}" ]]
+[[ "$(stat -c '%u' "${podman_runtime}")" == "$(id -u)" ]]
+podman_runtime_mode="$(stat -c '%a' "${podman_runtime}")"
+podman_runtime_mode_value=$((8#${podman_runtime_mode}))
+if (( (podman_runtime_mode_value & 0700) != 0700 ||
+      (podman_runtime_mode_value & ~0755) != 0 )); then
+  printf 'Managed runtime Linux Podman runtime directory has unsafe permissions.\n' >&2
+  exit 1
+fi
+longest_gvproxy_socket="${podman_runtime}/$(printf '%030d' 0)-gvproxy.sock"
+longest_gvproxy_socket_bytes="$(node -e 'process.stdout.write(String(Buffer.byteLength(process.argv[1])))' "${longest_gvproxy_socket}")"
+if (( longest_gvproxy_socket_bytes > 103 )); then
+  printf 'Managed runtime Linux gvproxy socket exceeds Podman 5.8.2 path budget.\n' >&2
+  exit 1
+fi
 run_managed start start
 assert_managed_ssh_identity
 run_managed running-status status
 run_managed container-qualification qualify
 run_managed stop stop
+[[ -d "${short_runtime}" && ! -L "${short_runtime}" ]]
+virtiofs_pid="${podman_runtime}/virtiofschar0.pid"
+if [[ ! -f "${virtiofs_pid}" || -L "${virtiofs_pid}" ]]; then
+  printf 'Pinned Podman stop did not leave the expected real virtiofsd pid evidence.\n' >&2
+  exit 1
+fi
+[[ "$(stat -c '%u' "${virtiofs_pid}")" == "$(id -u)" ]]
+[[ "$(stat -c '%h' "${virtiofs_pid}")" == "1" ]]
+[[ "$(stat -c '%a' "${virtiofs_pid}")" == "600" ]]
+if ! flock -n "${virtiofs_pid}" true; then
+  printf 'Pinned Podman stop left the exact virtiofsd pid lock live.\n' >&2
+  exit 1
+fi
+virtiofs_socket="${podman_runtime}/virtiofschar0"
+if [[ -e "${virtiofs_socket}" || -L "${virtiofs_socket}" ]]; then
+  if [[ ! -S "${virtiofs_socket}" || -L "${virtiofs_socket}" ]]; then
+    printf 'Pinned Podman stop left an unsafe virtiofsd socket entry.\n' >&2
+    exit 1
+  fi
+  [[ "$(stat -c '%u' "${virtiofs_socket}")" == "$(id -u)" ]]
+  [[ "$(stat -c '%h' "${virtiofs_socket}")" == "1" ]]
+  [[ "$(stat -c '%a' "${virtiofs_socket}")" == "700" ]]
+fi
 run_managed stopped-status status
 run_managed uninstall-purge uninstall --force --purge-image-cache
 if [[ -e "${provider_release_home}" || -L "${provider_release_home}" ]]; then
   printf 'Managed runtime uninstall left its exact release provider home behind.\n' >&2
+  exit 1
+fi
+if [[ -e "${short_runtime}" || -L "${short_runtime}" ]]; then
+  printf 'Managed runtime uninstall left its exact Linux short XDG runtime directory behind.\n' >&2
   exit 1
 fi
 run_managed final-status status

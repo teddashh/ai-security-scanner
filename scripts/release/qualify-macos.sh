@@ -154,7 +154,6 @@ assert_managed_ssh_identity() {
 }
 run_managed initial-status status
 run_managed install install
-run_managed installed-status status
 short_home="$(node -e '
   const crypto = require("crypto");
   const fs = require("fs");
@@ -182,6 +181,7 @@ if [[ -e "${short_home}" || -L "${short_home}" ]]; then
   printf 'macOS qualification did not begin with a fresh exact short HOME.\n' >&2
   exit 1
 fi
+run_managed installed-status status
 run_managed start start
 assert_managed_ssh_identity
 [[ -d "${short_home}" && ! -L "${short_home}" ]]

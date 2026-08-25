@@ -115,7 +115,7 @@ function Test-ExactEntryExists([string]$Path) {
   }
   return @(
     Get-ChildItem -LiteralPath $parent -Force |
-      Where-Object { [String]::Equals($_.Name, $name, [StringComparison]::Ordinal) }
+      Where-Object { [String]::Equals($_.Name, $name, [StringComparison]::OrdinalIgnoreCase) }
   ).Count -ne 0
 }
 
@@ -297,11 +297,34 @@ if (-not $workRoot.StartsWith($runnerTemp + [IO.Path]::DirectorySeparatorChar, [
 }
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 $installDirectory = Join-Path $runnerTemp "ai-security-scanner-platform-qualification-installed"
-$dataDirectory = Join-Path $runnerTemp "ai-security-scanner-platform-qualification-windows-data"
+$reportedLocalApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+if ([String]::IsNullOrWhiteSpace($reportedLocalApplicationData) -or
+    -not [IO.Path]::IsPathFullyQualified($reportedLocalApplicationData)) {
+  throw "Windows qualification could not obtain OS-resolved LocalApplicationData."
+}
+$localApplicationData = [IO.Path]::GetFullPath($reportedLocalApplicationData)
+$localApplicationDataItem = Get-Item -LiteralPath $localApplicationData -Force
+if (-not $localApplicationDataItem.PSIsContainer -or
+    ($localApplicationDataItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw "OS-resolved LocalApplicationData is not a real directory."
+}
+$dataDirectory = [IO.Path]::GetFullPath(
+  (Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-data")
+)
+if (-not [String]::Equals(
+    [IO.Path]::GetDirectoryName($dataDirectory),
+    $localApplicationData,
+    [StringComparison]::OrdinalIgnoreCase
+  )) {
+  throw "Qualification data directory escaped OS-resolved LocalApplicationData."
+}
 foreach ($boundedPath in @($installDirectory, $dataDirectory)) {
   if (-not ([IO.Path]::GetFileName($boundedPath)).StartsWith("ai-security-scanner-platform-qualification-", [StringComparison]::Ordinal)) {
     throw "Refusing an unexpected qualification cleanup path."
   }
+}
+if (Test-ExactEntryExists $dataDirectory) {
+  throw "Qualification requires a fresh LocalApplicationData namespace."
 }
 
 $installed = $false

@@ -16,6 +16,16 @@ function assert(condition, message) {
   }
 }
 
+function assertOrderedTokens(source, tokens, label) {
+  let previous = -1;
+  for (const token of tokens) {
+    const index = source.indexOf(token);
+    assert(index !== -1, label + " is missing ordered marker: " + token);
+    assert(index > previous, label + " has an out-of-order marker: " + token);
+    previous = index;
+  }
+}
+
 function cargoPackageVersion(toml) {
   const packageStart = toml.indexOf("[package]");
   if (packageStart === -1) {
@@ -336,10 +346,14 @@ function validatePlatformQualificationSources(sources) {
   for (const required of [
     "run_managed initial-status status",
     "run_managed install install",
+    "run_managed installed-status status",
     "run_managed start start",
+    "run_managed running-status status",
     "run_managed container-qualification qualify",
     "run_managed stop stop",
+    "run_managed stopped-status status",
     "run_managed uninstall-purge uninstall --force --purge-image-cache",
+    "run_managed final-status status",
     "xvfb-run",
     "apt-get purge",
     'const binary = path.join(runtimeRoot, "bin", "qemu-img")',
@@ -358,11 +372,28 @@ function validatePlatformQualificationSources(sources) {
     ".machine.public-key-new",
     "Managed SSH identity staging entries remain after start.",
     "Managed runtime uninstall left its exact release provider home behind.",
+    "ai-security-scanner-linux-xdg-runtime-v1\\0",
+    "Linux qualification did not begin with a fresh exact short XDG runtime directory.",
+    "Initial managed status created the Linux short XDG runtime directory before installation.",
+    "Managed payload installation created the Linux short XDG runtime directory before a Podman command.",
+    '[[ -d "${short_runtime}" && ! -L "${short_runtime}" ]]',
+    '[[ "$(stat -c \'%u\' "${short_runtime}")" == "$(id -u)" ]]',
+    '[[ "$(stat -c \'%a\' "${short_runtime}")" == "700" ]]',
+    '[[ "$(stat -c \'%u\' "${podman_runtime}")" == "$(id -u)" ]]',
+    'podman_runtime_mode_value=$((8#${podman_runtime_mode}))',
+    "(podman_runtime_mode_value & 0700) != 0700",
+    "(podman_runtime_mode_value & ~0755) != 0",
+    "Managed runtime Linux Podman runtime directory has unsafe permissions.",
+    "Managed runtime Linux gvproxy socket exceeds Podman 5.8.2 path budget.",
+    "virtiofschar0.pid",
+    'flock -n "${virtiofs_pid}" true',
+    "Managed runtime uninstall left its exact Linux short XDG runtime directory behind.",
     "managed-runtime/provider-home",
   ]) assert(linux.includes(required), `Linux qualification is missing: ${required}`);
   for (const required of [
     "run_managed initial-status status",
     "run_managed install install",
+    "run_managed installed-status status",
     "run_managed start start",
     "run_managed running-status status",
     "run_managed container-qualification qualify",
@@ -419,12 +450,77 @@ function validatePlatformQualificationSources(sources) {
     "Managed runtime uninstall left its exact release provider home behind.",
     "Managed runtime uninstall left its exact WSL distribution registered:",
     "managed-runtime\\provider-home",
+    "GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
+    '(Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-data")',
+    "Where-Object { [String]::Equals($_.Name, $name, [StringComparison]::OrdinalIgnoreCase) }",
+    "OS-resolved LocalApplicationData is not a real directory.",
+    "Qualification data directory escaped OS-resolved LocalApplicationData.",
+    "Qualification requires a fresh LocalApplicationData namespace.",
+    "if (Test-ExactEntryExists $dataDirectory)",
+    "New-Item -ItemType Directory -Path $dataDirectory -Force",
   ]) assert(windows.includes(required), `Windows qualification is missing: ${required}`);
+  assertOrderedTokens(linux, [
+    "Linux qualification did not begin with a fresh exact short XDG runtime directory.",
+    "run_managed initial-status status",
+    "Initial managed status created the Linux short XDG runtime directory before installation.",
+    "run_managed install install",
+    "Managed payload installation created the Linux short XDG runtime directory before a Podman command.",
+    "run_managed installed-status status",
+    "Managed runtime Linux Podman runtime directory has unsafe permissions.",
+    "Managed runtime Linux gvproxy socket exceeds Podman 5.8.2 path budget.",
+    "run_managed start start",
+    "run_managed running-status status",
+    "run_managed container-qualification qualify",
+    "run_managed stop stop",
+    'flock -n "${virtiofs_pid}" true',
+    "run_managed stopped-status status",
+    "run_managed uninstall-purge uninstall --force --purge-image-cache",
+    "Managed runtime uninstall left its exact Linux short XDG runtime directory behind.",
+    "run_managed final-status status",
+  ], "Linux qualification");
+  assertOrderedTokens(macos, [
+    "run_managed initial-status status",
+    "run_managed install install",
+    "macOS qualification did not begin with a fresh exact short HOME.",
+    "run_managed installed-status status",
+    "run_managed start start",
+    "run_managed running-status status",
+    "run_managed container-qualification qualify",
+    "run_managed stop stop",
+    "run_managed stopped-status status",
+    "run_managed uninstall-purge uninstall --force --purge-image-cache",
+    "Managed runtime uninstall left its exact macOS short HOME behind.",
+    "run_managed final-status status",
+  ], "macOS qualification");
+  assertOrderedTokens(windows, [
+    "GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
+    '(Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-data")',
+    "if (Test-ExactEntryExists $dataDirectory)",
+    "New-Item -ItemType Directory -Path $dataDirectory -Force",
+    '$initialStatus = Invoke-Managed "initial-status" @("status")',
+    '$installStatus = Invoke-Managed "install" @("install")',
+    '$installedStatus = Invoke-Managed "installed-status" @("status")',
+    '$startStatus = Invoke-Managed "start" @("start")',
+    '$runningStatus = Invoke-Managed "running-status" @("status")',
+    '$containerQualification = Invoke-Managed "container-qualification" @("qualify")',
+    '$stopStatus = Invoke-Managed "stop" @("stop")',
+    '$stoppedStatus = Invoke-Managed "stopped-status" @("status")',
+    '$uninstallStatus = Invoke-Managed "uninstall-purge" @("uninstall", "--force", "--purge-image-cache")',
+    '$finalStatus = Invoke-Managed "final-status" @("status")',
+  ], "Windows qualification");
+  assert(
+    !windows.includes('$dataDirectory = Join-Path $runnerTemp "ai-security-scanner-platform-qualification-windows-data"'),
+    "Windows qualification regressed its managed data directory to RUNNER_TEMP",
+  );
   for (const [name, source] of [["Linux", linux], ["macOS", macos], ["Windows", windows]]) {
     assert(!source.includes("ssh-keygen"), `${name} qualification depends on a host ssh-keygen`);
   }
   assert(!linux.includes("command -v qemu-img"), "Linux qualification can resolve qemu-img from the host PATH");
   assert(!linux.includes("qemu-utils"), "Linux qualification installs a host qemu-img package");
+  assert(
+    !linux.includes('[[ "${podman_runtime_mode}" == "700" || "${podman_runtime_mode}" == "755" ]]'),
+    "Linux qualification rejects safe umask-derived Podman runtime modes",
+  );
   assert(!windows.includes("$env:SystemRoot"), "Windows qualification trusts inherited SystemRoot for WSL cleanup");
   assert(!windows.includes('.Replace([string][char]0, "")'), "Windows qualification silently repairs malformed WSL inventory");
   for (const required of [
@@ -518,6 +614,19 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
   for (const required of [
     "canonical_application_data_root",
     "linux_machine_volume_spec",
+    "linux_short_runtime_directory",
+    "let runtime_directory = self.runtime_directory(target, &persistent_run)?;",
+    'OsString::from("XDG_RUNTIME_DIR")',
+    "runtime_directory.as_os_str().to_owned()",
+    'OsString::from("XDG_RUNTIME_DIR"),\n            runtime_directory.as_os_str().to_owned(),',
+    "ai-security-scanner-linux-xdg-runtime-v1\\0",
+    "PODMAN_LINUX_MAX_SOCKET_PATH_BYTES",
+    "wait_for_unlocked_linux_virtiofs_pid",
+    "PODMAN_VIRTIOFS_PID_NAME",
+    "remove_linux_short_runtime_directory_at",
+    "self.remove_temporary_command_state_after_machine_removal_locked(target)?;",
+    "linux_short_runtime_is_domain_separated_private_and_socket_bounded",
+    "linux_short_runtime_cleanup_is_exact_and_unsafe_entries_fail_closed",
     'OsString::from("--volume")',
     "self.initialize_machine(&command, target, &image, &machine_name)?",
     "ManagedOperatingSystem::Macos | ManagedOperatingSystem::Windows => Ok(None)",

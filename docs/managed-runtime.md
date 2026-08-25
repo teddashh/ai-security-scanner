@@ -28,6 +28,24 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   every supported host and architecture. Managed commands clear the inherited environment and use
   absolute, already-verified executable paths. On Windows they also disable current-directory
   executable lookup, so Go helper resolution remains inside the constrained managed `PATH`.
+- On Linux only, managed commands set `XDG_RUNTIME_DIR` to a stable
+  `/tmp/assm1-<32-hex-namespace>` directory while `HOME`, configuration, identities, images, and
+  every other durable provider path remain under the release-private provider home. The namespace
+  uses a Linux-specific domain-separated hash of the canonical managed state root, exact release
+  manifest digest, and effective uid. The app creates or reopens only that exact `/tmp` child when
+  it is a real current-user directory with mode `0700`, verified through an `O_NOFOLLOW` directory
+  handle. A link, foreign owner, permissive mode, non-canonical temporary base, or changed object
+  fails closed. With a maximum 30-byte machine name, Podman 5.8.2's longest
+  `$XDG_RUNTIME_DIR/podman/*-gvproxy.sock` path is 94 bytes, below its 103-byte Unix-socket budget.
+- The Linux short runtime remains stable across start, ordinary stop, and update. After exact
+  machine removal, uninstall accepts only the pinned Podman `podman` child. It may remove only the
+  exact `virtiofschar0.pid`, `virtiofschar0`, and `gvproxy.log` basenames. The pid must be a
+  current-user, single-link, mode-`0600` regular file whose exclusive `flock` becomes available
+  within a bounded wait; only that proof permits removal of a matching current-user, single-link,
+  mode-`0700` Unix socket. A socket without its exact pid-lock proof, a still-live lock, or any
+  other unsafe type fails closed. The log must likewise be a current-user, single-link,
+  non-executable regular file with an expected umask-derived mode. Cleanup then requires the Podman
+  directory and short root to be empty before removing those exact directories and syncing `/tmp`.
 - On macOS only, managed commands set `HOME`, `USERPROFILE`, and their working directory to the
   stable `/tmp/assm1-<32-hex-namespace>` directory. The namespace hashes the canonical managed
   state root, exact release-manifest digest, and effective uid. The app creates or reopens that
