@@ -5800,8 +5800,10 @@ fn canonical_real_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
 fn create_windows_private_file(path: &Path) -> io::Result<File> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
-    use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
-    use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
+    use windows_sys::Wdk::Storage::FileSystem::NtSetSecurityObject;
+    use windows_sys::Win32::Foundation::{
+        FALSE, INVALID_HANDLE_VALUE, RtlNtStatusToDosError, TRUE,
+    };
     use windows_sys::Win32::Security::{
         DACL_SECURITY_INFORMATION, InitializeSecurityDescriptor,
         PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
@@ -5925,39 +5927,61 @@ fn create_windows_private_file(path: &Path) -> io::Result<File> {
     // SAFETY: CreateFileW returned a uniquely owned file handle.
     let file = unsafe { File::from_raw_handle(raw) };
     let secure = (|| {
-        // First transition both the DACL and its inheritance policy through
-        // the exact, exclusively opened, still-empty filesystem handle. The
-        // file provider can preserve an inherited ACE while applying that
-        // transition, so replace the DACL once more after the object is
-        // protected. No caller can write bytes until this same handle is
-        // verified below.
-        let status = unsafe {
-            SetSecurityInfo(
-                file.as_raw_handle(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                enforcement_acl.as_ptr(),
-                std::ptr::null(),
+        let mut enforcement_descriptor = SECURITY_DESCRIPTOR::default();
+        // SAFETY: enforcement_descriptor is correctly sized writable storage.
+        if unsafe {
+            InitializeSecurityDescriptor(
+                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
+                SECURITY_DESCRIPTOR_REVISION,
             )
-        };
-        if status != 0 {
-            return Err(io::Error::from_raw_os_error(status as i32));
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
         }
-        let status = unsafe {
-            SetSecurityInfo(
-                file.as_raw_handle(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+        // SAFETY: descriptor and the separately validated ACL are live for the
+        // native call below.
+        if unsafe {
+            SetSecurityDescriptorDacl(
+                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
+                TRUE,
                 enforcement_acl.as_ptr(),
-                std::ptr::null(),
+                FALSE,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: enforcement_descriptor is initialized. Setting the protected
+        // control bit makes the native modification descriptor authoritative
+        // instead of subject to parent auto-inheritance merging.
+        if unsafe {
+            SetSecurityDescriptorControl(
+                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
+                SE_DACL_PROTECTED,
+                SE_DACL_PROTECTED,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SetSecurityInfo routes file DACL changes through MARTA's automatic
+        // inheritance merge, which can preserve an inherited Everyone ACE even
+        // after reporting success. NtSetSecurityObject applies this absolute
+        // modification descriptor directly to the exact, exclusively opened,
+        // still-empty handle. The strict readback below remains authoritative.
+        // SAFETY: file owns a WRITE_DAC handle and enforcement_descriptor plus
+        // all of its ACL backing remain live for this synchronous native call.
+        let status = unsafe {
+            NtSetSecurityObject(
+                file.as_raw_handle(),
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::addr_of_mut!(enforcement_descriptor).cast(),
             )
         };
-        if status != 0 {
-            return Err(io::Error::from_raw_os_error(status as i32));
+        if status < 0 {
+            // SAFETY: status is the NTSTATUS returned by NtSetSecurityObject.
+            let error = unsafe { RtlNtStatusToDosError(status) };
+            return Err(io::Error::from_raw_os_error(error as i32));
         }
         let information = windows_file_information(&file)?;
         if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
