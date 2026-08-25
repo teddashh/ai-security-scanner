@@ -11,8 +11,8 @@ use crate::domain::{
     Confidence, Evidence, EvidenceKind, Finding, FindingStatus, RawArtifact, Severity,
 };
 use crate::error::AppResult;
-use quick_xml::Reader;
 use quick_xml::events::{BytesRef, BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,6 +60,7 @@ const MAX_SHORT_TEXT: usize = 512;
 const MAX_LONG_TEXT: usize = 2_048;
 const MAX_XML_DEPTH: usize = 64;
 const MAX_XML_EVENTS: usize = 200_000;
+const MAX_XML_ATTRIBUTES: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Profile {
@@ -806,17 +807,21 @@ fn xml_attribute(
     decoder: quick_xml::encoding::Decoder,
     name: &[u8],
 ) -> Result<Option<String>, String> {
-    for attribute in start.attributes().with_checks(true) {
+    let mut matched = None;
+    for (index, attribute) in start.attributes().with_checks(true).enumerate() {
+        if index >= MAX_XML_ATTRIBUTES {
+            return Err("Greenbone XML element exceeded the attribute limit".to_owned());
+        }
         let attribute =
             attribute.map_err(|_| "Greenbone XML contained a malformed attribute".to_owned())?;
-        if attribute.key.as_ref() == name {
+        if attribute.key.as_ref() == name && matched.is_none() {
             let value = attribute
-                .decode_and_unescape_value(decoder)
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
                 .map_err(|_| "Greenbone XML attribute could not be decoded safely".to_owned())?;
-            return Ok(Some(safe_text(&value, MAX_SHORT_TEXT)));
+            matched = Some(safe_text(&value, MAX_SHORT_TEXT));
         }
     }
-    Ok(None)
+    Ok(matched)
 }
 
 fn safe_xml_reference(reference: &BytesRef<'_>) -> Option<char> {
@@ -2430,5 +2435,22 @@ mod tests {
         assert!(!is_runtime_stream_capture_path(
             "case/run/engine/attempt-1/raw/result.json"
         ));
+    }
+
+    #[test]
+    fn greenbone_attribute_flood_is_bounded_before_normalization() {
+        let mut xml = String::from("<results><result id=\"result-1\" ");
+        for index in 0..=MAX_XML_ATTRIBUTES {
+            xml.push_str(&format!("a{index}=\"x\" "));
+        }
+        xml.push_str("><name>bounded</name></result></results>");
+
+        let mut warnings = Vec::new();
+        assert!(parse_greenbone_xml(xml.as_bytes(), &mut warnings).is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("attribute limit"))
+        );
     }
 }
