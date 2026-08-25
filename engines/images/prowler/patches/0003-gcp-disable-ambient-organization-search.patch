@@ -1,0 +1,67 @@
+diff --git a/prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py b/prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py
+index dff973307c15d6d624c0a558d251a208d5e7385c..c5af89822acb407cb4ff78f8cd117fb422b46fbc 100644
+--- a/prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py
++++ b/prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py
+@@ -14,7 +14,8 @@ class CloudResourceManager(GCPService):
+         self.cloud_resource_manager_projects = []
+         self.organizations = []
+         self._get_iam_policy()
+-        self._get_organizations()
++        # ai-security-scanner's downstream exact-project profile runs only
++        # project IAM checks and must not enumerate ambient organizations.
+ 
+     def _get_iam_policy(self):
+         for project_id in self.project_ids:
+diff --git a/tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py b/tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py
+index 11d53fa86f5238d8aa214b9141ef54b369efc1fa..8ed7d038ff1f103b7e19199b4d04eec36282f428 100644
+--- a/tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py
++++ b/tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py
+@@ -1,4 +1,4 @@
+-from unittest.mock import patch
++from unittest.mock import MagicMock, patch
+ 
+ from prowler.providers.gcp.services.cloudresourcemanager.cloudresourcemanager_service import (
+     CloudResourceManager,
+@@ -61,8 +61,36 @@ class TestCloudResourceManagerService:
+             assert api_keys_client.bindings[1].members[0] == "user:eve@example.com"
+             assert api_keys_client.bindings[1].project_id == GCP_PROJECT_ID
+ 
+-            assert len(api_keys_client.organizations) == 2
+-            assert api_keys_client.organizations[0].id == "123456789"
+-            assert api_keys_client.organizations[0].name == "Organization 1"
+-            assert api_keys_client.organizations[1].id == "987654321"
+-            assert api_keys_client.organizations[1].name == "Organization 2"
++            assert api_keys_client.organizations == []
++
++    def test_exact_project_initialization_never_searches_organizations(self):
++        client = MagicMock()
++        projects = MagicMock()
++        client.projects.return_value = projects
++        projects.get.return_value.execute.return_value = {
++            "projectNumber": "123456789012"
++        }
++        projects.getIamPolicy.return_value.execute.return_value = {
++            "bindings": [],
++            "auditConfigs": [],
++        }
++
++        with (
++            patch(
++                "prowler.providers.gcp.lib.service.service.GCPService.__is_api_active__",
++                new=mock_is_api_active,
++            ),
++            patch(
++                "prowler.providers.gcp.lib.service.service.GCPService.__generate_client__",
++                return_value=client,
++            ),
++        ):
++            cloud_resource_manager = CloudResourceManager(
++                set_mocked_gcp_provider(project_ids=[GCP_PROJECT_ID])
++            )
++
++        projects.get.assert_called_once_with(projectId=GCP_PROJECT_ID)
++        projects.getIamPolicy.assert_called_once_with(resource=GCP_PROJECT_ID)
++        projects.list.assert_not_called()
++        client.organizations.assert_not_called()
++        assert cloud_resource_manager.organizations == []
+

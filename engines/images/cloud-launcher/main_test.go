@@ -48,6 +48,57 @@ func TestProviderRequiresExactCredentialClosure(t *testing.T) {
 	}
 }
 
+func TestCredentialLifetimeIsShortLivedBeforeProviderRequests(t *testing.T) {
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	if err := validateCredentialLifetime(now.Add(30*time.Minute), now); err != nil {
+		t.Fatalf("short-lived credential rejected: %v", err)
+	}
+	for name, expiry := range map[string]time.Time{
+		"too-short": now.Add(minimumCredentialTTL),
+		"too-long":  now.Add(time.Hour + time.Second),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateCredentialLifetime(expiry, now); err == nil {
+				t.Fatal("out-of-contract credential lifetime was accepted")
+			}
+		})
+	}
+
+	directory := t.TempDir()
+	path := filepath.Join(directory, "credentials.json")
+	envelope := credentialEnvelope{
+		SchemaVersion: "1.0.0",
+		Credentials: []credentialEntry{
+			{Key: "AWS_ACCESS_KEY_ID", Value: "ASIAFIXTURE", ExpiresAt: time.Now().UTC().Add(30 * time.Minute), Source: "ephemeral_scan_role"},
+			{Key: "AWS_SECRET_ACCESS_KEY", Value: "fixture-secret", ExpiresAt: time.Now().UTC().Add(30 * time.Minute), Source: "ephemeral_scan_role"},
+			{Key: "AWS_SESSION_TOKEN", Value: "fixture-session", ExpiresAt: time.Now().UTC().Add(time.Hour + time.Minute), Source: "ephemeral_scan_role"},
+		},
+	}
+	bytes, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, bytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := loadCredentials(path); err == nil {
+		t.Fatal("credential envelope with one overlong entry was accepted")
+	}
+}
+
+func TestCredentialValuesRequirePrintableASCIIWithoutWhitespace(t *testing.T) {
+	for _, valid := range []string{"header.payload.signature", "AWS+/session==", "opaque-token_123"} {
+		if !safeSecret(valid, 64*1024) {
+			t.Fatalf("valid scanner token rejected: %q", valid)
+		}
+	}
+	for _, invalid := range []string{"", "token with space", "token\nheader", "tökén"} {
+		if safeSecret(invalid, 64*1024) {
+			t.Fatalf("unsafe scanner token accepted: %q", invalid)
+		}
+	}
+}
+
 func TestScopeRejectsUnknownFieldsAndExpiredGrants(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "scope.json")
@@ -256,6 +307,18 @@ func TestAzureSubscriptionPreflightBindsBearerTokenAndNativeID(t *testing.T) {
 	}
 }
 
+func TestAzureSubscriptionPreflightRejectsDisabledSubscription(t *testing.T) {
+	const subscriptionID = "11111111-2222-3333-4444-555555555555"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"subscriptionId":"`+subscriptionID+`","state":"Disabled"}`)
+	}))
+	defer server.Close()
+	if err := verifyAzureSubscription(server.Client(), server.URL, "azure-token", subscriptionID); err == nil {
+		t.Fatal("disabled Azure subscription was accepted")
+	}
+}
+
 func TestGCPProjectPreflightUsesOnlyExactGetAndIAMPolicy(t *testing.T) {
 	const projectID = "audit-project-123"
 	requests := 0
@@ -373,9 +436,12 @@ func TestProwlerProviderInvocationsAreExactAndNarrow(t *testing.T) {
 			}
 			common := []string{
 				"--output-formats", "json-ocsf", "--output-filename", "prowler", "--output-directory", "/output",
-				"--ignore-exit-code-3", "--no-banner", "--no-color", "--skip-sh-update",
+				"--ignore-exit-code-3", "--no-banner", "--no-color",
 			}
 			expected := append(append([]string(nil), test.prefix...), common...)
+			if test.selected == providerAWS {
+				expected = append(expected, "--skip-sh-update")
+			}
 			if strings.Join(profile.Args, "\x00") != strings.Join(expected, "\x00") {
 				t.Fatalf("unexpected %s argv: %#v", name, profile.Args)
 			}

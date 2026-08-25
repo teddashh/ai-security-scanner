@@ -1,0 +1,63 @@
+diff --git a/prowler/providers/gcp/gcp_provider.py b/prowler/providers/gcp/gcp_provider.py
+index b9af05c99..68dca1c77 100644
+--- a/prowler/providers/gcp/gcp_provider.py
++++ b/prowler/providers/gcp/gcp_provider.py
+@@ -260,8 +260,10 @@ class GcpProvider(Provider):
+             )
+             sys.exit(0)
+ 
+-        # Update organizations info
+-        self.update_projects_with_organizations()
++        # Exact project scans must not expand into parent organization metadata.
++        # Preserve the legacy organization enrichment only for ambient discovery.
++        if not project_ids:
++            self.update_projects_with_organizations()
+ 
+         self._identity = GCPIdentityInfo(
+             profile=getattr(self.session, "_service_account_email", "default"),
+diff --git a/tests/providers/gcp/gcp_exact_projects_test.py b/tests/providers/gcp/gcp_exact_projects_test.py
+index f5e919db8..19e4cdf84 100644
+--- a/tests/providers/gcp/gcp_exact_projects_test.py
++++ b/tests/providers/gcp/gcp_exact_projects_test.py
+@@ -40,6 +40,41 @@ def _service_for_projects(projects):
+ 
+ 
+ class TestGCPExactProjects:
++    def test_exact_project_constructor_never_reads_parent_organization(self):
++        project_id = "exact-project"
++        project = MagicMock(lifecycle_state="ACTIVE")
++        project.organization.id = "987654321"
++        service = MagicMock()
++        credentials = MagicMock()
++        credentials._service_account_email = "static-access-token"
++
++        with (
++            patch.object(
++                GcpProvider,
++                "setup_session",
++                return_value=(credentials, project_id),
++            ),
++            patch.object(
++                GcpProvider,
++                "get_projects",
++                return_value={project_id: project},
++            ),
++            patch(
++                "prowler.providers.gcp.gcp_provider.discovery.build",
++                return_value=service,
++            ) as mock_build,
++            patch("prowler.providers.gcp.gcp_provider.GCPMutelist"),
++        ):
++            provider = GcpProvider(
++                project_ids=[project_id],
++                config_content={"shodan_api_key": None},
++                mutelist_content={"Mutelist": {}},
++            )
++
++        assert provider.project_ids == [project_id]
++        mock_build.assert_not_called()
++        service.organizations.return_value.get.assert_not_called()
++
+     def test_uses_only_individual_gets_for_requested_projects(self):
+         first_id = "exact-project-a"
+         second_id = "exact-project-b"

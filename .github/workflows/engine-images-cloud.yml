@@ -40,19 +40,19 @@ jobs:
       matrix:
         include:
           - engine: cloudquery
-            tag: 2.0.31-aws9.2.0-2
+            tag: 2.0.31-aws9.2.0-3
             dockerfile: engines/images/cloudquery/Dockerfile
           - engine: prowler
-            tag: 5.39.1-2
+            tag: 5.39.1-3
             dockerfile: engines/images/prowler/Dockerfile
           - engine: cloudsplaining
-            tag: 0.9.1-2
+            tag: 0.9.1-3
             dockerfile: engines/images/cloudsplaining/Dockerfile
           - engine: scoutsuite
-            tag: 5.14.0-2
+            tag: 5.14.0-3
             dockerfile: engines/images/scoutsuite/Dockerfile
           - engine: steampipe
-            tag: 2.4.5-2
+            tag: 2.4.5-3
             dockerfile: engines/images/steampipe/Dockerfile
     env:
       IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-${{ matrix.engine }}
@@ -159,19 +159,38 @@ jobs:
           import hashlib
           from pathlib import Path
           expected = {
-              "prowler/providers/azure/azure_provider.py": "b86ac5e1b350f07012058d2d53b15a9aa79126cb31577b871984e3d877b924cd",
+              "prowler/lib/outputs/finding.py": "71d5665f11c27a3dc69660ac61b747264066c6791ba65014c50ba80105902749",
+              "prowler/providers/azure/azure_provider.py": "421c9c913ee62076a3305ef1feca6130f87d5ab508a0cb20cd704f1cf1241460",
               "prowler/providers/azure/lib/arguments/arguments.py": "afb7c9b47f1b9b2354774579121db4f1c26d6b03112a3d0407fb4f14ad8625af",
               "prowler/providers/common/provider.py": "4fe43b204884910bfbceac5ebb3e0b2898c9c044b18d241b566cc9a53ae6cf04",
-              "prowler/providers/gcp/gcp_provider.py": "36287ddfe2a79b9a61ca71b926b69cde43202f658c55e6a144794b1aa3bba3ae",
+              "prowler/providers/gcp/gcp_provider.py": "c30756aaaa1ce3739c6bf2a023b4ab633656c767f1e6fa1e84ba4ff9fff1c34f",
+              "prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py": "379876877311fe2f4aa17bb9d5b132c85baaf2081210aebf6da59472cc11c9fe",
           }
           root = Path("/home/prowler")
           assert all(hashlib.sha256((root / path).read_bytes()).hexdigest() == digest for path, digest in expected.items())
           '
           docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
-            --entrypoint /home/prowler/.venv/bin/prowler "${reference}" azure --help \
+            --entrypoint /home/prowler/.venv/bin/prowler "${reference}" \
+            aws --service iam --region us-east-1 \
+            --output-formats json-ocsf --output-filename prowler --output-directory /output \
+            --ignore-exit-code-3 --no-banner --no-color --skip-sh-update --help \
+            | grep -F -- '--skip-sh-update'
+          azure_expiry="$(( $(date +%s) + 1800 ))"
+          docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+            --entrypoint /home/prowler/.venv/bin/prowler "${reference}" \
+            azure --access-token-auth --access-token-expires-at "${azure_expiry}" \
+            --subscription-ids 11111111-2222-3333-4444-555555555555 --service iam \
+            --output-formats json-ocsf --output-filename prowler --output-directory /output \
+            --ignore-exit-code-3 --no-banner --no-color --help \
             | grep -F -- '--access-token-auth'
           docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
-            --entrypoint /home/prowler/.venv/bin/prowler "${reference}" gcp --help \
+            --entrypoint /home/prowler/.venv/bin/prowler "${reference}" \
+            gcp --project-ids audit-project-123 \
+            --checks iam_audit_logs_enabled iam_no_service_roles_at_project_level \
+            iam_role_kms_enforce_separation_of_duties iam_role_sa_enforce_separation_of_duties \
+            --skip-api-check --gcp-retries-max-attempts 2 \
+            --output-formats json-ocsf --output-filename prowler --output-directory /output \
+            --ignore-exit-code-3 --no-banner --no-color --help \
             | grep -F -- '--project-ids'
           if docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
             "${reference}" --engine prowler --scope /run/ai-security-scanner/scope.json --output /output; then

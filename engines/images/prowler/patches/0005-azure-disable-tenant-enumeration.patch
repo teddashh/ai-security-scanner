@@ -1,0 +1,383 @@
+diff --git a/prowler/lib/outputs/finding.py b/prowler/lib/outputs/finding.py
+index dc8804469..51c01210b 100644
+--- a/prowler/lib/outputs/finding.py
++++ b/prowler/lib/outputs/finding.py
+@@ -180,13 +180,16 @@ class Finding(BaseModel):
+                 output_data["auth_method"] = (
+                     f"{provider.identity.identity_type}: {provider.identity.identity_id}"
+                 )
+-                # Get the first tenant domain ID, just in case
+-                output_data["account_organization_uid"] = get_nested_attribute(
+-                    provider, "identity.tenant_ids"
+-                )[0]
++                tenant_ids = (
++                    get_nested_attribute(provider, "identity.tenant_ids") or []
++                )
++                output_data["account_organization_uid"] = (
++                    tenant_ids[0] if tenant_ids else None
++                )
+                 output_data["account_uid"] = (
+                     output_data["account_organization_uid"]
+                     if "Tenant:" in check_output.subscription
++                    and output_data["account_organization_uid"]
+                     else check_output.subscription
+                 )
+                 output_data["account_name"] = provider.identity.subscriptions.get(
+diff --git a/prowler/providers/azure/azure_provider.py b/prowler/providers/azure/azure_provider.py
+index 6e5b83aa8..6343bc692 100644
+--- a/prowler/providers/azure/azure_provider.py
++++ b/prowler/providers/azure/azure_provider.py
+@@ -19,6 +19,9 @@ from azure.identity import (
+     InteractiveBrowserCredential,
+ )
+ from azure.mgmt.resource import ResourceManagementClient
++from azure.mgmt.resource.subscriptions.v2022_12_01 import (
++    SubscriptionClient as ExactSubscriptionClient,
++)
+ from azure.mgmt.subscription import SubscriptionClient
+ from colorama import Fore, Style
+ from msgraph import GraphServiceClient
+@@ -589,8 +592,13 @@ class AzureProvider(Provider):
+         for subscription_id, display_name in self._identity.subscriptions.items():
+             intermediate = display_name + ": " + subscription_id
+             printed_subscriptions.append(intermediate)
++        tenant_id = (
++            self._identity.tenant_ids[0]
++            if self._identity.tenant_ids
++            else "Not discovered for exact static-token scope"
++        )
+         report_lines = [
+-            f"Azure Tenant Domain: {Fore.YELLOW}{self._identity.tenant_domain}{Style.RESET_ALL} Azure Tenant ID: {Fore.YELLOW}{self._identity.tenant_ids[0]}{Style.RESET_ALL}",
++            f"Azure Tenant Domain: {Fore.YELLOW}{self._identity.tenant_domain}{Style.RESET_ALL} Azure Tenant ID: {Fore.YELLOW}{tenant_id}{Style.RESET_ALL}",
+             f"Azure Region: {Fore.YELLOW}{self.region_config.name}{Style.RESET_ALL}",
+             f"Azure Subscriptions: {Fore.YELLOW}{printed_subscriptions}{Style.RESET_ALL}",
+             f"Azure Resource Groups: {Fore.YELLOW}{sorted({rg for rgs in self._resource_groups.values() for rg in rgs}) if any(self._resource_groups.values()) else ('NONE (no matching resource groups found)' if self._resource_groups else 'ALL')}{Style.RESET_ALL}",
+@@ -1133,7 +1141,10 @@ class AzureProvider(Provider):
+             logger.info(
+                 "Trying to subscriptions and tenant ids to populate identity structure ..."
+             )
+-            subscriptions_client = SubscriptionClient(
++            subscription_client_class = (
++                ExactSubscriptionClient if access_token_auth else SubscriptionClient
++            )
++            subscriptions_client = subscription_client_class(
+                 credential=credentials,
+                 base_url=self.region_config.base_url,
+                 credential_scopes=self.region_config.credential_scopes,
+@@ -1148,15 +1159,22 @@ class AzureProvider(Provider):
+                 ]
+             else:
+                 logger.info("Scanning the subscriptions passed as argument ...")
+-                subscription_pairs = [
+-                    (
+-                        subscriptions_client.subscriptions.get(
+-                            subscription_id=id
+-                        ).display_name,
+-                        id,
++                subscription_pairs = []
++                for subscription_id in subscription_ids:
++                    subscription = subscriptions_client.subscriptions.get(
++                        subscription_id=subscription_id
++                    )
++                    if access_token_auth:
++                        tenant_id = getattr(subscription, "tenant_id", None)
++                        if not exact_subscription_ids_are_valid([tenant_id]):
++                            raise ValueError(
++                                "Exact subscription response tenant ID is missing or is not a canonical UUID"
++                            )
++                        if tenant_id not in identity.tenant_ids:
++                            identity.tenant_ids.append(tenant_id)
++                    subscription_pairs.append(
++                        (subscription.display_name, subscription_id)
+                     )
+-                    for id in subscription_ids
+-                ]
+ 
+             # Key the subscriptions dict by subscription ID (which is
+             # guaranteed unique) and store the display name as the value.
+@@ -1175,9 +1193,12 @@ class AzureProvider(Provider):
+                     message="No subscriptions were found, please check your permission assignments.",
+                 )
+ 
+-            tenants = subscriptions_client.tenants.list()
+-            for tenant in tenants:
+-                identity.tenant_ids.append(tenant.tenant_id)
++            # The downstream static-token profile is bound to exact subscription
++            # GETs and must not enumerate every tenant visible to the bearer.
++            if not access_token_auth:
++                tenants = subscriptions_client.tenants.list()
++                for tenant in tenants:
++                    identity.tenant_ids.append(tenant.tenant_id)
+         # This error is critical, since it implies something is wrong with the credentials provided
+         except Exception as error:
+             logger.critical(
+diff --git a/tests/providers/azure/azure_access_token_auth_test.py b/tests/providers/azure/azure_access_token_auth_test.py
+index 1bdecf4b2..943b33359 100644
+--- a/tests/providers/azure/azure_access_token_auth_test.py
++++ b/tests/providers/azure/azure_access_token_auth_test.py
+@@ -4,14 +4,27 @@ from uuid import uuid4
+ 
+ import pytest
+ from azure.core.exceptions import ClientAuthenticationError
++from azure.mgmt.resource.subscriptions.v2022_12_01.models import (
++    Subscription as ExactSubscription,
++)
+ 
+ from prowler.lib.cli.parser import ProwlerArgumentParser
++from prowler.lib.check.models import (
++    CheckMetadata,
++    Code,
++    Recommendation,
++    Remediation,
++)
++from prowler.lib.outputs.common import Status
++from prowler.lib.outputs.finding import Finding
++from prowler.lib.outputs.ocsf.ocsf import OCSF
+ from prowler.providers.azure.azure_provider import (
+     AzureProvider,
+     StaticAccessTokenCredential,
+ )
+ from prowler.providers.azure.exceptions.exceptions import (
+     AzureArgumentTypeValidationError,
++    AzureSetUpIdentityError,
+ )
+ from prowler.providers.azure.lib.arguments.arguments import (
+     validate_access_token_expiry,
+@@ -34,6 +47,13 @@ def _region_config():
+     )
+ 
+ 
++def _exact_subscription(display_name, tenant_id):
++    subscription = ExactSubscription()
++    subscription.display_name = display_name
++    subscription.tenant_id = tenant_id
++    return subscription
++
++
+ def _provider_arguments(**overrides):
+     arguments = {
+         "access_token_auth": True,
+@@ -45,6 +65,46 @@ def _provider_arguments(**overrides):
+     return Namespace(**arguments)
+ 
+ 
++def _azure_check_output(subscription_id):
++    check_output = MagicMock()
++    check_output.check_metadata = CheckMetadata(
++        Provider="azure",
++        CheckID="iam_exact_subscription_test",
++        CheckTitle="Exact subscription IAM test",
++        CheckType=[],
++        CheckAliases=[],
++        ServiceName="iam",
++        SubServiceName="",
++        ResourceIdTemplate="",
++        Severity="high",
++        ResourceType="AzureRoleAssignment",
++        Description="",
++        Risk="",
++        RelatedUrl="",
++        Remediation=Remediation(
++            Code=Code(NativeIaC="", Terraform="", CLI="", Other=""),
++            Recommendation=Recommendation(Text="", Url=""),
++        ),
++        Categories=[],
++        DependsOn=[],
++        RelatedTo=[],
++        Notes="",
++        Compliance=[],
++    )
++    check_output.subscription = subscription_id
++    check_output.resource_name = "Exact role assignment"
++    check_output.resource_id = "/subscriptions/exact/roleAssignments/one"
++    check_output.resource_details = ""
++    check_output.resource_tags = {}
++    check_output.resource = {}
++    check_output.location = "global"
++    check_output.status = Status.PASS
++    check_output.status_extended = "Exact subscription IAM result"
++    check_output.muted = False
++    check_output.compliance = {}
++    return check_output
++
++
+ class TestAzureAccessTokenArguments:
+     @patch("prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW)
+     def test_exact_expiry_is_parsed_as_unix_seconds(self, _mock_time):
+@@ -285,24 +345,24 @@ class TestAzureAccessTokenProvider:
+     def test_identity_skips_graph_and_gets_only_requested_subscriptions(self):
+         first_id = str(uuid4())
+         second_id = str(uuid4())
++        tenant_id = str(uuid4())
+         subscriptions = {
+-            first_id: MagicMock(display_name="First"),
+-            second_id: MagicMock(display_name="Second"),
++            first_id: _exact_subscription("First", tenant_id),
++            second_id: _exact_subscription("Second", tenant_id),
+         }
+-        subscriptions_client = MagicMock()
+-        subscriptions_client.subscriptions.get.side_effect = (
++        exact_subscriptions_client = MagicMock()
++        exact_subscriptions_client.subscriptions.get.side_effect = (
+             lambda subscription_id: subscriptions[subscription_id]
+         )
+-        subscriptions_client.tenants.list.return_value = [
+-            MagicMock(tenant_id=str(uuid4()))
+-        ]
+-
+         with (
+             patch.object(AzureProvider, "__init__", return_value=None),
+             patch(
+-                "prowler.providers.azure.azure_provider.SubscriptionClient",
+-                return_value=subscriptions_client,
++                "prowler.providers.azure.azure_provider.ExactSubscriptionClient",
++                return_value=exact_subscriptions_client,
+             ),
++            patch(
++                "prowler.providers.azure.azure_provider.SubscriptionClient",
++            ) as mock_ambient_subscription_client,
+             patch(
+                 "prowler.providers.azure.azure_provider.GraphServiceClient"
+             ) as mock_graph,
+@@ -322,10 +382,139 @@ class TestAzureAccessTokenProvider:
+             )
+ 
+         mock_graph.assert_not_called()
+-        subscriptions_client.subscriptions.list.assert_not_called()
+-        assert subscriptions_client.subscriptions.get.call_args_list == [
++        mock_ambient_subscription_client.assert_not_called()
++        exact_subscriptions_client.subscriptions.list.assert_not_called()
++        exact_subscriptions_client.tenants.list.assert_not_called()
++        assert exact_subscriptions_client.subscriptions.get.call_args_list == [
+             call(subscription_id=first_id),
+             call(subscription_id=second_id),
+         ]
+         assert identity.subscriptions == {first_id: "First", second_id: "Second"}
++        assert identity.tenant_ids == [tenant_id]
+         assert identity.identity_type == "Static Access Token"
++
++    @pytest.mark.parametrize(
++        "tenant_id", [None, "not-a-uuid", "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]
++    )
++    def test_identity_rejects_missing_or_noncanonical_exact_tenant(self, tenant_id):
++        subscription_id = str(uuid4())
++        exact_subscriptions_client = MagicMock()
++        exact_subscriptions_client.subscriptions.get.return_value = _exact_subscription(
++            "Exact", tenant_id
++        )
++
++        with (
++            patch.object(AzureProvider, "__init__", return_value=None),
++            patch(
++                "prowler.providers.azure.azure_provider.ExactSubscriptionClient",
++                return_value=exact_subscriptions_client,
++            ),
++            patch(
++                "prowler.providers.azure.azure_provider.SubscriptionClient"
++            ) as mock_ambient_subscription_client,
++        ):
++            provider = AzureProvider()
++            provider._session = MagicMock()
++            provider._region_config = _region_config()
++
++            with pytest.raises(AzureSetUpIdentityError):
++                provider.setup_identity(
++                    az_cli_auth=False,
++                    sp_env_auth=False,
++                    browser_auth=False,
++                    managed_identity_auth=False,
++                    subscription_ids=[subscription_id],
++                    client_id=None,
++                    access_token_auth=True,
++                )
++
++        mock_ambient_subscription_client.assert_not_called()
++        exact_subscriptions_client.subscriptions.list.assert_not_called()
++        exact_subscriptions_client.tenants.list.assert_not_called()
++
++    def test_whole_constructor_print_finding_and_ocsf_exact_scope(self, monkeypatch):
++        subscription_id = str(uuid4())
++        tenant_id = str(uuid4())
++        exact_subscriptions_client = MagicMock()
++        exact_subscriptions_client.subscriptions.get.return_value = _exact_subscription(
++            "Exact", tenant_id
++        )
++        locations_client = MagicMock()
++        locations_client.subscriptions.list_locations.return_value = []
++        monkeypatch.setenv("AZURE_ACCESS_TOKEN", TOKEN)
++
++        with (
++            patch(
++                "prowler.providers.azure.lib.arguments.arguments.time", return_value=NOW
++            ),
++            patch("prowler.providers.azure.azure_provider.time", return_value=NOW),
++            patch(
++                "prowler.providers.azure.azure_provider.ExactSubscriptionClient",
++                return_value=exact_subscriptions_client,
++            ),
++            patch(
++                "prowler.providers.azure.azure_provider.SubscriptionClient",
++                return_value=locations_client,
++            ),
++            patch("prowler.providers.azure.azure_provider.AzureMutelist"),
++            patch.object(Provider, "set_global_provider"),
++            patch("prowler.providers.azure.azure_provider.print_boxes") as mock_print,
++        ):
++            provider = AzureProvider(
++                access_token_auth=True,
++                access_token_expires_at=NOW + 60,
++                subscription_ids=[subscription_id],
++                services=["iam"],
++                config_content={"exact-scope": True},
++                mutelist_content={"exact-scope": True},
++            )
++
++            provider.print_credentials()
++
++            assert provider.identity.tenant_ids == [tenant_id]
++            assert provider.identity.subscriptions == {subscription_id: "Exact"}
++            assert tenant_id in mock_print.call_args.args[0][0]
++            exact_subscriptions_client.subscriptions.list.assert_not_called()
++            exact_subscriptions_client.tenants.list.assert_not_called()
++            locations_client.subscriptions.list.assert_not_called()
++            locations_client.tenants.list.assert_not_called()
++            exact_subscriptions_client.subscriptions.get.assert_called_once_with(
++                subscription_id=subscription_id
++            )
++
++            check_output = _azure_check_output(subscription_id)
++            finding = Finding.generate_output(
++                provider, check_output, Namespace(unix_timestamp=True)
++            )
++            ocsf = OCSF([finding])
++
++            assert finding.account_uid == subscription_id
++            assert finding.account_organization_uid == tenant_id
++            assert len(ocsf.data) == 1
++            assert ocsf.data[0].cloud.account.uid == subscription_id
++            assert ocsf.data[0].cloud.org.uid == tenant_id
++            assert ocsf.data[0].metadata.tenant_uid == tenant_id
++
++            # Defensive support for legacy static identities with no attributed
++            # tenant metadata: do not crash or invent an organization ID.
++            provider._identity.tenant_ids = []
++            provider.print_credentials()
++            assert (
++                "Not discovered for exact static-token scope"
++                in mock_print.call_args.args[0][0]
++            )
++
++            finding = Finding.generate_output(
++                provider, check_output, Namespace(unix_timestamp=True)
++            )
++            ocsf = OCSF([finding])
++
++            assert finding.account_uid == subscription_id
++            assert finding.account_organization_uid is None
++            assert len(ocsf.data) == 1
++            assert ocsf.data[0].cloud.account.uid == subscription_id
++            assert ocsf.data[0].cloud.org.uid is None
++            assert ocsf.data[0].metadata.tenant_uid is None
++            serialized = ocsf.data[0].model_dump(exclude_none=True)
++            assert "uid" not in serialized["cloud"]["org"]
++            assert "tenant_uid" not in serialized["metadata"]

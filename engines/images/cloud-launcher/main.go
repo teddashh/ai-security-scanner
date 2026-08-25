@@ -154,6 +154,10 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	verificationTime := time.Now().UTC()
+	if err := validateCredentialLifetime(credentialExpiresAt, verificationTime); err != nil {
+		return err
+	}
 	providerClient := &http.Client{
 		Timeout: 20 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -162,7 +166,7 @@ func run(arguments []string) error {
 	}
 	switch selectedProvider {
 	case providerAWS:
-		if err := verifyAWSCallerIdentity(providerClient, awsSTSEndpointForEngine(*engineID), credentials, providerTarget, time.Now().UTC()); err != nil {
+		if err := verifyAWSCallerIdentity(providerClient, awsSTSEndpointForEngine(*engineID), credentials, providerTarget, verificationTime); err != nil {
 			return err
 		}
 	case providerAzure:
@@ -324,14 +328,14 @@ func loadCredentials(path string) (map[string]string, provider, time.Time, error
 	minimumExpiry := time.Time{}
 	now := time.Now().UTC()
 	for _, credential := range envelope.Credentials {
-		if !allowedCredentialKey(credential.Key) || !safeText(credential.Value, 64*1024) {
+		if !allowedCredentialKey(credential.Key) || !safeSecret(credential.Value, 64*1024) {
 			return nil, "", time.Time{}, errors.New("credential channel contains an unauthorized entry")
 		}
 		if credential.Source != "ephemeral_scan_role" && credential.Source != "external_read_only_grant" {
 			return nil, "", time.Time{}, errors.New("credential source is not a scanner-only source")
 		}
-		if !credential.ExpiresAt.After(now.Add(minimumCredentialTTL)) {
-			return nil, "", time.Time{}, errors.New("credential channel lacks the minimum scanner-only lifetime")
+		if err := validateCredentialLifetime(credential.ExpiresAt, now); err != nil {
+			return nil, "", time.Time{}, err
 		}
 		if _, exists := values[credential.Key]; exists {
 			return nil, "", time.Time{}, errors.New("credential channel contains a duplicate key")
@@ -350,6 +354,13 @@ func loadCredentials(path string) (map[string]string, provider, time.Time, error
 
 func matchesProvider(value string) bool {
 	return value == string(providerAWS) || value == string(providerAzure) || value == string(providerGCP)
+}
+
+func validateCredentialLifetime(expiresAt, now time.Time) error {
+	if !expiresAt.After(now.Add(minimumCredentialTTL)) || expiresAt.After(now.Add(time.Hour)) {
+		return errors.New("credential lifetime is not within the scanner-only five-to-sixty-minute window")
+	}
+	return nil
 }
 
 func providerFromCredentialKeys(values map[string]string) (provider, error) {
@@ -618,6 +629,10 @@ func verifyAzureSubscription(client httpDoer, root, accessToken, expectedSubscri
 	if raw, exists := object["subscriptionId"]; !exists || json.Unmarshal(raw, &actual) != nil || actual != expectedSubscriptionID {
 		return errors.New("Azure subscription identity does not match the immutable execution scope")
 	}
+	var state string
+	if raw, exists := object["state"]; !exists || json.Unmarshal(raw, &state) != nil || state != "Enabled" {
+		return errors.New("Azure subscription identity is not enabled")
+	}
 	return nil
 }
 
@@ -789,7 +804,7 @@ func prowlerInvocation(selected provider, providerTarget string, credentialExpir
 	common := []string{
 		"--output-formats", "json-ocsf", "--output-filename", "prowler",
 		"--output-directory", output, "--ignore-exit-code-3", "--no-banner",
-		"--no-color", "--skip-sh-update",
+		"--no-color",
 	}
 	args := make([]string, 0, 32)
 	switch selected {
@@ -821,6 +836,9 @@ func prowlerInvocation(selected provider, providerTarget string, credentialExpir
 		return invocation{}, errors.New("Prowler provider profile is unsupported")
 	}
 	args = append(args, common...)
+	if selected == providerAWS {
+		args = append(args, "--skip-sh-update")
+	}
 	return invocation{
 		Program: "/home/prowler/.venv/bin/prowler",
 		Args:    args,
@@ -843,16 +861,32 @@ func runProwler(profile invocation, output string) error {
 }
 
 func validateProwlerOutput(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() == 0 || info.Size() > maxOutputFileSize {
-		return errors.New("Prowler OCSF output is not a bounded regular file")
-	}
-	file, err := os.Open(path)
+	descriptor, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return errors.New("Prowler OCSF output cannot be opened")
+		return errors.New("Prowler OCSF output cannot be opened without following links")
+	}
+	file := os.NewFile(uintptr(descriptor), path)
+	if file == nil {
+		_ = syscall.Close(descriptor)
+		return errors.New("Prowler OCSF output descriptor is invalid")
 	}
 	defer file.Close()
-	reader := bufio.NewReaderSize(io.LimitReader(file, maxOutputFileSize+1), 64*1024)
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxOutputFileSize {
+		return errors.New("Prowler OCSF output is not a bounded regular file")
+	}
+	limited := &io.LimitedReader{R: file, N: maxOutputFileSize + 1}
+	reader := bufio.NewReaderSize(limited, 64*1024)
+	if err := validateProwlerJSONArray(reader); err != nil {
+		return err
+	}
+	if limited.N == 0 {
+		return errors.New("Prowler OCSF output grew beyond its size bound")
+	}
+	return nil
+}
+
+func validateProwlerJSONArray(reader *bufio.Reader) error {
 	opening, err := readNextNonWhitespace(reader)
 	if err != nil || opening != '[' {
 		return errors.New("Prowler OCSF output must be one JSON array")
@@ -1289,6 +1323,18 @@ func safeText(value string, maximum int) bool {
 	}
 	for _, character := range value {
 		if character == 0 || character == '\r' || character == '\n' || character < 0x20 {
+			return false
+		}
+	}
+	return true
+}
+
+func safeSecret(value string, maximum int) bool {
+	if value == "" || len(value) > maximum {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x21 || value[index] > 0x7e {
 			return false
 		}
 	}

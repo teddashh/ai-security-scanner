@@ -21,10 +21,16 @@ from pathlib import Path
 SERIES = (
     "0001-azure-static-access-token-iam-only.patch",
     "0002-gcp-exact-project-lookups.patch",
+    "0003-gcp-disable-ambient-organization-search.patch",
+    "0004-gcp-disable-provider-organization-lookup.patch",
+    "0005-azure-disable-tenant-enumeration.patch",
 )
 PATCH_SHA256 = {
     SERIES[0]: "bf6059a33443e9f1fa459c6360346829170ee56e0775260f8a42f56dcb53c73c",
     SERIES[1]: "7a22e58b3c700813e3b7e814dd04254dd90ddbdbdfbccd917c3b477e487c2fcb",
+    SERIES[2]: "136335c3b7defd5a167aa6d07633bcb8f5c99c6f98b398eff01fc15d11a417d1",
+    SERIES[3]: "ffef7b02808bbb85f1f7d28ab3c453237b33cde45729daa51feb37633e1fd79a",
+    SERIES[4]: "00f40971d80137612b5327a8b7e31de6b05b08dd8239f1bd635339ae6325f80b",
 }
 EXPECTED_DIFF_FILES = {
     SERIES[0]: {
@@ -37,11 +43,24 @@ EXPECTED_DIFF_FILES = {
         "prowler/providers/gcp/gcp_provider.py",
         "tests/providers/gcp/gcp_exact_projects_test.py",
     },
+    SERIES[2]: {
+        "prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py",
+        "tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py",
+    },
+    SERIES[3]: {
+        "prowler/providers/gcp/gcp_provider.py",
+        "tests/providers/gcp/gcp_exact_projects_test.py",
+    },
+    SERIES[4]: {
+        "prowler/lib/outputs/finding.py",
+        "prowler/providers/azure/azure_provider.py",
+        "tests/providers/azure/azure_access_token_auth_test.py",
+    },
 }
 RUNTIME_FILES = {
     "prowler/providers/azure/azure_provider.py": (
         "8e54390485d31feeb5e114db2c24933f3c73a4f22f2532b5c18583f9520c9cbb",
-        "b86ac5e1b350f07012058d2d53b15a9aa79126cb31577b871984e3d877b924cd",
+        "421c9c913ee62076a3305ef1feca6130f87d5ab508a0cb20cd704f1cf1241460",
     ),
     "prowler/providers/azure/lib/arguments/arguments.py": (
         "fc48fdd229d5760f5675f06032e05df8e54ee8777dd04a60aecc093615474068",
@@ -51,9 +70,17 @@ RUNTIME_FILES = {
         "cf043f096173ba685f5cb57aff653ded25ec54d58300e7afbaf1fd77841a6a4c",
         "4fe43b204884910bfbceac5ebb3e0b2898c9c044b18d241b566cc9a53ae6cf04",
     ),
+    "prowler/lib/outputs/finding.py": (
+        "00ed79bee5e32239d3cce4943c70df33dbfe3f85056deb750ad11f2073613cce",
+        "71d5665f11c27a3dc69660ac61b747264066c6791ba65014c50ba80105902749",
+    ),
     "prowler/providers/gcp/gcp_provider.py": (
         "9ae2691559660ca902ab3b282fb1a5611bb47ca11f3118d34500dac847770c77",
-        "36287ddfe2a79b9a61ca71b926b69cde43202f658c55e6a144794b1aa3bba3ae",
+        "c30756aaaa1ce3739c6bf2a023b4ab633656c767f1e6fa1e84ba4ff9fff1c34f",
+    ),
+    "prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py": (
+        "029725c008bf0ed0d6c8cdb8ba1a378d40e584dc49ee40e021c4955e4e5688f3",
+        "379876877311fe2f4aa17bb9d5b132c85baaf2081210aebf6da59472cc11c9fe",
     ),
 }
 HUNK_HEADER = re.compile(
