@@ -34,6 +34,9 @@ const MAX_OUTPUT_DEPTH: usize = 32;
 const MAX_RUNTIME_COMMAND_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_RUNTIME_SECURITY_OPTIONS_BYTES: usize = 8 * 1024;
 const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+// A cold pull transfers and unpacks the release-pinned image inside the provider VM;
+// keep that data-plane deadline separate from short control-plane commands.
+const PINNED_IMAGE_PULL_TIMEOUT: StdDuration = StdDuration::from_secs(10 * 60);
 const RUNTIME_PIPE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(2);
 const CONTAINER_CAPTURE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 const MANAGED_NETWORK_LABEL_KEY: &str = "ai.security-scanner.managed";
@@ -1352,6 +1355,44 @@ pub struct ProcessContainerRuntime {
     context: RuntimeCommandContext,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectRuntimeOperation {
+    RuntimeVersionPreflight,
+    RuntimeSecurityPreflight,
+    ManagedNetworkPreflight,
+    PinnedImagePull,
+    ContainerPause,
+    ContainerUnpause,
+    ContainerStop,
+    CreatedContainerOwnershipInspection,
+    OwnedContainerInspection,
+    OwnedContainerCleanup,
+}
+
+impl DirectRuntimeOperation {
+    fn label(self) -> &'static str {
+        match self {
+            Self::RuntimeVersionPreflight => "runtime version preflight",
+            Self::RuntimeSecurityPreflight => "runtime security preflight",
+            Self::ManagedNetworkPreflight => "managed network preflight",
+            Self::PinnedImagePull => "pinned image pull",
+            Self::ContainerPause => "container pause",
+            Self::ContainerUnpause => "container unpause",
+            Self::ContainerStop => "container stop",
+            Self::CreatedContainerOwnershipInspection => "created container ownership inspection",
+            Self::OwnedContainerInspection => "owned container inspection",
+            Self::OwnedContainerCleanup => "owned container cleanup",
+        }
+    }
+
+    fn timeout(self) -> StdDuration {
+        match self {
+            Self::PinnedImagePull => PINNED_IMAGE_PULL_TIMEOUT,
+            _ => RUNTIME_COMMAND_TIMEOUT,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct OwnedContainerInspect {
     #[serde(rename = "Id", alias = "ID")]
@@ -2047,7 +2088,24 @@ impl ProcessContainerRuntime {
         )))
     }
 
-    fn direct_output<I, S>(&self, args: I) -> AppResult<std::process::Output>
+    fn direct_output<I, S>(
+        &self,
+        operation: DirectRuntimeOperation,
+        args: I,
+    ) -> AppResult<std::process::Output>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.direct_output_with_timeout(operation, args, operation.timeout())
+    }
+
+    fn direct_output_with_timeout<I, S>(
+        &self,
+        operation: DirectRuntimeOperation,
+        args: I,
+        timeout: StdDuration,
+    ) -> AppResult<std::process::Output>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -2057,35 +2115,37 @@ impl ProcessContainerRuntime {
             .map(|value| value.as_ref().to_os_string())
             .collect::<Vec<_>>();
         self.context
-            .output(
-                &args,
-                MAX_RUNTIME_COMMAND_OUTPUT_BYTES,
-                RUNTIME_COMMAND_TIMEOUT,
-            )
+            .output(&args, MAX_RUNTIME_COMMAND_OUTPUT_BYTES, timeout)
             .map_err(|error| {
                 AppError::Runtime(format!(
-                    "{} could not be executed directly: {error}",
+                    "{} via {} could not be executed directly: {error}",
+                    operation.label(),
                     self.context.binary.display()
                 ))
             })
     }
 
     fn container_control(&self, operation: &'static str, immutable_id: &str) -> AppResult<()> {
-        debug_assert!(matches!(operation, "pause" | "unpause"));
-        let output = self.direct_output([operation, immutable_id])?;
+        let direct_operation = match operation {
+            "pause" => DirectRuntimeOperation::ContainerPause,
+            "unpause" => DirectRuntimeOperation::ContainerUnpause,
+            _ => unreachable!("container control operation is fixed by the caller"),
+        };
+        let output = self.direct_output(direct_operation, [operation, immutable_id])?;
         if output.status.success() {
             Ok(())
         } else {
-            Err(process_failure(&format!("container {operation}"), &output))
+            Err(process_failure(direct_operation.label(), &output))
         }
     }
 
     fn stop_container(&self, immutable_id: &str) -> AppResult<()> {
-        let output = self.direct_output(["stop", "--time", "5", immutable_id])?;
+        let operation = DirectRuntimeOperation::ContainerStop;
+        let output = self.direct_output(operation, ["stop", "--time", "5", immutable_id])?;
         if output.status.success() {
             Ok(())
         } else {
-            Err(process_failure("container stop", &output))
+            Err(process_failure(operation.label(), &output))
         }
     }
 
@@ -2105,15 +2165,14 @@ impl ProcessContainerRuntime {
         if active_container.is_some() {
             return Ok(());
         }
-        let inspection = self.direct_output(["container", "inspect", created.immutable_id()])?;
+        let operation = DirectRuntimeOperation::CreatedContainerOwnershipInspection;
+        let inspection =
+            self.direct_output(operation, ["container", "inspect", created.immutable_id()])?;
         if !inspection.status.success() {
             if runtime_object_is_absent(&inspection.stderr) {
                 return Ok(());
             }
-            return Err(process_failure(
-                "created container ownership inspection",
-                &inspection,
-            ));
+            return Err(process_failure(operation.label(), &inspection));
         }
         let inspected_id = prove_owned_container(&inspection.stdout, plan.ownership())?;
         if !inspected_id.eq_ignore_ascii_case(created.immutable_id()) {
@@ -2255,9 +2314,13 @@ fn runtime_object_is_absent(stderr: &[u8]) -> bool {
 
 impl ContainerRuntime for ProcessContainerRuntime {
     fn preflight(&self) -> AppResult<RuntimePreflight> {
-        let version = self.direct_output(["version", "--format", "{{.Server.Version}}"])?;
+        let version_operation = DirectRuntimeOperation::RuntimeVersionPreflight;
+        let version = self.direct_output(
+            version_operation,
+            ["version", "--format", "{{.Server.Version}}"],
+        )?;
         if !version.status.success() {
-            return Err(process_failure("runtime version preflight", &version));
+            return Err(process_failure(version_operation.label(), &version));
         }
         let server_version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
         if server_version.is_empty() {
@@ -2266,13 +2329,17 @@ impl ContainerRuntime for ProcessContainerRuntime {
             ));
         }
 
-        let info = self.direct_output([
-            "info",
-            "--format",
-            runtime_security_info_template(self.context.provider),
-        ])?;
+        let security_operation = DirectRuntimeOperation::RuntimeSecurityPreflight;
+        let info = self.direct_output(
+            security_operation,
+            [
+                "info",
+                "--format",
+                runtime_security_info_template(self.context.provider),
+            ],
+        )?;
         if !info.status.success() {
-            return Err(process_failure("runtime security preflight", &info));
+            return Err(process_failure(security_operation.label(), &info));
         }
         let security_options =
             validate_runtime_security_options(self.context.provider, &info.stdout)?;
@@ -2294,9 +2361,10 @@ impl ContainerRuntime for ProcessContainerRuntime {
             return Ok(());
         };
         policy.validate()?;
-        let output = self.direct_output(["network", "inspect", network_name])?;
+        let operation = DirectRuntimeOperation::ManagedNetworkPreflight;
+        let output = self.direct_output(operation, ["network", "inspect", network_name])?;
         if !output.status.success() {
-            return Err(process_failure("managed network preflight", &output));
+            return Err(process_failure(operation.label(), &output));
         }
         prove_managed_internal_network(
             self.context.provider,
@@ -2307,9 +2375,10 @@ impl ContainerRuntime for ProcessContainerRuntime {
     }
 
     fn pull(&self, image: &PinnedImage) -> AppResult<()> {
-        let output = self.direct_output(["pull", image.reference().as_str()])?;
+        let operation = DirectRuntimeOperation::PinnedImagePull;
+        let output = self.direct_output(operation, ["pull", image.reference().as_str()])?;
         if !output.status.success() {
-            return Err(process_failure("pinned image pull", &output));
+            return Err(process_failure(operation.label(), &output));
         }
         Ok(())
     }
@@ -2443,7 +2512,9 @@ impl ContainerRuntime for ProcessContainerRuntime {
             Some(created) => created.immutable_id().to_owned(),
             None => ownership.container_name()?,
         };
-        let inspection = self.direct_output(["container", "inspect", target.as_str()])?;
+        let inspect_operation = DirectRuntimeOperation::OwnedContainerInspection;
+        let inspection =
+            self.direct_output(inspect_operation, ["container", "inspect", target.as_str()])?;
         if !inspection.status.success() {
             if runtime_object_is_absent(&inspection.stderr) {
                 return Ok(CleanupOutcome {
@@ -2451,7 +2522,7 @@ impl ContainerRuntime for ProcessContainerRuntime {
                     detail: "ownership-proven container was already absent".into(),
                 });
             }
-            return Err(process_failure("owned container inspection", &inspection));
+            return Err(process_failure(inspect_operation.label(), &inspection));
         }
         let immutable_id = prove_owned_container(&inspection.stdout, ownership)?;
         if created_container
@@ -2462,7 +2533,9 @@ impl ContainerRuntime for ProcessContainerRuntime {
                     .into(),
             ));
         }
-        let removal = self.direct_output(["rm", "--force", immutable_id.as_str()])?;
+        let cleanup_operation = DirectRuntimeOperation::OwnedContainerCleanup;
+        let removal =
+            self.direct_output(cleanup_operation, ["rm", "--force", immutable_id.as_str()])?;
         if removal.status.success() {
             return Ok(CleanupOutcome {
                 removed: true,
@@ -2475,7 +2548,7 @@ impl ContainerRuntime for ProcessContainerRuntime {
                 detail: "ownership-proven container disappeared before removal".into(),
             });
         }
-        Err(process_failure("owned container cleanup", &removal))
+        Err(process_failure(cleanup_operation.label(), &removal))
     }
 }
 
@@ -3275,6 +3348,58 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::time::Instant;
+
+    #[test]
+    fn direct_runtime_operations_keep_image_pull_timeout_separate() {
+        assert_eq!(
+            DirectRuntimeOperation::PinnedImagePull.timeout(),
+            StdDuration::from_secs(10 * 60)
+        );
+        for operation in [
+            DirectRuntimeOperation::RuntimeVersionPreflight,
+            DirectRuntimeOperation::RuntimeSecurityPreflight,
+            DirectRuntimeOperation::ManagedNetworkPreflight,
+            DirectRuntimeOperation::ContainerPause,
+            DirectRuntimeOperation::ContainerUnpause,
+            DirectRuntimeOperation::ContainerStop,
+            DirectRuntimeOperation::CreatedContainerOwnershipInspection,
+            DirectRuntimeOperation::OwnedContainerInspection,
+            DirectRuntimeOperation::OwnedContainerCleanup,
+        ] {
+            assert_eq!(operation.timeout(), StdDuration::from_secs(30));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_runtime_timeout_uses_a_fixed_label_without_echoing_arguments() {
+        let temp = tempfile::tempdir().expect("temporary runtime");
+        let binary = temp.path().join("slow-runtime");
+        fs::write(&binary, "#!/bin/sh\nsleep 5\n").expect("write slow runtime fixture");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("make slow runtime fixture executable");
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, binary);
+        let sensitive_argument =
+            "ghcr.io/example/private@sha256:do-not-echo-this-sensitive-reference";
+
+        let started = Instant::now();
+        let error = runtime
+            .direct_output_with_timeout(
+                DirectRuntimeOperation::PinnedImagePull,
+                ["pull", sensitive_argument],
+                StdDuration::from_millis(25),
+            )
+            .expect_err("slow image pull must reach its test deadline");
+        let message = error.to_string();
+
+        assert!(message.contains("pinned image pull"));
+        assert!(message.contains("runtime command exceeded its deadline"));
+        assert!(!message.contains(sensitive_argument));
+        assert!(
+            started.elapsed() < StdDuration::from_secs(3),
+            "timed-out direct command must terminate promptly"
+        );
+    }
 
     #[test]
     fn security_preflight_uses_the_provider_native_template_and_bounded_schema() {

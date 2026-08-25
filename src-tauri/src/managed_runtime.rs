@@ -50,6 +50,7 @@ const MAX_WSL_DISTRIBUTION_NAME_BYTES: usize = 256;
 const MAX_SSH_PRIVATE_KEY_BYTES: u64 = 16 * 1024;
 const MAX_SSH_PUBLIC_KEY_BYTES: u64 = 4 * 1024;
 const PODMAN_MACHINE_IDENTITY_NAME: &str = "machine";
+const PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY: &str = "wsldist";
 const MANAGED_SSH_KEY_COMMENT: &str = "ai-security-scanner-managed-runtime";
 #[cfg(unix)]
 const LINUX_SHORT_RUNTIME_BASE: &str = "/tmp";
@@ -2286,7 +2287,10 @@ impl ManagedRuntimeManager {
             // children can be owned by TokenOwner (Administrators), not
             // TokenUser. Pre-create the complete fixed WSL namespace with the
             // product's protected current-user-only descriptor before Podman
-            // can create any ancestor with ambient Windows defaults.
+            // can create any ancestor with ambient Windows defaults. WSL's
+            // service boundary additionally needs LocalSystem access only on
+            // the distribution-storage subtree; keep every ancestor and the
+            // adjacent image cache current-user-only.
             let provider = target.provider.argument();
             ensure_private_directory_tree(&persistent_run, &persistent_run.join("podman"))?;
             ensure_private_directory_tree(
@@ -2302,8 +2306,33 @@ impl ManagedRuntimeManager {
                     .join(provider)
                     .join("cache"),
             )?;
+            let machine_provider_data = data
+                .join("containers")
+                .join("podman")
+                .join("machine")
+                .join(provider);
+            ensure_managed_wsl_distribution_storage_directory(
+                &machine_provider_data.join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY),
+            )?;
         }
         self.write_containers_config(&containers.join("containers.conf"), &install, target)?;
+
+        let storage_config = containers.join("storage.conf");
+        if target.operating_system == ManagedOperatingSystem::Linux {
+            // Pinned containers/storage otherwise derives RunRoot as
+            // $XDG_RUNTIME_DIR/containers. Keep that durable storage state out
+            // of Linux's socket-length-bounded short runtime while retaining
+            // the conventional release-private rootless subpaths.
+            let storage_runroot = persistent_run.join("containers");
+            let storage_graphroot = data.join("containers").join("storage");
+            ensure_private_directory_tree(&persistent_run, &storage_runroot)?;
+            ensure_private_directory_tree(&data, &storage_graphroot)?;
+            self.write_containers_storage_config(
+                &storage_config,
+                &storage_runroot,
+                &storage_graphroot,
+            )?;
+        }
 
         let command_home = self.command_home(target)?;
         let runtime_directory = self.runtime_directory(target, &persistent_run)?;
@@ -2335,6 +2364,12 @@ impl ManagedRuntimeManager {
             OsString::from("CONTAINERS_CONF"),
             containers.join("containers.conf").into_os_string(),
         );
+        if target.operating_system == ManagedOperatingSystem::Linux {
+            environment.insert(
+                OsString::from("CONTAINERS_STORAGE_CONF"),
+                storage_config.into_os_string(),
+            );
+        }
         environment.insert(
             OsString::from("CONTAINERS_MACHINE_PROVIDER"),
             OsString::from(target.provider.argument()),
@@ -2561,7 +2596,7 @@ impl ManagedRuntimeManager {
                         &self.loaded.sha256,
                         effective_uid,
                     );
-                    remove_macos_short_home_directory(&home, effective_uid)
+                    remove_macos_short_home_directory(&home, effective_uid, &machine_name(target))
                 }
                 #[cfg(not(unix))]
                 Err(AppError::NotAvailable(
@@ -2645,6 +2680,20 @@ impl ManagedRuntimeManager {
             self.loaded.manifest.resources.disk_size_gb,
             self.loaded.manifest.resources.memory_mb,
             toml_scalar(target.provider.argument())
+        );
+        write_private_atomic(path, config.as_bytes())
+    }
+
+    fn write_containers_storage_config(
+        &self,
+        path: &Path,
+        runroot: &Path,
+        graphroot: &Path,
+    ) -> AppResult<()> {
+        let config = format!(
+            "[storage]\nrunroot = {}\ngraphroot = {}\n",
+            toml_string(runroot)?,
+            toml_string(graphroot)?,
         );
         write_private_atomic(path, config.as_bytes())
     }
@@ -3568,6 +3617,25 @@ impl WindowsCurrentUserSid {
 }
 
 #[cfg(windows)]
+struct WindowsLocalSystemSid {
+    storage: Vec<u32>,
+}
+
+#[cfg(windows)]
+impl WindowsLocalSystemSid {
+    fn as_ptr(&self) -> windows_sys::Win32::Security::PSID {
+        self.storage.as_ptr().cast_mut().cast()
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsManagedDirectoryAclPolicy {
+    CurrentUserOnly,
+    CurrentUserAndLocalSystem,
+}
+
+#[cfg(windows)]
 struct WindowsCurrentUserOnlyAcl {
     raw: *mut windows_sys::Win32::Security::ACL,
 }
@@ -3676,6 +3744,49 @@ fn windows_current_user_sid() -> io::Result<WindowsCurrentUserSid> {
         return Err(io::Error::last_os_error());
     }
     Ok(WindowsCurrentUserSid { storage })
+}
+
+#[cfg(windows)]
+fn windows_local_system_sid() -> io::Result<WindowsLocalSystemSid> {
+    use windows_sys::Win32::Security::{
+        CreateWellKnownSid, IsValidSid, IsWellKnownSid, SECURITY_MAX_SID_SIZE, WinLocalSystemSid,
+    };
+
+    let mut storage =
+        vec![0_u32; (SECURITY_MAX_SID_SIZE as usize).div_ceil(std::mem::size_of::<u32>())];
+    let mut length = u32::try_from(storage.len() * std::mem::size_of::<u32>()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows SID buffer is too large",
+        )
+    })?;
+    // SAFETY: storage is DWORD-aligned and exposes length writable bytes;
+    // WinLocalSystemSid does not require a domain SID.
+    if unsafe {
+        CreateWellKnownSid(
+            WinLocalSystemSid,
+            std::ptr::null_mut(),
+            storage.as_mut_ptr().cast(),
+            &raw mut length,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let sid = WindowsLocalSystemSid { storage };
+    // SAFETY: CreateWellKnownSid initialized the SID in storage and storage
+    // remains live for both validation calls.
+    if length == 0
+        || length as usize > sid.storage.len() * std::mem::size_of::<u32>()
+        || unsafe { IsValidSid(sid.as_ptr()) } == 0
+        || unsafe { IsWellKnownSid(sid.as_ptr(), WinLocalSystemSid) } == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid LocalSystem SID",
+        ));
+    }
+    Ok(sid)
 }
 
 #[cfg(windows)]
@@ -3908,12 +4019,37 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     file: &File,
     expected_ace_flags: u8,
 ) -> io::Result<()> {
+    verify_windows_managed_directory_dacl_with_ace_flags(
+        file,
+        expected_ace_flags,
+        WindowsManagedDirectoryAclPolicy::CurrentUserOnly,
+    )
+}
+
+#[cfg(windows)]
+fn verify_windows_wsl_distribution_storage_dacl_with_ace_flags(
+    file: &File,
+    expected_ace_flags: u8,
+) -> io::Result<()> {
+    verify_windows_managed_directory_dacl_with_ace_flags(
+        file,
+        expected_ace_flags,
+        WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem,
+    )
+}
+
+#[cfg(windows)]
+fn verify_windows_managed_directory_dacl_with_ace_flags(
+    file: &File,
+    expected_ace_flags: u8,
+    policy: WindowsManagedDirectoryAclPolicy,
+) -> io::Result<()> {
     use std::ffi::c_void;
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, EqualSid,
         GetAce, GetAclInformation, GetLengthSid, GetSecurityDescriptorControl,
-        GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidAcl, IsValidSid,
-        IsWellKnownSid, PSID, SE_DACL_PROTECTED, SE_SELF_RELATIVE, WinWorldSid,
+        GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, IsValidAcl, IsValidSid, PSID,
+        SE_DACL_PROTECTED, SE_SELF_RELATIVE,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
     use windows_sys::Win32::System::SystemServices::{
@@ -3921,6 +4057,19 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     };
 
     let user = windows_current_user_sid()?;
+    let local_system = if policy == WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem {
+        let local_system = windows_local_system_sid()?;
+        // SAFETY: both SID wrappers own valid, live SID storage.
+        if unsafe { EqualSid(user.as_ptr(), local_system.as_ptr()) } != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed WSL storage cannot use LocalSystem as its interactive owner",
+            ));
+        }
+        Some(local_system)
+    } else {
+        None
+    };
     let mut descriptor = windows_owner_dacl_security_descriptor(file)?;
     let security_descriptor = descriptor.as_mut_ptr().cast::<c_void>();
 
@@ -4030,61 +4179,101 @@ fn verify_windows_current_user_only_dacl_with_ace_flags(
     {
         return Err(io::Error::last_os_error());
     }
-    if acl_information.AceCount != 1 {
+    let expected_ace_count = match policy {
+        WindowsManagedDirectoryAclPolicy::CurrentUserOnly => 1,
+        WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem => 2,
+    };
+    if acl_information.AceCount != expected_ace_count {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "file DACL must contain exactly one access rule",
+            format!("file DACL must contain exactly {expected_ace_count} explicit access rule(s)"),
         ));
     }
 
-    let mut raw_ace = std::ptr::null_mut::<c_void>();
-    // SAFETY: the valid DACL reports one ACE, so index zero exists and raw_ace
-    // is writable output storage.
-    if unsafe { GetAce(dacl, 0, &raw mut raw_ace) } == 0 || raw_ace.is_null() {
-        return Err(io::Error::last_os_error());
+    let mut saw_current_user = false;
+    let mut saw_local_system = false;
+    for ace_index in 0..acl_information.AceCount {
+        let mut raw_ace = std::ptr::null_mut::<c_void>();
+        // SAFETY: ace_index is bounded by the count reported by the valid DACL
+        // and raw_ace is writable output storage.
+        if unsafe { GetAce(dacl, ace_index, &raw mut raw_ace) } == 0 || raw_ace.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: GetAce returned a pointer to at least an ACE_HEADER in the live DACL.
+        let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
+        if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE
+            || header.AceFlags != expected_ace_flags
+            || usize::from(header.AceSize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file DACL contains an unexpected access rule",
+            ));
+        }
+        // SAFETY: the ACE type and minimum size establish the ACCESS_ALLOWED_ACE
+        // fixed prefix, which is contained in the valid DACL.
+        let allowed = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
+        let ace_sid: PSID = std::ptr::addr_of!(allowed.SidStart).cast_mut().cast();
+        // SAFETY: ace_sid points to the SID payload of a valid, sufficiently large ACE.
+        if allowed.Mask != FILE_ALL_ACCESS || unsafe { IsValidSid(ace_sid) } == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file DACL does not grant only the expected private access",
+            ));
+        }
+        // SAFETY: IsValidSid established that ace_sid is a valid SID.
+        let sid_length = unsafe { GetLengthSid(ace_sid) } as usize;
+        let expected_ace_size = std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            .checked_sub(std::mem::size_of::<u32>())
+            .and_then(|prefix| prefix.checked_add(sid_length))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "Windows ACE size overflowed")
+            })?;
+        if usize::from(header.AceSize) != expected_ace_size {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file DACL contains a malformed SID boundary",
+            ));
+        }
+
+        // SAFETY: ace_sid and the expected principal SIDs are valid and live.
+        if unsafe { EqualSid(ace_sid, user.as_ptr()) } != 0 {
+            if saw_current_user {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "file DACL contains a duplicate current-user access rule",
+                ));
+            }
+            saw_current_user = true;
+            continue;
+        }
+        let matches_local_system = local_system
+            .as_ref()
+            // SAFETY: both SIDs are valid and live for the comparison.
+            .is_some_and(|system| unsafe { EqualSid(ace_sid, system.as_ptr()) } != 0);
+        if matches_local_system {
+            if saw_local_system {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "file DACL contains a duplicate LocalSystem access rule",
+                ));
+            }
+            saw_local_system = true;
+            continue;
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "file DACL grants access to an unexpected Windows principal",
+        ));
     }
-    // SAFETY: GetAce returned a pointer to at least an ACE_HEADER in the live DACL.
-    let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
-    if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE
-        || header.AceFlags != expected_ace_flags
-        || usize::from(header.AceSize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+    if !saw_current_user
+        || (policy == WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem
+            && !saw_local_system)
+        || (policy == WindowsManagedDirectoryAclPolicy::CurrentUserOnly && saw_local_system)
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "file DACL contains an unexpected access rule",
-        ));
-    }
-    // SAFETY: the ACE type and minimum size establish the ACCESS_ALLOWED_ACE
-    // fixed prefix, which is contained in the valid DACL.
-    let allowed = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
-    let ace_sid: PSID = std::ptr::addr_of!(allowed.SidStart).cast_mut().cast();
-    // SAFETY: ace_sid points to the SID payload of a valid, sufficiently large ACE.
-    if allowed.Mask != FILE_ALL_ACCESS || unsafe { IsValidSid(ace_sid) } == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "file DACL does not grant only the expected private access",
-        ));
-    }
-    // SAFETY: IsValidSid established both SID pointers as valid.
-    let sid_length = unsafe { GetLengthSid(ace_sid) } as usize;
-    let current_user_sid_length = unsafe { GetLengthSid(user.as_ptr()) } as usize;
-    let expected_ace_size = std::mem::size_of::<ACCESS_ALLOWED_ACE>()
-        .checked_sub(std::mem::size_of::<u32>())
-        .and_then(|prefix| prefix.checked_add(sid_length))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACE size overflowed"))?;
-    // SAFETY: IsValidSid established both SID pointers as valid.
-    let sid_matches_current_user = unsafe { EqualSid(ace_sid, user.as_ptr()) } != 0;
-    let sid_is_everyone = unsafe { IsWellKnownSid(ace_sid, WinWorldSid) } != 0;
-    if usize::from(header.AceSize) != expected_ace_size || !sid_matches_current_user {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "file DACL is not restricted to the current Windows user \
-                 (ACE size {}, expected {expected_ace_size}, SID match {sid_matches_current_user}, \
-                 SID length {sid_length}, current-user SID length {current_user_sid_length}, \
-                 Everyone SID {sid_is_everyone}, descriptor control {control:#06x})",
-                header.AceSize
-            ),
+            "file DACL does not contain the exact expected Windows principal set",
         ));
     }
     Ok(())
@@ -5629,8 +5818,196 @@ fn verify_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) ->
 }
 
 #[cfg(unix)]
-fn remove_macos_short_home_directory(path: &Path, effective_uid: libc::uid_t) -> AppResult<()> {
-    remove_macos_short_home_directory_at(path, Path::new(MACOS_SHORT_HOME_BASE), effective_uid)
+fn open_verified_macos_socket_alias_directory(
+    path: &Path,
+    effective_uid: libc::uid_t,
+) -> AppResult<File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS socket-alias directory is unsafe".into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(path).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "managed runtime macOS socket-alias directory could not be opened without following links: {error}"
+        ))
+    })?;
+    verify_opened_macos_socket_alias_directory(path, &directory, &metadata, effective_uid)?;
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn verify_opened_macos_socket_alias_directory(
+    path: &Path,
+    directory: &File,
+    expected: &fs::Metadata,
+    effective_uid: libc::uid_t,
+) -> AppResult<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let current = fs::symlink_metadata(path)?;
+    let opened = directory.metadata()?;
+    if current.file_type().is_symlink()
+        || !current.is_dir()
+        || current.dev() != expected.dev()
+        || current.ino() != expected.ino()
+        || current.uid() != effective_uid
+        || current.mode() & 0o7777 != 0o700
+        || !opened.is_dir()
+        || opened.dev() != current.dev()
+        || opened.ino() != current.ino()
+        || opened.uid() != effective_uid
+        || opened.mode() & 0o7777 != 0o700
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS socket-alias directory changed while it was being verified"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn macos_socket_alias_stat(directory: &File, basename: &std::ffi::CStr) -> AppResult<libc::stat> {
+    use std::os::fd::AsRawFd;
+
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: directory owns a live directory descriptor, basename is a
+    // NUL-terminated relative name, and metadata points to writable storage.
+    if unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            basename.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        let error = io::Error::last_os_error();
+        return Err(AppError::NotAuthorized(format!(
+            "managed runtime macOS ignition socket could not be inspected without following links: {error}"
+        )));
+    }
+    // SAFETY: successful fstatat initialized every field of metadata.
+    Ok(unsafe { metadata.assume_init() })
+}
+
+#[cfg(unix)]
+fn remove_expected_macos_ignition_socket_alias(
+    aliases: &Path,
+    effective_uid: libc::uid_t,
+    machine_name: &str,
+) -> AppResult<()> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
+
+    if machine_name.is_empty()
+        || machine_name.len() > MAX_MACHINE_NAME_BYTES
+        || !machine_name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS machine name is invalid for exact socket cleanup".into(),
+        ));
+    }
+    let expected_basename = format!("{machine_name}{PODMAN_IGNITION_SOCKET_SUFFIX}");
+    let expected_c_basename = CString::new(expected_basename.as_bytes()).map_err(|_| {
+        AppError::Internal(
+            "managed runtime macOS ignition socket basename was not representable".into(),
+        )
+    })?;
+    let directory = open_verified_macos_socket_alias_directory(aliases, effective_uid)?;
+
+    let mut entries = fs::read_dir(aliases)?;
+    let first = entries.next().transpose()?.map(|entry| entry.file_name());
+    if entries.next().transpose()?.is_some()
+        || first
+            .as_ref()
+            .is_some_and(|name| name != OsStr::new(&expected_basename))
+    {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS socket-alias directory contained an unexpected entry after machine removal"
+                .into(),
+        ));
+    }
+
+    verify_opened_macos_socket_alias_directory(
+        aliases,
+        &directory,
+        &directory.metadata()?,
+        effective_uid,
+    )?;
+    if first.is_some() {
+        let expected = macos_socket_alias_stat(&directory, &expected_c_basename)?;
+        if expected.st_mode & libc::S_IFMT != libc::S_IFSOCK
+            || expected.st_uid != effective_uid
+            || expected.st_nlink != 1
+            || expected.st_mode & 0o7000 != 0
+        {
+            return Err(AppError::NotAuthorized(
+                "managed runtime macOS ignition socket is not an expected current-user single-link Unix socket"
+                    .into(),
+            ));
+        }
+        let current = macos_socket_alias_stat(&directory, &expected_c_basename)?;
+        if current.st_dev != expected.st_dev
+            || current.st_ino != expected.st_ino
+            || current.st_mode != expected.st_mode
+            || current.st_uid != expected.st_uid
+            || current.st_nlink != expected.st_nlink
+        {
+            return Err(AppError::NotAuthorized(
+                "managed runtime macOS ignition socket changed while it was being verified".into(),
+            ));
+        }
+        // SAFETY: directory is the verified .podman descriptor and the fixed
+        // relative basename was checked twice with AT_SYMLINK_NOFOLLOW.
+        if unsafe { libc::unlinkat(directory.as_raw_fd(), expected_c_basename.as_ptr(), 0) } != 0 {
+            let error = io::Error::last_os_error();
+            return Err(AppError::Runtime(format!(
+                "managed runtime macOS ignition socket could not be removed: {error}"
+            )));
+        }
+    }
+
+    verify_opened_macos_socket_alias_directory(
+        aliases,
+        &directory,
+        &directory.metadata()?,
+        effective_uid,
+    )?;
+    if fs::read_dir(aliases)?.next().transpose()?.is_some() {
+        return Err(AppError::NotAuthorized(
+            "managed runtime macOS socket-alias directory changed during exact cleanup".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_macos_short_home_directory(
+    path: &Path,
+    effective_uid: libc::uid_t,
+    machine_name: &str,
+) -> AppResult<()> {
+    remove_macos_short_home_directory_at(
+        path,
+        Path::new(MACOS_SHORT_HOME_BASE),
+        effective_uid,
+        machine_name,
+    )
 }
 
 #[cfg(unix)]
@@ -5638,6 +6015,7 @@ fn remove_macos_short_home_directory_at(
     path: &Path,
     base: &Path,
     effective_uid: libc::uid_t,
+    machine_name: &str,
 ) -> AppResult<()> {
     if path.parent() != Some(base) {
         return Err(AppError::NotAuthorized(
@@ -5659,23 +6037,8 @@ fn remove_macos_short_home_directory_at(
     }
     let aliases = path.join(".podman");
     match fs::symlink_metadata(&aliases) {
-        Ok(metadata) => {
-            use std::os::unix::fs::MetadataExt;
-            if metadata.file_type().is_symlink()
-                || !metadata.is_dir()
-                || metadata.uid() != effective_uid
-                || metadata.mode() & 0o7777 != 0o700
-            {
-                return Err(AppError::NotAuthorized(
-                    "managed runtime macOS socket-alias directory is unsafe".into(),
-                ));
-            }
-            if fs::read_dir(&aliases)?.next().transpose()?.is_some() {
-                return Err(AppError::NotAuthorized(
-                    "managed runtime macOS socket-alias directory was not empty after machine removal"
-                        .into(),
-                ));
-            }
+        Ok(_) => {
+            remove_expected_macos_ignition_socket_alias(&aliases, effective_uid, machine_name)?;
             fs::remove_dir(&aliases)?;
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -6161,6 +6524,30 @@ fn open_or_create_windows_managed_private_directory_guard(
     path: &Path,
     verify_ancestor_chain: bool,
 ) -> io::Result<(PathBuf, File)> {
+    open_or_create_windows_managed_directory_guard(
+        path,
+        verify_ancestor_chain,
+        WindowsManagedDirectoryAclPolicy::CurrentUserOnly,
+    )
+}
+
+#[cfg(windows)]
+fn open_or_create_windows_managed_wsl_distribution_storage_guard(
+    path: &Path,
+) -> io::Result<(PathBuf, File)> {
+    open_or_create_windows_managed_directory_guard(
+        path,
+        false,
+        WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem,
+    )
+}
+
+#[cfg(windows)]
+fn open_or_create_windows_managed_directory_guard(
+    path: &Path,
+    verify_ancestor_chain: bool,
+    policy: WindowsManagedDirectoryAclPolicy,
+) -> io::Result<(PathBuf, File)> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
@@ -6178,13 +6565,42 @@ fn open_or_create_windows_managed_private_directory_guard(
     use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
     let user = windows_current_user_sid()?;
-    // SAFETY: as_ptr returns the valid SID copy owned by user.
-    let sid_length = unsafe { windows_sys::Win32::Security::GetLengthSid(user.as_ptr()) } as usize;
-    let acl_bytes = std::mem::size_of::<ACL>()
-        .checked_add(std::mem::size_of::<ACCESS_ALLOWED_ACE>())
-        .and_then(|size| size.checked_sub(std::mem::size_of::<u32>()))
-        .and_then(|size| size.checked_add(sid_length))
-        .and_then(|size| size.checked_add(std::mem::size_of::<u32>() - 1))
+    let local_system = if policy == WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem {
+        let local_system = windows_local_system_sid()?;
+        // SAFETY: both SID wrappers own valid, live SID storage.
+        if unsafe { windows_sys::Win32::Security::EqualSid(user.as_ptr(), local_system.as_ptr()) }
+            != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed WSL storage cannot use LocalSystem as its interactive owner",
+            ));
+        }
+        Some(local_system)
+    } else {
+        None
+    };
+    let mut acl_bytes = std::mem::size_of::<ACL>();
+    let mut append_ace_size = |sid: windows_sys::Win32::Security::PSID| -> io::Result<()> {
+        // SAFETY: each pointer comes from a validated SID wrapper that remains live.
+        let sid_length = unsafe { windows_sys::Win32::Security::GetLengthSid(sid) } as usize;
+        let ace_bytes = std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            .checked_sub(std::mem::size_of::<u32>())
+            .and_then(|size| size.checked_add(sid_length))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "Windows ACE size overflowed")
+            })?;
+        acl_bytes = acl_bytes.checked_add(ace_bytes).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Windows ACL size overflowed")
+        })?;
+        Ok(())
+    };
+    append_ace_size(user.as_ptr())?;
+    if let Some(local_system) = local_system.as_ref() {
+        append_ace_size(local_system.as_ptr())?;
+    }
+    let acl_bytes = acl_bytes
+        .checked_add(std::mem::size_of::<u32>() - 1)
         .map(|size| size & !(std::mem::size_of::<u32>() - 1))
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Windows ACL size overflowed"))?;
     let acl_length = u32::try_from(acl_bytes)
@@ -6208,6 +6624,23 @@ fn open_or_create_windows_managed_private_directory_guard(
     } == 0
     {
         return Err(io::Error::last_os_error());
+    }
+    if let Some(local_system) = local_system.as_ref() {
+        // SAFETY: the ACL remains initialized and local_system owns a valid
+        // SID. This second inheritable ACE is present only for WSL's
+        // distribution-storage service boundary.
+        if unsafe {
+            AddAccessAllowedAceEx(
+                acl.as_mut_ptr().cast(),
+                ACL_REVISION,
+                inheritance,
+                FILE_ALL_ACCESS,
+                local_system.as_ptr(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
     }
 
     let mut descriptor = SECURITY_DESCRIPTOR::default();
@@ -6334,10 +6767,16 @@ fn open_or_create_windows_managed_private_directory_guard(
             "managed runtime path is not a real directory",
         ));
     }
-    verify_windows_current_user_only_dacl_with_ace_flags(
-        &directory,
-        u8::try_from(inheritance).expect("Windows inheritance flags fit in an ACE header"),
-    )?;
+    let inheritance =
+        u8::try_from(inheritance).expect("Windows inheritance flags fit in an ACE header");
+    match policy {
+        WindowsManagedDirectoryAclPolicy::CurrentUserOnly => {
+            verify_windows_current_user_only_dacl_with_ace_flags(&directory, inheritance)?;
+        }
+        WindowsManagedDirectoryAclPolicy::CurrentUserAndLocalSystem => {
+            verify_windows_wsl_distribution_storage_dacl_with_ace_flags(&directory, inheritance)?;
+        }
+    }
     Ok((exact_path, directory))
 }
 
@@ -6349,6 +6788,12 @@ fn ensure_windows_managed_private_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn ensure_windows_managed_wsl_distribution_storage_directory(path: &Path) -> io::Result<()> {
+    drop(open_or_create_windows_managed_wsl_distribution_storage_guard(path)?);
+    Ok(())
+}
+
 fn ensure_managed_private_directory(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -6357,6 +6802,17 @@ fn ensure_managed_private_directory(path: &Path) -> io::Result<()> {
     #[cfg(not(windows))]
     {
         ensure_private_directory(path)
+    }
+}
+
+fn ensure_managed_wsl_distribution_storage_directory(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        ensure_windows_managed_wsl_distribution_storage_directory(path)
+    }
+    #[cfg(not(windows))]
+    {
+        ensure_managed_private_directory(path)
     }
 }
 
@@ -7245,22 +7701,33 @@ mod tests {
             .parent()
             .expect("identity parent")
             .to_path_buf();
+        let config = provider_home.join("config");
+        let data = provider_home.join("data");
+        let machine_provider_data = data
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join(target.provider.argument());
         let expected = [
+            provider_home.clone(),
+            provider_home.join("cache"),
+            provider_home.join("run"),
             provider_home.join("run").join("podman"),
-            provider_home
-                .join("config")
+            config.clone(),
+            config.join("containers"),
+            config.join("containers").join("podman"),
+            config.join("containers").join("podman").join("machine"),
+            config
                 .join("containers")
                 .join("podman")
                 .join("machine")
                 .join(target.provider.argument()),
+            data.clone(),
+            data.join("containers"),
+            data.join("containers").join("podman"),
             identity_parent,
-            provider_home
-                .join("data")
-                .join("containers")
-                .join("podman")
-                .join("machine")
-                .join(target.provider.argument())
-                .join("cache"),
+            machine_provider_data.clone(),
+            machine_provider_data.join("cache"),
         ];
         let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
             .expect("inheritance flags fit in an ACE header");
@@ -7270,6 +7737,29 @@ mod tests {
             verify_windows_current_user_only_dacl_with_ace_flags(&handle, inheritance)
                 .unwrap_or_else(|error| panic!("verify {}: {error}", directory.display()));
         }
+
+        let distribution_storage =
+            machine_provider_data.join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY);
+        let distribution_storage_handle =
+            open_windows_real_directory_security_handle(&distribution_storage)
+                .unwrap_or_else(|error| panic!("open {}: {error}", distribution_storage.display()));
+        verify_windows_wsl_distribution_storage_dacl_with_ace_flags(
+            &distribution_storage_handle,
+            inheritance,
+        )
+        .unwrap_or_else(|error| panic!("verify {}: {error}", distribution_storage.display()));
+        assert!(
+            verify_windows_current_user_only_dacl_with_ace_flags(
+                &distribution_storage_handle,
+                inheritance,
+            )
+            .is_err(),
+            "WSL distribution storage must have the narrow LocalSystem exception"
+        );
+        assert!(
+            !private_entry_exists(&distribution_storage.join(machine_name(target))).unwrap(),
+            "the product must leave the per-machine import target for WSL to create"
+        );
     }
 
     #[cfg(unix)]
@@ -7760,6 +8250,23 @@ mod tests {
         );
         assert!(unexpected.is_dir());
 
+        let legacy_storage_runtime =
+            linux_short_runtime_path(&base, &state, &"1".repeat(64), effective_uid);
+        ensure_linux_short_runtime_directory_at(&legacy_storage_runtime, &base, effective_uid)
+            .unwrap();
+        let legacy_storage = legacy_storage_runtime.join("containers");
+        fs::create_dir(&legacy_storage).unwrap();
+        fs::set_permissions(&legacy_storage, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(legacy_storage.join("must-remain"), b"legacy storage state").unwrap();
+        let error =
+            remove_linux_short_runtime_directory_at(&legacy_storage_runtime, &base, effective_uid)
+                .expect_err("legacy containers/storage state must never be removed recursively");
+        assert!(error.to_string().contains("unexpected entry"));
+        assert_eq!(
+            fs::read(legacy_storage.join("must-remain")).unwrap(),
+            b"legacy storage state"
+        );
+
         let linked_log_runtime =
             linux_short_runtime_path(&base, &state, &"c".repeat(64), effective_uid);
         ensure_linux_short_runtime_directory_at(&linked_log_runtime, &base, effective_uid).unwrap();
@@ -7949,23 +8456,36 @@ mod tests {
     #[test]
     fn macos_short_home_cleanup_is_exact_and_unsafe_preexisting_entries_fail_closed() {
         use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::os::unix::net::UnixListener;
 
         let temp = TempDir::new().expect("temporary root");
-        let base = temp.path().join("short-homes");
+        let base = temp.path().join("s");
         let state = temp.path().join("state");
         ensure_private_directory(&base).unwrap();
         ensure_private_directory(&state).unwrap();
         let state = canonical_real_directory(&state, "test state").unwrap();
         // SAFETY: geteuid has no preconditions and does not dereference memory.
         let effective_uid = unsafe { libc::geteuid() };
+        let machine_name = "m";
 
         let home = macos_short_home_path(&base, &state, &"a".repeat(64), effective_uid);
         ensure_macos_short_home_directory(&home, effective_uid).unwrap();
         let aliases = home.join(".podman");
         ensure_private_directory(&aliases).unwrap();
-        remove_macos_short_home_directory_at(&home, &base, effective_uid)
+        remove_macos_short_home_directory_at(&home, &base, effective_uid, machine_name)
             .expect("remove empty exact home after machine removal");
         assert!(!private_entry_exists(&home).unwrap());
+
+        let socket_home = macos_short_home_path(&base, &state, &"d".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&socket_home, effective_uid).unwrap();
+        let aliases = socket_home.join(".podman");
+        ensure_private_directory(&aliases).unwrap();
+        let exact_socket = macos_podman_ignition_socket_alias(&socket_home, machine_name);
+        let listener = UnixListener::bind(&exact_socket).unwrap();
+        drop(listener);
+        remove_macos_short_home_directory_at(&socket_home, &base, effective_uid, machine_name)
+            .expect("remove exact stale pinned-Podman ignition socket and short home");
+        assert!(!private_entry_exists(&socket_home).unwrap());
 
         let unexpected = macos_short_home_path(&base, &state, &"d".repeat(64), effective_uid);
         ensure_macos_short_home_directory(&unexpected, effective_uid).unwrap();
@@ -7978,11 +8498,76 @@ mod tests {
         // Ordinary stop/update does not invoke cleanup; the stable namespace
         // and any live socket aliases remain available until machine removal.
         assert!(unexpected.is_dir());
-        let error = remove_macos_short_home_directory_at(&unexpected, &base, effective_uid)
-            .expect_err("unexpected alias entry must fail closed");
-        assert!(error.to_string().contains("was not empty"));
+        let error =
+            remove_macos_short_home_directory_at(&unexpected, &base, effective_uid, machine_name)
+                .expect_err("unexpected alias entry must fail closed");
+        assert!(error.to_string().contains("unexpected entry"));
         assert_eq!(fs::read(&outside).unwrap(), b"must remain");
         assert!(unexpected.is_dir());
+
+        let linked_alias_home =
+            macos_short_home_path(&base, &state, &"e".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&linked_alias_home, effective_uid).unwrap();
+        let aliases = linked_alias_home.join(".podman");
+        ensure_private_directory(&aliases).unwrap();
+        let exact_alias = macos_podman_ignition_socket_alias(&linked_alias_home, machine_name);
+        symlink(&outside, &exact_alias).unwrap();
+        let error = remove_macos_short_home_directory_at(
+            &linked_alias_home,
+            &base,
+            effective_uid,
+            machine_name,
+        )
+        .expect_err("an exact-name symlink must not be treated as Podman's socket residue");
+        assert!(error.to_string().contains("single-link Unix socket"));
+        assert!(
+            fs::symlink_metadata(&exact_alias)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"must remain");
+
+        let regular_alias_home =
+            macos_short_home_path(&base, &state, &"f".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&regular_alias_home, effective_uid).unwrap();
+        let aliases = regular_alias_home.join(".podman");
+        ensure_private_directory(&aliases).unwrap();
+        let exact_alias = macos_podman_ignition_socket_alias(&regular_alias_home, machine_name);
+        fs::write(&exact_alias, b"must remain").unwrap();
+        assert!(
+            remove_macos_short_home_directory_at(
+                &regular_alias_home,
+                &base,
+                effective_uid,
+                machine_name,
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&exact_alias).unwrap(), b"must remain");
+
+        let extra_entry_home = macos_short_home_path(&base, &state, &"0".repeat(64), effective_uid);
+        ensure_macos_short_home_directory(&extra_entry_home, effective_uid).unwrap();
+        let aliases = extra_entry_home.join(".podman");
+        ensure_private_directory(&aliases).unwrap();
+        let exact_socket = macos_podman_ignition_socket_alias(&extra_entry_home, machine_name);
+        let listener = UnixListener::bind(&exact_socket).unwrap();
+        drop(listener);
+        fs::write(aliases.join("unexpected"), b"must remain").unwrap();
+        assert!(
+            remove_macos_short_home_directory_at(
+                &extra_entry_home,
+                &base,
+                effective_uid,
+                machine_name,
+            )
+            .is_err()
+        );
+        assert!(private_entry_exists(&exact_socket).unwrap());
+        assert_eq!(
+            fs::read(aliases.join("unexpected")).unwrap(),
+            b"must remain"
+        );
 
         let permissive = macos_short_home_path(&base, &state, &"b".repeat(64), effective_uid);
         fs::create_dir(&permissive).unwrap();
@@ -7994,7 +8579,10 @@ mod tests {
                 .to_string()
                 .contains("unsafe ownership or permissions")
         );
-        assert!(remove_macos_short_home_directory_at(&permissive, &base, effective_uid).is_err());
+        assert!(
+            remove_macos_short_home_directory_at(&permissive, &base, effective_uid, machine_name)
+                .is_err()
+        );
         assert!(permissive.is_dir());
 
         let linked = macos_short_home_path(&base, &state, &"c".repeat(64), effective_uid);
@@ -8002,7 +8590,10 @@ mod tests {
         ensure_private_directory(&outside_directory).unwrap();
         symlink(&outside_directory, &linked).unwrap();
         assert!(ensure_macos_short_home_directory(&linked, effective_uid).is_err());
-        assert!(remove_macos_short_home_directory_at(&linked, &base, effective_uid).is_err());
+        assert!(
+            remove_macos_short_home_directory_at(&linked, &base, effective_uid, machine_name)
+                .is_err()
+        );
         assert!(
             fs::symlink_metadata(&linked)
                 .unwrap()
@@ -9466,6 +10057,7 @@ mod tests {
             #[cfg(unix)]
             {
                 use std::os::unix::ffi::OsStrExt;
+                use std::os::unix::fs::MetadataExt;
 
                 assert_eq!(
                     xdg_runtime_directory,
@@ -9480,8 +10072,55 @@ mod tests {
                 let socket =
                     linux_podman_gvproxy_socket_path(&xdg_runtime_directory, &machine_name(target));
                 assert!(socket.as_os_str().as_bytes().len() <= PODMAN_LINUX_MAX_SOCKET_PATH_BYTES);
+                assert!(
+                    !private_entry_exists(&xdg_runtime_directory.join("containers")).unwrap(),
+                    "containers/storage state must not be created in the socket-bounded runtime"
+                );
+
+                let provider_home = fixture.manager.provider_home();
+                let storage_config = provider_home
+                    .join("config")
+                    .join("containers")
+                    .join("storage.conf");
+                assert_eq!(
+                    command
+                        .environment
+                        .get(OsStr::new("CONTAINERS_STORAGE_CONF"))
+                        .map(OsString::as_os_str),
+                    Some(storage_config.as_os_str())
+                );
+                let storage_runroot = provider_home.join("run").join("containers");
+                let storage_graphroot = provider_home
+                    .join("data")
+                    .join("containers")
+                    .join("storage");
+                assert_eq!(
+                    fs::read_to_string(&storage_config).expect("private storage config"),
+                    format!(
+                        "[storage]\nrunroot = {}\ngraphroot = {}\n",
+                        toml_string(&storage_runroot).unwrap(),
+                        toml_string(&storage_graphroot).unwrap(),
+                    )
+                );
+                let storage_metadata = fs::symlink_metadata(&storage_config).unwrap();
+                assert!(storage_metadata.is_file());
+                assert!(!storage_metadata.file_type().is_symlink());
+                assert_eq!(storage_metadata.uid(), effective_uid());
+                assert_eq!(storage_metadata.mode() & 0o7777, 0o600);
+                for directory in [storage_runroot, storage_graphroot] {
+                    let metadata = fs::symlink_metadata(&directory).unwrap();
+                    assert!(metadata.is_dir());
+                    assert!(!metadata.file_type().is_symlink());
+                    assert_eq!(metadata.uid(), effective_uid());
+                    assert_eq!(metadata.mode() & 0o7777, 0o700);
+                }
             }
         } else {
+            assert!(
+                !command
+                    .environment
+                    .contains_key(OsStr::new("CONTAINERS_STORAGE_CONF"))
+            );
             assert_eq!(
                 xdg_runtime_directory,
                 fixture.manager.provider_home().join("run")
@@ -9526,6 +10165,38 @@ mod tests {
         for value in command.environment.values() {
             assert!(!value.to_string_lossy().contains('\n'));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_storage_configuration_is_immutable() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        let command = fixture.manager.runtime_command(target).expect("command");
+        let storage_config = PathBuf::from(
+            command
+                .environment
+                .get(OsStr::new("CONTAINERS_STORAGE_CONF"))
+                .expect("Linux storage config"),
+        );
+        fs::write(&storage_config, b"[storage]\nrunroot = \"tampered\"\n")
+            .expect("tamper storage config");
+
+        let error = fixture
+            .manager
+            .runtime_command(target)
+            .expect_err("immutable storage config mismatch must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("immutable configuration differs")
+        );
+        assert_eq!(
+            fs::read(&storage_config).unwrap(),
+            b"[storage]\nrunroot = \"tampered\"\n"
+        );
     }
 
     #[test]

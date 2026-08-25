@@ -182,6 +182,100 @@ function Assert-ManagedPrivateDirectory([string]$Path, [string]$Label) {
   }
 }
 
+function Assert-ManagedWslDistributionDirectory([string]$Path, [string]$Label) {
+  $item = Get-Item -LiteralPath $Path -Force
+  if (-not $item.PSIsContainer -or
+      ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "$Label is not an exact real directory."
+  }
+  $acl = Get-Acl -LiteralPath $Path
+  $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $localSystemSid = [Security.Principal.SecurityIdentifier]::new(
+    [Security.Principal.WellKnownSidType]::LocalSystemSid,
+    $null
+  )
+  $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+  $rawDescriptor = [Security.AccessControl.RawSecurityDescriptor]::new(
+    $acl.GetSecurityDescriptorBinaryForm(),
+    0
+  )
+  $ownerDefaulted = (
+    $rawDescriptor.ControlFlags -band [Security.AccessControl.ControlFlags]::OwnerDefaulted
+  ) -ne [Security.AccessControl.ControlFlags]::None
+  $daclDefaulted = (
+    $rawDescriptor.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclDefaulted
+  ) -ne [Security.AccessControl.ControlFlags]::None
+  $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+  if (-not $acl.AreAccessRulesProtected -or $ownerDefaulted -or $daclDefaulted -or
+      -not $ownerSid.Equals($currentSid) -or $rules.Count -ne 2) {
+    throw "$Label does not have an exact protected non-defaulted current-user-owned two-principal DACL."
+  }
+  [Security.AccessControl.InheritanceFlags]$expectedInheritance = (
+    [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+    [Security.AccessControl.InheritanceFlags]::ObjectInherit
+  )
+  $sawCurrentUser = $false
+  $sawLocalSystem = $false
+  foreach ($rule in $rules) {
+    if ($rule.IsInherited -or
+        $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+        $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+        $rule.InheritanceFlags -ne $expectedInheritance -or
+        $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) {
+      throw "$Label DACL contains a rule other than explicit inheritable full control."
+    }
+    if ($rule.IdentityReference.Equals($currentSid)) {
+      if ($sawCurrentUser) {
+        throw "$Label DACL contains a duplicate current-user rule."
+      }
+      $sawCurrentUser = $true
+    } elseif ($rule.IdentityReference.Equals($localSystemSid)) {
+      if ($sawLocalSystem) {
+        throw "$Label DACL contains a duplicate LocalSystem rule."
+      }
+      $sawLocalSystem = $true
+    } else {
+      throw "$Label DACL grants an unexpected principal."
+    }
+  }
+  if (-not $sawCurrentUser -or -not $sawLocalSystem) {
+    throw "$Label DACL does not grant both the current user and LocalSystem."
+  }
+}
+
+function Get-BoundedManagedFailureOutput(
+  [string]$Path,
+  [string]$StreamLabel,
+  [int]$MaximumBytes = 16384
+) {
+  if ($MaximumBytes -lt 1 -or $MaximumBytes -gt 65536) {
+    throw "Managed runtime failure-output byte bound is invalid."
+  }
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return "$StreamLabel=<missing>"
+  }
+  $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try {
+    $byteCount = [int][Math]::Min([int64]$MaximumBytes, $stream.Length)
+    [byte[]]$bytes = [byte[]]::new($byteCount)
+    $offset = 0
+    while ($offset -lt $byteCount) {
+      $read = $stream.Read($bytes, $offset, $byteCount - $offset)
+      if ($read -eq 0) { break }
+      $offset += $read
+    }
+    $text = [Text.UTF8Encoding]::new($false, $false).GetString($bytes, 0, $offset)
+    if ($text.StartsWith([char]0xfeff)) {
+      $text = $text.Substring(1)
+    }
+    $encoded = ConvertTo-Json -InputObject $text -Compress
+    $suffix = if ($stream.Length -gt $MaximumBytes) { " (truncated at $MaximumBytes bytes)" } else { "" }
+    return "$StreamLabel=$encoded$suffix"
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Assert-ManagedSshIdentity([string]$ProviderReleaseHome) {
   $identityDirectory = Join-Path $ProviderReleaseHome "data\containers\podman\machine"
   $privateKey = Join-Path $identityDirectory "machine"
@@ -450,9 +544,11 @@ try {
     $stdout = Join-Path $workRoot "$OutputName.json"
     $stderr = Join-Path $workRoot "$OutputName.stderr.log"
     & $cli --json --data-dir $dataDirectory runtime managed @Arguments 1> $stdout 2> $stderr
-    if ($LASTEXITCODE -ne 0) {
-      $failure = Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue
-      throw "Managed runtime command $OutputName failed: $failure"
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+      $boundedStdout = Get-BoundedManagedFailureOutput $stdout "stdout"
+      $boundedStderr = Get-BoundedManagedFailureOutput $stderr "stderr"
+      throw "Managed runtime command $OutputName failed with status ${exitCode}; $boundedStdout; $boundedStderr"
     }
     try {
       return Get-Content -LiteralPath $stdout -Raw | ConvertFrom-Json
@@ -468,11 +564,14 @@ try {
     (Join-Path $providerReleaseHome "run\podman"),
     (Join-Path $providerReleaseHome "config\containers\podman\machine\wsl"),
     (Join-Path $providerReleaseHome "data\containers\podman\machine"),
+    (Join-Path $providerReleaseHome "data\containers\podman\machine\wsl"),
     (Join-Path $providerReleaseHome "data\containers\podman\machine\wsl\cache")
   )
   foreach ($namespaceDirectory in $podmanNamespaceDirectories) {
     Assert-ManagedPrivateDirectory $namespaceDirectory "Managed Podman namespace directory"
   }
+  $wslDistributionDirectory = Join-Path $providerReleaseHome "data\containers\podman\machine\wsl\wsldist"
+  Assert-ManagedWslDistributionDirectory $wslDistributionDirectory "Managed WSL distribution directory"
   $startStatus = Invoke-Managed "start" @("start")
   Assert-ManagedSshIdentity $providerReleaseHome
   $runningStatus = Invoke-Managed "running-status" @("status")

@@ -34,8 +34,13 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   uses a Linux-specific domain-separated hash of the canonical managed state root, exact release
   manifest digest, and effective uid. The app creates or reopens only that exact `/tmp` child when
   it is a real current-user directory with mode `0700`, verified through an `O_NOFOLLOW` directory
-  handle. A link, foreign owner, permissive mode, non-canonical temporary base, or changed object
-  fails closed. With a maximum 30-byte machine name, Podman 5.8.2's longest
+  handle. An immutable private `storage.conf`, selected through the exact
+  `CONTAINERS_STORAGE_CONF` path, pins containers/storage's `runroot` to
+  `provider-home/run/containers` and `graphroot` to `provider-home/data/containers/storage`.
+  Consequently, the short runtime holds only Podman's socket-budgeted `podman` namespace instead
+  of the default `$XDG_RUNTIME_DIR/containers` storage state. A link, foreign owner, permissive
+  mode, non-canonical temporary base, or changed object fails closed. With a maximum 30-byte machine
+  name, Podman 5.8.2's longest
   `$XDG_RUNTIME_DIR/podman/*-gvproxy.sock` path is 94 bytes, below its 103-byte Unix-socket budget.
 - The Linux short runtime remains stable across start, ordinary stop, and update. After exact
   machine removal, uninstall accepts only the pinned Podman `podman` child. It may remove only the
@@ -57,8 +62,13 @@ explicit compatibility providers; they are not silently mixed with managed runs.
 - The macOS short home is stable and remains present across start, ordinary stop, and update so a
   live vfkit/gvproxy process cannot lose its socket aliases. Uninstall removes only that exact
   owned namespace after `machine rm` succeeds or inventory proves the exact machine is absent. It
-  removes only an absent or empty real `.podman` directory and then the empty home itself; links,
-  unexpected children, or an unsafe replacement abort cleanup instead of broadening removal.
+  accepts an absent or empty real `.podman` directory, or the single exact
+  `<deterministic-machine>-ignition.sock` pathname left by pinned Podman 5.8.2's first-boot
+  ignition server. That one pathname is removed through the verified directory handle only after
+  no-follow inspection proves it is a current-user, single-link Unix socket and a second identity
+  check is unchanged. Cleanup is not recursive: another basename, an additional child, a link or
+  regular file at the expected name, foreign ownership, or an unsafe directory replacement aborts
+  cleanup before the exact directories are removed.
 - On Windows, Podman can report `machine rm` success after an underlying WSL unregister failure.
   Before deleting the release-private provider home, installation, or requested image cache, the
   app therefore obtains the Windows root from the bounded operating-system directory API, never an
@@ -87,12 +97,18 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   private provider home as well, so the SSH identity and provider configuration do not survive a
   successful uninstall.
 - On Windows the app-created `managed-runtime` namespace and its provider directories use protected,
-  inheritable, current-user-only DACLs. The caller-selected data-directory root is never rewritten.
-  Before creating or accepting that namespace, the app opens the canonical local ancestor chain
-  without following reparse points and rejects an untrusted owner, malformed/unsupported ACL, or
-  any untrusted grant of namespace-replacement rights. Each manager then retains a no-delete-share
-  handle that pins the exact verified, non-reparse state-root object for its lifetime. An unsafe
-  parent or pre-existing namespace is rejected rather than silently repaired.
+  inheritable, current-user-only DACLs, with one narrowly scoped WSL compatibility exception. The
+  exact `data/containers/podman/machine/wsl/wsldist` directory has a protected DACL, a
+  non-defaulted current-user owner, and exactly two explicit object-and-container-inheritable full
+  control grants: the current user and LocalSystem. WSL's system service needs that access while it
+  imports and operates the distribution; no ancestor, identity, configuration, cache, or runtime
+  directory receives the LocalSystem grant. The caller-selected data-directory root is never
+  rewritten. Before creating or accepting that namespace, the app opens the canonical local
+  ancestor chain without following reparse points and rejects an untrusted owner,
+  malformed/unsupported ACL, or any untrusted grant of namespace-replacement rights. Each manager
+  then retains a no-delete-share handle that pins the exact verified, non-reparse state-root object
+  for its lifetime. An unsafe parent or pre-existing namespace is rejected rather than silently
+  repaired.
 - Every private Windows file creation additionally pins and verifies its canonical immediate parent
   before `CREATE_NEW`. The parent must retain that exact protected current-user-only inheritable
   DACL; otherwise creation fails before any staging entry exists. The new child is then read back by
@@ -160,11 +176,15 @@ installed versions require a durable exact manifest digest and otherwise fail cl
 runtime, retrieves the release-fixed Gitleaks digest, and executes the built-in qualification
 fixture through the same container-plan path used by scans. That plan has a read-only root,
 drop-all capabilities, no-new-privileges, no credentials, and `network=none`; the image pull occurs
-before the isolated container starts. Success is emitted only after the expected empty JSON report
-is hashed and the created container is removed by its immutable runtime ID. The machine-readable
-result binds the runtime manifest and machine-image digests, engine image, scope digest, report and
-capture digests, exit status, and cleanup outcome. This proves release-runtime execution and
-cleanup, not assessment coverage.
+before the isolated container starts. A cold pinned-image pull has a separate 10-minute deadline;
+preflight, inspection, and container-control commands retain their 30-second deadline. All direct
+command execution and deadline failures identify a fixed operation label; the local error wrapper
+never constructs those messages from the image reference, container identity, or other command
+arguments. Success is emitted only after the expected empty JSON report is hashed and the created
+container is removed by its immutable runtime ID. The machine-readable result binds the runtime
+manifest and machine-image digests, engine image, scope digest, report and capture digests, exit
+status, and cleanup outcome. This proves release-runtime execution and cleanup, not assessment
+coverage.
 
 ## Engine output exhaustion protection
 
