@@ -68,8 +68,9 @@ new private data directory. Linux and Windows must prove this exact sequence:
    dual-network pinned gateway container, observes its ready status, and runs a second internal-only
    container from that same pinned image. The probe exchanges only a SOCKS greeting, sends no CONNECT request,
    and exact-removes both containers, both networks, the policy, status directory, and recovery record;
-5. the built-in fixed Gitleaks container qualification (immutable catalog digest, no network,
-   read-only root, all capabilities dropped, no-new-privileges, zero credentials, and exact
+5. the built-in fixed Gitleaks container qualification (project-managed 8.30.1 source build at the
+   immutable catalog digest, scanner-owned configuration, no network, read-only workspace and root,
+   all capabilities dropped, no-new-privileges, zero credentials, fully redacted results, and exact
    container cleanup);
 6. real machine stop and `stopped` status; and
 7. forced uninstall with the exact machine-image cache purged, final `not_installed` status,
@@ -246,16 +247,22 @@ OS code signing, whose absence remains explicit above.
 ## Managed engine image publication
 
 The project-managed cloud, external-target, Microsoft 365, local artifact, container, Kubernetes,
-Greenbone, Checkov, and Syft publication workflows build linux/amd64 plus linux/arm64 indexes,
+Greenbone, Gitleaks, Checkov, and Syft publication workflows build linux/amd64 plus linux/arm64 indexes,
 preserve the immutable public digest, and invoke the common signed-evidence contract documented in
 [`engine-image-supply-chain.md`](engine-image-supply-chain.md). Each published index has SLSA
 build provenance; each platform manifest has independently signed SPDX and CycloneDX SBOMs. The
 attestations remain available from GitHub and as GHCR referrers, while a 90-day workflow artifact
 provides convenient copies of the SBOMs, Sigstore bundles, hashes, and evidence manifest.
 
-Gitleaks and KICS are the two explicit upstream-pinned exceptions: the catalog acquires their
-verified upstream images by immutable digest and the project does not republish them as managed
-GHCR images. This distinction is part of the catalog and release validation contract.
+KICS is the remaining explicit upstream-pinned exception: the catalog acquires its verified
+upstream image by immutable digest and the project does not republish it as a managed GHCR image.
+
+The Gitleaks release plan instead builds version 8.30.1 from pinned source and adds a dedicated
+Apache-2.0 non-shell launcher around the MIT-licensed scanner. The launcher fixes the current-tree
+directory scan, scanner-owned rules, ignored repository suppressions, `--exit-code 0`, and 100%
+redaction before evidence. Publication is not complete until the normal multi-platform image,
+smoke, SBOM, provenance, signature, and immutable-promotion workflow has succeeded; this
+source-tree description is not evidence that a final image has already been published.
 
 These workflows intentionally keep BuildKit's automatic provenance and SBOM flags disabled. The
 external attestations bind to already-final image and platform digests, so adding supply-chain

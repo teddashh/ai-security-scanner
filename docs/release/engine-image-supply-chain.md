@@ -3,11 +3,20 @@
 Every project-managed engine image publication uses the shared immutable-version guard and
 `.github/actions/engine-image-evidence` action. A new build is pushed only to a run-unique
 `candidate-<source-revision>-<run-id>-<attempt>` tag. The human-readable version tag is created
-only after the candidate digest is publicly readable, smoke-tested, and signed. It covers all 19 managed
+only after the candidate digest is publicly readable, smoke-tested, and signed. It covers all 20 managed
 images: CloudQuery, Prowler, Cloudsplaining, ScoutSuite, Steampipe, Naabu, httpx, Nuclei,
-Greenbone, ScubaGear, Maester, Semgrep, TruffleHog, Trivy, Grype, Kubescape, kube-bench, Checkov,
-and Syft. Gitleaks and KICS retain their separately verified upstream-image provenance instead of
-being represented as project-built images.
+Greenbone, ScubaGear, Maester, Semgrep, Gitleaks, TruffleHog, Trivy, Grype, Kubescape, kube-bench,
+Checkov, and Syft. KICS retains separately verified upstream-image provenance instead of being
+represented as a project-built image.
+
+The Gitleaks 8.30.1 build has a dedicated non-shell launcher and scanner-owned configuration. It
+scans only the current worktree in directory mode, ignores repository `.gitleaksignore` and
+`gitleaks:allow` suppressions, uses `--exit-code 0` so detected secrets remain findings rather than
+execution failures, and applies `--redact=100` before output can become evidence. Its qualification
+contract also requires a read-only workspace, a read-only root filesystem, and no network. Gitleaks
+remains MIT-licensed; the project launcher is Apache-2.0. The plan is not considered published or
+pinnable until the normal candidate verification, signed evidence, and immutable promotion path
+has completed successfully.
 
 ## Immutable version contract
 
@@ -54,6 +63,14 @@ and before a new version tag is promoted:
 2. A digest-pinned Syft 1.51.0 container scans each platform manifest from the public registry and
    writes both SPDX 2.3 JSON and CycloneDX JSON. The evidence helper rejects an SBOM unless its
    described container checksum is the exact platform digest.
+   The first-party managed egress gateway is a package-manager-free `scratch` image. When—and only
+   when—Syft omits the CycloneDX `components` field for that exact engine and repository, the helper
+   may add one project-owned application component. Before doing so it requires the matching SPDX
+   document to contain only its `CONTAINER` root, no package or file inventory, the exact OCI
+   platform digest, and the CycloneDX metadata to carry the exact project source, title, and license
+   labels. The added component records the workflow source revision and platform-manifest digest;
+   the downloadable evidence manifest records the transformation and tool. Any discovered package,
+   file, dependency, wrong label, wrong digest, wrong engine, or wrong repository still fails closed.
 3. `actions/attest` creates one SLSA build-provenance attestation for the index and an SPDX plus a
    CycloneDX SBOM attestation for each platform manifest. The five Sigstore statements are stored
    in GitHub's attestation API and pushed to GHCR as OCI referrers. Neither operation changes the
@@ -80,7 +97,9 @@ only evidence store.
 The self-test uses a synthetic exact two-platform index, multi-platform SBOMs, and Sigstore
 envelopes. It proves the manifest has five exact attestations, rejects a wrong source revision,
 extra platform, wrong image digest, or SPDX checksum mismatch, and verifies cloud changed-input
-selection keeps full manual dispatch while narrowing an engine-only push:
+selection keeps full manual dispatch while narrowing an engine-only push. It also proves the
+gateway-only transformation records both platforms and rejects a wrong engine, repository,
+inventory, source label, or platform digest:
 
 ```sh
 node scripts/engine-image-evidence.mjs self-test

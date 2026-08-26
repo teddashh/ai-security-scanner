@@ -37,7 +37,7 @@ test("coverage onboarding presents all required use-case next steps in both loca
     ["A website or API that is already online", "已架好的網站或 API"],
     ["Public IP addresses or domains", "公開 IP 或網域"],
     ["Internal IT systems", "內部 IT 環境"],
-    ["Source code", "程式碼"],
+    ["Code you wrote or generated with AI", "自己寫或 AI 生成的程式碼"],
     ["Infrastructure code", "基礎設施程式碼"],
     ["Container image", "容器映像"],
     ["Kubernetes", "Kubernetes"],
@@ -213,9 +213,31 @@ test("local-project formats stay available behind technical details", () => {
   assert.ok(source.includes("準備這份專案進行掃描"));
 });
 
+test("source-code setup says local, masked, and unchanged instead of asking users to remove secrets", () => {
+  for (const phrase of [
+    "Code you wrote or generated with AI",
+    "自己寫或 AI 生成的程式碼",
+    "Your project stays local and unchanged",
+    "專案留在本機，檔案不會被修改",
+    "Detected secret values are masked in results",
+    "找到的秘密值會在結果中遮罩",
+  ]) {
+    assert.ok(source.includes(phrase), phrase);
+  }
+
+  for (const outdated of [
+    "Remove passwords, keys, and tokens from this folder first",
+    "請先移除這個資料夾裡的密碼、金鑰與 token",
+    "Remove secrets before you continue",
+    "繼續前請先移除秘密值",
+  ]) {
+    assert.ok(!source.includes(outdated), outdated);
+  }
+});
+
 test("each guided local route has plain-language first-layer copy in both locales", () => {
   for (const [english, traditionalChinese] of [
-    ["Choose the source code you want checked", "選擇想檢查的程式碼"],
+    ["Choose code you wrote or generated with AI", "選擇自己寫或 AI 生成的程式碼"],
     ["Choose the infrastructure code you want checked", "選擇想檢查的基礎設施程式碼"],
     ["Choose the container image you want checked", "選擇想檢查的容器映像"],
     ["Choose the Kubernetes settings you want checked", "選擇想檢查的 Kubernetes 設定"],

@@ -2,7 +2,7 @@
 
 Status: v0.1.0 source inventory; generated release evidence is artifact-specific
 
-Last updated: 2026-08-24
+Last updated: 2026-08-26
 
 `ai-security-scanner` orchestrates independent upstream projects. This file explains their v0.1.0 packaging relationships and also retains research projects that are not release dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that a GitHub Release or image was published.
 
@@ -40,7 +40,7 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 | Nuclei and selected templates | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei), [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) | MIT upstream; Apache-2.0 launcher | Project-managed image with one exact allowlisted template snapshot | ALLOW |
 | Greenbone scanner and feed | [greenbone/openvas-scanner](https://github.com/greenbone/openvas-scanner) | GPL-2.0-only scanner; pinned feed GPL/ODbL terms; Apache-2.0 launcher | Project-managed direct-`openvasd` image carrying exact scanner/feed source and notices; no gvmd, GSA, OSPd, or feed-sync runtime | SOURCE_OFFER |
 | Semgrep | [semgrep/semgrep](https://github.com/semgrep/semgrep) | LGPL-2.1-or-later scanner; Apache-2.0 project rules/launcher | Project-managed open-source build; no proprietary Semgrep image or Pro component | SOURCE_OFFER |
-| Gitleaks | [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks) | MIT | Exact verified upstream image acquired by digest | UPSTREAM_PINNED |
+| Gitleaks 8.30.1 | [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks/tree/v8.30.1) | MIT upstream; Apache-2.0 project launcher | Project-managed source build with a fixed non-shell launcher, scanner-owned rules, and redacted directory-scan output | ALLOW |
 | TruffleHog | [trufflesecurity/trufflehog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0; Apache-2.0 launcher | Project-managed source build restricted to offline filesystem scanning | SOURCE_OFFER |
 | Checkov | [bridgecrewio/checkov](https://github.com/bridgecrewio/checkov) | Apache-2.0 plus dependency/policy terms | Project-managed image with dependency notices | ALLOW |
 | KICS | [Checkmarx/kics](https://github.com/Checkmarx/kics) | Apache-2.0 | Exact verified upstream image acquired by digest | UPSTREAM_PINNED |
@@ -73,6 +73,12 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 | OWASP ZAP | [zaproxy/zaproxy](https://github.com/zaproxy/zaproxy) | Apache-2.0 | Authorized web/API testing research | RESEARCH |
 | OSV-Scanner | [google/osv-scanner](https://github.com/google/osv-scanner) | Apache-2.0 | Dependency scanner research | RESEARCH |
 | Nikto | [sullo/nikto](https://github.com/sullo/nikto) | NOASSERTION | Authorized web-server assessment research | MANUAL / RESEARCH |
+| VibeScan | [Armur-Ai/vibescan](https://github.com/Armur-Ai/vibescan/tree/52efb12fdcd8118c6f0f2b642558b2f335e7bf66) | MIT at audited revision `52efb12fdcd8118c6f0f2b642558b2f335e7bf66` | Vibe-coding journey and normalized multi-tool-report research only; no code, binary, image, or package is shipped | RESEARCH / NOT_DISTRIBUTED |
+
+The VibeScan packaging decision and security review are recorded in
+[`docs/research/vibescan-evaluation.md`](docs/research/vibescan-evaluation.md). Its useful guided
+journey and common-results-envelope ideas are being implemented independently over this project's
+existing scanners; VibeScan itself is not a release dependency.
 
 ## Supporting standards and runtime inventory
 
@@ -92,6 +98,22 @@ The platform-specific managed-runtime manifest records every bundled file, first
 | Moby | [moby/moby](https://github.com/moby/moby) | Apache-2.0 | Architecture research only; not used by the packaged managed runtime | NOT_DISTRIBUTED |
 | Docker CLI and Compose | [docker/cli](https://github.com/docker/cli), [docker/compose](https://github.com/docker/compose) | Apache-2.0 | Optional user-installed compatibility provider; not bundled or required by the product | NOT_DISTRIBUTED |
 
+## Redistributed framework reference data
+
+| Component | Official source | Pinned license record | Relationship | Disposition |
+|---|---|---|---|---|
+| AIDEFEND selected actionable-control metadata | [edward-playground/aidefense-framework](https://github.com/edward-playground/aidefense-framework/tree/e10c1678ee49f03f8fb0c97d446ba3fbc3543655) | CC-BY-4.0 framework content at version `1.20260805`; source `data/data.json` SHA-256 `ee0db6542fe28bcb3bd9ead0fba0fb69884b6cb765f2a1a420ceaf119a472786` | Modified six-record metadata selection with pinned provenance, attribution, and full content-license text under [`mappings/vendor/aidefend/1.20260805/`](mappings/vendor/aidefend/1.20260805/) | ALLOW |
+
+The selected AIDEFEND snapshot contains only control ID, name, tactic, parent,
+pillar, phase, and upstream `contentHash` fields. It does not copy source code,
+descriptions, implementation guidance, code examples, tool lists, keywords,
+external-framework mapping strings, logos, badges, or other trademark assets.
+AIDEFEND is used nominatively to identify the source. This is an independent,
+unofficial integration and is not affiliated with, approved, certified,
+sponsored, or endorsed by AIDEFEND or its owner. The selected coordinates are
+navigation and classification metadata, not evidence of control
+implementation, effectiveness, certification, or compliance.
+
 ## Docker Desktop is separate
 
 [Docker Desktop licensing](https://docs.docker.com/subscription/desktop-license/) is not the same as the Apache-2.0 licenses on Moby, Docker CLI, or Docker Compose. `ai-security-scanner` must not bundle, redistribute, or require an enterprise user to use Docker Desktop based only on those repository licenses.
@@ -107,6 +129,7 @@ Rules, feeds, plugins, and databases remain independently identified artifacts e
 - Greenbone carries one digest-pinned Community Feed snapshot, executable NASL source, data, declared license texts, revision, checksum manifest, and upstream detached signature; it performs no live feed synchronization.
 - Trivy and Grype each carry one immutable offline vulnerability database with its digest, timestamp, and attribution notice; automatic database updates are disabled.
 - Semgrep carries a small project-owned offline rule file; no registry rules, Pro component, or token-driven installer is included.
+- Gitleaks is built from the pinned 8.30.1 source under its MIT license and paired with a project-owned Apache-2.0 non-shell launcher. The launcher performs a current-worktree directory scan using only the scanner-owned configuration, ignores repository `.gitleaksignore` and `gitleaks:allow` suppressions, treats findings as results with `--exit-code 0`, and requires 100% secret redaction before output becomes evidence. The workspace is read-only and engine networking is disabled.
 - Checkov's packaged policies, the KICS upstream-image query pack, Kubescape's three checksum-pinned offline policy assets, and kube-bench's benchmark configuration stay bound to their exact engine artifacts.
 
 No statement above claims that a newer feed, database, policy, plugin, user-supplied pack, or language advisory index is shipped. Replacing any one requires a new source, terms, version/date, digest, update method, disposition, evidence set, and support window. An engine's source license does not automatically license its data.

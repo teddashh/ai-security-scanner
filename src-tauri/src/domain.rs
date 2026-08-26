@@ -242,6 +242,7 @@ pub enum AssessmentIntent {
     DeployedWebsite,
     ExternalIpOrDomain,
     InternalItEnvironment,
+    AiApplication,
     SourceCode,
     InfrastructureAsCode,
     CloudAccount,

@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 
 import {
   PROJECT_ROOT,
@@ -45,9 +46,48 @@ const PREDICATES = Object.freeze({
   cyclonedx: "https://cyclonedx.org/bom",
 });
 const CLOUD_ENGINE_IDS = Object.freeze(["cloudquery", "prowler", "cloudsplaining", "scoutsuite", "steampipe"]);
+const GATEWAY_SCRATCH_SBOM = Object.freeze({
+  engine: "egress-gateway",
+  image: "ghcr.io/teddashh/ai-security-scanner-egress-gateway",
+  componentName: "ai-security-scanner-egress-gateway",
+  source: "https://github.com/teddashh/ai-security-scanner",
+  title: "ai-security-scanner managed egress gateway",
+  license: "Apache-2.0",
+  normalizationProperty: "ai-security-scanner:normalization:components",
+  normalizationValue: "first-party-scratch-application-from-matching-spdx-v1",
+});
+const PROJECT_SBOM_TRANSFORMER = Object.freeze({
+  name: "ai-security-scanner/scripts/engine-image-evidence.mjs",
+  version: "1",
+});
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function staticEnvironmentEvidenceEngines(workflow, relative) {
+  const resolved = new Set();
+  for (const [jobId, job] of Object.entries(workflow?.jobs ?? {})) {
+    for (const [stepIndex, step] of (job?.steps ?? []).entries()) {
+      if (step?.uses !== "./.github/actions/engine-image-evidence") continue;
+      const configured = step?.with?.engine;
+      if (configured === "${{ env.ENGINE }}") {
+        const engine = workflow?.env?.ENGINE;
+        assert(
+          typeof engine === "string" && ENGINE_PATTERN.test(engine),
+          `${relative}:jobs.${jobId}.steps[${stepIndex}] env.ENGINE must resolve to one static engine id`,
+        );
+        resolved.add(engine);
+        continue;
+      }
+      assert(
+        typeof configured === "string" &&
+          (ENGINE_PATTERN.test(configured) || configured === "${{ matrix.engine }}"),
+        `${relative}:jobs.${jobId}.steps[${stepIndex}] evidence engine must be literal, static env.ENGINE, or matrix.engine`,
+      );
+    }
+  }
+  return resolved;
 }
 
 function digestHex(digest) {
@@ -357,7 +397,7 @@ function validateSpdx(document, platformDigest) {
   );
 }
 
-function validateCycloneDx(document, platformDigest) {
+function validateCycloneDxSubject(document, platformDigest) {
   digestHex(platformDigest);
   assert(document?.bomFormat === "CycloneDX", "SBOM is not CycloneDX JSON");
   assert(/^1\.[0-9]+$/u.test(document?.specVersion ?? ""), "CycloneDX specVersion is invalid");
@@ -366,7 +406,163 @@ function validateCycloneDx(document, platformDigest) {
     document.metadata.component.version === platformDigest,
     "CycloneDX described image version is not the platform digest",
   );
+}
+
+function validateCycloneDx(document, platformDigest) {
+  validateCycloneDxSubject(document, platformDigest);
   assert(Array.isArray(document.components), "CycloneDX component inventory is missing");
+}
+
+function exactCycloneDxProperty(document, name, value) {
+  const matches = document?.metadata?.properties?.filter(
+    (property) => property?.name === name,
+  );
+  return Array.isArray(matches) && matches.length === 1 && matches[0]?.value === value;
+}
+
+function normalizeGatewayScratchCycloneDx({
+  engine,
+  image,
+  tag,
+  platformDigest,
+  sourceRevision,
+  spdxDocument,
+  cycloneDxDocument,
+}) {
+  if (Object.hasOwn(cycloneDxDocument, "components")) return false;
+
+  assert(
+    engine === GATEWAY_SCRATCH_SBOM.engine && image === GATEWAY_SCRATCH_SBOM.image,
+    "CycloneDX component inventory is missing",
+  );
+  assert(TAG_PATTERN.test(tag), "gateway scratch component version tag is invalid");
+  assert(SOURCE_REVISION_PATTERN.test(sourceRevision), "gateway scratch component source revision is invalid");
+  validateSpdx(spdxDocument, platformDigest);
+  validateCycloneDxSubject(cycloneDxDocument, platformDigest);
+
+  const root = describedSpdxPackage(spdxDocument);
+  assert(
+    root.primaryPackagePurpose === "CONTAINER" &&
+      typeof root.name === "string" && root.name.length > 0 &&
+      root.name === cycloneDxDocument.metadata.component.name,
+    "gateway scratch normalization requires matching SPDX and CycloneDX container identities",
+  );
+  assert(root.filesAnalyzed === false, "gateway scratch SPDX root must not claim file analysis");
+  assert(
+    spdxDocument.packages.length === 1,
+    "gateway scratch normalization refuses to discard an SPDX package inventory",
+  );
+  assert(
+    spdxDocument.files === undefined ||
+      (Array.isArray(spdxDocument.files) && spdxDocument.files.length === 0),
+    "gateway scratch normalization refuses to discard an SPDX file inventory",
+  );
+  assert(
+    Array.isArray(spdxDocument.relationships) && spdxDocument.relationships.length === 1 &&
+      spdxDocument.relationships[0]?.spdxElementId === "SPDXRef-DOCUMENT" &&
+      spdxDocument.relationships[0]?.relationshipType === "DESCRIBES" &&
+      spdxDocument.relationships[0]?.relatedSpdxElement === root.SPDXID,
+    "gateway scratch SPDX relationships do not prove an empty inventory",
+  );
+  const ociPurl = root.externalRefs?.find(
+    (reference) =>
+      reference?.referenceCategory === "PACKAGE-MANAGER" &&
+      reference?.referenceType === "purl" &&
+      typeof reference?.referenceLocator === "string" &&
+      reference.referenceLocator.startsWith("pkg:oci/"),
+  )?.referenceLocator;
+  let decodedOciPurl = "";
+  try {
+    decodedOciPurl = decodeURIComponent(ociPurl ?? "");
+  } catch {
+    // The assertion below deliberately fails closed for malformed package URLs.
+  }
+  assert(
+    decodedOciPurl.includes(`@${platformDigest}`),
+    "gateway scratch SPDX root is missing the exact OCI package digest",
+  );
+  assert(
+    cycloneDxDocument.specVersion === "1.7" &&
+      cycloneDxDocument.$schema === "http://cyclonedx.org/schema/bom-1.7.schema.json" &&
+      Number.isInteger(cycloneDxDocument.version) && cycloneDxDocument.version >= 1,
+    "gateway scratch normalization supports only the pinned CycloneDX 1.7 output",
+  );
+  assert(
+    cycloneDxDocument.dependencies === undefined ||
+      (Array.isArray(cycloneDxDocument.dependencies) && cycloneDxDocument.dependencies.length === 0),
+    "gateway scratch normalization refuses to discard CycloneDX dependencies",
+  );
+  for (const [label, value] of [
+    ["org.opencontainers.image.source", GATEWAY_SCRATCH_SBOM.source],
+    ["org.opencontainers.image.title", GATEWAY_SCRATCH_SBOM.title],
+    ["org.opencontainers.image.licenses", GATEWAY_SCRATCH_SBOM.license],
+  ]) {
+    assert(
+      exactCycloneDxProperty(cycloneDxDocument, `syft:image:labels:${label}`, value),
+      `gateway scratch CycloneDX metadata is missing the exact ${label} label`,
+    );
+  }
+
+  const componentBomRef = `urn:ai-security-scanner:egress-gateway:${digestHex(platformDigest)}`;
+  cycloneDxDocument.components = [{
+    "bom-ref": componentBomRef,
+    type: "application",
+    name: GATEWAY_SCRATCH_SBOM.componentName,
+    version: tag,
+    description: "First-party policy-bound egress gateway application contained by this scratch image.",
+    licenses: [{ license: { id: GATEWAY_SCRATCH_SBOM.license } }],
+    externalReferences: [{
+      type: "vcs",
+      url: `${GATEWAY_SCRATCH_SBOM.source}/tree/${sourceRevision}`,
+    }],
+    properties: [
+      { name: "ai-security-scanner:component:source-revision", value: sourceRevision },
+      { name: "ai-security-scanner:component:platform-manifest-digest", value: platformDigest },
+      { name: "ai-security-scanner:component:artifact-kind", value: "first-party-scratch-application-image" },
+    ],
+  }];
+  cycloneDxDocument.version += 1;
+  cycloneDxDocument.metadata.properties.push({
+    name: GATEWAY_SCRATCH_SBOM.normalizationProperty,
+    value: GATEWAY_SCRATCH_SBOM.normalizationValue,
+  });
+  return componentBomRef;
+}
+
+async function normalizeGatewayScratchCycloneDxFile({
+  engine,
+  image,
+  tag,
+  platform,
+  platformDigest,
+  sourceRevision,
+  spdxFile,
+  cycloneDxFile,
+}) {
+  const cycloneDxDocument = await readJson(cycloneDxFile);
+  if (Object.hasOwn(cycloneDxDocument, "components")) return null;
+  const spdxDocument = await readJson(spdxFile);
+  const componentBomRef = normalizeGatewayScratchCycloneDx({
+    engine,
+    image,
+    tag,
+    platformDigest,
+    sourceRevision,
+    spdxDocument,
+    cycloneDxDocument,
+  });
+  if (!componentBomRef) return null;
+  await writeJsonAtomic(cycloneDxFile, cycloneDxDocument);
+  return {
+    kind: "cyclonedx-first-party-scratch-application-v1",
+    platform,
+    platformDigest,
+    sourceRevision,
+    sourceFile: path.basename(spdxFile),
+    outputFile: path.basename(cycloneDxFile),
+    componentBomRef,
+    tool: PROJECT_SBOM_TRANSFORMER,
+  };
 }
 
 async function sbomRecord(root, filename, format, predicateType, platformDigest) {
@@ -431,11 +627,25 @@ async function createPreparedEvidence({ engine, image, tag, indexDigest, sourceR
   await mkdir(outputRoot, { recursive: true });
 
   const platforms = [];
+  const sbomTransformations = [];
   for (const platform of ["linux/amd64", "linux/arm64"]) {
     const digest = platformDigests.get(platform);
     digestHex(digest);
     const prefix = `${engine}-linux-${platformKey(platform)}`;
     if (runSyftScan) runSyftScan(image, digest, outputRoot, prefix);
+    const spdxFile = path.join(outputRoot, `${prefix}.spdx.json`);
+    const cycloneDxFile = path.join(outputRoot, `${prefix}.cyclonedx.json`);
+    const transformation = await normalizeGatewayScratchCycloneDxFile({
+      engine,
+      image,
+      tag,
+      platform,
+      platformDigest: digest,
+      sourceRevision,
+      spdxFile,
+      cycloneDxFile,
+    });
+    if (transformation) sbomTransformations.push(transformation);
     platforms.push({
       platform,
       digest,
@@ -455,6 +665,7 @@ async function createPreparedEvidence({ engine, image, tag, indexDigest, sourceR
     sourceRevision,
     public: true,
     generator: SYFT,
+    sbomTransformations,
     imageBuild: {
       inlineProvenance: false,
       inlineSbom: false,
@@ -653,6 +864,27 @@ function fakeSboms(image, digest) {
   };
 }
 
+function fakeEmptyGatewaySboms(digest) {
+  const fixtures = fakeSboms(GATEWAY_SCRATCH_SBOM.image, digest);
+  const root = fixtures.spdx.packages[0];
+  root.filesAnalyzed = false;
+  root.primaryPackagePurpose = "CONTAINER";
+  root.externalRefs = [{
+    referenceCategory: "PACKAGE-MANAGER",
+    referenceType: "purl",
+    referenceLocator: `pkg:oci/${GATEWAY_SCRATCH_SBOM.componentName}@${encodeURIComponent(digest)}`,
+  }];
+  fixtures.cyclonedx.$schema = "http://cyclonedx.org/schema/bom-1.7.schema.json";
+  fixtures.cyclonedx.specVersion = "1.7";
+  fixtures.cyclonedx.metadata.properties = [
+    { name: "syft:image:labels:org.opencontainers.image.licenses", value: GATEWAY_SCRATCH_SBOM.license },
+    { name: "syft:image:labels:org.opencontainers.image.source", value: GATEWAY_SCRATCH_SBOM.source },
+    { name: "syft:image:labels:org.opencontainers.image.title", value: GATEWAY_SCRATCH_SBOM.title },
+  ];
+  delete fixtures.cyclonedx.components;
+  return fixtures;
+}
+
 async function fakeBundle(file, image, digest, predicateType, predicate) {
   const statement = {
     _type: "https://in-toto.io/Statement/v1",
@@ -815,6 +1047,114 @@ async function selfTest() {
       isDeepStrictEqual(affectedCloudEngines([], "workflow_dispatch"), CLOUD_ENGINE_IDS),
       "self-test weakened full manual cloud publication",
     );
+
+    const gatewayRoot = path.join(root, "gateway-scratch");
+    await mkdir(gatewayRoot, { recursive: true });
+    for (const [platform, digest] of platformDigests) {
+      const prefix = `${GATEWAY_SCRATCH_SBOM.engine}-linux-${platformKey(platform)}`;
+      const fixtures = fakeEmptyGatewaySboms(digest);
+      await writeJsonAtomic(path.join(gatewayRoot, `${prefix}.spdx.json`), fixtures.spdx);
+      await writeJsonAtomic(path.join(gatewayRoot, `${prefix}.cyclonedx.json`), fixtures.cyclonedx);
+    }
+    const gatewayPrepared = await createPreparedEvidence({
+      engine: GATEWAY_SCRATCH_SBOM.engine,
+      image: GATEWAY_SCRATCH_SBOM.image,
+      tag: "0.1.6-1",
+      indexDigest,
+      sourceRevision,
+      outputRoot: gatewayRoot,
+      platformDigests,
+      runSyftScan: null,
+    });
+    assert(
+      gatewayPrepared.evidence.sbomTransformations.length === 2,
+      "self-test did not record both project-owned gateway SBOM transformations",
+    );
+    for (const [platform, digest] of platformDigests) {
+      const prefix = `${GATEWAY_SCRATCH_SBOM.engine}-linux-${platformKey(platform)}`;
+      const transformation = gatewayPrepared.evidence.sbomTransformations.find(
+        (candidate) => candidate.platform === platform,
+      );
+      const normalized = await readJson(path.join(gatewayRoot, `${prefix}.cyclonedx.json`));
+      const component = normalized.components?.[0];
+      assert(
+        transformation?.platformDigest === digest &&
+          transformation?.sourceRevision === sourceRevision &&
+          transformation?.sourceFile === `${prefix}.spdx.json` &&
+          transformation?.outputFile === `${prefix}.cyclonedx.json` &&
+          transformation?.tool?.name === PROJECT_SBOM_TRANSFORMER.name &&
+          normalized.version === 2 && normalized.components?.length === 1 &&
+          component?.type === "application" &&
+          component?.name === GATEWAY_SCRATCH_SBOM.componentName &&
+          component?.hashes === undefined &&
+          component?.properties?.some((property) =>
+            property?.name === "ai-security-scanner:component:source-revision" &&
+            property?.value === sourceRevision) &&
+          component?.properties?.some((property) =>
+            property?.name === "ai-security-scanner:component:platform-manifest-digest" &&
+            property?.value === digest),
+        `self-test gateway normalization lost the first-party application identity for ${platform}`,
+      );
+    }
+
+    const gatewayDigest = platformDigests.get("linux/amd64");
+    const assertGatewayNormalizationRejected = (fixtures, overrides, message) => {
+      let normalizationRejected = false;
+      try {
+        normalizeGatewayScratchCycloneDx({
+          engine: GATEWAY_SCRATCH_SBOM.engine,
+          image: GATEWAY_SCRATCH_SBOM.image,
+          tag: "0.1.6-1",
+          platformDigest: gatewayDigest,
+          sourceRevision,
+          spdxDocument: fixtures.spdx,
+          cycloneDxDocument: fixtures.cyclonedx,
+          ...overrides,
+        });
+      } catch {
+        normalizationRejected = true;
+      }
+      assert(normalizationRejected, message);
+    };
+
+    assertGatewayNormalizationRejected(
+      fakeEmptyGatewaySboms(gatewayDigest),
+      { engine: "fixture-engine" },
+      "self-test allowed another engine to use the gateway scratch normalization",
+    );
+    assertGatewayNormalizationRejected(
+      fakeEmptyGatewaySboms(gatewayDigest),
+      { image: "ghcr.io/teddashh/not-the-egress-gateway" },
+      "self-test allowed another repository to use the gateway scratch normalization",
+    );
+
+    const hiddenPackageFixtures = fakeEmptyGatewaySboms(gatewayDigest);
+    hiddenPackageFixtures.spdx.packages.unshift({
+      SPDXID: "SPDXRef-Package-hidden",
+      name: "must-not-be-discarded",
+      versionInfo: "1.0.0",
+    });
+    assertGatewayNormalizationRejected(
+      hiddenPackageFixtures,
+      {},
+      "self-test allowed gateway normalization to hide an SPDX package",
+    );
+
+    const wrongLabelFixtures = fakeEmptyGatewaySboms(gatewayDigest);
+    wrongLabelFixtures.cyclonedx.metadata.properties.find(
+      (property) => property.name.endsWith("org.opencontainers.image.source"),
+    ).value = "https://github.com/example/not-this-project";
+    assertGatewayNormalizationRejected(
+      wrongLabelFixtures,
+      {},
+      "self-test allowed gateway normalization with a mismatched source label",
+    );
+    assertGatewayNormalizationRejected(
+      fakeEmptyGatewaySboms(gatewayDigest),
+      { platformDigest: platformDigests.get("linux/arm64") },
+      "self-test allowed gateway normalization with a mismatched SPDX platform digest",
+    );
+
     for (const [platform, digest] of platformDigests) {
       const prefix = `${engine}-linux-${platformKey(platform)}`;
       const fixtures = fakeSboms(image, digest);
@@ -884,6 +1224,7 @@ async function selfTest() {
       [".github/workflows/engine-images-external.yml", ["naabu", "httpx", "nuclei"]],
       [".github/workflows/engine-images-m365.yml", ["scubagear", "maester"]],
       [".github/workflows/engine-images-local-k8s.yml", ["semgrep", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"]],
+      [".github/workflows/engine-image-gitleaks.yml", ["gitleaks"]],
       [".github/workflows/engine-image-greenbone.yml", ["greenbone"]],
       [".github/workflows/engine-image-checkov.yml", ["checkov"]],
       [".github/workflows/engine-image-syft.yml", ["syft"]],
@@ -891,6 +1232,8 @@ async function selfTest() {
     let coveredEngines = 0;
     for (const [relative, engines] of workflowCoverage) {
       const workflow = await readFile(path.join(PROJECT_ROOT, relative), "utf8");
+      const workflowDocument = parseYaml(workflow);
+      const staticEnvironmentEngines = staticEnvironmentEvidenceEngines(workflowDocument, relative);
       assert(workflow.includes("uses: ./.github/actions/engine-image-evidence"), `${relative} does not invoke signed image evidence`);
       const guardIndex = workflow.indexOf("uses: ./.github/actions/engine-image-evidence/publication-guard");
       const evidenceIndex = workflow.lastIndexOf("uses: ./.github/actions/engine-image-evidence\n");
@@ -902,13 +1245,14 @@ async function selfTest() {
       assert(workflow.includes("provenance: false") && workflow.includes("sbom: false"), `${relative} may mutate the published index digest`);
       for (const engineId of engines) {
         assert(
-          workflow.includes(`engine: ${engineId}`) || workflow.includes(`"engine":"${engineId}"`),
+          workflow.includes(`engine: ${engineId}`) || workflow.includes(`"engine":"${engineId}"`) ||
+            staticEnvironmentEngines.has(engineId),
           `${relative} does not cover ${engineId}`,
         );
         coveredEngines += 1;
       }
     }
-    assert(coveredEngines === 19, "self-test engine workflow coverage changed unexpectedly");
+    assert(coveredEngines === 20, "self-test engine workflow coverage changed unexpectedly");
     const promotionAction = await readFile(
       path.join(PROJECT_ROOT, ".github/actions/engine-image-evidence/promote/action.yml"),
       "utf8",
@@ -920,7 +1264,7 @@ async function selfTest() {
         promotionAction.includes("run: docker logout ghcr.io"),
       "promotion action is not self-contained across anonymous-smoke credential state",
     );
-    process.stdout.write("Engine image evidence self-test passed (19 engines, immutable tag provenance, exact index, 5 attestations, 4 SBOMs, negative digest checks).\n");
+    process.stdout.write("Engine image evidence self-test passed (20 engines, immutable tag provenance, exact index, 5 attestations, 4 SBOMs, gateway scratch augmentation, negative scope/digest checks).\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

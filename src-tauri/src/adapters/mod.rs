@@ -1513,14 +1513,14 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
         .filter_map(|(pointer, value)| {
             let object = value.as_object()?;
             let rule_id = string_any(object, &["RuleID", "rule_id"])?;
-            let file = string_any(object, &["File", "file"]).unwrap_or_else(|| "repository".into());
+            let location = gitleaks_location(object);
             Some(record!(
                 pointer,
                 rule_id.clone(),
                 string_any(object, &["Description", "description"])
                     .unwrap_or_else(|| format!("Potential secret detected by {rule_id}")),
                 "high".into(),
-                file,
+                location,
                 string_any(object, &["asset_id"]),
                 Confidence::High,
                 EvidenceKind::SourceCode,
@@ -1529,6 +1529,54 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
             ))
         })
         .collect()
+}
+
+fn gitleaks_location(object: &Map<String, Value>) -> String {
+    // Gitleaks' Secret and Match fields must never participate in a durable
+    // identity. File coordinates and a validated Git object ID distinguish
+    // multiple observations without retaining the detected value.
+    let file = string_any(object, &["File", "file"])
+        .map(|value| redact_location(&value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "repository".into());
+    let mut location = safe_text(&file, 360);
+
+    if let Some(line) = positive_u32_any(object, &["StartLine", "start_line"]) {
+        location.push_str(&format!(":line={line}"));
+    }
+    if let Some(column) = positive_u32_any(object, &["StartColumn", "start_column"]) {
+        location.push_str(&format!(":column={column}"));
+    }
+    if let Some(commit) =
+        string_any(object, &["Commit", "commit"]).and_then(|value| normalized_git_object_id(&value))
+    {
+        location.push_str(":commit=");
+        location.push_str(&commit);
+    }
+
+    location
+}
+
+fn positive_u32_any(object: &Map<String, Value>, keys: &[&str]) -> Option<u32> {
+    keys.iter().find_map(|key| {
+        let value = object.get(*key)?;
+        let parsed = match value {
+            Value::Number(number) => number.as_u64()?,
+            Value::String(value) => value.parse::<u64>().ok()?,
+            _ => return None,
+        };
+        u32::try_from(parsed).ok().filter(|value| *value > 0)
+    })
+}
+
+fn normalized_git_object_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    if !matches!(value.len(), 40 | 64)
+        || !value.bytes().all(|character| character.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(value.to_ascii_lowercase())
 }
 
 fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -2009,7 +2057,11 @@ fn merge_finding(
             ],
             asset_ids: vec![asset_id],
             evidence: vec![evidence],
-            control_references: control_mapping::lookup(adapter.id, &rule_id),
+            control_references: control_mapping::lookup(
+                adapter.id,
+                &rule_id,
+                input.ai_system_applicable,
+            ),
             recommendation: format!(
                 "Have a {} review the affected asset and the source rule's official guidance, then plan and approve a least-privilege configuration or code change.",
                 adapter.expert_type

@@ -2,7 +2,7 @@
 
 Status: implementation architecture
 
-Last updated: 2026-08-24
+Last updated: 2026-08-26
 
 This document describes the target architecture. Component names and interfaces are requirements or proposed contracts until corresponding code and tests exist; they are not implementation claims.
 
@@ -95,7 +95,7 @@ crates/adapters/             adapter protocol and built-in adapters
 crates/normalization/        canonical model and exporters
 crates/case-export/          package, redaction, hash, and verification
 engines/                     declarative manifests and adapter fixtures
-mappings/                    versioned NIST/ISO relationships
+mappings/                    versioned NIST/ISO/AIDEFEND relationships
 skills/                      Claude/Codex setup and operations guidance
 ```
 
@@ -297,7 +297,7 @@ The active-group collection is a reversible presentation projection. Creating or
 ControlMapping
   id
   finding_category
-  framework: nist_csf | iso_27001
+  framework: nist_csf | iso_27001 | aidefend
   framework_version
   control_id
   relationship: related | supporting_evidence | partial_signal
@@ -308,6 +308,14 @@ ControlMapping
 ```
 
 There is deliberately no `pass`, `fail`, or compliance score field.
+
+AIDEFEND is available only as a reviewed relationship coordinate for findings that actually apply
+to an AI system or AI-generated artifact. The mapping input is a selected CC BY 4.0-derived snapshot
+of AIDEFEND `1.20260805`, pinned to source commit
+`e10c1678ee49f03f8fb0c97d446ba3fbc3543655`; provenance records the selected fields and changes.
+Non-applicable scanners receive no AIDEFEND relationship. The integration is independent and
+unofficial, and a coordinate does not state implementation, effectiveness, certification, pass/fail,
+compliance, affiliation, or endorsement.
 
 ### 5.9 VerificationDiff
 
@@ -466,7 +474,8 @@ Adapters must not:
 - request credentials outside their manifest profile;
 - map engine failure to zero findings;
 - suppress raw output because normalization failed;
-- invent NIST or ISO mappings with an unreviewed language-model response.
+- invent NIST, ISO, or AIDEFEND mappings with an unreviewed language-model response;
+- attach AIDEFEND coordinates without a reviewed AI-system applicability rationale.
 
 ## 10. Orchestration and recovery
 

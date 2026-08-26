@@ -43,6 +43,12 @@
         }
       }
     },
+    "sbomTransformations": {
+      "description": "Project-owned, fail-closed transformations applied after the pinned generator. Empty when the generated SBOM required no transformation.",
+      "type": "array",
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/sbomTransformation" }
+    },
     "imageBuild": {
       "type": "object",
       "additionalProperties": false,
@@ -106,6 +112,50 @@
         "file": { "type": "string", "pattern": "^[a-z0-9.-]+\\.(?:spdx|cyclonedx)\\.json$" },
         "sha256": { "$ref": "#/$defs/hash" },
         "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 }
+      }
+    },
+    "sbomTransformation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "platform",
+        "platformDigest",
+        "sourceRevision",
+        "sourceFile",
+        "outputFile",
+        "componentBomRef",
+        "tool"
+      ],
+      "properties": {
+        "kind": { "const": "cyclonedx-first-party-scratch-application-v1" },
+        "platform": { "enum": ["linux/amd64", "linux/arm64"] },
+        "platformDigest": { "$ref": "#/$defs/digest" },
+        "sourceRevision": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "sourceFile": {
+          "type": "string",
+          "pattern": "^egress-gateway-linux-(?:amd64|arm64)\\.spdx\\.json$"
+        },
+        "outputFile": {
+          "type": "string",
+          "pattern": "^egress-gateway-linux-(?:amd64|arm64)\\.cyclonedx\\.json$"
+        },
+        "componentBomRef": {
+          "type": "string",
+          "pattern": "^urn:ai-security-scanner:egress-gateway:[0-9a-f]{64}$"
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "const": "ai-security-scanner/scripts/engine-image-evidence.mjs" },
+            "version": { "const": "1" }
+          }
+        }
       }
     },
     "platformBase": {

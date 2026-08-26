@@ -52,6 +52,13 @@ test("all 21 catalog engines have plain-language English and Traditional Chinese
   }
 });
 
+test("Gitleaks describes exposed secrets without implying a Git-history-only scan", () => {
+  assert.deepEqual(engineOutcomeCopy.gitleaks, {
+    en: "Exposed secrets in code",
+    zhTW: "程式碼中暴露的秘密",
+  });
+});
+
 test("unknown scanner identities never leak into the first-layer fallback", () => {
   const outcome = engineOutcomeFor(engine({ engineId: "future-engine", engineName: "do-not-render" }));
   assert.deepEqual(outcome, { en: "Security check result", zhTW: "安全檢查結果" });

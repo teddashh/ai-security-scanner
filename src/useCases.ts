@@ -6,6 +6,7 @@ export type UseCaseId =
   | "deployed_website"
   | "external_ip_or_domain"
   | "internal_it_environment"
+  | "ai_application"
   | "source_code"
   | "infrastructure_as_code"
   | "cloud_account"
@@ -86,6 +87,15 @@ export const useCaseDefinitions = [
     suggestedPlatforms: ["external"],
     knownAssetKind: "external_target",
     internetExposure: "internal",
+  },
+  {
+    id: "ai_application",
+    icon: "spark",
+    inputKind: "repository_or_folder",
+    suggestedActivities: ["local_artifact_analysis"],
+    suggestedPlatforms: ["code"],
+    knownAssetKind: "repository",
+    internetExposure: "not_applicable",
   },
   {
     id: "source_code",
@@ -189,15 +199,27 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
         productDoesNot:
           "It does not discover and scan every private address automatically, install agents, change devices, or bypass network access controls.",
       },
+      ai_application: {
+        title: "An AI app or agent you are building",
+        summary: "Check vibe-coded and AI-assisted software before the next release.",
+        want:
+          "The local project for an AI app, agent, or codebase generated or materially changed with AI.",
+        prepare:
+          "The exact local project folder or read-only repository snapshot you want checked.",
+        productDoes:
+          "Checks the selected copy locally for risky code, exposed secrets, dependencies, and related deployment files, then adds applicable AIDEFEND references to the results.",
+        productDoesNot:
+          "It does not upload or change project files, verify discovered secrets against live services, or claim that the app passes AIDEFEND or any compliance framework.",
+      },
       source_code: {
         title: "Source code you have written",
         summary: "Catch risky code and exposed secrets before the next release.",
         want:
           "A local project folder or read-only copy of a repository that you are allowed to assess.",
         prepare:
-          "The exact folder or repository snapshot and a quick check that unrelated secrets or personal files are excluded.",
+          "The exact local folder or read-only repository snapshot you want checked.",
         productDoes:
-          "Mounts only the selected copy as read-only, checks code and secret patterns locally, and keeps sensitive evidence in the case.",
+          "Checks only the selected read-only copy on this device, masks detected secret values in results, and never changes project files.",
         productDoesNot:
           "It does not push changes, verify discovered secrets against live services, inspect unselected folders, or prove that the code is bug-free.",
       },
@@ -292,12 +314,20 @@ export const startPageCopy: Record<"en" | "zh-TW", StartPageCopy> = {
         productDoes: "用相同的精確目標與限速保護執行內部檢查，也能在本機分析你附上的設定證據。",
         productDoesNot: "不自動掃完整個私有網段、不安裝代理程式、不修改設備，也不繞過現有網路存取控制。",
       },
+      ai_application: {
+        title: "正在開發的 AI 應用或 Agent",
+        summary: "在上線前檢查 vibe coding 與 AI 協作產生的軟體。",
+        want: "AI 應用、Agent，或由 AI 生成／大幅修改的本機程式碼專案。",
+        prepare: "你想檢查的精確本機專案資料夾或唯讀程式碼儲存庫快照。",
+        productDoes: "在本機檢查選定副本的危險程式碼、暴露秘密、相依套件與相關部署檔案，並在適用結果上附上 AIDEFEND 參考座標。",
+        productDoesNot: "不會上傳或修改專案檔案、不拿找到的秘密登入線上服務，也不會宣稱應用已通過 AIDEFEND 或任何合規框架。",
+      },
       source_code: {
-        title: "寫好的程式碼",
-        summary: "在上線前抓出危險寫法與不小心留下的秘密。",
+        title: "自己寫的程式碼",
+        summary: "在上線前抓出危險寫法與暴露的秘密。",
         want: "你有權檢查的本機專案資料夾或唯讀程式碼儲存庫副本。",
-        prepare: "精確的資料夾或程式碼快照，並先排除無關的秘密與個人檔案。",
-        productDoes: "只把選定副本以唯讀方式交給本機引擎，檢查程式碼與秘密模式，敏感證據留在案件裡。",
+        prepare: "你想檢查的精確本機資料夾或唯讀程式碼儲存庫快照。",
+        productDoes: "只在這台裝置上檢查選定的唯讀副本，在結果中遮罩找到的秘密值，而且不會修改專案檔案。",
         productDoesNot: "不推送修改、不拿找到的秘密去登入線上服務、不讀未選取資料夾，也不保證程式完全沒有錯誤。",
       },
       infrastructure_as_code: {

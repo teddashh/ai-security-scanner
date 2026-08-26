@@ -342,7 +342,7 @@ const pageCopy = {
 
 const platformIds = ["aws", "azure", "gcp", "m365", "external", "code", "container", "kubernetes"] as const satisfies readonly CloudPlatform[];
 const cloudPlatformIds = ["aws", "azure", "gcp", "m365"] as const satisfies readonly CloudPlatform[];
-const guidedLocalUseCaseIds: readonly UseCaseId[] = ["source_code", "infrastructure_as_code", "container_image", "kubernetes"];
+const guidedLocalUseCaseIds: readonly UseCaseId[] = ["ai_application", "source_code", "infrastructure_as_code", "container_image", "kubernetes"];
 
 const platformKeys: Record<CloudPlatform, StaticTranslationKey> = {
   aws: "platform.aws",

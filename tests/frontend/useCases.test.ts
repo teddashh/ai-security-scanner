@@ -14,6 +14,7 @@ const requiredUseCases = [
   "deployed_website",
   "external_ip_or_domain",
   "internal_it_environment",
+  "ai_application",
   "source_code",
   "infrastructure_as_code",
   "cloud_account",
@@ -48,6 +49,34 @@ test("both locales preserve optional preparation, behavior, and boundary details
       assert.ok(card.productDoesNot.trim(), `${locale}.${id}.productDoesNot`);
     }
   }
+});
+
+test("AI-application onboarding is explicit, local, and does not ask users to hide secrets", () => {
+  const aiEnglish = startPageCopy.en.cards.ai_application;
+  const aiTraditionalChinese = startPageCopy["zh-TW"].cards.ai_application;
+  const english = startPageCopy.en.cards.source_code;
+  const traditionalChinese = startPageCopy["zh-TW"].cards.source_code;
+
+  assert.equal(aiEnglish.title, "An AI app or agent you are building");
+  assert.equal(aiTraditionalChinese.title, "正在開發的 AI 應用或 Agent");
+  assert.equal(english.title, "Source code you have written");
+  assert.equal(traditionalChinese.title, "自己寫的程式碼");
+  assert.match(english.productDoes, /this device/u);
+  assert.match(english.productDoes, /masks detected secret values/u);
+  assert.match(english.productDoes, /never changes project files/u);
+  assert.match(traditionalChinese.productDoes, /這台裝置/u);
+  assert.match(traditionalChinese.productDoes, /遮罩找到的秘密值/u);
+  assert.match(traditionalChinese.productDoes, /不會修改專案檔案/u);
+  assert.doesNotMatch(english.prepare, /remove|exclude.*secrets?/iu);
+  assert.doesNotMatch(traditionalChinese.prepare, /移除|排除.*秘密/u);
+  assert.match(aiEnglish.productDoes, /AIDEFEND/u);
+  assert.match(aiTraditionalChinese.productDoes, /AIDEFEND/u);
+  assert.match(aiEnglish.productDoesNot, /does not upload or change project files/u);
+  assert.match(aiTraditionalChinese.productDoesNot, /不會上傳或修改專案檔案/u);
+
+  assert.ok(startPageSource.includes("Check an AI project"));
+  assert.ok(startPageSource.includes("檢查 AI 專案"));
+  assert.doesNotMatch(startPageSource, /committed secrets|不小心放進程式碼的秘密/u);
 });
 
 test("the start page leads with outcomes and keeps technical guidance progressive", () => {
@@ -109,7 +138,7 @@ test("internal network detection stays an explicit bilingual suggestion", () => 
 });
 
 test("local artifacts never inherit an external-contact activity", () => {
-  for (const id of ["source_code", "container_image"] as const) {
+  for (const id of ["ai_application", "source_code", "container_image"] as const) {
     assert.deepEqual(useCaseById(id).suggestedActivities, ["local_artifact_analysis"]);
   }
 });
@@ -131,6 +160,7 @@ test("each artifact scenario maps to the existing case questionnaire coordinate"
         "deployed_website",
         "external_ip_or_domain",
         "internal_it_environment",
+        "ai_application",
         "source_code",
         "infrastructure_as_code",
         "container_image",
@@ -141,6 +171,7 @@ test("each artifact scenario maps to the existing case questionnaire coordinate"
       deployed_website: "external_target",
       external_ip_or_domain: "external_target",
       internal_it_environment: "external_target",
+      ai_application: "repository",
       source_code: "repository",
       infrastructure_as_code: "iac_project",
       container_image: "container_image",

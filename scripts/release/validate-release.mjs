@@ -16,6 +16,46 @@ function assert(condition, message) {
   }
 }
 
+function assertExactKeys(value, expected, label) {
+  assert(value && typeof value === "object" && !Array.isArray(value), `${label} must be an object`);
+  assert(
+    JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort()),
+    `${label} fields are not the strict released set`,
+  );
+}
+
+function validateManagedEgressGatewayManifest(manifest, version) {
+  assertExactKeys(
+    manifest,
+    ["schema_version", "product_version", "image"],
+    "managed egress gateway manifest",
+  );
+  assert(manifest.schema_version === "1.0.0", "managed egress gateway schema is unsupported");
+  assert(manifest.product_version === version, "managed egress gateway product version is out of sync");
+  assertExactKeys(
+    manifest.image,
+    ["repository", "publication_tag", "digest", "source_revision"],
+    "managed egress gateway image",
+  );
+  assert(
+    manifest.image.repository === "ghcr.io/teddashh/ai-security-scanner-egress-gateway",
+    "managed egress gateway repository is not release-owned",
+  );
+  assert(
+    manifest.image.publication_tag === `${version}-1`,
+    "managed egress gateway publication tag is out of sync",
+  );
+  assert(
+    /^sha256:[0-9a-f]{64}$/u.test(manifest.image.digest),
+    "managed egress gateway digest is not immutable",
+  );
+  assert(
+    /^[0-9a-f]{40}$/u.test(manifest.image.source_revision),
+    "managed egress gateway source revision is malformed",
+  );
+  return `${manifest.image.repository}@${manifest.image.digest}`;
+}
+
 function compareNumericSemver(left, right) {
   const leftParts = left.split(".").map(Number);
   const rightParts = right.split(".").map(Number);
@@ -582,6 +622,9 @@ function validatePlatformQualificationSources(sources) {
     "credential_count === 0",
     "cleanup_removed === true",
     "qualificationImageFromCatalog",
+    "gatewayImageFromReleaseManifest",
+    "runtime/managed-egress-gateway.json",
+    "result.gateway.image === expectedGatewayImage",
     "installedManifestExactMatch",
     "github-hosted",
     "macos-15-intel",
@@ -794,6 +837,9 @@ async function main() {
     "utf8",
   );
   const managedRuntimeLock = await readJson(path.join(PROJECT_ROOT, "runtime/upstreams.lock.json"));
+  const managedEgressGatewayManifest = await readJson(
+    path.join(PROJECT_ROOT, "runtime/managed-egress-gateway.json"),
+  );
   const managedRuntimeDockerfile = await readFile(
     path.join(PROJECT_ROOT, "runtime/linux-qemu.Dockerfile"),
     "utf8",
@@ -833,6 +879,7 @@ async function main() {
   assert(tauri.version === version, "Tauri version is out of sync");
   assert(cargoPackageVersion(cargoToml) === version, "Cargo package version is out of sync");
   assert(cargoLockPackageVersion(cargoLock) === version, "Cargo.lock package version is out of sync");
+  validateManagedEgressGatewayManifest(managedEgressGatewayManifest, version);
   const [major, minor, patch] = version.split(".").map(Number);
   assert(
     major <= 255 && minor <= 255 && patch <= 65_535,
@@ -1048,6 +1095,16 @@ async function main() {
       "engines/images/checkov/prepare_source.py",
     ],
     sourceDateEpoch: "1787218764",
+  });
+  validateEngineImageWorkflow(workflows.get("engine-image-gitleaks.yml"), {
+    image: "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
+    tag: "8.30.1-1",
+    requiredPaths: [
+      "engines/images/gitleaks/Dockerfile",
+      "engines/images/gitleaks/launcher",
+      "generic-api-key",
+      "REDACTED",
+    ],
   });
 
   if (typeof args.get("metadata") === "string") {

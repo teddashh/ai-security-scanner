@@ -132,6 +132,7 @@ These are not scanning engines but are part of the design or implementation rese
 |---|---|---|---|
 | OCSF schema | [ocsf/ocsf-schema](https://github.com/ocsf/ocsf-schema) | Apache-2.0 | Export/interchange coordinate implemented by project-owned mapping code; not the internal persistence model and not a compliance conclusion |
 | OSCAL | [usnistgov/OSCAL](https://github.com/usnistgov/OSCAL) | NIST publication terms | Assessment/control exchange coordinate implemented by project-owned mapping code; no formal assessment plan or audit is inferred |
+| AIDEFEND AI Defense Framework | [edward-playground/aidefense-framework](https://github.com/edward-playground/aidefense-framework/tree/e10c1678ee49f03f8fb0c97d446ba3fbc3543655) | CC-BY-4.0 for framework content/data | Selected metadata derived from version `1.20260805` is pinned, attributed, and modified into a project-reviewed relationship input for applicable AI-system findings only. It is not a scanner, audit, certification, control-implementation result, or official affiliation/endorsement. |
 | Tauri | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) | Apache-2.0 / MIT | Desktop shell and command boundary; exact dependencies appear in generated release notices/SBOMs |
 | Podman | [containers/podman](https://github.com/containers/podman) | Apache-2.0 | Packaged rootless managed-runtime client; first setup retrieves an exact pinned Podman machine image |
 | QEMU and DTC | [qemu-project/qemu](https://gitlab.com/qemu-project/qemu), [qemu-project/dtc](https://gitlab.com/qemu-project/dtc) | GPL-2.0-only; GPL-2.0-or-later AND BSD-2-Clause | Linux managed-runtime emulator built from checksum-pinned source with corresponding-source records |
@@ -198,7 +199,7 @@ An engine cannot be marked supported until all items have evidence:
 - coverage records emitted without equating zero findings to success;
 - raw evidence preserved and hashed;
 - re-verification identity and adapter migrations defined;
-- NIST/ISO relationships versioned and reviewed rather than guessed at runtime;
+- NIST/ISO relationships and applicable AIDEFEND relationships versioned and reviewed rather than guessed at runtime;
 - SBOM generated for distributed artifacts;
 - end-of-support and replacement behavior documented.
 

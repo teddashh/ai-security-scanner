@@ -23,8 +23,10 @@ use ai_security_scanner_lib::domain::{
 };
 use ai_security_scanner_lib::error::{AppError, AppResult};
 use ai_security_scanner_lib::export::{ExportOptions, RedactionProfile, verify_case_bundle};
+use ai_security_scanner_lib::gateway_release::managed_egress_gateway_spec;
 use ai_security_scanner_lib::managed_network::{
-    ManagedNetworkCleanupOutcome, ManagedNetworkOwner, ManagedNetworkRegistry,
+    ManagedGatewayQualification, ManagedNetworkCleanupOutcome, ManagedNetworkController,
+    ManagedNetworkOwner, ManagedNetworkRegistry,
 };
 use ai_security_scanner_lib::managed_runtime::{
     ManagedRuntimeManager, ManagedStopMode, ManagedUninstallOptions,
@@ -52,8 +54,8 @@ const MANAGED_RUNTIME_QUALIFICATION_ENGINE_ID: &str = "gitleaks";
 const MANAGED_RUNTIME_QUALIFICATION_CASE_ID: &str = "q";
 const MANAGED_RUNTIME_QUALIFICATION_SCAN_RUN_ID: &str = "s";
 const MANAGED_RUNTIME_QUALIFICATION_IMAGE: &str = concat!(
-    "ghcr.io/gitleaks/gitleaks@",
-    "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+    "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks@",
+    "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa"
 );
 const MANAGED_RUNTIME_QUALIFICATION_REPORT: &str = "gitleaks.json";
 const MAX_MANAGED_RUNTIME_QUALIFICATION_REPORT_BYTES: u64 = 1024 * 1024;
@@ -670,6 +672,8 @@ enum ManagedRuntimeCliCommand {
     Update,
     /// Run the release-fixed, network-disabled managed-container qualification.
     Qualify,
+    /// Prove the pinned gateway is reachable without sending an upstream request.
+    QualifyEgress,
     /// Remove only this app's exact managed machine and private payload.
     Uninstall {
         /// Stop even when owned engine containers are still running.
@@ -1482,9 +1486,15 @@ async fn execute_runtime(
     match command {
         RuntimeCommand::Managed { command } => {
             let data_dir = data_dir.to_path_buf();
+            let artifact_root = artifact_root.to_path_buf();
             let bundle = managed_runtime_bundle.map(Path::to_path_buf);
             let value = tokio::task::spawn_blocking(move || {
-                execute_managed_runtime_command(&data_dir, bundle.as_deref(), command)
+                execute_managed_runtime_command(
+                    &data_dir,
+                    &artifact_root,
+                    bundle.as_deref(),
+                    command,
+                )
             })
             .await
             .map_err(|error| {
@@ -2034,6 +2044,7 @@ fn packaged_managed_runtime_candidates(executable: &Path) -> Vec<PathBuf> {
 
 fn execute_managed_runtime_command(
     data_dir: &Path,
+    artifact_root: &Path,
     bundle_override: Option<&Path>,
     command: ManagedRuntimeCliCommand,
 ) -> AppResult<Value> {
@@ -2055,7 +2066,10 @@ fn execute_managed_runtime_command(
         }
         ManagedRuntimeCliCommand::Update => serde_json::to_value(manager.update()?),
         ManagedRuntimeCliCommand::Qualify => {
-            return execute_managed_runtime_qualification(&manager, data_dir);
+            return execute_managed_runtime_qualification(&manager, artifact_root);
+        }
+        ManagedRuntimeCliCommand::QualifyEgress => {
+            return execute_managed_egress_gateway_qualification(&manager, artifact_root);
         }
         ManagedRuntimeCliCommand::Uninstall {
             force,
@@ -2081,17 +2095,142 @@ fn execute_managed_runtime_command(
 
 fn execute_managed_runtime_qualification(
     manager: &ManagedRuntimeManager,
-    data_dir: &Path,
+    artifact_root: &Path,
 ) -> AppResult<Value> {
     let runtime = ProcessContainerRuntime::from_managed(manager.start()?)?;
     let preflight = runtime.preflight()?;
     let engines = EngineRegistry::load_builtin()?;
+    let canonical_artifact_root = canonical_private_artifact_root(artifact_root)?;
     execute_fixed_managed_container_qualification(
         &runtime,
         preflight,
         &engines,
-        &data_dir.join("qualification-artifacts"),
+        &canonical_artifact_root.join("qualification-artifacts"),
     )
+}
+
+fn execute_managed_egress_gateway_qualification(
+    manager: &ManagedRuntimeManager,
+    artifact_root: &Path,
+) -> AppResult<Value> {
+    let runtime = ProcessContainerRuntime::from_managed(manager.start()?)?;
+    let preflight = runtime.preflight()?;
+    if preflight.provider != RuntimeProvider::ManagedLocal
+        || !matches!(
+            &preflight.command_provenance,
+            RuntimeCommandProvenance::ManagedLocal { .. }
+        )
+    {
+        return Err(AppError::NotAuthorized(
+            "managed egress qualification requires verified managed-local command provenance"
+                .into(),
+        ));
+    }
+
+    let canonical_artifact_root = canonical_private_artifact_root(artifact_root)?;
+    let qualification_case_root = ensure_private_directory_child(&canonical_artifact_root, "q")?;
+    let policy_root = ensure_private_directory_child(&qualification_case_root, "network-policies")?;
+    let registry_root =
+        ensure_private_directory_child(&canonical_artifact_root, ".managed-egress-registry")?;
+    let gateway = managed_egress_gateway_spec()?;
+    let expected_image = gateway.reference();
+    let controller = ManagedNetworkController::new_with_registry_context_and_container(
+        runtime.command_context(),
+        gateway,
+        policy_root,
+        registry_root,
+    )?;
+    let owner = ManagedNetworkOwner::new(
+        MANAGED_RUNTIME_QUALIFICATION_CASE_ID,
+        MANAGED_RUNTIME_QUALIFICATION_SCAN_RUN_ID,
+        new_id(),
+        1,
+    )?;
+    let qualification_id = format!(
+        "release_gateway_{}",
+        env!("CARGO_PKG_VERSION").replace('.', "_")
+    );
+    let qualification =
+        controller.qualify_gateway_container(&owner, &qualification_id, Utc::now())?;
+    managed_egress_gateway_qualification_value(preflight, qualification, &expected_image)
+}
+
+fn managed_egress_gateway_qualification_value(
+    preflight: RuntimePreflight,
+    qualification: ManagedGatewayQualification,
+    expected_image: &str,
+) -> AppResult<Value> {
+    if preflight.provider != RuntimeProvider::ManagedLocal
+        || !matches!(
+            &preflight.command_provenance,
+            RuntimeCommandProvenance::ManagedLocal { .. }
+        )
+    {
+        return Err(AppError::NotAuthorized(
+            "managed egress qualification lost verified managed-local command provenance".into(),
+        ));
+    }
+    if qualification.image != expected_image
+        || !qualification.gateway_reachable
+        || qualification.reachability_probe != "socks5_no_connect_greeting"
+        || qualification.upstream_connect_attempted
+    {
+        return Err(AppError::NotAuthorized(
+            "managed egress qualification did not prove the pinned no-upstream gateway contract"
+                .into(),
+        ));
+    }
+    if [
+        qualification.cleanup.gateway_container_removed,
+        qualification.cleanup.probe_container_removed,
+        qualification.cleanup.internal_network_removed,
+        qualification.cleanup.uplink_network_removed,
+        qualification.cleanup.policy_file_removed,
+        qualification.cleanup.status_directory_removed,
+        qualification.cleanup.registry_record_removed,
+    ]
+    .contains(&false)
+    {
+        return Err(AppError::Runtime(
+            "managed egress qualification cleanup proof is incomplete".into(),
+        ));
+    }
+
+    Ok(json!({
+        "schema_version": "1.0.0",
+        "status": "passed",
+        "qualification_kind": "managed_egress_gateway_readiness",
+        "product_version": env!("CARGO_PKG_VERSION"),
+        "runtime": {
+            "provider": preflight.provider,
+            "server_version": preflight.server_version,
+            "command_provenance": preflight.command_provenance,
+        },
+        "gateway": {
+            "image": qualification.image,
+            "backend": "pinned_container",
+            "ready": true,
+            "scanner_reachable": qualification.gateway_reachable,
+            "reachability_probe": qualification.reachability_probe,
+            "upstream_connection_attempted": qualification.upstream_connect_attempted,
+            "container_id": qualification.gateway_container_id,
+            "probe_container_id": qualification.probe_container_id,
+            "internal_network_id": qualification.internal_network_id,
+            "uplink_network_id": qualification.uplink_network_id,
+            "policy_sha256": qualification.policy_sha256,
+        },
+        "cleanup": qualification.cleanup,
+    }))
+}
+
+fn canonical_private_artifact_root(artifact_root: &Path) -> AppResult<PathBuf> {
+    let metadata = fs::symlink_metadata(artifact_root)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "qualification artifact root must be a real directory".into(),
+        ));
+    }
+    artifact_root.canonicalize().map_err(AppError::from)
 }
 
 fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
@@ -2119,15 +2258,7 @@ fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
                 "managed-container qualification engine is absent from the built-in catalog".into(),
             )
         })?;
-    let expected_command = [
-        "dir",
-        "/workspace",
-        "--report-format",
-        "json",
-        "--report-path",
-        "/output/gitleaks.json",
-        "--no-banner",
-    ];
+    let expected_command = ["--workspace", "/workspace", "--output", "/output"];
     if manifest.command.len() != expected_command.len()
         || !manifest
             .command
@@ -2652,6 +2783,13 @@ mod tests {
             Cli::try_parse_from(["ai-security-scanner", "runtime", "managed", "install"]).unwrap();
         let qualify =
             Cli::try_parse_from(["ai-security-scanner", "runtime", "managed", "qualify"]).unwrap();
+        let qualify_egress = Cli::try_parse_from([
+            "ai-security-scanner",
+            "runtime",
+            "managed",
+            "qualify-egress",
+        ])
+        .unwrap();
         let status =
             Cli::try_parse_from(["ai-security-scanner", "runtime", "managed", "status"]).unwrap();
         let doctor = Cli::try_parse_from(["ai-security-scanner", "doctor"]).unwrap();
@@ -2660,8 +2798,112 @@ mod tests {
         assert!(command_requires_exclusive_data_directory(&cleanup.command));
         assert!(command_requires_exclusive_data_directory(&install.command));
         assert!(command_requires_exclusive_data_directory(&qualify.command));
+        assert!(command_requires_exclusive_data_directory(
+            &qualify_egress.command
+        ));
         assert!(!command_requires_exclusive_data_directory(&status.command));
         assert!(!command_requires_exclusive_data_directory(&doctor.command));
+    }
+
+    #[test]
+    fn managed_egress_qualification_envelope_is_exact_and_no_upstream() {
+        let image = format!(
+            "ghcr.io/teddashh/ai-security-scanner-egress-gateway@sha256:{}",
+            "1".repeat(64)
+        );
+        let result = managed_egress_gateway_qualification_value(
+            managed_qualification_preflight(),
+            ManagedGatewayQualification {
+                image: image.clone(),
+                gateway_container_id: "2".repeat(64),
+                probe_container_id: "3".repeat(64),
+                internal_network_id: "4".repeat(64),
+                uplink_network_id: "5".repeat(64),
+                policy_sha256: "6".repeat(64),
+                reachability_probe: "socks5_no_connect_greeting".into(),
+                gateway_reachable: true,
+                upstream_connect_attempted: false,
+                cleanup:
+                    ai_security_scanner_lib::managed_network::ManagedGatewayQualificationCleanup {
+                        gateway_container_removed: true,
+                        probe_container_removed: true,
+                        internal_network_removed: true,
+                        uplink_network_removed: true,
+                        policy_file_removed: true,
+                        status_directory_removed: true,
+                        registry_record_removed: true,
+                    },
+            },
+            &image,
+        )
+        .expect("qualification envelope");
+
+        assert_eq!(
+            result.pointer("/qualification_kind"),
+            Some(&json!("managed_egress_gateway_readiness"))
+        );
+        assert_eq!(
+            result.pointer("/gateway/backend"),
+            Some(&json!("pinned_container"))
+        );
+        assert_eq!(result.pointer("/gateway/ready"), Some(&json!(true)));
+        assert_eq!(
+            result.pointer("/gateway/scanner_reachable"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            result.pointer("/gateway/upstream_connection_attempted"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            result.pointer("/cleanup/registry_record_removed"),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn managed_egress_qualification_refuses_upstream_or_incomplete_cleanup_claims() {
+        let image = format!(
+            "ghcr.io/teddashh/ai-security-scanner-egress-gateway@sha256:{}",
+            "1".repeat(64)
+        );
+        let qualification = |upstream, registry_removed| ManagedGatewayQualification {
+            image: image.clone(),
+            gateway_container_id: "2".repeat(64),
+            probe_container_id: "3".repeat(64),
+            internal_network_id: "4".repeat(64),
+            uplink_network_id: "5".repeat(64),
+            policy_sha256: "6".repeat(64),
+            reachability_probe: "socks5_no_connect_greeting".into(),
+            gateway_reachable: true,
+            upstream_connect_attempted: upstream,
+            cleanup: ai_security_scanner_lib::managed_network::ManagedGatewayQualificationCleanup {
+                gateway_container_removed: true,
+                probe_container_removed: true,
+                internal_network_removed: true,
+                uplink_network_removed: true,
+                policy_file_removed: true,
+                status_directory_removed: true,
+                registry_record_removed: registry_removed,
+            },
+        };
+
+        assert!(
+            managed_egress_gateway_qualification_value(
+                managed_qualification_preflight(),
+                qualification(true, true),
+                &image,
+            )
+            .is_err()
+        );
+        assert!(
+            managed_egress_gateway_qualification_value(
+                managed_qualification_preflight(),
+                qualification(false, false),
+                &image,
+            )
+            .is_err()
+        );
     }
 
     #[test]

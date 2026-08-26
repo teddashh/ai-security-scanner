@@ -156,6 +156,10 @@ pub struct PlannedEngineExecution {
     pub engine_run_id: Id,
     pub attempt: u32,
     pub manifest: EngineManifest,
+    /// Frozen at planning time from the explicit AI-application journey.
+    /// This only controls AI-framework result coordinates.
+    #[serde(default)]
+    pub ai_system_applicable: bool,
     pub assets: Vec<Asset>,
     pub scope_grants: Vec<ScopeGrant>,
     #[serde(default)]
@@ -1748,6 +1752,8 @@ impl<'a> CaseService<'a> {
                     engine_run_id: engine_run_id.clone(),
                     attempt: 1,
                     manifest: manifest.clone(),
+                    ai_system_applicable: case.assessment_intent
+                        == Some(AssessmentIntent::AiApplication),
                     assets: assets.into_iter().cloned().collect(),
                     scope_grants: relevant_grants,
                     resume_checkpoint: None,
@@ -2286,6 +2292,8 @@ impl<'a> CaseService<'a> {
                     engine_run_id: engine_run.id.clone(),
                     attempt,
                     manifest: manifest.clone(),
+                    ai_system_applicable: case.assessment_intent
+                        == Some(AssessmentIntent::AiApplication),
                     assets,
                     scope_grants: relevant_grants,
                     resume_checkpoint: previous,
@@ -5772,12 +5780,19 @@ mod tests {
         }
 
         fn create(&self) -> AssessmentCase {
+            self.create_with_intent(None)
+        }
+
+        fn create_with_intent(
+            &self,
+            assessment_intent: Option<AssessmentIntent>,
+        ) -> AssessmentCase {
             self.service()
                 .create_case(&CreateCaseRequest {
                     title: "Assessment".into(),
                     organization_name: "Example Co".into(),
                     employee_range: "1-10".into(),
-                    assessment_intent: None,
+                    assessment_intent,
                     data_classes: vec![DataClass::General],
                     requested_activities: vec![],
                     source_kinds: vec![],
@@ -8106,6 +8121,40 @@ mod tests {
             ScanPermission::LocalArtifactRead
         );
         assert!(plan.scan_run.engine_runs[0].resume_token.is_some());
+        assert!(!plan.executable[0].ai_system_applicable);
+    }
+
+    #[test]
+    fn explicit_ai_application_journey_freezes_framework_applicability_into_the_plan() {
+        let fixture = Fixture::new();
+        let case = fixture.create_with_intent(Some(AssessmentIntent::AiApplication));
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 1);
+        assert!(plan.executable[0].ai_system_applicable);
     }
 
     #[test]

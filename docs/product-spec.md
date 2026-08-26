@@ -4,7 +4,7 @@ Status: implementation specification
 
 Audience: product, desktop, runtime, adapter, security, and release maintainers
 
-Last updated: 2026-08-24
+Last updated: 2026-08-26
 
 This document defines the intended complete product. It is not a statement that any feature is already implemented, tested, secure, or released. A requirement remains planned until the repository contains implementation and verification evidence for it.
 
@@ -57,6 +57,7 @@ A contributor who adds or updates an engine adapter, engine manifest, control ma
 
 - an ISO 27001 audit;
 - a NIST CSF certification or conformance decision;
+- an AIDEFEND implementation assessment, certification, or endorsement;
 - a guarantee that all assets were discovered;
 - a guarantee that every finding is a confirmed vulnerability;
 - a replacement for a qualified security professional;
@@ -64,7 +65,7 @@ A contributor who adds or updates an engine adapter, engine manifest, control ma
 - a cloud service that silently uploads findings or credentials;
 - a single numeric “security score.”
 
-The user interface and exports must not label a finding or an environment as “ISO compliant,” “ISO non-compliant,” “NIST passed,” “NIST failed,” or “fully scanned.” NIST CSF and ISO 27001 references are navigation coordinates to potentially related controls only.
+The user interface and exports must not label a finding or an environment as “ISO compliant,” “ISO non-compliant,” “NIST passed,” “NIST failed,” “AIDEFEND implemented,” “AIDEFEND passed,” or “fully scanned.” NIST CSF, ISO 27001, and AIDEFEND references are navigation coordinates to potentially related controls only; they do not establish compliance, certification, control implementation, or effectiveness.
 
 ## 5. Product principles
 
@@ -159,8 +160,15 @@ Adapters preserve raw output and translate it into the canonical model described
 - confidence and verification state;
 - scan time and scope;
 - related findings without destructively deleting duplicates;
-- potentially related NIST CSF and ISO 27001 controls;
+- potentially related NIST CSF and ISO 27001 controls, plus reviewed AIDEFEND coordinates when the finding actually concerns an AI system or AI-generated artifact;
 - plain-language risk, likely impact, suggested next step, official references, and recommended expert type.
+
+AIDEFEND relationships use a selected, versioned metadata snapshot derived from AIDEFEND
+`1.20260805` under CC BY 4.0. The snapshot and each project-authored relationship rationale are
+pinned and reviewed with the other mapping inputs. A scanner result that does not concern an
+applicable AI-system context receives no AIDEFEND relationship. This is an independent, unofficial
+integration and is not affiliated with, approved, certified, sponsored, or endorsed by AIDEFEND or
+its owner.
 
 The home view may show the highest-priority items first. Internal priority uses higher values for earlier handling, but user-facing screens and reports show only relative list order and the recorded reasons—not a raw value that could be mistaken for a risk or compliance score. The complete list must remain available under categories such as `prioritize`, `needs_confirmation`, and `observe`.
 
@@ -327,7 +335,7 @@ The product is complete only when all of the following have implementation and v
 - Active external testing cannot start outside an explicitly recorded grant.
 - Every required engine records exact provenance and can complete, partially complete, fail, cancel, and resume without falsifying coverage.
 - Full raw findings survive normalization; related results can be grouped without destructive loss.
-- Plain-language results never claim NIST or ISO compliance and never offer automatic write remediation.
+- Plain-language results never claim NIST, ISO, or AIDEFEND compliance, certification, control implementation, or pass/fail status and never offer automatic write remediation.
 - Cases remain local by default and can be exported with explicit contents, evidence hashes, and sensitivity warnings.
 - A comparable second run produces trustworthy resolved, persistent, new, and unverifiable outcomes and identifies changed evidence on persistent findings.
 - Claude/Codex repository skills install, start, inspect, and clean up through supported product interfaces.

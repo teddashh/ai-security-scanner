@@ -45,7 +45,7 @@ export const engineOutcomeCopy = {
   nuclei: { en: "Known website and service weaknesses", zhTW: "網站與服務的已知弱點" },
   greenbone: { en: "Network and system vulnerabilities", zhTW: "網路與系統弱點" },
   semgrep: { en: "Risky code patterns", zhTW: "程式碼中的危險寫法" },
-  gitleaks: { en: "Secrets committed to code", zhTW: "寫進程式碼的機密資料" },
+  gitleaks: { en: "Exposed secrets in code", zhTW: "程式碼中暴露的秘密" },
   trufflehog: { en: "Exposed credentials and secrets", zhTW: "外洩的憑證與機密資料" },
   checkov: { en: "Risky infrastructure settings", zhTW: "基礎設施設定風險" },
   kics: { en: "Infrastructure-code mistakes", zhTW: "基礎設施程式碼錯誤" },

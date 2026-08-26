@@ -116,6 +116,7 @@ test("all existing local artifact coordinates remain available", () => {
 
 test("guided local routes wait for the real picker snapshot instead of creating text placeholders", () => {
   for (const [selectedUseCase, field] of [
+    ["ai_application", "repositories"],
     ["source_code", "repositories"],
     ["infrastructure_as_code", "iacProjects"],
     ["container_image", "containerImages"],

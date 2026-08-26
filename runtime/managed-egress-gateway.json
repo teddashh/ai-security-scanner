@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0.0",
+  "product_version": "0.1.6",
+  "image": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-egress-gateway",
+    "publication_tag": "0.1.6-1",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    "source_revision": "4f5703b490c66c387b1837b92bc09d23ad1dd90e"
+  }
+}

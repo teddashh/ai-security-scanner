@@ -148,6 +148,20 @@ fn normalize_bytes_with_assets(
     run_id: &str,
     assets: &[Asset],
 ) -> AdapterOutput {
+    normalize_bytes_with_assets_and_context(
+        engine_id, media_type, bytes, filename, run_id, assets, false,
+    )
+}
+
+fn normalize_bytes_with_assets_and_context(
+    engine_id: &str,
+    media_type: &str,
+    bytes: &[u8],
+    filename: &str,
+    run_id: &str,
+    assets: &[Asset],
+    ai_system_applicable: bool,
+) -> AdapterOutput {
     let temp = tempfile::tempdir().expect("temporary artifact root");
     std::fs::write(temp.path().join(filename), bytes).expect("write fixture artifact");
 
@@ -183,6 +197,7 @@ fn normalize_bytes_with_assets(
         scan_run_id: run_id,
         engine_run_id: &engine_run_id,
         manifest,
+        ai_system_applicable,
         asset_ids: &asset_ids,
         asset_identifier_map: &asset_identifier_map,
         artifact_root: temp.path(),
@@ -226,6 +241,23 @@ fn authorized_asset(
 fn normalize_fixture(engine_id: &str) -> AdapterOutput {
     let (bytes, filename, media_type) = fixture(engine_id);
     normalize_bytes(engine_id, bytes, filename, media_type, "run-1")
+}
+
+fn normalize_ai_system_fixture(engine_id: &str) -> AdapterOutput {
+    let (bytes, filename, media_type) = fixture(engine_id);
+    let assets = if engine_id == "prowler" {
+        vec![authorized_asset(
+            "asset-1",
+            AssetKind::CloudAccount,
+            Some("aws"),
+            &[("aws_account_id", "123456789012")],
+        )]
+    } else {
+        vec![authorized_asset("asset-1", AssetKind::Other, None, &[])]
+    };
+    normalize_bytes_with_assets_and_context(
+        engine_id, media_type, bytes, filename, "run-ai-1", &assets, true,
+    )
 }
 
 #[test]
@@ -504,6 +536,16 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         "kubescape",
         "kube-bench",
     ];
+    let aidefend_related_engines = [
+        "semgrep",
+        "gitleaks",
+        "trufflehog",
+        "checkov",
+        "kics",
+        "trivy",
+        "grype",
+        "kubescape",
+    ];
     for engine_id in mapped_engines {
         let output = normalize_fixture(engine_id);
         let references = output
@@ -517,9 +559,28 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         );
         assert!(references.iter().all(|reference| {
             reference.relationship == "related"
-                && reference.mapping_version == "2026-08-24.1"
+                && reference.mapping_version == "2026-08-26.1"
                 && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
         }));
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.framework != "AIDEFEND")
+        );
+
+        let ai_output = normalize_ai_system_fixture(engine_id);
+        let ai_references = ai_output
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.control_references)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ai_references
+                .iter()
+                .any(|reference| reference.framework == "AIDEFEND"),
+            aidefend_related_engines.contains(&engine_id),
+            "explicit AI-system applicability for {engine_id} changed"
+        );
         let serialized = serde_json::to_string(&references)
             .expect("serialize versioned control references")
             .to_ascii_lowercase();
@@ -575,6 +636,65 @@ fn secret_values_and_target_instructions_never_enter_findings() {
     let kube_bench = serde_json::to_string(&normalize_fixture("kube-bench").findings)
         .expect("serialize kube-bench findings");
     assert!(!kube_bench.contains("Do not execute this target-controlled command"));
+}
+
+#[test]
+fn gitleaks_keeps_same_rule_findings_at_distinct_source_coordinates_without_secrets() {
+    let bytes = br#"[
+      {
+        "RuleID": "generic-api-key",
+        "Description": "Potential API key",
+        "File": "src/generated.ts",
+        "StartLine": 12,
+        "StartColumn": 7,
+        "Commit": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        "Secret": "FIRST_SECRET_SENTINEL_MUST_NEVER_LEAK",
+        "Match": "token=FIRST_SECRET_SENTINEL_MUST_NEVER_LEAK",
+        "asset_id": "asset-1"
+      },
+      {
+        "RuleID": "generic-api-key",
+        "Description": "Potential API key",
+        "File": "src/generated.ts",
+        "StartLine": 29,
+        "StartColumn": 11,
+        "Commit": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        "Secret": "SECOND_SECRET_SENTINEL_MUST_NEVER_LEAK",
+        "Match": "token=SECOND_SECRET_SENTINEL_MUST_NEVER_LEAK",
+        "asset_id": "asset-1"
+      }
+    ]"#;
+
+    let output = normalize_bytes(
+        "gitleaks",
+        bytes,
+        "gitleaks-multiple.json",
+        "application/json",
+        "run-1",
+    );
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 2);
+    assert_eq!(
+        output
+            .findings
+            .iter()
+            .map(|finding| finding.fingerprint.as_str())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        2,
+        "source coordinates must keep same-file, same-rule findings distinct"
+    );
+
+    let serialized = serde_json::to_string(&output.findings).expect("serialize Gitleaks findings");
+    assert!(serialized.contains("src/generated.ts:line=12:column=7"));
+    assert!(serialized.contains("abcdef0123456789abcdef0123456789abcdef01"));
+    assert!(!serialized.contains("FIRST_SECRET_SENTINEL_MUST_NEVER_LEAK"));
+    assert!(!serialized.contains("SECOND_SECRET_SENTINEL_MUST_NEVER_LEAK"));
+    assert!(!serialized.contains("token="));
 }
 
 #[test]
@@ -685,6 +805,7 @@ fn artifact_path_escape_is_rejected_without_reading_outside_root() {
         scan_run_id: "run-1",
         engine_run_id: "engine-run-run-1",
         manifest,
+        ai_system_applicable: false,
         asset_ids: &assets,
         asset_identifier_map: &asset_identifier_map,
         artifact_root: Path::new(temp.path()),

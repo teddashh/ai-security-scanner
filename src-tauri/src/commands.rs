@@ -23,11 +23,11 @@ use crate::error::{AppError, AppResult};
 use crate::export::verify_case_bundle;
 use crate::export::{ExportOptions, RedactionProfile};
 use crate::external_scope::{ExternalScopeGrant, ResolvedExternalPlan, resolve_external_plan};
+use crate::gateway_release::managed_egress_gateway_spec;
 use crate::managed_network::{
-    ManagedNetworkCleanupOutcome, ManagedNetworkController, ManagedNetworkLease,
-    ManagedNetworkOwner, ProviderServiceEgressRequest, inspect_gateway_binary,
-    inspect_installed_gateway_binary, resolve_provider_service_plan,
-    validate_provider_service_request_static,
+    GatewayContainerSpec, ManagedNetworkCleanupOutcome, ManagedNetworkController,
+    ManagedNetworkLease, ManagedNetworkOwner, ProviderServiceEgressRequest,
+    resolve_provider_service_plan, validate_provider_service_request_static,
 };
 use crate::managed_runtime::{
     ManagedRuntimePrerequisiteRepairResult, ManagedRuntimeSetupController,
@@ -3250,6 +3250,7 @@ fn execute_planned_engine(
         scan_run_id: &execution.scan_run_id,
         engine_run_id: &execution.engine_run_id,
         manifest: &execution.manifest,
+        ai_system_applicable: execution.ai_system_applicable,
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations,
@@ -3402,6 +3403,7 @@ fn resume_captured_execution(
         scan_run_id: &execution.scan_run_id,
         engine_run_id: &execution.engine_run_id,
         manifest: &execution.manifest,
+        ai_system_applicable: execution.ai_system_applicable,
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations: None,
@@ -3677,7 +3679,7 @@ fn validate_execution_network_static_with_gateway<F>(
     locate_gateway: &mut F,
 ) -> Result<(), DesktopExecutionBlocker>
 where
-    F: FnMut() -> AppResult<PathBuf>,
+    F: FnMut() -> AppResult<GatewayContainerSpec>,
 {
     let direct_external = execution
         .manifest
@@ -3700,14 +3702,7 @@ where
         return Ok(());
     }
 
-    let gateway = locate_gateway().map_err(|error| {
-        trace_execution_preflight_failure(
-            execution,
-            DesktopExecutionBlocker::EgressGatewayUnavailable,
-            &error,
-        )
-    })?;
-    inspect_gateway_binary(&gateway).map_err(|error| {
+    locate_gateway().map_err(|error| {
         trace_execution_preflight_failure(
             execution,
             DesktopExecutionBlocker::EgressGatewayUnavailable,
@@ -3759,7 +3754,7 @@ fn validate_execution_inputs_static(
     state: &AppState,
     plan: &ScanPlan,
 ) -> Result<(), DesktopExecutionBlocker> {
-    validate_execution_inputs_static_with_gateway(state, plan, locate_egress_gateway_binary)
+    validate_execution_inputs_static_with_gateway(state, plan, managed_egress_gateway_spec)
 }
 
 fn validate_execution_inputs_static_with_gateway<F>(
@@ -3768,7 +3763,7 @@ fn validate_execution_inputs_static_with_gateway<F>(
     mut locate_gateway: F,
 ) -> Result<(), DesktopExecutionBlocker>
 where
-    F: FnMut() -> AppResult<PathBuf>,
+    F: FnMut() -> AppResult<GatewayContainerSpec>,
 {
     if plan.executable.is_empty() {
         tracing::error!(
@@ -3852,7 +3847,7 @@ fn provision_execution_network(
         return Ok(None);
     }
     let now = Utc::now();
-    let gateway_binary = locate_egress_gateway_binary()?;
+    let gateway = managed_egress_gateway_spec()?;
     let policy_root = state.network_policy_root(&execution.case_id)?;
     let context = runtime.command_context();
     let registry = state.managed_network_registry_with_context(context.clone())?;
@@ -3862,9 +3857,9 @@ fn provision_execution_network(
         execution.engine_run_id.clone(),
         execution.attempt,
     )?;
-    let controller = ManagedNetworkController::new_with_registry_context(
+    let controller = ManagedNetworkController::new_with_registry_context_and_container(
         context,
-        gateway_binary,
+        gateway,
         policy_root,
         registry.root(),
     )?;
@@ -3922,19 +3917,6 @@ fn exact_execution_network_destinations(
         )));
     }
     Ok(contract.network_destinations.clone())
-}
-
-fn locate_egress_gateway_binary() -> AppResult<std::path::PathBuf> {
-    let current = std::env::current_exe().map_err(|error| {
-        AppError::Runtime(format!(
-            "desktop executable path could not be resolved: {error}"
-        ))
-    })?;
-    inspect_installed_gateway_binary(&current).map_err(|error| {
-        AppError::NotAvailable(format!(
-            "the managed egress gateway sidecar is unavailable beside the desktop executable: {error}"
-        ))
-    })
 }
 
 fn resolve_execution_credentials(
@@ -5137,10 +5119,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_managed_gateway_blocks_a_home_network_scan_before_persistence() {
-        let (directory, state, case_id) = ready_internal_network_state();
+    fn invalid_release_gateway_manifest_blocks_a_home_network_scan_before_persistence() {
+        let (_directory, state, case_id) = ready_internal_network_state();
         let service = state.case_service();
-        let missing_gateway = directory.path().join("missing-egress-gateway");
 
         let error = service
             .plan_scan_for_execution_checked(
@@ -5150,7 +5131,9 @@ mod tests {
                 },
                 |plan| {
                     validate_execution_inputs_static_with_gateway(&state, plan, || {
-                        Ok(missing_gateway.clone())
+                        Err(AppError::NotAvailable(
+                            "release gateway manifest unavailable".into(),
+                        ))
                     })
                     .map_err(DesktopExecutionBlocker::into_error)
                 },

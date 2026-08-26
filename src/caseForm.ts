@@ -96,6 +96,7 @@ export const lineValues = (value: string): string[] =>
   [...new Set(value.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean))];
 
 const guidedLocalUseCases: readonly UseCaseId[] = [
+  "ai_application",
   "source_code",
   "infrastructure_as_code",
   "container_image",

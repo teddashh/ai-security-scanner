@@ -26,6 +26,7 @@
     "typecheck": "tsc -b --pretty false",
     "test:frontend": "node --experimental-strip-types --test tests/frontend/*.test.ts",
     "test:usability-evidence": "node --test tests/usability/*.test.mjs",
+    "validate:aidefend": "node scripts/validate-aidefend-snapshot.mjs",
     "validate:engines": "node scripts/validate-engine-catalog.mjs",
     "validate:usability-evidence": "node scripts/validate-usability-evidence.mjs",
     "desktop:prepare-sidecar": "node scripts/release/build-sidecar.mjs",

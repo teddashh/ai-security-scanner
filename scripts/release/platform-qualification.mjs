@@ -159,7 +159,7 @@ function validateContainerResult(result, runtime, target, version, expectedImage
   assert(result.evidence.finding_count === 0, "fixed container qualification fixture unexpectedly produced findings");
 }
 
-function validateEgressGatewayResult(result, runtime, target, version) {
+function validateEgressGatewayResult(result, runtime, target, version, expectedGatewayImage) {
   exactKeys(
     result,
     ["schema_version", "status", "qualification_kind", "product_version", "runtime", "gateway", "cleanup"],
@@ -202,8 +202,8 @@ function validateEgressGatewayResult(result, runtime, target, version) {
     "egress gateway readiness",
   );
   assert(
-    new RegExp(`^${GATEWAY_IMAGE_REPOSITORY.replaceAll(".", "\\.")}@sha256:[0-9a-f]{64}$`, "u").test(result.gateway.image),
-    "egress gateway qualification image is not the immutable first-party gateway image",
+    result.gateway.image === expectedGatewayImage,
+    "egress gateway qualification image differs from the release manifest",
   );
   assert(result.gateway.backend === "pinned_container", "egress gateway qualification used the wrong backend");
   assert(result.gateway.ready === true, "egress gateway did not become ready");
@@ -245,6 +245,34 @@ function qualificationImageFromCatalog(catalog) {
   requireText(engine.image?.repository, "Gitleaks image repository");
   assert(/^sha256:[0-9a-f]{64}$/u.test(engine.image?.digest ?? ""), "Gitleaks image digest is not immutable");
   return `${engine.image.repository}@${engine.image.digest}`;
+}
+
+function gatewayImageFromReleaseManifest(manifest, version) {
+  exactKeys(manifest, ["schema_version", "product_version", "image"], "managed egress gateway manifest");
+  assert(manifest.schema_version === "1.0.0", "managed egress gateway manifest schema is unsupported");
+  assert(manifest.product_version === version, "managed egress gateway manifest product version mismatch");
+  exactKeys(
+    manifest.image,
+    ["repository", "publication_tag", "digest", "source_revision"],
+    "managed egress gateway image",
+  );
+  assert(
+    manifest.image.repository === GATEWAY_IMAGE_REPOSITORY,
+    "managed egress gateway manifest repository is not release-owned",
+  );
+  assert(
+    manifest.image.publication_tag === `${version}-1`,
+    "managed egress gateway publication tag is not release-fixed",
+  );
+  assert(
+    /^sha256:[0-9a-f]{64}$/u.test(manifest.image.digest),
+    "managed egress gateway manifest digest is not immutable",
+  );
+  assert(
+    /^[0-9a-f]{40}$/u.test(manifest.image.source_revision),
+    "managed egress gateway manifest source revision is malformed",
+  );
+  return `${manifest.image.repository}@${manifest.image.digest}`;
 }
 
 function validateFullOperations(operations, runtime, target) {
@@ -383,11 +411,16 @@ export function validatePlatformQualification(evidence, context = {}) {
     validateFullOperations(evidence.managedRuntime.operations, evidence.runtime, evidence.runtime.selectedTarget);
     exactKeys(evidence.egressGateway, ["outcome", "result"], "egress gateway execution");
     assert(evidence.egressGateway.outcome === "passed", "managed egress gateway qualification did not pass");
+    assert(
+      typeof context.expectedGatewayImage === "string",
+      "validator has no released managed egress gateway image identity",
+    );
     validateEgressGatewayResult(
       evidence.egressGateway.result,
       evidence.runtime,
       evidence.runtime.selectedTarget,
       evidence.releaseIdentity.version,
+      context.expectedGatewayImage,
     );
     exactKeys(evidence.containerExecution, ["outcome", "result"], "container execution");
     assert(evidence.containerExecution.outcome === "passed", "managed container execution did not pass");
@@ -400,7 +433,7 @@ export function validatePlatformQualification(evidence, context = {}) {
 }
 
 function observationsToEvidence(observations, inputs) {
-  const { platform, version, tag, commit, releaseChannel, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, environment } = inputs;
+  const { platform, version, tag, commit, releaseChannel, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, expectedGatewayImage, environment } = inputs;
   const contract = PLATFORM_CONTRACTS[platform];
   exactKeys(observations, ["installedLayout", "desktopStartup", "privateDataDirectory", "operations", "egressGateway", "containerExecution", "cleanup", "installedManifestSnapshot"], "platform observations");
   exactKeys(observations.installedLayout, ["pathsVerifiedAbsolute", "desktop", "cli", "companions", "runtimeManifestOriginalPath"], "observed installed layout");
@@ -478,7 +511,14 @@ function observationsToEvidence(observations, inputs) {
     containerExecution: observations.containerExecution,
     cleanup: observations.cleanup,
   };
-  return validatePlatformQualification(evidence, { platform, version, tag, commit, expectedQualificationImage });
+  return validatePlatformQualification(evidence, {
+    platform,
+    version,
+    tag,
+    commit,
+    expectedQualificationImage,
+    expectedGatewayImage,
+  });
 }
 
 export async function createPlatformQualification({ artifactDirectory, observationsFile, outputFile, platform, installerType, version, tag, commit, releaseChannel, runnerLabel, environment = process.env }) {
@@ -527,7 +567,11 @@ export async function createPlatformQualification({ artifactDirectory, observati
   const installedManifestSha256 = await sha256File(installedManifestSnapshot);
   const catalog = await readJson(path.join(PROJECT_ROOT, "engines/catalog.json"));
   const expectedQualificationImage = qualificationImageFromCatalog(catalog);
-  const evidence = observationsToEvidence(observations, { platform, version, tag, commit, releaseChannel, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, environment });
+  const gatewayManifest = await readJson(
+    path.join(PROJECT_ROOT, "runtime/managed-egress-gateway.json"),
+  );
+  const expectedGatewayImage = gatewayImageFromReleaseManifest(gatewayManifest, version);
+  const evidence = observationsToEvidence(observations, { platform, version, tag, commit, releaseChannel, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, expectedGatewayImage, environment });
   await writeJsonAtomic(outputFile, evidence);
   return evidence;
 }
@@ -547,7 +591,21 @@ export async function verifyPlatformQualificationFile(file, context = {}) {
     const catalog = await readJson(path.join(PROJECT_ROOT, "engines/catalog.json"));
     expectedQualificationImage = qualificationImageFromCatalog(catalog);
   }
-  validatePlatformQualification(evidence, { ...context, expectedQualificationImage });
+  let expectedGatewayImage = context.expectedGatewayImage;
+  if (!expectedGatewayImage) {
+    const gatewayManifest = await readJson(
+      path.join(PROJECT_ROOT, "runtime/managed-egress-gateway.json"),
+    );
+    expectedGatewayImage = gatewayImageFromReleaseManifest(
+      gatewayManifest,
+      context.version ?? evidence.releaseIdentity.version,
+    );
+  }
+  validatePlatformQualification(evidence, {
+    ...context,
+    expectedQualificationImage,
+    expectedGatewayImage,
+  });
   if (context.releaseDirectory) {
     const installerManifest = await readJson(path.join(context.releaseDirectory, `installers-${evidence.platform}.json`));
     const installer = installerManifest.installers?.find((candidate) => candidate.bundleType === evidence.installer.bundleType && candidate.file === evidence.installer.file);

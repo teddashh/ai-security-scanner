@@ -97,7 +97,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     choiceDescription: "Choose the closest match. You can add more checks later.",
     cardDetails: "See what’s included",
     moreWaysTitle: "More ways to scan",
-    moreWaysDescription: "Cloud accounts, infrastructure code, container images, and Kubernetes",
+    moreWaysDescription: "Source code, cloud accounts, infrastructure code, containers, and Kubernetes",
     setupEyebrow: "One-time setup",
     setupTitle: "Get the scan tools ready",
     setupDescription: "Set it up once, then reuse it for every kind of check.",
@@ -115,9 +115,13 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         outcome: "Spot weaknesses and risky settings across your approved internal systems.",
         action: "Check internal systems",
       },
+      ai_application: {
+        outcome: "Catch risky AI-generated code, exposed secrets, and vulnerable dependencies before they ship.",
+        action: "Check an AI project",
+      },
       source_code: {
-        outcome: "Catch risky code and exposed secrets before the next release.",
-        action: "Check source code",
+        outcome: "Check source code locally for risky patterns and exposed secrets.",
+        action: "Check my code",
       },
       infrastructure_as_code: {
         outcome: "Find risky cloud and deployment settings before they go live.",
@@ -183,7 +187,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     choiceDescription: "選一個最接近的項目就好，其他檢查之後都能再加入。",
     cardDetails: "查看包含哪些檢查",
     moreWaysTitle: "更多檢查方式",
-    moreWaysDescription: "雲端帳號、基礎設施程式碼、容器映像與 Kubernetes",
+    moreWaysDescription: "一般程式碼、雲端帳號、基礎設施程式碼、容器映像與 Kubernetes",
     setupEyebrow: "只需設定一次",
     setupTitle: "準備好掃描工具",
     setupDescription: "完成一次設定，之後每種檢查都能直接使用。",
@@ -201,9 +205,13 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
         outcome: "找出核准內部系統的弱點與高風險設定。",
         action: "檢查內部系統",
       },
+      ai_application: {
+        outcome: "在上線前抓出 AI 生成程式碼的危險寫法、暴露秘密與有弱點的相依套件。",
+        action: "檢查 AI 專案",
+      },
       source_code: {
-        outcome: "在上線前抓出危險寫法與不小心放進程式碼的秘密。",
-        action: "檢查程式碼",
+        outcome: "在本機檢查程式碼，找出危險寫法與暴露的秘密。",
+        action: "檢查我的程式碼",
       },
       infrastructure_as_code: {
         outcome: "在部署前找出雲端與基礎設施設定裡的風險。",

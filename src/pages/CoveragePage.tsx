@@ -176,6 +176,7 @@ const networkAssessmentIntents: readonly UseCaseId[] = [
 ];
 
 const localProfileByAssessmentIntent: Partial<Record<UseCaseId, LocalInputProfile>> = {
+  ai_application: "repository_working_tree",
   source_code: "repository_working_tree",
   infrastructure_as_code: "iac_working_tree",
   container_image: "container_image_oci_layout",
@@ -197,12 +198,12 @@ interface LocalInputDefinition {
 
 const localInputDefinitions: Record<LocalInputProfile, LocalInputDefinition> = {
   repository_working_tree: {
-    label: bilingual("Source-code project", "程式碼專案"),
-    detail: bilingual("Check the files in one project folder. Git history stays out.", "檢查一個專案資料夾內的檔案，不會包含 Git 版本紀錄。"),
-    formTitle: bilingual("Choose the source code you want checked", "選擇想檢查的程式碼"),
-    formIntro: bilingual("Pick one project folder. We'll make a private local copy and look for risky code, exposed secrets, and vulnerable packages.", "選擇一個專案資料夾；我們會建立私密的本機副本，檢查危險程式碼、外洩秘密與有弱點的套件。"),
-    cautionTitle: bilingual("Remove passwords, keys, and tokens from this folder first", "請先移除這個資料夾裡的密碼、金鑰與 token"),
-    cautionBody: bilingual("Git history stays out, but files such as .env are part of the copy. Remove secrets you do not want included.", "Git 版本紀錄不會包含在內，但 .env 等檔案會進入副本；請先移除不想納入的秘密值。"),
+    label: bilingual("Code you wrote or generated with AI", "自己寫或 AI 生成的程式碼"),
+    detail: bilingual("Check one local project without changing its files.", "在本機檢查一個專案，不會修改任何檔案。"),
+    formTitle: bilingual("Choose code you wrote or generated with AI", "選擇自己寫或 AI 生成的程式碼"),
+    formIntro: bilingual("Pick one project folder. We'll check it locally for risky code, exposed secrets, and vulnerable packages without changing its files.", "選擇一個專案資料夾；我們會在本機檢查危險程式碼、暴露的秘密與有弱點的套件，不會修改任何檔案。"),
+    cautionTitle: bilingual("Your project stays local and unchanged", "專案留在本機，檔案不會被修改"),
+    cautionBody: bilingual("Only the selected folder is copied into the private local scan. Detected secret values are masked in results.", "只會把選定資料夾複製到私密的本機掃描；找到的秘密值會在結果中遮罩。"),
     directoryLabel: bilingual("Source-code folder", "程式碼資料夾"),
     selection: bilingual("Choose the source-code folder", "選擇程式碼資料夾"),
     attachAction: bilingual("Add this source-code project", "加入這份程式碼專案"),
@@ -405,8 +406,8 @@ const pageCopy = {
   workspaceEyebrow: bilingual("Saved local copy", "保存本機副本"),
   workspaceFormTitle: bilingual("Choose the local project you want checked", "選擇想檢查的本機專案"),
   workspaceIntro: bilingual("Pick one folder. The app prepares a private local copy for the scan and leaves your working files untouched.", "選擇一個資料夾；產品會準備掃描用的本機副本，不會動到你的工作檔案。"),
-  gitWarningTitle: bilingual("Remove passwords, keys, and tokens from this folder first", "請先移除這個資料夾裡的密碼、金鑰與 token"),
-  gitWarningBody: bilingual("The app leaves Git history out, but other files in this folder—including .env files—are copied for the scan. Remove secrets before you continue.", "產品不會包含 Git 版本紀錄，但會複製資料夾裡的其他檔案，包括 .env 檔。繼續前請先移除秘密值。"),
+  gitWarningTitle: bilingual("Your project stays local and unchanged", "專案留在本機，檔案不會被修改"),
+  gitWarningBody: bilingual("Only the selected folder is copied into the private local scan. Detected secret values are masked in results.", "只會把選定資料夾複製到私密的本機掃描；找到的秘密值會在結果中遮罩。"),
   gitTechnicalBody: bilingual("Every .git directory is excluded, so Git history, refs, hooks, and credentials stored inside .git are not opened or copied.", "所有 .git 目錄都會排除，因此不會開啟或複製其中的 Git history、refs、hooks 與 credentials。"),
   localNoGrantTitle: bilingual("The input type is fixed, but attaching it does not grant scan permission", "輸入類型會固定，但附加動作不會授予掃描權限"),
   localNoGrantBody: bilingual("The case saves a snapshot ID, input type, content hash, and relative-path manifest—not the original host path. Confirm ownership and read-only local review in step 3.", "案件只保存快照 ID、輸入類型、內容雜湊與相對路徑 manifest，不保存原始主機路徑。請在步驟 3 確認所有權與本機唯讀檢查。"),
@@ -630,8 +631,8 @@ const useCaseNextSteps = [
   {
     id: "source-code",
     icon: "file" as const,
-    title: bilingual("Source code", "程式碼"),
-    detail: bilingual("Choose the project folder, review what was added, then start the recommended local code checks.", "選擇專案資料夾、確認加入的內容，再開始建議的本機程式碼檢查。"),
+    title: bilingual("Code you wrote or generated with AI", "自己寫或 AI 生成的程式碼"),
+    detail: bilingual("Choose one project folder, then check it locally without changing its files.", "選擇一個專案資料夾，在本機檢查，而且不會修改任何檔案。"),
   },
   {
     id: "infrastructure-code",

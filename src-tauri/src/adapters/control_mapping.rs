@@ -51,6 +51,8 @@ struct MappingEntry {
     engine_id: String,
     match_kind: MatchKind,
     source_rule: String,
+    #[serde(default)]
+    aidefend_applicability: Option<AidefendApplicability>,
     controls: Vec<String>,
     rationale: String,
 }
@@ -60,6 +62,12 @@ struct MappingEntry {
 enum MatchKind {
     Exact,
     Prefix,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AidefendApplicability {
+    AiSystem,
 }
 
 #[derive(Debug)]
@@ -91,7 +99,11 @@ pub(super) fn catalog_version() -> AppResult<&'static str> {
     Ok(catalog.mapping_version.as_str())
 }
 
-pub(super) fn lookup(engine_id: &str, source_rule: &str) -> Vec<ControlReference> {
+pub(super) fn lookup(
+    engine_id: &str,
+    source_rule: &str,
+    ai_system_applicable: bool,
+) -> Vec<ControlReference> {
     let Ok(catalog) = catalog() else {
         // Registry construction validates this immutable embedded catalog. If a
         // future build ships invalid metadata, findings remain evidence-backed
@@ -111,6 +123,12 @@ pub(super) fn lookup(engine_id: &str, source_rule: &str) -> Vec<ControlReference
             let Some(control) = catalog.controls.get(key) else {
                 continue;
             };
+            if control.framework == "AIDEFEND"
+                && (!ai_system_applicable
+                    || entry.aidefend_applicability != Some(AidefendApplicability::AiSystem))
+            {
+                continue;
+            }
             let identity = (
                 control.framework.clone(),
                 control.framework_version.clone(),
@@ -251,19 +269,35 @@ fn parse_and_validate() -> Result<ValidatedCatalog, String> {
             ));
         }
         let mut unique_controls = BTreeSet::new();
+        let mut has_aidefend_control = false;
         for key in &entry.controls {
-            if !controls.contains_key(key) {
+            let Some(control) = controls.get(key) else {
                 return Err(format!(
                     "mapping for {} references unknown control {key}",
                     entry.engine_id
                 ));
-            }
+            };
+            has_aidefend_control |= control.framework == "AIDEFEND";
             if !unique_controls.insert(key) {
                 return Err(format!(
                     "mapping for {} repeats control {key}",
                     entry.engine_id
                 ));
             }
+        }
+        if has_aidefend_control
+            && entry.aidefend_applicability != Some(AidefendApplicability::AiSystem)
+        {
+            return Err(format!(
+                "mapping for {} references AIDEFEND without explicit AI-system applicability",
+                entry.engine_id
+            ));
+        }
+        if !has_aidefend_control && entry.aidefend_applicability.is_some() {
+            return Err(format!(
+                "mapping for {} declares AIDEFEND applicability without an AIDEFEND control",
+                entry.engine_id
+            ));
         }
         validate_text("mapping rationale", &entry.rationale, 20, 512)?;
         let rationale = entry.rationale.to_ascii_lowercase();
@@ -386,23 +420,48 @@ mod tests {
 
     #[test]
     fn exact_and_standardized_prefix_rules_map_deterministically() {
-        let public_bucket = lookup("prowler", "s3_bucket_level_public_access_block");
+        let public_bucket = lookup("prowler", "s3_bucket_level_public_access_block", false);
         assert_eq!(public_bucket.len(), 3);
         assert!(public_bucket.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-08-24.1"
+                && item.mapping_version == "2026-08-26.1"
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
 
-        let cve = lookup("trivy", "CVE-2026-12345");
-        assert_eq!(cve.len(), 2);
-        assert!(cve.iter().any(|item| item.control_id == "ID.RA-01"));
+        let ordinary_cve = lookup("trivy", "CVE-2026-12345", false);
+        assert_eq!(ordinary_cve.len(), 2);
+        assert!(
+            ordinary_cve
+                .iter()
+                .any(|item| item.control_id == "ID.RA-01")
+        );
+        assert!(ordinary_cve.iter().all(|item| item.framework != "AIDEFEND"));
+
+        let ai_system_cve = lookup("trivy", "CVE-2026-12345", true);
+        assert_eq!(ai_system_cve.len(), 4);
+        assert!(
+            ai_system_cve
+                .iter()
+                .any(|item| item.control_id == "AID-H-003.001")
+        );
+
+        let generated_code_secret = lookup("gitleaks", "generic-api-key", true);
+        assert!(
+            generated_code_secret
+                .iter()
+                .any(|item| item.control_id == "AID-H-031.002")
+        );
+        assert!(
+            lookup("gitleaks", "generic-api-key", false)
+                .iter()
+                .all(|item| item.framework != "AIDEFEND")
+        );
     }
 
     #[test]
     fn unknown_or_observation_rules_are_not_guessed() {
-        assert!(lookup("prowler", "new-unknown-check").is_empty());
-        assert!(lookup("httpx", "http-service-observed").is_empty());
-        assert!(lookup("naabu", "open-tcp-port").is_empty());
+        assert!(lookup("prowler", "new-unknown-check", false).is_empty());
+        assert!(lookup("httpx", "http-service-observed", false).is_empty());
+        assert!(lookup("naabu", "open-tcp-port", false).is_empty());
     }
 }

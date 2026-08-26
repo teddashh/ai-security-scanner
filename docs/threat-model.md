@@ -2,7 +2,7 @@
 
 Status: design-time threat model
 
-Last updated: 2026-08-24
+Last updated: 2026-08-26
 
 This document defines threats and required controls for the intended product. It does not assert that the controls are implemented or that the product has passed a security review. Risk acceptance requires an explicit repository decision; silence is not acceptance.
 
@@ -43,7 +43,7 @@ It considers a single human user on one workstation. Shared-workstation authoriz
 | Scope grant and identity record | High | ownership assertions, approved targets, authorization history |
 | Case history | High | remediation history, accepted false positives, old evidence |
 | Engine and update artifacts | High integrity | binaries, images, rules, templates, vulnerability databases |
-| Control mappings and explanations | Medium integrity | NIST/ISO relationships and plain-language advice |
+| Control mappings and explanations | Medium integrity | NIST/ISO relationships, applicable AIDEFEND relationships, and plain-language advice |
 | Export integrity key | High integrity | local signing key, when used |
 
 ## 4. Threat actors
@@ -201,7 +201,7 @@ Active template collections require policy classification. Destructive, denial-o
 | T-18 | No findings, failed engine, or unknown source appears green. | False reassurance. | Independent coverage ledger; state-specific presentation; zero findings cannot set coverage; `unverifiable` comparison state. |
 | T-19 | Normalization incorrectly merges distinct findings. | A real issue is hidden. | Preserve every source finding and evidence; no automatic cross-engine merge; one active presentation group per finding; append-only create/remove events; versioned fingerprint; expert access to raw results. |
 | T-20 | Normalization double-counts corroborating evidence. | Inflated risk and unusable report. | One user-facing issue can reference multiple source findings; prioritization records corroboration separately. |
-| T-21 | Automated NIST/ISO mapping implies audit status. | Misrepresentation and bad decisions. | Relationship-only mapping enum; no pass/fail/score field; reviewed, versioned rationale; prohibited-claim tests in UI/export. |
+| T-21 | Automated NIST, ISO, or AIDEFEND mapping implies audit status, control implementation, certification, or official endorsement; AIDEFEND is also attached to findings with no AI-system applicability. | Misrepresentation and bad decisions. | Relationship-only mapping enum; no pass/fail/score field; reviewed, versioned rationale; explicit AIDEFEND applicability; selected pinned framework metadata; attribution and non-endorsement notice; prohibited-claim tests in UI/export. |
 | T-22 | AI agent follows prompt injection in a finding or widens a scan. | Data exfiltration, unauthorized scanning, or host changes. | Treat evidence as untrusted data; no secrets in model context; AI calls same backend authorization; no runtime socket; no remediation command. |
 | T-23 | Remediation advice is executed automatically or mistaken for endorsed code. | Production outage or permission escalation. | No execute/copy-run controls, no write credential in scan runtime, advisory wording, official reference and expert-role guidance. |
 | T-24 | Demo findings are mistaken for real scans. | False product or environment claims. | Persistent Demo badge and provenance, synthetic namespaces, export marker, no demo-to-real state transition. |
@@ -222,6 +222,7 @@ An engine is not trusted because it is popular or open source. Admission to a di
 - artifact version, digest, and retrieval source;
 - signature or provenance verification where upstream provides it;
 - engine, template, feed, and database licenses reviewed separately;
+- derived framework metadata pinned to its exact source, hash, version, license, attribution, and recorded modifications;
 - adapter fixture tests and malformed-output tests;
 - declared provider APIs, network destinations, mounts, credentials, and resource needs;
 - known security-reporting channel and maintenance status;
@@ -295,6 +296,7 @@ Implementation should eventually provide evidence for at least:
 - dependency, image, signature, license, and SBOM checks for release artifacts;
 - export traversal, hash, signature, truncation, and redaction tests;
 - UI tests that distinguish demo, partial, failed, unknown, no-findings, and verified states;
+- mapping tests that reject unsupported AIDEFEND coordinates, missing attribution, and relationships on non-applicable scanner results;
 - manual security review before making security or isolation claims.
 
 Listing a control or test here is not proof that it passes.

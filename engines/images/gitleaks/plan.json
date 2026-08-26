@@ -1,56 +1,98 @@
 {
   "schema_version": "1.0.0",
   "engine_id": "gitleaks",
-  "plan_kind": "upstream_image",
+  "plan_kind": "managed_build",
   "knowledge_date": "2026-08-24",
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "verified_upstream_artifact",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/gitleaks/gitleaks",
     "revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
     "acquisition_source": "https://github.com/gitleaks/gitleaks/commit/83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
     "local_research_checkout": ".upstreams/gitleaks/gitleaks"
   },
-  "verified_upstream_artifact": {
-    "repository": "ghcr.io/gitleaks/gitleaks",
-    "tag": "v8.30.1",
-    "digest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
-    "signature_identity": null,
-    "entrypoint": [
-      "gitleaks"
-    ],
-    "verification": {
-      "method": "docker_buildx_imagetools_inspect",
-      "verified_at": "2026-08-24",
-      "source_association": "attested_match",
-      "artifact_source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e"
-    }
-  },
+  "verified_upstream_artifact": null,
   "final_artifact": {
-    "repository": "ghcr.io/gitleaks/gitleaks",
-    "tag": "v8.30.1",
-    "digest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
+    "tag": "8.30.1-1",
+    "digest": "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa"
   },
-  "build_recipe": null,
+  "build_recipe": {
+    "source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+    "source_archive": {
+      "url": "https://github.com/gitleaks/gitleaks/archive/83d9cd684c87d95d656c1458ef04895a7f1cbd8e.tar.gz",
+      "sha256": "sha256:6b2638a733b85619dc80bdf28e84e4fed7e526a761ab5c148fbf67695aea2115"
+    },
+    "source_integrity": {
+      "go_sum_sha256": "sha256:3fd66952713338b561c71c7ed608c5cce41355a7594c4eb8ffb4303abae29ccd",
+      "default_config_sha256": "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf"
+    },
+    "source_patch": {
+      "path": "engines/images/gitleaks/patches/0001-add-scanner-owned-ignore-policy.patch",
+      "sha256": "sha256:9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7"
+    },
+    "source_date_epoch": 1773330037,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.3-alpine",
+        "digest": "sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d",
+        "uses": [
+          "launcher",
+          "build"
+        ]
+      }
+    ],
+    "static_steps": [
+      [
+        "go",
+        "mod",
+        "verify"
+      ],
+      [
+        "go",
+        "test",
+        "./cmd/..."
+      ],
+      [
+        "go",
+        "build",
+        "-mod=readonly",
+        "-trimpath",
+        "-o",
+        "/out/gitleaks",
+        "."
+      ]
+    ]
+  },
   "dockerfile": {
-    "emitted": false,
-    "reason": "No managed Dockerfile is needed for the verified upstream artifact."
+    "emitted": true,
+    "path": "engines/images/gitleaks/Dockerfile",
+    "sha256": "sha256:3a5a92640f4cf815d3c62ed63dd4f6a309b67c28e6b5dc5f596a6f02e2034455",
+    "reason": null
   },
   "wrapper": {
-    "required": false,
-    "strategy": "The pinned image entrypoint is the gitleaks binary and accepts only the fixed workspace/output paths.",
-    "entrypoint": null
+    "required": true,
+    "strategy": "Accept only the fixed read-only workspace/output mounts, enforce scanner-owned policy, and reject evidence unless every secret value is fully redacted.",
+    "entrypoint": "/usr/local/bin/ai-security-scanner-gitleaks-entrypoint",
+    "launcher_sha256": "sha256:848f720ae31af96dbd78cc4139eeeafc1b3b89d1993fed8e85191dc14b844082"
   },
   "command": [
-    "dir",
+    "--workspace",
     "/workspace",
-    "--report-format",
-    "json",
-    "--report-path",
-    "/output/gitleaks.json",
-    "--no-banner"
+    "--output",
+    "/output"
   ],
   "output": {
     "primary_format": "json",
@@ -63,5 +105,32 @@
     "rationale": "MIT permits redistribution with notices.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [],
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/ai-security-scanner-gitleaks-entrypoint"
+    ],
+    "network_mode": "disabled",
+    "network_destinations": [],
+    "cache_path": "/tmp/ai-security-scanner-cache",
+    "updates": false,
+    "telemetry": false
+  },
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33001735978",
+    "source_revision": "77233a2d08684294c7620f8da601e1e1efed6023",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:8c5994ad3639b9873ff1db3c0cc3d08bfe6914adf4497fbcb43ef4877b778d1d",
+      "linux/arm64": "sha256:e0ae20229c0810a31133142450ba04656d3d17ae807fd9603d916f423cce6317"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "gitleaks-image-evidence-33001735978-1",
+    "managed_smoke_evidence_sha256": "sha256:1c4e1edb5b573f6d7a92a598aaa367f505583d98e40c0e323e4ce29737cf34c0"
+  }
 }

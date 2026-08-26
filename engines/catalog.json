@@ -996,8 +996,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
-      "tag": "2.6.1-2",
-      "digest": "sha256:eb61839a467209042792b1c0c5621abbd582b819523568bc4ac0cf24edc23050",
+      "tag": "2.6.1-3",
+      "digest": "sha256:da7620d495c2fcf9207a636e9be571a03d5a36e6bc99ec40c760573d54b63398",
       "signature_identity": null
     },
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
@@ -1141,8 +1141,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
-      "tag": "1.10.0-2",
-      "digest": "sha256:4428ff0a76d8cc13c1afd4930c98ea3b5f764800f86072f430eceb60afe672f8",
+      "tag": "1.10.0-3",
+      "digest": "sha256:efa8b5fb20ef0b91bcda2f73847546e67427b7bf9a11b5c2e7aea0360612e15e",
       "signature_identity": null
     },
     "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
@@ -1284,8 +1284,8 @@
     "distribution_mode": "pull_pinned_image",
     "image": {
       "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
-      "tag": "3.11.1-2",
-      "digest": "sha256:efa5a2e40fc4a6063faf69c941a9be4b0ebf7d1595f07941a9c9020924b3daac",
+      "tag": "3.11.1-3",
+      "digest": "sha256:289e12b870ea3371a73cabb6978379cda66ddcf1b981eee434a1238784a74f72",
       "signature_identity": null
     },
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
@@ -1703,14 +1703,14 @@
     "license_spdx": "MIT",
     "distribution_mode": "pull_pinned_image",
     "image": {
-      "repository": "ghcr.io/gitleaks/gitleaks",
-      "tag": "v8.30.1",
-      "digest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
+      "tag": "8.30.1-1",
+      "digest": "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa",
       "signature_identity": null
     },
     "source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
     "engine_version": "8.30.1",
-    "rule_version": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+    "rule_version": "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
     "adapter_version": "0.1.1",
     "supported_asset_kinds": [
       "repository"
@@ -1727,22 +1727,19 @@
     "estimated_disk_mb": 512,
     "network_destinations": [],
     "output_formats": [
-      "json",
-      "sarif"
+      "json"
     ],
     "command": [
-      "dir",
+      "--workspace",
       "/workspace",
-      "--report-format",
-      "json",
-      "--report-path",
-      "/output/gitleaks.json",
-      "--no-banner"
+      "--output",
+      "/output"
     ],
     "status": "integrated",
     "notices": [
-      "MIT permits redistribution with notices.",
-      "Execution is limited to an immutable case-scoped working-tree snapshot; repository history is not included."
+      "Built from the exact MIT-licensed Gitleaks source revision with the scanner-owned default configuration and project hardening patch.",
+      "Scans only the current read-only project snapshot; repository-controlled ignore and allow directives cannot suppress results, and repository history is not included.",
+      "Secret values are fully redacted before the managed launcher accepts the JSON evidence."
     ],
     "license": {
       "disposition": "allow",
@@ -1761,9 +1758,9 @@
       },
       "rules": {
         "mode": "embedded",
-        "identifier": "default Gitleaks configuration",
-        "revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
-        "acquisition_source": "https://github.com/gitleaks/gitleaks/commit/83d9cd684c87d95d656c1458ef04895a7f1cbd8e"
+        "identifier": "scanner-owned Gitleaks default configuration",
+        "revision": "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
+        "acquisition_source": "https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/config/gitleaks.toml"
       },
       "data": {
         "mode": "runtime_bound",
@@ -1785,7 +1782,7 @@
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
       "runnable": true,
-      "artifact_state": "verified_upstream_image",
+      "artifact_state": "managed_build_plan",
       "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_bound",
@@ -1795,9 +1792,9 @@
         "pin_state": "runtime_bound"
       },
       "wrapper": {
-        "required": false,
-        "strategy": "The pinned image entrypoint is the gitleaks binary and accepts only the fixed workspace/output paths.",
-        "entrypoint": null
+        "required": true,
+        "strategy": "Accept only the fixed read-only workspace/output mounts, enforce scanner-owned policy, and reject evidence unless every secret value is fully redacted.",
+        "entrypoint": "/usr/local/bin/ai-security-scanner-gitleaks-entrypoint"
       },
       "packaging_plan": "engines/images/gitleaks/plan.json"
     },

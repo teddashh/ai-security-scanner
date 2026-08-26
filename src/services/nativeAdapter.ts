@@ -601,6 +601,7 @@ const assessmentIntents: readonly UseCaseId[] = [
   "deployed_website",
   "external_ip_or_domain",
   "internal_it_environment",
+  "ai_application",
   "source_code",
   "infrastructure_as_code",
   "cloud_account",

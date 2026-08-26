@@ -4,7 +4,7 @@
 
 ## Find security problems without becoming a security-tool expert
 
-**Check your website, public IPs, internal systems, source code, infrastructure as code, cloud, containers, and Kubernetes from one desktop app.** Start with what you want to protect—not a wall of scanner names—and get a clear list of what needs attention.
+**Check your website, public IPs, internal systems, AI apps and agents, source code, infrastructure as code, cloud, containers, and Kubernetes from one desktop app.** Start with what you want to protect—not a wall of scanner names—and get a clear list of what needs attention.
 
 `ai-security-scanner` brings proven open-source security tools into one guided workflow. It chooses checks that fit your situation, turns technical output into useful next steps, keeps the evidence together, and lets you verify what changed after a fix.
 
@@ -13,7 +13,8 @@
 - **A live website or API** — uncover exposed services and known vulnerabilities.
 - **External IP addresses or domains** — understand what is reachable from the internet.
 - **An internal IT environment** — check selected systems or configuration snapshots.
-- **Source code** — find risky code patterns and accidentally committed secrets.
+- **An AI app or agent you are building** — check vibe-coded and AI-assisted software, with applicable AIDEFEND references in the results.
+- **Source code** — find risky patterns and exposed secrets locally without changing your files.
 - **Infrastructure as code** — catch cloud and deployment mistakes before they ship.
 - **AWS, Azure, GCP, or Microsoft 365** — review assets, configuration, identity, and permissions.
 - **Container images** — find vulnerable packages and create a software inventory (SBOM).
@@ -31,6 +32,7 @@
 - **Results written for humans:** understand the problem, the affected asset, and the next useful action.
 - **Your data stays with you:** scan projects and detailed results remain on your computer unless you export them.
 - **Always know where you stand:** see what was checked, what is still waiting, and where more information is needed.
+- **Frameworks without the paperwork wall:** relate applicable findings to NIST CSF, ISO 27001, and AIDEFEND while keeping the result focused on what to fix.
 - **Easy to share and verify:** export a clear report and compare results after a fix.
 
 ## Try the guided demo
@@ -59,7 +61,7 @@ The remaining sections keep the complete operating and engineering details in on
 
 `ai-security-scanner` is a local-first desktop application that turns a security check into a repeatable case. Tell it what you want to inspect, confirm the exact scope, run the applicable open-source engines in an isolated local environment, review the evidence in plain language, export a handoff package, and compare a later verification run with the original result.
 
-It does **not** promise that an organization is secure, replace a qualified security professional, or produce an ISO 27001 or NIST certification score. A framework reference is a coordinate for discussion, not a compliance conclusion. “No finding” is also not the same as “everything was checked.”
+It does **not** promise that an organization is secure, replace a qualified security professional, or produce an ISO 27001, NIST, or AIDEFEND certification score. A framework reference is a coordinate for discussion, not a compliance conclusion. “No finding” is also not the same as “everything was checked.”
 
 ### Detailed use-case guide
 
@@ -70,7 +72,8 @@ You do not need to choose scanner names. Choose the situation that sounds like y
 | A website or API that is already online | An exact URL, proof that you may test it, and the allowed scan intensity | Checks approved reachable services and vulnerabilities with target/rate limits. It does not test business logic or replace a penetration test. |
 | External IP addresses or domains | Exact public IPs/domains, ownership or authorization evidence, and exclusions | Checks only the approved targets. It does not expand into neighboring addresses or call an unreachable target secure. |
 | An internal IT environment | Exact internal targets or configuration snapshots, a reachable test location, limits, and IT-owner approval | Runs bounded checks against approved systems or analyzes attached evidence. It does not sweep an undefined private network, install agents, or change devices. |
-| Source code you have written | A read-only local project or repository snapshot | Checks code and secret patterns locally. It does not upload code, push changes, or verify discovered secrets against live services. |
+| An AI app or agent you are building | A read-only local project or repository snapshot explicitly identified as an AI application | Checks code, secrets, dependencies, and related deployment files locally; applicable findings also receive selected AIDEFEND relationship coordinates. It does not upload or change files and does not claim framework compliance. |
+| Source code you have written | A read-only local project or repository snapshot | Checks code and secret patterns locally, masks detected secret values in results, and never changes project files. It does not upload code or verify discovered secrets against live services. |
 | Infrastructure as code | Terraform, CloudFormation, Kubernetes YAML, or another local IaC project | Checks selected files for risky defaults and configuration mistakes. It does not deploy or modify them. |
 | AWS, Azure, GCP, or Microsoft 365 | One exact account, subscription, project, or tenant plus permission to assess it | Uses a provider-hosted, short-lived, read-only sign-in path. It does not ask a scanner for administrator access or change cloud settings. |
 | A container image | One exact local image artifact or OCI layout with a fixed digest | Finds known vulnerable packages and produces an SBOM with pinned offline data. It does not run the image, log in to a registry, or scan an ambiguous `latest` tag. |

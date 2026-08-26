@@ -24,3 +24,38 @@ When changing the catalog:
 
 The framework source links are metadata only. ISO text is not embedded or
 redistributed by this project.
+
+## Pinned AIDEFEND selected data
+
+[`vendor/aidefend/1.20260805/selected-controls.json`](vendor/aidefend/1.20260805/selected-controls.json)
+is a small, project-reviewed metadata selection from AIDEFEND version
+`1.20260805`. It is pinned to upstream commit
+`e10c1678ee49f03f8fb0c97d446ba3fbc3543655` and the SHA-256 of that commit's
+generated `data/data.json`. The adjacent provenance, attribution, and CC BY
+4.0 files state the exact source and modifications.
+
+This snapshot is not part of `control-mappings.json` and does not add a
+runtime mapping by itself. Its records are reference coordinates and
+classification metadata only. They do not show that a defense is implemented
+or effective, do not create a pass or failure, and do not establish
+certification, endorsement, or compliance. Only selected actionable leaf
+controls are present; non-actionable parent families are recorded solely as
+parent coordinates.
+
+Validate the checked-in selection and notices offline:
+
+```bash
+npm run validate:aidefend
+```
+
+During a source-update review, also prove the selection against an independently
+obtained copy of the pinned upstream `data/data.json`:
+
+```bash
+npm run validate:aidefend -- --source /path/to/data.json
+```
+
+The optional source check recomputes the complete file's byte length and
+SHA-256 before deriving the selected records. AIDEFEND tool recommendations or
+threat mappings are not included and must never be treated as automatic
+scanner-to-control mappings.

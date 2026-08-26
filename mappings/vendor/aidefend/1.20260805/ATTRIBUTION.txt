@@ -1,0 +1,12 @@
+AIDEFEND AI Defense Framework, created by Edward Lee, https://aidefend.net, licensed under CC BY 4.0.
+
+Source repository: https://github.com/edward-playground/aidefense-framework
+Source commit: e10c1678ee49f03f8fb0c97d446ba3fbc3543655
+Framework version: 1.20260805
+Source file: data/data.json
+Source file SHA-256: ee0db6542fe28bcb3bd9ead0fba0fb69884b6cb765f2a1a420ceaf119a472786
+License: https://creativecommons.org/licenses/by/4.0/legalcode
+
+Changes made by ai-security-scanner: selected six actionable leaf-control records; added their tactic and parent coordinates from the source hierarchy; retained only id, name, tactic, parent, pillar, phase, and contentHash; and ordered the selected records deterministically. Descriptions, implementation guidance, code examples, tool lists, keywords, and external-framework mapping strings are not included in this snapshot.
+
+AIDEFEND is used only to identify the source framework. ai-security-scanner is an independent, unofficial integration and is not affiliated with, approved, certified, sponsored, or endorsed by AIDEFEND or its owner. The selected coordinates do not state that any control is implemented, effective, passed, failed, certified, or compliant.

@@ -44,7 +44,8 @@ const managedCloudIds = new Set([
 const managedExternalIds = new Set(["naabu", "httpx", "nuclei"]);
 const managedM365Ids = new Set(["scubagear", "maester"]);
 const managedImageRepositoryPrefix = "ghcr.io/teddashh/ai-security-scanner-engine-";
-const managedLocalK8sIds = ["semgrep", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"];
+const managedLocalK8sIds = ["semgrep", "gitleaks", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"];
+const managedLocalK8sWorkflowIds = managedLocalK8sIds.filter((id) => id !== "gitleaks");
 const managedLocalK8sContracts = new Map([
   ["semgrep", {
     tag: "1.174.0-2",
@@ -56,6 +57,57 @@ const managedLocalK8sContracts = new Map([
       "COPY engines/images/semgrep/SOURCE-OFFER.md /usr/share/source/SEMGREP-SOURCE-OFFER.md",
       'SEMGREP_ENABLE_VERSION_CHECK="0"',
       'SEMGREP_SEND_METRICS="off"',
+    ],
+  }],
+  ["gitleaks", {
+    tag: "8.30.1-1",
+    planKind: "managed_build",
+    license: { disposition: "allow", sourceOfferPath: null },
+    entrypoint: "/usr/local/bin/ai-security-scanner-gitleaks-entrypoint",
+    launcherPath: "engines/images/gitleaks/launcher/main.go",
+    launcherDockerfileCopy: "COPY engines/images/gitleaks/launcher/go.mod engines/images/gitleaks/launcher/main.go engines/images/gitleaks/launcher/main_test.go ./",
+    command: ["--workspace", "/workspace", "--output", "/output"],
+    outputFormats: ["json"],
+    ruleVersion: "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
+    sourceArchiveSha256: "sha256:6b2638a733b85619dc80bdf28e84e4fed7e526a761ab5c148fbf67695aea2115",
+    sourceDateEpoch: 1773330037,
+    sourceIntegrity: {
+      go_sum_sha256: "sha256:3fd66952713338b561c71c7ed608c5cce41355a7594c4eb8ffb4303abae29ccd",
+      default_config_sha256: "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
+    },
+    sourcePatch: {
+      path: "engines/images/gitleaks/patches/0001-add-scanner-owned-ignore-policy.patch",
+      sha256: "sha256:9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7",
+    },
+    immutableLauncherInputs: [
+      'workspaceMountPath  = "/workspace"',
+      'outputMountPath     = "/output"',
+      'reportPath          = "/output/gitleaks.json"',
+      'configPath          = "/opt/ai-security-scanner/gitleaks/gitleaks.toml"',
+      'configSHA256        = "e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf"',
+      '"--ignore-gitleaks-allow"',
+      '"--no-source-ignore"',
+      '"--exit-code", "0"',
+      '"--redact=100"',
+      '"--max-decode-depth", "5"',
+      '"--max-archive-depth", "0"',
+      'secret != "REDACTED"',
+      "requireReadOnlyWorkspace(*workspace)",
+      "ensureAbsent(reportPath)",
+      "validateRedactedEvidence(reportPath)",
+    ],
+    immutableDockerfileInputs: [
+      "ADD --checksum=sha256:6b2638a733b85619dc80bdf28e84e4fed7e526a761ab5c148fbf67695aea2115",
+      "https://github.com/gitleaks/gitleaks/archive/83d9cd684c87d95d656c1458ef04895a7f1cbd8e.tar.gz",
+      "3fd66952713338b561c71c7ed608c5cce41355a7594c4eb8ffb4303abae29ccd  go.sum",
+      "e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf  config/gitleaks.toml",
+      "COPY engines/images/gitleaks/patches/0001-add-scanner-owned-ignore-policy.patch /tmp/0001-add-scanner-owned-ignore-policy.patch",
+      "9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7  /tmp/0001-add-scanner-owned-ignore-policy.patch",
+      "git apply --check /tmp/0001-add-scanner-owned-ignore-policy.patch",
+      "install -m 0444 config/gitleaks.toml /rootfs/opt/ai-security-scanner/gitleaks/gitleaks.toml",
+      "SOURCE_DATE_EPOCH=1773330037",
+      'io.ai-security-scanner.gitleaks-config-sha256="e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf"',
+      'io.ai-security-scanner.patch-sha256="9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7"',
     ],
   }],
   ["trufflehog", {
@@ -138,13 +190,14 @@ const managedEvidenceWorkflows = new Map([
   [".github/workflows/engine-images-cloud.yml", ["cloudquery", "prowler", "cloudsplaining", "scoutsuite", "steampipe"]],
   [".github/workflows/engine-images-external.yml", ["naabu", "httpx", "nuclei"]],
   [".github/workflows/engine-images-m365.yml", ["scubagear", "maester"]],
-  [".github/workflows/engine-images-local-k8s.yml", managedLocalK8sIds],
+  [".github/workflows/engine-images-local-k8s.yml", managedLocalK8sWorkflowIds],
+  [".github/workflows/engine-image-gitleaks.yml", ["gitleaks"]],
   [".github/workflows/engine-image-greenbone.yml", ["greenbone"]],
   [".github/workflows/engine-image-checkov.yml", ["checkov"]],
   [".github/workflows/engine-image-syft.yml", ["syft"]],
 ]);
 const managedEvidenceEngineIds = [...managedEvidenceWorkflows.values()].flat();
-const upstreamImageOnlyIds = new Set(["gitleaks", "kics"]);
+const upstreamImageOnlyIds = new Set(["kics"]);
 const shellNames = new Set([
   "sh", "bash", "dash", "zsh", "fish", "cmd", "cmd.exe",
   "powershell", "powershell.exe", "pwsh", "pwsh.exe",
@@ -247,8 +300,16 @@ function resolveEvidenceStepEngines(workflow, job, step, label) {
     }
     return matrixEngines;
   }
+  if (/^\$\{\{\s*env\.ENGINE\s*\}\}$/.test(configuredEngine)) {
+    const environmentEngine = workflow?.env?.ENGINE;
+    if (typeof environmentEngine !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(environmentEngine)) {
+      errors.push(`${label}: env.ENGINE must resolve to one static engine id`);
+      return [];
+    }
+    return [environmentEngine];
+  }
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(configuredEngine)) {
-    errors.push(`${label}: evidence engine input must be a literal id or exactly \${{ matrix.engine }}`);
+    errors.push(`${label}: evidence engine input must be a literal id, exactly \${{ matrix.engine }}, or the statically declared env.ENGINE`);
     return [];
   }
   return [configuredEngine];
@@ -278,8 +339,8 @@ function validateManagedImageEvidence(catalogEntries) {
       errors.push(`${label} action is missing or does not preserve its fail-closed authentication contract`);
     }
   }
-  if (expectedManagedIds.length !== 19 || new Set(expectedManagedIds).size !== 19) {
-    errors.push("managed evidence contract must enumerate exactly 19 unique engines");
+  if (expectedManagedIds.length !== 20 || new Set(expectedManagedIds).size !== 20) {
+    errors.push("managed evidence contract must enumerate exactly 20 unique engines");
   }
   for (const id of upstreamImageOnlyIds) {
     if (expectedManagedIds.includes(id)) errors.push(`managed evidence contract must not count upstream-only engine ${id}`);
@@ -448,7 +509,7 @@ function validateManagedImageEvidence(catalogEntries) {
   if (coveredIds.length !== new Set(coveredIds).size) {
     errors.push("managed image evidence workflows cover an engine more than once");
   }
-  validateExactIdSet(coveredIds, expectedManagedIds, "managed image evidence workflow coverage differs from the 19-engine contract");
+  validateExactIdSet(coveredIds, expectedManagedIds, "managed image evidence workflow coverage differs from the 20-engine contract");
 
   const catalogManagedIds = [];
   for (const engine of Array.isArray(catalogEntries) ? catalogEntries : []) {
@@ -471,7 +532,7 @@ function validateManagedImageEvidence(catalogEntries) {
   validateExactIdSet(
     catalogManagedIds,
     expectedManagedIds,
-    "catalog project-managed GHCR images differ from the 19-engine contract",
+    "catalog project-managed GHCR images differ from the 20-engine contract",
   );
 }
 
@@ -676,7 +737,7 @@ function validatePublishedManagedEvidence(
   }
 }
 
-function validatePublishedManagedDockerfile(plan, planRelative, engine, expectedTag) {
+function validatePublishedManagedDockerfile(plan, planRelative, engine, expectedTag, entrypoint) {
   const dockerfileRelative = `engines/images/${engine.id}/Dockerfile`;
   const dockerfilePath = resolve(root, dockerfileRelative);
   if (plan.dockerfile?.emitted !== true || plan.dockerfile?.path !== dockerfileRelative || plan.dockerfile?.reason !== null) {
@@ -698,7 +759,6 @@ function validatePublishedManagedDockerfile(plan, planRelative, engine, expected
   if (!dockerfileText.split(/\r?\n/).some((line) => line.trim() === "USER 65532:65532")) {
     errors.push(`${planRelative}: published managed Dockerfile must select USER 65532:65532`);
   }
-  const entrypoint = "/usr/local/bin/ai-security-scanner-engine-entrypoint";
   if (!dockerfileText.split(/\r?\n/).some((line) => line.trim() === `ENTRYPOINT ${JSON.stringify([entrypoint])}`)) {
     errors.push(`${planRelative}: published managed Dockerfile must use the direct project-owned entrypoint`);
   }
@@ -786,6 +846,13 @@ function validatePublishedManagedBasics(plan, planRelative, engine, contract, co
   if (!deepEqual(engine.command, command) || !deepEqual(plan.command, command)) {
     errors.push(`${planRelative}: published engine command must equal the fixed non-shell launcher argv`);
   }
+  if (contract.outputFormats !== undefined && !deepEqual(engine.output_formats, contract.outputFormats)) {
+    errors.push(`catalog:${engine.id}.output_formats: released formats do not match the fixed managed-image contract`);
+  }
+  if (contract.ruleVersion !== undefined &&
+      (engine.rule_version !== contract.ruleVersion || engine.provenance?.rules?.revision !== contract.ruleVersion)) {
+    errors.push(`catalog:${engine.id}.rule_version: embedded rules do not match the fixed managed-image contract`);
+  }
   if (engine.execution?.network?.required !== network.required ||
       engine.execution?.network?.mode !== network.mode ||
       !deepEqual(engine.execution?.network?.destinations, network.destinations) ||
@@ -793,29 +860,37 @@ function validatePublishedManagedBasics(plan, planRelative, engine, contract, co
     errors.push(`catalog:${engine.id}.execution.network: released network contract is not exact`);
   }
 
-  const entrypoint = "/usr/local/bin/ai-security-scanner-engine-entrypoint";
+  const entrypoint = contract.entrypoint ?? "/usr/local/bin/ai-security-scanner-engine-entrypoint";
   const runtime = plan.managed_runtime;
   if (runtime?.non_root_user !== "65532:65532" || runtime?.read_only_rootfs !== true ||
       !deepEqual(runtime?.entrypoint, [entrypoint]) || runtime?.network_mode !== network.mode ||
       !deepEqual(runtime?.network_destinations, network.destinations)) {
     errors.push(`${planRelative}: managed runtime must preserve the non-root, read-only, direct-entrypoint network contract`);
   }
-  const launcherRelative = engine.id === "greenbone"
+  const launcherRelative = contract.launcherPath ?? (engine.id === "greenbone"
     ? "engines/images/greenbone-launcher/main.go"
-    : "engines/images/local-launcher/main.go";
+    : "engines/images/local-launcher/main.go");
   const launcherPath = resolve(root, launcherRelative);
   if (engine.compatibility?.wrapper?.required !== true || engine.compatibility?.wrapper?.entrypoint !== entrypoint ||
       plan.wrapper?.required !== true || plan.wrapper?.entrypoint !== entrypoint ||
       plan.wrapper?.launcher_sha256 !== sha256File(launcherPath)) {
     errors.push(`${planRelative}: wrapper must bind the exact project-owned launcher source and entrypoint`);
   }
+  if (contract.immutableLauncherInputs !== undefined) {
+    const launcherText = existsSync(launcherPath) ? readFileSync(launcherPath, "utf8") : "";
+    for (const required of contract.immutableLauncherInputs) {
+      if (!launcherText.includes(required)) {
+        errors.push(`${planRelative}: launcher lacks immutable release input ${required}`);
+      }
+    }
+  }
 
   validatePublishedManagedEvidence(plan, planRelative, engine, { requireManagedSmoke: true });
-  return validatePublishedManagedDockerfile(plan, planRelative, engine, contract.tag);
+  return validatePublishedManagedDockerfile(plan, planRelative, engine, contract.tag, entrypoint);
 }
 
 function validatePublishedLocalK8sImage(plan, planRelative, engine, contract) {
-  const command = ["--engine", engine.id, "--workspace", "/workspace", "--output", "/output"];
+  const command = contract.command ?? ["--engine", engine.id, "--workspace", "/workspace", "--output", "/output"];
   const dockerfileText = validatePublishedManagedBasics(plan, planRelative, engine, contract, command, {
     required: false,
     mode: "disabled",
@@ -839,13 +914,31 @@ function validatePublishedLocalK8sImage(plan, planRelative, engine, contract) {
       !sourceArchivePrefix.includes(`ADD --checksum=${sourceArchive.sha256}`)) {
     errors.push(`${planRelative}: source archive must be an exact checksum-pinned GitHub artifact for the catalog revision`);
   }
+  if (contract.sourceArchiveSha256 !== undefined && sourceArchive?.sha256 !== contract.sourceArchiveSha256) {
+    errors.push(`${planRelative}: source archive digest does not match the fixed ${engine.id} release contract`);
+  }
+  if (contract.sourceDateEpoch !== undefined && recipe?.source_date_epoch !== contract.sourceDateEpoch) {
+    errors.push(`${planRelative}: SOURCE_DATE_EPOCH does not match the fixed ${engine.id} release contract`);
+  }
+  if (contract.sourceIntegrity !== undefined && !deepEqual(recipe?.source_integrity, contract.sourceIntegrity)) {
+    errors.push(`${planRelative}: reviewed upstream file digests do not match the fixed ${engine.id} release contract`);
+  }
+  if (contract.sourcePatch !== undefined) {
+    const patchPath = resolve(root, contract.sourcePatch.path);
+    if (!deepEqual(recipe?.source_patch, contract.sourcePatch) || !existsSync(patchPath) ||
+        sha256File(patchPath) !== contract.sourcePatch.sha256) {
+      errors.push(`${planRelative}: source patch path and digest do not match the reviewed ${engine.id} patch`);
+    }
+  }
   const frontend = recipe?.dockerfile_frontend;
   validateImage(frontend, `${planRelative}.build_recipe.dockerfile_frontend`);
   if (dockerfileText.split(/\r?\n/)[0] !== `# syntax=${frontend?.repository}:${frontend?.tag}@${frontend?.digest}`) {
     errors.push(`${planRelative}: source build frontend must match the exact Dockerfile frontend`);
   }
   validateExactDeclaredBaseImages(recipe, dockerfileText, planRelative);
-  if (!dockerfileText.includes("COPY engines/images/local-launcher/go.mod engines/images/local-launcher/main.go engines/images/local-launcher/main_test.go ./") ||
+  const launcherDockerfileCopy = contract.launcherDockerfileCopy ??
+    "COPY engines/images/local-launcher/go.mod engines/images/local-launcher/main.go engines/images/local-launcher/main_test.go ./";
+  if (!dockerfileText.includes(launcherDockerfileCopy) ||
       !dockerfileText.includes("-buildvcs=false -trimpath") ||
       !dockerfileText.includes(engine.source_revision)) {
     errors.push(`${planRelative}: Dockerfile is not closed over the reviewed launcher and engine source revision`);
@@ -1763,7 +1856,7 @@ if (new Set(catalogIds).size !== catalogIds.length) errors.push("catalog engine 
 validateExactIdSet(
   [...managedLocalK8sContracts.keys()],
   managedLocalK8sIds,
-  "published local/Kubernetes validation contract differs from the exact six-engine set",
+  "published local/Kubernetes validation contract differs from the exact seven-engine set",
 );
 validateManagedImageEvidence(catalog);
 

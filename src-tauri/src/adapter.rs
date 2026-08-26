@@ -92,6 +92,10 @@ pub struct AdapterInput<'a> {
     pub scan_run_id: &'a str,
     pub engine_run_id: &'a str,
     pub manifest: &'a EngineManifest,
+    /// True only when the case was explicitly created through the AI
+    /// application journey. It controls AI-framework references; it never
+    /// changes scan scope, permissions, or scanner execution.
+    pub ai_system_applicable: bool,
     pub asset_ids: &'a [String],
     pub asset_identifier_map: &'a AdapterAssetIdentifierMap,
     pub artifact_root: &'a Path,
@@ -437,6 +441,7 @@ mod tests {
             scan_run_id: "run-1",
             engine_run_id: "engine-run-1",
             manifest: &manifest,
+            ai_system_applicable: false,
             asset_ids: &assets,
             asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),
@@ -470,6 +475,7 @@ mod tests {
             scan_run_id: "run-1",
             engine_run_id: "engine-run-1",
             manifest: &manifest,
+            ai_system_applicable: false,
             asset_ids: &assets,
             asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),
@@ -502,6 +508,7 @@ mod tests {
             scan_run_id: "run-1",
             engine_run_id: "engine-run-1",
             manifest: &manifest,
+            ai_system_applicable: false,
             asset_ids: &assets,
             asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),

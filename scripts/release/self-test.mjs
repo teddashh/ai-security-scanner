@@ -22,6 +22,22 @@ import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
 const VERSION = JSON.parse(
   readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf8"),
 ).version;
+const GITLEAKS_RELEASE = JSON.parse(
+  readFileSync(path.join(PROJECT_ROOT, "engines", "catalog.json"), "utf8"),
+).find((engine) => engine?.id === "gitleaks");
+if (!GITLEAKS_RELEASE?.image?.repository || !/^sha256:[0-9a-f]{64}$/u.test(GITLEAKS_RELEASE.image.digest ?? "")) {
+  throw new Error("release self-test requires the immutable managed Gitleaks catalog image");
+}
+const EXPECTED_QUALIFICATION_IMAGE =
+  `${GITLEAKS_RELEASE.image.repository}@${GITLEAKS_RELEASE.image.digest}`;
+const GATEWAY_RELEASE_MANIFEST = JSON.parse(
+  readFileSync(
+    path.join(PROJECT_ROOT, "runtime", "managed-egress-gateway.json"),
+    "utf8",
+  ),
+);
+const EXPECTED_GATEWAY_IMAGE =
+  `${GATEWAY_RELEASE_MANIFEST.image.repository}@${GATEWAY_RELEASE_MANIFEST.image.digest}`;
 const TAG = `v${VERSION}`;
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TEST_KEY_PASSWORD = "release-self-test-only";
@@ -339,7 +355,7 @@ async function createQualificationFixture(output, platform, installerType) {
               },
             },
             gateway: {
-              image: `ghcr.io/teddashh/ai-security-scanner-egress-gateway@sha256:${"14".repeat(32)}`,
+              image: EXPECTED_GATEWAY_IMAGE,
               backend: "pinned_container",
               ready: true,
               scanner_reachable: true,
@@ -383,7 +399,7 @@ async function createQualificationFixture(output, platform, installerType) {
             },
             container: {
               engine_id: "gitleaks",
-              image: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+              image: EXPECTED_QUALIFICATION_IMAGE,
               network: "none",
               read_only_root: true,
               capabilities: "drop_all",
@@ -736,13 +752,13 @@ async function main() {
     const relativePathQualification = JSON.parse(validLinuxQualification.toString("utf8"));
     relativePathQualification.installedLayout.cli = "relative/ai-security-scanner-cli";
     expectFailure(
-      () => validatePlatformQualification(relativePathQualification, { expectedQualificationImage }),
+      () => validatePlatformQualification(relativePathQualification, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "relative installed path qualification",
     );
     const oversizedReportQualification = JSON.parse(validLinuxQualification.toString("utf8"));
     oversizedReportQualification.containerExecution.result.evidence.report_bytes = 1024 * 1024 + 1;
     expectFailure(
-      () => validatePlatformQualification(oversizedReportQualification, { expectedQualificationImage }),
+      () => validatePlatformQualification(oversizedReportQualification, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "oversized container qualification report",
     );
     const skippedLinuxContainer = JSON.parse(validLinuxQualification.toString("utf8"));
@@ -751,32 +767,39 @@ async function main() {
       reasonCode: "github_hosted_macos_nested_virtualization_unsupported",
     };
     expectFailure(
-      () => validatePlatformQualification(skippedLinuxContainer, { expectedQualificationImage }),
+      () => validatePlatformQualification(skippedLinuxContainer, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "skipped Linux container qualification",
     );
     const unsafeLinuxGateway = JSON.parse(validLinuxQualification.toString("utf8"));
     unsafeLinuxGateway.egressGateway.result.gateway.upstream_connection_attempted = true;
     expectFailure(
-      () => validatePlatformQualification(unsafeLinuxGateway, { expectedQualificationImage }),
+      () => validatePlatformQualification(unsafeLinuxGateway, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "egress qualification that contacted an upstream destination",
     );
     const unreachableLinuxGateway = JSON.parse(validLinuxQualification.toString("utf8"));
     unreachableLinuxGateway.egressGateway.result.gateway.scanner_reachable = false;
     expectFailure(
-      () => validatePlatformQualification(unreachableLinuxGateway, { expectedQualificationImage }),
+      () => validatePlatformQualification(unreachableLinuxGateway, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "egress gateway unreachable from the isolated scanner network",
     );
     const connectingLinuxProbe = JSON.parse(validLinuxQualification.toString("utf8"));
     connectingLinuxProbe.egressGateway.result.gateway.reachability_probe = "socks5_connect";
     expectFailure(
-      () => validatePlatformQualification(connectingLinuxProbe, { expectedQualificationImage }),
+      () => validatePlatformQualification(connectingLinuxProbe, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "egress gateway qualification using a CONNECT probe",
     );
     const incompleteGatewayCleanup = JSON.parse(validLinuxQualification.toString("utf8"));
     incompleteGatewayCleanup.egressGateway.result.cleanup.probe_container_removed = false;
     expectFailure(
-      () => validatePlatformQualification(incompleteGatewayCleanup, { expectedQualificationImage }),
+      () => validatePlatformQualification(incompleteGatewayCleanup, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "egress gateway qualification with an unremoved probe container",
+    );
+    const wrongGatewayImage = JSON.parse(validLinuxQualification.toString("utf8"));
+    wrongGatewayImage.egressGateway.result.gateway.image =
+      `ghcr.io/teddashh/ai-security-scanner-egress-gateway@sha256:${"ff".repeat(32)}`;
+    expectFailure(
+      () => validatePlatformQualification(wrongGatewayImage, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
+      "egress gateway qualification with an image absent from the release manifest",
     );
     run("finalize-release.mjs", finalizeArguments);
     const finalizedVerificationArguments = [

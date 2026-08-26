@@ -17,6 +17,8 @@ pub mod error;
 pub mod export;
 pub mod exporters;
 pub mod external_scope;
+#[cfg(any(feature = "desktop", feature = "cli"))]
+pub mod gateway_release;
 pub mod job_manager;
 pub mod managed_network;
 pub mod managed_runtime;

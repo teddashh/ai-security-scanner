@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.0",
+  "framework": "AIDEFEND",
+  "framework_version": "1.20260805",
+  "source_data_version": "2026.08.05",
+  "source_schema_version": "2.3",
+  "source_commit": "e10c1678ee49f03f8fb0c97d446ba3fbc3543655",
+  "source_file_sha256": "ee0db6542fe28bcb3bd9ead0fba0fb69884b6cb765f2a1a420ceaf119a472786",
+  "selection_kind": "project-reviewed-actionable-control-metadata",
+  "notice": "Selected AIDEFEND coordinates are reference metadata only. They do not establish implementation, effectiveness, certification, endorsement, or compliance.",
+  "records": [
+    {
+      "id": "AID-H-003.001",
+      "name": "Software Dependency & Package Security",
+      "tactic": "harden",
+      "parent": "AID-H-003",
+      "pillar": [
+        "infra"
+      ],
+      "phase": [
+        "building"
+      ],
+      "contentHash": "5b2108ff050f4b71"
+    },
+    {
+      "id": "AID-H-003.005",
+      "name": "Infrastructure as Code (IaC) Security Scanning for AI Systems",
+      "tactic": "harden",
+      "parent": "AID-H-003",
+      "pillar": [
+        "infra"
+      ],
+      "phase": [
+        "validation"
+      ],
+      "contentHash": "116106615728dd83"
+    },
+    {
+      "id": "AID-H-003.010",
+      "name": "Deployed AI Software Vulnerability Remediation Lifecycle",
+      "tactic": "harden",
+      "parent": "AID-H-003",
+      "pillar": [
+        "infra",
+        "app"
+      ],
+      "phase": [
+        "operation",
+        "improvement"
+      ],
+      "contentHash": "156ee9117ec09d38"
+    },
+    {
+      "id": "AID-H-025.001",
+      "name": "Pre-Execution Static Analysis & Dangerous Construct Blocking",
+      "tactic": "harden",
+      "parent": "AID-H-025",
+      "pillar": [
+        "app"
+      ],
+      "phase": [
+        "building",
+        "operation"
+      ],
+      "contentHash": "c8c62f11c2c90ea5"
+    },
+    {
+      "id": "AID-H-031.002",
+      "name": "Static Admission Gates for AI-Generated Artifacts",
+      "tactic": "harden",
+      "parent": "AID-H-031",
+      "pillar": [
+        "infra",
+        "app"
+      ],
+      "phase": [
+        "building",
+        "validation"
+      ],
+      "contentHash": "9bbf7a3732c4c691"
+    },
+    {
+      "id": "AID-I-001.001",
+      "name": "Container-Based Isolation",
+      "tactic": "isolate",
+      "parent": "AID-I-001",
+      "pillar": [
+        "infra"
+      ],
+      "phase": [
+        "operation"
+      ],
+      "contentHash": "f54f612d01792cff"
+    }
+  ]
+}
