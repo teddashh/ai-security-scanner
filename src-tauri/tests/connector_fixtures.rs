@@ -1,7 +1,7 @@
 use ai_security_scanner_lib::connectors::{
     LIVE_PROVIDER_ARTIFACT_SET_SCHEMA, LiveProviderArtifactPage, LiveProviderArtifactSet,
     MAX_SNAPSHOT_BYTES, SNAPSHOT_ARTIFACT_METADATA_KEY, SnapshotArtifactReference,
-    SnapshotConnectorRegistry,
+    SnapshotConnectorRegistry, preflight_snapshot_artifact,
 };
 use ai_security_scanner_lib::discovery::{
     DiscoveryBatch, DiscoveryConnector, DiscoveryError, reconcile_discovery, run_connector,
@@ -716,6 +716,113 @@ fn connector_reads_only_the_backend_canonical_reference_and_rejects_escape_or_ta
         run_connector(&connector, &tampered_source),
         Err(DiscoveryError::Connector(message)) if message.contains("integrity check")
     ));
+}
+
+#[test]
+fn passive_snapshot_preflight_rejects_missing_tampered_and_mismatched_artifacts() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let selected_root = temp.path().join("selected");
+    fs::create_dir(&artifact_root).unwrap();
+    fs::create_dir(&selected_root).unwrap();
+    let registry = SnapshotConnectorRegistry::new(&artifact_root).unwrap();
+    let (_source, reference) = ingest_source(
+        &registry,
+        &selected_root,
+        "preflight",
+        SourceKind::GitRepository,
+        "git-manifest",
+        "git-manifest.json",
+    );
+
+    preflight_snapshot_artifact(&artifact_root, &SourceKind::GitRepository, &reference)
+        .expect("valid passive snapshot is ready");
+
+    let profile_error =
+        preflight_snapshot_artifact(&artifact_root, &SourceKind::TerraformState, &reference)
+            .expect_err("source kind must bind the parser profile");
+    assert!(matches!(
+        profile_error,
+        DiscoveryError::Connector(message) if message.contains("not allowed for this source kind")
+    ));
+
+    let artifact_path = artifact_root.join(&reference.canonical_relative_path);
+    fs::write(&artifact_path, b"{}").unwrap();
+    let tamper_error =
+        preflight_snapshot_artifact(&artifact_root, &SourceKind::GitRepository, &reference)
+            .expect_err("tampering must fail before persistence");
+    assert!(matches!(
+        tamper_error,
+        DiscoveryError::Connector(message) if message.contains("integrity check")
+    ));
+
+    fs::remove_file(&artifact_path).unwrap();
+    let missing_error =
+        preflight_snapshot_artifact(&artifact_root, &SourceKind::GitRepository, &reference)
+            .expect_err("missing snapshot must fail before persistence");
+    assert!(matches!(
+        missing_error,
+        DiscoveryError::Connector(message) if message.contains("could not be inspected")
+    ));
+
+    let missing_root = temp.path().join("missing-artifact-root");
+    let missing_root_error =
+        preflight_snapshot_artifact(&missing_root, &SourceKind::GitRepository, &reference)
+            .expect_err("preflight must not create a missing root");
+    assert!(matches!(
+        missing_root_error,
+        DiscoveryError::Connector(message) if message.contains("root could not be inspected")
+    ));
+    assert!(!missing_root.exists());
+}
+
+#[test]
+fn passive_snapshot_preflight_is_read_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let selected_root = temp.path().join("selected");
+    fs::create_dir(&artifact_root).unwrap();
+    fs::create_dir(&selected_root).unwrap();
+    let registry = SnapshotConnectorRegistry::new(&artifact_root).unwrap();
+    let (_source, reference) = ingest_source(
+        &registry,
+        &selected_root,
+        "read-only-preflight",
+        SourceKind::GitRepository,
+        "git-manifest",
+        "git-manifest.json",
+    );
+    let artifact_path = artifact_root.join(&reference.canonical_relative_path);
+    let before_bytes = fs::read(&artifact_path).unwrap();
+    let before_entries = fs::read_dir(&artifact_root).unwrap().count();
+
+    #[cfg(unix)]
+    {
+        fs::set_permissions(&artifact_root, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&artifact_path, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    preflight_snapshot_artifact(&artifact_root, &SourceKind::GitRepository, &reference)
+        .expect("read-only preflight succeeds");
+
+    assert_eq!(fs::read(&artifact_path).unwrap(), before_bytes);
+    assert_eq!(
+        fs::read_dir(&artifact_root).unwrap().count(),
+        before_entries
+    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            fs::metadata(&artifact_root).unwrap().permissions().mode() & 0o777,
+            0o755,
+            "preflight must not chmod the artifact root"
+        );
+        assert_eq!(
+            fs::metadata(&artifact_path).unwrap().permissions().mode() & 0o777,
+            0o644,
+            "preflight must not chmod the artifact"
+        );
+    }
 }
 
 #[cfg(unix)]

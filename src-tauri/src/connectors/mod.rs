@@ -19,8 +19,8 @@ use crate::discovery::{
 };
 use crate::domain::{AssetKind, DataSource, RelationKind, SourceKind};
 use artifact::{
-    ingest_provider_response, ingest_selected_source, prepare_artifact_root,
-    read_snapshot_reference, read_source_snapshot,
+    ingest_provider_response, ingest_selected_source, inspect_snapshot_reference,
+    prepare_artifact_root, read_snapshot_reference, read_source_snapshot,
 };
 use chrono::{DateTime, Utc};
 use parser::{ParserProfile, parse_snapshot};
@@ -28,6 +28,25 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub const SNAPSHOT_CONNECTOR_VERSION: &str = "1.0.0";
+
+/// Checks whether a preserved passive-source snapshot can be used before a
+/// scan record is created.
+///
+/// This is a pure, bounded read: it never creates the artifact root, changes
+/// permissions, writes metadata, parses the snapshot, or contacts its source.
+/// The same schema, source/profile binding, normalized path, symlink, regular
+/// file, size, and optional SHA-256 checks are repeated by the connector at
+/// execution time as a TOCTOU defense.
+pub fn preflight_snapshot_artifact(
+    artifact_root: impl AsRef<Path>,
+    source_kind: &SourceKind,
+    reference: &SnapshotArtifactReference,
+) -> Result<(), DiscoveryError> {
+    let artifact_root = prepare_artifact_root(artifact_root)?;
+    let descriptor = definition(source_kind);
+    inspect_snapshot_reference(&artifact_root, reference, descriptor.parser_profiles)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub struct ConnectorDescriptor {

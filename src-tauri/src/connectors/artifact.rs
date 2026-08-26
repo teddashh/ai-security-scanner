@@ -341,7 +341,20 @@ pub(crate) fn read_snapshot_reference(
     reference: SnapshotArtifactReference,
     allowed_profiles: &[&str],
 ) -> Result<ReadSnapshot, DiscoveryError> {
-    validate_reference(&reference, allowed_profiles)?;
+    let bytes = inspect_snapshot_reference(root, &reference, allowed_profiles)?;
+
+    Ok(ReadSnapshot { reference, bytes })
+}
+
+/// Performs the complete immutable-reference check without changing the
+/// artifact store. The bounded bytes are returned so the normal connector read
+/// path can reuse the exact same validation and integrity boundary.
+pub(crate) fn inspect_snapshot_reference(
+    root: &Path,
+    reference: &SnapshotArtifactReference,
+    allowed_profiles: &[&str],
+) -> Result<Vec<u8>, DiscoveryError> {
+    validate_reference(reference, allowed_profiles)?;
     let path = resolve_without_symlinks(root, &reference.canonical_relative_path)?;
     let bytes = read_bounded_regular_file(&path)?;
 
@@ -361,7 +374,7 @@ pub(crate) fn read_snapshot_reference(
         }
     }
 
-    Ok(ReadSnapshot { reference, bytes })
+    Ok(bytes)
 }
 
 fn validate_reference(
