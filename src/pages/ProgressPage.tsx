@@ -18,7 +18,12 @@ import {
   skippedEngineRunSummary,
   type ScanDiagnosticContext,
 } from "../scanDiagnostics";
-import { engineNextStepFor, engineOutcomeFor, skippedChecksNextStepFor } from "../scanPresentation";
+import {
+  engineNextStepFor,
+  engineOutcomeFor,
+  engineRecoveryLabelFor,
+  skippedChecksNextStepFor,
+} from "../scanPresentation";
 import { isCapturedEvidenceBlocker } from "../scanReadiness";
 import type {
   EngineRun,
@@ -232,8 +237,8 @@ const copy = {
   skippedGroupTitle: { en: "{count} planned checks did not start", zhTW: "{count} 項預定檢查沒有開始" },
   sharedFailureTitle: { en: "The private scan engine did not start", zhTW: "私有掃描引擎沒有啟動" },
   sharedFailureBody: {
-    en: "One scan-tool problem stopped {count} checks before they could inspect anything. Open scan-tool setup, make sure the engine is ready, then start a new scan.",
-    zhTW: "同一個掃描工具問題讓 {count} 項檢查在讀取任何內容前就停止。請開啟掃描工具設定、確認引擎已就緒，再開始新的掃描。",
+    en: "One scan-tool problem stopped {count} checks before they could inspect anything. Repair the scan tools, then retry the stopped checks.",
+    zhTW: "同一個掃描工具問題讓 {count} 項檢查在讀取任何內容前就停止。請修復掃描工具，再重試已停止的檢查。",
   },
   openToolSetup: { en: "Open scan-tool setup", zhTW: "開啟掃描工具設定" },
   aggregateTechnical: { en: "Technical records from {count} checks", zhTW: "{count} 項檢查的技術紀錄" },
@@ -306,21 +311,47 @@ const copy = {
       title: { en: "This scan has finished", zhTW: "這次掃描已完成" },
       body: { en: "The results are saved and ready to review.", zhTW: "結果已保存，可以開始查看。" },
     },
+    gateway_preparation_failed: {
+      title: { en: "The private scan connection did not start", zhTW: "專用掃描連線未能啟動" },
+      body: {
+        en: "The check stopped before its scanner contacted the target. Repair the scan tools, then retry the check.",
+        zhTW: "檢查在掃描工具接觸目標前就停止了。請修復掃描工具，再重試這項檢查。",
+      },
+    },
     stopped: {
       title: { en: "This scan has stopped", zhTW: "這次掃描已停止" },
       body: { en: "Review the results already saved and the next step shown for any unfinished check.", zhTW: "請查看已保存的結果，以及未完成檢查所顯示的下一步。" },
     },
   } satisfies Record<ScanActivityState, { title: BilingualText; body: BilingualText }>,
   activityEvents: {
-    run_started: { en: "Scan started", zhTW: "掃描已開始" },
-    checks_started: { en: "{count} checks have started", zhTW: "已有 {count} 項檢查開始" },
-    progress_saved: { en: "Progress saved at {percent}%", zhTW: "已保存 {percent}% 的進度" },
-    checks_finished: { en: "{count} checks have finished", zhTW: "已有 {count} 項檢查完成" },
-    run_finished: { en: "Scan finished", zhTW: "掃描已結束" },
+    run_requested: { en: "Scan requested", zhTW: "已提出掃描要求" },
+    check_attempts_started: { en: "{count} check attempts began", zhTW: "已有 {count} 項檢查開始嘗試" },
+    progress_saved: { en: "Progress recorded at {percent}%", zhTW: "已記錄 {percent}% 的進度" },
+    checks_completed: { en: "{count} checks completed", zhTW: "{count} 項檢查已完成" },
+    checks_failed: { en: "{count} checks stopped before completion", zhTW: "{count} 項檢查在完成前停止" },
+    checks_partly_completed: { en: "{count} checks saved partial results", zhTW: "{count} 項檢查已保存部分結果" },
+    checks_cancelled: { en: "{count} checks were cancelled", zhTW: "{count} 項檢查已取消" },
+    checks_not_started: { en: "{count} planned checks did not start", zhTW: "{count} 項預定檢查沒有開始" },
+    gateway_preparation_failed: {
+      en: "The private scan connection could not start",
+      zhTW: "專用掃描連線未能啟動",
+    },
+    run_completed: { en: "Scan completed", zhTW: "掃描已完成" },
+    run_stopped: { en: "Scan stopped", zhTW: "掃描已停止" },
     run_paused: { en: "Scan paused", zhTW: "掃描已暫停" },
+  },
+  activityEventSingular: {
+    check_attempts_started: { en: "1 check attempt began", zhTW: "1 項檢查開始嘗試" },
+    checks_completed: { en: "1 check completed", zhTW: "1 項檢查已完成" },
+    checks_failed: { en: "1 check stopped before completion", zhTW: "1 項檢查在完成前停止" },
+    checks_partly_completed: { en: "1 check saved partial results", zhTW: "1 項檢查已保存部分結果" },
+    checks_cancelled: { en: "1 check was cancelled", zhTW: "1 項檢查已取消" },
+    checks_not_started: { en: "1 planned check did not start", zhTW: "1 項預定檢查沒有開始" },
   },
   pause: { en: "Pause", zhTW: "暫停" },
   resume: { en: "Continue unfinished work", zhTW: "繼續未完成的工作" },
+  retry: { en: "Retry stopped checks", zhTW: "重試已停止的檢查" },
+  recoverMixed: { en: "Continue or retry unfinished checks", zhTW: "繼續或重試未完成的檢查" },
   cancel: { en: "Cancel this run", zhTW: "取消這一輪" },
   pauseAria: { en: "Pause scan run {id}", zhTW: "暫停掃描輪次 {id}" },
   resumeAria: { en: "Resume scan run {id}", zhTW: "續跑掃描輪次 {id}" },
@@ -404,9 +435,12 @@ const copy = {
   attempt: { en: "Attempt", zhTW: "嘗試次數" },
   evidence: { en: "Evidence", zhTW: "證據" },
   evidenceCount: { en: "{count} files", zhTW: "{count} 份" },
-  scopeLock: { en: "Scope lock", zhTW: "範圍固定" },
-  scopeLocked: { en: "Locked", zhTW: "已固定" },
-  scopeNotCreated: { en: "Not created", zhTW: "尚未建立" },
+  authorizationPlan: { en: "Target and permission plan", zhTW: "目標與權限計畫" },
+  authorizationFrozen: { en: "Frozen for this run", zhTW: "已為這一輪固定" },
+  authorizationUnknown: { en: "Not recorded in this older run", zhTW: "這個舊輪次未記錄" },
+  runtimeScope: { en: "Scanner runtime scope", zhTW: "掃描執行環境範圍" },
+  runtimeScopeCreated: { en: "Created", zhTW: "已建立" },
+  runtimeScopeNotReached: { en: "Not reached", zhTW: "尚未進行到這一步" },
   cleanup: { en: "Cleanup", zhTW: "環境清理" },
   cleanupDone: { en: "Done", zhTW: "完成" },
   cleanupPending: { en: "Still needed", zhTW: "仍待處理" },
@@ -414,7 +448,6 @@ const copy = {
   findingCount: { en: "{count} findings", zhTW: "{count} 個問題" },
   targets: { en: "Targets", zhTW: "目標數" },
   rawEvidenceFiles: { en: "Raw evidence files", zhTW: "原始證據檔案" },
-  resumable: { en: "Can continue where it stopped", zhTW: "可從中斷處繼續" },
   technicalDetails: { en: "Technical status and errors", zhTW: "技術狀態與錯誤" },
   scannerName: { en: "Scanner name", zhTW: "掃描工具名稱" },
   reportedPhase: { en: "Reported phase", zhTW: "回報階段" },
@@ -641,9 +674,15 @@ export function ProgressPage({
     : text(copy.workCount, { count: formatNumber(count) });
   const activityEventLabel = (event: ScanActivityEvent): string => {
     switch (event.code) {
-      case "checks_started":
-      case "checks_finished":
-        return text(copy.activityEvents[event.code], { count: formatNumber(event.count ?? 0) });
+      case "check_attempts_started":
+      case "checks_completed":
+      case "checks_failed":
+      case "checks_partly_completed":
+      case "checks_cancelled":
+      case "checks_not_started":
+        return event.count === 1
+          ? text(copy.activityEventSingular[event.code])
+          : text(copy.activityEvents[event.code], { count: formatNumber(event.count ?? 0) });
       case "progress_saved":
         return text(copy.activityEvents.progress_saved, { percent: formatNumber(event.progress ?? 0) });
       default:
@@ -788,7 +827,16 @@ export function ProgressPage({
     ? 1 + (skipped && !blocked ? 1 : 0)
     : visibleEngineRuns.length + (skipped && !blocked ? 1 : 0);
   const canPause = selectedRun.status === "running";
-  const hasResumableEngine = selectedRun.engineRuns.some((engine) => engine.resumable);
+  const recoverableEngines = selectedRun.engineRuns.filter((engine) => engine.resumable);
+  const hasResumableEngine = recoverableEngines.length > 0;
+  const recoveryActions = new Set(recoverableEngines.map((engine) =>
+    engine.recoveryAction ?? "continue_saved_results"
+  ));
+  const recoveryActionLabel = recoveryActions.size === 1 && recoveryActions.has("restart_check")
+    ? copy.retry
+    : recoveryActions.has("restart_check")
+      ? copy.recoverMixed
+      : copy.resume;
   const canResume = !startFreshScan && (
     selectedRun.status === "paused"
     || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine)
@@ -832,7 +880,7 @@ export function ProgressPage({
             )}
             {canResume && (
               <button className="button button--primary" type="button" disabled={busy} aria-label={text(copy.resumeAria, { id: selectedRun.id })} onClick={() => void onResume(selectedRun.id)}>
-                <Icon name="play" size={17} />{text(copy.resume)}
+                <Icon name="play" size={17} />{text(recoveryActionLabel)}
               </button>
             )}
             {canCancel && (
@@ -967,7 +1015,9 @@ export function ProgressPage({
                 ? "pause"
                 : activity.active
                   ? "refresh"
-                  : "check"} size={20} /></span>
+                  : activity.state === "completed"
+                    ? "check"
+                    : "warning"} size={20} /></span>
             <div>
               <small>{text(copy.currentActivity)}</small>
               <strong>{text(copy.activityStates[activity.state].title)}</strong>
@@ -1134,6 +1184,7 @@ export function ProgressPage({
             {visibleEngineRuns.map((engine) => {
               const meta = engineStatusMeta[engine.status];
               const checkpoint = engine.checkpoint;
+              const recoveryLabel = engineRecoveryLabelFor(engine);
               return (
                 <article key={engine.id} className={`engine-row engine-row--${meta.tone}`}>
                   <div className="engine-row__identity">
@@ -1173,7 +1224,18 @@ export function ProgressPage({
                           <dl>
                             <div><dt>{text(copy.attempt)}</dt><dd>#{formatNumber(checkpoint.attempt)}</dd></div>
                             <div><dt>{text(copy.evidence)}</dt><dd>{text(copy.evidenceCount, { count: formatNumber(checkpoint.artifactCount) })}</dd></div>
-                            <div><dt>{text(copy.scopeLock)}</dt><dd>{checkpoint.scopeBound ? text(copy.scopeLocked) : text(copy.scopeNotCreated)}</dd></div>
+                            <div>
+                              <dt>{text(copy.authorizationPlan)}</dt>
+                              <dd>{engine.scopeContractBound
+                                ? text(copy.authorizationFrozen)
+                                : text(copy.authorizationUnknown)}</dd>
+                            </div>
+                            <div>
+                              <dt>{text(copy.runtimeScope)}</dt>
+                              <dd>{checkpoint.scopeBound
+                                ? text(copy.runtimeScopeCreated)
+                                : text(copy.runtimeScopeNotReached)}</dd>
+                            </div>
                             <div><dt>{text(copy.cleanup)}</dt><dd>{checkpoint.cleanupCompleted ? text(copy.cleanupDone) : text(copy.cleanupPending)}</dd></div>
                           </dl>
                           <p>{executionStageMeta[checkpoint.stage].description}</p>
@@ -1192,7 +1254,9 @@ export function ProgressPage({
                     <span>{engine.findingCountKnown === false
                       ? text(copy.legacyFindingUnknown)
                       : text(copy.findingCount, { count: formatNumber(engine.findingCount) })}</span>
-                    {engine.resumable && <small><Icon name="refresh" size={13} /> {text(copy.resumable)}</small>}
+                    {recoveryLabel && (
+                      <small><Icon name="refresh" size={13} /> {text(recoveryLabel)}</small>
+                    )}
                   </div>
                   <details className="engine-provenance">
                     <summary>{text(copy.provenance)}</summary>

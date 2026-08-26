@@ -542,6 +542,19 @@ export interface EngineCheckpoint {
   lastError?: string;
 }
 
+/** Product-controlled failure categories safe to use in first-layer copy and support logs. */
+export type EngineFailureKind = "gateway_preparation_failed";
+
+/**
+ * What the backend will do when the person continues a terminal check.
+ * A restart is deliberately distinct from continuing preserved results.
+ */
+export type EngineRecoveryAction =
+  | "none"
+  | "restart_check"
+  | "continue_saved_results"
+  | "finish_cleanup";
+
 export interface EngineRun {
   id: string;
   engineId: string;
@@ -586,6 +599,11 @@ export interface EngineRun {
   message?: string;
   errorCode?: string;
   checkpoint?: EngineCheckpoint;
+  /** True when the target and permission contract was frozen for this run. */
+  scopeContractBound?: boolean;
+  /** Safe product-owned classification; never copied from scanner output. */
+  failureKind?: EngineFailureKind;
+  recoveryAction?: EngineRecoveryAction;
   resumable: boolean;
 }
 

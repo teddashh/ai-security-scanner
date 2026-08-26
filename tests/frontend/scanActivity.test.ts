@@ -55,8 +55,8 @@ test("active scan activity explains the wait and reports the last durable progre
   assert.equal(activity.staleMinutes, 3);
   assert.deepEqual(activity.events.map((event) => event.code), [
     "progress_saved",
-    "checks_started",
-    "run_started",
+    "check_attempts_started",
+    "run_requested",
   ]);
 });
 
@@ -102,7 +102,66 @@ test("paused and terminal runs show their own state and terminal timestamp", () 
   }));
   assert.equal(completed.state, "completed");
   assert.equal(completed.lastProgressAt, "2026-08-26T13:06:00Z");
-  assert.ok(completed.events.some((event) => event.code === "run_finished"));
+  assert.ok(completed.events.some((event) => event.code === "run_completed"));
+});
+
+test("a gateway preparation failure is a stopped pre-scanner attempt, never a finished check", () => {
+  const activity = buildScanActivity(run({
+    status: "failed",
+    progress: 0,
+    finishedAt: "2026-08-26T13:02:00Z",
+    engineRuns: [engine({
+      status: "failed",
+      progress: 0,
+      phase: "failed",
+      finishedAt: "2026-08-26T13:02:00Z",
+      failureKind: "gateway_preparation_failed",
+      recoveryAction: "restart_check",
+      scopeContractBound: true,
+      checkpoint: {
+        attempt: 1,
+        stage: "failed",
+        artifactCount: 0,
+        cleanupCompleted: true,
+        scopeBound: false,
+        lastError: "raw target data must stay technical",
+      },
+    })],
+  }));
+
+  assert.equal(activity.state, "gateway_preparation_failed");
+  assert.ok(activity.events.some((event) => event.code === "gateway_preparation_failed"));
+  assert.ok(activity.events.some((event) => event.code === "run_stopped"));
+  assert.ok(activity.events.some((event) => event.code === "check_attempts_started"));
+  assert.ok(!activity.events.some((event) => event.code === "checks_completed"));
+  assert.ok(!activity.events.some((event) => event.code === "run_completed"));
+  assert.doesNotMatch(JSON.stringify(activity), /raw target data/u);
+});
+
+test("terminal activity counts each outcome instead of calling every check finished", () => {
+  const finishedAt = "2026-08-26T13:06:00Z";
+  const activity = buildScanActivity(run({
+    status: "partial",
+    finishedAt,
+    engineRuns: [
+      engine({ id: "completed", status: "completed", finishedAt }),
+      engine({ id: "failed", status: "failed", finishedAt }),
+      engine({ id: "partial", status: "partial", finishedAt }),
+      engine({ id: "cancelled", status: "cancelled", finishedAt }),
+      engine({ id: "not-run", status: "not_executed", startedAt: undefined, finishedAt }),
+    ],
+  }));
+  const codes = new Set(activity.events.map((event) => event.code));
+
+  for (const code of [
+    "checks_completed",
+    "checks_failed",
+    "checks_partly_completed",
+    "checks_cancelled",
+    "checks_not_started",
+    "run_stopped",
+  ] as const) assert.ok(codes.has(code), code);
+  assert.ok(!codes.has("run_completed"));
 });
 
 test("first-layer activity identifies the active check but never carries scanner output or target ids", () => {

@@ -19,6 +19,7 @@ const {
   engineNextStepFor,
   engineOutcomeCopy,
   engineOutcomeFor,
+  engineRecoveryLabelFor,
   skippedChecksNextStepFor,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString("base64")}`);
 
@@ -145,6 +146,34 @@ test("post-start failures preserve results and cleanup guidance", () => {
   assert.match(cleanup.en, /cleanup status/u);
   assert.match(cleanup.zhTW, /清理狀態/u);
   assert.doesNotMatch(cleanup.en, /scan-tool setup/u);
+});
+
+test("a gateway preparation failure says repair and retry, never resume saved progress", () => {
+  const failed = engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    failureKind: "gateway_preparation_failed",
+    recoveryAction: "restart_check",
+    resumable: true,
+    scopeContractBound: true,
+    checkpoint: {
+      attempt: 1,
+      stage: "failed",
+      artifactCount: 0,
+      cleanupCompleted: true,
+      scopeBound: false,
+    },
+  });
+  const nextStep = engineNextStepFor(failed);
+  const recovery = engineRecoveryLabelFor(failed);
+
+  assert.match(nextStep.en, /private scan connection/u);
+  assert.match(nextStep.en, /repair.*retry/iu);
+  assert.match(nextStep.zhTW, /專用掃描連線/u);
+  assert.match(recovery.en, /from the beginning/u);
+  assert.match(recovery.zhTW, /從頭重試/u);
+  assert.doesNotMatch(`${nextStep.en}${recovery.en}`, /continue from saved|last saved point/u);
 });
 
 test("typed skipped reasons choose a specific bilingual next step without rendering the code", () => {

@@ -123,6 +123,10 @@ const safeEngineDiagnostic = (engine: EngineRun) => ({
   attempt: engine.checkpoint?.attempt ?? null,
   checkpoint_stage: engine.checkpoint?.stage ?? null,
   cleanup_completed: engine.checkpoint?.cleanupCompleted ?? null,
+  authorization_contract_frozen: engine.scopeContractBound ?? null,
+  runtime_scope_created: engine.checkpoint?.scopeBound ?? null,
+  failure_kind: engine.failureKind ?? null,
+  recovery_action: engine.recoveryAction ?? null,
   engine_version: engine.version,
   adapter_version: engine.adapterVersion ?? null,
   runtime_provider: engine.runtimeProvider ?? null,
@@ -141,7 +145,7 @@ export const buildScanDiagnostic = (
 ): string => {
   const activity = buildScanActivity(run);
   return JSON.stringify({
-    schema_version: "ai-security-scanner.redacted-diagnostic/v2",
+    schema_version: "ai-security-scanner.redacted-diagnostic/v3",
     product_version: context.productVersion ?? null,
     run: {
       run_id: run.id,

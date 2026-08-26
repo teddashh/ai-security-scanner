@@ -122,6 +122,10 @@ const nextStepCopy = {
     en: "Return to cloud setup and reconnect or review the selected account.",
     zhTW: "請回到雲端設定，重新連接或檢查所選帳號。",
   },
+  gatewayPreparation: {
+    en: "The private scan connection stopped before this check began. Repair the scan tools, then retry this check.",
+    zhTW: "專用掃描連線在這項檢查開始前就停止了。請修復掃描工具，再重試這項檢查。",
+  },
   unavailableInRelease: {
     en: "These checks are not available in this version. Review completed results and update the app before trying again.",
     zhTW: "這些檢查在目前版本無法使用；請先查看已完成的結果，更新程式後再試。",
@@ -207,6 +211,7 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
   if (engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted") {
     return nextStepCopy.interrupted;
   }
+  if (engine.failureKind === "gateway_preparation_failed") return nextStepCopy.gatewayPreparation;
   if (engine.errorCode === "provider_rate_limited") return nextStepCopy.providerBusy;
   if (engine.status === "partial") return nextStepCopy.partial;
   if (targetSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.targetSetup;
@@ -240,4 +245,24 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
       return nextStepCopy.retry;
     }
   }
+};
+
+const recoveryCopy = {
+  restart_check: {
+    en: "Retry this check from the beginning",
+    zhTW: "從頭重試這項檢查",
+  },
+  continue_saved_results: {
+    en: "Continue from saved results",
+    zhTW: "從已保存的結果繼續",
+  },
+  finish_cleanup: {
+    en: "Finish cleanup, then retry",
+    zhTW: "完成清理後再重試",
+  },
+} as const satisfies Record<Exclude<NonNullable<EngineRun["recoveryAction"]>, "none">, BilingualText>;
+
+export const engineRecoveryLabelFor = (engine: EngineRun): BilingualText | undefined => {
+  const action = engine.recoveryAction ?? (engine.resumable ? "continue_saved_results" : "none");
+  return action === "none" ? undefined : recoveryCopy[action];
 };

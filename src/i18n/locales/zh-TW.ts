@@ -142,7 +142,7 @@ export const zhTW = {
   "status.stage.cancelled.label": "已停止",
   "status.stage.cancelled.description": "掃描已停止，先前保存的進度仍可使用。",
   "status.stage.failed.label": "需要處理",
-  "status.stage.failed.description": "你可以從最後保存的進度繼續。",
+  "status.stage.failed.description": "這次嘗試在完成前停止了；請依照這項檢查顯示的下一步處理。",
 
   "status.run.queued": "等待中",
   "status.run.running": "掃描中",

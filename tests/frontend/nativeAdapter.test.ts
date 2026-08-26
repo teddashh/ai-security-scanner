@@ -246,3 +246,76 @@ test("native assets preserve the exact data-source provenance used for cloud bin
 
   assert.deepEqual(workspace.assets[0]?.discoveredFromSourceIds, ["aws-source-a"]);
 });
+
+test("native gateway failures preserve frozen authorization but restart before runtime scope", () => {
+  const checkpoint = JSON.stringify({
+    case_id: "case-1",
+    scan_run_id: "run-1",
+    engine_run_id: "engine-run-1",
+    engine_id: "naabu",
+    attempt: 1,
+    stage: "failed",
+    container_name: null,
+    scope_sha256: null,
+    artifact_ids: [],
+    cleanup_completed: true,
+    last_error: "runtime error: egress gateway exited before becoming ready",
+  });
+  const workspace = adaptNativeCase({
+    id: "case-1",
+    title: "Internal IP scan",
+    assessment_intent: "internal_it_environment",
+    profile: {
+      organization_name: "Example",
+      employee_range: "small",
+      data_classes: [],
+      notes: null,
+    },
+    status: "needs_attention",
+    created_at: "2026-08-26T12:01:00Z",
+    updated_at: "2026-08-26T12:02:00Z",
+    is_demo: false,
+    requested_activities: ["low_impact_external_checks"],
+    data_sources: [],
+    assets: [],
+    scope_grants: [],
+    coverage: [],
+    scan_runs: [{
+      id: "run-1",
+      case_id: "case-1",
+      sequence: 1,
+      created_at: "2026-08-26T12:02:00Z",
+      completed_at: "2026-08-26T12:02:01Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      engine_runs: [{
+        id: "engine-run-1",
+        engine_id: "naabu",
+        asset_ids: ["private-asset-id"],
+        status: "failed",
+        progress_percent: 0,
+        phase: "failed",
+        started_at: "2026-08-26T12:02:00Z",
+        finished_at: "2026-08-26T12:02:01Z",
+        resume_token: checkpoint,
+        engine_version: "2.6.1",
+        image_digest: "sha256:redacted",
+        rule_version: null,
+        adapter_version: "0.1.1",
+        scope_contract_sha256: "a".repeat(64),
+        raw_artifact_ids: [],
+        error_code: "execution_failed",
+        error_message: "runtime error: egress gateway exited before becoming ready",
+      }],
+    }],
+    findings: [],
+    exports: [],
+    comparisons: [],
+  });
+
+  const failed = workspace.runs[0]?.engineRuns[0];
+  assert.equal(failed?.scopeContractBound, true);
+  assert.equal(failed?.checkpoint?.scopeBound, false);
+  assert.equal(failed?.failureKind, "gateway_preparation_failed");
+  assert.equal(failed?.recoveryAction, "restart_check");
+  assert.equal(failed?.resumable, true);
+});

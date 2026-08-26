@@ -319,6 +319,41 @@ test("progress has a bilingual event log before and during every scan route", as
   const technicalChecks = progress.indexOf('<details className="page-technical-details', currentActivity);
   assert.ok(currentActivity > noRunEnd && technicalChecks > currentActivity);
   assert.doesNotMatch(progress.slice(currentActivity, technicalChecks), /engine\.message|checkpoint\?\.lastError|engine\.assetIds/u);
+  for (const copy of [
+    "Scan requested",
+    "已提出掃描要求",
+    "checks stopped before completion",
+    "項檢查在完成前停止",
+    "Scan stopped",
+    "掃描已停止",
+    "The private scan connection could not start",
+    "專用掃描連線未能啟動",
+  ]) assert.ok(progress.includes(copy), copy);
+  assert.doesNotMatch(progress, /checks have finished|Scan finished/u);
+});
+
+test("pre-scanner failures separate frozen authorization from runtime scope and offer a retry", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  const english = await readFile(new URL("../../src/i18n/locales/en.ts", import.meta.url), "utf8");
+  const traditionalChinese = await readFile(new URL("../../src/i18n/locales/zh-TW.ts", import.meta.url), "utf8");
+
+  for (const copy of [
+    "Target and permission plan",
+    "目標與權限計畫",
+    "Frozen for this run",
+    "已為這一輪固定",
+    "Scanner runtime scope",
+    "掃描執行環境範圍",
+    "Not reached",
+    "尚未進行到這一步",
+    "Retry stopped checks",
+    "重試已停止的檢查",
+  ]) assert.ok(progress.includes(copy), copy);
+  assert.match(progress, /engine\.scopeContractBound[\s\S]*checkpoint\.scopeBound/u);
+  assert.match(progress, /engineRecoveryLabelFor\(engine\)/u);
+  assert.doesNotMatch(progress, /Can continue where it stopped|Scope lock|Not created/u);
+  assert.doesNotMatch(english, /You can continue from the last saved point/u);
+  assert.doesNotMatch(traditionalChinese, /你可以從最後保存的進度繼續/u);
 });
 
 test("export preview, export, and both verification paths remain wired", async () => {

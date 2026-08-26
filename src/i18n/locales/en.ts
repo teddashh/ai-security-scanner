@@ -140,7 +140,7 @@ export const en = {
   "status.stage.cancelled.label": "Stopped",
   "status.stage.cancelled.description": "The scan stopped, and saved progress is still available.",
   "status.stage.failed.label": "Needs attention",
-  "status.stage.failed.description": "You can continue from the last saved point.",
+  "status.stage.failed.description": "This attempt stopped before it completed. Follow the next step shown for this check.",
 
   "status.run.queued": "Waiting",
   "status.run.running": "Scanning",

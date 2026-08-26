@@ -9,14 +9,21 @@ export type ScanActivityState =
   | "closing_scanner"
   | "paused"
   | "completed"
+  | "gateway_preparation_failed"
   | "stopped";
 
 export type ScanActivityEventCode =
-  | "run_started"
-  | "checks_started"
+  | "run_requested"
+  | "check_attempts_started"
   | "progress_saved"
-  | "checks_finished"
-  | "run_finished"
+  | "checks_completed"
+  | "checks_failed"
+  | "checks_partly_completed"
+  | "checks_cancelled"
+  | "checks_not_started"
+  | "gateway_preparation_failed"
+  | "run_completed"
+  | "run_stopped"
   | "run_paused";
 
 export interface ScanActivityEvent {
@@ -97,6 +104,9 @@ const stageFor = (engine?: EngineRun): ExecutionStage | undefined => {
 
 const activityState = (run: ScanRun): ScanActivityState => {
   if (run.status === "completed") return "completed";
+  if (run.engineRuns.some((engine) => engine.failureKind === "gateway_preparation_failed")) {
+    return "gateway_preparation_failed";
+  }
   if (["failed", "partial", "cancelled"].includes(run.status)) return "stopped";
   if (run.status === "paused") return "paused";
 
@@ -155,20 +165,54 @@ export const buildScanActivity = (
   const staleMinutes = Number.isFinite(elapsedMs) ? Math.floor(elapsedMs / 60_000) : 0;
 
   const events: Array<ScanActivityEvent | undefined> = [
-    { id: `run_started-${run.startedAt}`, code: "run_started", occurredAt: run.startedAt },
-    groupedEvent("checks_started", run.engineRuns, "startedAt"),
+    { id: `run_requested-${run.startedAt}`, code: "run_requested", occurredAt: run.startedAt },
+    groupedEvent("check_attempts_started", run.engineRuns, "startedAt"),
     {
       id: `progress_saved-${lastProgressAt}`,
       code: "progress_saved",
       occurredAt: lastProgressAt,
       progress: run.progress,
     },
-    groupedEvent("checks_finished", run.engineRuns, "finishedAt"),
+    groupedEvent(
+      "checks_completed",
+      run.engineRuns.filter((engine) => engine.status === "completed"),
+      "finishedAt",
+    ),
+    groupedEvent(
+      "gateway_preparation_failed",
+      run.engineRuns.filter((engine) => engine.failureKind === "gateway_preparation_failed"),
+      "finishedAt",
+    ),
+    groupedEvent(
+      "checks_failed",
+      run.engineRuns.filter((engine) =>
+        engine.status === "failed" && engine.failureKind !== "gateway_preparation_failed"
+      ),
+      "finishedAt",
+    ),
+    groupedEvent(
+      "checks_partly_completed",
+      run.engineRuns.filter((engine) => engine.status === "partial"),
+      "finishedAt",
+    ),
+    groupedEvent(
+      "checks_cancelled",
+      run.engineRuns.filter((engine) => engine.status === "cancelled"),
+      "finishedAt",
+    ),
+    groupedEvent(
+      "checks_not_started",
+      run.engineRuns.filter((engine) => engine.status === "not_executed"),
+      "finishedAt",
+    ),
     run.status === "paused"
       ? { id: `run_paused-${lastProgressAt}`, code: "run_paused", occurredAt: lastProgressAt }
       : undefined,
-    run.finishedAt
-      ? { id: `run_finished-${run.finishedAt}`, code: "run_finished", occurredAt: run.finishedAt }
+    run.finishedAt && run.status === "completed"
+      ? { id: `run_completed-${run.finishedAt}`, code: "run_completed", occurredAt: run.finishedAt }
+      : undefined,
+    run.finishedAt && run.status !== "completed"
+      ? { id: `run_stopped-${run.finishedAt}`, code: "run_stopped", occurredAt: run.finishedAt }
       : undefined,
   ];
 

@@ -186,7 +186,7 @@ test("shareable diagnostic omits target-controlled messages, warnings, paths, an
     assetIds: ["sensitive-asset-id"],
     cleanupDetail: "/private/path",
   })]), { productVersion: "0.1.4" });
-  assert.match(diagnostic, /redacted-diagnostic\/v2/);
+  assert.match(diagnostic, /redacted-diagnostic\/v3/);
   assert.match(diagnostic, /no_compatible_authorized_assets/);
   assert.match(diagnostic, /"activity"/);
   assert.match(diagnostic, /"last_progress_at"/);
@@ -194,4 +194,31 @@ test("shareable diagnostic omits target-controlled messages, warnings, paths, an
   assert.doesNotMatch(diagnostic, /secret warning/);
   assert.doesNotMatch(diagnostic, /sensitive-asset-id/);
   assert.doesNotMatch(diagnostic, /private\/path/);
+});
+
+test("gateway diagnostics include only the safe failure and recovery categories", () => {
+  const diagnostic = buildScanDiagnostic(run([engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    message: "runtime error: egress gateway exited before becoming ready at private target",
+    scopeContractBound: true,
+    failureKind: "gateway_preparation_failed",
+    recoveryAction: "restart_check",
+    checkpoint: {
+      attempt: 1,
+      stage: "failed",
+      artifactCount: 0,
+      cleanupCompleted: true,
+      scopeBound: false,
+      lastError: "runtime error: egress gateway exited before becoming ready at private target",
+    },
+  })]));
+
+  assert.match(diagnostic, /"failure_kind": "gateway_preparation_failed"/u);
+  assert.match(diagnostic, /"recovery_action": "restart_check"/u);
+  assert.match(diagnostic, /"authorization_contract_frozen": true/u);
+  assert.match(diagnostic, /"runtime_scope_created": false/u);
+  assert.doesNotMatch(diagnostic, /private target/u);
+  assert.doesNotMatch(diagnostic, /exited before becoming ready/u);
 });

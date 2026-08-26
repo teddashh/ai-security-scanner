@@ -18,6 +18,8 @@ import type {
   DiffState,
   EngineManifest,
   EngineCheckpoint,
+  EngineFailureKind,
+  EngineRecoveryAction,
   EngineRun,
   EngineRunStatus,
   ExternalActivity,
@@ -169,6 +171,7 @@ interface NativeEngineRun {
   distribution_mode?: string | null;
   image_repository?: string | null;
   command_sha256?: string | null;
+  scope_contract_sha256?: string | null;
   knowledge_input?: {
     kind: string;
     identifier: string;
@@ -885,6 +888,43 @@ const parseCheckpoint = (token: string | null, engineRun: NativeEngineRun): Engi
   }
 };
 
+const gatewayPreparationMarkers = [
+  "egress gateway exited before becoming ready",
+  "egress gateway did not become ready",
+  "egress gateway could not start",
+] as const;
+
+/**
+ * Convert only exact product-owned gateway markers into a safe category. The
+ * backend text itself may contain target-controlled data, so it is never
+ * copied into first-layer state or the shareable diagnostic.
+ */
+const engineFailureKind = (
+  engineRun: NativeEngineRun,
+  checkpoint: EngineCheckpoint | undefined,
+): EngineFailureKind | undefined => {
+  if (engineRun.error_code !== "execution_failed") return undefined;
+  const technicalText = `${engineRun.error_message ?? ""}\n${checkpoint?.lastError ?? ""}`.toLowerCase();
+  return gatewayPreparationMarkers.some((marker) => technicalText.includes(marker))
+    ? "gateway_preparation_failed"
+    : undefined;
+};
+
+const engineRecoveryAction = (
+  status: EngineRunStatus,
+  hasResumeToken: boolean,
+  checkpoint: EngineCheckpoint | undefined,
+): EngineRecoveryAction => {
+  if (!hasResumeToken || !checkpoint || !["paused", "failed", "partial", "cancelled"].includes(status)) {
+    return "none";
+  }
+  if (checkpoint?.stage === "captured_awaiting_adapter" || checkpoint?.stage === "adapting_artifacts") {
+    return "continue_saved_results";
+  }
+  if (checkpoint?.stage === "cleanup_pending") return "finish_cleanup";
+  return "restart_check";
+};
+
 const runStatus = (runs: EngineRun[]): RunStatus => {
   if (runs.length === 0 || runs.every((run) => run.status === "pending")) return "queued";
   if (runs.some((run) => run.status === "running")) return "running";
@@ -1146,6 +1186,8 @@ export const adaptNativeCase = (
     const engineRuns: EngineRun[] = run.engine_runs.map((engineRun) => {
       const manifest = manifestById.get(engineRun.engine_id);
       const status = mapEngineStatus(engineRun.status);
+      const checkpoint = parseCheckpoint(engineRun.resume_token, engineRun);
+      const recoveryAction = engineRecoveryAction(status, Boolean(engineRun.resume_token), checkpoint);
       const exactFindingCount = nativeCase.findings.filter((finding) =>
         finding.evidence.some((evidence) => evidence.engine_run_id === engineRun.id)
       ).length;
@@ -1200,8 +1242,12 @@ export const adaptNativeCase = (
           ? adapterText(`Error code: ${engineRun.error_code}`, `錯誤代碼：${engineRun.error_code}`)
           : engineRun.phase),
         errorCode: engineRun.error_code ?? undefined,
-        checkpoint: parseCheckpoint(engineRun.resume_token, engineRun),
-        resumable: Boolean(engineRun.resume_token) && ["paused", "failed", "partial", "cancelled"].includes(status),
+        checkpoint,
+        scopeContractBound: typeof engineRun.scope_contract_sha256 === "string"
+          && engineRun.scope_contract_sha256.length > 0,
+        failureKind: engineFailureKind(engineRun, checkpoint),
+        recoveryAction,
+        resumable: recoveryAction !== "none",
       };
     });
     const allAssetIds = unique(run.engine_runs.flatMap((engineRun) => engineRun.asset_ids));
