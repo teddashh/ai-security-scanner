@@ -268,6 +268,8 @@ function validateReleaseWorkflow(workflow) {
     "qualify-windows.ps1",
     "platform-qualification.mjs create",
     "platform-qualification.mjs validate",
+    "--release-channel",
+    "needs.validate.outputs.release_channel",
     "platform-qualification-${{ matrix.platform }}.json",
   ]) {
     assert(qualificationSource.includes(required), `platform qualification job is missing: ${required}`);
@@ -428,35 +430,24 @@ function validatePlatformQualificationSources(sources) {
     "managed-runtime/provider-home",
   ]) assert(linux.includes(required), `Linux qualification is missing: ${required}`);
   for (const required of [
-    "run_managed initial-status status",
-    "run_managed install install",
-    "run_managed installed-status status",
-    "run_managed start start",
-    "run_managed running-status status",
-    "run_managed container-qualification qualify",
-    "run_managed stop stop",
-    "run_managed stopped-status status",
-    "run_managed uninstall-purge uninstall --force --purge-image-cache",
-    "runtime managed stop --force",
-    "runtime managed uninstall --force --purge-image-cache",
     "hdiutil attach",
-    "ai-security-scanner-macos-command-home-v1\\0",
-    "macOS qualification did not begin with a fresh exact short HOME.",
-    "Managed runtime macOS socket alias exceeds Podman 5.8.2 path budget.",
-    "Qualification cleanup found the exact macOS short HOME still present:",
-    "^/tmp/assm1-[0-9a-f]{32}$",
-    "Refusing to follow or remove an unsafe macOS short HOME during qualification cleanup.",
-    "[[ -d \"${short_home}\" && ! -L \"${short_home}\" ]]",
-    "stat -f '%u'",
-    "stat -f '%Lp'",
-    "Managed runtime uninstall left its exact macOS short HOME behind.",
-    "assert_managed_ssh_identity",
-    "data/containers/podman/machine/machine",
-    ".machine.private-key-new",
-    ".machine.public-key-new",
-    "Managed SSH identity staging entries remain after start.",
-    "Managed runtime uninstall left its exact release provider home behind.",
-    "managed-runtime/provider-home",
+    "Installed macOS managed-runtime manifest is malformed or lacks its released AppleHV target.",
+    '"${cli}" --help',
+    "Installed macOS desktop exited before the 12-second observation window.",
+    "Do not invoke any managed-runtime lifecycle command",
+    "github_hosted_macos_nested_virtualization_unsupported",
+    'outcome: "not_observed"',
+    'notObserved("initial_status")',
+    'notObserved("install")',
+    'notObserved("start")',
+    'notObserved("uninstall_purge")',
+    'containerExecution: { outcome: "not_observed", reasonCode }',
+    'diskImageDetached: true',
+    'installedApplicationRemoved: true',
+    'privateDataRemoved: true',
+    'managedRuntimeState: "not_created"',
+    'machineImageCacheState: "not_created"',
+    'rmdir -- "${data_directory}"',
   ]) assert(macos.includes(required), `macOS qualification is missing: ${required}`);
   for (const required of [
     'Invoke-Managed "initial-status"',
@@ -522,18 +513,18 @@ function validatePlatformQualificationSources(sources) {
     "run_managed final-status status",
   ], "Linux qualification");
   assertOrderedTokens(macos, [
-    "run_managed initial-status status",
-    "run_managed install install",
-    "macOS qualification did not begin with a fresh exact short HOME.",
-    "run_managed installed-status status",
-    "run_managed start start",
-    "run_managed running-status status",
-    "run_managed container-qualification qualify",
-    "run_managed stop stop",
-    "run_managed stopped-status status",
-    "run_managed uninstall-purge uninstall --force --purge-image-cache",
-    "Managed runtime uninstall left its exact macOS short HOME behind.",
-    "run_managed final-status status",
+    "hdiutil attach",
+    "Installed macOS managed-runtime manifest is malformed or lacks its released AppleHV target.",
+    '"${cli}" --help',
+    "Installed macOS desktop exited before the 12-second observation window.",
+    "Do not invoke any managed-runtime lifecycle command",
+    'rm -rf -- "${installed_app}"',
+    'rmdir -- "${data_directory}"',
+    "github_hosted_macos_nested_virtualization_unsupported",
+    'notObserved("initial_status")',
+    'notObserved("final_status")',
+    'containerExecution: { outcome: "not_observed", reasonCode }',
+    'diskImageDetached: true',
   ], "macOS qualification");
   assertOrderedTokens(windows, [
     "GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
@@ -567,6 +558,9 @@ function validatePlatformQualificationSources(sources) {
   );
   assert(!windows.includes("$env:SystemRoot"), "Windows qualification trusts inherited SystemRoot for WSL cleanup");
   assert(!windows.includes('.Replace([string][char]0, "")'), "Windows qualification silently repairs malformed WSL inventory");
+  for (const forbidden of ["run_managed", "runtime managed", "container-qualification", "short_home"]) {
+    assert(!macos.includes(forbidden), `hosted macOS qualification must not attempt an unobservable managed runtime: ${forbidden}`);
+  }
   for (const required of [
     'engine_id === "gitleaks"',
     'network === "none"',
@@ -579,11 +573,15 @@ function validatePlatformQualificationSources(sources) {
     "installedManifestExactMatch",
     "github-hosted",
     "macos-15-intel",
+    "QUALIFICATION_SCHEMA_VERSION = 2",
+    'qualificationState: "installer_passed_runtime_not_observed"',
+    "github_hosted_macos_nested_virtualization_unsupported",
+    'operation.outcome === "not_observed"',
+    'evidence.releaseIdentity.releaseChannel === "prerelease"',
   ]) assert(evidence.includes(required), `strict platform qualification evidence is missing: ${required}`);
   for (const forbidden of [
     "host_limited",
     "not_run",
-    "github_macos_hosted_nested_virtualization_unavailable",
   ]) {
     assert(!macos.includes(forbidden), `macOS qualification retains a bypass state: ${forbidden}`);
     assert(!evidence.includes(forbidden), `platform evidence validator retains a bypass state: ${forbidden}`);
@@ -837,10 +835,13 @@ async function main() {
   );
   assert(
     releaseGuide.includes("`macos-15-intel`") &&
-      releaseGuide.includes("Every platform must prove this exact sequence") &&
-      !releaseGuide.includes("github_macos_hosted_nested_virtualization_unavailable") &&
+      releaseGuide.includes("Linux and Windows must prove this exact sequence") &&
+      releaseGuide.includes("github_hosted_macos_nested_virtualization_unsupported") &&
+      releaseGuide.includes("records every managed-runtime operation and the container probe as `not_observed`") &&
+      releaseGuide.includes("can publish only a `prerelease`") &&
+      releaseGuide.includes("https://docs.github.com/en/actions/concepts/runners/github-hosted-runners") &&
       !releaseGuide.includes("`not_run`"),
-    "release guide does not require a real Intel-hosted macOS runtime qualification",
+    "release guide does not document the strict pre-release hosted-macOS observation contract",
   );
   assert(
     releaseGuide.includes("resolves `bin/qemu-img` from the installed managed-runtime") &&
@@ -848,13 +849,16 @@ async function main() {
       releaseGuide.includes("bounded raw bytes") &&
       releaseGuide.includes("both fixed staging names are absent") &&
       releaseGuide.includes("provider-home directory itself must be absent") &&
-      releaseGuide.includes("103-byte Podman socket-path budget"),
-    "release guide omits the self-contained managed-runtime qualification contract",
+      releaseGuide.includes("never emits a passing") &&
+      releaseGuide.includes("runtime status or container result"),
+    "release guide omits the exact per-platform managed-runtime qualification contract",
   );
   assert(
     releaseLineNotes.includes("macOS 15 Intel") &&
-      releaseLineNotes.includes("network-disabled Gitleaks container probe"),
-    "release-line notes omit the full macOS managed-runtime qualification contract",
+      releaseLineNotes.includes("network-disabled Gitleaks container probe") &&
+      releaseLineNotes.includes("`not_observed`, not passed") &&
+      releaseLineNotes.includes("limited evidence is accepted only for a pre-release"),
+    "release-line notes omit the honest hosted-macOS pre-release qualification contract",
   );
   assert(packageJson.license === "Apache-2.0", "package.json license must be Apache-2.0");
   assert(

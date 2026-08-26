@@ -262,6 +262,12 @@ async function createQualificationFixture(output, platform) {
     detail: `release self-test ${phase} status`,
   });
   const passed = (name, phase, available) => ({ name, outcome: "passed", status: status(phase, available) });
+  const macosHostedLimitation = "github_hosted_macos_nested_virtualization_unsupported";
+  const notObserved = (name) => ({
+    name,
+    outcome: "not_observed",
+    reasonCode: macosHostedLimitation,
+  });
   const qualificationRoot = path.join(output, `qualification-fixture-${platform}`);
   await mkdir(qualificationRoot);
   await copyFile(runtimeManifestFile, path.join(qualificationRoot, "installed-runtime-manifest.json"));
@@ -290,63 +296,85 @@ async function createQualificationFixture(output, platform) {
     privateDataDirectory: platform === "windows-x86_64"
       ? installedPath.join("C:\\fixture-private", platform)
       : installedPath.join("/fixture-private", platform),
-    operations: [
-      passed("initial_status", "not_installed", false),
-      passed("install", "installed", false),
-      passed("installed_status", "installed", false),
-      passed("start", "running", true),
-      passed("running_status", "running", true),
-      passed("stop", "stopped", false),
-      passed("stopped_status", "stopped", false),
-      passed("uninstall_purge", "not_installed", false),
-      passed("final_status", "not_installed", false),
-    ],
-    containerExecution: {
-      outcome: "passed",
-      result: {
-        schema_version: "1.0.0",
-        status: "passed",
-        qualification_kind: "managed_container_execution",
-        product_version: VERSION,
-        runtime: {
-          provider: "managed_local",
-          server_version: runtimeManifest.runtime_version,
-          command_provenance: {
-            kind: "managed_local",
-            runtime_version: runtimeManifest.runtime_version,
-            manifest_sha256: manifestSha256,
-            machine_image_sha256: target.machine_image.sha256,
+    operations: platform === "macos-universal"
+      ? [
+          notObserved("initial_status"),
+          notObserved("install"),
+          notObserved("installed_status"),
+          notObserved("start"),
+          notObserved("running_status"),
+          notObserved("stop"),
+          notObserved("stopped_status"),
+          notObserved("uninstall_purge"),
+          notObserved("final_status"),
+        ]
+      : [
+          passed("initial_status", "not_installed", false),
+          passed("install", "installed", false),
+          passed("installed_status", "installed", false),
+          passed("start", "running", true),
+          passed("running_status", "running", true),
+          passed("stop", "stopped", false),
+          passed("stopped_status", "stopped", false),
+          passed("uninstall_purge", "not_installed", false),
+          passed("final_status", "not_installed", false),
+        ],
+    containerExecution: platform === "macos-universal"
+      ? { outcome: "not_observed", reasonCode: macosHostedLimitation }
+      : {
+          outcome: "passed",
+          result: {
+            schema_version: "1.0.0",
+            status: "passed",
+            qualification_kind: "managed_container_execution",
+            product_version: VERSION,
+            runtime: {
+              provider: "managed_local",
+              server_version: runtimeManifest.runtime_version,
+              command_provenance: {
+                kind: "managed_local",
+                runtime_version: runtimeManifest.runtime_version,
+                manifest_sha256: manifestSha256,
+                machine_image_sha256: target.machine_image.sha256,
+              },
+            },
+            container: {
+              engine_id: "gitleaks",
+              image: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+              network: "none",
+              read_only_root: true,
+              capabilities: "drop_all",
+              no_new_privileges: true,
+              credential_count: 0,
+              exit_code: 0,
+              cancelled: false,
+              created_object_id: "cd".repeat(32),
+              cleanup_removed: true,
+            },
+            evidence: {
+              scope_sha256: "10".repeat(32),
+              report_sha256: "11".repeat(32),
+              report_bytes: 2,
+              finding_count: 0,
+              stdout_sha256: "12".repeat(32),
+              stderr_sha256: "13".repeat(32),
+            },
           },
         },
-        container: {
-          engine_id: "gitleaks",
-          image: "ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
-          network: "none",
-          read_only_root: true,
-          capabilities: "drop_all",
-          no_new_privileges: true,
-          credential_count: 0,
-          exit_code: 0,
-          cancelled: false,
-          created_object_id: "cd".repeat(32),
-          cleanup_removed: true,
+    cleanup: platform === "macos-universal"
+      ? {
+          diskImageDetached: true,
+          installedApplicationRemoved: true,
+          privateDataRemoved: true,
+          managedRuntimeState: "not_created",
+          machineImageCacheState: "not_created",
+        }
+      : {
+          managedRuntimePurged: true,
+          machineImageCachePurged: true,
+          installerRemoved: true,
+          privateDataRemoved: true,
         },
-        evidence: {
-          scope_sha256: "10".repeat(32),
-          report_sha256: "11".repeat(32),
-          report_bytes: 2,
-          finding_count: 0,
-          stdout_sha256: "12".repeat(32),
-          stderr_sha256: "13".repeat(32),
-        },
-      },
-    },
-    cleanup: {
-      managedRuntimePurged: true,
-      machineImageCachePurged: true,
-      installerRemoved: true,
-      privateDataRemoved: true,
-    },
     installedManifestSnapshot: "installed-runtime-manifest.json",
   };
   const observationsFile = path.join(qualificationRoot, "observations.json");
@@ -364,6 +392,7 @@ async function createQualificationFixture(output, platform) {
     version: VERSION,
     tag: TAG,
     commit: COMMIT,
+    releaseChannel: "prerelease",
     runnerLabel: runner.label,
     environment: {
       GITHUB_ACTIONS: "true",
@@ -581,14 +610,10 @@ async function main() {
     expectFailure(() => run("finalize-release.mjs", finalizeArguments), "missing platform qualification");
     await rename(hiddenMacQualification, macQualification);
     const validMacQualification = JSON.parse((await readFile(macQualification)).toString("utf8"));
-    const expectedMacQualificationImage =
-      validMacQualification.containerExecution.result.container.image;
     const legacyMacState = JSON.parse(JSON.stringify(validMacQualification));
     legacyMacState.qualificationState = "host_limited";
     expectFailure(
-      () => validatePlatformQualification(legacyMacState, {
-        expectedQualificationImage: expectedMacQualificationImage,
-      }),
+      () => validatePlatformQualification(legacyMacState),
       "legacy host-limited macOS qualification",
     );
     const skippedMacContainer = JSON.parse(JSON.stringify(validMacQualification));
@@ -597,10 +622,8 @@ async function main() {
       reason: "legacy-host-limitation",
     };
     expectFailure(
-      () => validatePlatformQualification(skippedMacContainer, {
-        expectedQualificationImage: expectedMacQualificationImage,
-      }),
-      "skipped macOS container qualification",
+      () => validatePlatformQualification(skippedMacContainer),
+      "untyped macOS container observation",
     );
     const unsupportedMacStart = JSON.parse(JSON.stringify(validMacQualification));
     unsupportedMacStart.managedRuntime.operations[3] = {
@@ -609,25 +632,37 @@ async function main() {
       reason: "legacy-host-limitation",
     };
     expectFailure(
-      () => validatePlatformQualification(unsupportedMacStart, {
-        expectedQualificationImage: expectedMacQualificationImage,
-      }),
-      "unsupported macOS managed-runtime start",
+      () => validatePlatformQualification(unsupportedMacStart),
+      "untyped macOS managed-runtime observation",
+    );
+    const stableMacQualification = JSON.parse(JSON.stringify(validMacQualification));
+    stableMacQualification.releaseIdentity.releaseChannel = "stable";
+    expectFailure(
+      () => validatePlatformQualification(stableMacQualification),
+      "stable release with runtime-not-observed macOS evidence",
+    );
+    const legacyMacSchema = JSON.parse(JSON.stringify(validMacQualification));
+    legacyMacSchema.schemaVersion = 1;
+    expectFailure(
+      () => validatePlatformQualification(legacyMacSchema),
+      "legacy platform qualification schema",
+    );
+    const incompleteMacCleanup = JSON.parse(JSON.stringify(validMacQualification));
+    incompleteMacCleanup.cleanup.installedApplicationRemoved = false;
+    expectFailure(
+      () => validatePlatformQualification(incompleteMacCleanup),
+      "incomplete macOS installer cleanup",
     );
     const wrongMacRunner = JSON.parse(JSON.stringify(validMacQualification));
     wrongMacRunner.runner.runnerLabel = "macos-14";
     expectFailure(
-      () => validatePlatformQualification(wrongMacRunner, {
-        expectedQualificationImage: expectedMacQualificationImage,
-      }),
+      () => validatePlatformQualification(wrongMacRunner),
       "wrong macOS qualification runner",
     );
     const wrongMacTarget = JSON.parse(JSON.stringify(validMacQualification));
     wrongMacTarget.runtime.selectedTarget.architecture = "aarch64";
     expectFailure(
-      () => validatePlatformQualification(wrongMacTarget, {
-        expectedQualificationImage: expectedMacQualificationImage,
-      }),
+      () => validatePlatformQualification(wrongMacTarget),
       "wrong macOS qualification runtime target",
     );
     const linuxQualification = path.join(release, "platform-qualification-linux-x86_64.json");
@@ -655,6 +690,15 @@ async function main() {
     expectFailure(
       () => validatePlatformQualification(oversizedReportQualification, { expectedQualificationImage }),
       "oversized container qualification report",
+    );
+    const skippedLinuxContainer = JSON.parse(validLinuxQualification.toString("utf8"));
+    skippedLinuxContainer.containerExecution = {
+      outcome: "not_observed",
+      reasonCode: "github_hosted_macos_nested_virtualization_unsupported",
+    };
+    expectFailure(
+      () => validatePlatformQualification(skippedLinuxContainer, { expectedQualificationImage }),
+      "skipped Linux container qualification",
     );
     run("finalize-release.mjs", finalizeArguments);
     const finalizedVerificationArguments = [
@@ -702,7 +746,8 @@ async function main() {
       !checksums.includes("platform-qualification-linux-x86_64.json") ||
       !checksums.includes("platform-qualification-macos-universal.json") ||
       !checksums.includes("platform-qualification-windows-x86_64.json") ||
-      !releaseNotes.includes("All three platforms completed managed-runtime install, start, status, fixed") ||
+      !releaseNotes.includes("Linux and Windows completed managed-runtime install, start, status, fixed") ||
+      !releaseNotes.includes("managed-runtime and container lifecycle is explicitly recorded as not observed") ||
       Object.keys(latest.platforms).length !== 11 ||
       !latest.platforms["windows-x86_64-nsis"] ||
       !latest.platforms["windows-x86_64-msi"] ||
@@ -717,7 +762,7 @@ async function main() {
       throw new Error("finalized release did not preserve updater and companion executable evidence");
     }
     process.stdout.write(
-      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact managed-runtime evidence sets, and three strict hosted platform qualifications.\n",
+      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact runtime-manifest evidence sets, and three strict hosted platform qualifications.\n",
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });

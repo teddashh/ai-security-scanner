@@ -494,7 +494,14 @@ async function main() {
     runtimeComponents.push(...(await verifyRuntimeEvidence(directory, platform)));
     platformQualifications.push(await verifyPlatformQualificationFile(
       path.join(directory, `platform-qualification-${platform}.json`),
-      { platform, version, tag, commit, releaseDirectory: directory },
+      {
+        platform,
+        version,
+        tag,
+        commit,
+        releaseChannel: metadata.releaseChannel,
+        releaseDirectory: directory,
+      },
     ));
   }
   assert(installers.some((file) => file.endsWith(".deb")), "release has no Debian installer");
@@ -552,10 +559,13 @@ async function main() {
     "artifact attestation before installing.",
     "",
     "Fresh GitHub-hosted qualification jobs independently installed the Debian package, macOS DMG,",
-    "and Windows MSI. All three platforms completed managed-runtime install, start, status, fixed",
+    "and Windows MSI. Linux and Windows completed managed-runtime install, start, status, fixed",
     "network-disabled Gitleaks container execution, stop, uninstall with image-cache purge, and",
-    "private-state cleanup. The universal macOS artifact was independently exercised on GitHub's",
-    "standard Intel macos-15-intel runner. Exact runner-image and operation evidence is published",
+    "private-state cleanup. The universal macOS artifact's DMG installation, bundled layout, exact",
+    "runtime manifest, CLI, desktop startup, and cleanup passed on GitHub's Intel macos-15-intel",
+    "runner. Its managed-runtime and container lifecycle is explicitly recorded as not observed",
+    "because GitHub-hosted macOS does not support the nested virtualization required by AppleHV.",
+    "This limited macOS evidence is accepted only for a pre-release. Exact evidence is published",
     "per platform.",
     "",
     "> The current installers are not signed with Apple Developer ID or Windows Authenticode and",

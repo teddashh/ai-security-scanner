@@ -20,7 +20,6 @@ data_directory="${RUNNER_TEMP}/ai-security-scanner-platform-qualification-macos-
 mounted=false
 desktop_pid=""
 cli=""
-short_home=""
 
 cleanup_on_exit() {
   status=$?
@@ -28,21 +27,6 @@ cleanup_on_exit() {
   if [[ -n "${desktop_pid}" ]] && kill -0 "${desktop_pid}" 2>/dev/null; then
     kill "${desktop_pid}" >/dev/null 2>&1
     wait "${desktop_pid}" >/dev/null 2>&1
-  fi
-  if [[ -x "${cli}" && -d "${data_directory}" ]]; then
-    "${cli}" --json --data-dir "${data_directory}" runtime managed stop --force >/dev/null 2>&1 || true
-    "${cli}" --json --data-dir "${data_directory}" runtime managed uninstall --force --purge-image-cache >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${short_home}" && ( -e "${short_home}" || -L "${short_home}" ) ]]; then
-    printf 'Qualification cleanup found the exact macOS short HOME still present: %s\n' "${short_home}" >&2
-    if [[ "${short_home}" =~ ^/tmp/assm1-[0-9a-f]{32}$ ]] \
-      && [[ -d "${short_home}" && ! -L "${short_home}" ]] \
-      && [[ "$(/usr/bin/stat -f '%u' "${short_home}" 2>/dev/null)" == "$(id -u)" ]] \
-      && [[ "$(/usr/bin/stat -f '%Lp' "${short_home}" 2>/dev/null)" == "700" ]]; then
-      rm -rf -- "${short_home}"
-    else
-      printf 'Refusing to follow or remove an unsafe macOS short HOME during qualification cleanup.\n' >&2
-    fi
   fi
   if [[ "${mounted}" == true ]]; then /usr/bin/hdiutil detach "${mount_point}" >/dev/null; fi
   for exact_path in "${installed_app}" "${data_directory}" "${mount_point}"; do
@@ -86,14 +70,17 @@ for installed_executable in "${desktop}" "${egress}" "${broker}" "${cli}"; do
   [[ "${installed_executable}" == /* && -f "${installed_executable}" && -x "${installed_executable}" ]]
 done
 [[ -f "${runtime_manifest}" ]]
+node -e '
+  const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (manifest.schema_version !== "2" || typeof manifest.bundle_id !== "string" ||
+      manifest.bundle_id.length === 0 || typeof manifest.runtime_version !== "string" ||
+      manifest.runtime_version.length === 0 || !Array.isArray(manifest.targets) ||
+      !manifest.targets.some((target) => target?.operating_system === "macos" &&
+        target?.architecture === "x86_64" && target?.provider === "applehv")) {
+    throw new Error("Installed macOS managed-runtime manifest is malformed or lacks its released AppleHV target.");
+  }
+' "${runtime_manifest}"
 cp -- "${runtime_manifest}" "${work_directory}/installed-runtime-manifest.json"
-manifest_sha256="$(node -e '
-  const crypto = require("crypto");
-  const fs = require("fs");
-  process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));
-' "${runtime_manifest}")"
-[[ "${manifest_sha256}" =~ ^[0-9a-f]{64}$ ]]
-provider_release_home="${data_directory}/managed-runtime/provider-home/${manifest_sha256:0:16}"
 
 "${cli}" --help >/dev/null
 "${desktop}" >"${work_directory}/desktop-startup.log" 2>&1 &
@@ -110,114 +97,15 @@ wait "${desktop_pid}" || true
 desktop_pid=""
 
 mkdir -m 700 -- "${data_directory}"
-run_managed() {
-  output_name="$1"
-  shift
-  "${cli}" --json --data-dir "${data_directory}" runtime managed "$@" >"${work_directory}/${output_name}.json"
-  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "${work_directory}/${output_name}.json"
-}
-
-assert_managed_ssh_identity() {
-  node -e '
-    const fs = require("fs");
-    const [privateKey, publicKey, privateStaging, publicStaging] = process.argv.slice(1);
-    const absent = (entry) => {
-      try { fs.lstatSync(entry); return false; }
-      catch (error) { if (error.code === "ENOENT") return true; throw error; }
-    };
-    const verify = (entry, maximum, modes, label) => {
-      const metadata = fs.lstatSync(entry);
-      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1 ||
-          metadata.uid !== process.geteuid() || metadata.size <= 0 || metadata.size > maximum ||
-          !modes.includes(metadata.mode & 0o777)) {
-        throw new Error(`${label} is not an exact current-user single-link private file.`);
-      }
-      return fs.readFileSync(entry, "utf8");
-    };
-    const privateText = verify(privateKey, 16 * 1024, [0o400, 0o600], "Managed SSH private key");
-    const publicText = verify(publicKey, 4 * 1024, [0o400, 0o444, 0o600, 0o644], "Managed SSH public key");
-    if (!privateText.startsWith("-----BEGIN OPENSSH PRIVATE KEY-----\n") ||
-        !privateText.trimEnd().endsWith("-----END OPENSSH PRIVATE KEY-----")) {
-      throw new Error("Managed SSH private key is not an OpenSSH private key.");
-    }
-    if (!/^ssh-ed25519 [A-Za-z0-9+/]+={0,2} ai-security-scanner-managed-runtime\n?$/.test(publicText)) {
-      throw new Error("Managed SSH public key does not have the exact Ed25519 identity format.");
-    }
-    if (!absent(privateStaging) || !absent(publicStaging)) {
-      throw new Error("Managed SSH identity staging entries remain after start.");
-    }
-  ' \
-    "${provider_release_home}/data/containers/podman/machine/machine" \
-    "${provider_release_home}/data/containers/podman/machine/machine.pub" \
-    "${provider_release_home}/data/containers/podman/machine/.machine.private-key-new" \
-    "${provider_release_home}/data/containers/podman/machine/.machine.public-key-new"
-}
-run_managed initial-status status
-run_managed install install
-short_home="$(node -e '
-  const crypto = require("crypto");
-  const fs = require("fs");
-  const path = require("path");
-  const state = Buffer.from(fs.realpathSync(path.join(process.argv[1], "managed-runtime")));
-  const manifest = crypto.createHash("sha256").update(fs.readFileSync(process.argv[2])).digest("hex");
-  const u32 = Buffer.alloc(4);
-  u32.writeUInt32BE(process.geteuid());
-  const stateLength = Buffer.alloc(8);
-  stateLength.writeBigUInt64BE(BigInt(state.length));
-  const manifestLength = Buffer.alloc(8);
-  manifestLength.writeBigUInt64BE(BigInt(manifest.length));
-  const namespace = crypto.createHash("sha256")
-    .update(Buffer.from("ai-security-scanner-macos-command-home-v1\0"))
-    .update(u32)
-    .update(stateLength)
-    .update(state)
-    .update(manifestLength)
-    .update(manifest)
-    .digest("hex")
-    .slice(0, 32);
-  process.stdout.write(`/tmp/assm1-${namespace}`);
-' "${data_directory}" "${runtime_manifest}")"
-if [[ -e "${short_home}" || -L "${short_home}" ]]; then
-  printf 'macOS qualification did not begin with a fresh exact short HOME.\n' >&2
-  exit 1
-fi
-run_managed installed-status status
-run_managed start start
-assert_managed_ssh_identity
-[[ -d "${short_home}" && ! -L "${short_home}" ]]
-[[ "$(stat -f '%u' "${short_home}")" == "$(id -u)" ]]
-[[ "$(stat -f '%Lp' "${short_home}")" == "700" ]]
-longest_ignition_alias="${short_home}/.podman/$(printf '%030d' 0)-ignition.sock"
-if (( ${#longest_ignition_alias} > 103 )); then
-  printf 'Managed runtime macOS socket alias exceeds Podman 5.8.2 path budget.\n' >&2
-  exit 1
-fi
-run_managed running-status status
-run_managed container-qualification qualify
-run_managed stop stop
-[[ -d "${short_home}" && ! -L "${short_home}" ]]
-run_managed stopped-status status
-run_managed uninstall-purge uninstall --force --purge-image-cache
-if [[ -e "${provider_release_home}" || -L "${provider_release_home}" ]]; then
-  printf 'Managed runtime uninstall left its exact release provider home behind.\n' >&2
-  exit 1
-fi
-if [[ -e "${short_home}" || -L "${short_home}" ]]; then
-  printf 'Managed runtime uninstall left its exact macOS short HOME behind.\n' >&2
-  exit 1
-fi
-run_managed final-status status
-
-for private_root in "${data_directory}/managed-runtime/versions" "${data_directory}/managed-runtime/machine-images" "${data_directory}/managed-runtime/provider-home"; do
-  if [[ -d "${private_root}" ]] && find "${private_root}" -mindepth 1 -print -quit | grep -q .; then
-    printf 'Managed runtime cleanup left private entries below %s.\n' "${private_root}" >&2
-    exit 1
-  fi
-done
+# GitHub-hosted macOS runners do not support the nested virtualization required by
+# the packaged AppleHV machine. Do not invoke any managed-runtime lifecycle command
+# here: the evidence below records those operations as not observed instead of
+# manufacturing passing status documents.
+[[ ! -e "${data_directory}/managed-runtime" && ! -L "${data_directory}/managed-runtime" ]]
 
 rm -rf -- "${installed_app}"
 [[ ! -e "${installed_app}" ]]
-rm -rf -- "${data_directory}"
+rmdir -- "${data_directory}"
 [[ ! -e "${data_directory}" ]]
 
 export QUAL_DESKTOP="${desktop}"
@@ -228,10 +116,10 @@ export QUAL_RUNTIME_MANIFEST="${runtime_manifest}"
 export QUAL_DATA_DIRECTORY="${data_directory}"
 export QUAL_WORK_DIRECTORY="${work_directory}"
 node --input-type=module <<'NODE'
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
-const read = (name) => JSON.parse(readFileSync(path.join(process.env.QUAL_WORK_DIRECTORY, `${name}.json`), "utf8"));
-const passed = (name, file) => ({ name, outcome: "passed", status: read(file) });
+const reasonCode = "github_hosted_macos_nested_virtualization_unsupported";
+const notObserved = (name) => ({ name, outcome: "not_observed", reasonCode });
 const observations = {
   installedLayout: {
     pathsVerifiedAbsolute: true,
@@ -247,18 +135,24 @@ const observations = {
   desktopStartup: { outcome: "passed", observationSeconds: 12, installedExecutable: process.env.QUAL_DESKTOP },
   privateDataDirectory: process.env.QUAL_DATA_DIRECTORY,
   operations: [
-    passed("initial_status", "initial-status"),
-    passed("install", "install"),
-    passed("installed_status", "installed-status"),
-    passed("start", "start"),
-    passed("running_status", "running-status"),
-    passed("stop", "stop"),
-    passed("stopped_status", "stopped-status"),
-    passed("uninstall_purge", "uninstall-purge"),
-    passed("final_status", "final-status"),
+    notObserved("initial_status"),
+    notObserved("install"),
+    notObserved("installed_status"),
+    notObserved("start"),
+    notObserved("running_status"),
+    notObserved("stop"),
+    notObserved("stopped_status"),
+    notObserved("uninstall_purge"),
+    notObserved("final_status"),
   ],
-  containerExecution: { outcome: "passed", result: read("container-qualification") },
-  cleanup: { managedRuntimePurged: true, machineImageCachePurged: true, installerRemoved: true, privateDataRemoved: true },
+  containerExecution: { outcome: "not_observed", reasonCode },
+  cleanup: {
+    diskImageDetached: true,
+    installedApplicationRemoved: true,
+    privateDataRemoved: true,
+    managedRuntimeState: "not_created",
+    machineImageCacheState: "not_created",
+  },
   installedManifestSnapshot: "installed-runtime-manifest.json",
 };
 writeFileSync(path.join(process.env.QUAL_WORK_DIRECTORY, "observations.json"), `${JSON.stringify(observations, null, 2)}\n`, { flag: "wx" });

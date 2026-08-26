@@ -1,4 +1,4 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -28,7 +28,7 @@ const PLATFORM_CONTRACTS = Object.freeze({
     runnerLabel: "macos-15-intel",
     runnerOs: "macOS",
     runnerArch: "X64",
-    qualificationState: "passed",
+    qualificationState: "installer_passed_runtime_not_observed",
     targetOperatingSystem: "macos",
     targetArchitecture: "x86_64",
     targetProvider: "applehv",
@@ -45,6 +45,8 @@ const PLATFORM_CONTRACTS = Object.freeze({
   }),
 });
 
+const QUALIFICATION_SCHEMA_VERSION = 2;
+const MACOS_HOSTED_LIMITATION = "github_hosted_macos_nested_virtualization_unsupported";
 const MAX_QUALIFICATION_DOCUMENT_BYTES = 1024 * 1024;
 const MAX_CONTAINER_REPORT_BYTES = 1024 * 1024;
 
@@ -160,7 +162,7 @@ function qualificationImageFromCatalog(catalog) {
   return `${engine.image.repository}@${engine.image.digest}`;
 }
 
-function validateOperations(operations, runtime, target) {
+function validateFullOperations(operations, runtime, target) {
   assert(Array.isArray(operations), "managed lifecycle operations must be an array");
   assert(JSON.stringify(operations.map((operation) => operation?.name)) === JSON.stringify(LIFECYCLE_OPERATION_NAMES), "managed lifecycle operation order is incomplete or unexpected");
   const expectedPhases = new Map([
@@ -182,9 +184,19 @@ function validateOperations(operations, runtime, target) {
   }
 }
 
+function validateMacosHostedOperations(operations) {
+  assert(Array.isArray(operations), "managed lifecycle operations must be an array");
+  assert(JSON.stringify(operations.map((operation) => operation?.name)) === JSON.stringify(LIFECYCLE_OPERATION_NAMES), "managed lifecycle operation order is incomplete or unexpected");
+  for (const operation of operations) {
+    exactKeys(operation, ["name", "outcome", "reasonCode"], `${operation.name} operation`);
+    assert(operation.outcome === "not_observed", `${operation.name} must be recorded as not observed on hosted macOS`);
+    assert(operation.reasonCode === MACOS_HOSTED_LIMITATION, `${operation.name} has an unsupported hosted-macOS limitation code`);
+  }
+}
+
 export function validatePlatformQualification(evidence, context = {}) {
   exactKeys(evidence, ["schemaVersion", "evidenceType", "product", "platform", "qualificationState", "releaseIdentity", "runner", "sourceArtifact", "installer", "installedLayout", "runtime", "desktopStartup", "managedRuntime", "containerExecution", "cleanup"], "platform qualification");
-  assert(evidence.schemaVersion === 1, "platform qualification schemaVersion must be 1");
+  assert(evidence.schemaVersion === QUALIFICATION_SCHEMA_VERSION, `platform qualification schemaVersion must be ${QUALIFICATION_SCHEMA_VERSION}`);
   assert(evidence.evidenceType === "hosted-platform-qualification", "platform qualification evidenceType is incorrect");
   assert(evidence.product === "ai-security-scanner", "platform qualification product is incorrect");
   const contract = PLATFORM_CONTRACTS[evidence.platform];
@@ -192,13 +204,18 @@ export function validatePlatformQualification(evidence, context = {}) {
   if (context.platform) assert(evidence.platform === context.platform, "platform qualification filename/platform mismatch");
   assert(evidence.qualificationState === contract.qualificationState, `${evidence.platform} qualification state is dishonest`);
 
-  exactKeys(evidence.releaseIdentity, ["version", "tag", "sourceCommit"], "qualification release identity");
+  exactKeys(evidence.releaseIdentity, ["version", "tag", "sourceCommit", "releaseChannel"], "qualification release identity");
   assert(isSemver(evidence.releaseIdentity.version), "qualification version is not native-compatible numeric SemVer");
   assert(evidence.releaseIdentity.tag === `v${evidence.releaseIdentity.version}`, "qualification tag/version mismatch");
   assert(/^[0-9a-f]{40}$/u.test(evidence.releaseIdentity.sourceCommit), "qualification commit must be a full lowercase object id");
+  assert(["prerelease", "stable"].includes(evidence.releaseIdentity.releaseChannel), "qualification release channel is unsupported");
   if (context.version) assert(evidence.releaseIdentity.version === context.version, "qualification version differs from release");
   if (context.tag) assert(evidence.releaseIdentity.tag === context.tag, "qualification tag differs from release");
   if (context.commit) assert(evidence.releaseIdentity.sourceCommit === context.commit, "qualification commit differs from release");
+  if (context.releaseChannel) assert(evidence.releaseIdentity.releaseChannel === context.releaseChannel, "qualification release channel differs from release");
+  if (evidence.platform === "macos-universal") {
+    assert(evidence.releaseIdentity.releaseChannel === "prerelease", "hosted macOS runtime-not-observed evidence is allowed only for a pre-release");
+  }
 
   exactKeys(evidence.runner, ["provider", "environment", "runnerLabel", "os", "arch", "imageOs", "imageVersion", "workflow", "job", "runId", "runAttempt", "freshJob", "artifactOnlyFromBuild"], "qualification runner");
   assert(evidence.runner.provider === "github-actions" && evidence.runner.environment === "github-hosted", "qualification did not run on a GitHub-hosted runner");
@@ -256,26 +273,35 @@ export function validatePlatformQualification(evidence, context = {}) {
 
   exactKeys(evidence.managedRuntime, ["privateDataDirectory", "operations"], "managed runtime qualification");
   requireAbsolutePath(evidence.managedRuntime.privateDataDirectory, evidence.platform, "managed runtime private data directory");
-  validateOperations(evidence.managedRuntime.operations, evidence.runtime, evidence.runtime.selectedTarget);
-
-  exactKeys(evidence.containerExecution, ["outcome", "result"], "container execution");
-  assert(evidence.containerExecution.outcome === "passed", "managed container execution did not pass");
-  assert(typeof context.expectedQualificationImage === "string", "validator has no released qualification image identity");
-  validateContainerResult(evidence.containerExecution.result, evidence.runtime, evidence.runtime.selectedTarget, evidence.releaseIdentity.version, context.expectedQualificationImage);
-
-  exactKeys(evidence.cleanup, ["managedRuntimePurged", "machineImageCachePurged", "installerRemoved", "privateDataRemoved"], "qualification cleanup");
-  assert(Object.values(evidence.cleanup).every((value) => value === true), "qualification cleanup is incomplete");
+  if (evidence.platform === "macos-universal") {
+    validateMacosHostedOperations(evidence.managedRuntime.operations);
+    exactKeys(evidence.containerExecution, ["outcome", "reasonCode"], "container execution");
+    assert(evidence.containerExecution.outcome === "not_observed", "hosted macOS container execution must be recorded as not observed");
+    assert(evidence.containerExecution.reasonCode === MACOS_HOSTED_LIMITATION, "hosted macOS container execution has an unsupported limitation code");
+    exactKeys(evidence.cleanup, ["diskImageDetached", "installedApplicationRemoved", "privateDataRemoved", "managedRuntimeState", "machineImageCacheState"], "qualification cleanup");
+    assert(evidence.cleanup.diskImageDetached === true, "macOS qualification did not detach the installer image");
+    assert(evidence.cleanup.installedApplicationRemoved === true, "macOS qualification did not remove the installed application");
+    assert(evidence.cleanup.privateDataRemoved === true, "macOS qualification did not remove its private data directory");
+    assert(evidence.cleanup.managedRuntimeState === "not_created", "macOS qualification made an unsupported managed-runtime cleanup claim");
+    assert(evidence.cleanup.machineImageCacheState === "not_created", "macOS qualification made an unsupported machine-image cleanup claim");
+  } else {
+    validateFullOperations(evidence.managedRuntime.operations, evidence.runtime, evidence.runtime.selectedTarget);
+    exactKeys(evidence.containerExecution, ["outcome", "result"], "container execution");
+    assert(evidence.containerExecution.outcome === "passed", "managed container execution did not pass");
+    assert(typeof context.expectedQualificationImage === "string", "validator has no released qualification image identity");
+    validateContainerResult(evidence.containerExecution.result, evidence.runtime, evidence.runtime.selectedTarget, evidence.releaseIdentity.version, context.expectedQualificationImage);
+    exactKeys(evidence.cleanup, ["managedRuntimePurged", "machineImageCachePurged", "installerRemoved", "privateDataRemoved"], "qualification cleanup");
+    assert(Object.values(evidence.cleanup).every((value) => value === true), "qualification cleanup is incomplete");
+  }
   return evidence;
 }
 
 function observationsToEvidence(observations, inputs) {
-  const { platform, version, tag, commit, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, environment } = inputs;
+  const { platform, version, tag, commit, releaseChannel, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, environment } = inputs;
   const contract = PLATFORM_CONTRACTS[platform];
   exactKeys(observations, ["installedLayout", "desktopStartup", "privateDataDirectory", "operations", "containerExecution", "cleanup", "installedManifestSnapshot"], "platform observations");
   exactKeys(observations.installedLayout, ["pathsVerifiedAbsolute", "desktop", "cli", "companions", "runtimeManifestOriginalPath"], "observed installed layout");
   assert(observations.installedManifestSnapshot === "installed-runtime-manifest.json", "installed manifest snapshot must use the fixed local filename");
-  const selectedStatus = observations.operations.find((operation) => operation.name === "installed_status")?.status;
-  assert(selectedStatus && typeof selectedStatus === "object", "observations have no installed runtime status");
   const machineImages = runtimeManifest.targets.map((target) => ({
     operatingSystem: target.operating_system,
     architecture: target.architecture,
@@ -284,19 +310,33 @@ function observationsToEvidence(observations, inputs) {
     sha256: target.machine_image.sha256,
     bytes: target.machine_image.size_bytes,
   }));
-  const selectedTarget = {
-    operatingSystem: selectedStatus.operating_system,
-    architecture: selectedStatus.architecture,
-    provider: selectedStatus.machine_provider,
-    sha256: selectedStatus.machine_image_sha256,
-  };
+  let selectedTarget;
+  if (platform === "macos-universal") {
+    const matches = machineImages.filter((target) => target.operatingSystem === contract.targetOperatingSystem && target.architecture === contract.targetArchitecture && target.provider === contract.targetProvider);
+    assert(matches.length === 1, "hosted macOS observations do not bind one exact released AppleHV target");
+    selectedTarget = {
+      operatingSystem: matches[0].operatingSystem,
+      architecture: matches[0].architecture,
+      provider: matches[0].provider,
+      sha256: matches[0].sha256,
+    };
+  } else {
+    const selectedStatus = observations.operations.find((operation) => operation.name === "installed_status")?.status;
+    assert(selectedStatus && typeof selectedStatus === "object", "observations have no installed runtime status");
+    selectedTarget = {
+      operatingSystem: selectedStatus.operating_system,
+      architecture: selectedStatus.architecture,
+      provider: selectedStatus.machine_provider,
+      sha256: selectedStatus.machine_image_sha256,
+    };
+  }
   const evidence = {
-    schemaVersion: 1,
+    schemaVersion: QUALIFICATION_SCHEMA_VERSION,
     evidenceType: "hosted-platform-qualification",
     product: "ai-security-scanner",
     platform,
     qualificationState: contract.qualificationState,
-    releaseIdentity: { version, tag, sourceCommit: commit },
+    releaseIdentity: { version, tag, sourceCommit: commit, releaseChannel },
     runner: {
       provider: "github-actions",
       environment: environment.RUNNER_ENVIRONMENT,
@@ -336,7 +376,7 @@ function observationsToEvidence(observations, inputs) {
   return validatePlatformQualification(evidence, { platform, version, tag, commit, expectedQualificationImage });
 }
 
-export async function createPlatformQualification({ artifactDirectory, observationsFile, outputFile, platform, version, tag, commit, runnerLabel, environment = process.env }) {
+export async function createPlatformQualification({ artifactDirectory, observationsFile, outputFile, platform, version, tag, commit, releaseChannel, runnerLabel, environment = process.env }) {
   const contract = PLATFORM_CONTRACTS[platform];
   assert(contract, `unsupported qualification platform: ${platform}`);
   assert(runnerLabel === contract.runnerLabel, `runner label ${runnerLabel} is not released for ${platform}`);
@@ -345,6 +385,7 @@ export async function createPlatformQualification({ artifactDirectory, observati
   assert(environment.RUNNER_OS === contract.runnerOs && environment.RUNNER_ARCH === contract.runnerArch, "actual runner OS/architecture differs from the qualification contract");
   for (const field of ["ImageOS", "ImageVersion", "GITHUB_WORKFLOW", "GITHUB_JOB", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA"]) requireText(environment[field], `runner environment ${field}`);
   assert(isSemver(version) && tag === `v${version}` && /^[0-9a-f]{40}$/u.test(commit), "qualification release identity is malformed");
+  assert(["prerelease", "stable"].includes(releaseChannel), "qualification release channel is unsupported");
   assert(environment.GITHUB_SHA === commit, "qualification checkout SHA differs from validated release identity");
 
   const installerManifest = await readJson(path.join(artifactDirectory, `installers-${platform}.json`));
@@ -380,7 +421,7 @@ export async function createPlatformQualification({ artifactDirectory, observati
   const installedManifestSha256 = await sha256File(installedManifestSnapshot);
   const catalog = await readJson(path.join(PROJECT_ROOT, "engines/catalog.json"));
   const expectedQualificationImage = qualificationImageFromCatalog(catalog);
-  const evidence = observationsToEvidence(observations, { platform, version, tag, commit, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, environment });
+  const evidence = observationsToEvidence(observations, { platform, version, tag, commit, releaseChannel, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, environment });
   await writeJsonAtomic(outputFile, evidence);
   return evidence;
 }
@@ -427,6 +468,7 @@ async function main() {
       version: requireString(args, "version"),
       tag: requireString(args, "tag"),
       commit: requireString(args, "commit"),
+      releaseChannel: requireString(args, "release-channel"),
       runnerLabel: requireString(args, "runner-label"),
     });
     process.stdout.write(`Created strict ${evidence.qualificationState} qualification evidence for ${evidence.platform}.\n`);
@@ -438,12 +480,13 @@ async function main() {
       version: requireString(args, "version"),
       tag: requireString(args, "tag"),
       commit: requireString(args, "commit"),
+      releaseChannel: requireString(args, "release-channel"),
       releaseDirectory: path.resolve(requireString(args, "artifact-dir")),
     });
     process.stdout.write(`Validated strict ${evidence.qualificationState} qualification evidence for ${evidence.platform}.\n`);
     return;
   }
-  throw new Error("usage: platform-qualification.mjs <create|validate> --platform ... --version ... --tag ... --commit ...");
+  throw new Error("usage: platform-qualification.mjs <create|validate> --platform ... --version ... --tag ... --commit ... --release-channel ...");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runMain(main);

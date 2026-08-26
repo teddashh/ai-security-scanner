@@ -57,7 +57,7 @@ GitHub-hosted `ubuntu-24.04`, `macos-15-intel`, and `windows-2025` machines. Eac
 named `release-<platform>` artifact and independently installs the Debian package, DMG, or MSI. It
 locates the installed desktop, all three companion executables, and the packaged managed-runtime
 manifest; the installed manifest must byte-hash to the release copy. Every CLI operation uses a
-new private data directory. Every platform must prove this exact sequence:
+new private data directory. Linux and Windows must prove this exact sequence:
 
 1. initial `not_installed` status;
 2. managed payload install and independent `installed` status;
@@ -81,8 +81,8 @@ requires its exact device inventory to contain `vhost-user-fs-pci`, which Podman
 application-data VirtioFS mount needs.
 It also resolves `bin/virtiofsd` from that manifest, binds its digest to the exact component and
 version, rejects a non-x86-64 ELF or any host interpreter dependency, and executes its version probe
-by absolute path. It does not install or resolve host QEMU or VirtioFS packages. On every platform,
-qualification also proves after start that the exact private-XDG `machine{,.pub}` Ed25519 identity
+by absolute path. It does not install or resolve host QEMU or VirtioFS packages. Linux and Windows
+qualification also prove after start that the exact private-XDG `machine{,.pub}` Ed25519 identity
 exists with bounded single-link current-user protection and that both fixed staging names are absent.
 After uninstall, the exact release-digest provider-home directory itself must be absent; an existing
 but empty directory does not satisfy this check.
@@ -92,26 +92,33 @@ configuration, WSL data, SSH-identity-parent, and image-cache directories alread
 current-user-only inheritable DACLs. Podman therefore never gets an opportunity to create those
 security-sensitive namespace ancestors with the administrator token's ambient default owner.
 
-The macOS qualification independently derives the stable `/tmp/assm1-<32-hex-namespace>` short
-home from the canonical state root, installed manifest digest, and effective uid. It requires a
-fresh real current-user `0700` directory after start, checks the 103-byte Podman socket-path budget,
-requires the directory to survive ordinary stop, and requires it to be absent after uninstall.
-
 The universal macOS package is still built on `macos-14`, while its independent qualification runs
-the Intel slice on `macos-15-intel`. That fresh job must start the packaged AppleHV machine and run
-the same fixed container probe as Linux and Windows. There is no host-limited or skipped release
-state: if the hosted runner cannot complete the real lifecycle, the qualification and release fail.
-This is exact release evidence from the recorded runner image, not a promise about future hosted
-runner capabilities or every end-user Mac.
+the Intel slice on `macos-15-intel`. The job must mount the DMG read-only, copy and inspect the app,
+verify every installed executable, parse the packaged AppleHV runtime manifest, prove that the
+installed manifest exactly matches the release copy, render CLI help, keep the installed desktop
+alive through the startup observation window, detach the DMG, and remove both the installed app and
+its exact private test directory.
+
+The hosted macOS job deliberately does not call managed-runtime install, start, container qualify,
+stop, or uninstall. GitHub documents that nested virtualization on GitHub-hosted runners is not
+officially supported, while the packaged AppleHV machine requires that capability. The evidence
+therefore records every managed-runtime operation and the container probe as `not_observed` with the
+fixed reason code `github_hosted_macos_nested_virtualization_unsupported`; it never emits a passing
+runtime status or container result. See GitHub's
+[hosted-runner documentation](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
+This limited macOS contract can publish only a `prerelease`. A stable release must replace it with
+real managed-runtime lifecycle evidence from a suitable Mac execution surface.
 
 Each runner emits one strict `platform-qualification-<platform>.json`. The record is bound to the
 exact version, candidate tag, 40-character source commit, source artifact name, installer bytes and
 SHA-256, hosted runner label and machine-image version, installed/release runtime-manifest SHA-256,
-all released managed machine-image URLs/digests/sizes, ordered raw CLI status documents, desktop
-startup result, fixed container result, and cleanup results. Unknown fields,
-missing operations, caller-selected commands/images, inconsistent status phases, digest changes,
-and a false cleanup claim fail closed. Finalization requires all three records; the global checksum
-index and GitHub provenance attestation cover them like every other published release file.
+all released managed machine-image URLs/digests/sizes, desktop startup, and cleanup results. Linux
+and Windows additionally contain ordered raw CLI status documents and the fixed container result;
+macOS instead contains the exact ordered `not_observed` records and fixed hosted-runner limitation
+code. Unknown fields, missing operations, caller-selected commands/images, inconsistent status
+phases, digest changes, a fabricated runtime pass, and a false cleanup claim fail closed.
+Finalization requires all three records; the global checksum index and GitHub provenance attestation
+cover them like every other published release file.
 
 The workflow compiles all three real companion executables before every desktop build; no placeholder binary is kept
 in Git. For a local native desktop check, run:
@@ -194,7 +201,8 @@ gh workflow run release.yml --ref main
 
 The preflight executes the same Linux, universal macOS, and Windows build matrix, preserves its
 desktop startup observations, and then runs the independent hosted qualification matrix described
-above. Wait for that dispatch to succeed, record
+above. For a pre-release, macOS runtime/container coverage remains explicitly unobserved rather than
+being treated as passed. Wait for that dispatch to succeed, record
 its immutable `headSha`, and retain or download its `release-finalized` artifact. Tag that exact
 commit—not a later `main` tip:
 
