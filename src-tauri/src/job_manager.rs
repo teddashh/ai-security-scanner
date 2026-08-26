@@ -129,6 +129,17 @@ pub enum JobCompletion {
     Failed,
 }
 
+/// Result of the one-time transition that makes a newly persisted job
+/// executable. Activation waits while the job is paused and shares the same
+/// per-job coordinator as pause, resume, and cancellation. The activation
+/// closure therefore runs exactly once only when cancellation is not pending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobActivationOutcome<T, E> {
+    Activated(T),
+    Cancelled,
+    Failed(E),
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum JobManagerError {
     #[error("invalid {field}")]
@@ -447,6 +458,39 @@ impl JobContext {
         write()
     }
 
+    /// Runs the worker's one-time dispatch activation under the same
+    /// coordinator used by pause, resume, cancellation, and durable writes. A
+    /// pause delays activation without invoking `activate`; cancellation wins
+    /// without invoking it. Once activation begins, a concurrent control
+    /// request waits until the closure has completed.
+    pub fn activate_with_transition<T, E, F>(&self, activate: F) -> JobActivationOutcome<T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        let mut activate = Some(activate);
+        loop {
+            if !self.record.wait_until_runnable() {
+                return JobActivationOutcome::Cancelled;
+            }
+
+            let _control = lock(&self.record.control_transition);
+            if self.record.cancel_requested.load(Ordering::SeqCst) {
+                return JobActivationOutcome::Cancelled;
+            }
+            if self.record.pause_requested.load(Ordering::SeqCst) {
+                continue;
+            }
+
+            let activate = activate
+                .take()
+                .expect("job activation closure is consumed exactly once");
+            return match activate() {
+                Ok(value) => JobActivationOutcome::Activated(value),
+                Err(error) => JobActivationOutcome::Failed(error),
+            };
+        }
+    }
+
     pub fn engine(&self, engine_id: &str) -> Result<EngineJobControl, JobManagerError> {
         self.record
             .engines
@@ -474,15 +518,7 @@ impl JobContext {
     /// `false` if cancellation won the race, allowing the worker to stop before
     /// starting another engine.
     pub fn wait_until_runnable(&self) -> bool {
-        let mut guard = lock(&self.record.gate);
-        while self.is_pause_requested() && !self.is_cancelled() {
-            guard = self
-                .record
-                .gate_changed
-                .wait(guard)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-        }
-        !self.is_cancelled()
+        self.record.wait_until_runnable()
     }
 }
 
@@ -584,6 +620,7 @@ impl JobRecord {
     }
 
     fn request_pause(&self) -> bool {
+        let _gate = lock(&self.gate);
         if self.cancel_requested.load(Ordering::SeqCst) {
             return false;
         }
@@ -599,6 +636,7 @@ impl JobRecord {
     }
 
     fn request_resume(&self) -> bool {
+        let _gate = lock(&self.gate);
         if !self.pause_requested.swap(false, Ordering::SeqCst) {
             return false;
         }
@@ -612,6 +650,7 @@ impl JobRecord {
     }
 
     fn request_cancel(&self) {
+        let _gate = lock(&self.gate);
         self.cancel_requested.store(true, Ordering::SeqCst);
         for engine in self.engines.values() {
             if !engine.base_status().is_terminal() {
@@ -619,6 +658,19 @@ impl JobRecord {
             }
         }
         self.gate_changed.notify_all();
+    }
+
+    fn wait_until_runnable(&self) -> bool {
+        let mut guard = lock(&self.gate);
+        while self.pause_requested.load(Ordering::SeqCst)
+            && !self.cancel_requested.load(Ordering::SeqCst)
+        {
+            guard = self
+                .gate_changed
+                .wait(guard)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        !self.cancel_requested.load(Ordering::SeqCst)
     }
 
     fn snapshot(&self) -> JobSnapshot {

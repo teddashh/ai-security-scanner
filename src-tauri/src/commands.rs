@@ -54,7 +54,9 @@ use crate::{
         ProcessContainerRuntime, ResourceLimits, RuntimeCommandProvenance, RuntimeProvider,
         ScannerCredentialSet, cleanup_orphaned_credentials,
     },
-    job_manager::{EngineJobStatus, JobCompletion, JobContext, JobKey, JobSnapshot},
+    job_manager::{
+        EngineJobStatus, JobActivationOutcome, JobCompletion, JobContext, JobKey, JobSnapshot,
+    },
     orchestrator::{
         EngineExecutionRequest, ExecutionCheckpoint, ExecutionReport, ExecutionStage, Orchestrator,
         ResumeAction,
@@ -666,6 +668,78 @@ impl<'a> PendingProviderExecutionReservation<'a> {
 impl Drop for PendingProviderExecutionReservation<'_> {
     fn drop(&mut self) {
         release_provider_execution_reservation(self.state, self.reservation.take(), self.operation);
+    }
+}
+
+/// Transferable guard for the persisted-plan to worker-activation seam. The
+/// provider checkout remains reserved, uncommitted, and releasable while the
+/// worker is paused or cancellation is pending. Sending this guard through the
+/// activation channel transfers the sole release responsibility to the worker.
+struct OwnedPendingProviderExecutionReservation {
+    reservation: Option<ProviderExecutionReservation>,
+    release: Option<Box<dyn FnOnce(ProviderExecutionReservation) + Send>>,
+}
+
+impl OwnedPendingProviderExecutionReservation {
+    fn new(
+        reservation: Option<ProviderExecutionReservation>,
+        release: impl FnOnce(ProviderExecutionReservation) + Send + 'static,
+    ) -> Self {
+        Self {
+            reservation,
+            release: Some(Box::new(release)),
+        }
+    }
+
+    fn release_now(&mut self) {
+        let Some(reservation) = self.reservation.take() else {
+            return;
+        };
+        if let Some(release) = self.release.take() {
+            release(reservation);
+        }
+    }
+
+    fn commit_for_activation(
+        &mut self,
+        state: &AppState,
+    ) -> Result<Option<ReservedProviderExecutionBundle>, ProviderPreflightFailure> {
+        let Some(reservation) = self.reservation.as_ref() else {
+            self.release.take();
+            return Ok(None);
+        };
+        let commit = state
+            .source_authorizations
+            .commit_checkout_reservation(&reservation.handle, Utc::now());
+        match commit {
+            Ok(()) => {
+                let reservation = self
+                    .reservation
+                    .take()
+                    .expect("committed provider reservation remained guarded");
+                self.release.take();
+                Ok(Some(ReservedProviderExecutionBundle {
+                    credentials: reservation.credentials,
+                    contexts: reservation.contexts,
+                }))
+            }
+            Err(error) => {
+                let failure = map_provider_reservation_commit_error(error);
+                let reservation = self
+                    .reservation
+                    .take()
+                    .expect("failed provider reservation remained guarded");
+                self.release.take();
+                release_after_provider_commit_error(state, reservation);
+                Err(failure)
+            }
+        }
+    }
+}
+
+impl Drop for OwnedPendingProviderExecutionReservation {
+    fn drop(&mut self) {
+        self.release_now();
     }
 }
 
@@ -2513,16 +2587,26 @@ fn release_after_provider_commit_error(
     }
 }
 
+fn owned_provider_execution_reservation(
+    app: &AppHandle,
+    reservation: Option<ProviderExecutionReservation>,
+) -> OwnedPendingProviderExecutionReservation {
+    let release_app = app.clone();
+    OwnedPendingProviderExecutionReservation::new(reservation, move |reservation| {
+        let state = release_app.state::<AppState>();
+        release_provider_execution_reservation(
+            &state,
+            Some(reservation),
+            "scan activation handoff",
+        );
+    })
+}
+
 fn map_provider_reservation_commit_error(error: AppError) -> ProviderPreflightFailure {
     match error {
         AppError::NotAuthorized(_) => ProviderPreflightFailure::CapabilityUnavailable,
         _ => ProviderPreflightFailure::PreflightUnavailable,
     }
-}
-
-enum ScanWorkerActivation {
-    Execute(Option<ReservedProviderExecutionBundle>),
-    Abort(&'static str),
 }
 
 struct ReservedProviderExecutionBundle {
@@ -2585,15 +2669,106 @@ fn abort_inactive_scan_worker(
     JobCompletion::Failed
 }
 
+fn cancel_inactive_scan_worker(
+    app: &AppHandle,
+    executions: &[PlannedEngineExecution],
+    context: &JobContext,
+    message: &str,
+) -> JobCompletion {
+    let state = app.state::<AppState>();
+    for execution in executions {
+        let report = terminal_report(execution, ExecutionStage::Cancelled, message);
+        if let Ok(applied) = context.coordinate_durable_write(|| {
+            state
+                .case_service()
+                .apply_execution_report(&execution.case_id, &report)
+        }) {
+            let _ = emit(app, RUN_PROGRESS_EVENT, &applied.case);
+        }
+        if let Ok(control) = context.engine(&execution.engine_run_id) {
+            let _ = control.mark_cancelled();
+        }
+    }
+    JobCompletion::Cancelled
+}
+
+fn run_activated_scan_worker(
+    app: AppHandle,
+    executions: Vec<PlannedEngineExecution>,
+    mut pending: OwnedPendingProviderExecutionReservation,
+    context: JobContext,
+) -> JobCompletion {
+    let activation = {
+        let state = app.state::<AppState>();
+        context.activate_with_transition(|| pending.commit_for_activation(&state))
+    };
+    match activation {
+        JobActivationOutcome::Activated(credentials) => {
+            run_scan_worker(app, executions, credentials, context)
+        }
+        JobActivationOutcome::Cancelled => {
+            pending.release_now();
+            cancel_inactive_scan_worker(
+                &app,
+                &executions,
+                &context,
+                "scan cancellation was requested before any scanner was allowed to run",
+            )
+        }
+        JobActivationOutcome::Failed(_) => abort_inactive_scan_worker(
+            &app,
+            &executions,
+            &context,
+            "the cloud connection changed before dispatch; no scanner was allowed to run",
+        ),
+    }
+}
+
+fn persist_inactive_scan_terminal(
+    state: &AppState,
+    executions: &[PlannedEngineExecution],
+    stage: ExecutionStage,
+    message: &str,
+) -> AppResult<AssessmentCase> {
+    let first = executions.first().ok_or_else(|| {
+        AppError::Internal("inactive scan terminalization has no planned executions".into())
+    })?;
+    let mut first_error = None;
+    for execution in executions {
+        let report = terminal_report(execution, stage.clone(), message);
+        if let Err(error) = state
+            .case_service()
+            .apply_execution_report(&execution.case_id, &report)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    state
+        .case_service()
+        .finalize_verification_if_terminal(&first.case_id, &first.scan_run_id)?;
+    state.case_service().show_case(&first.case_id)
+}
+
+fn emit_inactive_scan_terminal(app: &AppHandle, case: &AssessmentCase) {
+    if let Err(error) = emit(app, RUN_FINISHED_EVENT, case) {
+        tracing::warn!(
+            error = %error,
+            "inactive scan was terminalized but its finished event was not emitted"
+        );
+    }
+}
+
 fn dispatch_scan_plan(
     app: &AppHandle,
     state: &State<'_, AppState>,
     plan: ScanPlan,
     reservation: Option<ProviderExecutionReservation>,
 ) -> AppResult<()> {
-    let mut pending =
-        PendingProviderExecutionReservation::new(state, "scan dispatch before activation");
-    pending.set(reservation)?;
+    let mut pending = owned_provider_execution_reservation(app, reservation);
     let key = match JobKey::new(plan.scan_run.case_id.clone(), plan.scan_run.id.clone()) {
         Ok(key) => key,
         Err(error) => return Err(AppError::InvalidRequest(error.to_string())),
@@ -2607,17 +2782,14 @@ fn dispatch_scan_plan(
     let terminal_app = app.clone();
     let terminal_key = key.clone();
     let persisted_executions = plan.executable.clone();
-    let (activation_sender, activation_receiver) = mpsc::channel::<ScanWorkerActivation>();
+    let (activation_sender, activation_receiver) =
+        mpsc::channel::<OwnedPendingProviderExecutionReservation>();
+    let (terminal_sender, terminal_receiver) = mpsc::channel::<AppResult<AssessmentCase>>();
     let initial = match state.jobs.start_job(
-        key,
+        key.clone(),
         engine_run_ids,
         move |context| match activation_receiver.recv() {
-            Ok(ScanWorkerActivation::Execute(credentials)) => {
-                run_scan_worker(worker_app, plan.executable, credentials, context)
-            }
-            Ok(ScanWorkerActivation::Abort(message)) => {
-                abort_inactive_scan_worker(&worker_app, &plan.executable, &context, message)
-            }
+            Ok(pending) => run_activated_scan_worker(worker_app, plan.executable, pending, context),
             Err(_) => abort_inactive_scan_worker(
                 &worker_app,
                 &plan.executable,
@@ -2625,69 +2797,64 @@ fn dispatch_scan_plan(
                 "scan dispatch stopped before any scanner was allowed to run",
             ),
         },
-        move |snapshot| reconcile_terminal_job(&terminal_app, &terminal_key, &snapshot),
+        move |snapshot| {
+            let terminal = reconcile_terminal_job(&terminal_app, &terminal_key, &snapshot);
+            if let Err(error) = &terminal {
+                tracing::error!(
+                    error = %error,
+                    case_id = %terminal_key.case_id,
+                    scan_run_id = %terminal_key.scan_run_id,
+                    "terminal scan reconciliation failed"
+                );
+            }
+            let _ = terminal_sender.send(terminal);
+        },
     ) {
         Ok(initial) => initial,
         Err(error) => {
             let message = format!("scan worker could not start: {error}");
-            for execution in &persisted_executions {
-                let report = terminal_report(execution, ExecutionStage::Failed, &message);
-                let _ = state
-                    .case_service()
-                    .apply_execution_report(&execution.case_id, &report);
-            }
-            if let Some(execution) = persisted_executions.first()
-                && let Err(error) = state
-                    .case_service()
-                    .finalize_verification_if_terminal(&execution.case_id, &execution.scan_run_id)
-            {
-                tracing::error!(
-                    error = %error,
-                    case_id = %execution.case_id,
-                    scan_run_id = %execution.scan_run_id,
-                    "terminal verification comparison could not be persisted"
-                );
-            }
-            if let Some(execution) = persisted_executions.first()
-                && let Ok(case) = state.case_service().show_case(&execution.case_id)
-            {
-                let _ = emit(app, RUN_FINISHED_EVENT, &case);
-            }
+            pending.release_now();
+            let case = persist_inactive_scan_terminal(
+                state,
+                &persisted_executions,
+                ExecutionStage::Failed,
+                &message,
+            )
+            .map_err(|terminal_error| {
+                AppError::Runtime(format!(
+                    "{message}; durable terminalization also failed: {}",
+                    bounded_error(&terminal_error)
+                ))
+            })?;
+            emit_inactive_scan_terminal(app, &case);
             return Err(AppError::Runtime(message));
         }
     };
 
-    let activation = match pending.take() {
-        Some(reservation) => {
-            let commit = state
-                .source_authorizations
-                .commit_checkout_reservation(&reservation.handle, Utc::now());
-            match commit {
-                Ok(()) => ScanWorkerActivation::Execute(Some(ReservedProviderExecutionBundle {
-                    credentials: reservation.credentials,
-                    contexts: reservation.contexts,
-                })),
-                Err(error) => {
-                    let failure = map_provider_reservation_commit_error(error);
-                    release_after_provider_commit_error(state, reservation);
-                    let _ = activation_sender.send(ScanWorkerActivation::Abort(
-                        "the cloud connection changed before dispatch; no scanner was allowed to run",
-                    ));
-                    return Err(failure.into_error());
-                }
+    match activation_sender.send(pending) {
+        Ok(()) => {
+            drop(terminal_receiver);
+            if let Err(error) = emit(app, RUN_PROGRESS_EVENT, &initial) {
+                tracing::warn!(error = %error, "scan started but its initial progress event was not emitted");
             }
+            Ok(())
         }
-        None => ScanWorkerActivation::Execute(None),
-    };
-    if activation_sender.send(activation).is_err() {
-        return Err(AppError::Runtime(
-            "scan worker stopped before dispatch activation".into(),
-        ));
+        Err(error) => {
+            // `SendError` returns the still-uncommitted guard. Dropping it
+            // releases capacity and zeroizes credentials before waiting for
+            // the worker's single terminal-reconciliation owner.
+            drop(error.0);
+            terminal_receiver.recv().map_err(|_| {
+                AppError::Runtime(
+                    "scan worker stopped before handoff and terminal reconciliation did not run"
+                        .into(),
+                )
+            })??;
+            Err(AppError::Runtime(
+                "scan worker stopped before dispatch handoff".into(),
+            ))
+        }
     }
-    if let Err(error) = emit(app, RUN_PROGRESS_EVENT, &initial) {
-        tracing::warn!(error = %error, "scan started but its initial progress event was not emitted");
-    }
-    Ok(())
 }
 
 fn run_scan_worker(
@@ -4154,90 +4321,120 @@ fn merge_reconciled_managed_cleanup(
     });
 }
 
-fn reconcile_terminal_job(app: &AppHandle, key: &JobKey, snapshot: &JobSnapshot) {
+fn reconcile_terminal_job(
+    app: &AppHandle,
+    key: &JobKey,
+    snapshot: &JobSnapshot,
+) -> AppResult<AssessmentCase> {
     let state = app.state::<AppState>();
-    let service = state.case_service();
-    if let Ok(case) = service.show_case(&key.case_id)
-        && let Some(run) = case.scan_runs.iter().find(|run| run.id == key.scan_run_id)
-    {
-        for engine_snapshot in &snapshot.engines {
-            let Some(engine_run) = run
-                .engine_runs
-                .iter()
-                .find(|engine_run| engine_run.id == engine_snapshot.engine_id)
-            else {
-                continue;
-            };
-            if matches!(
-                engine_run.status,
-                EngineRunStatus::Completed
-                    | EngineRunStatus::PartiallyCompleted
-                    | EngineRunStatus::Failed
-                    | EngineRunStatus::Cancelled
-                    | EngineRunStatus::NotExecuted
-            ) {
-                continue;
-            }
-            let Some(mut checkpoint) = engine_run
-                .resume_token
-                .as_deref()
-                .and_then(|token| ExecutionCheckpoint::from_resume_token(token).ok())
-            else {
-                continue;
-            };
-            let stage = if !checkpoint.cleanup_completed {
-                ExecutionStage::CleanupPending
-            } else if checkpoint.resume_action() == ResumeAction::AdaptCapturedArtifacts {
-                ExecutionStage::CapturedAwaitingAdapter
-            } else if engine_snapshot.status == EngineJobStatus::Cancelled {
-                ExecutionStage::Cancelled
-            } else {
-                ExecutionStage::Failed
-            };
-            checkpoint.stage = stage;
-            checkpoint.last_error = Some(
-                match snapshot.failure_kind {
-                    Some(_) => "background scan worker stopped before a durable terminal report",
-                    None => "scan worker ended before this engine reached a durable terminal state",
-                }
-                .into(),
-            );
-            let raw_artifacts = checkpoint
-                .artifact_ids
-                .iter()
-                .map(|artifact_id| {
-                    case.raw_artifacts
-                        .iter()
-                        .find(|artifact| artifact.id == *artifact_id)
-                        .cloned()
-                })
-                .collect::<Option<Vec<_>>>();
-            let Some(raw_artifacts) = raw_artifacts else {
-                continue;
-            };
-            let report = DurableExecutionReport {
-                checkpoint,
-                runtime_preflight: None,
-                cleanup: None,
-                exit_code: None,
-                raw_artifacts,
-                findings: vec![],
-                warnings: vec![],
-            };
-            let _ = service.apply_execution_report(&key.case_id, &report);
-        }
-    }
-    if let Err(error) = service.finalize_verification_if_terminal(&key.case_id, &key.scan_run_id) {
-        tracing::error!(
+    let case = persist_terminal_job_reconciliation(&state, key, snapshot)?;
+    if let Err(error) = emit(app, RUN_FINISHED_EVENT, &case) {
+        tracing::warn!(
             error = %error,
             case_id = %key.case_id,
             scan_run_id = %key.scan_run_id,
-            "terminal verification comparison could not be persisted"
+            "terminal scan was persisted but its finished event was not emitted"
         );
     }
-    if let Ok(case) = service.show_case(&key.case_id) {
-        let _ = emit(app, RUN_FINISHED_EVENT, &case);
+    Ok(case)
+}
+
+fn persist_terminal_job_reconciliation(
+    state: &AppState,
+    key: &JobKey,
+    snapshot: &JobSnapshot,
+) -> AppResult<AssessmentCase> {
+    let service = state.case_service();
+    let case = service.show_case(&key.case_id)?;
+    let run = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == key.scan_run_id)
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "terminal reconciliation could not find persisted scan run {}",
+                key.scan_run_id
+            ))
+        })?;
+    for engine_snapshot in &snapshot.engines {
+        let engine_run = run
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == engine_snapshot.engine_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "terminal reconciliation could not find persisted engine run {}",
+                    engine_snapshot.engine_id
+                ))
+            })?;
+        if matches!(
+            engine_run.status,
+            EngineRunStatus::Completed
+                | EngineRunStatus::PartiallyCompleted
+                | EngineRunStatus::Failed
+                | EngineRunStatus::Cancelled
+                | EngineRunStatus::NotExecuted
+        ) {
+            continue;
+        }
+        let token = engine_run.resume_token.as_deref().ok_or_else(|| {
+            AppError::Internal(format!(
+                "terminal reconciliation found no checkpoint for engine run {}",
+                engine_run.id
+            ))
+        })?;
+        let mut checkpoint = ExecutionCheckpoint::from_resume_token(token).map_err(|error| {
+            AppError::Internal(format!(
+                "terminal reconciliation could not read checkpoint for engine run {}: {}",
+                engine_run.id,
+                bounded_error(&error)
+            ))
+        })?;
+        let stage = if !checkpoint.cleanup_completed {
+            ExecutionStage::CleanupPending
+        } else if checkpoint.resume_action() == ResumeAction::AdaptCapturedArtifacts {
+            ExecutionStage::CapturedAwaitingAdapter
+        } else if engine_snapshot.status == EngineJobStatus::Cancelled {
+            ExecutionStage::Cancelled
+        } else {
+            ExecutionStage::Failed
+        };
+        checkpoint.stage = stage;
+        checkpoint.last_error = Some(
+            match snapshot.failure_kind {
+                Some(_) => "background scan worker stopped before a durable terminal report",
+                None => "scan worker ended before this engine reached a durable terminal state",
+            }
+            .into(),
+        );
+        let raw_artifacts = checkpoint
+            .artifact_ids
+            .iter()
+            .map(|artifact_id| {
+                case.raw_artifacts
+                    .iter()
+                    .find(|artifact| artifact.id == *artifact_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "terminal reconciliation could not find raw artifact {artifact_id}"
+                        ))
+                    })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        let report = DurableExecutionReport {
+            checkpoint,
+            runtime_preflight: None,
+            cleanup: None,
+            exit_code: None,
+            raw_artifacts,
+            findings: vec![],
+            warnings: vec![],
+        };
+        service.apply_execution_report(&key.case_id, &report)?;
     }
+    service.finalize_verification_if_terminal(&key.case_id, &key.scan_run_id)?;
+    service.show_case(&key.case_id)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4280,6 +4477,7 @@ mod tests {
     };
     use crate::storage::Storage;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::{Arc, mpsc};
     use zeroize::Zeroizing;
 
     #[test]
@@ -5005,6 +5203,207 @@ mod tests {
             .unwrap();
         drop(reservation);
         validate_provider_execution_demands(&state, &plan, issued_at).unwrap();
+    }
+
+    #[test]
+    fn failed_worker_handoff_drops_the_guard_and_restores_provider_capacity() {
+        let issued_at = Utc::now();
+        let (_directory, state, case_id, _source_id) = ready_aws_state(issued_at, 1);
+        let state = Arc::new(state);
+        let plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        let reservation = prepare_desktop_execution_with_runtime(&state, &plan, || Ok(()))
+            .unwrap()
+            .unwrap();
+        let release_state = Arc::clone(&state);
+        let pending =
+            OwnedPendingProviderExecutionReservation::new(Some(reservation), move |reservation| {
+                release_provider_execution_reservation(
+                    &release_state,
+                    Some(reservation),
+                    "failed worker handoff test",
+                );
+            });
+        assert_eq!(
+            validate_provider_execution_demands(&state, &plan, issued_at).unwrap_err(),
+            ProviderPreflightFailure::CapabilityUnavailable
+        );
+
+        let (sender, receiver) = mpsc::channel();
+        drop(receiver);
+        let returned = match sender.send(pending) {
+            Ok(()) => panic!("closed activation channel accepted a reservation"),
+            Err(error) => error.0,
+        };
+        drop(returned);
+
+        validate_provider_execution_demands(&state, &plan, issued_at).unwrap();
+        assert!(
+            state
+                .case_service()
+                .show_case(&case_id)
+                .unwrap()
+                .scan_runs
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn pause_then_cancel_before_activation_never_commits_provider_capacity() {
+        let issued_at = Utc::now();
+        let (_directory, state, case_id, _source_id) = ready_aws_state(issued_at, 1);
+        let state = Arc::new(state);
+        let plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        let reservation = prepare_desktop_execution_with_runtime(&state, &plan, || Ok(()))
+            .unwrap()
+            .unwrap();
+        let release_state = Arc::clone(&state);
+        let pending =
+            OwnedPendingProviderExecutionReservation::new(Some(reservation), move |reservation| {
+                release_provider_execution_reservation(
+                    &release_state,
+                    Some(reservation),
+                    "cancel before activation test",
+                );
+            });
+
+        let manager = state.jobs.clone();
+        let key = JobKey::new(&case_id, "provider-activation-test").unwrap();
+        let worker_state = Arc::clone(&state);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (begin_tx, begin_rx) = mpsc::channel();
+        let (activation_entered_tx, activation_entered_rx) = mpsc::channel();
+        let (outcome_tx, outcome_rx) = mpsc::channel();
+        let (terminal_tx, terminal_rx) = mpsc::channel();
+        manager
+            .start_job(
+                key.clone(),
+                ["steampipe"],
+                move |context| {
+                    let mut pending = pending;
+                    started_tx.send(()).unwrap();
+                    begin_rx.recv().unwrap();
+                    let activation = context.activate_with_transition(|| {
+                        activation_entered_tx.send(()).unwrap();
+                        pending.commit_for_activation(&worker_state)
+                    });
+                    let control = context.engine("steampipe").unwrap();
+                    match activation {
+                        JobActivationOutcome::Cancelled => {
+                            pending.release_now();
+                            outcome_tx.send("cancelled").unwrap();
+                            control.mark_cancelled().unwrap();
+                            JobCompletion::Cancelled
+                        }
+                        JobActivationOutcome::Activated(bundle) => {
+                            drop(bundle);
+                            outcome_tx.send("activated").unwrap();
+                            control.mark_completed().unwrap();
+                            JobCompletion::Completed
+                        }
+                        JobActivationOutcome::Failed(_) => {
+                            outcome_tx.send("failed").unwrap();
+                            control.mark_failed().unwrap();
+                            JobCompletion::Failed
+                        }
+                    }
+                },
+                move |snapshot| terminal_tx.send(snapshot).unwrap(),
+            )
+            .unwrap();
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        manager.pause(&key).unwrap();
+        begin_tx.send(()).unwrap();
+        assert!(
+            activation_entered_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "paused worker must not enter the checkout commit"
+        );
+        assert_eq!(
+            validate_provider_execution_demands(&state, &plan, issued_at).unwrap_err(),
+            ProviderPreflightFailure::CapabilityUnavailable
+        );
+
+        manager.cancel(&key).unwrap();
+        assert_eq!(
+            outcome_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            "cancelled"
+        );
+        assert!(activation_entered_rx.try_recv().is_err());
+        assert_eq!(
+            terminal_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .status,
+            crate::job_manager::JobStatus::Cancelled
+        );
+        validate_provider_execution_demands(&state, &plan, issued_at).unwrap();
+    }
+
+    #[test]
+    fn failed_handoff_reconciliation_terminalizes_the_persisted_execution() {
+        let (_directory, state, case_id) = ready_repository_state();
+        let plan = state
+            .case_service()
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        let execution = plan.executable.first().unwrap();
+        let key = JobKey::new(&case_id, &plan.scan_run.id).unwrap();
+        let snapshot = JobSnapshot {
+            key: key.clone(),
+            status: crate::job_manager::JobStatus::Failed,
+            engines: vec![crate::job_manager::EngineJobSnapshot {
+                engine_id: execution.engine_run_id.clone(),
+                status: EngineJobStatus::Failed,
+            }],
+            failure_kind: Some(crate::job_manager::JobFailureKind::WorkerPanicked),
+        };
+
+        let stored = persist_terminal_job_reconciliation(&state, &key, &snapshot).unwrap();
+        let run = stored
+            .scan_runs
+            .iter()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap();
+        assert_eq!(engine_run.status, EngineRunStatus::Failed);
+        assert_eq!(engine_run.phase, "failed");
+        assert!(engine_run.finished_at.is_some());
+        assert!(run.completed_at.is_some());
+        assert_eq!(
+            engine_run.error_message.as_deref(),
+            Some("background scan worker stopped before a durable terminal report")
+        );
     }
 
     #[test]

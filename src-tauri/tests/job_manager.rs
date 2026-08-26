@@ -1,5 +1,6 @@
 use ai_security_scanner_lib::job_manager::{
-    EngineJobStatus, JobCompletion, JobFailureKind, JobKey, JobManager, JobManagerError, JobStatus,
+    EngineJobStatus, JobActivationOutcome, JobCompletion, JobFailureKind, JobKey, JobManager,
+    JobManagerError, JobStatus,
 };
 use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
 use std::thread;
@@ -242,6 +243,147 @@ fn durable_pause_and_resume_transitions_are_serialized_per_job() {
         .recv_timeout(Duration::from_secs(2))
         .expect("terminal callback");
     assert_eq!(terminal.status, JobStatus::Cancelled);
+}
+
+#[test]
+fn paused_job_defers_activation_and_cancel_wins_without_invoking_it() {
+    let manager = JobManager::default();
+    let key = key();
+    let (worker_started_tx, worker_started_rx) = mpsc::channel();
+    let (begin_activation_tx, begin_activation_rx) = mpsc::channel();
+    let (activation_entered_tx, activation_entered_rx) = mpsc::channel();
+    let (activation_result_tx, activation_result_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |context| {
+                worker_started_tx.send(()).expect("worker started");
+                begin_activation_rx.recv().expect("begin activation");
+                let activation = context.activate_with_transition(|| {
+                    activation_entered_tx.send(()).expect("activation entered");
+                    Ok::<_, ()>(())
+                });
+                activation_result_tx
+                    .send(activation.clone())
+                    .expect("activation result");
+                let engine = context.engine("gitleaks").expect("engine");
+                match activation {
+                    JobActivationOutcome::Cancelled => {
+                        engine.mark_cancelled().expect("cancelled");
+                        JobCompletion::Cancelled
+                    }
+                    JobActivationOutcome::Activated(()) | JobActivationOutcome::Failed(()) => {
+                        engine.mark_failed().expect("failed");
+                        JobCompletion::Failed
+                    }
+                }
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal event"),
+        )
+        .expect("job starts");
+    worker_started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker started");
+    manager.pause(&key).expect("pause before activation");
+    begin_activation_tx.send(()).expect("release worker");
+    assert!(
+        activation_entered_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "pause must keep the activation closure dormant"
+    );
+
+    manager.cancel(&key).expect("cancel before activation");
+    assert_eq!(
+        activation_result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancelled activation"),
+        JobActivationOutcome::Cancelled
+    );
+    assert!(
+        activation_entered_rx.try_recv().is_err(),
+        "cancelled activation closure must never run"
+    );
+    assert_eq!(
+        terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("terminal callback")
+            .status,
+        JobStatus::Cancelled
+    );
+}
+
+#[test]
+fn activation_is_serialized_before_a_concurrent_cancel_request() {
+    let manager = JobManager::default();
+    let key = key();
+    let activation_release = Arc::new(Barrier::new(2));
+    let activation_worker_release = Arc::clone(&activation_release);
+    let (activation_entered_tx, activation_entered_rx) = mpsc::channel();
+    let (activation_result_tx, activation_result_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |context| {
+                let activation = context.activate_with_transition(|| {
+                    activation_entered_tx.send(()).expect("activation entered");
+                    activation_worker_release.wait();
+                    Ok::<_, ()>("activated")
+                });
+                activation_result_tx
+                    .send(activation)
+                    .expect("activation result");
+                while !context.is_cancelled() {
+                    thread::yield_now();
+                }
+                let engine = context.engine("gitleaks").expect("engine");
+                engine.mark_cancelled().expect("cancelled");
+                JobCompletion::Cancelled
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal event"),
+        )
+        .expect("job starts");
+    activation_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("activation entered");
+
+    let cancel_manager = manager.clone();
+    let cancel_key = key.clone();
+    let (cancelled_tx, cancelled_rx) = mpsc::channel();
+    let cancel = thread::spawn(move || {
+        let result = cancel_manager.cancel(&cancel_key);
+        cancelled_tx.send(result).expect("cancel result");
+    });
+    assert!(
+        cancelled_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "cancel must wait for the one-time activation boundary"
+    );
+
+    activation_release.wait();
+    assert_eq!(
+        activation_result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("activation result"),
+        JobActivationOutcome::Activated("activated")
+    );
+    cancelled_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("cancel completed")
+        .expect("cancel request");
+    cancel.join().expect("cancel thread");
+    assert_eq!(
+        terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("terminal callback")
+            .status,
+        JobStatus::Cancelled
+    );
 }
 
 #[test]
