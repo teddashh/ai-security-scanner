@@ -2449,6 +2449,7 @@ pub(crate) fn inspect_gateway_binary(path: &Path) -> AppResult<PathBuf> {
 /// Canonicalizing the trusted desktop executable first keeps the companion's
 /// no-symlink/alias guarantee while ensuring both sides of its comparison use
 /// the same platform-native path form. This remains inspection-only.
+#[cfg(any(feature = "desktop", test))]
 pub(crate) fn inspect_installed_gateway_binary(desktop_executable: &Path) -> AppResult<PathBuf> {
     if !desktop_executable.is_absolute() || desktop_executable.as_os_str().len() > 4096 {
         return Err(AppError::Runtime(
