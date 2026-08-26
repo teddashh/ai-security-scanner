@@ -441,6 +441,44 @@ pub struct SourceCredentialCheckout<'a> {
     pub permissions: &'a [ReadOnlyCapability],
 }
 
+/// Backend-only, non-secret identity snapshot for one exact installed source
+/// capability generation. The public authorization metadata may be inspected
+/// by backend policy code; the generation remains private so a caller cannot
+/// forge or weaken the binding. This type intentionally implements no serde
+/// traits.
+///
+/// ```compile_fail
+/// use ai_security_scanner_lib::source_authorization::SourceAuthorizationBindingSnapshot;
+/// fn requires_serialize<T: serde::Serialize>() {}
+/// requires_serialize::<SourceAuthorizationBindingSnapshot>();
+/// ```
+#[derive(Clone)]
+pub struct SourceAuthorizationBindingSnapshot {
+    authorization: InstalledSourceAuthorization,
+    capability_generation: SourceCapabilityGeneration,
+}
+
+impl SourceAuthorizationBindingSnapshot {
+    pub fn authorization(&self) -> &InstalledSourceAuthorization {
+        &self.authorization
+    }
+}
+
+impl fmt::Debug for SourceAuthorizationBindingSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SourceAuthorizationBindingSnapshot([REDACTED])")
+    }
+}
+
+/// Typed, backend-only failure classification for generation-bound provider
+/// preflight. It contains no provider, target, identity, or secret text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceCheckoutPreflightFailure {
+    CapabilityUnavailable,
+    BindingMismatch,
+    Internal,
+}
+
 /// One prospective provider credential checkout. It contains only exact,
 /// non-secret binding coordinates; capability handles and credentials remain
 /// private to [`SourceAuthorizationBindings`]. Repeated entries intentionally
@@ -450,6 +488,16 @@ pub struct SourceCheckoutDemand<'a> {
     pub case_id: &'a str,
     pub source_id: &'a str,
     pub engine_id: &'a str,
+}
+
+/// One checkout demand bound to the exact source authorization generation
+/// that passed provider identity, proof, and target validation. Repeated
+/// entries intentionally reserve repeated execution groups.
+pub struct BoundSourceCheckoutDemand<'a> {
+    pub case_id: &'a str,
+    pub source_id: &'a str,
+    pub engine_id: &'a str,
+    pub binding: &'a SourceAuthorizationBindingSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -768,6 +816,168 @@ impl SourceAuthorizationBindings {
         engine_id: &str,
     ) -> AppResult<ScannerCredentialSet> {
         self.checkout(case_id, source_id, engine_id, Utc::now())
+    }
+
+    /// Captures the exact installed authorization generation after verifying
+    /// that it is live and has at least one unreserved checkout. A missing
+    /// case/source binding is represented by `Ok(None)`; a stale vault entry,
+    /// expiry, or exhausted capacity is `CapabilityUnavailable`.
+    pub fn binding_snapshot(
+        &self,
+        case_id: &str,
+        source_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<SourceAuthorizationBindingSnapshot>, SourceCheckoutPreflightFailure> {
+        validate_trusted_identifier(case_id, "case")?;
+        validate_trusted_identifier(source_id, "source")?;
+        let receipts = self
+            .receipts
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let entries = self
+            .vault
+            .entries
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let reservations = self
+            .reservations
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let Some(binding) = receipts.get(&(case_id.to_owned(), source_id.to_owned())) else {
+            return Ok(None);
+        };
+        if binding.receipt.case_id != case_id || binding.receipt.source_id != source_id {
+            return Err(SourceCheckoutPreflightFailure::BindingMismatch);
+        }
+        let generation = binding.receipt.capability_generation;
+        let stored = entries
+            .get(&generation.0)
+            .ok_or(SourceCheckoutPreflightFailure::CapabilityUnavailable)?;
+        validate_bound_installed_binding(stored, binding)?;
+        validate_stored_reservation_invariant(stored, generation, &reservations)?;
+        if now >= stored.expires_at {
+            return Err(SourceCheckoutPreflightFailure::CapabilityUnavailable);
+        }
+        let unavailable = stored
+            .completed_checkouts
+            .checked_add(stored.reserved_checkouts)
+            .ok_or(SourceCheckoutPreflightFailure::Internal)?;
+        if unavailable >= stored.max_checkouts {
+            return Err(SourceCheckoutPreflightFailure::CapabilityUnavailable);
+        }
+        Ok(Some(SourceAuthorizationBindingSnapshot {
+            authorization: InstalledSourceAuthorization::from(&binding.receipt),
+            capability_generation: generation,
+        }))
+    }
+
+    /// Atomically validates a duplicate-preserving demand batch against the
+    /// exact generations captured before planning. The receipts, vault, and
+    /// reservation registries remain locked in that order for the complete
+    /// validation snapshot.
+    pub fn validate_bound_checkout_demands(
+        &self,
+        demands: &[BoundSourceCheckoutDemand<'_>],
+        now: DateTime<Utc>,
+    ) -> Result<(), SourceCheckoutPreflightFailure> {
+        validate_bound_demand_identifiers(demands)?;
+        let receipts = self
+            .receipts
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let entries = self
+            .vault
+            .entries
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let reservations = self
+            .reservations
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        validate_bound_checkout_demands_locked(demands, now, &receipts, &entries, &reservations)?;
+        Ok(())
+    }
+
+    /// Atomically validates and reserves an exact generation-bound demand
+    /// batch. A concurrent reinstall changes the generation and returns
+    /// `BindingMismatch`; credentials from that replacement are never
+    /// materialized or reserved by this call.
+    pub fn reserve_bound_checkout_demands(
+        &self,
+        demands: &[BoundSourceCheckoutDemand<'_>],
+        now: DateTime<Utc>,
+    ) -> Result<
+        (
+            SourceCheckoutReservationHandle,
+            ReservedScannerCredentialBundle,
+        ),
+        SourceCheckoutPreflightFailure,
+    > {
+        validate_bound_demand_identifiers(demands)?;
+        if demands.is_empty() {
+            return Err(SourceCheckoutPreflightFailure::Internal);
+        }
+        let receipts = self
+            .receipts
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let mut entries = self
+            .vault
+            .entries
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let mut reservations = self
+            .reservations
+            .lock()
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let allocations = validate_bound_checkout_demands_locked(
+            demands,
+            now,
+            &receipts,
+            &entries,
+            &reservations,
+        )?;
+
+        let mut credential_entries = Vec::with_capacity(demands.len());
+        for demand in demands {
+            let stored = entries
+                .get(&demand.binding.capability_generation.0)
+                .ok_or(SourceCheckoutPreflightFailure::CapabilityUnavailable)?;
+            let credentials = scanner_credentials(stored).map_err(|error| match error {
+                AppError::NotAuthorized(_) => SourceCheckoutPreflightFailure::CapabilityUnavailable,
+                _ => SourceCheckoutPreflightFailure::Internal,
+            })?;
+            credential_entries.push(ReservedScannerCredential {
+                case_id: demand.case_id.to_owned(),
+                source_id: demand.source_id.to_owned(),
+                engine_id: demand.engine_id.to_owned(),
+                credentials: Some(credentials),
+            });
+        }
+        let handle = new_checkout_reservation_handle(&reservations)
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        for allocation in &allocations {
+            let stored = entries
+                .get_mut(&allocation.capability_generation.0)
+                .ok_or(SourceCheckoutPreflightFailure::Internal)?;
+            stored.reserved_checkouts = stored
+                .reserved_checkouts
+                .checked_add(allocation.count)
+                .ok_or(SourceCheckoutPreflightFailure::Internal)?;
+        }
+        reservations.insert(
+            handle.0.clone(),
+            StoredCheckoutReservation {
+                reserved_at: now,
+                allocations,
+            },
+        );
+        Ok((
+            handle,
+            ReservedScannerCredentialBundle {
+                credentials: credential_entries,
+            },
+        ))
     }
 
     /// Atomically reserves checkout capacity and materializes one owned,
@@ -1637,6 +1847,181 @@ fn validate_identifier(value: &str, label: &str) -> AppResult<()> {
         return Err(AppError::InvalidRequest(format!(
             "source authorization {label} identifier is invalid"
         )));
+    }
+    Ok(())
+}
+
+fn validate_trusted_identifier(
+    value: &str,
+    label: &str,
+) -> Result<(), SourceCheckoutPreflightFailure> {
+    validate_identifier(value, label).map_err(|_| SourceCheckoutPreflightFailure::Internal)
+}
+
+fn validate_bound_demand_identifiers(
+    demands: &[BoundSourceCheckoutDemand<'_>],
+) -> Result<(), SourceCheckoutPreflightFailure> {
+    for demand in demands {
+        validate_trusted_identifier(demand.case_id, "case")?;
+        validate_trusted_identifier(demand.source_id, "source")?;
+        validate_trusted_identifier(demand.engine_id, "engine")?;
+        if demand.case_id != demand.binding.authorization.case_id
+            || demand.source_id != demand.binding.authorization.source_id
+            || !demand
+                .binding
+                .authorization
+                .allowed_engine_ids
+                .contains(demand.engine_id)
+        {
+            return Err(SourceCheckoutPreflightFailure::BindingMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn validate_bound_checkout_demands_locked(
+    demands: &[BoundSourceCheckoutDemand<'_>],
+    now: DateTime<Utc>,
+    receipts: &HashMap<(String, String), InstalledBinding>,
+    entries: &HashMap<[u8; 32], StoredSourceAuthorization>,
+    reservations: &HashMap<String, StoredCheckoutReservation>,
+) -> Result<Vec<StoredCheckoutReservationAllocation>, SourceCheckoutPreflightFailure> {
+    let mut grouped = BTreeMap::<(&str, &str), Vec<&BoundSourceCheckoutDemand<'_>>>::new();
+    for demand in demands {
+        grouped
+            .entry((demand.case_id, demand.source_id))
+            .or_default()
+            .push(demand);
+    }
+
+    let mut allocations = Vec::with_capacity(grouped.len());
+    for ((case_id, source_id), grouped_demands) in grouped {
+        let first = grouped_demands
+            .first()
+            .ok_or(SourceCheckoutPreflightFailure::Internal)?;
+        if grouped_demands.iter().any(|demand| {
+            demand.binding.capability_generation != first.binding.capability_generation
+                || demand.binding.authorization != first.binding.authorization
+        }) {
+            return Err(SourceCheckoutPreflightFailure::BindingMismatch);
+        }
+        let binding = receipts
+            .get(&(case_id.to_owned(), source_id.to_owned()))
+            .ok_or(SourceCheckoutPreflightFailure::CapabilityUnavailable)?;
+        if binding.receipt.capability_generation != first.binding.capability_generation {
+            return Err(SourceCheckoutPreflightFailure::BindingMismatch);
+        }
+        if InstalledSourceAuthorization::from(&binding.receipt) != first.binding.authorization {
+            return Err(SourceCheckoutPreflightFailure::BindingMismatch);
+        }
+        let stored = entries
+            .get(&first.binding.capability_generation.0)
+            .ok_or(SourceCheckoutPreflightFailure::CapabilityUnavailable)?;
+        validate_bound_installed_binding(stored, binding)?;
+        validate_stored_reservation_invariant(
+            stored,
+            first.binding.capability_generation,
+            reservations,
+        )?;
+        if now >= stored.expires_at {
+            return Err(SourceCheckoutPreflightFailure::CapabilityUnavailable);
+        }
+        if grouped_demands
+            .iter()
+            .any(|demand| !stored.allowed_engine_ids.contains(demand.engine_id))
+        {
+            return Err(SourceCheckoutPreflightFailure::BindingMismatch);
+        }
+        let count = u16::try_from(grouped_demands.len())
+            .map_err(|_| SourceCheckoutPreflightFailure::Internal)?;
+        let unavailable = stored
+            .completed_checkouts
+            .checked_add(stored.reserved_checkouts)
+            .ok_or(SourceCheckoutPreflightFailure::Internal)?;
+        let required = unavailable
+            .checked_add(count)
+            .ok_or(SourceCheckoutPreflightFailure::Internal)?;
+        if required > stored.max_checkouts {
+            return Err(SourceCheckoutPreflightFailure::CapabilityUnavailable);
+        }
+        allocations.push(StoredCheckoutReservationAllocation {
+            case_id: case_id.to_owned(),
+            source_id: source_id.to_owned(),
+            capability_generation: first.binding.capability_generation,
+            count,
+        });
+    }
+    Ok(allocations)
+}
+
+fn validate_bound_installed_binding(
+    stored: &StoredSourceAuthorization,
+    binding: &InstalledBinding,
+) -> Result<(), SourceCheckoutPreflightFailure> {
+    let receipt = &binding.receipt;
+    if stored.case_id != receipt.case_id
+        || stored.source_id != receipt.source_id
+        || stored.provider != receipt.provider
+        || stored.source_kind != receipt.source_kind
+        || stored.profile != receipt.profile
+        || stored.credential_source != receipt.credential_source
+        || stored.expires_at != receipt.expires_at
+        || stored.permissions != canonical_permissions(&receipt.permissions)
+        || stored.allowed_engine_ids != receipt.allowed_engine_ids
+        || stored.max_checkouts != receipt.max_checkouts
+        || receipt.provider != receipt.profile.provider()
+        || receipt.source_kind != receipt.profile.source_kind()
+        || receipt.permissions != receipt.profile.permissions()
+        || receipt.allowed_engine_ids.iter().any(|engine_id| {
+            !receipt
+                .profile
+                .allowed_engine_ids()
+                .contains(engine_id.as_str())
+        })
+        || receipt.provider_verification.provider != receipt.provider
+        || receipt.provider_verification.profile != receipt.profile
+        || receipt.provider_verification.provider_identity != receipt.provider_identity
+        || receipt.provider_verification.credential_expires_at != receipt.expires_at
+    {
+        return Err(SourceCheckoutPreflightFailure::BindingMismatch);
+    }
+    if stored.completed_checkouts != binding.completed_checkouts
+        || stored.max_checkouts == 0
+        || stored.completed_checkouts > stored.max_checkouts
+        || stored.reserved_checkouts > stored.max_checkouts
+        || stored
+            .completed_checkouts
+            .checked_add(stored.reserved_checkouts)
+            .is_none_or(|unavailable| unavailable > stored.max_checkouts)
+    {
+        return Err(SourceCheckoutPreflightFailure::Internal);
+    }
+    Ok(())
+}
+
+fn validate_stored_reservation_invariant(
+    stored: &StoredSourceAuthorization,
+    generation: SourceCapabilityGeneration,
+    reservations: &HashMap<String, StoredCheckoutReservation>,
+) -> Result<(), SourceCheckoutPreflightFailure> {
+    let mut reserved = 0_u16;
+    for allocation in reservations
+        .values()
+        .flat_map(|reservation| reservation.allocations.iter())
+        .filter(|allocation| allocation.capability_generation == generation)
+    {
+        if allocation.case_id != stored.case_id
+            || allocation.source_id != stored.source_id
+            || allocation.count == 0
+        {
+            return Err(SourceCheckoutPreflightFailure::Internal);
+        }
+        reserved = reserved
+            .checked_add(allocation.count)
+            .ok_or(SourceCheckoutPreflightFailure::Internal)?;
+    }
+    if reserved != stored.reserved_checkouts {
+        return Err(SourceCheckoutPreflightFailure::Internal);
     }
     Ok(())
 }
@@ -2739,5 +3124,317 @@ mod tests {
             )
             .unwrap();
         drop(bundle);
+    }
+
+    #[test]
+    fn binding_snapshot_is_nonsecret_redacted_and_distinguishes_missing_binding() {
+        let now = Utc::now();
+        let bindings = SourceAuthorizationBindings::default();
+        assert!(
+            bindings
+                .binding_snapshot("case-missing", "source-missing", now)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            bindings.binding_snapshot("bad/case", "source-missing", now),
+            Err(SourceCheckoutPreflightFailure::Internal)
+        ));
+
+        install_aws_test_binding(&bindings, "case-snapshot", "source-snapshot", 1, now);
+        let snapshot = bindings
+            .binding_snapshot("case-snapshot", "source-snapshot", now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            format!("{snapshot:?}"),
+            "SourceAuthorizationBindingSnapshot([REDACTED])"
+        );
+        assert_eq!(snapshot.authorization().case_id, "case-snapshot");
+        assert_eq!(snapshot.authorization().source_id, "source-snapshot");
+        assert!(
+            snapshot
+                .authorization()
+                .allowed_engine_ids
+                .contains("prowler")
+        );
+    }
+
+    #[test]
+    fn bound_reservation_rejects_reinstalled_generation_without_reserving_replacement() {
+        let now = Utc::now();
+        let bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(&bindings, "case-bound-race", "source-bound-race", 1, now);
+        let old_snapshot = bindings
+            .binding_snapshot("case-bound-race", "source-bound-race", now)
+            .unwrap()
+            .unwrap();
+        let old_generation = old_snapshot.capability_generation;
+
+        bindings
+            .install(
+                aws_test_request("case-bound-race", "source-bound-race", 1, now),
+                now,
+            )
+            .unwrap();
+        let new_generation = bindings
+            .receipts
+            .lock()
+            .unwrap()
+            .get(&("case-bound-race".into(), "source-bound-race".into()))
+            .unwrap()
+            .receipt
+            .capability_generation;
+        assert!(old_generation != new_generation);
+
+        let demand = [BoundSourceCheckoutDemand {
+            case_id: "case-bound-race",
+            source_id: "source-bound-race",
+            engine_id: "prowler",
+            binding: &old_snapshot,
+        }];
+        assert!(matches!(
+            bindings.validate_bound_checkout_demands(&demand, now),
+            Err(SourceCheckoutPreflightFailure::BindingMismatch)
+        ));
+        assert!(matches!(
+            bindings.reserve_bound_checkout_demands(&demand, now),
+            Err(SourceCheckoutPreflightFailure::BindingMismatch)
+        ));
+        assert!(bindings.reservations.lock().unwrap().is_empty());
+        assert_eq!(
+            bindings
+                .vault
+                .entries
+                .lock()
+                .unwrap()
+                .get(&new_generation.0)
+                .unwrap()
+                .reserved_checkouts,
+            0
+        );
+    }
+
+    #[test]
+    fn bound_reservation_succeeds_with_duplicate_preserving_owned_credentials() {
+        let now = Utc::now();
+        let bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(
+            &bindings,
+            "case-bound-success",
+            "source-bound-success",
+            2,
+            now,
+        );
+        let snapshot = bindings
+            .binding_snapshot("case-bound-success", "source-bound-success", now)
+            .unwrap()
+            .unwrap();
+        let demands = [
+            BoundSourceCheckoutDemand {
+                case_id: "case-bound-success",
+                source_id: "source-bound-success",
+                engine_id: "prowler",
+                binding: &snapshot,
+            },
+            BoundSourceCheckoutDemand {
+                case_id: "case-bound-success",
+                source_id: "source-bound-success",
+                engine_id: "prowler",
+                binding: &snapshot,
+            },
+        ];
+        bindings
+            .validate_bound_checkout_demands(&demands, now)
+            .unwrap();
+        let (handle, mut credentials) = bindings
+            .reserve_bound_checkout_demands(&demands, now)
+            .unwrap();
+        assert_eq!(credentials.remaining(), 2);
+        credentials
+            .take("case-bound-success", "source-bound-success", "prowler")
+            .unwrap();
+        credentials
+            .take("case-bound-success", "source-bound-success", "prowler")
+            .unwrap();
+        assert_eq!(credentials.remaining(), 0);
+        bindings.release_checkout_reservation(&handle).unwrap();
+    }
+
+    #[test]
+    fn bound_preflight_classifies_expiry_exhaustion_and_capacity_without_strings() {
+        let now = Utc::now();
+
+        let expiry_bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(
+            &expiry_bindings,
+            "case-bound-expiry",
+            "source-bound-expiry",
+            1,
+            now,
+        );
+        let expiry_snapshot = expiry_bindings
+            .binding_snapshot("case-bound-expiry", "source-bound-expiry", now)
+            .unwrap()
+            .unwrap();
+        let expiry_demand = [BoundSourceCheckoutDemand {
+            case_id: "case-bound-expiry",
+            source_id: "source-bound-expiry",
+            engine_id: "prowler",
+            binding: &expiry_snapshot,
+        }];
+        assert_eq!(
+            expiry_bindings
+                .validate_bound_checkout_demands(&expiry_demand, now + Duration::minutes(31)),
+            Err(SourceCheckoutPreflightFailure::CapabilityUnavailable)
+        );
+        assert!(matches!(
+            expiry_bindings.binding_snapshot(
+                "case-bound-expiry",
+                "source-bound-expiry",
+                now + Duration::minutes(31)
+            ),
+            Err(SourceCheckoutPreflightFailure::CapabilityUnavailable)
+        ));
+
+        let exhausted_bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(
+            &exhausted_bindings,
+            "case-bound-exhausted",
+            "source-bound-exhausted",
+            1,
+            now,
+        );
+        exhausted_bindings
+            .checkout(
+                "case-bound-exhausted",
+                "source-bound-exhausted",
+                "prowler",
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            exhausted_bindings.binding_snapshot(
+                "case-bound-exhausted",
+                "source-bound-exhausted",
+                now
+            ),
+            Err(SourceCheckoutPreflightFailure::CapabilityUnavailable)
+        ));
+
+        let capacity_bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(
+            &capacity_bindings,
+            "case-bound-capacity",
+            "source-bound-capacity",
+            1,
+            now,
+        );
+        let capacity_snapshot = capacity_bindings
+            .binding_snapshot("case-bound-capacity", "source-bound-capacity", now)
+            .unwrap()
+            .unwrap();
+        let capacity_demands = [
+            BoundSourceCheckoutDemand {
+                case_id: "case-bound-capacity",
+                source_id: "source-bound-capacity",
+                engine_id: "prowler",
+                binding: &capacity_snapshot,
+            },
+            BoundSourceCheckoutDemand {
+                case_id: "case-bound-capacity",
+                source_id: "source-bound-capacity",
+                engine_id: "prowler",
+                binding: &capacity_snapshot,
+            },
+        ];
+        assert_eq!(
+            capacity_bindings.validate_bound_checkout_demands(&capacity_demands, now),
+            Err(SourceCheckoutPreflightFailure::CapabilityUnavailable)
+        );
+        assert!(matches!(
+            capacity_bindings.reserve_bound_checkout_demands(&capacity_demands, now),
+            Err(SourceCheckoutPreflightFailure::CapabilityUnavailable)
+        ));
+        assert!(capacity_bindings.reservations.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bound_preflight_classifies_coordinate_profile_engine_and_internal_invariants() {
+        let now = Utc::now();
+        let bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(&bindings, "case-bound-types", "source-bound-types", 2, now);
+        let snapshot = bindings
+            .binding_snapshot("case-bound-types", "source-bound-types", now)
+            .unwrap()
+            .unwrap();
+
+        let wrong_engine = [BoundSourceCheckoutDemand {
+            case_id: "case-bound-types",
+            source_id: "source-bound-types",
+            engine_id: "scoutsuite",
+            binding: &snapshot,
+        }];
+        assert_eq!(
+            bindings.validate_bound_checkout_demands(&wrong_engine, now),
+            Err(SourceCheckoutPreflightFailure::BindingMismatch)
+        );
+        let wrong_source = [BoundSourceCheckoutDemand {
+            case_id: "case-bound-types",
+            source_id: "source-other",
+            engine_id: "prowler",
+            binding: &snapshot,
+        }];
+        assert_eq!(
+            bindings.validate_bound_checkout_demands(&wrong_source, now),
+            Err(SourceCheckoutPreflightFailure::BindingMismatch)
+        );
+
+        let mut altered_profile = snapshot.clone();
+        altered_profile.authorization.profile =
+            ProviderSourceProfile::AzureTenantReadOnlyAccessToken;
+        let wrong_profile = [BoundSourceCheckoutDemand {
+            case_id: "case-bound-types",
+            source_id: "source-bound-types",
+            engine_id: "prowler",
+            binding: &altered_profile,
+        }];
+        assert_eq!(
+            bindings.validate_bound_checkout_demands(&wrong_profile, now),
+            Err(SourceCheckoutPreflightFailure::BindingMismatch)
+        );
+
+        let mut altered_permissions = snapshot.clone();
+        altered_permissions.authorization.permissions.pop();
+        let wrong_permissions = [BoundSourceCheckoutDemand {
+            case_id: "case-bound-types",
+            source_id: "source-bound-types",
+            engine_id: "prowler",
+            binding: &altered_permissions,
+        }];
+        assert_eq!(
+            bindings.validate_bound_checkout_demands(&wrong_permissions, now),
+            Err(SourceCheckoutPreflightFailure::BindingMismatch)
+        );
+
+        let generation = snapshot.capability_generation;
+        bindings
+            .vault
+            .entries
+            .lock()
+            .unwrap()
+            .get_mut(&generation.0)
+            .unwrap()
+            .reserved_checkouts = 1;
+        let valid_shape = [BoundSourceCheckoutDemand {
+            case_id: "case-bound-types",
+            source_id: "source-bound-types",
+            engine_id: "prowler",
+            binding: &snapshot,
+        }];
+        assert_eq!(
+            bindings.validate_bound_checkout_demands(&valid_shape, now),
+            Err(SourceCheckoutPreflightFailure::Internal)
+        );
     }
 }
