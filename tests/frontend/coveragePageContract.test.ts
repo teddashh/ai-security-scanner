@@ -49,8 +49,8 @@ test("technical detail is progressive and a website service remains a preset, no
   assert.ok(source.includes("source-card__technical"));
   assert.ok(source.includes("asset-review-card__technical"));
   assert.ok(source.includes("selectedExternalAsset.declaredWebService"));
-  assert.match(source, /setExternalProtocol\(service\?\.protocol \?\? "https"\)/);
-  assert.match(source, /setExternalPorts\(service \? String\(service\.port\) : "443"\)/);
+  assert.match(source, /setExternalProtocol\(service\.protocol\)/);
+  assert.match(source, /setExternalPorts\(String\(service\.port\)\)/);
   assert.ok(source.includes("path is context, not permission"));
   assert.ok(source.includes("路徑只是提示，不是許可"));
   assert.match(source, /internetExposed === false && effectiveAllowSensitiveNetworks/);
@@ -79,6 +79,16 @@ test("technical detail is progressive and a website service remains a preset, no
     "the extra internal-network toggle must not clutter the guided low-impact setup",
   );
   assert.doesNotMatch(source.slice(advancedEnd, source.indexOf("</section>", advancedEnd)), /asset\.locator/);
+});
+
+test("guided IP and internal scans use a useful bounded TCP service preset", () => {
+  assert.ok(source.includes("commonTcpServicePorts"));
+  assert.ok(source.includes("recommendedTcpPorts"));
+  assert.match(source, /assessmentIntent === "external_ip_or_domain" \|\| assessmentIntent === "internal_it_environment"/u);
+  assert.match(source, /setExternalProtocol\("tcp"\)/u);
+  assert.match(source, /setExternalPorts\(recommendedTcpPorts\(externalTarget\)\.join\(", "\)\)/u);
+  assert.ok(source.includes("pageCopy.guidedNetworkPreset"));
+  assert.ok(source.includes("這次只會檢查 {target}"));
 });
 
 test("the saved assessment intent opens one guided route and moves unrelated inputs under advanced options", () => {

@@ -434,6 +434,10 @@ const pageCopy = {
   grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then save. The scan starts only when you press Start on the progress page.", "確認建議內容與你有權執行這些檢查，再儲存；到掃描進度頁按下開始後才會正式執行。"),
   presetTitle: bilingual("Recommended settings are ready", "建議設定已準備好"),
   presetBody: bilingual("We picked a safe, useful starting point for the selected items. You can still change anything before saving.", "我們已依所選項目準備安全又實用的起始設定；儲存前仍可調整。"),
+  guidedNetworkPreset: bilingual(
+    "We'll check only {target}, using {protocol} on {count} common service ports with one connection at a time. The scan still waits for you to press Start.",
+    "這次只會檢查 {target}，使用 {protocol} 連接 {count} 個常見服務連接埠，一次只進行一個連線；仍要等你按下「開始」才會執行。",
+  ),
   noCommonTitle: bilingual("These items need different scan setups", "這些項目需要不同的掃描設定"),
   noCommonBody: bilingual("Set up websites and internal systems separately from cloud accounts and local projects.", "請把網站與內部系統，和雲端帳號與本機專案分開設定。"),
   allowedQuestion: bilingual("What should we check?", "想檢查哪些內容？"),
@@ -668,6 +672,22 @@ const parsePorts = (value: string): number[] | undefined => {
   return [...new Set(parts)].sort((a, b) => a - b);
 };
 
+// Ordered by usefulness for a first low-impact inventory. A CIDR receives only
+// as many ports as keep the frozen address/port set comfortably below the
+// managed gateway's 10,000-endpoint ceiling.
+const commonTcpServicePorts = [80, 443, 22, 445, 3389, 8080, 8443, 21, 25, 53, 110, 139, 143, 465, 587, 993, 995, 3306, 5432, 6379, 9100] as const;
+
+const recommendedTcpPorts = (target: string): number[] => {
+  const match = /^(?:\d{1,3}\.){3}\d{1,3}\/(\d{1,2})$/u.exec(target.trim());
+  if (!match) return [...commonTcpServicePorts];
+  const prefix = Number(match[1]);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return [80, 443];
+  const total = 2 ** (32 - prefix);
+  const addresses = prefix <= 30 ? Math.max(1, total - 2) : total;
+  const safePortCount = Math.max(1, Math.floor(9_000 / addresses));
+  return commonTcpServicePorts.slice(0, safePortCount);
+};
+
 const parseTemplateIds = (value: string): string[] =>
   [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
 
@@ -813,9 +833,21 @@ export function CoveragePage({
 
   useEffect(() => {
     const service = selectedExternalAsset?.declaredWebService;
-    setExternalProtocol(service?.protocol ?? "https");
-    setExternalPorts(service ? String(service.port) : "443");
+    if (service) {
+      setExternalProtocol(service.protocol);
+      setExternalPorts(String(service.port));
+      return;
+    }
+    if (assessmentIntent === "external_ip_or_domain" || assessmentIntent === "internal_it_environment") {
+      setExternalProtocol("tcp");
+      setExternalPorts(recommendedTcpPorts(externalTarget).join(", "));
+      return;
+    }
+    setExternalProtocol("https");
+    setExternalPorts("443");
   }, [
+    assessmentIntent,
+    externalTarget,
     selectedExternalAsset?.id,
     selectedExternalAsset?.declaredWebService?.port,
     selectedExternalAsset?.declaredWebService?.protocol,
@@ -1495,7 +1527,13 @@ export function CoveragePage({
               <span><Icon name="check" size={18} /></span>
               <div>
                 <strong>{text(pageCopy.presetTitle)}</strong>
-                <p>{text(pageCopy.presetBody)}</p>
+                <p>{guidedLowImpactNetwork && selectedExternalAsset && parsedPorts
+                  ? text(pageCopy.guidedNetworkPreset, {
+                    target: externalTarget || selectedExternalAsset.name,
+                    protocol: externalProtocol.toUpperCase(),
+                    count: formatNumber(parsedPorts.length),
+                  })
+                  : text(pageCopy.presetBody)}</p>
               </div>
             </div>
 
