@@ -47,6 +47,7 @@ interface CoveragePageProps {
   scopeGrants: ScopeGrant[];
   nativeMode: boolean;
   busy?: boolean;
+  discoveryBusy?: boolean;
   onChooseSnapshot: () => Promise<string | null>;
   onConnectSourceSnapshot: (input: ConnectSourceSnapshotInput) => Promise<void>;
   onChooseWorkspace: () => Promise<string | null>;
@@ -773,6 +774,7 @@ export function CoveragePage({
   scopeGrants,
   nativeMode,
   busy,
+  discoveryBusy,
   onChooseSnapshot,
   onConnectSourceSnapshot,
   onChooseWorkspace,
@@ -1234,12 +1236,12 @@ export function CoveragePage({
         eyebrow={text(pageCopy.headerEyebrow)}
         title={text(pageCopy.headerTitle)}
         description={text(pageCopy.headerDescription)}
-        actions={
+        actions={!guidedCloudRoute ? (
           <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStartDiscovery()}>
             <Icon name="refresh" size={18} />
             {busy ? text(pageCopy.refreshing) : text(pageCopy.refresh)}
           </button>
-        }
+        ) : undefined}
       />
 
       <ol className="coverage-journey" aria-label={text(pageCopy.journeyLabel)}>
@@ -1285,7 +1287,7 @@ export function CoveragePage({
                 {!guidedCloudRoute && providerInputCard}
                 {sourceInputCard}
                 {!guidedLocalProfile && workspaceInputCard}
-                {!guidedNetworkRoute && knownTargetsInputCard}
+                {!guidedNetworkRoute && !guidedCloudRoute && knownTargetsInputCard}
               </div>
             </details>
           </>
@@ -1323,7 +1325,9 @@ export function CoveragePage({
               sources={sources}
               nativeMode={nativeMode}
               disabled={busy}
+              findingAssets={discoveryBusy}
               onAuthorizationChanged={onAuthorizationChanged}
+              onFindAssets={onStartDiscovery}
               onConnectionStateChanged={setProviderConnection}
             />
           </div>

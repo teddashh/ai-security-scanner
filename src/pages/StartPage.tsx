@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { Icon } from "../components/Icon";
 import {
@@ -14,6 +14,7 @@ interface StartPageProps {
   locale: "en" | "zh-TW";
   copy: StartPageCopy;
   setup?: ReactNode;
+  setupFocusKey?: number;
   onChoose: (useCase: UseCaseDefinition) => void;
   onOpenExistingCase?: () => void;
 }
@@ -224,10 +225,20 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   },
 };
 
-export function StartPage({ locale, copy, setup, onChoose, onOpenExistingCase }: StartPageProps) {
+export function StartPage({ locale, copy, setup, setupFocusKey, onChoose, onOpenExistingCase }: StartPageProps) {
   const marketing = marketingCopy[locale];
   const primaryUseCases = useCaseDefinitions.slice(0, 4);
   const additionalUseCases = useCaseDefinitions.slice(4);
+
+  useEffect(() => {
+    if (!setupFocusKey) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const setupSection = document.getElementById("start-page-runtime-setup");
+      setupSection?.focus({ preventScroll: true });
+      setupSection?.scrollIntoView({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [setupFocusKey]);
 
   const renderUseCaseCard = (useCase: UseCaseDefinition) => {
     const card = copy.cards[useCase.id];
@@ -360,7 +371,7 @@ export function StartPage({ locale, copy, setup, onChoose, onOpenExistingCase }:
       </section>
 
       {setup && (
-        <section className="start-page__setup" aria-labelledby="start-page-setup-title">
+        <section id="start-page-runtime-setup" className="start-page__setup" tabIndex={-1} aria-labelledby="start-page-setup-title">
           <header className="start-page__section-heading">
             <p className="eyebrow">{marketing.setupEyebrow}</p>
             <h2 id="start-page-setup-title">{marketing.setupTitle}</h2>

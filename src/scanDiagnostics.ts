@@ -8,13 +8,25 @@ export interface BlockedRunSummary {
   reasonCodes: string[];
 }
 
+export interface AggregatedEngineRunSummary {
+  checkCount: number;
+  reasonCodes: string[];
+}
+
 /**
  * Releases before the guided preflight fix persisted one `not_executed` row
  * per catalog engine even when no scan could start. Keep that history, but
  * present it as one blocked setup attempt instead of a failed 21-check scan.
  */
 export const blockedRunSummary = (run: ScanRun): BlockedRunSummary | undefined => {
-  if (run.engineRuns.length === 0 || !run.engineRuns.every((engine) => engine.status === "not_executed")) {
+  if (run.engineRuns.length === 0) {
+    return {
+      kind: "no_runnable_checks",
+      skippedCheckCount: 0,
+      reasonCodes: [],
+    };
+  }
+  if (!run.engineRuns.every((engine) => engine.status === "not_executed")) {
     return undefined;
   }
   const reasonCodes = [...new Set(run.engineRuns
@@ -26,6 +38,53 @@ export const blockedRunSummary = (run: ScanRun): BlockedRunSummary | undefined =
     kind: hasAnyTarget ? "no_runnable_checks" : "no_targets",
     skippedCheckCount: run.engineRuns.length,
     reasonCodes,
+  };
+};
+
+export const skippedEngineRunSummary = (run: ScanRun): AggregatedEngineRunSummary | undefined => {
+  const skipped = run.engineRuns.filter((engine) => engine.status === "not_executed");
+  if (skipped.length === 0) return undefined;
+  return {
+    checkCount: skipped.length,
+    reasonCodes: [...new Set(skipped
+      .map((engine) => engine.errorCode)
+      .filter((value): value is string => Boolean(value)))]
+      .sort(),
+  };
+};
+
+/**
+ * Collapse a fan-out caused by one pre-scanner infrastructure failure. The
+ * comparison never displays or interprets raw messages; it only verifies that
+ * every runnable check stopped at the same pre-scope boundary.
+ */
+export const sharedInfrastructureFailureSummary = (
+  run: ScanRun,
+): AggregatedEngineRunSummary | undefined => {
+  const attempted = run.engineRuns.filter((engine) => engine.status !== "not_executed");
+  if (attempted.length < 2) return undefined;
+  const preScannerFailures = attempted.every((engine) =>
+    engine.status === "failed"
+    && engine.errorCode === "execution_failed"
+    && engine.rawArtifactCount === 0
+    && engine.findingCount === 0
+    && engine.exitCode === undefined
+    && !engine.runtimeProvider
+    && (!engine.checkpoint || (
+      engine.checkpoint.stage === "failed"
+      && !engine.checkpoint.scopeBound
+    )),
+  );
+  if (!preScannerFailures) return undefined;
+
+  const failureSignatures = new Set(attempted.map((engine) =>
+    engine.checkpoint?.lastError ?? engine.message ?? "",
+  ));
+  if (failureSignatures.size !== 1 || failureSignatures.has("")) return undefined;
+
+  return {
+    checkCount: attempted.length,
+    reasonCodes: ["execution_failed"],
   };
 };
 

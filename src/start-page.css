@@ -367,6 +367,12 @@
 
 .start-page__setup {
   padding-top: 4px;
+  scroll-margin-top: 24px;
+  outline: none;
+}
+
+.start-page__setup:focus-visible {
+  box-shadow: 0 0 0 3px rgba(0, 124, 130, 0.2);
 }
 
 .start-page__scope-note {

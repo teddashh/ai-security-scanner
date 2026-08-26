@@ -40,7 +40,9 @@ interface ProviderAuthorizationPanelProps {
   sources: ConnectedSource[];
   nativeMode: boolean;
   disabled?: boolean;
+  findingAssets?: boolean;
   onAuthorizationChanged: () => Promise<void>;
+  onFindAssets: () => Promise<void>;
   onConnectionStateChanged?: (connection: ProviderConnectionBoundary | undefined) => void;
 }
 
@@ -82,17 +84,23 @@ const copy = {
   },
   connectedTitle: { en: "Cloud scan connected", zhTW: "雲端掃描已連接" },
   connectedBody: {
-    en: "This scan project can now check the selected account with short-lived, read-only access.",
-    zhTW: "這個掃描專案現在可以使用短期唯讀權限檢查所選帳號。",
+    en: "Sign-in is ready. Continue when you want the app to find the resources available to this read-only connection.",
+    zhTW: "登入已準備好。要讓程式找出這個唯讀連線可查看的資源時，再按下繼續。",
+  },
+  findAssets: { en: "Continue: find cloud assets", zhTW: "繼續：尋找雲端資產" },
+  findingAssets: { en: "Finding cloud assets…", zhTW: "正在尋找雲端資產…" },
+  findAssetsHelp: {
+    en: "This reads the connected account's inventory. It does not approve or start a security scan.",
+    zhTW: "這一步只會讀取已連接帳號的資產清單，不會授權或開始安全掃描。",
   },
   disconnect: { en: "Disconnect account", zhTW: "中斷帳號連線" },
   connectCtaTitle: { en: "Prepare {provider} sign-in", zhTW: "準備登入 {provider}" },
   connectCtaBody: {
-    en: "Ask IT for one small connection file—no passwords or keys. Choose it here, then sign in on the provider's official page.",
-    zhTW: "向 IT 取得一個不含密碼或金鑰的小型連線設定檔，在這裡選取後，再到雲端服務商的官方頁面登入。",
+    en: "Use your provider's official sign-in. Choose an existing read-only connection or prepare temporary read-only access inside the setup guide.",
+    zhTW: "使用雲端服務商的官方登入。你可以在設定指南中選擇既有唯讀連線，或準備暫時唯讀權限。",
   },
-  connectCta: { en: "Set up cloud sign-in", zhTW: "設定雲端登入" },
-  connectionDetailsSummary: { en: "Set up {provider} sign-in", zhTW: "設定 {provider} 登入" },
+  connectCta: { en: "Open the connection guide", zhTW: "開啟連線指南" },
+  connectionDetailsSummary: { en: "Connect {provider} when you are ready", zhTW: "準備好後連接 {provider}" },
   connectionDetailsIntro: {
     en: "Your IT team prepares this once for your organization.",
     zhTW: "這份設定由 IT 為組織準備一次即可。",
@@ -770,7 +778,9 @@ export function ProviderAuthorizationPanel({
   sources,
   nativeMode,
   disabled,
+  findingAssets,
   onAuthorizationChanged,
+  onFindAssets,
   onConnectionStateChanged,
 }: ProviderAuthorizationPanelProps) {
   const { text, formatDateTime, formatNumber } = useI18n();
@@ -1389,10 +1399,16 @@ export function ProviderAuthorizationPanel({
           <div>
             <strong><Icon name="check" size={17} />{text(copy.connectedTitle)}</strong>
             <p>{text(copy.connectedBody)}</p>
+            <small>{text(copy.findAssetsHelp)}</small>
           </div>
-          <button className="button button--ghost button--small" type="button" disabled={working || disabled} onClick={() => void revokePreferred()}>
-            {text(copy.disconnect)}
-          </button>
+          <div className="provider-current-access__actions">
+            <button className="button button--primary" type="button" disabled={working || disabled} onClick={() => void onFindAssets()}>
+              <Icon name="arrow" size={17} />{text(findingAssets ? copy.findingAssets : copy.findAssets)}
+            </button>
+            <button className="button button--ghost button--small" type="button" disabled={working || disabled} onClick={() => void revokePreferred()}>
+              {text(copy.disconnect)}
+            </button>
+          </div>
         </div>
       )}
 
@@ -1401,8 +1417,12 @@ export function ProviderAuthorizationPanel({
           <div className="provider-setup-heading">
             <h3 id="provider-setup-title">{text(copy.connectionDetailsSummary, { provider: providerName })}</h3>
             <p>{text(copy.connectCtaBody)}</p>
-            <small>{text(copy.connectionDetailsIntro)}</small>
           </div>
+
+          <details className="provider-connection-guide">
+            <summary>{text(copy.connectCta)}</summary>
+            <div className="provider-connection-guide__body">
+              <small className="provider-connection-guide__intro">{text(copy.connectionDetailsIntro)}</small>
 
           <div className="provider-auth-choice-heading">
             <h3 id="provider-auth-choice-title">{text(copy.choiceQuestion)}</h3>
@@ -1637,6 +1657,8 @@ export function ProviderAuthorizationPanel({
             </button>
           </div>
             </form>
+          </details>
+            </div>
           </details>
         </section>
       )}

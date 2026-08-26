@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("../../src/pages/CoveragePage.tsx", import.meta.url),
   "utf8",
 );
+const providerPanelSource = readFileSync(
+  new URL("../../src/components/ProviderAuthorizationPanel.tsx", import.meta.url),
+  "utf8",
+);
 
 test("coverage onboarding keeps the complete input and permission surface", () => {
   for (const capability of [
@@ -141,6 +145,35 @@ test("cloud sign-in leads to one exact read-only scan confirmation instead of an
   ]) {
     assert.ok(source.includes(english), english);
     assert.ok(source.includes(traditionalChinese), traditionalChinese);
+  }
+});
+
+test("guided cloud discovery is one explicit continuation after sign-in", () => {
+  assert.match(source, /actions=\{!guidedCloudRoute \? \(/u);
+  assert.match(source, /!guidedNetworkRoute && !guidedCloudRoute && knownTargetsInputCard/u);
+  assert.match(source, /findingAssets=\{discoveryBusy\}/u);
+  assert.match(source, /onFindAssets=\{onStartDiscovery\}/u);
+
+  const installedStart = providerPanelSource.indexOf("{installed && (");
+  const setupStart = providerPanelSource.indexOf("{!installed && !prompt", installedStart);
+  const installedMarkup = providerPanelSource.slice(installedStart, setupStart);
+  assert.match(installedMarkup, /copy\.findAssets/u);
+  assert.match(installedMarkup, /onClick=\{\(\) => void onFindAssets\(\)\}/u);
+  assert.match(installedMarkup, /copy\.findAssetsHelp/u);
+  assert.doesNotMatch(installedMarkup, /onAuthorizationChanged\(/u);
+
+  const pollingStart = providerPanelSource.indexOf("const schedulePoll");
+  const beginStart = providerPanelSource.indexOf("const beginPreferred", pollingStart);
+  const polling = providerPanelSource.slice(pollingStart, beginStart);
+  assert.match(polling, /await onAuthorizationChanged\(\)/u);
+  assert.doesNotMatch(polling, /onFindAssets|startDiscovery/u);
+
+  for (const [english, traditionalChinese] of [
+    ["Continue: find cloud assets", "繼續：尋找雲端資產"],
+    ["It does not approve or start a security scan", "不會授權或開始安全掃描"],
+  ]) {
+    assert.ok(providerPanelSource.includes(english), english);
+    assert.ok(providerPanelSource.includes(traditionalChinese), traditionalChinese);
   }
 });
 

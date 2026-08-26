@@ -5,7 +5,14 @@ import { EmptyState, InlineNotice, MetricCard, PageHeader, ProgressBar } from ".
 import { StatusPill } from "../components/StatusPill";
 import { useI18n } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
-import { blockedRunSummary, buildScanDiagnostic, type ScanDiagnosticContext } from "../scanDiagnostics";
+import {
+  blockedRunSummary,
+  buildScanDiagnostic,
+  sharedInfrastructureFailureSummary,
+  skippedEngineRunSummary,
+  type ScanDiagnosticContext,
+} from "../scanDiagnostics";
+import { engineNextStepFor, engineOutcomeFor } from "../scanPresentation";
 import type {
   EngineRun,
   EngineRunStatus,
@@ -20,10 +27,12 @@ import { displayTechnicalDetail } from "./pageTechnicalDetails";
 interface ProgressPageProps {
   runs: ScanRun[];
   readiness?: ScanReadiness;
+  readinessCheckFailed?: boolean;
   diagnosticContext?: ScanDiagnosticContext;
   busy?: boolean;
   onStart: () => Promise<void>;
   onFixSetup: () => void;
+  onOpenToolSetup: () => void;
   onPause: (runId: string) => Promise<void>;
   onResume: (runId: string) => Promise<void>;
   onCancel: (runId: string) => Promise<void>;
@@ -43,6 +52,11 @@ const copy = {
   },
   start: { en: "Start scan", zhTW: "開始掃描" },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
+  readinessUnavailableTitle: { en: "We could not check what is ready", zhTW: "目前無法確認掃描準備狀態" },
+  readinessUnavailableDescription: {
+    en: "No scan started and nothing changed. Check again now.",
+    zhTW: "掃描尚未開始，也沒有變更任何資料；請立即重新檢查。",
+  },
   finishSetup: { en: "Finish scan setup", zhTW: "完成掃描設定" },
   setupTools: { en: "Set up scan tools for me", zhTW: "幫我準備掃描工具" },
   connectCloud: { en: "Connect cloud account", zhTW: "連接雲端帳號" },
@@ -126,15 +140,27 @@ const copy = {
   },
   blockedTitle: { en: "Nothing was scanned", zhTW: "這次其實沒有開始掃描" },
   blockedNoTargets: {
-    en: "This older attempt had no confirmed target that any selected check could use. No device, website, account, or file was contacted.",
-    zhTW: "這筆舊紀錄沒有任何檢查可使用的已確認目標；沒有接觸任何設備、網站、帳號或檔案。",
+    en: "Choose the website, system, account, or files you want to check, then start a new scan.",
+    zhTW: "請選擇要檢查的網站、系統、帳號或檔案，再開始新的掃描。",
   },
   blockedNoChecks: {
-    en: "The target was recorded, but none of its checks could run. No result was produced.",
-    zhTW: "目標已有紀錄，但沒有任何檢查能執行，因此沒有產生結果。",
+    en: "Open scan setup, finish the step shown there, then start a new scan.",
+    zhTW: "請開啟掃描設定，完成畫面上的步驟，再開始新的掃描。",
   },
   downloadLog: { en: "Download diagnostic log", zhTW: "下載診斷紀錄" },
   skippedTechnical: { en: "Technical records from {count} skipped checks", zhTW: "{count} 項未執行檢查的技術紀錄" },
+  skippedGroupTitle: { en: "{count} planned checks did not start", zhTW: "{count} 項預定檢查沒有開始" },
+  skippedGroupAction: {
+    en: "Finish the target or scan-tool setup shown above, then start a new scan.",
+    zhTW: "請完成上方顯示的目標或掃描工具設定，再開始新的掃描。",
+  },
+  sharedFailureTitle: { en: "The private scan engine did not start", zhTW: "私有掃描引擎沒有啟動" },
+  sharedFailureBody: {
+    en: "One scan-tool problem stopped {count} checks before they could inspect anything. Open scan-tool setup, make sure the engine is ready, then start a new scan.",
+    zhTW: "同一個掃描工具問題讓 {count} 項檢查在讀取任何內容前就停止。請開啟掃描工具設定、確認引擎已就緒，再開始新的掃描。",
+  },
+  openToolSetup: { en: "Open scan-tool setup", zhTW: "開啟掃描工具設定" },
+  aggregateTechnical: { en: "Technical records from {count} checks", zhTW: "{count} 項檢查的技術紀錄" },
   diagnosticPrivacy: {
     en: "The diagnostic log excludes target names, asset IDs, raw evidence, paths, and scanner messages.",
     zhTW: "診斷紀錄不包含目標名稱、資產 ID、原始證據、檔案路徑或掃描工具訊息。",
@@ -203,17 +229,22 @@ const copy = {
     zhTW: "每項檢查都會顯示結果、目前進度，以及是否需要你接著處理。",
   },
   workCount: { en: "{count} checks", zhTW: "{count} 項檢查" },
+  workCountOne: { en: "1 check", zhTW: "1 項檢查" },
   noWorkTitle: { en: "No checks are ready yet", zhTW: "目前還沒有可執行的檢查" },
   noWorkDescription: {
     en: "Return to scan setup and choose what you want to check. No checks means there are no results yet.",
     zhTW: "請回到掃描設定，選擇想檢查的內容；目前沒有檢查，因此也還沒有結果。",
   },
+  noRecordedCheckTitle: { en: "No check was recorded for this attempt", zhTW: "這次嘗試沒有留下檢查項目" },
+  noRecordedCheckDescription: {
+    en: "There is no scanner result to review. Finish scan setup, then start a new scan.",
+    zhTW: "目前沒有掃描結果可查看；請完成掃描設定，再開始新的掃描。",
+  },
   notStarted: { en: "This check did not start", zhTW: "這項檢查沒有開始" },
   notStartedReason: {
-    en: "Open details to see what stopped it and what to try next.",
-    zhTW: "打開詳細資料，查看停止原因與可嘗試的下一步。",
+    en: "Finish the suggested setup step, then start a new scan.",
+    zhTW: "請完成建議的設定步驟，再開始新的掃描。",
   },
-  checkLabel: { en: "Check {number}", zhTW: "檢查 {number}" },
   checkProgress: { en: "Check progress", zhTW: "檢查進度" },
   currentStep: { en: "Current step: ", zhTW: "目前步驟：" },
   interruptedPhase: { en: "Stopped when the desktop app restarted", zhTW: "桌面程式重新啟動時中斷" },
@@ -276,6 +307,7 @@ const copy = {
   historyEyebrow: { en: "SCAN HISTORY", zhTW: "掃描紀錄" },
   historyTitle: { en: "Earlier scans", zhTW: "過往掃描" },
   historySnapshot: { en: "Case snapshot {date}", zhTW: "案件快照 {date}" },
+  historyNotStarted: { en: "Not started", zhTW: "未開始" },
 } as const;
 
 const providerReadinessPresentation: Partial<Record<ScanReadinessBlocker, {
@@ -340,23 +372,41 @@ const engineIcon = (engine: EngineRun) => {
   return "settings" as const;
 };
 
-export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart, onFixSetup, onPause, onResume, onCancel }: ProgressPageProps) {
+export function ProgressPage({
+  runs,
+  readiness,
+  readinessCheckFailed,
+  diagnosticContext,
+  busy,
+  onStart,
+  onFixSetup,
+  onOpenToolSetup,
+  onPause,
+  onResume,
+  onCancel,
+}: ProgressPageProps) {
   const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id);
   const providerPresentation = readiness?.blockerCode
     ? providerReadinessPresentation[readiness.blockerCode]
     : undefined;
-  const fixActionLabel = providerPresentation?.action
+  const fixActionLabel = readinessCheckFailed
+    ? copy.checkAgain
+    : providerPresentation?.action
     ?? (readiness?.nextStep === "scanner_setup"
       ? copy.setupTools
       : readiness?.nextStep === "cases"
         ? copy.chooseProject
         : copy.finishSetup);
-  const emptyTitle = providerPresentation?.title
+  const emptyTitle = readinessCheckFailed
+    ? copy.readinessUnavailableTitle
+    : providerPresentation?.title
     ?? (readiness?.blockerCode === "runtime_unavailable"
       ? copy.runtimeEmptyTitle
       : copy.emptyTitle);
-  const emptyDescription = providerPresentation?.description
+  const emptyDescription = readinessCheckFailed
+    ? copy.readinessUnavailableDescription
+    : providerPresentation?.description
     ?? (readiness?.blockerCode === "runtime_unavailable"
       ? copy.runtimeEmptyDescription
       : copy.emptyDescription);
@@ -374,12 +424,34 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
   );
   const showDateTime = (value?: string): string => value ? formatDateTime(value) : text(copy.noneReported);
   const showPlainDate = (value: string): string => formatDate(`${value}T12:00:00`);
+  const workCountLabel = (count: number): string => count === 1
+    ? text(copy.workCountOne)
+    : text(copy.workCount, { count: formatNumber(count) });
   const phaseLabel = (engine: EngineRun): string => {
     if (engine.phase === "interrupted_restart") return text(copy.interruptedPhase);
     if (engine.phase === "queued_for_resume") return text(copy.queuedResumePhase);
     if (isExecutionStage(engine.phase)) return executionStageMeta[engine.phase].label;
     return text(copy.unknownPhase);
   };
+
+  const aggregateTechnicalRecords = (engines: EngineRun[], summary: string) => (
+    <details className="page-technical-details aggregate-engine-records">
+      <summary>{summary}</summary>
+      {engines.map((engine) => (
+        <section key={engine.id} className="aggregate-engine-record">
+          <strong>{engine.engineName}</strong>
+          <dl>
+            <div><dt>{text(copy.engineId)}</dt><dd><code>{engine.engineId}</code></dd></div>
+            <div><dt>{text(copy.reportedPhase)}</dt><dd><code>{displayTechnicalDetail(engine.phase) ?? text(copy.noneReported)}</code></dd></div>
+            <div><dt>{text(copy.errorCode)}</dt><dd><code>{displayTechnicalDetail(engine.errorCode) ?? text(copy.noneReported)}</code></dd></div>
+            <div><dt>{text(copy.scannerMessage)}</dt><dd>{displayTechnicalDetail(engine.message) ?? text(copy.noneReported)}</dd></div>
+            <div><dt>{text(copy.checkpointError)}</dt><dd>{displayTechnicalDetail(engine.checkpoint?.lastError) ?? text(copy.noneReported)}</dd></div>
+          </dl>
+        </section>
+      ))}
+      <p>{text(copy.diagnosticPrivacy)}</p>
+    </details>
+  );
 
   const downloadDiagnostic = (run: ScanRun) => {
     const blob = new Blob([buildScanDiagnostic(run, diagnosticContext)], { type: "application/json" });
@@ -403,8 +475,8 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
             <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStart()}>
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
-          ) : readiness ? (
-            <button className="button button--primary" type="button" disabled={busy || readiness.nextStep === "progress"} onClick={onFixSetup}>
+          ) : readiness || readinessCheckFailed ? (
+            <button className="button button--primary" type="button" disabled={busy || readiness?.nextStep === "progress"} onClick={onFixSetup}>
               <Icon name="arrow" size={17} />{text(fixActionLabel)}
             </button>
           ) : (
@@ -418,12 +490,25 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
             <p>{text(copy.readiness[readiness.blockerCode])}</p>
           </InlineNotice>
         )}
+        {readinessCheckFailed && (
+          <InlineNotice tone="warning" title={text(copy.readinessUnavailableTitle)}>
+            <p>{text(copy.readinessUnavailableDescription)}</p>
+          </InlineNotice>
+        )}
       </div>
     );
   }
 
   const runMeta = runStatusMeta[selectedRun.status];
   const blocked = blockedRunSummary(selectedRun);
+  const skipped = skippedEngineRunSummary(selectedRun);
+  const sharedInfrastructureFailure = sharedInfrastructureFailureSummary(selectedRun);
+  const visibleEngineRuns = sharedInfrastructureFailure
+    ? []
+    : selectedRun.engineRuns.filter((engine) => engine.status !== "not_executed");
+  const visibleWorkCount = sharedInfrastructureFailure
+    ? 1 + (skipped && !blocked ? 1 : 0)
+    : visibleEngineRuns.length + (skipped && !blocked ? 1 : 0);
   const canPause = selectedRun.status === "running";
   const hasResumableEngine = selectedRun.engineRuns.some((engine) => engine.resumable);
   const canResume = selectedRun.status === "paused"
@@ -487,6 +572,15 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
         )}
       />
 
+      {readinessCheckFailed && (
+        <InlineNotice tone="warning" title={text(copy.readinessUnavailableTitle)}>
+          <p>{text(copy.readinessUnavailableDescription)}</p>
+          <button className="button button--primary button--small" type="button" disabled={busy} onClick={onFixSetup}>
+            <Icon name="refresh" size={15} />{text(copy.checkAgain)}
+          </button>
+        </InlineNotice>
+      )}
+
       {runs.length > 1 && (
         <div className="run-picker" role="group" aria-label={text(copy.chooseRun)}>
           <span>{text(copy.viewRun)}</span>
@@ -532,11 +626,26 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
       <section className="run-overview run-overview--single">
         <div className="run-overview__copy">
           <div className="run-overview__meta">
-            <StatusPill label={blocked ? text(copy.blockedTitle) : runMeta.label} tone={blocked ? "warning" : runMeta.tone} />
+            <StatusPill
+              label={blocked
+                ? text(copy.blockedTitle)
+                : sharedInfrastructureFailure
+                  ? text(copy.sharedFailureTitle)
+                  : runMeta.label}
+              tone={blocked ? "warning" : sharedInfrastructureFailure ? "danger" : runMeta.tone}
+            />
             <span>{selectedRun.label}</span>
           </div>
-          <h2>{text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
-          <p>{blocked ? text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks) : (
+          <h2>{blocked
+            ? text(copy.blockedTitle)
+            : sharedInfrastructureFailure
+              ? text(copy.sharedFailureTitle)
+              : text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
+          <p>{blocked
+            ? text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)
+            : sharedInfrastructureFailure
+              ? text(copy.sharedFailureBody, { count: formatNumber(sharedInfrastructureFailure.checkCount) })
+              : (
             <>
             {text(copy.runSummary, {
               covered: formatNumber(selectedRun.coveredAssetCount),
@@ -546,7 +655,9 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
             {selectedRun.finishedAt ? text(copy.finished, { finished: showDateTime(selectedRun.finishedAt) }) : ""}
             </>
           )}</p>
-          <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />
+          {!blocked && !sharedInfrastructureFailure && (
+            <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />
+          )}
         </div>
       </section>
 
@@ -561,7 +672,20 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
               <Icon name="file" size={15} />{text(copy.downloadLog)}
             </button>
           </div>
-          <small>{text(copy.diagnosticPrivacy)}</small>
+        </InlineNotice>
+      )}
+
+      {sharedInfrastructureFailure && (
+        <InlineNotice tone="warning" title={text(copy.sharedFailureTitle)}>
+          <p>{text(copy.sharedFailureBody, { count: formatNumber(sharedInfrastructureFailure.checkCount) })}</p>
+          <div className="button-group">
+            <button className="button button--primary button--small" type="button" onClick={onOpenToolSetup}>
+              <Icon name="settings" size={15} />{text(copy.openToolSetup)}
+            </button>
+            <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
+              <Icon name="file" size={15} />{text(copy.downloadLog)}
+            </button>
+          </div>
         </InlineNotice>
       )}
 
@@ -590,14 +714,14 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
         </div>
       </details>
 
-      {!blocked && <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
+      {!blocked && !sharedInfrastructureFailure && <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
         <MetricCard label={text(copy.completed)} value={formatNumber(stateCounts.completed)} detail={text(copy.completedDetail)} icon="check" tone="accent" />
         <MetricCard label={text(copy.partial)} value={formatNumber(stateCounts.partial)} detail={text(copy.partialDetail)} icon="warning" tone={stateCounts.partial ? "warning" : "default"} />
         <MetricCard label={text(copy.failedCancelled)} value={formatNumber(stateCounts.failed + stateCounts.cancelled)} detail={text(copy.failedCancelledDetail)} icon="stop" tone={stateCounts.failed ? "danger" : "default"} />
         <MetricCard label={text(copy.notRun)} value={formatNumber(stateCounts.not_executed)} detail={text(copy.notRunDetail)} icon="clock" tone={stateCounts.not_executed ? "warning" : "default"} />
       </section>}
 
-      {!blocked && incompleteCount > 0 && (
+      {!blocked && !sharedInfrastructureFailure && incompleteCount > 0 && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
           <p>{text(copy.incompleteBody)}</p>
         </InlineNotice>
@@ -610,24 +734,54 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
             <h2>{text(copy.workTitle)}</h2>
             <p>{text(copy.workDescription)}</p>
           </div>
-          <span className="count-label">{text(copy.workCount, { count: formatNumber(selectedRun.engineRuns.length) })}</span>
+          {!(blocked && blocked.skippedCheckCount === 0) && (
+            <span className="count-label">{workCountLabel(blocked ? 1 : visibleWorkCount)}</span>
+          )}
         </div>
 
-        {blocked ? (
-          <details className="page-technical-details">
-            <summary>{text(copy.skippedTechnical, { count: formatNumber(blocked.skippedCheckCount) })}</summary>
-            <dl>
-              <div><dt>{text(copy.errorCode)}</dt><dd><code>{blocked.reasonCodes.join(", ") || text(copy.noneReported)}</code></dd></div>
-              <div><dt>{text(copy.targets)}</dt><dd>0</dd></div>
-              <div><dt>{text(copy.rawEvidenceFiles)}</dt><dd>0</dd></div>
-            </dl>
-            <p>{text(copy.diagnosticPrivacy)}</p>
-          </details>
-        ) : selectedRun.engineRuns.length === 0 ? (
-          <EmptyState icon="progress" title={text(copy.noWorkTitle)} description={text(copy.noWorkDescription)} />
+        {blocked && blocked.skippedCheckCount > 0 ? (
+          aggregateTechnicalRecords(
+            selectedRun.engineRuns,
+            text(copy.skippedTechnical, { count: formatNumber(blocked.skippedCheckCount) }),
+          )
+        ) : blocked ? (
+          <EmptyState icon="progress" title={text(copy.noRecordedCheckTitle)} description={text(copy.noRecordedCheckDescription)} />
         ) : (
           <div className="engine-list">
-            {selectedRun.engineRuns.map((engine, index) => {
+            {sharedInfrastructureFailure && (
+              aggregateTechnicalRecords(
+                selectedRun.engineRuns.filter((engine) => engine.status !== "not_executed"),
+                text(copy.aggregateTechnical, { count: formatNumber(sharedInfrastructureFailure.checkCount) }),
+              )
+            )}
+
+            {skipped && !blocked && (
+              <article className="engine-row engine-row--unknown engine-row--aggregate">
+                <div className="engine-row__identity">
+                  <span className="engine-icon engine-icon--unknown"><Icon name="info" size={19} /></span>
+                  <span>
+                    <strong>{text(copy.skippedGroupTitle, { count: formatNumber(skipped.checkCount) })}</strong>
+                    <small>{text(copy.skippedGroupAction)}</small>
+                  </span>
+                </div>
+                <div className="engine-row__progress">
+                  <div className="engine-not-executed">
+                    <Icon name="info" size={16} />
+                    <span><strong>{text(copy.notStarted)}</strong><small>{text(copy.notStartedReason)}</small></span>
+                  </div>
+                  {aggregateTechnicalRecords(
+                    selectedRun.engineRuns.filter((engine) => engine.status === "not_executed"),
+                    text(copy.skippedTechnical, { count: formatNumber(skipped.checkCount) }),
+                  )}
+                </div>
+                <div className="engine-row__result">
+                  <StatusPill label={engineStatusMeta.not_executed.label} tone={engineStatusMeta.not_executed.tone} />
+                  <span>{workCountLabel(skipped.checkCount)}</span>
+                </div>
+              </article>
+            )}
+
+            {visibleEngineRuns.map((engine) => {
               const meta = engineStatusMeta[engine.status];
               const checkpoint = engine.checkpoint;
               return (
@@ -635,7 +789,8 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
                   <div className="engine-row__identity">
                     <span className={`engine-icon engine-icon--${meta.tone}`}><Icon name={engineIcon(engine)} size={19} /></span>
                     <span>
-                      <strong>{text(copy.checkLabel, { number: formatNumber(index + 1) })}</strong>
+                      <strong>{text(engineOutcomeFor(engine))}</strong>
+                      <small>{text(engineNextStepFor(engine))}</small>
                     </span>
                   </div>
                   <div className="engine-row__progress">
@@ -741,20 +896,28 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
           <div><p className="eyebrow">{text(copy.historyEyebrow)}</p><h2>{text(copy.historyTitle)}</h2></div>
         </div>
         <div className="history-list">
-          {runs.map((run) => (
-            <button key={run.id} type="button" className={run.id === selectedRun.id ? "history-row history-row--active" : "history-row"} onClick={() => setSelectedRunId(run.id)}>
-              <span className="history-row__line" aria-hidden="true" />
-              <span className="history-row__copy">
-                <strong>{run.label}</strong>
-                <span>{showDateTime(run.startedAt)} · {text(copy.historySnapshot, { date: showDateTime(run.knowledgeDate) })}</span>
-              </span>
-              <StatusPill
-                label={blockedRunSummary(run) ? text(copy.blockedTitle) : runStatusMeta[run.status].label}
-                tone={blockedRunSummary(run) ? "warning" : runStatusMeta[run.status].tone}
-              />
-              <b>{formatNumber(run.progress)}%</b>
-            </button>
-          ))}
+          {runs.map((run) => {
+            const historyBlocked = blockedRunSummary(run);
+            const historySharedFailure = sharedInfrastructureFailureSummary(run);
+            return (
+              <button key={run.id} type="button" className={run.id === selectedRun.id ? "history-row history-row--active" : "history-row"} onClick={() => setSelectedRunId(run.id)}>
+                <span className="history-row__line" aria-hidden="true" />
+                <span className="history-row__copy">
+                  <strong>{run.label}</strong>
+                  <span>{showDateTime(run.startedAt)} · {text(copy.historySnapshot, { date: showDateTime(run.knowledgeDate) })}</span>
+                </span>
+                <StatusPill
+                  label={historyBlocked
+                    ? text(copy.blockedTitle)
+                    : historySharedFailure
+                      ? text(copy.sharedFailureTitle)
+                      : runStatusMeta[run.status].label}
+                  tone={historyBlocked ? "warning" : historySharedFailure ? "danger" : runStatusMeta[run.status].tone}
+                />
+                <b>{historyBlocked || historySharedFailure ? text(copy.historyNotStarted) : `${formatNumber(run.progress)}%`}</b>
+              </button>
+            );
+          })}
         </div>
       </section>
     </div>

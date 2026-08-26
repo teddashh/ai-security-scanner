@@ -116,9 +116,16 @@ test("provider sign-in leads with the setup-file journey and keeps manual entry 
   assert.doesNotMatch(panelSource, /product-owned OAuth|shared OAuth client/u);
 
   const stepsStart = panelSource.indexOf('<ol className="provider-preparation-steps provider-connection-steps"');
+  const guideStart = panelSource.indexOf('<details className="provider-connection-guide">');
   const manualStart = panelSource.indexOf('<details\n            className="provider-manual-details"', stepsStart);
+  const guideEnd = panelSource.indexOf("</section>", manualStart);
+  assert.notEqual(guideStart, -1);
   assert.notEqual(stepsStart, -1);
   assert.notEqual(manualStart, -1);
+  assert.ok(guideStart < stepsStart && guideEnd > manualStart, "engineering setup should stay inside the progressive connection guide");
+  const firstLayer = panelSource.slice(panelSource.indexOf('<section className="provider-auth-details"'), guideStart);
+  assert.match(firstLayer, /copy\.connectionDetailsSummary[\s\S]*copy\.connectCtaBody/u);
+  assert.doesNotMatch(firstLayer, /copy\.requestTitle|copy\.fields\.|setupTemplate/u);
   const primaryJourney = panelSource.slice(stepsStart, manualStart);
   assert.match(primaryJourney, /copy\.requestTitle/u);
   assert.match(primaryJourney, /copy\.importTitle/u);

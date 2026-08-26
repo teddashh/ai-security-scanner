@@ -2135,8 +2135,48 @@ button.update-control:hover:not(:disabled) {
 .engine-row__identity strong { overflow: hidden; color: var(--ink-strong); font-size: 0.8rem; text-overflow: ellipsis; }
 .engine-row__identity small { color: var(--muted); font-size: 0.64rem; }
 .engine-row__identity code { overflow: hidden; color: var(--subtle); font-size: 0.55rem; text-overflow: ellipsis; white-space: nowrap; }
+.engine-row--aggregate .engine-row__identity { align-items: flex-start; }
+.engine-row--aggregate .engine-row__identity small { line-height: 1.45; }
 .engine-row__progress .progress-label span { position: absolute; width: 1px; height: 1px; overflow: hidden; }
 .engine-message { margin: 6px 0 0; color: var(--amber); font-size: 0.64rem; line-height: 1.35; }
+
+.aggregate-engine-records {
+  margin-top: 9px;
+}
+
+.aggregate-engine-record {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.aggregate-engine-record > strong {
+  color: var(--ink-strong);
+  font-size: 0.7rem;
+}
+
+.aggregate-engine-record > dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
+.aggregate-engine-record > dl > div {
+  min-width: 0;
+}
+
+.aggregate-engine-record dt,
+.aggregate-engine-record dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.58rem;
+}
+
+.aggregate-engine-record dt { color: var(--muted); }
+.aggregate-engine-record dd { margin-top: 2px; color: var(--ink); }
 
 .engine-not-executed { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid #d9cfe4; border-radius: 9px; color: #66517e; background: #f6f0fb; }
 .engine-not-executed > svg { flex: 0 0 auto; }

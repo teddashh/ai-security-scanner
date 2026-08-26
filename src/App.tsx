@@ -141,6 +141,8 @@ export default function App() {
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
   const [scanReadiness, setScanReadiness] = useState<ScanReadiness>();
+  const [scanReadinessErrorCaseId, setScanReadinessErrorCaseId] = useState<string>();
+  const [runtimeSetupFocusKey, setRuntimeSetupFocusKey] = useState(0);
   const [focusedFindingId, setFocusedFindingId] = useState<string>();
   const [verificationBaselineRunId, setVerificationBaselineRunId] = useState<string>();
   const [selectedUseCase, setSelectedUseCase] = useState<{
@@ -175,12 +177,15 @@ export default function App() {
         try {
           const readiness = await scannerService.getScanReadiness(readinessCaseId);
           setScanReadiness(readiness.data);
+          setScanReadinessErrorCaseId(undefined);
         } catch (error) {
           setScanReadiness(undefined);
+          setScanReadinessErrorCaseId(readinessCaseId);
           recordTechnicalError("check scan readiness", error);
         }
       } else {
         setScanReadiness(undefined);
+        setScanReadinessErrorCaseId(undefined);
       }
       setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
     } catch (error) {
@@ -459,8 +464,10 @@ export default function App() {
       try {
         const readiness = await scannerService.getScanReadiness(caseId);
         setScanReadiness(readiness.data);
+        setScanReadinessErrorCaseId(undefined);
       } catch (error) {
         setScanReadiness(undefined);
+        setScanReadinessErrorCaseId(caseId);
         recordTechnicalError("check selected case scan readiness", error);
       }
     } catch (error) {
@@ -484,7 +491,9 @@ export default function App() {
       const result = await scannerService.getScanReadiness(caseId);
       applyServiceMeta(result);
       setScanReadiness(result.data);
+      setScanReadinessErrorCaseId(undefined);
     } catch (error) {
+      setScanReadinessErrorCaseId(caseId);
       recordTechnicalError("retry scan readiness", error);
       pushToast({
         tone: "warning",
@@ -798,6 +807,7 @@ export default function App() {
         <StartPage
           locale={locale}
           copy={startPageCopy[locale]}
+          setupFocusKey={runtimeSetupFocusKey}
           setup={
             <RuntimeSetupAssistant
               locale={locale}
@@ -899,6 +909,7 @@ export default function App() {
             scopeGrants={workspace.scopeGrants}
             nativeMode={mode === "native"}
             busy={busyAction === "connect-source" || busyAction === "attach-workspace" || busyAction === "discovery" || busyAction === "scope"}
+            discoveryBusy={busyAction === "discovery"}
             onChooseSnapshot={() => scannerService.chooseSourceSnapshot()}
             onConnectSourceSnapshot={(input) => runAction("connect-source", () => scannerService.connectSourceSnapshot(input))}
             onChooseWorkspace={() => scannerService.chooseWorkspaceDirectory()}
@@ -919,6 +930,7 @@ export default function App() {
           <ProgressPage
             runs={workspace.runs}
             readiness={scanReadiness?.caseId === currentCaseId ? scanReadiness : undefined}
+            readinessCheckFailed={scanReadinessErrorCaseId === currentCaseId}
             diagnosticContext={{
               productVersion: snapshot?.productVersion,
               runtime: snapshot?.runtime,
@@ -926,7 +938,12 @@ export default function App() {
             busy={Boolean(busyAction)}
             onStart={() => runAction("start-scan", () => scannerService.startScan(currentCaseId))}
             onFixSetup={() => {
+              if (scanReadinessErrorCaseId === currentCaseId) {
+                void retryScanReadiness(currentCaseId);
+                return;
+              }
               if (scanReadiness?.blockerCode === "runtime_unavailable" || scanReadiness?.nextStep === "scanner_setup") {
+                setRuntimeSetupFocusKey((key) => key + 1);
                 navigate("start");
                 void setupManagedRuntime();
                 return;
@@ -940,6 +957,10 @@ export default function App() {
                 return;
               }
               navigate(scanReadiness?.nextStep === "cases" ? "cases" : "coverage");
+            }}
+            onOpenToolSetup={() => {
+              setRuntimeSetupFocusKey((key) => key + 1);
+              navigate("start");
             }}
             onPause={(runId) => runAction("pause-scan", () => scannerService.pauseScan(currentCaseId, runId))}
             onResume={(runId) => runAction("resume-scan", () => scannerService.resumeScan(currentCaseId, runId))}

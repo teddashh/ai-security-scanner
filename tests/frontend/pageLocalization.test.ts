@@ -115,11 +115,13 @@ test("progress keeps scanner implementation data below the first layer", async (
   const runDetailsEnd = source.indexOf("</details>", ledger);
   assert.ok(runDetails >= 0 && ledger > runDetails && runDetailsEnd > ledger, "the scanner-state ledger should be inside scan details");
 
-  const identity = source.indexOf('<div className="engine-row__identity">');
+  const visibleMap = source.indexOf("{visibleEngineRuns.map((engine) => {");
+  const identity = source.indexOf('<div className="engine-row__identity">', visibleMap);
   const progress = source.indexOf('<div className="engine-row__progress">', identity);
-  assert.ok(identity >= 0 && progress > identity);
+  assert.ok(visibleMap >= 0 && identity > visibleMap && progress > identity);
   assert.doesNotMatch(source.slice(identity, progress), /engine\.engineName|rawArtifactCount|assetIds\.length/u);
-  assert.match(source.slice(identity, progress), /copy\.checkLabel/u);
+  assert.match(source.slice(identity, progress), /engineOutcomeFor\(engine\)[\s\S]*engineNextStepFor\(engine\)/u);
+  assert.doesNotMatch(source, /copy\.checkLabel/u);
 
   const engineDetails = source.indexOf('<details className="page-technical-details">', progress);
   const engineResult = source.indexOf('<div className="engine-row__result">', engineDetails);
@@ -127,6 +129,37 @@ test("progress keeps scanner implementation data below the first layer", async (
   assert.match(source.slice(engineDetails, engineResult), /engine\.engineName[\s\S]*engine\.assetIds\.length[\s\S]*engine\.rawArtifactCount/u);
   assert.doesNotMatch(source.slice(engineResult, source.indexOf('<details className="engine-provenance">', engineResult)), /rawArtifactCount|assetIds\.length/u);
   assert.doesNotMatch(source, /<code>\{run\.id\}<\/code>/u);
+});
+
+test("readiness errors remain retryable and runtime setup receives focus", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  const start = await readPage("StartPage.tsx");
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(progress, /readinessCheckFailed[\s\S]*copy\.checkAgain/u);
+  assert.match(progress, /readiness \|\| readinessCheckFailed[\s\S]*onClick=\{onFixSetup\}/u);
+  assert.match(app, /setScanReadinessErrorCaseId\(readinessCaseId\)/u);
+  assert.match(app, /setScanReadinessErrorCaseId\(caseId\)/u);
+  assert.match(app, /scanReadinessErrorCaseId === currentCaseId[\s\S]*retryScanReadiness\(currentCaseId\)/u);
+  assert.match(app, /setRuntimeSetupFocusKey\(\(key\) => key \+ 1\)[\s\S]*navigate\("start"\)/u);
+  assert.match(start, /id="start-page-runtime-setup"[\s\S]*tabIndex=\{-1\}/u);
+  assert.match(start, /getElementById\("start-page-runtime-setup"\)[\s\S]*\.focus\([\s\S]*\.scrollIntoView\(/u);
+  for (const copy of [
+    "We could not check what is ready",
+    "目前無法確認掃描準備狀態",
+    "No scan started and nothing changed. Check again now.",
+    "掃描尚未開始，也沒有變更任何資料；請立即重新檢查。",
+  ]) assert.ok(progress.includes(copy), copy);
+});
+
+test("progress aggregates empty, skipped, and shared-infrastructure attempts", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  assert.match(progress, /blocked \? 1 : visibleWorkCount/u);
+  assert.match(progress, /selectedRun\.engineRuns\.filter\(\(engine\) => engine\.status !== "not_executed"\)/u);
+  assert.match(progress, /skipped && !blocked/u);
+  assert.match(progress, /sharedInfrastructureFailure[\s\S]*aggregateTechnicalRecords/u);
+  assert.match(progress, /aggregateTechnicalRecords[\s\S]*engine\.engineName[\s\S]*engine\.errorCode[\s\S]*engine\.message/u);
+  assert.match(progress, /historyBlocked \|\| historySharedFailure \? text\(copy\.historyNotStarted\)/u);
 });
 
 test("export preview, export, and both verification paths remain wired", async () => {

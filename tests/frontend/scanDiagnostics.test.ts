@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { blockedRunSummary, buildScanDiagnostic } from "../../src/scanDiagnostics.ts";
+import {
+  blockedRunSummary,
+  buildScanDiagnostic,
+  sharedInfrastructureFailureSummary,
+  skippedEngineRunSummary,
+} from "../../src/scanDiagnostics.ts";
 import type { EngineRun, ScanRun } from "../../src/types.ts";
 
 const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
@@ -49,6 +54,72 @@ test("legacy catalog fanout is one no-target setup block", () => {
 
 test("a mixed or actually executed run is never reclassified as a setup block", () => {
   assert.equal(blockedRunSummary(run([engine(), engine({ status: "completed" })])), undefined);
+});
+
+test("a legacy zero-engine run is one blocked attempt instead of a failed zero-of-zero scan", () => {
+  assert.deepEqual(blockedRunSummary(run([])), {
+    kind: "no_runnable_checks",
+    skippedCheckCount: 0,
+    reasonCodes: [],
+  });
+});
+
+test("not-executed checks stay in one aggregate even when another check produced a result", () => {
+  const summary = skippedEngineRunSummary(run([
+    engine({ status: "completed", errorCode: undefined }),
+    engine({ id: "engine-run-2" }),
+    engine({ id: "engine-run-3", errorCode: "runtime_image_unavailable" }),
+  ]));
+  assert.deepEqual(summary, {
+    checkCount: 2,
+    reasonCodes: ["no_compatible_authorized_assets", "runtime_image_unavailable"],
+  });
+});
+
+test("one shared pre-scanner infrastructure failure is aggregated", () => {
+  const commonFailure = (id: string): EngineRun => engine({
+    id,
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    message: "same bounded local failure",
+    checkpoint: {
+      attempt: 1,
+      stage: "failed",
+      artifactCount: 0,
+      cleanupCompleted: true,
+      scopeBound: false,
+      lastError: "same bounded local failure",
+    },
+  });
+  assert.deepEqual(sharedInfrastructureFailureSummary(run([
+    commonFailure("engine-run-1"),
+    commonFailure("engine-run-2"),
+  ])), {
+    checkCount: 2,
+    reasonCodes: ["execution_failed"],
+  });
+});
+
+test("scanner-specific or different failures are never collapsed as one infrastructure problem", () => {
+  const first = engine({
+    status: "failed",
+    errorCode: "execution_failed",
+    message: "first",
+    checkpoint: { attempt: 1, stage: "failed", artifactCount: 0, cleanupCompleted: true, scopeBound: false, lastError: "first" },
+  });
+  const second = engine({
+    id: "engine-run-2",
+    status: "failed",
+    errorCode: "execution_failed",
+    message: "second",
+    checkpoint: { attempt: 1, stage: "failed", artifactCount: 0, cleanupCompleted: true, scopeBound: false, lastError: "second" },
+  });
+  assert.equal(sharedInfrastructureFailureSummary(run([first, second])), undefined);
+  assert.equal(sharedInfrastructureFailureSummary(run([
+    first,
+    { ...second, message: "first", checkpoint: { ...second.checkpoint!, lastError: "first", scopeBound: true } },
+  ])), undefined);
 });
 
 test("shareable diagnostic omits target-controlled messages, warnings, paths, and asset ids", () => {
