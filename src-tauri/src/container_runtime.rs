@@ -3752,13 +3752,35 @@ esac\n",
         let log = temp.path().join("fake-owned-cleanup-runtime.log");
         let response = temp.path().join("container-inspect.json");
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = container ] && [ \"$2\" = inspect ]; then\n  /bin/cat '{}'\n  exit 0\nfi\nif [ \"$1\" = rm ] && [ \"$2\" = --force ]; then\n  exit 0\nfi\nexit 29\n",
+            "#!/bin/sh\nif [ \"$1\" = __fixture_ready__ ]; then exit 0; fi\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = container ] && [ \"$2\" = inspect ]; then\n  /bin/cat '{}'\n  exit 0\nfi\nif [ \"$1\" = rm ] && [ \"$2\" = --force ]; then\n  exit 0\nfi\nexit 29\n",
             log.display(),
             response.display()
         );
         fs::write(&binary, script).expect("fake owned cleanup runtime script");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("fake owned cleanup runtime executable");
+        // Hosted runners can briefly report ETXTBSY after creating an executable
+        // fixture. Absorb it while publishing this fixture, never in runtime code.
+        let deadline = Instant::now() + StdDuration::from_secs(1);
+        loop {
+            match Command::new(&binary)
+                .arg("__fixture_ready__")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+            {
+                Ok(status) => {
+                    assert!(status.success(), "fake owned cleanup runtime readiness");
+                    break;
+                }
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
+                {
+                    thread::yield_now();
+                }
+                Err(error) => panic!("fake owned cleanup runtime readiness failed: {error}"),
+            }
+        }
         (binary, log, response)
     }
 
