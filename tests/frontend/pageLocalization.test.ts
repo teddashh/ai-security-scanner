@@ -230,6 +230,16 @@ test("progress keeps scanner implementation data below the first layer", async (
   assert.doesNotMatch(source, /<code>\{run\.id\}<\/code>/u);
 });
 
+test("progress describes its asset coverage count as fully checked targets", async () => {
+  const source = await readPage("ProgressPage.tsx");
+  assert.match(source, /Fully checked \{covered\} of \{total\} targets/u);
+  assert.match(source, /已完整檢查 \{covered\}／\{total\} 個目標/u);
+  assert.doesNotMatch(source, /\{covered\} of \{total\} checks have reported/u);
+  assert.doesNotMatch(source, /\{covered\}／\{total\} 項檢查已有結果/u);
+  assert.match(source, /covered: formatNumber\(selectedRun\.coveredAssetCount\)/u);
+  assert.match(source, /total: formatNumber\(selectedRun\.totalAssetCount\)/u);
+});
+
 test("readiness errors remain retryable and runtime setup receives focus", async () => {
   const progress = await readPage("ProgressPage.tsx");
   const start = await readPage("StartPage.tsx");

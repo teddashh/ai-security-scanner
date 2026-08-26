@@ -5608,6 +5608,15 @@ mod tests {
         );
 
         let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
+        let ambiguous_plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
         let mut stored = state.case_service().show_case(&case_id).unwrap();
         let mut second_source = stored
             .data_sources
@@ -5624,7 +5633,13 @@ mod tests {
             .storage
             .save_case(&mut stored, "test.provider_source_ambiguous")
             .unwrap();
-        let ambiguous_plan = state
+        assert_eq!(
+            validate_provider_execution_demands(&state, &ambiguous_plan, issued_at).unwrap_err(),
+            ProviderPreflightFailure::SourceAmbiguous
+        );
+
+        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
+        let reconnect_plan = state
             .case_service()
             .preview_scan_for_execution(
                 &case_id,
@@ -5633,12 +5648,6 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(
-            validate_provider_execution_demands(&state, &ambiguous_plan, issued_at).unwrap_err(),
-            ProviderPreflightFailure::SourceAmbiguous
-        );
-
-        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
         let mut stored = state.case_service().show_case(&case_id).unwrap();
         stored
             .data_sources
@@ -5649,15 +5658,6 @@ mod tests {
         state
             .storage
             .save_case(&mut stored, "test.provider_needs_reauthorization")
-            .unwrap();
-        let reconnect_plan = state
-            .case_service()
-            .preview_scan_for_execution(
-                &case_id,
-                ScanPlanRequest {
-                    engine_ids: vec!["steampipe".into()],
-                },
-            )
             .unwrap();
         assert_eq!(
             validate_provider_execution_demands(&state, &reconnect_plan, issued_at).unwrap_err(),

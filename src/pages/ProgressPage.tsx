@@ -248,8 +248,8 @@ const copy = {
   runIdTitle: { en: "Local scan run ID", zhTW: "本機掃描輪次 ID" },
   processed: { en: "{percent}% processed", zhTW: "已處理 {percent}%" },
   runSummary: {
-    en: "{covered} of {total} checks have reported a result · Started {started}",
-    zhTW: "{covered}／{total} 項檢查已有結果 · 開始於 {started}",
+    en: "Fully checked {covered} of {total} targets · Started {started}",
+    zhTW: "已完整檢查 {covered}／{total} 個目標 · 開始於 {started}",
   },
   finished: { en: " · Ended {finished}", zhTW: " · 結束於 {finished}" },
   overallProgress: { en: "Overall scan progress", zhTW: "整體掃描進度" },
