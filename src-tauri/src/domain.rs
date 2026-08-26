@@ -231,6 +231,22 @@ pub enum AssessmentActivity {
     ActiveExternalVulnerabilityTests,
 }
 
+/// The plain-language goal selected when the case was created. This only
+/// chooses the guided setup recipe; it never grants permission or widens a
+/// target. Older and advanced cases may legitimately have no recorded intent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssessmentIntent {
+    DeployedWebsite,
+    ExternalIpOrDomain,
+    InternalItEnvironment,
+    SourceCode,
+    InfrastructureAsCode,
+    CloudAccount,
+    ContainerImage,
+    Kubernetes,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeGrant {
     pub id: Id,
@@ -931,6 +947,8 @@ pub struct AssessmentCase {
     pub knowledge_cutoff: Option<DateTime<Utc>>,
     pub is_demo: bool,
     #[serde(default)]
+    pub assessment_intent: Option<AssessmentIntent>,
+    #[serde(default)]
     pub requested_activities: Vec<AssessmentActivity>,
     pub data_sources: Vec<DataSource>,
     pub assets: Vec<Asset>,
@@ -964,6 +982,7 @@ impl AssessmentCase {
             updated_at: now,
             knowledge_cutoff: None,
             is_demo: false,
+            assessment_intent: None,
             requested_activities: Vec::new(),
             data_sources: Vec::new(),
             assets: Vec::new(),
@@ -1025,6 +1044,8 @@ pub struct CaseSummary {
     pub data_classes: Vec<DataClass>,
     #[serde(default)]
     pub requested_activities: Vec<AssessmentActivity>,
+    #[serde(default)]
+    pub assessment_intent: Option<AssessmentIntent>,
     pub source_kinds: Vec<SourceKind>,
     pub notes: Option<String>,
     pub status: CaseStatus,
@@ -1051,6 +1072,7 @@ impl From<&AssessmentCase> for CaseSummary {
             employee_range: value.profile.employee_range.clone(),
             data_classes: value.profile.data_classes.clone(),
             requested_activities: value.requested_activities.clone(),
+            assessment_intent: value.assessment_intent.clone(),
             source_kinds,
             notes: value.profile.notes.clone(),
             status: value.status.clone(),
@@ -1110,6 +1132,10 @@ pub struct CreateCaseRequest {
     pub title: String,
     pub organization_name: String,
     pub employee_range: String,
+    /// Plain-language guided setup choice. It selects UI and validation
+    /// recipes only; it never authorizes a target.
+    #[serde(default)]
+    pub assessment_intent: Option<AssessmentIntent>,
     #[serde(default)]
     pub data_classes: Vec<DataClass>,
     /// Desired assessment activities from the questionnaire. This field is

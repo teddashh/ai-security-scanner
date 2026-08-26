@@ -882,6 +882,7 @@ fn execute_case(
                 title: args.title,
                 organization_name: args.organization,
                 employee_range: args.employee_range,
+                assessment_intent: None,
                 data_classes: args
                     .data_class
                     .iter()
@@ -3159,6 +3160,7 @@ mod tests {
                 title: "CLI deletion fixture".into(),
                 organization_name: "Example".into(),
                 employee_range: "1-10".into(),
+                assessment_intent: None,
                 data_classes: vec![],
                 requested_activities: vec![],
                 source_kinds: vec![],

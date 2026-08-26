@@ -168,6 +168,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_snapshot,
+            commands::get_scan_readiness,
             commands::setup_managed_runtime,
             commands::get_managed_runtime_setup_status,
             commands::cancel_managed_runtime_setup,

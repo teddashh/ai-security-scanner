@@ -9,7 +9,7 @@ use crate::case_service::{
     ArtifactDeletionResult, CaseDeletionResult, CaseExportFormat, DurableExecutionReport,
     ExportPreview, FindingGroupRequest, FindingUngroupRequest, FindingWorkflowRequest,
     InterruptedCleanupSuccess, LiveProviderDiscoveryOutcome, PlannedEngineExecution, ScanPlan,
-    ScanPlanRequest, ScopeApprovalRequest, SourceMutation,
+    ScanPlanRequest, ScanReadiness, ScopeApprovalRequest, SourceMutation,
 };
 use crate::connectors::{
     SNAPSHOT_ARTIFACT_METADATA_KEY, SnapshotArtifactReference, SnapshotConnectorRegistry,
@@ -472,6 +472,11 @@ pub async fn get_app_snapshot(state: State<'_, AppState>) -> AppResult<AppSnapsh
         artifact_cleanup_obligations: service.list_artifact_deletion_obligations()?,
         engine_count: state.engines.manifests().len(),
     })
+}
+
+#[tauri::command]
+pub fn get_scan_readiness(case_id: String, state: State<'_, AppState>) -> AppResult<ScanReadiness> {
+    state.case_service().scan_readiness(&case_id)
 }
 
 #[tauri::command]
@@ -1604,23 +1609,12 @@ pub fn start_scan(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<AssessmentCase> {
-    let engine_ids = state
-        .engines
-        .manifests()
-        .iter()
-        .map(|manifest| manifest.id.clone())
-        .collect();
     let plan = state
         .case_service()
-        .plan_scan(&case_id, ScanPlanRequest { engine_ids })?;
+        .plan_scan_for_execution(&case_id, ScanPlanRequest::default())?;
     emit(&app, RUN_PROGRESS_EVENT, &plan.scan_run)?;
-    if !plan.executable.is_empty() {
-        dispatch_scan_plan(&app, &state, plan.clone())?;
-    }
+    dispatch_scan_plan(&app, &state, plan.clone())?;
     let case = state.case_service().show_case(&case_id)?;
-    if plan.executable.is_empty() {
-        emit(&app, RUN_FINISHED_EVENT, &plan.scan_run)?;
-    }
     Ok(case)
 }
 
@@ -1744,23 +1738,14 @@ pub fn start_rescan(
     state: State<'_, AppState>,
 ) -> AppResult<AssessmentCase> {
     let service = state.case_service();
-    let engine_ids = state
-        .engines
-        .manifests()
-        .iter()
-        .map(|manifest| manifest.id.clone())
-        .collect();
-    let rescan = service.plan_rescan(&case_id, &baseline_run_id, ScanPlanRequest { engine_ids })?;
+    let rescan = service.plan_rescan_for_execution(
+        &case_id,
+        &baseline_run_id,
+        ScanPlanRequest::default(),
+    )?;
     emit(&app, RUN_PROGRESS_EVENT, &rescan.plan.scan_run)?;
-    if !rescan.plan.executable.is_empty() {
-        dispatch_scan_plan(&app, &state, rescan.plan.clone())?;
-    } else {
-        service.finalize_verification_if_terminal(&case_id, &rescan.plan.scan_run.id)?;
-    }
+    dispatch_scan_plan(&app, &state, rescan.plan.clone())?;
     let case = service.show_case(&case_id)?;
-    if rescan.plan.executable.is_empty() {
-        emit(&app, RUN_FINISHED_EVENT, &case)?;
-    }
     Ok(case)
 }
 
@@ -3474,6 +3459,7 @@ mod tests {
                 title: "Interrupted cleanup".into(),
                 organization_name: "Example Co".into(),
                 employee_range: "1-10".into(),
+                assessment_intent: None,
                 data_classes: vec![DataClass::General],
                 requested_activities: vec![],
                 source_kinds: vec![],

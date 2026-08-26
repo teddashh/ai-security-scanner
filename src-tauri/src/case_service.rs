@@ -18,14 +18,14 @@ use crate::discovery::{
     DiscoveredAsset, DiscoveryBatch, ReconciliationReport, reconcile_discovery,
 };
 use crate::domain::{
-    ArtifactCleanupObligation, AssessmentCase, Asset, AssetIdentifier, AssetKind, CaseExport,
-    CaseStatus, CaseSummary, CoverageStatus, CreateCaseRequest, DataSource, DeclaredAssetInput,
-    DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput, DistributionMode,
-    EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus, Finding, FindingDiffStatus,
-    FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation, FindingStatus,
-    FindingWorkflowEvent, Id, ManifestStatus, OrganizationProfile, RawArtifact, ScanPermission,
-    ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
-    valid_azure_subscription_id, valid_gcp_project_id,
+    ArtifactCleanupObligation, AssessmentCase, AssessmentIntent, Asset, AssetIdentifier, AssetKind,
+    CaseExport, CaseStatus, CaseSummary, CoverageStatus, CreateCaseRequest, DataSource,
+    DeclaredAssetInput, DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput,
+    DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus, Finding,
+    FindingDiffStatus, FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation,
+    FindingStatus, FindingWorkflowEvent, Id, ManifestStatus, OrganizationProfile, RawArtifact,
+    ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind,
+    VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export::{
@@ -42,7 +42,7 @@ use crate::source_authorization::PROVIDER_RESOURCE_SCOPE_METADATA_KEY;
 use crate::storage::Storage;
 use crate::workspace_snapshot::{
     WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA,
-    WorkspaceSnapshot,
+    WorkspaceSnapshot, WorkspaceSnapshotReference,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -175,6 +175,87 @@ pub struct ScanPlan {
     pub scan_run: ScanRun,
     pub executable: Vec<PlannedEngineExecution>,
     pub not_executed: Vec<NotExecutedEngine>,
+}
+
+/// Stable, user-facing readiness states for starting a new desktop execution.
+/// Planning-only callers may still persist explicit `not_executed` records for
+/// audit purposes; a ready state means at least one engine/target execution can
+/// be dispatched without widening the current scope.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanReadinessState {
+    Ready,
+    CaseUnavailable,
+    ScanInProgress,
+    ScopeRequired,
+    OwnershipRequired,
+    NoCompatibleAuthorizedTargets,
+    NoRunnableAuthorizedTargets,
+}
+
+/// Machine-readable reason that the primary start-scan action is blocked.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanReadinessBlocker {
+    DemoCase,
+    ArchivedCase,
+    ScanAlreadyActive,
+    NoEffectiveScopeGrants,
+    NoOwnershipConfirmedTargets,
+    NoCompatibleAuthorizedTargets,
+    NoRunnableAuthorizedTargets,
+}
+
+impl ScanReadinessBlocker {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DemoCase => "demo_case",
+            Self::ArchivedCase => "archived_case",
+            Self::ScanAlreadyActive => "scan_already_active",
+            Self::NoEffectiveScopeGrants => "no_effective_scope_grants",
+            Self::NoOwnershipConfirmedTargets => "no_ownership_confirmed_targets",
+            Self::NoCompatibleAuthorizedTargets => "no_compatible_authorized_targets",
+            Self::NoRunnableAuthorizedTargets => "no_runnable_authorized_targets",
+        }
+    }
+}
+
+/// Stable destination/action identifiers that a UI can map to its own route.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanReadinessNextStep {
+    Cases,
+    Coverage,
+    Progress,
+    ScannerSetup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScanReadiness {
+    pub case_id: Id,
+    pub ready: bool,
+    pub state: ScanReadinessState,
+    /// Ownership-confirmed, non-candidate assets with at least one effective
+    /// grant. Compatibility may still require additional permissions.
+    pub authorized_target_count: usize,
+    /// Discovered assets that are still candidates, unconfirmed, or have no
+    /// effective grant.
+    pub pending_target_count: usize,
+    /// Catalog engines with at least one compatible authorized asset.
+    pub compatible_engine_count: usize,
+    /// Compatible engines whose release, adapter, image, and command contract
+    /// can be dispatched by the constrained executor.
+    pub runnable_engine_count: usize,
+    pub blocker_code: Option<ScanReadinessBlocker>,
+    pub next_step: Option<ScanReadinessNextStep>,
+}
+
+const SCAN_PREFLIGHT_ERROR_PREFIX: &str = "scan_preflight";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanPlanIntent {
+    PersistAuditPlan,
+    StartExecution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,6 +428,10 @@ impl<'a> CaseService<'a> {
                 notes,
             },
         );
+        case.assessment_intent = request
+            .assessment_intent
+            .clone()
+            .or_else(|| infer_assessment_intent(request));
         let mut requested_activities = request.requested_activities.clone();
         requested_activities.sort_by_key(enum_key);
         requested_activities.dedup();
@@ -1279,8 +1364,45 @@ impl<'a> CaseService<'a> {
         Ok(approved)
     }
 
+    /// Reports whether a new desktop execution can start without mutating the
+    /// case or creating a scan-run record.
+    pub fn scan_readiness(&self, case_id: &str) -> AppResult<ScanReadiness> {
+        let case = self.storage.get_case(case_id)?;
+        Ok(scan_readiness_at(
+            &case,
+            self.engines,
+            self.adapters,
+            Utc::now(),
+        ))
+    }
+
+    /// Persists an audit plan. Explicitly requested unavailable or
+    /// incompatible engines remain durable `not_executed` records.
     pub fn plan_scan(&self, case_id: &str, request: ScanPlanRequest) -> AppResult<ScanPlan> {
-        self.plan_scan_at(case_id, request, None, Utc::now())
+        self.plan_scan_at(
+            case_id,
+            request,
+            None,
+            ScanPlanIntent::PersistAuditPlan,
+            Utc::now(),
+        )
+    }
+
+    /// Atomically plans a run that will be dispatched immediately. Unlike an
+    /// audit-only plan, this path never persists a run with zero executable
+    /// engine/target groups.
+    pub fn plan_scan_for_execution(
+        &self,
+        case_id: &str,
+        request: ScanPlanRequest,
+    ) -> AppResult<ScanPlan> {
+        self.plan_scan_at(
+            case_id,
+            request,
+            None,
+            ScanPlanIntent::StartExecution,
+            Utc::now(),
+        )
     }
 
     fn plan_scan_at(
@@ -1288,10 +1410,15 @@ impl<'a> CaseService<'a> {
         case_id: &str,
         request: ScanPlanRequest,
         verification_baseline_run_id: Option<&str>,
+        intent: ScanPlanIntent,
         now: DateTime<Utc>,
     ) -> AppResult<ScanPlan> {
         let mut case = self.mutable_case(case_id, "plan a scan")?;
+        let readiness = scan_readiness_at(&case, self.engines, self.adapters, now);
         if case.scan_runs.iter().any(|run| !run_is_terminal(run)) {
+            if intent == ScanPlanIntent::StartExecution {
+                return Err(scan_preflight_error(&readiness));
+            }
             return Err(AppError::InvalidRequest(
                 "the case already has an active or paused scan".into(),
             ));
@@ -1313,6 +1440,9 @@ impl<'a> CaseService<'a> {
 
         let effective = effective_grants(&case, now);
         if effective.is_empty() {
+            if intent == ScanPlanIntent::StartExecution {
+                return Err(scan_preflight_error(&readiness));
+            }
             return Err(AppError::NotAuthorized(
                 "no unexpired explicit scope grants exist; discovery alone never authorizes scanning"
                     .into(),
@@ -1327,12 +1457,24 @@ impl<'a> CaseService<'a> {
                 && asset.owner_confirmed
                 && !asset.candidate
         }) {
+            if intent == ScanPlanIntent::StartExecution {
+                return Err(scan_preflight_error(&readiness));
+            }
             return Err(AppError::NotAuthorized(
                 "scope grants do not refer to an ownership-confirmed asset".into(),
             ));
         }
 
         let engine_ids = selected_engine_ids(self.engines, &request, &case, &effective, now)?;
+        if engine_ids.is_empty() {
+            if intent == ScanPlanIntent::StartExecution {
+                return Err(scan_preflight_error(&readiness));
+            }
+            return Err(AppError::InvalidRequest(
+                "no catalog engine is applicable to the ownership-confirmed assets and effective scope grants"
+                    .into(),
+            ));
+        }
         let scan_run_id = new_id();
         let sequence = case
             .scan_runs
@@ -1523,6 +1665,10 @@ impl<'a> CaseService<'a> {
             }
         }
 
+        if intent == ScanPlanIntent::StartExecution && executable.is_empty() {
+            return Err(scan_preflight_error(&readiness));
+        }
+
         let completed_at = executable.is_empty().then_some(now);
         let scan_run = ScanRun {
             id: scan_run_id,
@@ -1568,7 +1714,34 @@ impl<'a> CaseService<'a> {
         baseline_run_id: &str,
         request: ScanPlanRequest,
     ) -> AppResult<RescanPlan> {
-        let plan = self.plan_scan_at(case_id, request, Some(baseline_run_id), Utc::now())?;
+        let plan = self.plan_scan_at(
+            case_id,
+            request,
+            Some(baseline_run_id),
+            ScanPlanIntent::PersistAuditPlan,
+            Utc::now(),
+        )?;
+        Ok(RescanPlan {
+            baseline_run_id: baseline_run_id.to_owned(),
+            plan,
+        })
+    }
+
+    /// Execution-intent counterpart to `plan_rescan`; a verification run is
+    /// never persisted unless at least one exact engine/target group can run.
+    pub fn plan_rescan_for_execution(
+        &self,
+        case_id: &str,
+        baseline_run_id: &str,
+        request: ScanPlanRequest,
+    ) -> AppResult<RescanPlan> {
+        let plan = self.plan_scan_at(
+            case_id,
+            request,
+            Some(baseline_run_id),
+            ScanPlanIntent::StartExecution,
+            Utc::now(),
+        )?;
         Ok(RescanPlan {
             baseline_run_id: baseline_run_id.to_owned(),
             plan,
@@ -2888,6 +3061,41 @@ impl<'a> CaseService<'a> {
     }
 }
 
+fn infer_assessment_intent(request: &CreateCaseRequest) -> Option<AssessmentIntent> {
+    if request
+        .declared_assets
+        .iter()
+        .any(|asset| asset.web_service.is_some())
+    {
+        return Some(AssessmentIntent::DeployedWebsite);
+    }
+    if let Some(asset) = request.declared_assets.first() {
+        return Some(match asset.kind {
+            DeclaredAssetKind::ExternalTarget if asset.internet_exposed == Some(false) => {
+                AssessmentIntent::InternalItEnvironment
+            }
+            DeclaredAssetKind::ExternalTarget => AssessmentIntent::ExternalIpOrDomain,
+            DeclaredAssetKind::Repository => AssessmentIntent::SourceCode,
+            DeclaredAssetKind::IacProject => AssessmentIntent::InfrastructureAsCode,
+            DeclaredAssetKind::ContainerImage => AssessmentIntent::ContainerImage,
+            DeclaredAssetKind::KubernetesCluster => AssessmentIntent::Kubernetes,
+        });
+    }
+    request
+        .source_kinds
+        .iter()
+        .any(|kind| {
+            matches!(
+                kind,
+                SourceKind::AwsOrganization
+                    | SourceKind::AzureTenant
+                    | SourceKind::GcpOrganization
+                    | SourceKind::Microsoft365Tenant
+            )
+        })
+        .then_some(AssessmentIntent::CloudAccount)
+}
+
 fn normalize_declared_assets(inputs: &[DeclaredAssetInput]) -> AppResult<Vec<DiscoveredAsset>> {
     if inputs.len() > MAX_DECLARED_ASSETS {
         return Err(AppError::InvalidRequest(format!(
@@ -3427,13 +3635,29 @@ fn materialize_external_scope(
             "external target is not attributable to the selected discovered asset".into(),
         ));
     }
-    if expected_activity != ExternalActivity::PassivePublicDiscovery
-        && asset.internet_exposed != Some(true)
-    {
-        return Err(AppError::NotAuthorized(
-            "direct external activity requires source evidence that the asset is internet exposed"
-                .into(),
-        ));
+    if expected_activity != ExternalActivity::PassivePublicDiscovery {
+        match asset.internet_exposed {
+            Some(true) => {
+                if external.allow_sensitive_networks {
+                    return Err(AppError::InvalidRequest(
+                        "a public target cannot request the private-network allowance".into(),
+                    ));
+                }
+            }
+            Some(false) => {
+                if !external.allow_sensitive_networks {
+                    return Err(AppError::NotAuthorized(
+                        "an internal target requires the explicit private-network allowance".into(),
+                    ));
+                }
+            }
+            None => {
+                return Err(AppError::NotAuthorized(
+                    "direct network activity requires a confirmed public or internal target type"
+                        .into(),
+                ));
+            }
+        }
     }
     let expires_at = request.expires_at.ok_or_else(|| {
         AppError::NotAuthorized("external authorization requires an explicit expiry".into())
@@ -3475,6 +3699,142 @@ fn asset_attributable_to_target(asset: &Asset, target: &CanonicalTarget) -> bool
         })
 }
 
+fn scan_readiness_at(
+    case: &AssessmentCase,
+    engines: &EngineRegistry,
+    adapters: &AdapterRegistry,
+    now: DateTime<Utc>,
+) -> ScanReadiness {
+    let effective = effective_grants(case, now);
+    let effective_asset_ids = effective
+        .iter()
+        .map(|grant| grant.asset_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let authorized_target_ids = case
+        .assets
+        .iter()
+        .filter(|asset| {
+            asset.owner_confirmed
+                && !asset.candidate
+                && effective_asset_ids.contains(asset.id.as_str())
+        })
+        .map(|asset| asset.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let compatible = engines
+        .manifests()
+        .iter()
+        .filter(|manifest| {
+            !compatible_authorized_assets(case, manifest, &effective, now).is_empty()
+        })
+        .collect::<Vec<_>>();
+    let runnable_engine_count = compatible
+        .iter()
+        .filter(|manifest| engine_unavailable(manifest, adapters).is_none())
+        .count();
+
+    let (state, blocker_code, next_step) = if case.is_demo {
+        (
+            ScanReadinessState::CaseUnavailable,
+            Some(ScanReadinessBlocker::DemoCase),
+            Some(ScanReadinessNextStep::Cases),
+        )
+    } else if case.status == CaseStatus::Archived {
+        (
+            ScanReadinessState::CaseUnavailable,
+            Some(ScanReadinessBlocker::ArchivedCase),
+            Some(ScanReadinessNextStep::Cases),
+        )
+    } else if case.scan_runs.iter().any(|run| !run_is_terminal(run)) {
+        (
+            ScanReadinessState::ScanInProgress,
+            Some(ScanReadinessBlocker::ScanAlreadyActive),
+            Some(ScanReadinessNextStep::Progress),
+        )
+    } else if effective.is_empty() {
+        (
+            ScanReadinessState::ScopeRequired,
+            Some(ScanReadinessBlocker::NoEffectiveScopeGrants),
+            Some(ScanReadinessNextStep::Coverage),
+        )
+    } else if authorized_target_ids.is_empty() {
+        (
+            ScanReadinessState::OwnershipRequired,
+            Some(ScanReadinessBlocker::NoOwnershipConfirmedTargets),
+            Some(ScanReadinessNextStep::Coverage),
+        )
+    } else if compatible.is_empty() {
+        (
+            ScanReadinessState::NoCompatibleAuthorizedTargets,
+            Some(ScanReadinessBlocker::NoCompatibleAuthorizedTargets),
+            Some(ScanReadinessNextStep::Coverage),
+        )
+    } else if runnable_engine_count == 0 {
+        (
+            ScanReadinessState::NoRunnableAuthorizedTargets,
+            Some(ScanReadinessBlocker::NoRunnableAuthorizedTargets),
+            Some(ScanReadinessNextStep::ScannerSetup),
+        )
+    } else {
+        (ScanReadinessState::Ready, None, None)
+    };
+
+    ScanReadiness {
+        case_id: case.id.clone(),
+        ready: state == ScanReadinessState::Ready,
+        state,
+        authorized_target_count: authorized_target_ids.len(),
+        pending_target_count: case
+            .assets
+            .len()
+            .saturating_sub(authorized_target_ids.len()),
+        compatible_engine_count: compatible.len(),
+        runnable_engine_count,
+        blocker_code,
+        next_step,
+    }
+}
+
+fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
+    let blocker = readiness
+        .blocker_code
+        .unwrap_or(ScanReadinessBlocker::NoRunnableAuthorizedTargets);
+    let message = match blocker {
+        ScanReadinessBlocker::DemoCase => {
+            "the demo is read-only; create or select a real case before scanning"
+        }
+        ScanReadinessBlocker::ArchivedCase => {
+            "archived cases cannot start a scan; create a new assessment case"
+        }
+        ScanReadinessBlocker::ScanAlreadyActive => "this case already has an active or paused scan",
+        ScanReadinessBlocker::NoEffectiveScopeGrants => {
+            "no unexpired explicit scope grant authorizes a target"
+        }
+        ScanReadinessBlocker::NoOwnershipConfirmedTargets => {
+            "the effective scope does not include an ownership-confirmed target"
+        }
+        ScanReadinessBlocker::NoCompatibleAuthorizedTargets => {
+            "no installed scanner supports an ownership-confirmed target with its required permissions"
+        }
+        ScanReadinessBlocker::NoRunnableAuthorizedTargets => {
+            "no selected compatible scanner is currently runnable"
+        }
+    };
+    let detail = format!(
+        "{SCAN_PREFLIGHT_ERROR_PREFIX}:{}: {message}",
+        blocker.as_str()
+    );
+    match blocker {
+        ScanReadinessBlocker::NoEffectiveScopeGrants
+        | ScanReadinessBlocker::NoOwnershipConfirmedTargets
+        | ScanReadinessBlocker::DemoCase => AppError::NotAuthorized(detail),
+        ScanReadinessBlocker::ArchivedCase | ScanReadinessBlocker::ScanAlreadyActive => {
+            AppError::InvalidRequest(detail)
+        }
+        ScanReadinessBlocker::NoCompatibleAuthorizedTargets
+        | ScanReadinessBlocker::NoRunnableAuthorizedTargets => AppError::NotAvailable(detail),
+    }
+}
+
 fn selected_engine_ids(
     engines: &EngineRegistry,
     request: &ScanPlanRequest,
@@ -3507,12 +3867,6 @@ fn selected_engine_ids(
         }
         selected.insert(value);
     }
-    if selected.is_empty() {
-        return Err(AppError::InvalidRequest(
-            "no catalog engine is applicable to the ownership-confirmed assets and effective scope grants"
-                .into(),
-        ));
-    }
     Ok(selected.into_iter().collect())
 }
 
@@ -3527,26 +3881,72 @@ fn compatible_authorized_assets<'a>(
         .filter(|asset| asset.owner_confirmed && !asset.candidate)
         .filter(|asset| manifest.supports_asset(asset))
         .filter(|asset| provider_target_metadata_matches(case, manifest, asset))
+        .filter(|asset| local_input_metadata_matches(case, manifest, asset))
         .filter(|asset| {
             let grants = effective
                 .iter()
                 .copied()
                 .filter(|grant| grant.asset_id == asset.id && grant_effective(grant, now))
                 .collect::<Vec<_>>();
-            manifest
-                .required_permissions
-                .iter()
-                .all(|required| grants.iter().any(|grant| grant.permission == *required))
-                && (!manifest.active_external
-                    || grants.iter().any(|grant| {
-                        grant.permission == ScanPermission::ActiveExternalTesting
-                            && grant
-                                .authorization_reference
-                                .as_deref()
-                                .is_some_and(|value| !value.trim().is_empty())
-                    }))
+            manifest.required_permissions.iter().all(|required| {
+                grants.iter().any(|grant| {
+                    grant.permission == *required
+                        && (!is_external_permission(required)
+                            || (grant.external_scope.is_some()
+                                && grant
+                                    .authorization_reference
+                                    .as_deref()
+                                    .is_some_and(|value| !value.trim().is_empty())))
+                })
+            })
         })
         .collect()
+}
+
+fn local_input_metadata_matches(
+    case: &AssessmentCase,
+    manifest: &EngineManifest,
+    asset: &Asset,
+) -> bool {
+    if !manifest
+        .required_permissions
+        .contains(&ScanPermission::LocalArtifactRead)
+    {
+        return true;
+    }
+    let Some(contract) = manifest
+        .input_contracts
+        .iter()
+        .find(|contract| contract.asset_kind == asset.kind)
+    else {
+        return false;
+    };
+    let expected_sha = asset
+        .metadata
+        .get("workspace_snapshot_sha256")
+        .and_then(Value::as_str);
+    let mut references = asset.discovered_from.iter().filter_map(|source_id| {
+        let source = case.data_sources.iter().find(|source| {
+            source.id == *source_id
+                && source.read_only
+                && source.status == SourceConnectionStatus::Connected
+        })?;
+        let value = source
+            .metadata
+            .get(WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY)?;
+        serde_json::from_value::<WorkspaceSnapshotReference>(value.clone()).ok()
+    });
+    let Some(reference) = references.next() else {
+        return false;
+    };
+    if references.next().is_some() {
+        return false;
+    }
+    reference.schema_version == WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA
+        && reference.working_tree_only
+        && reference.input_profile == contract.input_profile
+        && reference.input_profile.asset_kind() == asset.kind
+        && expected_sha == Some(reference.sha256.as_str())
 }
 
 /// Provider discovery attribution is broader than scanner authorization. A
@@ -5227,6 +5627,7 @@ mod tests {
                     title: "Assessment".into(),
                     organization_name: "Example Co".into(),
                     employee_range: "1-10".into(),
+                    assessment_intent: None,
                     data_classes: vec![DataClass::General],
                     requested_activities: vec![],
                     source_kinds: vec![],
@@ -5239,6 +5640,34 @@ mod tests {
 
         fn discovered_asset(&self, case_id: &str, kind: AssetKind) -> (AssessmentCase, Id) {
             let service = self.service();
+            if kind == AssetKind::Repository {
+                let fixture_id = new_id();
+                let selected = self
+                    .directory
+                    .path()
+                    .join("selected-working-trees")
+                    .join(&fixture_id);
+                fs::create_dir_all(selected.join("src")).unwrap();
+                fs::write(
+                    selected.join("src").join("main.rs"),
+                    b"fn main() { println!(\"snapshot fixture\"); }\n",
+                )
+                .unwrap();
+                fs::create_dir_all(self.directory.path().join("artifacts")).unwrap();
+                let snapshot = crate::workspace_snapshot::create_workspace_snapshot(
+                    self.directory.path().join("artifacts"),
+                    case_id,
+                    &format!("workspace-source-{fixture_id}"),
+                    &selected,
+                    crate::workspace_snapshot::WorkspaceSnapshotLimits::default(),
+                )
+                .unwrap();
+                let asset_id = snapshot.asset.id.clone();
+                let case = service
+                    .attach_workspace_snapshot(case_id, "Repository snapshot", snapshot)
+                    .unwrap();
+                return (case, asset_id);
+            }
             let source = service
                 .upsert_source(
                     case_id,
@@ -5708,6 +6137,209 @@ mod tests {
     }
 
     #[test]
+    fn execution_preflight_rejects_an_unsupported_authorized_target_without_a_run() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::FileSystem);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &created.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Filesystem owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+
+        let readiness = service.scan_readiness(&created.id).unwrap();
+        assert!(!readiness.ready);
+        assert_eq!(
+            readiness.state,
+            ScanReadinessState::NoCompatibleAuthorizedTargets
+        );
+        assert_eq!(readiness.authorized_target_count, 1);
+        assert_eq!(readiness.pending_target_count, 0);
+        assert_eq!(readiness.compatible_engine_count, 0);
+        assert_eq!(readiness.runnable_engine_count, 0);
+        assert_eq!(
+            readiness.blocker_code,
+            Some(ScanReadinessBlocker::NoCompatibleAuthorizedTargets)
+        );
+        assert_eq!(readiness.next_step, Some(ScanReadinessNextStep::Coverage));
+        let serialized = serde_json::to_value(&readiness).unwrap();
+        assert_eq!(
+            serialized["blocker_code"],
+            "no_compatible_authorized_targets"
+        );
+        assert_eq!(serialized["next_step"], "coverage");
+
+        let error = service
+            .plan_scan_for_execution(&created.id, ScanPlanRequest::default())
+            .unwrap_err();
+        assert!(matches!(error, AppError::NotAvailable(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:no_compatible_authorized_targets")
+        );
+        assert!(service.show_case(&created.id).unwrap().scan_runs.is_empty());
+    }
+
+    #[test]
+    fn execution_preflight_rejects_unavailable_engines_but_audit_planning_stays_durable() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_aws_account(&created.id, "111122223333");
+        fixture
+            .service()
+            .approve_scope(
+                &created.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::InventoryRead],
+                    confirmed_by: "Cloud account owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let unavailable_adapters = AdapterRegistry::default();
+        let service = CaseService::new(
+            &fixture.storage,
+            &fixture.engines,
+            &unavailable_adapters,
+            fixture.directory.path().join("artifacts"),
+            fixture.directory.path().join("signing.key"),
+        );
+
+        let readiness = service.scan_readiness(&created.id).unwrap();
+        assert!(!readiness.ready);
+        assert_eq!(
+            readiness.state,
+            ScanReadinessState::NoRunnableAuthorizedTargets
+        );
+        assert!(readiness.compatible_engine_count > 0);
+        assert_eq!(readiness.runnable_engine_count, 0);
+        assert_eq!(
+            readiness.blocker_code,
+            Some(ScanReadinessBlocker::NoRunnableAuthorizedTargets)
+        );
+        assert_eq!(
+            readiness.next_step,
+            Some(ScanReadinessNextStep::ScannerSetup)
+        );
+
+        let error = service
+            .plan_scan_for_execution(&created.id, ScanPlanRequest::default())
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:no_runnable_authorized_targets")
+        );
+        assert!(service.show_case(&created.id).unwrap().scan_runs.is_empty());
+
+        let audit = service
+            .plan_scan(&created.id, ScanPlanRequest::default())
+            .unwrap();
+        assert!(audit.executable.is_empty());
+        assert_eq!(audit.not_executed.len(), readiness.compatible_engine_count);
+        assert!(
+            audit
+                .not_executed
+                .iter()
+                .all(|engine| engine.reason_code == "adapter_unavailable")
+        );
+        assert_eq!(service.show_case(&created.id).unwrap().scan_runs.len(), 1);
+    }
+
+    #[test]
+    fn execution_rescan_preflight_does_not_persist_an_empty_verification_run() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_aws_account(&created.id, "111122223333");
+        let available_service = fixture.service();
+        available_service
+            .approve_scope(
+                &created.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::InventoryRead],
+                    confirmed_by: "Cloud account owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let baseline = available_service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        let mut completed = available_service.show_case(&created.id).unwrap();
+        let baseline_run = completed
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == baseline.scan_run.id)
+            .unwrap();
+        baseline_run.completed_at = Some(baseline.scan_run.created_at);
+        for engine_run in &mut baseline_run.engine_runs {
+            engine_run.status = EngineRunStatus::Completed;
+            engine_run.progress_percent = 100;
+            engine_run.phase = "completed".into();
+            engine_run.started_at = Some(baseline.scan_run.created_at);
+            engine_run.finished_at = Some(baseline.scan_run.created_at);
+            engine_run.exit_code = Some(0);
+        }
+        completed.status = CaseStatus::ReadyForHandoff;
+        fixture
+            .storage
+            .save_case(&mut completed, "test.baseline_completed")
+            .unwrap();
+        let case_id = created.id;
+        let baseline_run_id = baseline.scan_run.id;
+        let unavailable_adapters = AdapterRegistry::default();
+        let service = CaseService::new(
+            &fixture.storage,
+            &fixture.engines,
+            &unavailable_adapters,
+            fixture.directory.path().join("artifacts"),
+            fixture.directory.path().join("signing.key"),
+        );
+        let run_count = service.show_case(&case_id).unwrap().scan_runs.len();
+
+        let error = service
+            .plan_rescan_for_execution(&case_id, &baseline_run_id, ScanPlanRequest::default())
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:no_runnable_authorized_targets")
+        );
+        let retained = service.show_case(&case_id).unwrap();
+        assert_eq!(retained.scan_runs.len(), run_count);
+        assert!(
+            retained
+                .scan_runs
+                .iter()
+                .all(|run| run.verification_baseline_run_id.is_none())
+        );
+    }
+
+    #[test]
     fn case_questionnaire_creates_untrusted_candidates_and_reasoned_applicability() {
         let fixture = Fixture::new();
         let case = fixture
@@ -5716,6 +6348,7 @@ mod tests {
                 title: "Questionnaire case".into(),
                 organization_name: "Example Co".into(),
                 employee_range: "2-49".into(),
+                assessment_intent: None,
                 data_classes: vec![DataClass::General],
                 requested_activities: vec![
                     AssessmentActivity::ConfigurationAssessment,
@@ -5802,6 +6435,7 @@ mod tests {
             title: "Invalid questionnaire".into(),
             organization_name: "Example Co".into(),
             employee_range: "2-49".into(),
+            assessment_intent: None,
             data_classes: vec![],
             requested_activities: vec![],
             source_kinds: vec![SourceKind::AwsOrganization],
@@ -5831,6 +6465,7 @@ mod tests {
                 title: "Internal IT review".into(),
                 organization_name: "Example Co".into(),
                 employee_range: "2-49".into(),
+                assessment_intent: None,
                 data_classes: vec![],
                 requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
                 source_kinds: vec![],
@@ -5859,6 +6494,7 @@ mod tests {
                 title: "Deployed website review".into(),
                 organization_name: "Example Co".into(),
                 employee_range: "2-49".into(),
+                assessment_intent: None,
                 data_classes: vec![],
                 requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
                 source_kinds: vec![],
@@ -5899,6 +6535,7 @@ mod tests {
             title: "Website context validation".into(),
             organization_name: "Example Co".into(),
             employee_range: "2-49".into(),
+            assessment_intent: None,
             data_classes: vec![],
             requested_activities: vec![],
             source_kinds: vec![],
@@ -6197,6 +6834,7 @@ mod tests {
                     title: "Persistent".into(),
                     organization_name: "Example".into(),
                     employee_range: "1-10".into(),
+                    assessment_intent: None,
                     data_classes: vec![],
                     requested_activities: vec![],
                     source_kinds: vec![],
