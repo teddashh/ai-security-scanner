@@ -52,12 +52,35 @@ const GATEWAY_SCRATCH_SBOM = Object.freeze({
   source: "https://github.com/teddashh/ai-security-scanner",
   title: "ai-security-scanner managed egress gateway",
   license: "Apache-2.0",
+  fileNames: Object.freeze([
+    "usr/local/bin/ai-security-scanner-egress-gateway",
+    "usr/local/bin/ai-security-scanner-egress-probe",
+  ]),
   normalizationProperty: "ai-security-scanner:normalization:components",
-  normalizationValue: "first-party-scratch-application-from-matching-spdx-v1",
+  normalizationValue: "first-party-scratch-application-from-preserved-spdx-v2",
 });
 const PROJECT_SBOM_TRANSFORMER = Object.freeze({
   name: "ai-security-scanner/scripts/engine-image-evidence.mjs",
-  version: "1",
+  version: "2",
+});
+const SPDX_CHECKSUM_HEX_LENGTHS = Object.freeze({
+  ADLER32: 8,
+  MD2: 32,
+  MD4: 32,
+  MD5: 32,
+  MD6: 32,
+  SHA1: 40,
+  SHA224: 56,
+  SHA256: 64,
+  SHA384: 96,
+  SHA512: 128,
+  "SHA3-256": 64,
+  "SHA3-384": 96,
+  "SHA3-512": 128,
+  "BLAKE2b-256": 64,
+  "BLAKE2b-384": 96,
+  "BLAKE2b-512": 128,
+  BLAKE3: 64,
 });
 
 function assert(condition, message) {
@@ -446,6 +469,103 @@ function exactCycloneDxProperty(document, name, value) {
   return Array.isArray(matches) && matches.length === 1 && matches[0]?.value === value;
 }
 
+function validateGatewayScratchSpdxInventory(document, root) {
+  assert(
+    document.packages.length === 1,
+    "gateway scratch normalization refuses to conceal an SPDX package inventory",
+  );
+  const syftCreator = `Tool: syft-${SYFT.version}`;
+  assert(
+    Array.isArray(document?.creationInfo?.creators) &&
+      document.creationInfo.creators.filter((creator) => creator === syftCreator).length === 1,
+    "gateway scratch SPDX provenance does not identify the pinned Syft version",
+  );
+  assert(
+    Array.isArray(document.files) && document.files.length === GATEWAY_SCRATCH_SBOM.fileNames.length,
+    "gateway scratch SPDX file inventory does not match the image contract",
+  );
+
+  const expectedNames = new Set(GATEWAY_SCRATCH_SBOM.fileNames);
+  const elementIds = new Set(["SPDXRef-DOCUMENT", root.SPDXID]);
+  const seenNames = new Set();
+  for (const file of document.files) {
+    assert(
+      typeof file?.SPDXID === "string" && /^SPDXRef-[A-Za-z0-9.-]+$/u.test(file.SPDXID) &&
+        !elementIds.has(file.SPDXID),
+      "gateway scratch SPDX file identity is invalid or duplicated",
+    );
+    elementIds.add(file.SPDXID);
+    assert(
+      typeof file.fileName === "string" && file.fileName.length > 0 && !file.fileName.includes("\0"),
+      "gateway scratch SPDX file name is invalid",
+    );
+    const normalizedName = file.fileName.replace(/^\/+/, "");
+    assert(
+      expectedNames.has(normalizedName) && !seenNames.has(normalizedName),
+      "gateway scratch SPDX file inventory contains an unexpected or duplicate path",
+    );
+    seenNames.add(normalizedName);
+    assert(
+      Array.isArray(file.checksums) && file.checksums.length > 0,
+      "gateway scratch SPDX file is missing its checksum inventory",
+    );
+    const algorithms = new Set();
+    for (const checksum of file.checksums) {
+      const length = SPDX_CHECKSUM_HEX_LENGTHS[checksum?.algorithm];
+      assert(
+        Number.isInteger(length) &&
+          typeof checksum?.checksumValue === "string" &&
+          checksum.checksumValue.length === length &&
+          /^[0-9a-f]+$/u.test(checksum.checksumValue) &&
+          !/^0+$/u.test(checksum.checksumValue) &&
+          !algorithms.has(checksum.algorithm),
+        "gateway scratch SPDX file checksum is invalid or duplicated",
+      );
+      algorithms.add(checksum.algorithm);
+    }
+    assert(
+      algorithms.has("SHA1") && algorithms.has("SHA256"),
+      "gateway scratch SPDX file must retain Syft SHA1 and SHA256 evidence",
+    );
+  }
+  assert(
+    seenNames.size === expectedNames.size,
+    "gateway scratch SPDX file inventory is incomplete",
+  );
+
+  assert(Array.isArray(document.relationships), "gateway scratch SPDX relationships are missing");
+  const relationshipKeys = new Set();
+  let describesCount = 0;
+  for (const relationship of document.relationships) {
+    const key = [
+      relationship?.spdxElementId,
+      relationship?.relationshipType,
+      relationship?.relatedSpdxElement,
+    ].join("\0");
+    assert(!relationshipKeys.has(key), "gateway scratch SPDX relationships contain a duplicate edge");
+    relationshipKeys.add(key);
+    assert(
+      elementIds.has(relationship?.spdxElementId) && elementIds.has(relationship?.relatedSpdxElement),
+      "gateway scratch SPDX relationship references an unknown element",
+    );
+    if (relationship.relationshipType === "DESCRIBES") {
+      describesCount += 1;
+      assert(
+        relationship.spdxElementId === "SPDXRef-DOCUMENT" &&
+          relationship.relatedSpdxElement === root.SPDXID,
+        "gateway scratch SPDX DESCRIBES relationship has the wrong subject",
+      );
+      continue;
+    }
+    assert(
+      false,
+      "gateway scratch SPDX loose files must not be claimed by a filesAnalyzed=false container root",
+    );
+  }
+  assert(describesCount === 1, "gateway scratch SPDX must have exactly one DESCRIBES relationship");
+  return { fileCount: document.files.length };
+}
+
 function normalizeGatewayScratchCycloneDx({
   engine,
   image,
@@ -474,22 +594,7 @@ function normalizeGatewayScratchCycloneDx({
     "gateway scratch normalization requires matching SPDX and CycloneDX container identities",
   );
   assert(root.filesAnalyzed === false, "gateway scratch SPDX root must not claim file analysis");
-  assert(
-    spdxDocument.packages.length === 1,
-    "gateway scratch normalization refuses to discard an SPDX package inventory",
-  );
-  assert(
-    spdxDocument.files === undefined ||
-      (Array.isArray(spdxDocument.files) && spdxDocument.files.length === 0),
-    "gateway scratch normalization refuses to discard an SPDX file inventory",
-  );
-  assert(
-    Array.isArray(spdxDocument.relationships) && spdxDocument.relationships.length === 1 &&
-      spdxDocument.relationships[0]?.spdxElementId === "SPDXRef-DOCUMENT" &&
-      spdxDocument.relationships[0]?.relationshipType === "DESCRIBES" &&
-      spdxDocument.relationships[0]?.relatedSpdxElement === root.SPDXID,
-    "gateway scratch SPDX relationships do not prove an empty inventory",
-  );
+  const spdxInventory = validateGatewayScratchSpdxInventory(spdxDocument, root);
   const ociPurl = root.externalRefs?.find(
     (reference) =>
       reference?.referenceCategory === "PACKAGE-MANAGER" &&
@@ -552,7 +657,7 @@ function normalizeGatewayScratchCycloneDx({
     name: GATEWAY_SCRATCH_SBOM.normalizationProperty,
     value: GATEWAY_SCRATCH_SBOM.normalizationValue,
   });
-  return componentBomRef;
+  return { componentBomRef, spdxFileCount: spdxInventory.fileCount };
 }
 
 async function normalizeGatewayScratchCycloneDxFile({
@@ -567,8 +672,9 @@ async function normalizeGatewayScratchCycloneDxFile({
 }) {
   const cycloneDxDocument = await readJson(cycloneDxFile);
   if (Object.hasOwn(cycloneDxDocument, "components")) return null;
+  const sourceSpdxSha256 = await sha256File(spdxFile);
   const spdxDocument = await readJson(spdxFile);
-  const componentBomRef = normalizeGatewayScratchCycloneDx({
+  const normalization = normalizeGatewayScratchCycloneDx({
     engine,
     image,
     tag,
@@ -577,16 +683,23 @@ async function normalizeGatewayScratchCycloneDxFile({
     spdxDocument,
     cycloneDxDocument,
   });
-  if (!componentBomRef) return null;
+  if (!normalization) return null;
   await writeJsonAtomic(cycloneDxFile, cycloneDxDocument);
+  assert(
+    await sha256File(spdxFile) === sourceSpdxSha256,
+    "gateway scratch normalization changed the source SPDX document",
+  );
   return {
-    kind: "cyclonedx-first-party-scratch-application-v1",
+    kind: "cyclonedx-first-party-scratch-application-v2",
     platform,
     platformDigest,
     sourceRevision,
     sourceFile: path.basename(spdxFile),
     outputFile: path.basename(cycloneDxFile),
-    componentBomRef,
+    componentBomRef: normalization.componentBomRef,
+    spdxPreserved: true,
+    spdxFileCount: normalization.spdxFileCount,
+    spdxSha256: sourceSpdxSha256,
     tool: PROJECT_SBOM_TRANSFORMER,
   };
 }
@@ -672,13 +785,30 @@ async function createPreparedEvidence({ engine, image, tag, indexDigest, sourceR
       cycloneDxFile,
     });
     if (transformation) sbomTransformations.push(transformation);
+    const spdxRecord = await sbomRecord(
+      outputRoot,
+      `${prefix}.spdx.json`,
+      "spdx-json",
+      PREDICATES.spdx,
+      digest,
+    );
+    const cycloneDxRecord = await sbomRecord(
+      outputRoot,
+      `${prefix}.cyclonedx.json`,
+      "cyclonedx-json",
+      PREDICATES.cyclonedx,
+      digest,
+    );
+    if (transformation) {
+      assert(
+        transformation.spdxPreserved === true && transformation.spdxSha256 === spdxRecord.sha256,
+        `gateway scratch SPDX preservation record diverged for ${platform}`,
+      );
+    }
     platforms.push({
       platform,
       digest,
-      sboms: [
-        await sbomRecord(outputRoot, `${prefix}.spdx.json`, "spdx-json", PREDICATES.spdx, digest),
-        await sbomRecord(outputRoot, `${prefix}.cyclonedx.json`, "cyclonedx-json", PREDICATES.cyclonedx, digest),
-      ],
+      sboms: [spdxRecord, cycloneDxRecord],
     });
   }
 
@@ -890,7 +1020,7 @@ function fakeSboms(image, digest) {
   };
 }
 
-function fakeEmptyGatewaySboms(digest) {
+function fakeGatewayScratchSboms(digest) {
   const fixtures = fakeSboms(GATEWAY_SCRATCH_SBOM.image, digest);
   const root = fixtures.spdx.packages[0];
   root.filesAnalyzed = false;
@@ -900,6 +1030,20 @@ function fakeEmptyGatewaySboms(digest) {
     referenceType: "purl",
     referenceLocator: `pkg:oci/${GATEWAY_SCRATCH_SBOM.componentName}@${encodeURIComponent(digest)}`,
   }];
+  fixtures.spdx.creationInfo.creators = ["Organization: Anchore, Inc", `Tool: syft-${SYFT.version}`];
+  fixtures.spdx.files = GATEWAY_SCRATCH_SBOM.fileNames.map((fileName, index) => ({
+    fileName,
+    SPDXID: `SPDXRef-File-egress-gateway-${index + 1}`,
+    fileTypes: index < 2 ? ["APPLICATION", "BINARY"] : ["TEXT"],
+    checksums: [
+      { algorithm: "SHA1", checksumValue: `${index + 1}`.repeat(40) },
+      { algorithm: "SHA256", checksumValue: `${index + 4}`.repeat(64) },
+    ],
+    licenseConcluded: "NOASSERTION",
+    licenseInfoInFiles: ["NOASSERTION"],
+    copyrightText: "NOASSERTION",
+    comment: `layerID: ${digest}`,
+  }));
   fixtures.cyclonedx.$schema = "http://cyclonedx.org/schema/bom-1.7.schema.json";
   fixtures.cyclonedx.specVersion = "1.7";
   fixtures.cyclonedx.metadata.properties = [
@@ -1076,11 +1220,17 @@ async function selfTest() {
 
     const gatewayRoot = path.join(root, "gateway-scratch");
     await mkdir(gatewayRoot, { recursive: true });
+    const gatewaySpdxBefore = new Map();
     for (const [platform, digest] of platformDigests) {
       const prefix = `${GATEWAY_SCRATCH_SBOM.engine}-linux-${platformKey(platform)}`;
-      const fixtures = fakeEmptyGatewaySboms(digest);
-      await writeJsonAtomic(path.join(gatewayRoot, `${prefix}.spdx.json`), fixtures.spdx);
+      const fixtures = fakeGatewayScratchSboms(digest);
+      const spdxFile = path.join(gatewayRoot, `${prefix}.spdx.json`);
+      await writeJsonAtomic(spdxFile, fixtures.spdx);
       await writeJsonAtomic(path.join(gatewayRoot, `${prefix}.cyclonedx.json`), fixtures.cyclonedx);
+      gatewaySpdxBefore.set(platform, {
+        bytesSha256: await sha256File(spdxFile),
+        files: structuredClone(fixtures.spdx.files),
+      });
     }
     const gatewayPrepared = await createPreparedEvidence({
       engine: GATEWAY_SCRATCH_SBOM.engine,
@@ -1101,6 +1251,8 @@ async function selfTest() {
       const transformation = gatewayPrepared.evidence.sbomTransformations.find(
         (candidate) => candidate.platform === platform,
       );
+      const preservedSpdxFile = path.join(gatewayRoot, `${prefix}.spdx.json`);
+      const preservedSpdx = await readJson(preservedSpdxFile);
       const normalized = await readJson(path.join(gatewayRoot, `${prefix}.cyclonedx.json`));
       const component = normalized.components?.[0];
       assert(
@@ -1109,6 +1261,12 @@ async function selfTest() {
           transformation?.sourceFile === `${prefix}.spdx.json` &&
           transformation?.outputFile === `${prefix}.cyclonedx.json` &&
           transformation?.tool?.name === PROJECT_SBOM_TRANSFORMER.name &&
+          transformation?.tool?.version === PROJECT_SBOM_TRANSFORMER.version &&
+          transformation?.spdxPreserved === true &&
+          transformation?.spdxFileCount === GATEWAY_SCRATCH_SBOM.fileNames.length &&
+          transformation?.spdxSha256 === gatewaySpdxBefore.get(platform)?.bytesSha256 &&
+          await sha256File(preservedSpdxFile) === gatewaySpdxBefore.get(platform)?.bytesSha256 &&
+          isDeepStrictEqual(preservedSpdx.files, gatewaySpdxBefore.get(platform)?.files) &&
           normalized.version === 2 && normalized.components?.length === 1 &&
           component?.type === "application" &&
           component?.name === GATEWAY_SCRATCH_SBOM.componentName &&
@@ -1144,17 +1302,17 @@ async function selfTest() {
     };
 
     assertGatewayNormalizationRejected(
-      fakeEmptyGatewaySboms(gatewayDigest),
+      fakeGatewayScratchSboms(gatewayDigest),
       { engine: "fixture-engine" },
       "self-test allowed another engine to use the gateway scratch normalization",
     );
     assertGatewayNormalizationRejected(
-      fakeEmptyGatewaySboms(gatewayDigest),
+      fakeGatewayScratchSboms(gatewayDigest),
       { image: "ghcr.io/teddashh/not-the-egress-gateway" },
       "self-test allowed another repository to use the gateway scratch normalization",
     );
 
-    const hiddenPackageFixtures = fakeEmptyGatewaySboms(gatewayDigest);
+    const hiddenPackageFixtures = fakeGatewayScratchSboms(gatewayDigest);
     hiddenPackageFixtures.spdx.packages.unshift({
       SPDXID: "SPDXRef-Package-hidden",
       name: "must-not-be-discarded",
@@ -1166,7 +1324,7 @@ async function selfTest() {
       "self-test allowed gateway normalization to hide an SPDX package",
     );
 
-    const wrongLabelFixtures = fakeEmptyGatewaySboms(gatewayDigest);
+    const wrongLabelFixtures = fakeGatewayScratchSboms(gatewayDigest);
     wrongLabelFixtures.cyclonedx.metadata.properties.find(
       (property) => property.name.endsWith("org.opencontainers.image.source"),
     ).value = "https://github.com/example/not-this-project";
@@ -1175,8 +1333,49 @@ async function selfTest() {
       {},
       "self-test allowed gateway normalization with a mismatched source label",
     );
+
+    const wrongProvenanceFixtures = fakeGatewayScratchSboms(gatewayDigest);
+    wrongProvenanceFixtures.spdx.creationInfo.creators = ["Tool: syft-1.50.0"];
     assertGatewayNormalizationRejected(
-      fakeEmptyGatewaySboms(gatewayDigest),
+      wrongProvenanceFixtures,
+      {},
+      "self-test allowed gateway normalization with mismatched scanner provenance",
+    );
+
+    const danglingRelationshipFixtures = fakeGatewayScratchSboms(gatewayDigest);
+    danglingRelationshipFixtures.spdx.relationships.push({
+      spdxElementId: danglingRelationshipFixtures.spdx.packages[0].SPDXID,
+      relationshipType: "CONTAINS",
+      relatedSpdxElement: "SPDXRef-File-not-in-the-inventory",
+    });
+    assertGatewayNormalizationRejected(
+      danglingRelationshipFixtures,
+      {},
+      "self-test allowed a dangling SPDX relationship",
+    );
+
+    const falseContainmentFixtures = fakeGatewayScratchSboms(gatewayDigest);
+    falseContainmentFixtures.spdx.relationships.push({
+      spdxElementId: falseContainmentFixtures.spdx.packages[0].SPDXID,
+      relationshipType: "CONTAINS",
+      relatedSpdxElement: falseContainmentFixtures.spdx.files[0].SPDXID,
+    });
+    assertGatewayNormalizationRejected(
+      falseContainmentFixtures,
+      {},
+      "self-test allowed a filesAnalyzed=false gateway root to claim a loose file",
+    );
+
+    const missingFileHashFixtures = fakeGatewayScratchSboms(gatewayDigest);
+    missingFileHashFixtures.spdx.files[0].checksums = [];
+    assertGatewayNormalizationRejected(
+      missingFileHashFixtures,
+      {},
+      "self-test allowed a gateway SPDX file without preserved hashes",
+    );
+
+    assertGatewayNormalizationRejected(
+      fakeGatewayScratchSboms(gatewayDigest),
       { platformDigest: platformDigests.get("linux/arm64") },
       "self-test allowed gateway normalization with a mismatched SPDX platform digest",
     );
@@ -1289,7 +1488,7 @@ async function selfTest() {
         promotionAction.includes("run: docker logout ghcr.io"),
       "promotion action is not self-contained across anonymous-smoke credential state",
     );
-    process.stdout.write("Engine image evidence self-test passed (20 engines, immutable tag provenance, exact index, 5 attestations, 4 SBOMs, gateway scratch augmentation, negative scope/digest checks).\n");
+    process.stdout.write("Engine image evidence self-test passed (20 engines, immutable tag provenance, exact index, 5 attestations, 4 SBOMs, preserved gateway SPDX files/hashes, negative scope/provenance/relationship/digest checks).\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

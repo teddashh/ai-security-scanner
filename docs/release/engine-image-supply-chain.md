@@ -66,11 +66,18 @@ and before a new version tag is promoted:
    The first-party managed egress gateway is a package-manager-free `scratch` image. When—and only
    when—Syft omits the CycloneDX `components` field for that exact engine and repository, the helper
    may add one project-owned application component. Before doing so it requires the matching SPDX
-   document to contain only its `CONTAINER` root, no package or file inventory, the exact OCI
-   platform digest, and the CycloneDX metadata to carry the exact project source, title, and license
-   labels. The added component records the workflow source revision and platform-manifest digest;
-   the downloadable evidence manifest records the transformation and tool. Any discovered package,
-   file, dependency, wrong label, wrong digest, wrong engine, or wrong repository still fails closed.
+   document to contain only its `CONTAINER` package plus the two executable files cataloged from the
+   image (`ai-security-scanner-egress-gateway` and `ai-security-scanner-egress-probe`), with unique
+   SPDX identities and nonzero SHA-1 and SHA-256 checksums. Because the container package declares
+   `filesAnalyzed=false`, those executables remain loose SPDX file records: the only permitted edge
+   is one exact `DOCUMENT DESCRIBES container-root`; `CONTAINS` would make a false package-membership
+   claim and is rejected. The SPDX bytes,
+   file records, hashes, and relationships are never rewritten; that original document is signed as
+   the SPDX predicate. The CycloneDX-only application component records the workflow source revision
+   and platform-manifest digest without claiming a binary hash. The downloadable evidence manifest
+   records `spdxPreserved`, the file count and SPDX hash, along with the transformation tool. Any
+   discovered package, missing or unexpected file, missing hash, dangling relationship, dependency,
+   wrong Syft provenance, label, digest, engine, or repository still fails closed.
 3. `actions/attest` creates one SLSA build-provenance attestation for the index and an SPDX plus a
    CycloneDX SBOM attestation for each platform manifest. The five Sigstore statements are stored
    in GitHub's attestation API and pushed to GHCR as OCI referrers. Neither operation changes the
@@ -98,8 +105,9 @@ The self-test uses a synthetic exact two-platform index, multi-platform SBOMs, a
 envelopes. It proves the manifest has five exact attestations, rejects a wrong source revision,
 extra platform, wrong image digest, or SPDX checksum mismatch, and verifies cloud changed-input
 selection keeps full manual dispatch while narrowing an engine-only push. It also proves the
-gateway-only transformation records both platforms and rejects a wrong engine, repository,
-inventory, source label, or platform digest:
+gateway-only transformation keeps realistic gateway file records and hashes byte-for-byte for both
+platforms, and rejects a wrong engine, repository, inventory, scanner provenance, relationship,
+source label, or platform digest:
 
 ```sh
 node scripts/engine-image-evidence.mjs self-test

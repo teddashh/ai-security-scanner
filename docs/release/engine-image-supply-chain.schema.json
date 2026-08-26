@@ -125,10 +125,13 @@
         "sourceFile",
         "outputFile",
         "componentBomRef",
+        "spdxPreserved",
+        "spdxFileCount",
+        "spdxSha256",
         "tool"
       ],
       "properties": {
-        "kind": { "const": "cyclonedx-first-party-scratch-application-v1" },
+        "kind": { "const": "cyclonedx-first-party-scratch-application-v2" },
         "platform": { "enum": ["linux/amd64", "linux/arm64"] },
         "platformDigest": { "$ref": "#/$defs/digest" },
         "sourceRevision": {
@@ -147,13 +150,16 @@
           "type": "string",
           "pattern": "^urn:ai-security-scanner:egress-gateway:[0-9a-f]{64}$"
         },
+        "spdxPreserved": { "const": true },
+        "spdxFileCount": { "const": 2 },
+        "spdxSha256": { "$ref": "#/$defs/hash" },
         "tool": {
           "type": "object",
           "additionalProperties": false,
           "required": ["name", "version"],
           "properties": {
             "name": { "const": "ai-security-scanner/scripts/engine-image-evidence.mjs" },
-            "version": { "const": "1" }
+            "version": { "const": "2" }
           }
         }
       }
