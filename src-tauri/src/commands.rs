@@ -39,9 +39,9 @@ use crate::source_authorization::session::{
     ProviderAuthorizationPrompt, ProviderSessionPoll,
 };
 use crate::source_authorization::{
-    InstalledSourceAuthorization, PROVIDER_RESOURCE_SCOPE_METADATA_KEY, ProviderSourceProfile,
-    ReservedScannerCredentialBundle, SourceCheckoutDemand, SourceCheckoutReservationHandle,
-    validate_aws_execution_target,
+    BoundSourceCheckoutDemand, InstalledSourceAuthorization, PROVIDER_RESOURCE_SCOPE_METADATA_KEY,
+    ProviderSourceProfile, ReservedScannerCredentialBundle, SourceAuthorizationBindingSnapshot,
+    SourceCheckoutPreflightFailure, SourceCheckoutReservationHandle, validate_aws_execution_target,
 };
 use crate::state::AppState;
 use crate::workspace_snapshot::{
@@ -605,11 +605,68 @@ struct OwnedSourceCheckoutDemand {
     case_id: String,
     source_id: String,
     engine_id: String,
+    binding: SourceAuthorizationBindingSnapshot,
+    context: ProviderExecutionContext,
+}
+
+#[derive(Clone)]
+struct ProviderExecutionContext {
+    engine_run_id: String,
+    source: DataSource,
+    authorization: InstalledSourceAuthorization,
 }
 
 struct ProviderExecutionReservation {
     handle: SourceCheckoutReservationHandle,
     credentials: ReservedScannerCredentialBundle,
+    contexts: Vec<ProviderExecutionContext>,
+}
+
+/// Releases an in-memory provider reservation on every non-handoff path,
+/// including unwinding from a panic inside the blocking persistence worker.
+/// Credentials are owned by the reservation and zeroize when this guard drops.
+struct PendingProviderExecutionReservation<'a> {
+    state: &'a AppState,
+    operation: &'static str,
+    assigned: bool,
+    reservation: Option<ProviderExecutionReservation>,
+}
+
+impl<'a> PendingProviderExecutionReservation<'a> {
+    fn new(state: &'a AppState, operation: &'static str) -> Self {
+        Self {
+            state,
+            operation,
+            assigned: false,
+            reservation: None,
+        }
+    }
+
+    fn set(&mut self, reservation: Option<ProviderExecutionReservation>) -> AppResult<()> {
+        if self.assigned {
+            release_provider_execution_reservation(
+                self.state,
+                reservation,
+                "duplicate provider reservation handoff",
+            );
+            return Err(AppError::Internal(
+                "provider execution preflight attempted to replace a pending reservation".into(),
+            ));
+        }
+        self.assigned = true;
+        self.reservation = reservation;
+        Ok(())
+    }
+
+    fn take(&mut self) -> Option<ProviderExecutionReservation> {
+        self.reservation.take()
+    }
+}
+
+impl Drop for PendingProviderExecutionReservation<'_> {
+    fn drop(&mut self) {
+        release_provider_execution_reservation(self.state, self.reservation.take(), self.operation);
+    }
 }
 
 fn block_scan_readiness(readiness: &mut ScanReadiness, blocker: DesktopExecutionBlocker) {
@@ -662,24 +719,85 @@ fn provider_source_for_preflight(
 ) -> Result<DataSource, ProviderPreflightFailure> {
     match provider_source_for_execution(state, execution) {
         Ok(Some(source)) => Ok(source),
-        Ok(None) => Err(ProviderPreflightFailure::SourceRequired),
+        Ok(None) => {
+            let case = state
+                .case_service()
+                .show_case(&execution.case_id)
+                .map_err(|_| ProviderPreflightFailure::PreflightUnavailable)?;
+            let candidate_ids = execution
+                .assets
+                .iter()
+                .flat_map(|asset| asset.discovered_from.iter())
+                .filter_map(|source_id| {
+                    case.data_sources
+                        .iter()
+                        .find(|source| {
+                            source.id == *source_id
+                                && source.read_only
+                                && matches!(
+                                    source.kind,
+                                    SourceKind::AwsOrganization
+                                        | SourceKind::AzureTenant
+                                        | SourceKind::GcpOrganization
+                                        | SourceKind::Microsoft365Tenant
+                                )
+                        })
+                        .map(|source| source.id.clone())
+                })
+                .collect::<BTreeSet<_>>();
+            if candidate_ids.len() > 1 {
+                return Err(ProviderPreflightFailure::SourceAmbiguous);
+            }
+            let Some(source_id) = candidate_ids.into_iter().next() else {
+                return Err(ProviderPreflightFailure::SourceRequired);
+            };
+            let source = case
+                .data_sources
+                .iter()
+                .find(|source| source.id == source_id)
+                .expect("provider preflight source id came from this case");
+            match &source.status {
+                SourceConnectionStatus::NeedsReauthorization | SourceConnectionStatus::Failed => {
+                    Err(ProviderPreflightFailure::CapabilityUnavailable)
+                }
+                SourceConnectionStatus::Connecting => {
+                    Err(ProviderPreflightFailure::PreflightUnavailable)
+                }
+                _ => Err(ProviderPreflightFailure::SourceRequired),
+            }
+        }
         Err(AppError::InvalidRequest(_)) => Err(ProviderPreflightFailure::SourceAmbiguous),
         Err(AppError::NotAuthorized(_)) => Err(ProviderPreflightFailure::TargetBindingMismatch),
         Err(_) => Err(ProviderPreflightFailure::PreflightUnavailable),
     }
 }
 
-fn validate_provider_authorization_for_preflight(
+fn map_source_checkout_preflight_failure(
+    failure: SourceCheckoutPreflightFailure,
+) -> ProviderPreflightFailure {
+    match failure {
+        SourceCheckoutPreflightFailure::CapabilityUnavailable => {
+            ProviderPreflightFailure::CapabilityUnavailable
+        }
+        SourceCheckoutPreflightFailure::BindingMismatch => {
+            ProviderPreflightFailure::AuthorizationBindingMismatch
+        }
+        SourceCheckoutPreflightFailure::Internal => ProviderPreflightFailure::PreflightUnavailable,
+    }
+}
+
+fn provider_authorization_snapshot_for_preflight(
     state: &AppState,
     source: &DataSource,
     execution: &PlannedEngineExecution,
     now: chrono::DateTime<Utc>,
-) -> Result<(), ProviderPreflightFailure> {
-    let authorization = state
+) -> Result<SourceAuthorizationBindingSnapshot, ProviderPreflightFailure> {
+    let binding = state
         .source_authorizations
-        .status(&execution.case_id, &source.id, now)
-        .map_err(|_| ProviderPreflightFailure::PreflightUnavailable)?
+        .binding_snapshot(&execution.case_id, &source.id, now)
+        .map_err(map_source_checkout_preflight_failure)?
         .ok_or(ProviderPreflightFailure::CapabilityUnavailable)?;
+    let authorization = binding.authorization();
     let persisted_profile = source
         .metadata
         .get("provider_profile")
@@ -708,14 +826,15 @@ fn validate_provider_authorization_for_preflight(
     {
         return Err(ProviderPreflightFailure::AuthorizationBindingMismatch);
     }
-    validate_provider_execution_target(state, source, execution, &authorization).map_err(|error| {
-        match error {
+    validate_provider_execution_target(state, source, execution, authorization).map_err(
+        |error| match error {
             AppError::Internal(_) | AppError::Storage(_) | AppError::CaseNotFound(_) => {
                 ProviderPreflightFailure::PreflightUnavailable
             }
             _ => ProviderPreflightFailure::TargetBindingMismatch,
-        }
-    })
+        },
+    )?;
+    Ok(binding)
 }
 
 /// Builds the exact, duplicate-preserving provider demand. Every planned cloud
@@ -726,49 +845,42 @@ fn provider_execution_demands(
     plan: &ScanPlan,
     now: chrono::DateTime<Utc>,
 ) -> Result<Vec<OwnedSourceCheckoutDemand>, ProviderPreflightFailure> {
-    let mut owned_demands = Vec::<(String, String, String)>::new();
+    let mut owned_demands = Vec::new();
     for execution in &plan.executable {
         if !execution_requires_provider_capability(execution) {
             continue;
         }
         let source = provider_source_for_preflight(state, execution)?;
-        validate_provider_authorization_for_preflight(state, &source, execution, now)?;
-        owned_demands.push((
-            execution.case_id.clone(),
-            source.id,
-            execution.manifest.id.clone(),
-        ));
-    }
-    Ok(owned_demands
-        .into_iter()
-        .map(
-            |(case_id, source_id, engine_id)| OwnedSourceCheckoutDemand {
-                case_id,
-                source_id,
-                engine_id,
+        let binding =
+            provider_authorization_snapshot_for_preflight(state, &source, execution, now)?;
+        let authorization = binding.authorization().clone();
+        owned_demands.push(OwnedSourceCheckoutDemand {
+            case_id: execution.case_id.clone(),
+            source_id: source.id.clone(),
+            engine_id: execution.manifest.id.clone(),
+            binding,
+            context: ProviderExecutionContext {
+                engine_run_id: execution.engine_run_id.clone(),
+                source,
+                authorization,
             },
-        )
-        .collect())
+        });
+    }
+    Ok(owned_demands)
 }
 
-fn borrowed_checkout_demands(
+fn borrowed_bound_checkout_demands(
     owned_demands: &[OwnedSourceCheckoutDemand],
-) -> Vec<SourceCheckoutDemand<'_>> {
+) -> Vec<BoundSourceCheckoutDemand<'_>> {
     owned_demands
         .iter()
-        .map(|demand| SourceCheckoutDemand {
+        .map(|demand| BoundSourceCheckoutDemand {
             case_id: &demand.case_id,
             source_id: &demand.source_id,
             engine_id: &demand.engine_id,
+            binding: &demand.binding,
         })
         .collect()
-}
-
-fn map_checkout_preflight_error(error: AppError) -> ProviderPreflightFailure {
-    match error {
-        AppError::NotAuthorized(_) => ProviderPreflightFailure::CapabilityUnavailable,
-        _ => ProviderPreflightFailure::PreflightUnavailable,
-    }
 }
 
 /// Non-mutating readiness snapshot. Desktop execution uses the reservation
@@ -784,8 +896,8 @@ fn validate_provider_execution_demands(
     }
     state
         .source_authorizations
-        .validate_checkout_demands(&borrowed_checkout_demands(&owned_demands), now)
-        .map_err(map_checkout_preflight_error)
+        .validate_bound_checkout_demands(&borrowed_bound_checkout_demands(&owned_demands), now)
+        .map_err(map_source_checkout_preflight_failure)
 }
 
 fn reserve_provider_execution_demands(
@@ -799,12 +911,48 @@ fn reserve_provider_execution_demands(
     }
     let (handle, credentials) = state
         .source_authorizations
-        .reserve_checkout_demands(&borrowed_checkout_demands(&owned_demands), now)
-        .map_err(map_checkout_preflight_error)?;
+        .reserve_bound_checkout_demands(&borrowed_bound_checkout_demands(&owned_demands), now)
+        .map_err(map_source_checkout_preflight_failure)?;
+    if credentials.remaining() != owned_demands.len() {
+        let reservation = ProviderExecutionReservation {
+            handle,
+            credentials,
+            contexts: Vec::new(),
+        };
+        release_provider_execution_reservation(
+            state,
+            Some(reservation),
+            "provider reservation cardinality validation",
+        );
+        return Err(ProviderPreflightFailure::PreflightUnavailable);
+    }
     Ok(Some(ProviderExecutionReservation {
         handle,
         credentials,
+        contexts: owned_demands
+            .into_iter()
+            .map(|demand| demand.context)
+            .collect(),
     }))
+}
+
+fn validate_scan_dispatch_identity(plan: &ScanPlan) -> AppResult<()> {
+    JobKey::new(plan.scan_run.case_id.clone(), plan.scan_run.id.clone())
+        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    let mut engine_run_ids = BTreeSet::new();
+    for execution in &plan.executable {
+        if execution.case_id != plan.scan_run.case_id
+            || execution.scan_run_id != plan.scan_run.id
+            || !engine_run_ids.insert(execution.engine_run_id.as_str())
+        {
+            return Err(AppError::Internal(
+                "planned scan dispatch identities are inconsistent or duplicated".into(),
+            ));
+        }
+        JobKey::new(&execution.case_id, &execution.engine_run_id)
+            .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -816,6 +964,7 @@ fn validate_desktop_execution_with_runtime<F>(
 where
     F: FnMut() -> AppResult<()>,
 {
+    validate_scan_dispatch_identity(plan)?;
     validate_provider_execution_demands(state, plan, Utc::now())
         .map_err(ProviderPreflightFailure::into_error)?;
     runtime_preflight().map_err(|_| DesktopExecutionBlocker::RuntimeUnavailable.into_error())?;
@@ -834,6 +983,7 @@ fn prepare_desktop_execution_with_runtime<F>(
 where
     F: FnMut() -> AppResult<()>,
 {
+    validate_scan_dispatch_identity(plan)?;
     validate_provider_execution_demands(state, plan, Utc::now())
         .map_err(ProviderPreflightFailure::into_error)?;
     runtime_preflight().map_err(|_| DesktopExecutionBlocker::RuntimeUnavailable.into_error())?;
@@ -2031,22 +2181,14 @@ pub async fn start_scan(case_id: String, app: AppHandle) -> AppResult<Assessment
     let worker_case_id = case_id.clone();
     let (plan, reservation) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
-        let mut reservation = None;
+        let mut pending =
+            PendingProviderExecutionReservation::new(&state, "scan persistence worker");
         let planned = state.case_service().plan_scan_for_execution_checked(
             &worker_case_id,
             ScanPlanRequest::default(),
-            |plan| {
-                reservation = prepare_desktop_execution(&state, plan)?;
-                Ok(())
-            },
+            |plan| pending.set(prepare_desktop_execution(&state, plan)?),
         );
-        match planned {
-            Ok(plan) => Ok((plan, reservation)),
-            Err(error) => {
-                release_provider_execution_reservation(&state, reservation, "scan persistence");
-                Err(error)
-            }
-        }
+        planned.map(|plan| (plan, pending.take()))
     })
     .await
     .map_err(|_| AppError::Internal("scan preflight worker terminated unexpectedly".into()))??;
@@ -2131,21 +2273,15 @@ pub async fn resume_scan(
     let worker_run_id = run_id.clone();
     let (plan, reservation) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
-        let mut reservation = None;
+        let mut pending =
+            PendingProviderExecutionReservation::new(&state, "resume persistence worker");
         let planned =
             state
                 .case_service()
                 .plan_resume_checked(&worker_case_id, &worker_run_id, |plan| {
-                    reservation = prepare_desktop_resume(&state, plan)?;
-                    Ok(())
+                    pending.set(prepare_desktop_resume(&state, plan)?)
                 });
-        match planned {
-            Ok(plan) => Ok((plan, reservation)),
-            Err(error) => {
-                release_provider_execution_reservation(&state, reservation, "resume persistence");
-                Err(error)
-            }
-        }
+        planned.map(|plan| (plan, pending.take()))
     })
     .await
     .map_err(|_| AppError::Internal("resume preflight worker terminated unexpectedly".into()))??;
@@ -2206,23 +2342,15 @@ pub async fn start_rescan(
     let worker_baseline_run_id = baseline_run_id.clone();
     let (rescan, reservation) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
-        let mut reservation = None;
+        let mut pending =
+            PendingProviderExecutionReservation::new(&state, "rescan persistence worker");
         let planned = state.case_service().plan_rescan_for_execution_checked(
             &worker_case_id,
             &worker_baseline_run_id,
             ScanPlanRequest::default(),
-            |plan| {
-                reservation = prepare_desktop_execution(&state, plan)?;
-                Ok(())
-            },
+            |plan| pending.set(prepare_desktop_execution(&state, plan)?),
         );
-        match planned {
-            Ok(rescan) => Ok((rescan, reservation)),
-            Err(error) => {
-                release_provider_execution_reservation(&state, reservation, "rescan persistence");
-                Err(error)
-            }
-        }
+        planned.map(|rescan| (rescan, pending.take()))
     })
     .await
     .map_err(|_| AppError::Internal("rescan preflight worker terminated unexpectedly".into()))??;
@@ -2369,9 +2497,69 @@ fn release_provider_execution_reservation(
     }
 }
 
+fn release_after_provider_commit_error(
+    state: &AppState,
+    reservation: ProviderExecutionReservation,
+) {
+    match state
+        .source_authorizations
+        .release_checkout_reservation(&reservation.handle)
+    {
+        Ok(()) | Err(AppError::NotAuthorized(_)) => {}
+        Err(error) => tracing::error!(
+            error = %error,
+            "provider checkout reservation could not be finalized after activation failed"
+        ),
+    }
+}
+
+fn map_provider_reservation_commit_error(error: AppError) -> ProviderPreflightFailure {
+    match error {
+        AppError::NotAuthorized(_) => ProviderPreflightFailure::CapabilityUnavailable,
+        _ => ProviderPreflightFailure::PreflightUnavailable,
+    }
+}
+
 enum ScanWorkerActivation {
-    Execute(Option<ReservedScannerCredentialBundle>),
+    Execute(Option<ReservedProviderExecutionBundle>),
     Abort(&'static str),
+}
+
+struct ReservedProviderExecutionBundle {
+    credentials: ReservedScannerCredentialBundle,
+    contexts: Vec<ProviderExecutionContext>,
+}
+
+impl ReservedProviderExecutionBundle {
+    fn context_for(
+        &self,
+        execution: &PlannedEngineExecution,
+    ) -> AppResult<&ProviderExecutionContext> {
+        self.contexts
+            .iter()
+            .find(|context| context.engine_run_id == execution.engine_run_id)
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "provider execution has no frozen pre-persistence connection context".into(),
+                )
+            })
+    }
+
+    fn take_credentials(
+        &mut self,
+        execution: &PlannedEngineExecution,
+        context: &ProviderExecutionContext,
+    ) -> AppResult<ScannerCredentialSet> {
+        self.credentials.take(
+            &execution.case_id,
+            &context.source.id,
+            &execution.manifest.id,
+        )
+    }
+
+    fn remaining(&self) -> usize {
+        self.credentials.remaining()
+    }
 }
 
 fn abort_inactive_scan_worker(
@@ -2401,14 +2589,14 @@ fn dispatch_scan_plan(
     app: &AppHandle,
     state: &State<'_, AppState>,
     plan: ScanPlan,
-    mut reservation: Option<ProviderExecutionReservation>,
+    reservation: Option<ProviderExecutionReservation>,
 ) -> AppResult<()> {
+    let mut pending =
+        PendingProviderExecutionReservation::new(state, "scan dispatch before activation");
+    pending.set(reservation)?;
     let key = match JobKey::new(plan.scan_run.case_id.clone(), plan.scan_run.id.clone()) {
         Ok(key) => key,
-        Err(error) => {
-            release_provider_execution_reservation(state, reservation.take(), "scan job identity");
-            return Err(AppError::InvalidRequest(error.to_string()));
-        }
+        Err(error) => return Err(AppError::InvalidRequest(error.to_string())),
     };
     let engine_run_ids = plan
         .executable
@@ -2441,7 +2629,6 @@ fn dispatch_scan_plan(
     ) {
         Ok(initial) => initial,
         Err(error) => {
-            release_provider_execution_reservation(state, reservation.take(), "scan worker spawn");
             let message = format!("scan worker could not start: {error}");
             for execution in &persisted_executions {
                 let report = terminal_report(execution, ExecutionStage::Failed, &message);
@@ -2470,20 +2657,19 @@ fn dispatch_scan_plan(
         }
     };
 
-    let activation = match reservation.take() {
+    let activation = match pending.take() {
         Some(reservation) => {
             let commit = state
                 .source_authorizations
                 .commit_checkout_reservation(&reservation.handle, Utc::now());
             match commit {
-                Ok(()) => ScanWorkerActivation::Execute(Some(reservation.credentials)),
+                Ok(()) => ScanWorkerActivation::Execute(Some(ReservedProviderExecutionBundle {
+                    credentials: reservation.credentials,
+                    contexts: reservation.contexts,
+                })),
                 Err(error) => {
-                    let failure = map_checkout_preflight_error(error);
-                    release_provider_execution_reservation(
-                        state,
-                        Some(reservation),
-                        "scan worker activation",
-                    );
+                    let failure = map_provider_reservation_commit_error(error);
+                    release_after_provider_commit_error(state, reservation);
                     let _ = activation_sender.send(ScanWorkerActivation::Abort(
                         "the cloud connection changed before dispatch; no scanner was allowed to run",
                     ));
@@ -2507,7 +2693,7 @@ fn dispatch_scan_plan(
 fn run_scan_worker(
     app: AppHandle,
     executions: Vec<PlannedEngineExecution>,
-    mut reserved_credentials: Option<ReservedScannerCredentialBundle>,
+    mut reserved_provider: Option<ReservedProviderExecutionBundle>,
     context: JobContext,
 ) -> JobCompletion {
     let state = app.state::<AppState>();
@@ -2562,7 +2748,7 @@ fn run_scan_worker(
                 runtime,
                 artifacts,
                 &execution,
-                reserved_credentials.as_mut(),
+                reserved_provider.as_mut(),
                 &control.cancellation_token(),
                 &context,
             ),
@@ -2631,14 +2817,14 @@ fn run_scan_worker(
 
     if !failed
         && !cancelled
-        && reserved_credentials
+        && reserved_provider
             .as_ref()
-            .is_some_and(|credentials| credentials.remaining() != 0)
+            .is_some_and(|provider| provider.remaining() != 0)
     {
         tracing::error!(
-            remaining = reserved_credentials
+            remaining = reserved_provider
                 .as_ref()
-                .map(ReservedScannerCredentialBundle::remaining)
+                .map(ReservedProviderExecutionBundle::remaining)
                 .unwrap_or_default(),
             "scan worker completed without claiming every reserved provider credential set"
         );
@@ -2660,7 +2846,7 @@ fn execute_planned_engine(
     runtime: &ProcessContainerRuntime,
     artifacts: &ArtifactStore,
     execution: &PlannedEngineExecution,
-    reserved_credentials: Option<&mut ReservedScannerCredentialBundle>,
+    reserved_provider: Option<&mut ReservedProviderExecutionBundle>,
     cancellation: &crate::container_runtime::CancellationToken,
     job_context: &JobContext,
 ) -> AppResult<DurableExecutionReport> {
@@ -2731,6 +2917,26 @@ fn execute_planned_engine(
             return Ok(durable);
         }
     }
+    let mut reserved_provider = reserved_provider;
+    let provider_context = if execution_requires_provider_capability(execution) {
+        let context = reserved_provider
+            .as_deref()
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "provider execution has no pre-persistence dispatch bundle".into(),
+                )
+            })?
+            .context_for(execution)?
+            .clone();
+        if Utc::now() >= context.authorization.expires_at {
+            return Err(AppError::NotAuthorized(
+                "the frozen provider connection expired before scanner dispatch".into(),
+            ));
+        }
+        Some(context)
+    } else {
+        None
+    };
     let resolved_workspace = resolve_execution_workspace(state, execution)?;
     let limits = ResourceLimits {
         memory_mb: execution.manifest.estimated_memory_mb.clamp(128, 262_144),
@@ -2741,7 +2947,8 @@ fn execute_planned_engine(
         tmpfs_mb: execution.manifest.estimated_disk_mb.clamp(16, 4_096),
         ..ResourceLimits::default()
     };
-    let mut network_lease = provision_execution_network(state, runtime, execution)?;
+    let mut network_lease =
+        provision_execution_network(state, runtime, execution, provider_context.as_ref())?;
     let network_identity = network_lease
         .as_ref()
         .map(ManagedNetworkLease::durable_identity)
@@ -2750,7 +2957,12 @@ fn execute_planned_engine(
         .as_ref()
         .map(|lease| lease.network_policy().clone())
         .unwrap_or(NetworkPolicy::Disabled);
-    let credentials = match resolve_execution_credentials(state, execution, reserved_credentials) {
+    let credentials = match resolve_execution_credentials(
+        state,
+        execution,
+        reserved_provider,
+        provider_context.as_ref(),
+    ) {
         Ok(credentials) => credentials,
         Err(error) => {
             return Ok(terminal_after_prestart_error(
@@ -2969,6 +3181,7 @@ fn provision_execution_network(
     state: &AppState,
     runtime: &ProcessContainerRuntime,
     execution: &PlannedEngineExecution,
+    provider_context: Option<&ProviderExecutionContext>,
 ) -> AppResult<Option<ManagedNetworkLease>> {
     let direct_external = execution
         .manifest
@@ -3083,13 +3296,23 @@ fn provision_execution_network(
             )
         });
     let (source_id, source_kind, source_profile, expires_at) = if provider_read {
-        let (source, authorization) = provider_egress_source(state, execution, now)?;
-        (
-            source.id,
-            serialized_token(&source.kind, "source kind")?,
-            serialized_token(&authorization.profile, "source profile")?,
-            approved_execution_expiry(execution, now, authorization.expires_at)?,
-        )
+        match provider_context {
+            Some(context) => (
+                context.source.id.clone(),
+                serialized_token(&context.source.kind, "source kind")?,
+                serialized_token(&context.authorization.profile, "source profile")?,
+                approved_execution_expiry(execution, now, context.authorization.expires_at)?,
+            ),
+            None => {
+                let (source, authorization) = provider_egress_source(state, execution, now)?;
+                (
+                    source.id,
+                    serialized_token(&source.kind, "source kind")?,
+                    serialized_token(&authorization.profile, "source profile")?,
+                    approved_execution_expiry(execution, now, authorization.expires_at)?,
+                )
+            }
+        }
     } else if execution
         .manifest
         .required_permissions
@@ -3203,7 +3426,8 @@ fn locate_egress_gateway_binary() -> AppResult<std::path::PathBuf> {
 fn resolve_execution_credentials(
     state: &AppState,
     execution: &PlannedEngineExecution,
-    reserved_credentials: Option<&mut ReservedScannerCredentialBundle>,
+    reserved_provider: Option<&mut ReservedProviderExecutionBundle>,
+    provider_context: Option<&ProviderExecutionContext>,
 ) -> AppResult<ScannerCredentialSet> {
     let provider_read = execution
         .manifest
@@ -3219,33 +3443,50 @@ fn resolve_execution_credentials(
         return Ok(ScannerCredentialSet::default());
     }
 
-    let Some(source) = provider_source_for_execution(state, execution)? else {
-        let cloud_asset = execution.assets.iter().any(|asset| {
-            matches!(
-                asset.kind,
-                AssetKind::CloudOrganization
-                    | AssetKind::CloudAccount
-                    | AssetKind::Subscription
-                    | AssetKind::Project
-                    | AssetKind::Tenant
+    let cloud_asset = execution.assets.iter().any(|asset| {
+        matches!(
+            asset.kind,
+            AssetKind::CloudOrganization
+                | AssetKind::CloudAccount
+                | AssetKind::Subscription
+                | AssetKind::Project
+                | AssetKind::Tenant
+        )
+    });
+    if cloud_asset {
+        let context = provider_context.ok_or_else(|| {
+            AppError::NotAuthorized(
+                "cloud execution has no frozen provider connection context".into(),
             )
-        });
-        return if cloud_asset {
-            Err(AppError::NotAuthorized(
-                "cloud execution has no connected provider-native read-only source".into(),
-            ))
-        } else {
-            Ok(ScannerCredentialSet::default())
-        };
+        })?;
+        if context.engine_run_id != execution.engine_run_id
+            || context.authorization.case_id != execution.case_id
+            || context.authorization.source_id != context.source.id
+            || !context
+                .authorization
+                .allowed_engine_ids
+                .contains(&execution.manifest.id)
+        {
+            return Err(AppError::NotAuthorized(
+                "frozen provider connection context does not bind this execution".into(),
+            ));
+        }
+        return reserved_provider
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "provider execution has no pre-persistence credential reservation".into(),
+                )
+            })?
+            .take_credentials(execution, context);
+    }
+
+    let Some(source) = provider_source_for_execution(state, execution)? else {
+        return Ok(ScannerCredentialSet::default());
     };
     validate_installed_provider_authorization(state, &source, execution, Utc::now())?;
-    reserved_credentials
-        .ok_or_else(|| {
-            AppError::NotAuthorized(
-                "provider execution has no pre-persistence credential reservation".into(),
-            )
-        })?
-        .take(&execution.case_id, &source.id, &execution.manifest.id)
+    Err(AppError::NotAuthorized(
+        "non-cloud provider credentials cannot be checked out by desktop execution".into(),
+    ))
 }
 
 fn provider_egress_source(
@@ -4705,6 +4946,32 @@ mod tests {
         assert_eq!(
             validate_provider_execution_demands(&state, &ambiguous_plan, issued_at).unwrap_err(),
             ProviderPreflightFailure::SourceAmbiguous
+        );
+
+        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
+        let mut stored = state.case_service().show_case(&case_id).unwrap();
+        stored
+            .data_sources
+            .iter_mut()
+            .find(|source| source.id == source_id)
+            .unwrap()
+            .status = SourceConnectionStatus::NeedsReauthorization;
+        state
+            .storage
+            .save_case(&mut stored, "test.provider_needs_reauthorization")
+            .unwrap();
+        let reconnect_plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            validate_provider_execution_demands(&state, &reconnect_plan, issued_at).unwrap_err(),
+            ProviderPreflightFailure::CapabilityUnavailable
         );
     }
 
