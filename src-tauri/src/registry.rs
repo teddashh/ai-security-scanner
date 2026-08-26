@@ -205,6 +205,38 @@ fn validate_release_contract(manifest: &EngineManifest) -> AppResult<()> {
             "an engine without local-artifact permission cannot declare local input contracts",
         ));
     }
+    let direct_network = manifest.required_permissions.iter().any(|permission| {
+        matches!(
+            permission,
+            ScanPermission::LowImpactExternalConnection | ScanPermission::ActiveExternalTesting
+        )
+    });
+    if direct_network {
+        let contract = manifest.direct_network_contract.as_ref().ok_or_else(|| {
+            fail("a direct-network engine must declare its accepted target and protocol shapes")
+        })?;
+        if contract.target_kinds.is_empty()
+            || contract.protocols.is_empty()
+            || contract
+                .target_kinds
+                .iter()
+                .enumerate()
+                .any(|(index, kind)| contract.target_kinds[..index].contains(kind))
+            || contract
+                .protocols
+                .iter()
+                .enumerate()
+                .any(|(index, protocol)| contract.protocols[..index].contains(protocol))
+        {
+            return Err(fail(
+                "direct-network target kinds and protocols must be non-empty and unique",
+            ));
+        }
+    } else if manifest.direct_network_contract.is_some() {
+        return Err(fail(
+            "an engine without direct-network permission cannot declare a direct-network contract",
+        ));
+    }
     let knowledge_date = parse_iso_date(&manifest.compatibility.knowledge_date)
         .ok_or_else(|| fail("compatibility knowledge date is not a real ISO calendar date"))?;
     let support_until = parse_iso_date(&manifest.compatibility.support_until)
@@ -290,6 +322,8 @@ fn valid_sha256_digest(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DirectNetworkExecutionContract;
+    use crate::external_scope::{DirectNetworkTargetKind, TransportProtocol};
 
     #[test]
     fn builtin_catalog_has_unique_supported_engines() {
@@ -311,6 +345,101 @@ mod tests {
                 .unwrap()
                 .supported_providers
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn builtin_direct_network_contracts_match_their_launcher_shapes() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        let contract = |id: &str| {
+            registry
+                .get(id)
+                .and_then(|manifest| manifest.direct_network_contract.as_ref())
+                .unwrap_or_else(|| panic!("missing direct-network contract for {id}"))
+        };
+
+        assert_eq!(
+            contract("naabu"),
+            &DirectNetworkExecutionContract {
+                target_kinds: vec![
+                    DirectNetworkTargetKind::Hostname,
+                    DirectNetworkTargetKind::Address,
+                    DirectNetworkTargetKind::Network,
+                ],
+                protocols: vec![
+                    TransportProtocol::Tcp,
+                    TransportProtocol::Tls,
+                    TransportProtocol::Http,
+                    TransportProtocol::Https,
+                ],
+            }
+        );
+        for id in ["httpx", "nuclei"] {
+            assert_eq!(
+                contract(id),
+                &DirectNetworkExecutionContract {
+                    target_kinds: vec![
+                        DirectNetworkTargetKind::Hostname,
+                        DirectNetworkTargetKind::Address,
+                    ],
+                    protocols: vec![TransportProtocol::Http, TransportProtocol::Https],
+                }
+            );
+        }
+        assert_eq!(
+            contract("greenbone"),
+            &DirectNetworkExecutionContract {
+                target_kinds: vec![
+                    DirectNetworkTargetKind::Hostname,
+                    DirectNetworkTargetKind::Address,
+                ],
+                protocols: vec![
+                    TransportProtocol::Tcp,
+                    TransportProtocol::Tls,
+                    TransportProtocol::Http,
+                    TransportProtocol::Https,
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn direct_network_contract_is_required_only_for_direct_network_permissions() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+
+        let mut missing = registry.get("naabu").unwrap().clone();
+        missing.direct_network_contract = None;
+        assert!(
+            validate_release_contract(&missing)
+                .unwrap_err()
+                .to_string()
+                .contains("must declare its accepted target and protocol shapes")
+        );
+
+        let mut misplaced = registry.get("semgrep").unwrap().clone();
+        misplaced.direct_network_contract = Some(DirectNetworkExecutionContract {
+            target_kinds: vec![DirectNetworkTargetKind::Address],
+            protocols: vec![TransportProtocol::Tcp],
+        });
+        assert!(
+            validate_release_contract(&misplaced)
+                .unwrap_err()
+                .to_string()
+                .contains("without direct-network permission")
+        );
+
+        let mut duplicate = registry.get("httpx").unwrap().clone();
+        duplicate
+            .direct_network_contract
+            .as_mut()
+            .unwrap()
+            .protocols
+            .push(TransportProtocol::Http);
+        assert!(
+            validate_release_contract(&duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("must be non-empty and unique")
         );
     }
 

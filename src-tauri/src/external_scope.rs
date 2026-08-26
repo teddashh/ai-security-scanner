@@ -26,6 +26,17 @@ pub enum TransportProtocol {
     Https,
 }
 
+/// The structural target forms a direct-network engine can consume. This is
+/// deliberately separate from `CanonicalTarget`: manifests describe kinds,
+/// while grants retain the exact authorized value.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectNetworkTargetKind {
+    Hostname,
+    Address,
+    Network,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum CanonicalTarget {
@@ -35,6 +46,14 @@ pub enum CanonicalTarget {
 }
 
 impl CanonicalTarget {
+    pub fn kind(&self) -> DirectNetworkTargetKind {
+        match self {
+            Self::Hostname(_) => DirectNetworkTargetKind::Hostname,
+            Self::Address(_) => DirectNetworkTargetKind::Address,
+            Self::Network(_) => DirectNetworkTargetKind::Network,
+        }
+    }
+
     pub fn parse(input: &str) -> AppResult<Self> {
         let input = input.trim();
         if input.is_empty() || input.contains(['\n', '\r', '\0']) {

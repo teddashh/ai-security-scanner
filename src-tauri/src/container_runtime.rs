@@ -3552,6 +3552,7 @@ esac
             supported_asset_kinds: vec![AssetKind::Repository],
             input_contracts: vec![],
             provider_execution_contracts: vec![],
+            direct_network_contract: None,
             required_permissions: vec![ScanPermission::LocalArtifactRead],
             active_external: false,
             default_enabled: false,

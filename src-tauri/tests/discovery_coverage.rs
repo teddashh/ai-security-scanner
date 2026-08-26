@@ -391,6 +391,7 @@ fn manifest() -> EngineManifest {
         supported_asset_kinds: vec![AssetKind::CloudAccount],
         input_contracts: vec![],
         provider_execution_contracts: vec![],
+        direct_network_contract: None,
         required_permissions: vec![ScanPermission::InventoryRead],
         active_external: false,
         default_enabled: true,

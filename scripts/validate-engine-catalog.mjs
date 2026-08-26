@@ -1795,6 +1795,8 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   const permissions = new Set(engine.required_permissions ?? []);
   const inputContracts = engine.input_contracts ?? [];
   const providerContracts = engine.provider_execution_contracts ?? [];
+  const directNetworkPermission = permissions.has("low_impact_external_connection") || permissions.has("active_external_testing");
+  const directNetworkContract = engine.direct_network_contract;
   if ((engine.supported_providers?.length ?? 0) > 1 && providerContracts.length === 0) {
     errors.push(`${label}: a multi-provider engine requires exact provider execution contracts`);
   }
@@ -1834,6 +1836,16 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
     }
   } else if (inputContracts.length > 0) {
     errors.push(`${label}: non-local engine cannot declare a local input contract`);
+  }
+  if (directNetworkPermission) {
+    if (!directNetworkContract || !Array.isArray(directNetworkContract.target_kinds) || directNetworkContract.target_kinds.length === 0 ||
+        new Set(directNetworkContract.target_kinds).size !== directNetworkContract.target_kinds.length ||
+        !Array.isArray(directNetworkContract.protocols) || directNetworkContract.protocols.length === 0 ||
+        new Set(directNetworkContract.protocols).size !== directNetworkContract.protocols.length) {
+      errors.push(`${label}: a direct-network engine requires unique, non-empty target-kind and protocol contracts`);
+    }
+  } else if (directNetworkContract !== undefined) {
+    errors.push(`${label}: non-direct-network engine cannot declare a direct-network contract`);
   }
   if (!revisionPattern.test(engine.source_revision ?? "")) errors.push(`${label}.source_revision: exact 40-character commit is required`);
   if (engine.source_revision !== engine.provenance?.engine?.source_revision) errors.push(`${label}: top-level and provenance source revisions differ`);

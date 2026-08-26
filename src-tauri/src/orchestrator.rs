@@ -916,6 +916,12 @@ mod tests {
             }],
             input_contracts: vec![],
             provider_execution_contracts: vec![],
+            direct_network_contract: active_external.then(|| {
+                crate::domain::DirectNetworkExecutionContract {
+                    target_kinds: vec![crate::external_scope::DirectNetworkTargetKind::Hostname],
+                    protocols: vec![TransportProtocol::Https],
+                }
+            }),
             required_permissions: vec![if active_external {
                 ScanPermission::ActiveExternalTesting
             } else {

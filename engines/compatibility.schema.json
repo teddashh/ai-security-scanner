@@ -337,6 +337,25 @@
         }
       }
     },
+    "directNetworkContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_kinds", "protocols"],
+      "properties": {
+        "target_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["hostname", "address", "network"] }
+        },
+        "protocols": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["tcp", "udp", "tls", "http", "https"] }
+        }
+      }
+    },
     "engine": {
       "type": "object",
       "additionalProperties": false,
@@ -396,6 +415,7 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/providerExecutionContract" }
         },
+        "direct_network_contract": { "$ref": "#/$defs/directNetworkContract" },
         "required_permissions": {
           "type": "array",
           "minItems": 1,

@@ -3896,7 +3896,14 @@ fn compatible_authorized_assets<'a>(
                                 && grant
                                     .authorization_reference
                                     .as_deref()
-                                    .is_some_and(|value| !value.trim().is_empty())))
+                                    .is_some_and(|value| !value.trim().is_empty())
+                                && (!is_direct_external_permission(required)
+                                    || grant.external_scope.as_ref().is_some_and(|scope| {
+                                        manifest
+                                            .direct_network_contract
+                                            .as_ref()
+                                            .is_some_and(|contract| contract.supports(scope))
+                                    }))))
                 })
             })
         })
@@ -5795,6 +5802,78 @@ mod tests {
         }
     }
 
+    fn approve_direct_external_target(
+        fixture: &Fixture,
+        case_id: &str,
+        kind: AssetKind,
+        target: &str,
+        permission: ScanPermission,
+        protocol: crate::external_scope::TransportProtocol,
+    ) -> Id {
+        let (mut discovered, asset_id) = fixture.discovered_asset(case_id, kind);
+        let asset = discovered
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .unwrap();
+        asset.name = target.into();
+        asset.identifiers = vec![AssetIdentifier {
+            namespace: "external_target".into(),
+            value: target.into(),
+        }];
+        asset.internet_exposed = Some(true);
+        fixture
+            .storage
+            .save_case(&mut discovered, "test.direct_external_target_attributed")
+            .unwrap();
+
+        let activity = match permission {
+            ScanPermission::LowImpactExternalConnection => ExternalActivity::LowImpactExternal,
+            ScanPermission::ActiveExternalTesting => ExternalActivity::ActiveExternal,
+            _ => panic!("direct external fixture requires a direct external permission"),
+        };
+        let (revision, allowed_template_ids) = if activity == ExternalActivity::ActiveExternal {
+            (
+                "greenbone-community-feed@b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
+                vec!["1.3.6.1.4.1.25623.1.0.10335".into()],
+            )
+        } else {
+            ("not_applicable", vec![])
+        };
+        fixture
+            .service()
+            .approve_scope(
+                case_id,
+                ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![permission],
+                    confirmed_by: "Target owner".into(),
+                    expires_at: Some(Utc::now() + Duration::hours(1)),
+                    authorization_reference: Some("CHANGE-4242".into()),
+                    notes: None,
+                    external_scope: Some(ExternalScopeRequest {
+                        target: target.into(),
+                        ports: [443].into_iter().collect(),
+                        protocol,
+                        activity,
+                        rate_policy: crate::external_scope::RatePolicy {
+                            requests_per_second: 2,
+                            concurrency: 1,
+                            timeout_seconds: 300,
+                        },
+                        template_policy: crate::external_scope::TemplatePolicy::conservative(
+                            revision,
+                            allowed_template_ids,
+                        ),
+                        asserted_authority: "Approved change CHANGE-4242".into(),
+                        allow_sensitive_networks: false,
+                    }),
+                },
+            )
+            .unwrap();
+        asset_id
+    }
+
     fn write_legacy_artifact_deletion_obligation(
         fixture: &Fixture,
         plan: &ArtifactDeletionPlan,
@@ -5835,6 +5914,7 @@ mod tests {
             supported_asset_kinds: vec![AssetKind::CloudResource],
             input_contracts: vec![],
             provider_execution_contracts: vec![],
+            direct_network_contract: None,
             required_permissions: vec![ScanPermission::ConfigurationRead],
             active_external: false,
             default_enabled: true,
@@ -6189,6 +6269,80 @@ mod tests {
                 .contains("scan_preflight:no_compatible_authorized_targets")
         );
         assert!(service.show_case(&created.id).unwrap().scan_runs.is_empty());
+    }
+
+    #[test]
+    fn tcp_network_scope_plans_naabu_without_planning_http_engines() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let asset_id = approve_direct_external_target(
+            &fixture,
+            &created.id,
+            AssetKind::IpAddress,
+            "198.51.100.0/30",
+            ScanPermission::LowImpactExternalConnection,
+            crate::external_scope::TransportProtocol::Tcp,
+        );
+        let service = fixture.service();
+
+        let readiness = service.scan_readiness(&created.id).unwrap();
+        assert!(readiness.ready);
+        assert_eq!(readiness.compatible_engine_count, 1);
+        assert_eq!(readiness.runnable_engine_count, 1);
+
+        let plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["naabu".into(), "httpx".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "naabu");
+        assert_eq!(plan.executable[0].assets[0].id, asset_id);
+        assert!(plan.not_executed.iter().any(|engine| {
+            engine.engine_id == "httpx"
+                && engine.reason_code == "no_compatible_authorized_assets"
+                && engine.asset_ids.is_empty()
+        }));
+    }
+
+    #[test]
+    fn tcp_address_scope_plans_greenbone_without_planning_nuclei() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let asset_id = approve_direct_external_target(
+            &fixture,
+            &created.id,
+            AssetKind::IpAddress,
+            "198.51.100.10",
+            ScanPermission::ActiveExternalTesting,
+            crate::external_scope::TransportProtocol::Tcp,
+        );
+        let service = fixture.service();
+
+        let readiness = service.scan_readiness(&created.id).unwrap();
+        assert!(readiness.ready);
+        assert_eq!(readiness.compatible_engine_count, 1);
+        assert_eq!(readiness.runnable_engine_count, 1);
+
+        let plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["greenbone".into(), "nuclei".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "greenbone");
+        assert_eq!(plan.executable[0].assets[0].id, asset_id);
+        assert!(plan.not_executed.iter().any(|engine| {
+            engine.engine_id == "nuclei"
+                && engine.reason_code == "no_compatible_authorized_assets"
+                && engine.asset_ids.is_empty()
+        }));
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use crate::external_scope::{ExternalScopeGrant, ExternalScopeRequest};
+use crate::external_scope::{
+    DirectNetworkTargetKind, ExternalScopeGrant, ExternalScopeRequest, TransportProtocol,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -443,6 +445,10 @@ pub struct EngineManifest {
     /// Single-provider and provider-agnostic manifests may leave this empty.
     #[serde(default)]
     pub provider_execution_contracts: Vec<ProviderExecutionContract>,
+    /// Exact structured grant shapes accepted by a direct-network launcher.
+    /// This prevents planning a run that the engine wrapper must later reject.
+    #[serde(default)]
+    pub direct_network_contract: Option<DirectNetworkExecutionContract>,
     pub required_permissions: Vec<ScanPermission>,
     pub active_external: bool,
     pub default_enabled: bool,
@@ -454,6 +460,19 @@ pub struct EngineManifest {
     pub status: ManifestStatus,
     pub notices: Vec<String>,
     pub compatibility: EngineCompatibility,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DirectNetworkExecutionContract {
+    pub target_kinds: Vec<DirectNetworkTargetKind>,
+    pub protocols: Vec<TransportProtocol>,
+}
+
+impl DirectNetworkExecutionContract {
+    pub fn supports(&self, scope: &ExternalScopeGrant) -> bool {
+        self.target_kinds.contains(&scope.target.kind()) && self.protocols.contains(&scope.protocol)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
