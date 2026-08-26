@@ -638,6 +638,7 @@ export type ScanReadinessBlocker =
   | "egress_gateway_unavailable"
   | "engine_execution_contract_invalid"
   | "passive_source_unavailable"
+  | "captured_evidence_unavailable"
   | "execution_preflight_unavailable";
 
 export type ScanReadinessNextStep = "cases" | "coverage" | "progress" | "scanner_setup" | "retry";

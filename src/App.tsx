@@ -148,6 +148,10 @@ const scanStartIssueCopy = {
     en: "The saved read-only data source is missing or changed. Reconnect it before scanning.",
     zhTW: "已保存的唯讀資料來源已遺失或有變更；請重新連接後再掃描。",
   },
+  captured_evidence_unavailable: {
+    en: "The saved results needed to continue are missing or changed. Nothing was rerun. Review what remains, then start a new scan for fresh results.",
+    zhTW: "續跑所需的已保存結果已遺失或有變更；這次沒有重新執行任何檢查。請查看目前仍可用的結果，再開始新的掃描取得新結果。",
+  },
   execution_preflight_unavailable: {
     en: "The final readiness check could not finish. No scan started. Check again.",
     zhTW: "最後的準備狀態檢查尚未完成；掃描尚未開始。請重新檢查。",

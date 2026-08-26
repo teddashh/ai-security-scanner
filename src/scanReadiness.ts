@@ -18,6 +18,8 @@ export type ReadinessRetryBlocker =
   | "provider_preflight_unavailable"
   | "execution_preflight_unavailable";
 
+export type CapturedEvidenceBlocker = "captured_evidence_unavailable";
+
 const providerConfigurationBlockers: ReadonlySet<ScanReadinessBlocker> = new Set([
   "provider_source_required",
   "provider_capability_unavailable",
@@ -67,3 +69,8 @@ export const isReadinessRetryBlocker = (
 ): blocker is ReadinessRetryBlocker => Boolean(
   blocker && readinessRetryBlockers.has(blocker),
 );
+
+/** Missing saved evidence cannot be resumed; only an explicit fresh scan can replace it. */
+export const isCapturedEvidenceBlocker = (
+  blocker: ScanReadinessBlocker | undefined,
+): blocker is CapturedEvidenceBlocker => blocker === "captured_evidence_unavailable";

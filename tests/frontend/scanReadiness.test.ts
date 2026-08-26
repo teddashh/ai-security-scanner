@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   coverageSetupFocusFor,
+  isCapturedEvidenceBlocker,
   isProviderConfigurationBlocker,
   isReadinessRetryBlocker,
   isScannerSetupBlocker,
@@ -41,4 +42,7 @@ test("execution readiness blockers open the exact safe recovery surface", () => 
   assert.equal(isReadinessRetryBlocker("execution_preflight_unavailable"), true);
   assert.equal(isReadinessRetryBlocker("provider_preflight_unavailable"), true);
   assert.equal(isReadinessRetryBlocker("engine_execution_contract_invalid"), false);
+
+  assert.equal(isCapturedEvidenceBlocker("captured_evidence_unavailable"), true);
+  assert.equal(isCapturedEvidenceBlocker("workspace_snapshot_unavailable"), false);
 });

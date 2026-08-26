@@ -13,6 +13,7 @@ import {
   type ScanDiagnosticContext,
 } from "../scanDiagnostics";
 import { engineNextStepFor, engineOutcomeFor, skippedChecksNextStepFor } from "../scanPresentation";
+import { isCapturedEvidenceBlocker } from "../scanReadiness";
 import type {
   EngineRun,
   EngineRunStatus,
@@ -51,6 +52,7 @@ const copy = {
     zhTW: "準備好後就開始掃描；每項檢查與新結果都會顯示在這裡。",
   },
   start: { en: "Start scan", zhTW: "開始掃描" },
+  startFreshScan: { en: "Start a new scan for fresh results", zhTW: "開始新的掃描取得新結果" },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
   readinessUnavailableTitle: { en: "We could not check what is ready", zhTW: "目前無法確認掃描準備狀態" },
   readinessUnavailableDescription: {
@@ -125,6 +127,11 @@ const copy = {
     en: "The read-only source used by this check is missing or changed. Reconnect it before scanning.",
     zhTW: "這項檢查使用的唯讀來源已遺失或有變更；請重新連接後再掃描。",
   },
+  capturedEvidenceTitle: { en: "Review the results that are still available", zhTW: "請查看目前仍可用的結果" },
+  capturedEvidenceDescription: {
+    en: "Some saved results or evidence needed to continue are missing or changed. Nothing was rerun. Review what remains here, then start a new scan for fresh results.",
+    zhTW: "續跑所需的部分已保存結果或證據已遺失或變更；這次沒有重新執行任何檢查。請先查看目前仍可用的結果，再開始新的掃描取得新結果。",
+  },
   executionCheckTitle: { en: "No scan started", zhTW: "掃描尚未開始" },
   executionCheckDescription: {
     en: "The app could not finish checking the selected inputs and scan tools. Nothing was contacted or changed. Check again.",
@@ -181,6 +188,10 @@ const copy = {
     passive_source_unavailable: {
       en: "The saved read-only data source is missing or changed. Reconnect it before scanning.",
       zhTW: "已保存的唯讀資料來源已遺失或有變更；請重新連接後再掃描。",
+    },
+    captured_evidence_unavailable: {
+      en: "Saved results or evidence needed to continue are missing or changed. Nothing was rerun; review what remains, then start a new scan.",
+      zhTW: "續跑所需的已保存結果或證據已遺失或變更。這次沒有重新執行任何檢查；請查看目前仍可用的結果，再開始新的掃描。",
     },
     execution_preflight_unavailable: {
       en: "The final readiness check could not finish. No scan started and no target was contacted. Check again.",
@@ -406,6 +417,11 @@ const readinessPresentation: Partial<Record<ScanReadinessBlocker, {
     title: copy.passiveSourceTitle,
     description: copy.passiveSourceDescription,
   },
+  captured_evidence_unavailable: {
+    action: copy.startFreshScan,
+    title: copy.capturedEvidenceTitle,
+    description: copy.capturedEvidenceDescription,
+  },
   execution_preflight_unavailable: {
     action: copy.checkAgain,
     title: copy.executionCheckTitle,
@@ -459,6 +475,14 @@ export function ProgressPage({
   const blockerDescription = readiness?.blockerCode
     ? copy.readiness[readiness.blockerCode] ?? copy.readinessUnavailableDescription
     : copy.readinessUnavailableDescription;
+  const startFreshScan = !readinessCheckFailed && isCapturedEvidenceBlocker(readiness?.blockerCode);
+  const runReadinessAction = () => {
+    if (startFreshScan) {
+      void onStart();
+      return;
+    }
+    onFixSetup();
+  };
   const fixActionLabel = readinessCheckFailed
     ? copy.checkAgain
     : blockerPresentation?.action
@@ -467,6 +491,7 @@ export function ProgressPage({
       : readiness?.nextStep === "cases"
         ? copy.chooseProject
         : copy.finishSetup);
+  const blockerTitle = blockerPresentation?.title ?? fixActionLabel;
   const emptyTitle = readinessCheckFailed
     ? copy.readinessUnavailableTitle
     : blockerPresentation?.title
@@ -545,7 +570,12 @@ export function ProgressPage({
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
           ) : readiness || readinessCheckFailed ? (
-            <button className="button button--primary" type="button" disabled={busy || readiness?.nextStep === "progress"} onClick={onFixSetup}>
+            <button
+              className="button button--primary"
+              type="button"
+              disabled={busy || (readiness?.nextStep === "progress" && !startFreshScan)}
+              onClick={runReadinessAction}
+            >
               <Icon name="arrow" size={17} />{text(fixActionLabel)}
             </button>
           ) : (
@@ -555,7 +585,7 @@ export function ProgressPage({
           )}
         />
         {readiness && !readiness.ready && readiness.blockerCode && (
-          <InlineNotice tone="warning" title={text(fixActionLabel)}>
+          <InlineNotice tone="warning" title={text(blockerTitle)}>
             <p>{text(blockerDescription)}</p>
           </InlineNotice>
         )}
@@ -580,8 +610,10 @@ export function ProgressPage({
     : visibleEngineRuns.length + (skipped && !blocked ? 1 : 0);
   const canPause = selectedRun.status === "running";
   const hasResumableEngine = selectedRun.engineRuns.some((engine) => engine.resumable);
-  const canResume = selectedRun.status === "paused"
-    || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine);
+  const canResume = !startFreshScan && (
+    selectedRun.status === "paused"
+    || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine)
+  );
   const canCancel = selectedRun.status === "running" || selectedRun.status === "paused" || selectedRun.status === "queued";
   const hasDiagnosticIssue = selectedRun.status === "failed"
     || selectedRun.status === "partial"
@@ -650,10 +682,10 @@ export function ProgressPage({
         </InlineNotice>
       )}
 
-      {readiness && !readiness.ready && readiness.blockerCode && readiness.nextStep !== "progress" && (
-        <InlineNotice tone="warning" title={text(fixActionLabel)}>
+      {readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
+        <InlineNotice tone="warning" title={text(blockerTitle)}>
           <p>{text(blockerDescription)}</p>
-          <button className="button button--primary button--small" type="button" disabled={busy} onClick={onFixSetup}>
+          <button className="button button--primary button--small" type="button" disabled={busy} onClick={runReadinessAction}>
             <Icon name="arrow" size={15} />{text(fixActionLabel)}
           </button>
         </InlineNotice>
@@ -743,7 +775,7 @@ export function ProgressPage({
         <InlineNotice tone="warning" title={text(copy.blockedTitle)}>
           <p>{text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)}</p>
           <div className="button-group">
-            <button className="button button--primary button--small" type="button" onClick={onFixSetup}>
+            <button className="button button--primary button--small" type="button" onClick={runReadinessAction}>
               <Icon name="arrow" size={15} />{text(fixActionLabel)}
             </button>
             <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>

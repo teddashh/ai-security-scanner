@@ -80,6 +80,7 @@ test("desktop readiness states stay typed and never render backend messages", as
     "egress_gateway_unavailable",
     "engine_execution_contract_invalid",
     "passive_source_unavailable",
+    "captured_evidence_unavailable",
     "execution_preflight_unavailable",
     "retry",
   ]) {
@@ -129,6 +130,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["egress_gateway_unavailable", "copy.repairScanNetwork"],
     ["engine_execution_contract_invalid", "copy.repairScanTool"],
     ["execution_preflight_unavailable", "copy.checkAgain"],
+    ["captured_evidence_unavailable", "copy.startFreshScan"],
   ] as const) {
     assert.match(presentations, new RegExp(`${blocker}:[\\s\\S]*?action: ${action.replace(".", "\\.")}`, "u"));
     assert.match(app, new RegExp(`${blocker}:`, "u"));
@@ -140,6 +142,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["The scan-tool connection needs attention", "掃描工具的專用連線需要處理"],
     ["One scan tool needs repair", "有一項掃描工具需要修復"],
     ["The app could not finish checking the selected inputs and scan tools", "程式尚未完成所選輸入與掃描工具的準備檢查"],
+    ["Review the results that are still available", "請查看目前仍可用的結果"],
   ] as const) {
     assert.ok(progress.includes(english), english);
     assert.ok(progress.includes(traditionalChinese), traditionalChinese);
@@ -151,6 +154,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["One scan tool is missing a required component", "有一項掃描工具缺少必要元件"],
     ["The saved read-only data source is missing or changed", "已保存的唯讀資料來源已遺失或有變更"],
     ["The final readiness check could not finish", "最後的準備狀態檢查尚未完成"],
+    ["The saved results needed to continue are missing or changed", "續跑所需的已保存結果已遺失或有變更"],
   ] as const) {
     assert.ok(app.includes(english), english);
     assert.ok(app.includes(traditionalChinese), traditionalChinese);
@@ -169,6 +173,38 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
   const actionEnd = app.indexOf("const runAction = async", actionStart);
   assert.doesNotMatch(app.slice(actionStart, actionEnd), /detail:\s*result\.data\.message/u);
   assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
+});
+
+test("missing captured evidence never offers resume or setup and starts fresh only after a click", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+
+  for (const copy of [
+    "Start a new scan for fresh results",
+    "開始新的掃描取得新結果",
+    "Nothing was rerun",
+    "這次沒有重新執行任何檢查",
+  ]) {
+    assert.ok(progress.includes(copy) || app.includes(copy), copy);
+  }
+
+  assert.match(progress, /startFreshScan = !readinessCheckFailed && isCapturedEvidenceBlocker/u);
+  assert.match(progress, /if \(startFreshScan\) \{[\s\S]*void onStart\(\);[\s\S]*return;[\s\S]*\}[\s\S]*onFixSetup\(\)/u);
+  assert.match(progress, /const canResume = !startFreshScan &&/u);
+  assert.match(progress, /readiness\.nextStep !== "progress" \|\| startFreshScan/u);
+  assert.match(progress, /readiness\?\.nextStep === "progress" && !startFreshScan/u);
+  const presentationStart = progress.indexOf("const readinessPresentation");
+  const capturedStart = progress.indexOf("captured_evidence_unavailable:", presentationStart);
+  const capturedEnd = progress.indexOf("execution_preflight_unavailable:", capturedStart);
+  const capturedPresentation = progress.slice(capturedStart, capturedEnd);
+  assert.match(capturedPresentation, /action: copy\.startFreshScan/u);
+  assert.doesNotMatch(capturedPresentation, /copy\.(?:finishSetup|setupTools|checkAgain)/u);
+
+  const actionStart = app.indexOf("const executeAction = async");
+  const actionEnd = app.indexOf("const runAction = async", actionStart);
+  assert.match(app, /onResume=\{\(runId\) => runAction\("resume-scan"/u);
+  assert.match(app.slice(actionStart, actionEnd), /preflightCode[\s\S]*scanStartIssueCopy\[preflightCode\]/u);
+  assert.doesNotMatch(app.slice(actionStart, actionEnd), /detail:\s*result\.data\.message/u);
 });
 
 test("progress keeps scanner implementation data below the first layer", async () => {
