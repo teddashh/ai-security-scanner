@@ -39,6 +39,7 @@ import "../coverage-page.css";
 interface CoveragePageProps {
   caseId: string;
   assessmentIntent?: UseCaseId;
+  focusProviderSetup?: boolean;
   requestedActivities: AssessmentActivity[];
   coverage: CoverageRecord[];
   sources: ConnectedSource[];
@@ -764,6 +765,7 @@ const fileNameFromPath = (path: string, fallback: string): string =>
 export function CoveragePage({
   caseId,
   assessmentIntent,
+  focusProviderSetup,
   requestedActivities,
   coverage,
   sources,
@@ -978,6 +980,17 @@ export function CoveragePage({
       setWorkspaceFormError(undefined);
     }
   }, [caseId, assessmentIntent]);
+
+  useEffect(() => {
+    if (!focusProviderSetup) return undefined;
+    setShowProviderSetup(true);
+    setShowSourceForm(false);
+    setShowWorkspaceForm(false);
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("coverage-cloud-connection")?.scrollIntoView({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [caseId, focusProviderSetup]);
 
   useEffect(() => {
     const asset = guidedPendingAsset;
@@ -1304,7 +1317,7 @@ export function CoveragePage({
         </details>
 
         {showProviderSetup && (
-          <div className="coverage-provider-slot">
+          <div id="coverage-cloud-connection" className="coverage-provider-slot">
             <ProviderAuthorizationPanel
               caseId={caseId}
               sources={sources}

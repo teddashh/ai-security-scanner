@@ -40,13 +40,35 @@ test("scan readiness blocks empty runs and sends each fix to the useful screen",
 
   assert.match(progress, /action=\{readiness\?\.ready \?/u);
   assert.match(progress, /readiness\?\.nextStep === "scanner_setup"[\s\S]*copy\.setupTools/u);
+  assert.match(progress, /provider_capability_unavailable[\s\S]*copy\.connectCloud/u);
+  assert.match(progress, /One quick setup, then scan/u);
+  assert.match(progress, /先完成一次設定，就可以開始掃描/u);
+  assert.match(progress, /Connect the cloud account you chose/u);
+  assert.match(progress, /連接你剛剛選的雲端帳號/u);
   assert.match(progress, /Nothing was scanned/u);
   assert.match(progress, /這次其實沒有開始掃描/u);
   assert.match(progress, /Download diagnostic log/u);
   assert.match(progress, /下載診斷紀錄/u);
 
-  assert.match(app, /scanReadiness\?\.nextStep === "scanner_setup"[\s\S]*navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
+  assert.match(app, /scanReadiness\?\.blockerCode === "runtime_unavailable" \|\| scanReadiness\?\.nextStep === "scanner_setup"[\s\S]*navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
+  assert.match(app, /scanReadiness\?\.blockerCode === "provider_capability_unavailable"[\s\S]*navigate\("coverage"\)/u);
+  assert.match(app, /focusProviderSetup=\{scanReadiness\?\.blockerCode === "provider_capability_unavailable"\}/u);
   assert.match(app, /scanReadiness\?\.nextStep === "cases" \? "cases" : "coverage"/u);
+});
+
+test("desktop readiness states stay typed and never render backend messages", async () => {
+  const types = await readFile(new URL("../../src/types.ts", import.meta.url), "utf8");
+  const progress = await readPage("ProgressPage.tsx");
+
+  for (const value of [
+    "runtime_unavailable",
+    "provider_capability_required",
+    "provider_capability_unavailable",
+  ]) {
+    assert.match(types, new RegExp(`\\| "${value}"`, "u"));
+  }
+  assert.match(progress, /copy\.readiness\[readiness\.blockerCode\]/u);
+  assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
 });
 
 test("progress keeps scanner implementation data below the first layer", async () => {

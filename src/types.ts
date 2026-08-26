@@ -609,7 +609,9 @@ export type ScanReadinessState =
   | "scope_required"
   | "ownership_required"
   | "no_compatible_authorized_targets"
-  | "no_runnable_authorized_targets";
+  | "no_runnable_authorized_targets"
+  | "runtime_unavailable"
+  | "provider_capability_required";
 
 export type ScanReadinessBlocker =
   | "demo_case"
@@ -618,7 +620,9 @@ export type ScanReadinessBlocker =
   | "no_effective_scope_grants"
   | "no_ownership_confirmed_targets"
   | "no_compatible_authorized_targets"
-  | "no_runnable_authorized_targets";
+  | "no_runnable_authorized_targets"
+  | "runtime_unavailable"
+  | "provider_capability_unavailable";
 
 export type ScanReadinessNextStep = "cases" | "coverage" | "progress" | "scanner_setup";
 

@@ -94,6 +94,14 @@ const scanStartIssueCopy = {
     en: "The target is ready, but its scan tools still need setup or repair.",
     zhTW: "目標已準備好，但對應的掃描工具仍需要設定或修復。",
   },
+  runtime_unavailable: {
+    en: "The target is ready. Set up the private scan tools once, then start the scan.",
+    zhTW: "目標已準備好。先完成一次專用掃描工具設定，就能開始掃描。",
+  },
+  provider_capability_unavailable: {
+    en: "Reconnect the cloud account chosen for this project with read-only access, then start the scan.",
+    zhTW: "請以唯讀權限重新連接這個專案選定的雲端帳號，再開始掃描。",
+  },
 } as const;
 
 const isTerminalRun = (run: ScanRun): boolean =>
@@ -841,6 +849,7 @@ export default function App() {
           <CoveragePage
             caseId={currentCaseId}
             assessmentIntent={workspace.case.assessmentIntent}
+            focusProviderSetup={scanReadiness?.blockerCode === "provider_capability_unavailable"}
             requestedActivities={workspace.case.requestedActivities}
             coverage={workspace.coverage}
             sources={workspace.sources}
@@ -875,9 +884,13 @@ export default function App() {
             busy={Boolean(busyAction)}
             onStart={() => runAction("start-scan", () => scannerService.startScan(currentCaseId))}
             onFixSetup={() => {
-              if (scanReadiness?.nextStep === "scanner_setup") {
+              if (scanReadiness?.blockerCode === "runtime_unavailable" || scanReadiness?.nextStep === "scanner_setup") {
                 navigate("start");
                 void setupManagedRuntime();
+                return;
+              }
+              if (scanReadiness?.blockerCode === "provider_capability_unavailable") {
+                navigate("coverage");
                 return;
               }
               navigate(scanReadiness?.nextStep === "cases" ? "cases" : "coverage");

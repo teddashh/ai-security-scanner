@@ -107,6 +107,13 @@ test("the saved assessment intent opens one guided route and moves unrelated inp
   assert.ok(source.includes("pageCopy.otherInputsSummary"));
 });
 
+test("a cloud readiness fix opens the exact connection step", () => {
+  assert.ok(source.includes("focusProviderSetup?: boolean"));
+  assert.match(source, /focusProviderSetup[\s\S]*setShowProviderSetup\(true\)[\s\S]*setShowSourceForm\(false\)[\s\S]*setShowWorkspaceForm\(false\)/u);
+  assert.match(source, /getElementById\("coverage-cloud-connection"\)\?\.scrollIntoView/u);
+  assert.match(source, /id="coverage-cloud-connection" className="coverage-provider-slot"/u);
+});
+
 test("guided network, local, and signed-in cloud setup use one explicit confirmation without auto-approval", () => {
   assert.ok(source.includes("simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
   assert.ok(source.includes("pageCopy.confirmAndSave"));

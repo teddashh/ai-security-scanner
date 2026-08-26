@@ -37,8 +37,19 @@ const copy = {
   start: { en: "Start scan", zhTW: "開始掃描" },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
   finishSetup: { en: "Finish scan setup", zhTW: "完成掃描設定" },
-  setupTools: { en: "Set up scan tools automatically", zhTW: "自動準備掃描工具" },
+  setupTools: { en: "Set up scan tools for me", zhTW: "幫我準備掃描工具" },
+  connectCloud: { en: "Connect this cloud account", zhTW: "連接這個雲端帳號" },
   chooseProject: { en: "Choose a scan project", zhTW: "選擇掃描專案" },
+  runtimeEmptyTitle: { en: "One quick setup, then scan", zhTW: "先完成一次設定，就可以開始掃描" },
+  runtimeEmptyDescription: {
+    en: "Your target is ready. Let ai-security-scanner prepare its private scan tools on this computer.",
+    zhTW: "目標已經準備好。讓 ai-security-scanner 在這台電腦上自動準備專用掃描工具。",
+  },
+  providerEmptyTitle: { en: "Connect the cloud account you chose", zhTW: "連接你剛剛選的雲端帳號" },
+  providerEmptyDescription: {
+    en: "Finish the read-only sign-in for this account, then come back here to scan it.",
+    zhTW: "完成這個帳號的唯讀登入後，就能回到這裡開始掃描。",
+  },
   readiness: {
     demo_case: { en: "Create or open a real scan project before starting.", zhTW: "請先建立或開啟真正的掃描專案。" },
     archived_case: { en: "This scan project is archived. Choose an active project to continue.", zhTW: "這個掃描專案已封存；請選擇仍在使用的專案。" },
@@ -47,6 +58,14 @@ const copy = {
     no_ownership_confirmed_targets: { en: "The target has not been confirmed yet. Return to setup and confirm it.", zhTW: "目標尚未確認；請回到設定頁確認這次要掃描的目標。" },
     no_compatible_authorized_targets: { en: "The current input cannot be scanned yet. Finish the target step shown in setup.", zhTW: "目前的輸入還不能掃描；請完成設定頁顯示的目標步驟。" },
     no_runnable_authorized_targets: { en: "Your target is ready, but its scan tools still need setup or repair.", zhTW: "目標已準備好，但對應的掃描工具仍需要設定或修復。" },
+    runtime_unavailable: {
+      en: "Click once and the app will download, verify, and start the scan tools for you. The scan itself will still wait for you to press Start.",
+      zhTW: "按一次即可由程式自動下載、驗證並啟動掃描工具；掃描本身仍會等你按下「開始掃描」。",
+    },
+    provider_capability_unavailable: {
+      en: "This cloud account is part of the project, but its read-only connection is missing or expired. Reconnect the same account to continue.",
+      zhTW: "這個雲端帳號已在專案中，但唯讀連線尚未完成或已過期。請重新連接同一個帳號後繼續。",
+    },
   },
   blockedTitle: { en: "Nothing was scanned", zhTW: "這次其實沒有開始掃描" },
   blockedNoTargets: {
@@ -230,11 +249,23 @@ const engineIcon = (engine: EngineRun) => {
 export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart, onFixSetup, onPause, onResume, onCancel }: ProgressPageProps) {
   const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id);
-  const fixActionLabel = readiness?.nextStep === "scanner_setup"
+  const fixActionLabel = readiness?.blockerCode === "provider_capability_unavailable"
+    ? copy.connectCloud
+    : readiness?.nextStep === "scanner_setup"
     ? copy.setupTools
     : readiness?.nextStep === "cases"
       ? copy.chooseProject
       : copy.finishSetup;
+  const emptyTitle = readiness?.blockerCode === "runtime_unavailable"
+    ? copy.runtimeEmptyTitle
+    : readiness?.blockerCode === "provider_capability_unavailable"
+      ? copy.providerEmptyTitle
+      : copy.emptyTitle;
+  const emptyDescription = readiness?.blockerCode === "runtime_unavailable"
+    ? copy.runtimeEmptyDescription
+    : readiness?.blockerCode === "provider_capability_unavailable"
+      ? copy.providerEmptyDescription
+      : copy.emptyDescription;
 
   useEffect(() => {
     if (!runs.some((run) => run.id === selectedRunId)) setSelectedRunId(runs[0]?.id);
@@ -272,8 +303,8 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
         <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.title)} description={text(copy.description)} />
         <EmptyState
           icon="progress"
-          title={text(copy.emptyTitle)}
-          description={text(copy.emptyDescription)}
+          title={text(emptyTitle)}
+          description={text(emptyDescription)}
           action={readiness?.ready ? (
             <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStart()}>
               <Icon name="play" size={17} />{text(copy.start)}
@@ -289,7 +320,7 @@ export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart
           )}
         />
         {readiness && !readiness.ready && readiness.blockerCode && (
-          <InlineNotice tone="warning" title={text(copy.finishSetup)}>
+          <InlineNotice tone="warning" title={text(fixActionLabel)}>
             <p>{text(copy.readiness[readiness.blockerCode])}</p>
           </InlineNotice>
         )}
