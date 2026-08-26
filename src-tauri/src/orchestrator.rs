@@ -9,10 +9,11 @@ use crate::domain::{
     Asset, AssetIdentifier, EngineManifest, Finding, RawArtifact, ScanPermission, ScopeGrant,
 };
 use crate::error::{AppError, AppResult};
-use crate::managed_network::ManagedNetworkIdentity;
+use crate::managed_network::{GatewayDestination, ManagedNetworkIdentity};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -209,6 +210,11 @@ pub struct EngineExecutionRequest<'a> {
     pub manifest: &'a EngineManifest,
     pub assets: &'a [Asset],
     pub scope_grants: &'a [ScopeGrant],
+    /// Exact host-side DNS/address snapshot represented by the managed egress
+    /// policy. Only the project-owned external launcher receives these
+    /// addresses in its scope document; every other engine keeps its existing
+    /// strict scope schema.
+    pub frozen_destinations: Option<&'a [GatewayDestination]>,
     pub workspace: Option<&'a Path>,
     pub network_policy: &'a NetworkPolicy,
     pub resource_limits: &'a ResourceLimits,
@@ -293,7 +299,11 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             engine_run_id: request.engine_run_id.into(),
         };
         let directories = self.artifacts.prepare_run(&context, request.attempt)?;
-        let scope_document = ScopeDocument::new(request.manifest, &validated_scope);
+        let scope_document = ScopeDocument::new(
+            request.manifest,
+            &validated_scope,
+            request.frozen_destinations,
+        )?;
         let scope_file =
             self.artifacts
                 .write_control_json(&directories, "scope.json", &scope_document)?;
@@ -797,27 +807,47 @@ struct ScopeGrantDocument<'a> {
     expires_at: Option<String>,
     authorization_reference: Option<&'a str>,
     external_scope: Option<&'a crate::external_scope::ExternalScopeGrant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved_addresses: Option<Vec<String>>,
 }
 
 impl<'a> ScopeDocument<'a> {
-    fn new(manifest: &'a EngineManifest, scope: &'a [ValidatedAssetScope<'a>]) -> Self {
-        Self {
-            schema_version: "1",
-            engine_id: &manifest.id,
-            generated_at: Utc::now().to_rfc3339(),
-            assets: scope
-                .iter()
-                .map(|entry| ScopeAssetDocument {
-                    id: &entry.asset.id,
-                    name: &entry.asset.name,
-                    kind: &entry.asset.kind,
-                    provider: entry.asset.provider.as_deref(),
-                    region: entry.asset.region.as_deref(),
-                    identifiers: entry.identifiers.clone(),
-                    grants: entry
-                        .grants
-                        .iter()
-                        .map(|grant| ScopeGrantDocument {
+    fn new(
+        manifest: &'a EngineManifest,
+        scope: &'a [ValidatedAssetScope<'a>],
+        frozen_destinations: Option<&[GatewayDestination]>,
+    ) -> AppResult<Self> {
+        let external_launcher = uses_external_launcher(&manifest.id);
+        let destinations = if external_launcher {
+            Some(frozen_destinations.ok_or_else(|| {
+                AppError::NotAuthorized(format!(
+                    "engine {} has no frozen address snapshot for its external launcher",
+                    manifest.id
+                ))
+            })?)
+        } else {
+            None
+        };
+        let assets = scope
+            .iter()
+            .map(|entry| {
+                let grants = entry
+                    .grants
+                    .iter()
+                    .map(|grant| {
+                        let resolved_addresses = match destinations {
+                            Some(destinations) => {
+                                let external = grant.external_scope.as_ref().ok_or_else(|| {
+                                    AppError::NotAuthorized(format!(
+                                        "external launcher grant {} has no structured target policy",
+                                        grant.id
+                                    ))
+                                })?;
+                                Some(frozen_addresses_for_grant(external, destinations)?)
+                            }
+                            None => None,
+                        };
+                        Ok(ScopeGrantDocument {
                             id: &grant.id,
                             permission: &grant.permission,
                             confirmed_by: &grant.confirmed_by,
@@ -825,12 +855,91 @@ impl<'a> ScopeDocument<'a> {
                             expires_at: grant.expires_at.map(|value| value.to_rfc3339()),
                             authorization_reference: grant.authorization_reference.as_deref(),
                             external_scope: grant.external_scope.as_ref(),
+                            resolved_addresses,
                         })
-                        .collect(),
+                    })
+                    .collect::<AppResult<Vec<_>>>()?;
+                Ok(ScopeAssetDocument {
+                    id: &entry.asset.id,
+                    name: &entry.asset.name,
+                    kind: &entry.asset.kind,
+                    provider: entry.asset.provider.as_deref(),
+                    region: entry.asset.region.as_deref(),
+                    identifiers: entry.identifiers.clone(),
+                    grants,
                 })
-                .collect(),
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        Ok(Self {
+            schema_version: "1",
+            engine_id: &manifest.id,
+            generated_at: Utc::now().to_rfc3339(),
+            assets,
+        })
+    }
+}
+
+fn uses_external_launcher(engine_id: &str) -> bool {
+    matches!(engine_id, "naabu" | "httpx" | "nuclei")
+}
+
+fn frozen_addresses_for_grant(
+    grant: &crate::external_scope::ExternalScopeGrant,
+    destinations: &[GatewayDestination],
+) -> AppResult<Vec<String>> {
+    const MAX_FROZEN_ADDRESSES: usize = 4_096;
+
+    let expected_static_addresses = match &grant.target {
+        crate::external_scope::CanonicalTarget::Address(address) => {
+            Some(BTreeSet::from([*address]))
+        }
+        crate::external_scope::CanonicalTarget::Network(network) => {
+            let addresses = network
+                .hosts()
+                .take(MAX_FROZEN_ADDRESSES + 1)
+                .collect::<BTreeSet<_>>();
+            if addresses.len() > MAX_FROZEN_ADDRESSES {
+                return Err(AppError::InvalidRequest(format!(
+                    "external grant {} expands beyond the frozen address limit",
+                    grant.id
+                )));
+            }
+            Some(addresses)
+        }
+        crate::external_scope::CanonicalTarget::Hostname(_) => None,
+    };
+    let mut addresses = BTreeSet::<IpAddr>::new();
+    for destination in destinations {
+        if destination.ports != grant.ports
+            || destination.allow_sensitive_networks != grant.allow_sensitive_networks
+        {
+            continue;
+        }
+        let matches_target = match (&grant.target, &expected_static_addresses) {
+            (crate::external_scope::CanonicalTarget::Hostname(hostname), None) => {
+                destination.hostname.as_deref() == Some(hostname.as_str())
+            }
+            (
+                crate::external_scope::CanonicalTarget::Address(_)
+                | crate::external_scope::CanonicalTarget::Network(_),
+                Some(expected),
+            ) => destination.hostname.is_none() && destination.addresses == *expected,
+            _ => false,
+        };
+        if matches_target {
+            addresses.extend(destination.addresses.iter().copied());
         }
     }
+    if addresses.is_empty() || addresses.len() > MAX_FROZEN_ADDRESSES {
+        return Err(AppError::NotAuthorized(format!(
+            "external grant {} is not represented by one bounded frozen address set",
+            grant.id
+        )));
+    }
+    Ok(addresses
+        .into_iter()
+        .map(|address| address.to_string())
+        .collect())
 }
 
 fn run_directories_with_workspace(
@@ -1067,7 +1176,7 @@ mod tests {
 
         let scope = validate_execution_scope(&manifest, &assets, &grants, &policy)
             .expect("authorized scope");
-        let document = ScopeDocument::new(&manifest, &scope);
+        let document = ScopeDocument::new(&manifest, &scope, None).expect("scope document");
         let json = serde_json::to_value(document).expect("scope json");
 
         assert_eq!(
@@ -1076,6 +1185,11 @@ mod tests {
         );
         assert_eq!(json["assets"][0]["identifiers"][0]["value"], "one.example");
         assert!(!json.to_string().contains("not-authorized.example"));
+        assert!(
+            json["assets"][0]["grants"][0]
+                .get("resolved_addresses")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1117,7 +1231,10 @@ mod tests {
         .expect("policy");
         let scope = validate_execution_scope(&manifest, &assets, &grants, &policy)
             .expect("authorized scope");
-        let json = serde_json::to_value(ScopeDocument::new(&manifest, &scope)).expect("scope json");
+        let json = serde_json::to_value(
+            ScopeDocument::new(&manifest, &scope, None).expect("scope document"),
+        )
+        .expect("scope json");
         let external = &json["assets"][0]["grants"][0]["external_scope"];
 
         assert_eq!(external["target"]["kind"], "hostname");
@@ -1130,6 +1247,51 @@ mod tests {
             serde_json::json!(["http/misconfiguration/example"])
         );
         assert!(!json.to_string().contains("not-authorized.example"));
+    }
+
+    #[test]
+    fn external_launcher_scope_receives_only_the_gateway_frozen_addresses() {
+        let mut manifest = manifest(true);
+        manifest.id = "httpx".into();
+        let assets = vec![asset("one", true)];
+        let grants = vec![grant("one", ScanPermission::ActiveExternalTesting, true)];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("policy");
+        let scope = validate_execution_scope(&manifest, &assets, &grants, &policy)
+            .expect("authorized scope");
+        let destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: [
+                "192.0.2.10".parse().unwrap(),
+                "2001:db8::10".parse().unwrap(),
+            ]
+            .into_iter()
+            .collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let document = ScopeDocument::new(&manifest, &scope, Some(&destinations))
+            .expect("frozen launcher scope");
+        let json = serde_json::to_value(document).expect("scope json");
+
+        assert_eq!(
+            json["assets"][0]["grants"][0]["resolved_addresses"],
+            serde_json::json!(["192.0.2.10", "2001:db8::10"])
+        );
+        assert!(ScopeDocument::new(&manifest, &scope, None).is_err());
+
+        let unrelated = vec![GatewayDestination {
+            hostname: Some("other.example".into()),
+            addresses: ["198.51.100.10".parse().unwrap()].into_iter().collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        assert!(ScopeDocument::new(&manifest, &scope, Some(&unrelated)).is_err());
     }
 
     #[test]
@@ -1183,6 +1345,7 @@ mod tests {
             manifest: &manifest,
             assets: &assets,
             scope_grants: &grants,
+            frozen_destinations: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1243,6 +1406,7 @@ mod tests {
             manifest: &manifest,
             assets: &assets,
             scope_grants: &grants,
+            frozen_destinations: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1296,6 +1460,7 @@ mod tests {
             manifest: &manifest,
             assets: &assets,
             scope_grants: &grants,
+            frozen_destinations: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1352,6 +1517,7 @@ mod tests {
             manifest: &manifest,
             assets: &assets,
             scope_grants: &grants,
+            frozen_destinations: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1419,6 +1585,7 @@ mod tests {
             manifest: &manifest,
             assets: &assets,
             scope_grants: &grants,
+            frozen_destinations: None,
             workspace: None,
             network_policy: &policy,
             resource_limits: &limits,
@@ -1470,6 +1637,7 @@ mod tests {
             manifest: &manifest,
             assets: &assets,
             scope_grants: &grants,
+            frozen_destinations: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1511,6 +1679,7 @@ mod tests {
             manifest: &manifest,
             assets: &assets,
             scope_grants: &grants,
+            frozen_destinations: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,

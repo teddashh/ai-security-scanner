@@ -41,6 +41,7 @@ const (
 	maxAssets              = 4096
 	maxIdentifiers         = 128
 	maxGrantsPerAsset      = 16
+	maxResolvedAddresses   = 4096
 	managedGatewayPort     = "1080"
 )
 
@@ -74,6 +75,7 @@ type scopeGrant struct {
 	ExpiresAt              *time.Time     `json:"expires_at"`
 	AuthorizationReference *string        `json:"authorization_reference"`
 	ExternalScope          *externalScope `json:"external_scope"`
+	ResolvedAddresses      []string       `json:"resolved_addresses"`
 }
 
 type externalScope struct {
@@ -116,9 +118,11 @@ type templatePolicy struct {
 }
 
 type scanUnit struct {
-	AssetID string
-	Grant   externalScope
-	Port    uint16
+	AssetID           string
+	Grant             externalScope
+	Port              uint16
+	FrozenAddress     string
+	ResolvedAddresses []string
 }
 
 type invocation struct {
@@ -340,11 +344,20 @@ func validateAndPlan(document *scopeDocument, engineID string, now time.Time) ([
 			} else if caseID != external.CaseID {
 				return nil, errors.New("one execution cannot combine grants from different cases")
 			}
+			resolvedAddresses := append([]string(nil), grant.ResolvedAddresses...)
 			if engineID == "naabu" {
-				units = append(units, scanUnit{AssetID: asset.ID, Grant: external})
+				for _, address := range resolvedAddresses {
+					units = append(units, scanUnit{
+						AssetID: asset.ID, Grant: external, FrozenAddress: address,
+						ResolvedAddresses: resolvedAddresses,
+					})
+				}
 			} else {
 				for _, port := range external.Ports {
-					units = append(units, scanUnit{AssetID: asset.ID, Grant: external, Port: port})
+					units = append(units, scanUnit{
+						AssetID: asset.ID, Grant: external, Port: port,
+						ResolvedAddresses: resolvedAddresses,
+					})
 				}
 			}
 		}
@@ -356,7 +369,10 @@ func validateAndPlan(document *scopeDocument, engineID string, now time.Time) ([
 		if units[left].Grant.ID != units[right].Grant.ID {
 			return units[left].Grant.ID < units[right].Grant.ID
 		}
-		return units[left].Port < units[right].Port
+		if units[left].Port != units[right].Port {
+			return units[left].Port < units[right].Port
+		}
+		return units[left].FrozenAddress < units[right].FrozenAddress
 	})
 	return units, nil
 }
@@ -396,6 +412,9 @@ func validateGrant(asset scopeAsset, grant scopeGrant, external externalScope, e
 		}
 	}
 	if err := validatePorts(external.Ports); err != nil {
+		return err
+	}
+	if err := validateResolvedAddresses(grant.ResolvedAddresses, external.Target); err != nil {
 		return err
 	}
 	if err := validateRatePolicy(external.RatePolicy, expectedActivity); err != nil {
@@ -462,6 +481,38 @@ func validatePorts(ports []uint16) error {
 			return errors.New("external ports must be non-zero, unique, and sorted")
 		}
 		previous = port
+	}
+	return nil
+}
+
+func validateResolvedAddresses(addresses []string, target canonicalTarget) error {
+	if len(addresses) == 0 || len(addresses) > maxResolvedAddresses {
+		return errors.New("external grant requires a bounded non-empty frozen address set")
+	}
+	seen := make(map[string]struct{}, len(addresses))
+	var targetAddress net.IP
+	var targetNetwork *net.IPNet
+	if target.Kind == "address" {
+		targetAddress = net.ParseIP(target.Value)
+	}
+	if target.Kind == "network" {
+		_, targetNetwork, _ = net.ParseCIDR(target.Value)
+	}
+	for _, value := range addresses {
+		parsed := net.ParseIP(value)
+		if parsed == nil || parsed.String() != value {
+			return errors.New("frozen address set contains a non-canonical IP address")
+		}
+		if _, exists := seen[value]; exists {
+			return errors.New("frozen address set contains a duplicate IP address")
+		}
+		seen[value] = struct{}{}
+		if targetAddress != nil && !parsed.Equal(targetAddress) {
+			return errors.New("frozen address is outside the exact address target")
+		}
+		if targetNetwork != nil && !targetNetwork.Contains(parsed) {
+			return errors.New("frozen address is outside the approved network target")
+		}
 	}
 	return nil
 }
@@ -548,10 +599,9 @@ func naabuInvocation(unit scanUnit, proxy, output string, environment []string) 
 	return invocation{
 		Program: "/usr/local/bin/naabu",
 		Args: []string{
-			"-host", unit.Grant.Target.Value,
+			"-host", unit.FrozenAddress,
 			"-port", strings.Join(ports, ","),
 			"-scan-type", "c",
-			"-dns-order", "p",
 			"-proxy", proxy,
 			"-rate", strconv.Itoa(int(unit.Grant.RatePolicy.RequestsPerSecond)),
 			"-c", strconv.Itoa(int(unit.Grant.RatePolicy.Concurrency)),
@@ -758,7 +808,7 @@ func validateEvidenceObject(engineID string, object map[string]json.RawMessage, 
 		protocol, _ := json.Marshal("tcp")
 		object["protocol"] = protocol
 		observed, ok := firstJSONString(object, "host", "ip")
-		if !ok || !observedTargetMatches(unit.Grant.Target, observed) {
+		if !ok || !observedFrozenAddressMatches(unit.FrozenAddress, observed) {
 			return errors.New("Naabu evidence target is outside its independent grant")
 		}
 	case "httpx":
@@ -795,28 +845,41 @@ func validateObservedURL(value string, unit scanUnit) error {
 		}
 	}
 	parsedPort, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || uint16(parsedPort) != unit.Port || !observedTargetMatches(unit.Grant.Target, parsed.Hostname()) {
+	if err != nil || uint16(parsedPort) != unit.Port || !observedTargetMatches(unit, parsed.Hostname()) {
 		return errors.New("observed URL endpoint differs from its frozen target")
 	}
 	return nil
 }
 
-func observedTargetMatches(target canonicalTarget, observed string) bool {
+func observedFrozenAddressMatches(expected, observed string) bool {
+	parsed := net.ParseIP(observed)
+	return parsed != nil && parsed.String() == observed && observed == expected
+}
+
+func observedTargetMatches(unit scanUnit, observed string) bool {
+	target := unit.Grant.Target
+	if parsed := net.ParseIP(observed); parsed != nil {
+		canonical := parsed.String()
+		if canonical != observed || !containsString(unit.ResolvedAddresses, canonical) {
+			return false
+		}
+		switch target.Kind {
+		case "address":
+			return canonical == target.Value
+		case "network":
+			_, network, err := net.ParseCIDR(target.Value)
+			return err == nil && network.Contains(parsed)
+		case "hostname":
+			return true
+		default:
+			return false
+		}
+	}
 	switch target.Kind {
 	case "hostname":
-		if parsed := net.ParseIP(observed); parsed != nil {
-			// The host-side managed gateway separately verifies this address against
-			// the frozen DNS snapshot; the launcher never performs a second lookup.
-			return true
-		}
 		return strings.EqualFold(strings.TrimSuffix(observed, "."), target.Value)
-	case "address":
-		parsed := net.ParseIP(observed)
-		return parsed != nil && parsed.String() == target.Value
-	case "network":
-		parsed := net.ParseIP(observed)
-		_, network, err := net.ParseCIDR(target.Value)
-		return err == nil && parsed != nil && network.Contains(parsed)
+	case "address", "network":
+		return false
 	default:
 		return false
 	}

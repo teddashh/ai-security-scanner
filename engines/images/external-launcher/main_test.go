@@ -32,6 +32,10 @@ func fixtureDocument(engineID string, now time.Time) *scopeDocument {
 	makeAsset := func(assetID, grantID, target string, ports []uint16) scopeAsset {
 		approved := now.Add(-time.Minute)
 		expires := now.Add(time.Hour)
+		resolvedAddress := "192.0.2.10"
+		if assetID == "asset-b" {
+			resolvedAddress = "192.0.2.20"
+		}
 		return scopeAsset{
 			ID: assetID, Name: target, Kind: kind,
 			Identifiers: []identifier{{Namespace: "dns:name", Value: target}},
@@ -39,6 +43,7 @@ func fixtureDocument(engineID string, now time.Time) *scopeDocument {
 				ID: grantID, Permission: permission, ConfirmedBy: "owner@example.test",
 				ConfirmedAt: approved, ExpiresAt: &expires,
 				AuthorizationReference: stringPointer("ticket SEC-1042"),
+				ResolvedAddresses: []string{resolvedAddress},
 				ExternalScope: &externalScope{
 					ID: grantID, CaseID: "case-1", AssetID: assetID,
 					Target: canonicalTarget{Kind: "hostname", Value: target}, Ports: ports,
@@ -80,8 +85,61 @@ func TestPlansEachGrantWithoutTargetPortCrossProduct(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(naabuUnits) != 2 || !reflect.DeepEqual(naabuUnits[0].Grant.Ports, []uint16{443, 8443}) || !reflect.DeepEqual(naabuUnits[1].Grant.Ports, []uint16{9443}) {
+	if len(naabuUnits) != 2 || naabuUnits[0].FrozenAddress != "192.0.2.10" || !reflect.DeepEqual(naabuUnits[0].Grant.Ports, []uint16{443, 8443}) || naabuUnits[1].FrozenAddress != "192.0.2.20" || !reflect.DeepEqual(naabuUnits[1].Grant.Ports, []uint16{9443}) {
 		t.Fatalf("Naabu grants were combined: %#v", naabuUnits)
+	}
+}
+
+func TestNaabuPlansEveryHostSideFrozenAddressWithoutDNS(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	document := fixtureDocument("naabu", now)
+	document.Assets[0].Grants[0].ResolvedAddresses = []string{"192.0.2.10", "2001:db8::10"}
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(units))
+	for _, unit := range units {
+		got = append(got, unit.Grant.Target.Value+"="+unit.FrozenAddress)
+	}
+	want := []string{
+		"a.example.test=192.0.2.10",
+		"a.example.test=2001:db8::10",
+		"b.example.test=192.0.2.20",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Naabu did not preserve the exact frozen hostname mapping: got %v want %v", got, want)
+	}
+}
+
+func TestFrozenAddressSetIsCanonicalBoundedAndInsideStaticTarget(t *testing.T) {
+	valid := []struct {
+		addresses []string
+		target    canonicalTarget
+	}{
+		{[]string{"192.0.2.10", "2001:db8::10"}, canonicalTarget{Kind: "hostname", Value: "a.example.test"}},
+		{[]string{"192.0.2.10"}, canonicalTarget{Kind: "address", Value: "192.0.2.10"}},
+		{[]string{"192.0.2.10"}, canonicalTarget{Kind: "network", Value: "192.0.2.0/24"}},
+	}
+	for _, fixture := range valid {
+		if err := validateResolvedAddresses(fixture.addresses, fixture.target); err != nil {
+			t.Fatalf("valid frozen set rejected: %v", err)
+		}
+	}
+	invalid := []struct {
+		addresses []string
+		target    canonicalTarget
+	}{
+		{nil, canonicalTarget{Kind: "hostname", Value: "a.example.test"}},
+		{[]string{"192.0.2.10", "192.0.2.10"}, canonicalTarget{Kind: "hostname", Value: "a.example.test"}},
+		{[]string{"192.0.2.010"}, canonicalTarget{Kind: "hostname", Value: "a.example.test"}},
+		{[]string{"192.0.2.11"}, canonicalTarget{Kind: "address", Value: "192.0.2.10"}},
+		{[]string{"198.51.100.10"}, canonicalTarget{Kind: "network", Value: "192.0.2.0/24"}},
+	}
+	for _, fixture := range invalid {
+		if err := validateResolvedAddresses(fixture.addresses, fixture.target); err == nil {
+			t.Fatalf("unsafe frozen set accepted: %#v for %#v", fixture.addresses, fixture.target)
+		}
 	}
 }
 
@@ -147,12 +205,15 @@ func TestStaticInvocationsCarryEveryFrozenLimit(t *testing.T) {
 	naabu := naabuInvocation(naabuUnits[0], "172.30.0.1:1080", "/tmp/out", environment)
 	joined = " " + strings.Join(naabu.Args, " ") + " "
 	for _, exact := range []string{
-		" -host a.example.test ", " -port 443,8443 ", " -scan-type c ", " -dns-order p ",
+		" -host 192.0.2.10 ", " -port 443,8443 ", " -scan-type c ",
 		" -proxy 172.30.0.1:1080 ", " -rate 2 ", " -c 2 ", " -timeout 30s ",
 	} {
 		if !strings.Contains(joined, exact) {
 			t.Fatalf("Naabu invocation lacks %q: %s", exact, joined)
 		}
+	}
+	if strings.Contains(joined, " -dns-order ") || strings.Contains(joined, "a.example.test") {
+		t.Fatalf("Naabu invocation retained a second DNS lookup path: %s", joined)
 	}
 }
 
@@ -235,7 +296,7 @@ func TestEvidenceIsReattributedAndOutOfScopeRecordsFail(t *testing.T) {
 			Ports: []uint16{443}, Protocol: "https",
 			TemplatePolicy: templatePolicy{AllowedTemplateIDs: []string{"safe-template"}},
 		},
-		Port: 443,
+		Port: 443, ResolvedAddresses: []string{"192.0.2.10"},
 	}
 	path := filepath.Join(t.TempDir(), "httpx.jsonl")
 	if err := os.WriteFile(path, []byte(`{"url":"https://a.example.test:443/","status_code":200,"body":"discard me"}`+"\n"), 0o600); err != nil {
@@ -265,6 +326,48 @@ func TestEvidenceIsReattributedAndOutOfScopeRecordsFail(t *testing.T) {
 	written = 0
 	if err := normalizeEvidence(path, writer, &written, "httpx", unit); err == nil {
 		t.Fatal("out-of-scope evidence was accepted")
+	}
+}
+
+func TestEvidenceIPMustBelongToTheHostSideFrozenSet(t *testing.T) {
+	unit := scanUnit{
+		AssetID: "asset-a",
+		Grant: externalScope{
+			ID: "grant-a", Target: canonicalTarget{Kind: "hostname", Value: "a.example.test"},
+			Ports: []uint16{443}, Protocol: "https",
+		},
+		Port: 443, FrozenAddress: "192.0.2.10",
+		ResolvedAddresses: []string{"192.0.2.10", "2001:db8::10"},
+	}
+	for _, observed := range []string{
+		"https://a.example.test:443/",
+		"https://192.0.2.10:443/",
+		"https://[2001:db8::10]:443/",
+	} {
+		if err := validateObservedURL(observed, unit); err != nil {
+			t.Fatalf("frozen observation %s rejected: %v", observed, err)
+		}
+	}
+	if err := validateObservedURL("https://198.51.100.10:443/", unit); err == nil {
+		t.Fatal("hostname evidence accepted an IP outside the host-side DNS snapshot")
+	}
+
+	naabuRecord := func(host string) map[string]json.RawMessage {
+		value, err := json.Marshal(map[string]any{"host": host, "port": 443, "protocol": "tcp"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record map[string]json.RawMessage
+		if err := json.Unmarshal(value, &record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	if err := validateEvidenceObject("naabu", naabuRecord("192.0.2.10"), unit); err != nil {
+		t.Fatalf("Naabu frozen IP evidence rejected: %v", err)
+	}
+	if err := validateEvidenceObject("naabu", naabuRecord("198.51.100.10"), unit); err == nil {
+		t.Fatal("Naabu accepted evidence from a different address")
 	}
 }
 

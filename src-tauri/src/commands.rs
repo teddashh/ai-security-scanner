@@ -3242,6 +3242,9 @@ fn execute_planned_engine(
         }
     };
     let orchestrator = Orchestrator::new(runtime, artifacts, &state.adapters);
+    let frozen_destinations = network_lease
+        .as_ref()
+        .map(|lease| lease.egress_policy().destinations());
     let request = EngineExecutionRequest {
         case_id: &execution.case_id,
         scan_run_id: &execution.scan_run_id,
@@ -3249,6 +3252,7 @@ fn execute_planned_engine(
         manifest: &execution.manifest,
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
+        frozen_destinations,
         workspace: resolved_workspace
             .as_ref()
             .map(|workspace| workspace.tree_path.as_path()),
@@ -3400,6 +3404,7 @@ fn resume_captured_execution(
         manifest: &execution.manifest,
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
+        frozen_destinations: None,
         workspace: None,
         network_policy: &network,
         resource_limits: &limits,

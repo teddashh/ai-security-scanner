@@ -1227,6 +1227,7 @@ fn azure_and_gcp_ui_capability_checkout_reaches_narrow_prowler_dispatch() {
                     manifest: &execution.manifest,
                     assets: &execution.assets,
                     scope_grants: &execution.scope_grants,
+                    frozen_destinations: None,
                     workspace: None,
                     network_policy: &network,
                     resource_limits: &limits,
@@ -1851,6 +1852,7 @@ fn one_gcp_discovery_plus_nine_exact_projects_complete_the_bounded_lifecycle() {
                     manifest: &execution.manifest,
                     assets: &execution.assets,
                     scope_grants: &execution.scope_grants,
+                    frozen_destinations: None,
                     workspace: None,
                     network_policy: &network,
                     resource_limits: &ResourceLimits {
