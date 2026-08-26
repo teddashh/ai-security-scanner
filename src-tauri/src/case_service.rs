@@ -196,6 +196,9 @@ pub enum ScanReadinessState {
     ProviderCapabilityRequired,
     ProviderReviewRequired,
     ProviderCheckUnavailable,
+    ExecutionInputUnavailable,
+    ScannerSetupRequired,
+    ExecutionCheckUnavailable,
 }
 
 /// Machine-readable reason that the primary start-scan action is blocked.
@@ -216,6 +219,11 @@ pub enum ScanReadinessBlocker {
     ProviderAuthorizationBindingMismatch,
     ProviderTargetBindingMismatch,
     ProviderPreflightUnavailable,
+    WorkspaceSnapshotUnavailable,
+    EgressGatewayUnavailable,
+    EngineExecutionContractInvalid,
+    PassiveSourceUnavailable,
+    ExecutionPreflightUnavailable,
 }
 
 impl ScanReadinessBlocker {
@@ -235,6 +243,11 @@ impl ScanReadinessBlocker {
             Self::ProviderAuthorizationBindingMismatch => "provider_authorization_binding_mismatch",
             Self::ProviderTargetBindingMismatch => "provider_target_binding_mismatch",
             Self::ProviderPreflightUnavailable => "provider_preflight_unavailable",
+            Self::WorkspaceSnapshotUnavailable => "workspace_snapshot_unavailable",
+            Self::EgressGatewayUnavailable => "egress_gateway_unavailable",
+            Self::EngineExecutionContractInvalid => "engine_execution_contract_invalid",
+            Self::PassiveSourceUnavailable => "passive_source_unavailable",
+            Self::ExecutionPreflightUnavailable => "execution_preflight_unavailable",
         }
     }
 }
@@ -3971,6 +3984,21 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
         ScanReadinessBlocker::ProviderPreflightUnavailable => {
             "cloud readiness could not be checked; no scan started; retry the readiness check"
         }
+        ScanReadinessBlocker::WorkspaceSnapshotUnavailable => {
+            "the prepared workspace snapshot is unavailable; prepare the scan inputs again"
+        }
+        ScanReadinessBlocker::EgressGatewayUnavailable => {
+            "the managed scan network is unavailable; open scanner setup and try again"
+        }
+        ScanReadinessBlocker::EngineExecutionContractInvalid => {
+            "a scanner execution contract is invalid; open scanner setup and try again"
+        }
+        ScanReadinessBlocker::PassiveSourceUnavailable => {
+            "a passive data source is unavailable; retry the readiness check"
+        }
+        ScanReadinessBlocker::ExecutionPreflightUnavailable => {
+            "execution readiness could not be checked; no scan started; retry the readiness check"
+        }
     };
     let detail = format!(
         "{SCAN_PREFLIGHT_ERROR_PREFIX}:{}: {message}",
@@ -3991,7 +4019,12 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
         | ScanReadinessBlocker::ProviderSourceAmbiguous
         | ScanReadinessBlocker::ProviderAuthorizationBindingMismatch
         | ScanReadinessBlocker::ProviderTargetBindingMismatch
-        | ScanReadinessBlocker::ProviderPreflightUnavailable => AppError::NotAvailable(detail),
+        | ScanReadinessBlocker::ProviderPreflightUnavailable
+        | ScanReadinessBlocker::WorkspaceSnapshotUnavailable
+        | ScanReadinessBlocker::EgressGatewayUnavailable
+        | ScanReadinessBlocker::EngineExecutionContractInvalid
+        | ScanReadinessBlocker::PassiveSourceUnavailable
+        | ScanReadinessBlocker::ExecutionPreflightUnavailable => AppError::NotAvailable(detail),
     }
 }
 
@@ -6508,6 +6541,66 @@ mod tests {
             assert_eq!(serialized["blocker_code"], blocker_code);
             assert_eq!(serialized["next_step"], next_step_code);
             assert_eq!(blocker.as_str(), blocker_code);
+        }
+    }
+
+    #[test]
+    fn execution_readiness_contract_uses_stable_snake_case_codes() {
+        let states = [
+            (
+                ScanReadinessState::ExecutionInputUnavailable,
+                "execution_input_unavailable",
+            ),
+            (
+                ScanReadinessState::ScannerSetupRequired,
+                "scanner_setup_required",
+            ),
+            (
+                ScanReadinessState::ExecutionCheckUnavailable,
+                "execution_check_unavailable",
+            ),
+        ];
+
+        for (state, code) in states {
+            let serialized = serde_json::to_value(state).unwrap();
+            assert_eq!(serialized, code);
+            assert_eq!(
+                serde_json::from_value::<ScanReadinessState>(serialized).unwrap(),
+                state
+            );
+        }
+
+        let blockers = [
+            (
+                ScanReadinessBlocker::WorkspaceSnapshotUnavailable,
+                "workspace_snapshot_unavailable",
+            ),
+            (
+                ScanReadinessBlocker::EgressGatewayUnavailable,
+                "egress_gateway_unavailable",
+            ),
+            (
+                ScanReadinessBlocker::EngineExecutionContractInvalid,
+                "engine_execution_contract_invalid",
+            ),
+            (
+                ScanReadinessBlocker::PassiveSourceUnavailable,
+                "passive_source_unavailable",
+            ),
+            (
+                ScanReadinessBlocker::ExecutionPreflightUnavailable,
+                "execution_preflight_unavailable",
+            ),
+        ];
+
+        for (blocker, code) in blockers {
+            let serialized = serde_json::to_value(blocker).unwrap();
+            assert_eq!(serialized, code);
+            assert_eq!(blocker.as_str(), code);
+            assert_eq!(
+                serde_json::from_value::<ScanReadinessBlocker>(serialized).unwrap(),
+                blocker
+            );
         }
     }
 
