@@ -4,7 +4,7 @@
 
 ## Find security problems without becoming a security-tool expert
 
-**Check your website, public IPs, internal systems, source code, cloud, containers, and Kubernetes from one desktop app.** Start with what you want to protect—not a wall of scanner names—and get a clear list of what needs attention.
+**Check your website, public IPs, internal systems, source code, infrastructure as code, cloud, containers, and Kubernetes from one desktop app.** Start with what you want to protect—not a wall of scanner names—and get a clear list of what needs attention.
 
 `ai-security-scanner` brings proven open-source security tools into one guided workflow. It chooses checks that fit your situation, turns technical output into useful next steps, keeps the evidence together, and lets you verify what changed after a fix.
 
@@ -41,7 +41,7 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 <!-- Release line: v0.1.4. -->
 
-> **Project status:** `v0.1.4` is the installable public preview on the way to `v0.2.0`. Use it to try the much simpler home-network, website, external-IP, code, cloud, container, and Kubernetes scan flows; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
+> **Project status:** `v0.1.4` is the installable public preview on the way to `v0.2.0`. Use it to try the much simpler home-network, website, external-IP, code, infrastructure-as-code, cloud, container, and Kubernetes scan flows; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 

@@ -6,7 +6,7 @@
     "channel": "prerelease",
     "target": "0.2.0"
   },
-  "description": "One guided desktop app for security checks across websites, cloud, code, networks, containers, and Kubernetes.",
+  "description": "One guided desktop app for security checks across websites, networks, code, IaC, cloud, containers, and Kubernetes.",
   "license": "Apache-2.0",
   "author": "Ted Huang and ai-security-scanner contributors",
   "homepage": "https://github.com/teddashh/ai-security-scanner#readme",
