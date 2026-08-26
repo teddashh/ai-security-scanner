@@ -1181,12 +1181,19 @@ fn azure_and_gcp_ui_capability_checkout_reaches_narrow_prowler_dispatch() {
             credentials.environment_keys().collect::<Vec<_>>(),
             [expected_environment_key]
         );
+        // Exhaustion deletes and zeroizes the credential-bearing vault entry,
+        // but retains the nonsecret receipt long enough for the dispatched
+        // execution to validate its exact provider/target egress binding.
         assert!(
             bindings
                 .status(&case.id, &source.id, now)
                 .unwrap()
-                .is_none()
+                .is_some()
         );
+        assert!(matches!(
+            bindings.checkout(&case.id, &source.id, "prowler", now),
+            Err(AppError::NotAuthorized(_))
+        ));
 
         let runtime = FakeContainerRuntime::default();
         runtime.set_behavior(FakeRunBehavior {
@@ -1876,7 +1883,7 @@ fn one_gcp_discovery_plus_nine_exact_projects_complete_the_bounded_lifecycle() {
         bindings
             .status(&case.id, &source.id, now)
             .unwrap()
-            .is_none()
+            .is_some()
     );
     assert!(matches!(
         bindings.checkout(&case.id, &source.id, "prowler", now),

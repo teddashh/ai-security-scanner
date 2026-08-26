@@ -40,7 +40,8 @@ use crate::source_authorization::session::{
 };
 use crate::source_authorization::{
     InstalledSourceAuthorization, PROVIDER_RESOURCE_SCOPE_METADATA_KEY, ProviderSourceProfile,
-    SourceCheckoutDemand, validate_aws_execution_target,
+    ReservedScannerCredentialBundle, SourceCheckoutDemand, SourceCheckoutReservationHandle,
+    validate_aws_execution_target,
 };
 use crate::state::AppState;
 use crate::workspace_snapshot::{
@@ -483,22 +484,43 @@ pub fn detect_local_private_subnets() -> crate::target_candidates::LocalNetworkC
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopExecutionBlocker {
     RuntimeUnavailable,
+    ProviderSourceRequired,
     ProviderCapabilityUnavailable,
+    ProviderSourceAmbiguous,
+    ProviderAuthorizationBindingMismatch,
+    ProviderTargetBindingMismatch,
+    ProviderPreflightUnavailable,
 }
 
 impl DesktopExecutionBlocker {
     fn readiness_state(self) -> ScanReadinessState {
         match self {
             Self::RuntimeUnavailable => ScanReadinessState::RuntimeUnavailable,
+            Self::ProviderSourceRequired => ScanReadinessState::ProviderConnectionRequired,
             Self::ProviderCapabilityUnavailable => ScanReadinessState::ProviderCapabilityRequired,
+            Self::ProviderSourceAmbiguous
+            | Self::ProviderAuthorizationBindingMismatch
+            | Self::ProviderTargetBindingMismatch => ScanReadinessState::ProviderReviewRequired,
+            Self::ProviderPreflightUnavailable => ScanReadinessState::ProviderCheckUnavailable,
         }
     }
 
     fn blocker_code(self) -> ScanReadinessBlocker {
         match self {
             Self::RuntimeUnavailable => ScanReadinessBlocker::RuntimeUnavailable,
+            Self::ProviderSourceRequired => ScanReadinessBlocker::ProviderSourceRequired,
             Self::ProviderCapabilityUnavailable => {
                 ScanReadinessBlocker::ProviderCapabilityUnavailable
+            }
+            Self::ProviderSourceAmbiguous => ScanReadinessBlocker::ProviderSourceAmbiguous,
+            Self::ProviderAuthorizationBindingMismatch => {
+                ScanReadinessBlocker::ProviderAuthorizationBindingMismatch
+            }
+            Self::ProviderTargetBindingMismatch => {
+                ScanReadinessBlocker::ProviderTargetBindingMismatch
+            }
+            Self::ProviderPreflightUnavailable => {
+                ScanReadinessBlocker::ProviderPreflightUnavailable
             }
         }
     }
@@ -506,7 +528,12 @@ impl DesktopExecutionBlocker {
     fn next_step(self) -> ScanReadinessNextStep {
         match self {
             Self::RuntimeUnavailable => ScanReadinessNextStep::ScannerSetup,
-            Self::ProviderCapabilityUnavailable => ScanReadinessNextStep::Coverage,
+            Self::ProviderSourceRequired
+            | Self::ProviderCapabilityUnavailable
+            | Self::ProviderSourceAmbiguous
+            | Self::ProviderAuthorizationBindingMismatch
+            | Self::ProviderTargetBindingMismatch => ScanReadinessNextStep::Coverage,
+            Self::ProviderPreflightUnavailable => ScanReadinessNextStep::Retry,
         }
     }
 
@@ -516,13 +543,73 @@ impl DesktopExecutionBlocker {
                 "runtime_unavailable",
                 "scan tools are not ready yet; open scanner setup and try again",
             ),
+            Self::ProviderSourceRequired => (
+                "provider_source_required",
+                "connect the cloud account you want to scan; no scan started",
+            ),
             Self::ProviderCapabilityUnavailable => (
                 "provider_capability_unavailable",
-                "the cloud connection is missing, expired, or has no remaining scan uses; reconnect it and try again",
+                "this read-only cloud connection has ended; reconnect the same account and try again",
+            ),
+            Self::ProviderSourceAmbiguous => (
+                "provider_source_ambiguous",
+                "more than one cloud connection matches this target; choose the connection this scan should use",
+            ),
+            Self::ProviderAuthorizationBindingMismatch => (
+                "provider_authorization_binding_mismatch",
+                "the saved cloud account no longer matches its verified read-only connection; review it before scanning",
+            ),
+            Self::ProviderTargetBindingMismatch => (
+                "provider_target_binding_mismatch",
+                "the selected cloud target does not belong to the verified account or subscription; choose the correct target",
+            ),
+            Self::ProviderPreflightUnavailable => (
+                "provider_preflight_unavailable",
+                "the cloud connection could not be checked right now; no scan started; try again",
             ),
         };
         AppError::NotAvailable(format!("scan_preflight:{code}: {message}"))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderPreflightFailure {
+    SourceRequired,
+    CapabilityUnavailable,
+    SourceAmbiguous,
+    AuthorizationBindingMismatch,
+    TargetBindingMismatch,
+    PreflightUnavailable,
+}
+
+impl ProviderPreflightFailure {
+    fn blocker(self) -> DesktopExecutionBlocker {
+        match self {
+            Self::SourceRequired => DesktopExecutionBlocker::ProviderSourceRequired,
+            Self::CapabilityUnavailable => DesktopExecutionBlocker::ProviderCapabilityUnavailable,
+            Self::SourceAmbiguous => DesktopExecutionBlocker::ProviderSourceAmbiguous,
+            Self::AuthorizationBindingMismatch => {
+                DesktopExecutionBlocker::ProviderAuthorizationBindingMismatch
+            }
+            Self::TargetBindingMismatch => DesktopExecutionBlocker::ProviderTargetBindingMismatch,
+            Self::PreflightUnavailable => DesktopExecutionBlocker::ProviderPreflightUnavailable,
+        }
+    }
+
+    fn into_error(self) -> AppError {
+        self.blocker().into_error()
+    }
+}
+
+struct OwnedSourceCheckoutDemand {
+    case_id: String,
+    source_id: String,
+    engine_id: String,
+}
+
+struct ProviderExecutionReservation {
+    handle: SourceCheckoutReservationHandle,
+    credentials: ReservedScannerCredentialBundle,
 }
 
 fn block_scan_readiness(readiness: &mut ScanReadiness, blocker: DesktopExecutionBlocker) {
@@ -569,47 +656,158 @@ fn execution_requires_provider_capability(execution: &PlannedEngineExecution) ->
         })
 }
 
-/// Checks the exact, duplicate-preserving provider demand without checking out
-/// or materializing any credential. Every planned cloud group is also rebound
-/// to its persisted provider identity, proof, and exact resource scope.
-fn validate_provider_execution_demands(
+fn provider_source_for_preflight(
+    state: &AppState,
+    execution: &PlannedEngineExecution,
+) -> Result<DataSource, ProviderPreflightFailure> {
+    match provider_source_for_execution(state, execution) {
+        Ok(Some(source)) => Ok(source),
+        Ok(None) => Err(ProviderPreflightFailure::SourceRequired),
+        Err(AppError::InvalidRequest(_)) => Err(ProviderPreflightFailure::SourceAmbiguous),
+        Err(AppError::NotAuthorized(_)) => Err(ProviderPreflightFailure::TargetBindingMismatch),
+        Err(_) => Err(ProviderPreflightFailure::PreflightUnavailable),
+    }
+}
+
+fn validate_provider_authorization_for_preflight(
+    state: &AppState,
+    source: &DataSource,
+    execution: &PlannedEngineExecution,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), ProviderPreflightFailure> {
+    let authorization = state
+        .source_authorizations
+        .status(&execution.case_id, &source.id, now)
+        .map_err(|_| ProviderPreflightFailure::PreflightUnavailable)?
+        .ok_or(ProviderPreflightFailure::CapabilityUnavailable)?;
+    let persisted_profile = source
+        .metadata
+        .get("provider_profile")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ProviderSourceProfile>(value).ok());
+    let persisted_identity = source
+        .metadata
+        .get("provider_identity")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let persisted_proof = source
+        .metadata
+        .get("verification_evidence_sha256")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if authorization.case_id != execution.case_id
+        || authorization.source_id != source.id
+        || authorization.source_kind != source.kind
+        || authorization.provider_verification.profile != authorization.profile
+        || persisted_profile != Some(authorization.profile)
+        || authorization.provider_identity != persisted_identity
+        || authorization.provider_verification.evidence_sha256 != persisted_proof
+        || !authorization
+            .allowed_engine_ids
+            .contains(&execution.manifest.id)
+    {
+        return Err(ProviderPreflightFailure::AuthorizationBindingMismatch);
+    }
+    validate_provider_execution_target(state, source, execution, &authorization).map_err(|error| {
+        match error {
+            AppError::Internal(_) | AppError::Storage(_) | AppError::CaseNotFound(_) => {
+                ProviderPreflightFailure::PreflightUnavailable
+            }
+            _ => ProviderPreflightFailure::TargetBindingMismatch,
+        }
+    })
+}
+
+/// Builds the exact, duplicate-preserving provider demand. Every planned cloud
+/// group is rebound to its persisted provider identity, proof, and exact
+/// resource scope before a capability is inspected or reserved.
+fn provider_execution_demands(
     state: &AppState,
     plan: &ScanPlan,
     now: chrono::DateTime<Utc>,
-) -> AppResult<()> {
+) -> Result<Vec<OwnedSourceCheckoutDemand>, ProviderPreflightFailure> {
     let mut owned_demands = Vec::<(String, String, String)>::new();
     for execution in &plan.executable {
         if !execution_requires_provider_capability(execution) {
             continue;
         }
-        let source = provider_source_for_execution(state, execution)?.ok_or_else(|| {
-            AppError::NotAuthorized(
-                "cloud execution has no connected provider-native read-only source".into(),
-            )
-        })?;
-        validate_installed_provider_authorization(state, &source, execution, now)?;
+        let source = provider_source_for_preflight(state, execution)?;
+        validate_provider_authorization_for_preflight(state, &source, execution, now)?;
         owned_demands.push((
             execution.case_id.clone(),
             source.id,
             execution.manifest.id.clone(),
         ));
     }
+    Ok(owned_demands
+        .into_iter()
+        .map(
+            |(case_id, source_id, engine_id)| OwnedSourceCheckoutDemand {
+                case_id,
+                source_id,
+                engine_id,
+            },
+        )
+        .collect())
+}
+
+fn borrowed_checkout_demands(
+    owned_demands: &[OwnedSourceCheckoutDemand],
+) -> Vec<SourceCheckoutDemand<'_>> {
+    owned_demands
+        .iter()
+        .map(|demand| SourceCheckoutDemand {
+            case_id: &demand.case_id,
+            source_id: &demand.source_id,
+            engine_id: &demand.engine_id,
+        })
+        .collect()
+}
+
+fn map_checkout_preflight_error(error: AppError) -> ProviderPreflightFailure {
+    match error {
+        AppError::NotAuthorized(_) => ProviderPreflightFailure::CapabilityUnavailable,
+        _ => ProviderPreflightFailure::PreflightUnavailable,
+    }
+}
+
+/// Non-mutating readiness snapshot. Desktop execution uses the reservation
+/// path below at the pre-persistence seam instead of trusting this snapshot.
+fn validate_provider_execution_demands(
+    state: &AppState,
+    plan: &ScanPlan,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), ProviderPreflightFailure> {
+    let owned_demands = provider_execution_demands(state, plan, now)?;
     if owned_demands.is_empty() {
         return Ok(());
     }
-    let demands = owned_demands
-        .iter()
-        .map(|(case_id, source_id, engine_id)| SourceCheckoutDemand {
-            case_id,
-            source_id,
-            engine_id,
-        })
-        .collect::<Vec<_>>();
     state
         .source_authorizations
-        .validate_checkout_demands(&demands, now)
+        .validate_checkout_demands(&borrowed_checkout_demands(&owned_demands), now)
+        .map_err(map_checkout_preflight_error)
 }
 
+fn reserve_provider_execution_demands(
+    state: &AppState,
+    plan: &ScanPlan,
+    now: chrono::DateTime<Utc>,
+) -> Result<Option<ProviderExecutionReservation>, ProviderPreflightFailure> {
+    let owned_demands = provider_execution_demands(state, plan, now)?;
+    if owned_demands.is_empty() {
+        return Ok(None);
+    }
+    let (handle, credentials) = state
+        .source_authorizations
+        .reserve_checkout_demands(&borrowed_checkout_demands(&owned_demands), now)
+        .map_err(map_checkout_preflight_error)?;
+    Ok(Some(ProviderExecutionReservation {
+        handle,
+        credentials,
+    }))
+}
+
+#[cfg(test)]
 fn validate_desktop_execution_with_runtime<F>(
     state: &AppState,
     plan: &ScanPlan,
@@ -619,25 +817,46 @@ where
     F: FnMut() -> AppResult<()>,
 {
     validate_provider_execution_demands(state, plan, Utc::now())
-        .map_err(|_| DesktopExecutionBlocker::ProviderCapabilityUnavailable.into_error())?;
+        .map_err(ProviderPreflightFailure::into_error)?;
     runtime_preflight().map_err(|_| DesktopExecutionBlocker::RuntimeUnavailable.into_error())?;
     // Managed runtime setup can take long enough for a short-lived provider
     // capability to expire or be consumed elsewhere. Recheck immediately
     // before the case revision CAS and ScanRun append.
     validate_provider_execution_demands(state, plan, Utc::now())
-        .map_err(|_| DesktopExecutionBlocker::ProviderCapabilityUnavailable.into_error())
+        .map_err(ProviderPreflightFailure::into_error)
 }
 
-fn validate_desktop_execution(state: &AppState, plan: &ScanPlan) -> AppResult<()> {
-    validate_desktop_execution_with_runtime(state, plan, || {
+fn prepare_desktop_execution_with_runtime<F>(
+    state: &AppState,
+    plan: &ScanPlan,
+    mut runtime_preflight: F,
+) -> AppResult<Option<ProviderExecutionReservation>>
+where
+    F: FnMut() -> AppResult<()>,
+{
+    validate_provider_execution_demands(state, plan, Utc::now())
+        .map_err(ProviderPreflightFailure::into_error)?;
+    runtime_preflight().map_err(|_| DesktopExecutionBlocker::RuntimeUnavailable.into_error())?;
+    reserve_provider_execution_demands(state, plan, Utc::now())
+        .map_err(ProviderPreflightFailure::into_error)
+}
+
+fn prepare_desktop_execution(
+    state: &AppState,
+    plan: &ScanPlan,
+) -> AppResult<Option<ProviderExecutionReservation>> {
+    prepare_desktop_execution_with_runtime(state, plan, || {
         let runtime = state.runtime_for_execution()?;
         runtime.preflight()?;
         Ok(())
     })
 }
 
-fn validate_desktop_resume(state: &AppState, plan: &ScanPlan) -> AppResult<()> {
-    validate_desktop_execution_with_runtime(state, plan, || {
+fn prepare_desktop_resume(
+    state: &AppState,
+    plan: &ScanPlan,
+) -> AppResult<Option<ProviderExecutionReservation>> {
+    prepare_desktop_execution_with_runtime(state, plan, || {
         for execution in &plan.executable {
             let runtime = match execution.resume_checkpoint.as_ref() {
                 Some(checkpoint) => match (
@@ -676,11 +895,8 @@ pub fn get_scan_readiness(case_id: String, state: State<'_, AppState>) -> AppRes
         block_scan_readiness(&mut readiness, DesktopExecutionBlocker::RuntimeUnavailable);
         return Ok(readiness);
     }
-    if validate_provider_execution_demands(&state, &plan, Utc::now()).is_err() {
-        block_scan_readiness(
-            &mut readiness,
-            DesktopExecutionBlocker::ProviderCapabilityUnavailable,
-        );
+    if let Err(error) = validate_provider_execution_demands(&state, &plan, Utc::now()) {
+        block_scan_readiness(&mut readiness, error.blocker());
     }
     Ok(readiness)
 }
@@ -1813,19 +2029,29 @@ pub fn ungroup_findings(
 pub async fn start_scan(case_id: String, app: AppHandle) -> AppResult<AssessmentCase> {
     let worker_app = app.clone();
     let worker_case_id = case_id.clone();
-    let plan = tauri::async_runtime::spawn_blocking(move || {
+    let (plan, reservation) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
-        state.case_service().plan_scan_for_execution_checked(
+        let mut reservation = None;
+        let planned = state.case_service().plan_scan_for_execution_checked(
             &worker_case_id,
             ScanPlanRequest::default(),
-            |plan| validate_desktop_execution(&state, plan),
-        )
+            |plan| {
+                reservation = prepare_desktop_execution(&state, plan)?;
+                Ok(())
+            },
+        );
+        match planned {
+            Ok(plan) => Ok((plan, reservation)),
+            Err(error) => {
+                release_provider_execution_reservation(&state, reservation, "scan persistence");
+                Err(error)
+            }
+        }
     })
     .await
     .map_err(|_| AppError::Internal("scan preflight worker terminated unexpectedly".into()))??;
     let state = app.state::<AppState>();
-    emit(&app, RUN_PROGRESS_EVENT, &plan.scan_run)?;
-    dispatch_scan_plan(&app, &state, plan.clone())?;
+    dispatch_scan_plan(&app, &state, plan.clone(), reservation)?;
     let case = state.case_service().show_case(&case_id)?;
     Ok(case)
 }
@@ -1903,19 +2129,28 @@ pub async fn resume_scan(
     let worker_app = app.clone();
     let worker_case_id = case_id.clone();
     let worker_run_id = run_id.clone();
-    let plan = tauri::async_runtime::spawn_blocking(move || {
+    let (plan, reservation) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
-        state
-            .case_service()
-            .plan_resume_checked(&worker_case_id, &worker_run_id, |plan| {
-                validate_desktop_resume(&state, plan)
-            })
+        let mut reservation = None;
+        let planned =
+            state
+                .case_service()
+                .plan_resume_checked(&worker_case_id, &worker_run_id, |plan| {
+                    reservation = prepare_desktop_resume(&state, plan)?;
+                    Ok(())
+                });
+        match planned {
+            Ok(plan) => Ok((plan, reservation)),
+            Err(error) => {
+                release_provider_execution_reservation(&state, reservation, "resume persistence");
+                Err(error)
+            }
+        }
     })
     .await
     .map_err(|_| AppError::Internal("resume preflight worker terminated unexpectedly".into()))??;
     let state = app.state::<AppState>();
-    emit(&app, RUN_PROGRESS_EVENT, &plan.scan_run)?;
-    dispatch_scan_plan(&app, &state, plan)?;
+    dispatch_scan_plan(&app, &state, plan, reservation)?;
     state.case_service().show_case(&case_id)
 }
 
@@ -1969,20 +2204,30 @@ pub async fn start_rescan(
     let worker_app = app.clone();
     let worker_case_id = case_id.clone();
     let worker_baseline_run_id = baseline_run_id.clone();
-    let rescan = tauri::async_runtime::spawn_blocking(move || {
+    let (rescan, reservation) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
-        state.case_service().plan_rescan_for_execution_checked(
+        let mut reservation = None;
+        let planned = state.case_service().plan_rescan_for_execution_checked(
             &worker_case_id,
             &worker_baseline_run_id,
             ScanPlanRequest::default(),
-            |plan| validate_desktop_execution(&state, plan),
-        )
+            |plan| {
+                reservation = prepare_desktop_execution(&state, plan)?;
+                Ok(())
+            },
+        );
+        match planned {
+            Ok(rescan) => Ok((rescan, reservation)),
+            Err(error) => {
+                release_provider_execution_reservation(&state, reservation, "rescan persistence");
+                Err(error)
+            }
+        }
     })
     .await
     .map_err(|_| AppError::Internal("rescan preflight worker terminated unexpectedly".into()))??;
     let state = app.state::<AppState>();
-    emit(&app, RUN_PROGRESS_EVENT, &rescan.plan.scan_run)?;
-    dispatch_scan_plan(&app, &state, rescan.plan.clone())?;
+    dispatch_scan_plan(&app, &state, rescan.plan.clone(), reservation)?;
     let case = state.case_service().show_case(&case_id)?;
     Ok(case)
 }
@@ -2104,13 +2349,67 @@ pub fn verify_case_export(
     })
 }
 
+fn release_provider_execution_reservation(
+    state: &AppState,
+    reservation: Option<ProviderExecutionReservation>,
+    operation: &'static str,
+) {
+    let Some(reservation) = reservation else {
+        return;
+    };
+    if let Err(error) = state
+        .source_authorizations
+        .release_checkout_reservation(&reservation.handle)
+    {
+        tracing::error!(
+            error = %error,
+            operation,
+            "provider checkout reservation could not be released"
+        );
+    }
+}
+
+enum ScanWorkerActivation {
+    Execute(Option<ReservedScannerCredentialBundle>),
+    Abort(&'static str),
+}
+
+fn abort_inactive_scan_worker(
+    app: &AppHandle,
+    executions: &[PlannedEngineExecution],
+    context: &JobContext,
+    message: &str,
+) -> JobCompletion {
+    let state = app.state::<AppState>();
+    for execution in executions {
+        let report = terminal_report(execution, ExecutionStage::Failed, message);
+        if let Ok(applied) = context.coordinate_durable_write(|| {
+            state
+                .case_service()
+                .apply_execution_report(&execution.case_id, &report)
+        }) {
+            let _ = emit(app, RUN_PROGRESS_EVENT, &applied.case);
+        }
+        if let Ok(control) = context.engine(&execution.engine_run_id) {
+            let _ = control.mark_failed();
+        }
+    }
+    JobCompletion::Failed
+}
+
 fn dispatch_scan_plan(
     app: &AppHandle,
     state: &State<'_, AppState>,
     plan: ScanPlan,
+    mut reservation: Option<ProviderExecutionReservation>,
 ) -> AppResult<()> {
-    let key = JobKey::new(plan.scan_run.case_id.clone(), plan.scan_run.id.clone())
-        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    let key = match JobKey::new(plan.scan_run.case_id.clone(), plan.scan_run.id.clone()) {
+        Ok(key) => key,
+        Err(error) => {
+            release_provider_execution_reservation(state, reservation.take(), "scan job identity");
+            return Err(AppError::InvalidRequest(error.to_string()));
+        }
+    };
     let engine_run_ids = plan
         .executable
         .iter()
@@ -2120,14 +2419,29 @@ fn dispatch_scan_plan(
     let terminal_app = app.clone();
     let terminal_key = key.clone();
     let persisted_executions = plan.executable.clone();
+    let (activation_sender, activation_receiver) = mpsc::channel::<ScanWorkerActivation>();
     let initial = match state.jobs.start_job(
         key,
         engine_run_ids,
-        move |context| run_scan_worker(worker_app, plan.executable, context),
+        move |context| match activation_receiver.recv() {
+            Ok(ScanWorkerActivation::Execute(credentials)) => {
+                run_scan_worker(worker_app, plan.executable, credentials, context)
+            }
+            Ok(ScanWorkerActivation::Abort(message)) => {
+                abort_inactive_scan_worker(&worker_app, &plan.executable, &context, message)
+            }
+            Err(_) => abort_inactive_scan_worker(
+                &worker_app,
+                &plan.executable,
+                &context,
+                "scan dispatch stopped before any scanner was allowed to run",
+            ),
+        },
         move |snapshot| reconcile_terminal_job(&terminal_app, &terminal_key, &snapshot),
     ) {
         Ok(initial) => initial,
         Err(error) => {
+            release_provider_execution_reservation(state, reservation.take(), "scan worker spawn");
             let message = format!("scan worker could not start: {error}");
             for execution in &persisted_executions {
                 let report = terminal_report(execution, ExecutionStage::Failed, &message);
@@ -2155,12 +2469,45 @@ fn dispatch_scan_plan(
             return Err(AppError::Runtime(message));
         }
     };
-    emit(app, RUN_PROGRESS_EVENT, &initial)
+
+    let activation = match reservation.take() {
+        Some(reservation) => {
+            let commit = state
+                .source_authorizations
+                .commit_checkout_reservation(&reservation.handle, Utc::now());
+            match commit {
+                Ok(()) => ScanWorkerActivation::Execute(Some(reservation.credentials)),
+                Err(error) => {
+                    let failure = map_checkout_preflight_error(error);
+                    release_provider_execution_reservation(
+                        state,
+                        Some(reservation),
+                        "scan worker activation",
+                    );
+                    let _ = activation_sender.send(ScanWorkerActivation::Abort(
+                        "the cloud connection changed before dispatch; no scanner was allowed to run",
+                    ));
+                    return Err(failure.into_error());
+                }
+            }
+        }
+        None => ScanWorkerActivation::Execute(None),
+    };
+    if activation_sender.send(activation).is_err() {
+        return Err(AppError::Runtime(
+            "scan worker stopped before dispatch activation".into(),
+        ));
+    }
+    if let Err(error) = emit(app, RUN_PROGRESS_EVENT, &initial) {
+        tracing::warn!(error = %error, "scan started but its initial progress event was not emitted");
+    }
+    Ok(())
 }
 
 fn run_scan_worker(
     app: AppHandle,
     executions: Vec<PlannedEngineExecution>,
+    mut reserved_credentials: Option<ReservedScannerCredentialBundle>,
     context: JobContext,
 ) -> JobCompletion {
     let state = app.state::<AppState>();
@@ -2215,6 +2562,7 @@ fn run_scan_worker(
                 runtime,
                 artifacts,
                 &execution,
+                reserved_credentials.as_mut(),
                 &control.cancellation_token(),
                 &context,
             ),
@@ -2281,6 +2629,22 @@ fn run_scan_worker(
         }
     }
 
+    if !failed
+        && !cancelled
+        && reserved_credentials
+            .as_ref()
+            .is_some_and(|credentials| credentials.remaining() != 0)
+    {
+        tracing::error!(
+            remaining = reserved_credentials
+                .as_ref()
+                .map(ReservedScannerCredentialBundle::remaining)
+                .unwrap_or_default(),
+            "scan worker completed without claiming every reserved provider credential set"
+        );
+        failed = true;
+    }
+
     if failed {
         JobCompletion::Failed
     } else if cancelled || context.is_cancelled() {
@@ -2296,6 +2660,7 @@ fn execute_planned_engine(
     runtime: &ProcessContainerRuntime,
     artifacts: &ArtifactStore,
     execution: &PlannedEngineExecution,
+    reserved_credentials: Option<&mut ReservedScannerCredentialBundle>,
     cancellation: &crate::container_runtime::CancellationToken,
     job_context: &JobContext,
 ) -> AppResult<DurableExecutionReport> {
@@ -2385,7 +2750,7 @@ fn execute_planned_engine(
         .as_ref()
         .map(|lease| lease.network_policy().clone())
         .unwrap_or(NetworkPolicy::Disabled);
-    let credentials = match resolve_execution_credentials(state, execution) {
+    let credentials = match resolve_execution_credentials(state, execution, reserved_credentials) {
         Ok(credentials) => credentials,
         Err(error) => {
             return Ok(terminal_after_prestart_error(
@@ -2838,6 +3203,7 @@ fn locate_egress_gateway_binary() -> AppResult<std::path::PathBuf> {
 fn resolve_execution_credentials(
     state: &AppState,
     execution: &PlannedEngineExecution,
+    reserved_credentials: Option<&mut ReservedScannerCredentialBundle>,
 ) -> AppResult<ScannerCredentialSet> {
     let provider_read = execution
         .manifest
@@ -2873,9 +3239,13 @@ fn resolve_execution_credentials(
         };
     };
     validate_installed_provider_authorization(state, &source, execution, Utc::now())?;
-    state
-        .source_authorizations
-        .checkout_now(&execution.case_id, &source.id, &execution.manifest.id)
+    reserved_credentials
+        .ok_or_else(|| {
+            AppError::NotAuthorized(
+                "provider execution has no pre-persistence credential reservation".into(),
+            )
+        })?
+        .take(&execution.case_id, &source.id, &execution.manifest.id)
 }
 
 fn provider_egress_source(
@@ -4239,6 +4609,135 @@ mod tests {
         assert_eq!(after.status, before.status);
         assert_eq!(after.updated_at, before.updated_at);
         assert_eq!(after.storage_revision, before.storage_revision);
+    }
+
+    #[test]
+    fn provider_preflight_distinguishes_connection_proof_and_target_errors() {
+        let issued_at = Utc::now();
+
+        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
+        let mut stored = state.case_service().show_case(&case_id).unwrap();
+        stored
+            .data_sources
+            .iter_mut()
+            .find(|source| source.id == source_id)
+            .unwrap()
+            .metadata
+            .insert(
+                "verification_evidence_sha256".into(),
+                serde_json::Value::String("sentinel-proof-mismatch".into()),
+            );
+        state
+            .storage
+            .save_case(&mut stored, "test.provider_proof_mismatch")
+            .unwrap();
+        let proof_plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        let proof_error =
+            validate_provider_execution_demands(&state, &proof_plan, issued_at).unwrap_err();
+        assert_eq!(
+            proof_error,
+            ProviderPreflightFailure::AuthorizationBindingMismatch
+        );
+        let safe = proof_error.into_error().to_string();
+        assert!(safe.contains("provider_authorization_binding_mismatch"));
+        assert!(!safe.contains("sentinel-proof-mismatch"));
+
+        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
+        let mut stored = state.case_service().show_case(&case_id).unwrap();
+        stored
+            .data_sources
+            .iter_mut()
+            .find(|source| source.id == source_id)
+            .unwrap()
+            .kind = SourceKind::AzureTenant;
+        state
+            .storage
+            .save_case(&mut stored, "test.provider_target_mismatch")
+            .unwrap();
+        let target_plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            validate_provider_execution_demands(&state, &target_plan, issued_at).unwrap_err(),
+            ProviderPreflightFailure::TargetBindingMismatch
+        );
+
+        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
+        let mut stored = state.case_service().show_case(&case_id).unwrap();
+        let mut second_source = stored
+            .data_sources
+            .iter()
+            .find(|source| source.id == source_id)
+            .unwrap()
+            .clone();
+        second_source.id = "source-second-aws".into();
+        stored.data_sources.push(second_source);
+        stored.assets[0]
+            .discovered_from
+            .push("source-second-aws".into());
+        state
+            .storage
+            .save_case(&mut stored, "test.provider_source_ambiguous")
+            .unwrap();
+        let ambiguous_plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            validate_provider_execution_demands(&state, &ambiguous_plan, issued_at).unwrap_err(),
+            ProviderPreflightFailure::SourceAmbiguous
+        );
+    }
+
+    #[test]
+    fn provider_reservation_holds_the_entire_round_without_persisting_a_run() {
+        let issued_at = Utc::now();
+        let (_directory, state, case_id, _source_id) = ready_aws_state(issued_at, 1);
+        let service = state.case_service();
+        let plan = service
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+
+        let reservation = prepare_desktop_execution_with_runtime(&state, &plan, || Ok(()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(reservation.credentials.remaining(), 1);
+        assert_eq!(
+            validate_provider_execution_demands(&state, &plan, issued_at).unwrap_err(),
+            ProviderPreflightFailure::CapabilityUnavailable
+        );
+        assert!(service.show_case(&case_id).unwrap().scan_runs.is_empty());
+
+        state
+            .source_authorizations
+            .release_checkout_reservation(&reservation.handle)
+            .unwrap();
+        drop(reservation);
+        validate_provider_execution_demands(&state, &plan, issued_at).unwrap();
     }
 
     #[test]
