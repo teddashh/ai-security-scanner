@@ -191,6 +191,8 @@ pub enum ScanReadinessState {
     OwnershipRequired,
     NoCompatibleAuthorizedTargets,
     NoRunnableAuthorizedTargets,
+    RuntimeUnavailable,
+    ProviderCapabilityRequired,
 }
 
 /// Machine-readable reason that the primary start-scan action is blocked.
@@ -204,6 +206,8 @@ pub enum ScanReadinessBlocker {
     NoOwnershipConfirmedTargets,
     NoCompatibleAuthorizedTargets,
     NoRunnableAuthorizedTargets,
+    RuntimeUnavailable,
+    ProviderCapabilityUnavailable,
 }
 
 impl ScanReadinessBlocker {
@@ -216,6 +220,8 @@ impl ScanReadinessBlocker {
             Self::NoOwnershipConfirmedTargets => "no_ownership_confirmed_targets",
             Self::NoCompatibleAuthorizedTargets => "no_compatible_authorized_targets",
             Self::NoRunnableAuthorizedTargets => "no_runnable_authorized_targets",
+            Self::RuntimeUnavailable => "runtime_unavailable",
+            Self::ProviderCapabilityUnavailable => "provider_capability_unavailable",
         }
     }
 }
@@ -255,8 +261,17 @@ const SCAN_PREFLIGHT_ERROR_PREFIX: &str = "scan_preflight";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScanPlanIntent {
     PersistAuditPlan,
+    PreviewExecution,
     StartExecution,
 }
+
+impl ScanPlanIntent {
+    fn is_execution(self) -> bool {
+        matches!(self, Self::PreviewExecution | Self::StartExecution)
+    }
+}
+
+type ExecutionPrePersist<'a> = dyn FnMut(&ScanPlan) -> AppResult<()> + 'a;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RescanPlan {
@@ -1385,6 +1400,25 @@ impl<'a> CaseService<'a> {
             None,
             ScanPlanIntent::PersistAuditPlan,
             Utc::now(),
+            None,
+        )
+    }
+
+    /// Builds the exact desktop execution groups without changing the case.
+    /// Readiness callers use this to validate live, process-owned dependencies
+    /// that deliberately do not belong in the durable audit planner.
+    pub fn preview_scan_for_execution(
+        &self,
+        case_id: &str,
+        request: ScanPlanRequest,
+    ) -> AppResult<ScanPlan> {
+        self.plan_scan_at(
+            case_id,
+            request,
+            None,
+            ScanPlanIntent::PreviewExecution,
+            Utc::now(),
+            None,
         )
     }
 
@@ -1402,6 +1436,29 @@ impl<'a> CaseService<'a> {
             None,
             ScanPlanIntent::StartExecution,
             Utc::now(),
+            None,
+        )
+    }
+
+    /// Execution planner with a final live-dependency check at the only safe
+    /// seam: the exact groups exist in memory, but no `ScanRun` has been
+    /// appended or saved. Hook failure leaves the durable case unchanged.
+    pub fn plan_scan_for_execution_checked<F>(
+        &self,
+        case_id: &str,
+        request: ScanPlanRequest,
+        mut pre_persist: F,
+    ) -> AppResult<ScanPlan>
+    where
+        F: FnMut(&ScanPlan) -> AppResult<()>,
+    {
+        self.plan_scan_at(
+            case_id,
+            request,
+            None,
+            ScanPlanIntent::StartExecution,
+            Utc::now(),
+            Some(&mut pre_persist),
         )
     }
 
@@ -1412,11 +1469,12 @@ impl<'a> CaseService<'a> {
         verification_baseline_run_id: Option<&str>,
         intent: ScanPlanIntent,
         now: DateTime<Utc>,
+        mut pre_persist: Option<&mut ExecutionPrePersist<'_>>,
     ) -> AppResult<ScanPlan> {
         let mut case = self.mutable_case(case_id, "plan a scan")?;
         let readiness = scan_readiness_at(&case, self.engines, self.adapters, now);
         if case.scan_runs.iter().any(|run| !run_is_terminal(run)) {
-            if intent == ScanPlanIntent::StartExecution {
+            if intent.is_execution() {
                 return Err(scan_preflight_error(&readiness));
             }
             return Err(AppError::InvalidRequest(
@@ -1440,7 +1498,7 @@ impl<'a> CaseService<'a> {
 
         let effective = effective_grants(&case, now);
         if effective.is_empty() {
-            if intent == ScanPlanIntent::StartExecution {
+            if intent.is_execution() {
                 return Err(scan_preflight_error(&readiness));
             }
             return Err(AppError::NotAuthorized(
@@ -1457,7 +1515,7 @@ impl<'a> CaseService<'a> {
                 && asset.owner_confirmed
                 && !asset.candidate
         }) {
-            if intent == ScanPlanIntent::StartExecution {
+            if intent.is_execution() {
                 return Err(scan_preflight_error(&readiness));
             }
             return Err(AppError::NotAuthorized(
@@ -1467,7 +1525,7 @@ impl<'a> CaseService<'a> {
 
         let engine_ids = selected_engine_ids(self.engines, &request, &case, &effective, now)?;
         if engine_ids.is_empty() {
-            if intent == ScanPlanIntent::StartExecution {
+            if intent.is_execution() {
                 return Err(scan_preflight_error(&readiness));
             }
             return Err(AppError::InvalidRequest(
@@ -1665,7 +1723,7 @@ impl<'a> CaseService<'a> {
             }
         }
 
-        if intent == ScanPlanIntent::StartExecution && executable.is_empty() {
+        if intent.is_execution() && executable.is_empty() {
             return Err(scan_preflight_error(&readiness));
         }
 
@@ -1682,9 +1740,23 @@ impl<'a> CaseService<'a> {
             scope_grant_snapshots: frozen_scope_grants(&effective),
             engine_runs,
         };
-        case.scan_runs.push(scan_run.clone());
+        let plan = ScanPlan {
+            scan_run,
+            executable,
+            not_executed,
+        };
+        if intent == ScanPlanIntent::PreviewExecution {
+            return Ok(plan);
+        }
+        if intent == ScanPlanIntent::StartExecution
+            && let Some(pre_persist) = pre_persist.as_mut()
+        {
+            pre_persist(&plan)?;
+        }
+
+        case.scan_runs.push(plan.scan_run.clone());
         case.knowledge_cutoff = Some(now);
-        case.status = if executable.is_empty() {
+        case.status = if plan.executable.is_empty() {
             CaseStatus::NeedsAttention
         } else if verification_baseline_run_id.is_some() {
             CaseStatus::Verifying
@@ -1701,11 +1773,7 @@ impl<'a> CaseService<'a> {
                 "scan.planned"
             },
         )?;
-        Ok(ScanPlan {
-            scan_run,
-            executable,
-            not_executed,
-        })
+        Ok(plan)
     }
 
     pub fn plan_rescan(
@@ -1720,6 +1788,7 @@ impl<'a> CaseService<'a> {
             Some(baseline_run_id),
             ScanPlanIntent::PersistAuditPlan,
             Utc::now(),
+            None,
         )?;
         Ok(RescanPlan {
             baseline_run_id: baseline_run_id.to_owned(),
@@ -1741,6 +1810,31 @@ impl<'a> CaseService<'a> {
             Some(baseline_run_id),
             ScanPlanIntent::StartExecution,
             Utc::now(),
+            None,
+        )?;
+        Ok(RescanPlan {
+            baseline_run_id: baseline_run_id.to_owned(),
+            plan,
+        })
+    }
+
+    pub fn plan_rescan_for_execution_checked<F>(
+        &self,
+        case_id: &str,
+        baseline_run_id: &str,
+        request: ScanPlanRequest,
+        mut pre_persist: F,
+    ) -> AppResult<RescanPlan>
+    where
+        F: FnMut(&ScanPlan) -> AppResult<()>,
+    {
+        let plan = self.plan_scan_at(
+            case_id,
+            request,
+            Some(baseline_run_id),
+            ScanPlanIntent::StartExecution,
+            Utc::now(),
+            Some(&mut pre_persist),
         )?;
         Ok(RescanPlan {
             baseline_run_id: baseline_run_id.to_owned(),
@@ -1982,6 +2076,20 @@ impl<'a> CaseService<'a> {
     /// grant IDs are reused; newly approved or re-approved grants are refused
     /// so resume cannot silently widen the prior scan contract.
     pub fn plan_resume(&self, case_id: &str, run_id: &str) -> AppResult<ScanPlan> {
+        self.plan_resume_checked(case_id, run_id, |_| Ok(()))
+    }
+
+    /// Desktop resume counterpart whose live dependency hook runs before any
+    /// queued/status transition is saved.
+    pub fn plan_resume_checked<F>(
+        &self,
+        case_id: &str,
+        run_id: &str,
+        mut pre_persist: F,
+    ) -> AppResult<ScanPlan>
+    where
+        F: FnMut(&ScanPlan) -> AppResult<()>,
+    {
         let now = Utc::now();
         let mut case = self.mutable_case(case_id, "resume a scan")?;
         let run_index = case
@@ -2156,6 +2264,16 @@ impl<'a> CaseService<'a> {
                 "scan has no interrupted or retryable engine runs".into(),
             ));
         }
+
+        let preview = ScanPlan {
+            scan_run: case.scan_runs[run_index].clone(),
+            executable: candidates
+                .iter()
+                .map(|candidate| candidate.execution.clone())
+                .collect(),
+            not_executed: Vec::new(),
+        };
+        pre_persist(&preview)?;
 
         for candidate in &candidates {
             let engine_run = &mut case.scan_runs[run_index].engine_runs[candidate.engine_index];
@@ -3794,7 +3912,7 @@ fn scan_readiness_at(
     }
 }
 
-fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
+pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
     let blocker = readiness
         .blocker_code
         .unwrap_or(ScanReadinessBlocker::NoRunnableAuthorizedTargets);
@@ -3818,6 +3936,12 @@ fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
         ScanReadinessBlocker::NoRunnableAuthorizedTargets => {
             "no selected compatible scanner is currently runnable"
         }
+        ScanReadinessBlocker::RuntimeUnavailable => {
+            "scan tools are not running; open scanner setup and try again"
+        }
+        ScanReadinessBlocker::ProviderCapabilityUnavailable => {
+            "the cloud connection must be reconnected before this scan can start"
+        }
     };
     let detail = format!(
         "{SCAN_PREFLIGHT_ERROR_PREFIX}:{}: {message}",
@@ -3831,7 +3955,9 @@ fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
             AppError::InvalidRequest(detail)
         }
         ScanReadinessBlocker::NoCompatibleAuthorizedTargets
-        | ScanReadinessBlocker::NoRunnableAuthorizedTargets => AppError::NotAvailable(detail),
+        | ScanReadinessBlocker::NoRunnableAuthorizedTargets
+        | ScanReadinessBlocker::RuntimeUnavailable
+        | ScanReadinessBlocker::ProviderCapabilityUnavailable => AppError::NotAvailable(detail),
     }
 }
 
@@ -6114,7 +6240,7 @@ mod tests {
         }
     }
 
-    fn repository_case_with_completed_baseline(fixture: &Fixture) -> (Id, Id) {
+    fn repository_case_ready_for_execution(fixture: &Fixture) -> Id {
         let created = fixture.create();
         let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
         let service = fixture.service();
@@ -6132,15 +6258,21 @@ mod tests {
                 },
             )
             .unwrap();
+        created.id
+    }
+
+    fn repository_case_with_completed_baseline(fixture: &Fixture) -> (Id, Id) {
+        let case_id = repository_case_ready_for_execution(fixture);
+        let service = fixture.service();
         let baseline = service
             .plan_scan(
-                &created.id,
+                &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
                 },
             )
             .unwrap();
-        let mut stored = service.show_case(&created.id).unwrap();
+        let mut stored = service.show_case(&case_id).unwrap();
         let run = stored
             .scan_runs
             .iter_mut()
@@ -6160,7 +6292,7 @@ mod tests {
             .storage
             .save_case(&mut stored, "test.baseline_completed")
             .unwrap();
-        (created.id, baseline.scan_run.id)
+        (case_id, baseline.scan_run.id)
     }
 
     #[test]
@@ -6524,6 +6656,152 @@ mod tests {
                 .iter()
                 .all(|run| run.verification_baseline_run_id.is_none())
         );
+    }
+
+    #[test]
+    fn live_execution_hook_failure_leaves_new_scan_case_unchanged() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let before = service.show_case(&case_id).unwrap();
+        let mut called = 0_u8;
+
+        let error = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |plan| {
+                    called = called.saturating_add(1);
+                    assert_eq!(plan.executable.len(), 1);
+                    Err(AppError::NotAvailable(
+                        "scan_preflight:runtime_unavailable: fixture".into(),
+                    ))
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(called, 1);
+        assert!(error.to_string().contains("runtime_unavailable"));
+        let after = service.show_case(&case_id).unwrap();
+        assert!(after.scan_runs.is_empty());
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.storage_revision, before.storage_revision);
+    }
+
+    #[test]
+    fn execution_preview_is_read_only_and_successful_hook_persists_exactly_one_run() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+
+        let preview = service
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(preview.executable.len(), 1);
+        assert!(service.show_case(&case_id).unwrap().scan_runs.is_empty());
+
+        let mut called = 0_u8;
+        let persisted = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |plan| {
+                    called = called.saturating_add(1);
+                    assert_eq!(plan.executable.len(), 1);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(called, 1);
+        let stored = service.show_case(&case_id).unwrap();
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].id, persisted.scan_run.id);
+    }
+
+    #[test]
+    fn live_execution_hook_failure_leaves_rescan_baseline_unchanged() {
+        let fixture = Fixture::new();
+        let (case_id, baseline_run_id) = repository_case_with_completed_baseline(&fixture);
+        let service = fixture.service();
+        let before = service.show_case(&case_id).unwrap();
+        let baseline_before = before.scan_runs[0].clone();
+
+        let error = service
+            .plan_rescan_for_execution_checked(
+                &case_id,
+                &baseline_run_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |_| {
+                    Err(AppError::NotAvailable(
+                        "scan_preflight:runtime_unavailable: fixture".into(),
+                    ))
+                },
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("runtime_unavailable"));
+        let after = service.show_case(&case_id).unwrap();
+        assert_eq!(after.scan_runs.len(), 1);
+        assert_eq!(after.scan_runs[0].id, baseline_before.id);
+        assert_eq!(
+            after.scan_runs[0].completed_at,
+            baseline_before.completed_at
+        );
+        assert_eq!(
+            after.scan_runs[0].engine_runs[0].status,
+            baseline_before.engine_runs[0].status
+        );
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.storage_revision, before.storage_revision);
+    }
+
+    #[test]
+    fn live_execution_hook_failure_does_not_queue_a_retryable_run() {
+        let fixture = Fixture::new();
+        let (case_id, baseline_run_id) = repository_case_with_completed_baseline(&fixture);
+        let service = fixture.service();
+        let mut retryable = service.show_case(&case_id).unwrap();
+        retryable.scan_runs[0].engine_runs[0].status = EngineRunStatus::Failed;
+        retryable.scan_runs[0].engine_runs[0].phase = "failed".into();
+        retryable.status = CaseStatus::NeedsAttention;
+        fixture
+            .storage
+            .save_case(&mut retryable, "test.retryable_run")
+            .unwrap();
+        let before = service.show_case(&case_id).unwrap();
+
+        let error = service
+            .plan_resume_checked(&case_id, &baseline_run_id, |_| {
+                Err(AppError::NotAvailable(
+                    "scan_preflight:runtime_unavailable: fixture".into(),
+                ))
+            })
+            .unwrap_err();
+
+        assert!(error.to_string().contains("runtime_unavailable"));
+        let after = service.show_case(&case_id).unwrap();
+        assert_eq!(after.scan_runs.len(), 1);
+        assert_eq!(
+            after.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Failed
+        );
+        assert_eq!(after.scan_runs[0].engine_runs[0].phase, "failed");
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.storage_revision, before.storage_revision);
     }
 
     #[test]

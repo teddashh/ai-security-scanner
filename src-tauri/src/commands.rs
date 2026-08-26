@@ -9,7 +9,8 @@ use crate::case_service::{
     ArtifactDeletionResult, CaseDeletionResult, CaseExportFormat, DurableExecutionReport,
     ExportPreview, FindingGroupRequest, FindingUngroupRequest, FindingWorkflowRequest,
     InterruptedCleanupSuccess, LiveProviderDiscoveryOutcome, PlannedEngineExecution, ScanPlan,
-    ScanPlanRequest, ScanReadiness, ScopeApprovalRequest, SourceMutation,
+    ScanPlanRequest, ScanReadiness, ScanReadinessBlocker, ScanReadinessNextStep,
+    ScanReadinessState, ScopeApprovalRequest, SourceMutation,
 };
 use crate::connectors::{
     SNAPSHOT_ARTIFACT_METADATA_KEY, SnapshotArtifactReference, SnapshotConnectorRegistry,
@@ -39,7 +40,7 @@ use crate::source_authorization::session::{
 };
 use crate::source_authorization::{
     InstalledSourceAuthorization, PROVIDER_RESOURCE_SCOPE_METADATA_KEY, ProviderSourceProfile,
-    validate_aws_execution_target,
+    SourceCheckoutDemand, validate_aws_execution_target,
 };
 use crate::state::AppState;
 use crate::workspace_snapshot::{
@@ -48,7 +49,7 @@ use crate::workspace_snapshot::{
 };
 use crate::{
     container_runtime::{
-        CleanupOutcome, NetworkPolicy, OwnedContainerCleanupRequest, PinnedImage,
+        CleanupOutcome, ContainerRuntime, NetworkPolicy, OwnedContainerCleanupRequest, PinnedImage,
         ProcessContainerRuntime, ResourceLimits, RuntimeCommandProvenance, RuntimeProvider,
         ScannerCredentialSet, cleanup_orphaned_credentials,
     },
@@ -479,9 +480,195 @@ pub fn detect_local_private_subnets() -> crate::target_candidates::LocalNetworkC
     crate::target_candidates::detect_local_private_subnets()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopExecutionBlocker {
+    RuntimeUnavailable,
+    ProviderCapabilityUnavailable,
+}
+
+impl DesktopExecutionBlocker {
+    fn readiness_state(self) -> ScanReadinessState {
+        match self {
+            Self::RuntimeUnavailable => ScanReadinessState::RuntimeUnavailable,
+            Self::ProviderCapabilityUnavailable => ScanReadinessState::ProviderCapabilityRequired,
+        }
+    }
+
+    fn blocker_code(self) -> ScanReadinessBlocker {
+        match self {
+            Self::RuntimeUnavailable => ScanReadinessBlocker::RuntimeUnavailable,
+            Self::ProviderCapabilityUnavailable => {
+                ScanReadinessBlocker::ProviderCapabilityUnavailable
+            }
+        }
+    }
+
+    fn next_step(self) -> ScanReadinessNextStep {
+        match self {
+            Self::RuntimeUnavailable => ScanReadinessNextStep::ScannerSetup,
+            Self::ProviderCapabilityUnavailable => ScanReadinessNextStep::Coverage,
+        }
+    }
+
+    fn into_error(self) -> AppError {
+        let (code, message) = match self {
+            Self::RuntimeUnavailable => (
+                "runtime_unavailable",
+                "scan tools are not ready yet; open scanner setup and try again",
+            ),
+            Self::ProviderCapabilityUnavailable => (
+                "provider_capability_unavailable",
+                "the cloud connection is missing, expired, or has no remaining scan uses; reconnect it and try again",
+            ),
+        };
+        AppError::NotAvailable(format!("scan_preflight:{code}: {message}"))
+    }
+}
+
+fn block_scan_readiness(readiness: &mut ScanReadiness, blocker: DesktopExecutionBlocker) {
+    readiness.ready = false;
+    readiness.state = blocker.readiness_state();
+    readiness.blocker_code = Some(blocker.blocker_code());
+    readiness.next_step = Some(blocker.next_step());
+}
+
+fn execution_requires_provider_capability(execution: &PlannedEngineExecution) -> bool {
+    execution
+        .manifest
+        .required_permissions
+        .iter()
+        .any(|permission| {
+            matches!(
+                permission,
+                ScanPermission::InventoryRead | ScanPermission::ConfigurationRead
+            )
+        })
+        && execution.assets.iter().any(|asset| {
+            matches!(
+                asset.kind,
+                AssetKind::CloudOrganization
+                    | AssetKind::CloudAccount
+                    | AssetKind::Subscription
+                    | AssetKind::Project
+                    | AssetKind::Tenant
+            )
+        })
+}
+
+/// Checks the exact, duplicate-preserving provider demand without checking out
+/// or materializing any credential. Every planned cloud group is also rebound
+/// to its persisted provider identity, proof, and exact resource scope.
+fn validate_provider_execution_demands(
+    state: &AppState,
+    plan: &ScanPlan,
+    now: chrono::DateTime<Utc>,
+) -> AppResult<()> {
+    let mut owned_demands = Vec::<(String, String, String)>::new();
+    for execution in &plan.executable {
+        if !execution_requires_provider_capability(execution) {
+            continue;
+        }
+        let source = provider_source_for_execution(state, execution)?.ok_or_else(|| {
+            AppError::NotAuthorized(
+                "cloud execution has no connected provider-native read-only source".into(),
+            )
+        })?;
+        validate_installed_provider_authorization(state, &source, execution, now)?;
+        owned_demands.push((
+            execution.case_id.clone(),
+            source.id,
+            execution.manifest.id.clone(),
+        ));
+    }
+    if owned_demands.is_empty() {
+        return Ok(());
+    }
+    let demands = owned_demands
+        .iter()
+        .map(|(case_id, source_id, engine_id)| SourceCheckoutDemand {
+            case_id,
+            source_id,
+            engine_id,
+        })
+        .collect::<Vec<_>>();
+    state
+        .source_authorizations
+        .validate_checkout_demands(&demands, now)
+}
+
+fn validate_desktop_execution_with_runtime<F>(
+    state: &AppState,
+    plan: &ScanPlan,
+    mut runtime_preflight: F,
+) -> AppResult<()>
+where
+    F: FnMut() -> AppResult<()>,
+{
+    validate_provider_execution_demands(state, plan, Utc::now())
+        .map_err(|_| DesktopExecutionBlocker::ProviderCapabilityUnavailable.into_error())?;
+    runtime_preflight().map_err(|_| DesktopExecutionBlocker::RuntimeUnavailable.into_error())?;
+    // Managed runtime setup can take long enough for a short-lived provider
+    // capability to expire or be consumed elsewhere. Recheck immediately
+    // before the case revision CAS and ScanRun append.
+    validate_provider_execution_demands(state, plan, Utc::now())
+        .map_err(|_| DesktopExecutionBlocker::ProviderCapabilityUnavailable.into_error())
+}
+
+fn validate_desktop_execution(state: &AppState, plan: &ScanPlan) -> AppResult<()> {
+    validate_desktop_execution_with_runtime(state, plan, || {
+        let runtime = state.runtime_for_execution()?;
+        runtime.preflight()?;
+        Ok(())
+    })
+}
+
+fn validate_desktop_resume(state: &AppState, plan: &ScanPlan) -> AppResult<()> {
+    validate_desktop_execution_with_runtime(state, plan, || {
+        for execution in &plan.executable {
+            let runtime = match execution.resume_checkpoint.as_ref() {
+                Some(checkpoint) => match (
+                    checkpoint.runtime_provider,
+                    checkpoint.runtime_command_provenance.as_ref(),
+                ) {
+                    (Some(provider), Some(provenance)) => {
+                        state.runtime_for_recorded_execution(provider, provenance)?
+                    }
+                    (None, None) if checkpoint.cleanup_completed => {
+                        state.runtime_for_execution()?
+                    }
+                    _ => {
+                        return Err(AppError::NotAuthorized(
+                            "resumable execution has incomplete durable runtime provenance".into(),
+                        ));
+                    }
+                },
+                None => state.runtime_for_execution()?,
+            };
+            runtime.preflight()?;
+        }
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub fn get_scan_readiness(case_id: String, state: State<'_, AppState>) -> AppResult<ScanReadiness> {
-    state.case_service().scan_readiness(&case_id)
+    let service = state.case_service();
+    let mut readiness = service.scan_readiness(&case_id)?;
+    if !readiness.ready {
+        return Ok(readiness);
+    }
+    let plan = service.preview_scan_for_execution(&case_id, ScanPlanRequest::default())?;
+    if !state.runtime_health().available {
+        block_scan_readiness(&mut readiness, DesktopExecutionBlocker::RuntimeUnavailable);
+        return Ok(readiness);
+    }
+    if validate_provider_execution_demands(&state, &plan, Utc::now()).is_err() {
+        block_scan_readiness(
+            &mut readiness,
+            DesktopExecutionBlocker::ProviderCapabilityUnavailable,
+        );
+    }
+    Ok(readiness)
 }
 
 #[tauri::command]
@@ -1609,14 +1796,20 @@ pub fn ungroup_findings(
 }
 
 #[tauri::command]
-pub fn start_scan(
-    case_id: String,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> AppResult<AssessmentCase> {
-    let plan = state
-        .case_service()
-        .plan_scan_for_execution(&case_id, ScanPlanRequest::default())?;
+pub async fn start_scan(case_id: String, app: AppHandle) -> AppResult<AssessmentCase> {
+    let worker_app = app.clone();
+    let worker_case_id = case_id.clone();
+    let plan = tauri::async_runtime::spawn_blocking(move || {
+        let state = worker_app.state::<AppState>();
+        state.case_service().plan_scan_for_execution_checked(
+            &worker_case_id,
+            ScanPlanRequest::default(),
+            |plan| validate_desktop_execution(&state, plan),
+        )
+    })
+    .await
+    .map_err(|_| AppError::Internal("scan preflight worker terminated unexpectedly".into()))??;
+    let state = app.state::<AppState>();
     emit(&app, RUN_PROGRESS_EVENT, &plan.scan_run)?;
     dispatch_scan_plan(&app, &state, plan.clone())?;
     let case = state.case_service().show_case(&case_id)?;
@@ -1663,35 +1856,53 @@ pub fn pause_scan(
 }
 
 #[tauri::command]
-pub fn resume_scan(
+pub async fn resume_scan(
     case_id: String,
     run_id: Option<String>,
     app: AppHandle,
-    state: State<'_, AppState>,
 ) -> AppResult<AssessmentCase> {
-    let service = state.case_service();
-    let run_id = requested_or_latest_run(&service, &case_id, run_id.as_deref())?;
+    let run_id = {
+        let state = app.state::<AppState>();
+        requested_or_latest_run(&state.case_service(), &case_id, run_id.as_deref())?
+    };
     let key = JobKey::new(case_id.clone(), run_id.clone())
         .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
-    if state
-        .jobs
-        .snapshot(&key)
-        .is_some_and(|snapshot| !snapshot.is_terminal())
     {
-        let case = state
+        let state = app.state::<AppState>();
+        if state
             .jobs
-            .resume_with_durable_transition(&key, || service.resume_scan(&case_id, &run_id))
-            .map_err(|error| {
-                AppError::Runtime(format!("live scan resume could not be signalled: {error}"))
-            })??;
-        emit(&app, RUN_PROGRESS_EVENT, &case)?;
-        return Ok(case);
+            .snapshot(&key)
+            .is_some_and(|snapshot| !snapshot.is_terminal())
+        {
+            let service = state.case_service();
+            let case = state
+                .jobs
+                .resume_with_durable_transition(&key, || service.resume_scan(&case_id, &run_id))
+                .map_err(|error| {
+                    AppError::Runtime(format!("live scan resume could not be signalled: {error}"))
+                })??;
+            emit(&app, RUN_PROGRESS_EVENT, &case)?;
+            return Ok(case);
+        }
     }
 
-    let plan = service.plan_resume(&case_id, &run_id)?;
+    let worker_app = app.clone();
+    let worker_case_id = case_id.clone();
+    let worker_run_id = run_id.clone();
+    let plan = tauri::async_runtime::spawn_blocking(move || {
+        let state = worker_app.state::<AppState>();
+        state
+            .case_service()
+            .plan_resume_checked(&worker_case_id, &worker_run_id, |plan| {
+                validate_desktop_resume(&state, plan)
+            })
+    })
+    .await
+    .map_err(|_| AppError::Internal("resume preflight worker terminated unexpectedly".into()))??;
+    let state = app.state::<AppState>();
     emit(&app, RUN_PROGRESS_EVENT, &plan.scan_run)?;
     dispatch_scan_plan(&app, &state, plan)?;
-    service.show_case(&case_id)
+    state.case_service().show_case(&case_id)
 }
 
 #[tauri::command]
@@ -1736,21 +1947,29 @@ pub fn cancel_scan(
 }
 
 #[tauri::command]
-pub fn start_rescan(
+pub async fn start_rescan(
     case_id: String,
     baseline_run_id: String,
     app: AppHandle,
-    state: State<'_, AppState>,
 ) -> AppResult<AssessmentCase> {
-    let service = state.case_service();
-    let rescan = service.plan_rescan_for_execution(
-        &case_id,
-        &baseline_run_id,
-        ScanPlanRequest::default(),
-    )?;
+    let worker_app = app.clone();
+    let worker_case_id = case_id.clone();
+    let worker_baseline_run_id = baseline_run_id.clone();
+    let rescan = tauri::async_runtime::spawn_blocking(move || {
+        let state = worker_app.state::<AppState>();
+        state.case_service().plan_rescan_for_execution_checked(
+            &worker_case_id,
+            &worker_baseline_run_id,
+            ScanPlanRequest::default(),
+            |plan| validate_desktop_execution(&state, plan),
+        )
+    })
+    .await
+    .map_err(|_| AppError::Internal("rescan preflight worker terminated unexpectedly".into()))??;
+    let state = app.state::<AppState>();
     emit(&app, RUN_PROGRESS_EVENT, &rescan.plan.scan_run)?;
     dispatch_scan_plan(&app, &state, rescan.plan.clone())?;
-    let case = service.show_case(&case_id)?;
+    let case = state.case_service().show_case(&case_id)?;
     Ok(case)
 }
 
@@ -3421,15 +3640,22 @@ fn emit<T: Serialize + Clone>(app: &AppHandle, event: &str, payload: &T) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bootstrap::BootstrapProvider;
     use crate::case_service::{ScanPlanRequest, ScopeApprovalRequest, SourceMutation};
+    use crate::credential_vault::ReadOnlyCredentialSource;
     use crate::discovery::{DiscoveredAsset, DiscoveryBatch};
     use crate::domain::{
         AssetIdentifier, AssetKind, CreateCaseRequest, DataClass, ScanPermission,
         SourceConnectionStatus, SourceKind,
     };
     use crate::registry::EngineRegistry;
+    use crate::source_authorization::{
+        ProviderSecretMaterial, ProviderVerificationState, SecretEnvironmentValue,
+        SourceAuthorizationRequest, VerifiedProviderAuthorization,
+    };
     use crate::storage::Storage;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+    use zeroize::Zeroizing;
 
     #[test]
     fn product_events_use_a_versioned_consistent_envelope() {
@@ -3445,6 +3671,267 @@ mod tests {
         assert_eq!(value["occurredAt"], "2026-08-24T12:00:00Z");
         assert_eq!(value["payload"]["case_id"], "case-1");
     }
+
+    fn test_state() -> (tempfile::TempDir, AppState) {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact_root = directory.path().join("artifacts");
+        std::fs::create_dir_all(&artifact_root).unwrap();
+        let state = AppState::new(
+            Storage::open(directory.path().join("casework.db")).unwrap(),
+            EngineRegistry::load_builtin().unwrap(),
+            crate::adapters::builtin_adapter_registry().unwrap(),
+            artifact_root,
+            directory.path().join("signing.key"),
+        );
+        (directory, state)
+    }
+
+    fn create_test_case(state: &AppState, title: &str) -> AssessmentCase {
+        state
+            .case_service()
+            .create_case(&CreateCaseRequest {
+                title: title.into(),
+                organization_name: "Example Co".into(),
+                employee_range: "1-10".into(),
+                assessment_intent: None,
+                data_classes: vec![DataClass::General],
+                requested_activities: vec![],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![],
+                notes: None,
+            })
+            .unwrap()
+    }
+
+    fn ready_repository_state() -> (tempfile::TempDir, AppState, Id) {
+        let (directory, state) = test_state();
+        let case = create_test_case(&state, "Runtime preflight");
+        let service = state.case_service();
+        let source = service
+            .upsert_source(
+                &case.id,
+                SourceMutation {
+                    id: None,
+                    kind: SourceKind::UserDeclared,
+                    label: "Declared repository".into(),
+                    status: SourceConnectionStatus::Connected,
+                    read_only: true,
+                    metadata: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        service
+            .reconcile_discovery_batch(
+                &case.id,
+                &DiscoveryBatch {
+                    source_id: source.id,
+                    source_kind: SourceKind::UserDeclared,
+                    connector_id: "test".into(),
+                    connector_version: "1".into(),
+                    observed_at: Utc::now(),
+                    assets: vec![DiscoveredAsset {
+                        observation_key: "repository".into(),
+                        kind: AssetKind::Repository,
+                        name: "Repository".into(),
+                        provider: None,
+                        region: None,
+                        stable_identifier: AssetIdentifier {
+                            namespace: "repo:path".into(),
+                            value: "/tmp/example".into(),
+                        },
+                        additional_identifiers: vec![],
+                        internet_exposed: None,
+                        contains_sensitive_data: None,
+                        metadata: BTreeMap::new(),
+                    }],
+                    relations: vec![],
+                    notices: vec![],
+                },
+            )
+            .unwrap();
+        let asset_id = service.show_case(&case.id).unwrap().assets[0].id.clone();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        (directory, state, case.id)
+    }
+
+    fn verified_aws_authorization(
+        issued_at: chrono::DateTime<Utc>,
+    ) -> VerifiedProviderAuthorization {
+        let profile = ProviderSourceProfile::AwsOrganizationReadOnlySession;
+        let provider_identity =
+            "arn:aws:sts::111122223333:assumed-role/security-audit-reader/session";
+        let expires_at = issued_at + Duration::minutes(30);
+        let verification = ProviderVerificationState {
+            schema_version: "1.0.0".into(),
+            provider: BootstrapProvider::Aws,
+            profile,
+            authentication_method: "fixture_short_lived_session".into(),
+            provider_identity: provider_identity.into(),
+            subject_id: "fixture-subject".into(),
+            resource_scope: "aws-account:111122223333".into(),
+            verified_at: issued_at,
+            credential_expires_at: expires_at,
+            identity_endpoint: "https://sts.amazonaws.com/".into(),
+            permission_endpoints: vec!["https://iam.amazonaws.com/".into()],
+            required_permissions_verified: vec!["inventory.read".into()],
+            prohibited_permissions_denied: vec!["inventory.write".into()],
+            provider_request_ids: vec!["fixture-request".into()],
+            evidence_sha256: "a".repeat(64),
+        };
+        VerifiedProviderAuthorization::new_verified(
+            profile,
+            ReadOnlyCredentialSource::ProviderNative,
+            provider_identity.into(),
+            expires_at,
+            verification,
+            ProviderSecretMaterial::new(vec![
+                SecretEnvironmentValue::new(
+                    "AWS_ACCESS_KEY_ID",
+                    Zeroizing::new("fixture-access-key".into()),
+                ),
+                SecretEnvironmentValue::new(
+                    "AWS_SECRET_ACCESS_KEY",
+                    Zeroizing::new("fixture-secret-key".into()),
+                ),
+                SecretEnvironmentValue::new(
+                    "AWS_SESSION_TOKEN",
+                    Zeroizing::new("fixture-session-token".into()),
+                ),
+            ]),
+        )
+        .unwrap()
+    }
+
+    fn ready_aws_state(
+        issued_at: chrono::DateTime<Utc>,
+        max_checkouts: u16,
+    ) -> (tempfile::TempDir, AppState, Id, Id) {
+        let (directory, state) = test_state();
+        let case = create_test_case(&state, "Provider preflight");
+        let service = state.case_service();
+        let source = service
+            .upsert_source(
+                &case.id,
+                SourceMutation {
+                    id: None,
+                    kind: SourceKind::AwsOrganization,
+                    label: "AWS account".into(),
+                    status: SourceConnectionStatus::Connected,
+                    read_only: true,
+                    metadata: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        service
+            .reconcile_discovery_batch(
+                &case.id,
+                &DiscoveryBatch {
+                    source_id: source.id.clone(),
+                    source_kind: SourceKind::AwsOrganization,
+                    connector_id: "aws-organizations-list-accounts".into(),
+                    connector_version: "1".into(),
+                    observed_at: issued_at,
+                    assets: vec![DiscoveredAsset {
+                        observation_key: "aws-account".into(),
+                        kind: AssetKind::CloudAccount,
+                        name: "AWS account 111122223333".into(),
+                        provider: Some("aws".into()),
+                        region: None,
+                        stable_identifier: AssetIdentifier {
+                            namespace: "aws_account_id".into(),
+                            value: "111122223333".into(),
+                        },
+                        additional_identifiers: vec![],
+                        internet_exposed: None,
+                        contains_sensitive_data: None,
+                        metadata: BTreeMap::new(),
+                    }],
+                    relations: vec![],
+                    notices: vec![],
+                },
+            )
+            .unwrap();
+        let asset_id = service.show_case(&case.id).unwrap().assets[0].id.clone();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::InventoryRead],
+                    confirmed_by: "Cloud owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let verified = verified_aws_authorization(issued_at);
+        let verification = verified.verification().clone();
+        state
+            .source_authorizations
+            .install(
+                SourceAuthorizationRequest {
+                    case_id: case.id.clone(),
+                    source_id: source.id.clone(),
+                    allowed_engine_ids: BTreeSet::from(["steampipe".into()]),
+                    max_checkouts,
+                    verified_authorization: verified,
+                },
+                issued_at,
+            )
+            .unwrap();
+        connect_verified_provider_source(&state, &case.id, source.clone(), &verification).unwrap();
+        (directory, state, case.id, source.id)
+    }
+
+    fn completed_baseline(state: &AppState, case_id: &str, engine_id: &str) -> Id {
+        let service = state.case_service();
+        let baseline = service
+            .plan_scan(
+                case_id,
+                ScanPlanRequest {
+                    engine_ids: vec![engine_id.into()],
+                },
+            )
+            .unwrap();
+        let mut stored = service.show_case(case_id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == baseline.scan_run.id)
+            .unwrap();
+        run.completed_at = Some(baseline.scan_run.created_at);
+        for engine_run in &mut run.engine_runs {
+            engine_run.status = EngineRunStatus::Completed;
+            engine_run.progress_percent = 100;
+            engine_run.phase = "completed".into();
+            engine_run.started_at = Some(baseline.scan_run.created_at);
+            engine_run.finished_at = Some(baseline.scan_run.created_at);
+            engine_run.exit_code = Some(0);
+        }
+        stored.status = CaseStatus::ReadyForHandoff;
+        state
+            .storage
+            .save_case(&mut stored, "test.completed_baseline")
+            .unwrap();
+        baseline.scan_run.id
+    }
+
     fn interrupted_repository_state(
         checkpoint_stage: ExecutionStage,
     ) -> (tempfile::TempDir, AppState, Id, Id) {
@@ -3606,5 +4093,137 @@ mod tests {
             reconcile_interrupted_scan_resources(&state, Some((&case_id, &run_id))).unwrap();
         assert_eq!(retry.reconciled, 0);
         assert_eq!(retry.pending, 1);
+    }
+
+    #[test]
+    fn unavailable_runtime_preflight_persists_zero_new_scan_runs() {
+        let (_directory, state, case_id) = ready_repository_state();
+        let service = state.case_service();
+        let before = service.show_case(&case_id).unwrap();
+
+        let error = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |plan| {
+                    validate_desktop_execution_with_runtime(&state, plan, || {
+                        Err(AppError::Runtime("fixture runtime is unavailable".into()))
+                    })
+                },
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:runtime_unavailable")
+        );
+        let after = service.show_case(&case_id).unwrap();
+        assert!(after.scan_runs.is_empty());
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.storage_revision, before.storage_revision);
+    }
+
+    #[test]
+    fn unavailable_runtime_preflight_persists_zero_rescan_runs() {
+        let (_directory, state, case_id) = ready_repository_state();
+        let baseline_run_id = completed_baseline(&state, &case_id, "gitleaks");
+        let service = state.case_service();
+        let before = service.show_case(&case_id).unwrap();
+
+        let error = service
+            .plan_rescan_for_execution_checked(
+                &case_id,
+                &baseline_run_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |plan| {
+                    validate_desktop_execution_with_runtime(&state, plan, || {
+                        Err(AppError::Runtime("fixture runtime is unavailable".into()))
+                    })
+                },
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:runtime_unavailable")
+        );
+        let after = service.show_case(&case_id).unwrap();
+        assert_eq!(after.scan_runs.len(), 1);
+        assert_eq!(after.scan_runs[0].id, baseline_run_id);
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.storage_revision, before.storage_revision);
+    }
+
+    #[test]
+    fn expired_provider_capability_persists_zero_new_scan_runs() {
+        let issued_at = Utc::now() - Duration::minutes(40);
+        let (_directory, state, case_id, _source_id) = ready_aws_state(issued_at, 1);
+        let service = state.case_service();
+        let before = service.show_case(&case_id).unwrap();
+
+        let error = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+                |plan| validate_desktop_execution_with_runtime(&state, plan, || Ok(())),
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:provider_capability_unavailable")
+        );
+        let after = service.show_case(&case_id).unwrap();
+        assert!(after.scan_runs.is_empty());
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.storage_revision, before.storage_revision);
+    }
+
+    #[test]
+    fn exhausted_provider_capability_persists_zero_rescan_runs() {
+        let issued_at = Utc::now();
+        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 1);
+        let baseline_run_id = completed_baseline(&state, &case_id, "steampipe");
+        state
+            .source_authorizations
+            .checkout(&case_id, &source_id, "steampipe", issued_at)
+            .unwrap();
+        let service = state.case_service();
+        let before = service.show_case(&case_id).unwrap();
+
+        let error = service
+            .plan_rescan_for_execution_checked(
+                &case_id,
+                &baseline_run_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+                |plan| validate_desktop_execution_with_runtime(&state, plan, || Ok(())),
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:provider_capability_unavailable")
+        );
+        let after = service.show_case(&case_id).unwrap();
+        assert_eq!(after.scan_runs.len(), 1);
+        assert_eq!(after.scan_runs[0].id, baseline_run_id);
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(after.storage_revision, before.storage_revision);
     }
 }
