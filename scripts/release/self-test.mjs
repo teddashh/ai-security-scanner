@@ -732,13 +732,13 @@ async function main() {
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
       latest.version !== VERSION ||
-      !latest.notes.includes("guided use-case setup") ||
-      !latest.notes.includes("safe local-network suggestions") ||
-      !latest.notes.includes("deterministic scan readiness") ||
-      !releaseNotes.includes("fixes the empty 0/0 scan") ||
-      !releaseNotes.includes("Choose what you want to check") ||
-      !releaseNotes.includes("A scan run is created only when") ||
-      !releaseNotes.includes("export a redacted diagnostic") ||
+      !latest.notes.includes("automatic first-launch scan-tool preparation") ||
+      !latest.notes.includes("fixed Ready/Repair loop") ||
+      !latest.notes.includes("timestamped activity before and during scans") ||
+      !releaseNotes.includes("On first launch, the app checks installed Windows prerequisites") ||
+      !releaseNotes.includes("The Ready/Repair loop is removed") ||
+      !releaseNotes.includes("Before a scan starts, the activity view records") ||
+      !releaseNotes.includes("download a redacted diagnostic") ||
       latest.notes.includes("repair release") ||
       releaseNotes.includes("This patch release") ||
       !checksums.includes("ai-security-scanner-egress-gateway") ||

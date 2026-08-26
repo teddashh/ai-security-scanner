@@ -39,9 +39,9 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 ## Want the details?
 
-<!-- Release line: v0.1.4. -->
+<!-- Release line: v0.1.5. -->
 
-> **Project status:** `v0.1.4` is the installable public preview on the way to `v0.2.0`. Use it to try the much simpler home-network, website, external-IP, code, infrastructure-as-code, cloud, container, and Kubernetes scan flows; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
+> **Project status:** `v0.1.5` is the Windows-first public preview. It prepares scan tools automatically on first launch, stops the Ready/Repair loop, and shows a clear event log before and during every scan.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 
@@ -232,7 +232,7 @@ docs/usability/              Real-person study protocol and evidence schema
 
 ### Release and evidence status
 
-`v0.1.4` is the public hands-on preview for the planned `v0.2.0` release. It prevents empty scan runs, checks local tools and atomically reserves the short-lived cloud capacity needed by the exact plan before saving it, guides each use case through only the setup it needs, offers a safe local-network suggestion, and turns setup failures into one useful next action plus a downloadable redacted diagnostic. Its installers must complete automated cross-platform builds and fresh-host qualification before GitHub publishes the pre-release. The required live first-run study with an IAM-naive participant and the subsequent formal QC/code review still belong to the stable release process.
+`v0.1.5` is the Windows-first public testing preview for the planned `v0.2.0` release. On first launch, it checks what is already installed and prepares the local scan tools automatically. It no longer sends a broken packaged component through an endless Ready/Repair cycle; it explains the problem and points to the latest installer while keeping existing cases. Before a scan starts and while it runs, a timestamped event log shows readiness checks, the current scanner, what it is waiting for, and the last saved progress. A downloadable redacted diagnostic is available when more detail is needed. The app still waits for an explicit Start action before contacting a target. Formal QC and code review remain scheduled after the product workflow has been exercised end to end.
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 

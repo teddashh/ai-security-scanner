@@ -27,6 +27,42 @@ function assert(condition, message) {
 
 const RELEASE_COPY = new Map([
   [
+    "0.1.5",
+    {
+      updaterNotes:
+        "Windows-first public testing pre-release with automatic first-launch scan-tool preparation, a fixed Ready/Repair loop, and clear timestamped activity before and during scans. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **Public testing pre-release.** This build makes Windows startup and live scan progress",
+        "> easier to understand. It has not completed the planned formal QC/code review.",
+        "",
+        "On first launch, the app checks installed Windows prerequisites before showing the normal",
+        "workspace. It recognizes components that are already available and automatically prepares",
+        "the private local scan tools when needed. A standard Windows approval dialog appears only",
+        "when Windows itself needs a change; an explicit restart remains under the user's control.",
+        "",
+        "The Ready/Repair loop is removed. A temporary local-tool connection issue can still be",
+        "retried, but a missing or invalid component from the installed package is no longer",
+        "presented as something the same broken installation can repair. The app explains the",
+        "problem and links to the latest installer while preserving existing local cases.",
+        "",
+        "Before a scan starts, the activity view records when readiness was checked and explains any",
+        "blocker in plain language. During a scan, the same timeline shows the active and next scanner,",
+        "the current wait reason, the last durable progress, and a delayed-update notice without",
+        "mistaking a paused scan for a stalled one. This behavior is shared by every supported scan route.",
+        "",
+        "When technical detail is useful, the app can download a redacted diagnostic containing safe",
+        "timestamps, statuses, phases, blocker codes, versions, and counts. It excludes target names,",
+        "local paths, raw evidence, credentials, and raw scanner output.",
+        "",
+        "Preparation never starts a scan or widens its scope. The app still waits for the user's",
+        "explicit Start action before contacting an approved target.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "",
+      ],
+    },
+  ],
+  [
     "0.1.4",
     {
       updaterNotes:
