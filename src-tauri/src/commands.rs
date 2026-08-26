@@ -1,4 +1,4 @@
-use crate::artifact_store::{ArtifactContext, ArtifactStore};
+use crate::artifact_store::{ArtifactContext, ArtifactStore, inspect_raw_artifacts};
 use crate::bootstrap::executor::{
     BootstrapBrokerCommand, BootstrapCleanupObligationSummary, BootstrapCleanupResult,
     BootstrapExecutionRequest, BootstrapOperatorConfig, bootstrap_cleanup_obligation_summary,
@@ -14,6 +14,7 @@ use crate::case_service::{
 };
 use crate::connectors::{
     SNAPSHOT_ARTIFACT_METADATA_KEY, SnapshotArtifactReference, SnapshotConnectorRegistry,
+    preflight_snapshot_artifact,
 };
 use crate::demo::build_demo_case;
 use crate::discovery::run_connector;
@@ -21,10 +22,11 @@ use crate::domain::*;
 use crate::error::{AppError, AppResult};
 use crate::export::verify_case_bundle;
 use crate::export::{ExportOptions, RedactionProfile};
-use crate::external_scope::{ResolvedExternalPlan, resolve_external_plan};
+use crate::external_scope::{ExternalScopeGrant, ResolvedExternalPlan, resolve_external_plan};
 use crate::managed_network::{
     ManagedNetworkCleanupOutcome, ManagedNetworkController, ManagedNetworkLease,
-    ManagedNetworkOwner, ProviderServiceEgressRequest, resolve_provider_service_plan,
+    ManagedNetworkOwner, ProviderServiceEgressRequest, inspect_gateway_binary,
+    resolve_provider_service_plan, validate_provider_service_request_static,
 };
 use crate::managed_runtime::{
     ManagedRuntimePrerequisiteRepairResult, ManagedRuntimeSetupController,
@@ -46,7 +48,8 @@ use crate::source_authorization::{
 use crate::state::AppState;
 use crate::workspace_snapshot::{
     WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WorkspaceInputProfile, WorkspaceSnapshotLimits,
-    WorkspaceSnapshotReference, create_workspace_snapshot_with_profile, resolve_workspace_snapshot,
+    WorkspaceSnapshotReference, create_workspace_snapshot_with_profile, inspect_workspace_snapshot,
+    resolve_workspace_snapshot,
 };
 use crate::{
     container_runtime::{
@@ -492,6 +495,12 @@ enum DesktopExecutionBlocker {
     ProviderAuthorizationBindingMismatch,
     ProviderTargetBindingMismatch,
     ProviderPreflightUnavailable,
+    WorkspaceSnapshotUnavailable,
+    EgressGatewayUnavailable,
+    EngineExecutionContractInvalid,
+    PassiveSourceUnavailable,
+    CapturedEvidenceUnavailable,
+    ExecutionPreflightUnavailable,
 }
 
 impl DesktopExecutionBlocker {
@@ -504,6 +513,13 @@ impl DesktopExecutionBlocker {
             | Self::ProviderAuthorizationBindingMismatch
             | Self::ProviderTargetBindingMismatch => ScanReadinessState::ProviderReviewRequired,
             Self::ProviderPreflightUnavailable => ScanReadinessState::ProviderCheckUnavailable,
+            Self::WorkspaceSnapshotUnavailable
+            | Self::PassiveSourceUnavailable
+            | Self::CapturedEvidenceUnavailable => ScanReadinessState::ExecutionInputUnavailable,
+            Self::EgressGatewayUnavailable | Self::EngineExecutionContractInvalid => {
+                ScanReadinessState::ScannerSetupRequired
+            }
+            Self::ExecutionPreflightUnavailable => ScanReadinessState::ExecutionCheckUnavailable,
         }
     }
 
@@ -524,18 +540,37 @@ impl DesktopExecutionBlocker {
             Self::ProviderPreflightUnavailable => {
                 ScanReadinessBlocker::ProviderPreflightUnavailable
             }
+            Self::WorkspaceSnapshotUnavailable => {
+                ScanReadinessBlocker::WorkspaceSnapshotUnavailable
+            }
+            Self::EgressGatewayUnavailable => ScanReadinessBlocker::EgressGatewayUnavailable,
+            Self::EngineExecutionContractInvalid => {
+                ScanReadinessBlocker::EngineExecutionContractInvalid
+            }
+            Self::PassiveSourceUnavailable => ScanReadinessBlocker::PassiveSourceUnavailable,
+            Self::CapturedEvidenceUnavailable => ScanReadinessBlocker::CapturedEvidenceUnavailable,
+            Self::ExecutionPreflightUnavailable => {
+                ScanReadinessBlocker::ExecutionPreflightUnavailable
+            }
         }
     }
 
     fn next_step(self) -> ScanReadinessNextStep {
         match self {
-            Self::RuntimeUnavailable => ScanReadinessNextStep::ScannerSetup,
+            Self::RuntimeUnavailable
+            | Self::EgressGatewayUnavailable
+            | Self::EngineExecutionContractInvalid => ScanReadinessNextStep::ScannerSetup,
             Self::ProviderSourceRequired
             | Self::ProviderCapabilityUnavailable
             | Self::ProviderSourceAmbiguous
             | Self::ProviderAuthorizationBindingMismatch
-            | Self::ProviderTargetBindingMismatch => ScanReadinessNextStep::Coverage,
-            Self::ProviderPreflightUnavailable => ScanReadinessNextStep::Retry,
+            | Self::ProviderTargetBindingMismatch
+            | Self::WorkspaceSnapshotUnavailable
+            | Self::PassiveSourceUnavailable => ScanReadinessNextStep::Coverage,
+            Self::CapturedEvidenceUnavailable => ScanReadinessNextStep::Progress,
+            Self::ProviderPreflightUnavailable | Self::ExecutionPreflightUnavailable => {
+                ScanReadinessNextStep::Retry
+            }
         }
     }
 
@@ -568,6 +603,30 @@ impl DesktopExecutionBlocker {
             Self::ProviderPreflightUnavailable => (
                 "provider_preflight_unavailable",
                 "the cloud connection could not be checked right now; no scan started; try again",
+            ),
+            Self::WorkspaceSnapshotUnavailable => (
+                "workspace_snapshot_unavailable",
+                "the selected local input is missing or changed; choose it again before scanning",
+            ),
+            Self::EgressGatewayUnavailable => (
+                "egress_gateway_unavailable",
+                "the managed scan network is not ready; open scanner setup and try again",
+            ),
+            Self::EngineExecutionContractInvalid => (
+                "engine_execution_contract_invalid",
+                "this check is missing a required execution component; open scanner setup and try again",
+            ),
+            Self::PassiveSourceUnavailable => (
+                "passive_source_unavailable",
+                "the saved read-only data source is missing or changed; reconnect it before scanning",
+            ),
+            Self::CapturedEvidenceUnavailable => (
+                "captured_evidence_unavailable",
+                "saved scan evidence needed to continue is missing or changed; nothing was rerun; start a new scan for fresh results",
+            ),
+            Self::ExecutionPreflightUnavailable => (
+                "execution_preflight_unavailable",
+                "the scan readiness check could not finish; no scan started; try again",
             ),
         };
         AppError::NotAvailable(format!("scan_preflight:{code}: {message}"))
@@ -1049,62 +1108,96 @@ where
         .map_err(ProviderPreflightFailure::into_error)
 }
 
-fn prepare_desktop_execution_with_runtime<F>(
+fn prepare_desktop_execution_with_checks<F, I>(
     state: &AppState,
     plan: &ScanPlan,
+    mut input_preflight: I,
     mut runtime_preflight: F,
 ) -> AppResult<Option<ProviderExecutionReservation>>
 where
     F: FnMut() -> AppResult<()>,
+    I: FnMut() -> Result<(), DesktopExecutionBlocker>,
 {
     validate_scan_dispatch_identity(plan)?;
     validate_provider_execution_demands(state, plan, Utc::now())
         .map_err(ProviderPreflightFailure::into_error)?;
+    input_preflight().map_err(DesktopExecutionBlocker::into_error)?;
     runtime_preflight().map_err(|_| DesktopExecutionBlocker::RuntimeUnavailable.into_error())?;
+    // Runtime setup may take several minutes. Reinspect local inputs and
+    // packaged helpers immediately before reservation and the case revision
+    // CAS so a changed or missing deterministic dependency never becomes a
+    // failed ScanRun.
+    input_preflight().map_err(DesktopExecutionBlocker::into_error)?;
     reserve_provider_execution_demands(state, plan, Utc::now())
         .map_err(ProviderPreflightFailure::into_error)
+}
+
+#[cfg(test)]
+fn prepare_desktop_execution_with_runtime<F>(
+    state: &AppState,
+    plan: &ScanPlan,
+    runtime_preflight: F,
+) -> AppResult<Option<ProviderExecutionReservation>>
+where
+    F: FnMut() -> AppResult<()>,
+{
+    // Provider reservation tests deliberately isolate that seam. Static input
+    // preflight has dedicated tests and production always supplies the real
+    // inspector below.
+    prepare_desktop_execution_with_checks(state, plan, || Ok(()), runtime_preflight)
 }
 
 fn prepare_desktop_execution(
     state: &AppState,
     plan: &ScanPlan,
 ) -> AppResult<Option<ProviderExecutionReservation>> {
-    prepare_desktop_execution_with_runtime(state, plan, || {
-        let runtime = state.runtime_for_execution()?;
-        runtime.preflight()?;
-        Ok(())
-    })
+    prepare_desktop_execution_with_checks(
+        state,
+        plan,
+        || validate_execution_inputs_static(state, plan),
+        || {
+            let runtime = state.runtime_for_execution()?;
+            runtime.preflight()?;
+            Ok(())
+        },
+    )
 }
 
 fn prepare_desktop_resume(
     state: &AppState,
     plan: &ScanPlan,
 ) -> AppResult<Option<ProviderExecutionReservation>> {
-    prepare_desktop_execution_with_runtime(state, plan, || {
-        for execution in &plan.executable {
-            let runtime = match execution.resume_checkpoint.as_ref() {
-                Some(checkpoint) => match (
-                    checkpoint.runtime_provider,
-                    checkpoint.runtime_command_provenance.as_ref(),
-                ) {
-                    (Some(provider), Some(provenance)) => {
-                        state.runtime_for_recorded_execution(provider, provenance)?
-                    }
-                    (None, None) if checkpoint.cleanup_completed => {
-                        state.runtime_for_execution()?
-                    }
-                    _ => {
-                        return Err(AppError::NotAuthorized(
-                            "resumable execution has incomplete durable runtime provenance".into(),
-                        ));
-                    }
-                },
-                None => state.runtime_for_execution()?,
-            };
-            runtime.preflight()?;
-        }
-        Ok(())
-    })
+    prepare_desktop_execution_with_checks(
+        state,
+        plan,
+        || validate_execution_inputs_static(state, plan),
+        || {
+            for execution in &plan.executable {
+                let runtime = match execution.resume_checkpoint.as_ref() {
+                    Some(checkpoint) => match (
+                        checkpoint.runtime_provider,
+                        checkpoint.runtime_command_provenance.as_ref(),
+                    ) {
+                        (Some(provider), Some(provenance)) => {
+                            state.runtime_for_recorded_execution(provider, provenance)?
+                        }
+                        (None, None) if checkpoint.cleanup_completed => {
+                            state.runtime_for_execution()?
+                        }
+                        _ => {
+                            return Err(AppError::NotAuthorized(
+                                "resumable execution has incomplete durable runtime provenance"
+                                    .into(),
+                            ));
+                        }
+                    },
+                    None => state.runtime_for_execution()?,
+                };
+                runtime.preflight()?;
+            }
+            Ok(())
+        },
+    )
 }
 
 #[tauri::command]
@@ -1115,12 +1208,17 @@ pub fn get_scan_readiness(case_id: String, state: State<'_, AppState>) -> AppRes
         return Ok(readiness);
     }
     let plan = service.preview_scan_for_execution(&case_id, ScanPlanRequest::default())?;
+    if let Err(error) = validate_provider_execution_demands(&state, &plan, Utc::now()) {
+        block_scan_readiness(&mut readiness, error.blocker());
+        return Ok(readiness);
+    }
+    if let Err(blocker) = validate_execution_inputs_static(&state, &plan) {
+        block_scan_readiness(&mut readiness, blocker);
+        return Ok(readiness);
+    }
     if !state.runtime_health().available {
         block_scan_readiness(&mut readiness, DesktopExecutionBlocker::RuntimeUnavailable);
         return Ok(readiness);
-    }
-    if let Err(error) = validate_provider_execution_demands(&state, &plan, Utc::now()) {
-        block_scan_readiness(&mut readiness, error.blocker());
     }
     Ok(readiness)
 }
@@ -3084,7 +3182,6 @@ fn execute_planned_engine(
             return Ok(durable);
         }
     }
-    let mut reserved_provider = reserved_provider;
     let provider_context = if execution_requires_provider_capability(execution) {
         let context = reserved_provider
             .as_deref()
@@ -3262,42 +3359,10 @@ fn resume_captured_execution(
     execution: &PlannedEngineExecution,
     checkpoint: &ExecutionCheckpoint,
 ) -> AppResult<DurableExecutionReport> {
-    let case = state.case_service().show_case(&execution.case_id)?;
-    let engine_run = case
-        .scan_runs
-        .iter()
-        .find(|run| run.id == execution.scan_run_id)
-        .and_then(|run| {
-            run.engine_runs
-                .iter()
-                .find(|engine_run| engine_run.id == execution.engine_run_id)
-        })
-        .ok_or_else(|| AppError::InvalidRequest("resume engine run no longer exists".into()))?;
-    let expected_artifact_ids = engine_run
-        .raw_artifact_ids
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    let raw_artifacts = case
-        .raw_artifacts
-        .iter()
-        .filter(|artifact| {
-            artifact.run_id == execution.scan_run_id
-                && artifact.engine_run_id == execution.engine_run_id
-                && expected_artifact_ids.contains(&artifact.id)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if raw_artifacts.len() != expected_artifact_ids.len()
-        || checkpoint
-            .artifact_ids
-            .iter()
-            .any(|artifact_id| !expected_artifact_ids.contains(artifact_id))
-    {
-        return Err(AppError::Runtime(
-            "captured-artifact checkpoint no longer matches the durable case evidence".into(),
-        ));
-    }
+    let raw_artifacts = captured_execution_artifacts(state, execution, checkpoint)?;
+    // Repeat the exact read-only check in the worker so a file changed after
+    // the pre-persistence inspection cannot be normalized (TOCTOU defense).
+    inspect_raw_artifacts(artifacts.root(), &raw_artifacts)?;
     let directories = artifacts.prepare_run(
         &ArtifactContext {
             case_id: execution.case_id.clone(),
@@ -3344,114 +3409,161 @@ fn resume_captured_execution(
     Ok(DurableExecutionReport::from(&report))
 }
 
-fn provision_execution_network(
+fn captured_execution_artifacts(
     state: &AppState,
-    runtime: &ProcessContainerRuntime,
     execution: &PlannedEngineExecution,
-    provider_context: Option<&ProviderExecutionContext>,
-) -> AppResult<Option<ManagedNetworkLease>> {
-    let direct_external = execution
-        .manifest
-        .required_permissions
-        .iter()
-        .any(|permission| {
-            matches!(
-                permission,
-                ScanPermission::LowImpactExternalConnection | ScanPermission::ActiveExternalTesting
-            )
-        });
-    let exact_network_destinations = exact_execution_network_destinations(execution)?;
-    if !direct_external && exact_network_destinations.is_empty() {
-        return Ok(None);
+    checkpoint: &ExecutionCheckpoint,
+) -> AppResult<Vec<RawArtifact>> {
+    if checkpoint.resume_action() != ResumeAction::AdaptCapturedArtifacts
+        || checkpoint.case_id != execution.case_id
+        || checkpoint.scan_run_id != execution.scan_run_id
+        || checkpoint.engine_run_id != execution.engine_run_id
+        || checkpoint.engine_id != execution.manifest.id
+    {
+        return Err(AppError::NotAuthorized(
+            "captured-artifact checkpoint does not match the planned execution".into(),
+        ));
     }
-    let now = Utc::now();
-    let gateway_binary = locate_egress_gateway_binary()?;
-    let policy_root = state.network_policy_root(&execution.case_id)?;
-    let context = runtime.command_context();
-    let registry = state.managed_network_registry_with_context(context.clone())?;
-    let owner = ManagedNetworkOwner::new(
-        execution.case_id.clone(),
-        execution.scan_run_id.clone(),
-        execution.engine_run_id.clone(),
-        execution.attempt,
-    )?;
-    let controller = ManagedNetworkController::new_with_registry_context(
-        context,
-        gateway_binary,
-        policy_root,
-        registry.root(),
-    )?;
-    if direct_external {
-        let mut plans = Vec::<ResolvedExternalPlan>::new();
-        for asset in &execution.assets {
-            let mut asset_plans = execution
-                .scope_grants
+
+    let case = state.case_service().show_case(&execution.case_id)?;
+    let engine_run = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == execution.scan_run_id)
+        .and_then(|run| {
+            run.engine_runs
                 .iter()
-                .filter(|grant| grant.asset_id == asset.id)
-                .filter(|grant| {
-                    execution
-                        .manifest
-                        .required_permissions
-                        .contains(&grant.permission)
-                })
-                .map(|grant| {
-                    let external = grant.external_scope.as_ref().ok_or_else(|| {
-                        AppError::NotAuthorized(format!(
-                            "direct external grant {} has no structured policy",
-                            grant.id
-                        ))
-                    })?;
-                    let expected_activity = match grant.permission {
-                        ScanPermission::LowImpactExternalConnection => {
-                            crate::external_scope::ExternalActivity::LowImpactExternal
-                        }
-                        ScanPermission::ActiveExternalTesting => {
-                            crate::external_scope::ExternalActivity::ActiveExternal
-                        }
-                        _ => {
-                            return Err(AppError::NotAuthorized(
-                                "direct external network was requested for a non-direct permission"
-                                    .into(),
-                            ));
-                        }
-                    };
-                    if external.id != grant.id
-                        || external.asset_id != asset.id
-                        || external.case_id != execution.case_id
-                        || external.activity != expected_activity
-                    {
+                .find(|engine_run| engine_run.id == execution.engine_run_id)
+        })
+        .ok_or_else(|| AppError::InvalidRequest("resume engine run no longer exists".into()))?;
+    let expected_artifact_ids = engine_run
+        .raw_artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let checkpoint_artifact_ids = checkpoint
+        .artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if expected_artifact_ids.is_empty()
+        || expected_artifact_ids.len() != engine_run.raw_artifact_ids.len()
+        || checkpoint_artifact_ids.len() != checkpoint.artifact_ids.len()
+        || checkpoint_artifact_ids != expected_artifact_ids
+    {
+        return Err(AppError::Runtime(
+            "captured-artifact checkpoint does not exactly match the durable evidence IDs".into(),
+        ));
+    }
+
+    let mut raw_artifacts = Vec::with_capacity(engine_run.raw_artifact_ids.len());
+    for artifact_id in &engine_run.raw_artifact_ids {
+        let mut matching = case
+            .raw_artifacts
+            .iter()
+            .filter(|artifact| artifact.id == *artifact_id);
+        let artifact = matching.next().ok_or_else(|| {
+            AppError::Runtime(format!(
+                "captured evidence {artifact_id} is missing from the durable case"
+            ))
+        })?;
+        if matching.next().is_some() {
+            return Err(AppError::Runtime(format!(
+                "captured evidence {artifact_id} is duplicated in the durable case"
+            )));
+        }
+        if artifact.case_id != execution.case_id
+            || artifact.run_id != execution.scan_run_id
+            || artifact.engine_run_id != execution.engine_run_id
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "captured evidence {artifact_id} does not belong to this exact execution"
+            )));
+        }
+        raw_artifacts.push(artifact.clone());
+    }
+    Ok(raw_artifacts)
+}
+
+fn direct_external_grants(
+    execution: &PlannedEngineExecution,
+    now: chrono::DateTime<Utc>,
+) -> AppResult<Vec<&ExternalScopeGrant>> {
+    let mut grants = Vec::new();
+    for asset in &execution.assets {
+        let mut asset_grants = execution
+            .scope_grants
+            .iter()
+            .filter(|grant| grant.asset_id == asset.id)
+            .filter(|grant| {
+                execution
+                    .manifest
+                    .required_permissions
+                    .contains(&grant.permission)
+            })
+            .map(|grant| {
+                let external = grant.external_scope.as_ref().ok_or_else(|| {
+                    AppError::NotAuthorized(format!(
+                        "direct external grant {} has no structured policy",
+                        grant.id
+                    ))
+                })?;
+                let expected_activity = match grant.permission {
+                    ScanPermission::LowImpactExternalConnection => {
+                        crate::external_scope::ExternalActivity::LowImpactExternal
+                    }
+                    ScanPermission::ActiveExternalTesting => {
+                        crate::external_scope::ExternalActivity::ActiveExternal
+                    }
+                    _ => {
                         return Err(AppError::NotAuthorized(
-                            "structured external grant identity or activity does not match the execution"
+                            "direct external network was requested for a non-direct permission"
                                 .into(),
                         ));
                     }
-                    resolve_external_plan(external, now)
-                })
-                .collect::<AppResult<Vec<_>>>()?;
-            if asset_plans.is_empty() {
-                return Err(AppError::NotAuthorized(format!(
-                    "direct external asset {} has no frozen structured target/port/rate policy",
-                    asset.id
-                )));
-            }
-            plans.append(&mut asset_plans);
+                };
+                if external.id != grant.id
+                    || external.asset_id != asset.id
+                    || external.case_id != execution.case_id
+                    || external.activity != expected_activity
+                {
+                    return Err(AppError::NotAuthorized(
+                        "structured external grant identity or activity does not match the execution"
+                            .into(),
+                    ));
+                }
+                external.validate(now)?;
+                Ok(external)
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        if asset_grants.is_empty() {
+            return Err(AppError::NotAuthorized(format!(
+                "direct external asset {} has no frozen structured target/port/rate policy",
+                asset.id
+            )));
         }
-        plans.sort_by(|left, right| {
-            left.asset_id
-                .cmp(&right.asset_id)
-                .then_with(|| left.grant_id.cmp(&right.grant_id))
-        });
-        if plans
-            .windows(2)
-            .any(|pair| pair[0].grant_id == pair[1].grant_id)
-        {
-            return Err(AppError::InvalidRequest(
-                "direct external execution contains duplicate grant identities".into(),
-            ));
-        }
-        return controller.provision(&owner, &plans, now).map(Some);
+        grants.append(&mut asset_grants);
     }
+    grants.sort_by(|left, right| {
+        left.asset_id
+            .cmp(&right.asset_id)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    if grants.windows(2).any(|pair| pair[0].id == pair[1].id) {
+        return Err(AppError::InvalidRequest(
+            "direct external execution contains duplicate grant identities".into(),
+        ));
+    }
+    Ok(grants)
+}
 
+fn provider_service_egress_request(
+    state: &AppState,
+    execution: &PlannedEngineExecution,
+    provider_context: Option<&ProviderExecutionContext>,
+    exact_destinations: Vec<String>,
+    now: chrono::DateTime<Utc>,
+) -> AppResult<ProviderServiceEgressRequest> {
     let provider_read = execution
         .manifest
         .required_permissions
@@ -3509,19 +3621,263 @@ fn provision_execution_network(
                 "provider-service engine has no pinned manifest revision provenance".into(),
             )
         })?;
-    let plan = resolve_provider_service_plan(
-        ProviderServiceEgressRequest {
-            case_id: execution.case_id.clone(),
-            source_id,
-            source_kind,
-            source_profile,
-            manifest_id: execution.manifest.id.clone(),
-            manifest_revision,
-            exact_destinations: exact_network_destinations,
-            expires_at,
-        },
+    Ok(ProviderServiceEgressRequest {
+        case_id: execution.case_id.clone(),
+        source_id,
+        source_kind,
+        source_profile,
+        manifest_id: execution.manifest.id.clone(),
+        manifest_revision,
+        exact_destinations,
+        expires_at,
+    })
+}
+
+fn trace_execution_preflight_failure(
+    execution: &PlannedEngineExecution,
+    intended_blocker: DesktopExecutionBlocker,
+    error: &AppError,
+) -> DesktopExecutionBlocker {
+    let blocker = classify_execution_preflight_error(intended_blocker, error);
+    tracing::warn!(
+        case_id = %execution.case_id,
+        scan_run_id = %execution.scan_run_id,
+        engine_id = %execution.manifest.id,
+        blocker = blocker.blocker_code().as_str(),
+        error = %bounded_error(error),
+        "scan execution input preflight blocked before persistence"
+    );
+    blocker
+}
+
+/// Keep actionable input failures distinct from backend failures that the
+/// person using the app cannot repair by choosing the same input again.
+fn classify_execution_preflight_error(
+    intended_blocker: DesktopExecutionBlocker,
+    error: &AppError,
+) -> DesktopExecutionBlocker {
+    match error {
+        AppError::Storage(_) | AppError::Internal(_) | AppError::CaseNotFound(_) => {
+            DesktopExecutionBlocker::ExecutionPreflightUnavailable
+        }
+        _ => intended_blocker,
+    }
+}
+
+fn validate_execution_network_static_with_gateway<F>(
+    state: &AppState,
+    execution: &PlannedEngineExecution,
+    now: chrono::DateTime<Utc>,
+    locate_gateway: &mut F,
+) -> Result<(), DesktopExecutionBlocker>
+where
+    F: FnMut() -> AppResult<PathBuf>,
+{
+    let direct_external = execution
+        .manifest
+        .required_permissions
+        .iter()
+        .any(|permission| {
+            matches!(
+                permission,
+                ScanPermission::LowImpactExternalConnection | ScanPermission::ActiveExternalTesting
+            )
+        });
+    let exact_destinations = exact_execution_network_destinations(execution).map_err(|error| {
+        trace_execution_preflight_failure(
+            execution,
+            DesktopExecutionBlocker::EngineExecutionContractInvalid,
+            &error,
+        )
+    })?;
+    if !direct_external && exact_destinations.is_empty() {
+        return Ok(());
+    }
+
+    let gateway = locate_gateway().map_err(|error| {
+        trace_execution_preflight_failure(
+            execution,
+            DesktopExecutionBlocker::EgressGatewayUnavailable,
+            &error,
+        )
+    })?;
+    inspect_gateway_binary(&gateway).map_err(|error| {
+        trace_execution_preflight_failure(
+            execution,
+            DesktopExecutionBlocker::EgressGatewayUnavailable,
+            &error,
+        )
+    })?;
+
+    if direct_external {
+        direct_external_grants(execution, now).map_err(|error| {
+            trace_execution_preflight_failure(
+                execution,
+                DesktopExecutionBlocker::EngineExecutionContractInvalid,
+                &error,
+            )
+        })?;
+        return Ok(());
+    }
+
+    let passive = execution
+        .manifest
+        .required_permissions
+        .contains(&ScanPermission::PassiveExternalDiscovery);
+    let request = provider_service_egress_request(state, execution, None, exact_destinations, now)
+        .map_err(|error| {
+            trace_execution_preflight_failure(
+                execution,
+                if passive {
+                    DesktopExecutionBlocker::PassiveSourceUnavailable
+                } else {
+                    DesktopExecutionBlocker::EngineExecutionContractInvalid
+                },
+                &error,
+            )
+        })?;
+    validate_provider_service_request_static(&request, now).map_err(|error| {
+        trace_execution_preflight_failure(
+            execution,
+            if passive {
+                DesktopExecutionBlocker::PassiveSourceUnavailable
+            } else {
+                DesktopExecutionBlocker::EngineExecutionContractInvalid
+            },
+            &error,
+        )
+    })
+}
+
+fn validate_execution_inputs_static(
+    state: &AppState,
+    plan: &ScanPlan,
+) -> Result<(), DesktopExecutionBlocker> {
+    validate_execution_inputs_static_with_gateway(state, plan, locate_egress_gateway_binary)
+}
+
+fn validate_execution_inputs_static_with_gateway<F>(
+    state: &AppState,
+    plan: &ScanPlan,
+    mut locate_gateway: F,
+) -> Result<(), DesktopExecutionBlocker>
+where
+    F: FnMut() -> AppResult<PathBuf>,
+{
+    if plan.executable.is_empty() {
+        tracing::error!(
+            case_id = %plan.scan_run.case_id,
+            scan_run_id = %plan.scan_run.id,
+            "execution input preflight received an empty executable plan"
+        );
+        return Err(DesktopExecutionBlocker::ExecutionPreflightUnavailable);
+    }
+    let now = Utc::now();
+    let mut inspected_workspaces = BTreeSet::<(String, String, String)>::new();
+    for execution in &plan.executable {
+        if let Some(checkpoint) = execution
+            .resume_checkpoint
+            .as_ref()
+            .filter(|checkpoint| checkpoint.resume_action() == ResumeAction::AdaptCapturedArtifacts)
+        {
+            let raw_artifacts = captured_execution_artifacts(state, execution, checkpoint)
+                .map_err(|error| {
+                    trace_execution_preflight_failure(
+                        execution,
+                        DesktopExecutionBlocker::CapturedEvidenceUnavailable,
+                        &error,
+                    )
+                })?;
+            inspect_raw_artifacts(state.artifact_root(), &raw_artifacts).map_err(|error| {
+                trace_execution_preflight_failure(
+                    execution,
+                    DesktopExecutionBlocker::CapturedEvidenceUnavailable,
+                    &error,
+                )
+            })?;
+            continue;
+        }
+        let workspace = execution_workspace_reference(state, execution).map_err(|error| {
+            trace_execution_preflight_failure(
+                execution,
+                DesktopExecutionBlocker::WorkspaceSnapshotUnavailable,
+                &error,
+            )
+        })?;
+        if let Some(reference) = workspace
+            && inspected_workspaces.insert((
+                execution.case_id.clone(),
+                reference.storage_id.clone(),
+                reference.sha256.clone(),
+            ))
+        {
+            inspect_workspace_snapshot(state.artifact_root(), &execution.case_id, &reference)
+                .map_err(|error| {
+                    trace_execution_preflight_failure(
+                        execution,
+                        DesktopExecutionBlocker::WorkspaceSnapshotUnavailable,
+                        &error,
+                    )
+                })?;
+        }
+        validate_execution_network_static_with_gateway(state, execution, now, &mut locate_gateway)?;
+    }
+    Ok(())
+}
+
+fn provision_execution_network(
+    state: &AppState,
+    runtime: &ProcessContainerRuntime,
+    execution: &PlannedEngineExecution,
+    provider_context: Option<&ProviderExecutionContext>,
+) -> AppResult<Option<ManagedNetworkLease>> {
+    let direct_external = execution
+        .manifest
+        .required_permissions
+        .iter()
+        .any(|permission| {
+            matches!(
+                permission,
+                ScanPermission::LowImpactExternalConnection | ScanPermission::ActiveExternalTesting
+            )
+        });
+    let exact_network_destinations = exact_execution_network_destinations(execution)?;
+    if !direct_external && exact_network_destinations.is_empty() {
+        return Ok(None);
+    }
+    let now = Utc::now();
+    let gateway_binary = locate_egress_gateway_binary()?;
+    let policy_root = state.network_policy_root(&execution.case_id)?;
+    let context = runtime.command_context();
+    let registry = state.managed_network_registry_with_context(context.clone())?;
+    let owner = ManagedNetworkOwner::new(
+        execution.case_id.clone(),
+        execution.scan_run_id.clone(),
+        execution.engine_run_id.clone(),
+        execution.attempt,
+    )?;
+    let controller = ManagedNetworkController::new_with_registry_context(
+        context,
+        gateway_binary,
+        policy_root,
+        registry.root(),
+    )?;
+    if direct_external {
+        let plans = direct_external_grants(execution, now)?
+            .into_iter()
+            .map(|grant| resolve_external_plan(grant, now))
+            .collect::<AppResult<Vec<ResolvedExternalPlan>>>()?;
+        return controller.provision(&owner, &plans, now).map(Some);
+    }
+
+    let request = provider_service_egress_request(
+        state,
+        execution,
+        provider_context,
+        exact_network_destinations,
         now,
     )?;
+    let plan = resolve_provider_service_plan(request, now)?;
     controller
         .provision_provider_service(&owner, &plan, now)
         .map(Some)
@@ -3576,18 +3932,11 @@ fn locate_egress_gateway_binary() -> AppResult<std::path::PathBuf> {
     } else {
         "ai-security-scanner-egress-gateway"
     };
-    let candidate = parent.join(name);
-    let metadata = std::fs::symlink_metadata(&candidate).map_err(|error| {
+    inspect_gateway_binary(&parent.join(name)).map_err(|error| {
         AppError::NotAvailable(format!(
-            "the managed egress gateway sidecar is not installed beside the desktop executable: {error}"
+            "the managed egress gateway sidecar is unavailable beside the desktop executable: {error}"
         ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
-        return Err(AppError::NotAuthorized(
-            "the managed egress gateway sidecar is not a regular non-symlink file".into(),
-        ));
-    }
-    candidate.canonicalize().map_err(AppError::from)
+    })
 }
 
 fn resolve_execution_credentials(
@@ -3918,6 +4267,15 @@ fn passive_service_egress_source(
                 )
             })
         })?;
+    let connector_root = state
+        .artifact_root()
+        .join(&execution.case_id)
+        .join("connector-snapshots");
+    preflight_snapshot_artifact(&connector_root, &source.kind, &reference).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "passive-service source snapshot is unavailable or changed: {error}"
+        ))
+    })?;
     let mut expires_at = now + Duration::hours(1);
     for asset in &execution.assets {
         let grant = execution
@@ -4081,6 +4439,16 @@ fn resolve_execution_workspace(
     state: &AppState,
     execution: &PlannedEngineExecution,
 ) -> AppResult<Option<crate::workspace_snapshot::ResolvedWorkspaceSnapshot>> {
+    let Some(reference) = execution_workspace_reference(state, execution)? else {
+        return Ok(None);
+    };
+    resolve_workspace_snapshot(state.artifact_root(), &execution.case_id, &reference).map(Some)
+}
+
+fn execution_workspace_reference(
+    state: &AppState,
+    execution: &PlannedEngineExecution,
+) -> AppResult<Option<WorkspaceSnapshotReference>> {
     if !execution
         .manifest
         .required_permissions
@@ -4165,7 +4533,7 @@ fn resolve_execution_workspace(
             "workspace asset digest does not match its backend snapshot reference".into(),
         ));
     }
-    resolve_workspace_snapshot(state.artifact_root(), &execution.case_id, &reference).map(Some)
+    Ok(Some(reference))
 }
 
 fn checkpoint_for(
@@ -4495,6 +4863,37 @@ mod tests {
         assert_eq!(value["payload"]["case_id"], "case-1");
     }
 
+    #[test]
+    fn preflight_classification_does_not_blame_inputs_for_backend_failures() {
+        for error in [
+            AppError::Storage("database unavailable".into()),
+            AppError::Internal("worker unavailable".into()),
+            AppError::CaseNotFound("case-1".into()),
+        ] {
+            assert_eq!(
+                classify_execution_preflight_error(
+                    DesktopExecutionBlocker::WorkspaceSnapshotUnavailable,
+                    &error,
+                ),
+                DesktopExecutionBlocker::ExecutionPreflightUnavailable
+            );
+        }
+
+        for error in [
+            AppError::InvalidRequest("saved input changed".into()),
+            AppError::Runtime("saved input is missing".into()),
+            AppError::NotAuthorized("saved input escaped its root".into()),
+        ] {
+            assert_eq!(
+                classify_execution_preflight_error(
+                    DesktopExecutionBlocker::WorkspaceSnapshotUnavailable,
+                    &error,
+                ),
+                DesktopExecutionBlocker::WorkspaceSnapshotUnavailable
+            );
+        }
+    }
+
     fn test_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();
         let artifact_root = directory.path().join("artifacts");
@@ -4589,6 +4988,221 @@ mod tests {
             )
             .unwrap();
         (directory, state, case.id)
+    }
+
+    fn ready_repository_snapshot_state() -> (tempfile::TempDir, AppState, Id, PathBuf) {
+        let (directory, state) = test_state();
+        let case = create_test_case(&state, "Workspace input preflight");
+        let source_directory = directory.path().join("selected-repository");
+        std::fs::create_dir_all(&source_directory).unwrap();
+        std::fs::write(source_directory.join("main.rs"), b"fn main() {}\n").unwrap();
+        let source_id = new_id();
+        let snapshot = create_workspace_snapshot_with_profile(
+            state.artifact_root(),
+            &case.id,
+            &source_id,
+            &source_directory,
+            WorkspaceInputProfile::RepositoryWorkingTree,
+            WorkspaceSnapshotLimits::default(),
+        )
+        .unwrap();
+        let stored_file = state
+            .artifact_root()
+            .join(&case.id)
+            .join("workspace-snapshots")
+            .join(&snapshot.reference.storage_id)
+            .join("tree")
+            .join("main.rs");
+        let asset_id = snapshot.asset.id.clone();
+        let service = state.case_service();
+        service
+            .attach_workspace_snapshot(&case.id, "Selected repository", snapshot)
+            .unwrap();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        (directory, state, case.id, stored_file)
+    }
+
+    fn ready_internal_network_state() -> (tempfile::TempDir, AppState, Id) {
+        let (directory, state) = test_state();
+        let case = create_test_case(&state, "Home network preflight");
+        let service = state.case_service();
+        let source = service
+            .upsert_source(
+                &case.id,
+                SourceMutation {
+                    id: None,
+                    kind: SourceKind::UserDeclared,
+                    label: "Home network".into(),
+                    status: SourceConnectionStatus::Connected,
+                    read_only: true,
+                    metadata: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+        service
+            .reconcile_discovery_batch(
+                &case.id,
+                &DiscoveryBatch {
+                    source_id: source.id,
+                    source_kind: SourceKind::UserDeclared,
+                    connector_id: "test".into(),
+                    connector_version: "1".into(),
+                    observed_at: Utc::now(),
+                    assets: vec![DiscoveredAsset {
+                        observation_key: "home-network".into(),
+                        kind: AssetKind::IpAddress,
+                        name: "192.168.50.0/30".into(),
+                        provider: None,
+                        region: None,
+                        stable_identifier: AssetIdentifier {
+                            namespace: "network:cidr".into(),
+                            value: "192.168.50.0/30".into(),
+                        },
+                        additional_identifiers: vec![],
+                        internet_exposed: Some(false),
+                        contains_sensitive_data: None,
+                        metadata: BTreeMap::new(),
+                    }],
+                    relations: vec![],
+                    notices: vec![],
+                },
+            )
+            .unwrap();
+        let asset_id = service.show_case(&case.id).unwrap().assets[0].id.clone();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LowImpactExternalConnection],
+                    confirmed_by: "Home network owner".into(),
+                    expires_at: Some(Utc::now() + Duration::hours(1)),
+                    authorization_reference: Some("local-owner-confirmation".into()),
+                    notes: None,
+                    external_scope: Some(crate::external_scope::ExternalScopeRequest {
+                        target: "192.168.50.0/30".into(),
+                        ports: [443].into_iter().collect(),
+                        protocol: crate::external_scope::TransportProtocol::Tcp,
+                        activity: crate::external_scope::ExternalActivity::LowImpactExternal,
+                        rate_policy: crate::external_scope::RatePolicy {
+                            requests_per_second: 2,
+                            concurrency: 1,
+                            timeout_seconds: 300,
+                        },
+                        template_policy: crate::external_scope::TemplatePolicy::conservative(
+                            "not_applicable",
+                            vec![],
+                        ),
+                        asserted_authority: "Confirmed by the home network owner".into(),
+                        allow_sensitive_networks: true,
+                    }),
+                },
+            )
+            .unwrap();
+        (directory, state, case.id)
+    }
+
+    #[test]
+    fn missing_workspace_is_rejected_before_a_scan_run_is_persisted() {
+        let (_directory, state, case_id) = ready_repository_state();
+        let service = state.case_service();
+
+        let error = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |plan| {
+                    validate_execution_inputs_static(&state, plan)
+                        .map_err(DesktopExecutionBlocker::into_error)
+                },
+            )
+            .expect_err("missing immutable workspace must block persistence");
+
+        assert!(error.to_string().contains("workspace_snapshot_unavailable"));
+        assert!(service.show_case(&case_id).unwrap().scan_runs.is_empty());
+    }
+
+    #[test]
+    fn changed_workspace_is_rejected_before_a_scan_run_is_persisted() {
+        let (_directory, state, case_id, stored_file) = ready_repository_snapshot_state();
+        let service = state.case_service();
+        let preview = service
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        validate_execution_inputs_static(&state, &preview).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stored_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let mut permissions = std::fs::metadata(&stored_file).unwrap().permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&stored_file, permissions).unwrap();
+        }
+        std::fs::write(&stored_file, b"fn changed_after_setup() {}\n").unwrap();
+        let error = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |plan| {
+                    validate_execution_inputs_static(&state, plan)
+                        .map_err(DesktopExecutionBlocker::into_error)
+                },
+            )
+            .expect_err("changed immutable workspace must block persistence");
+
+        assert!(error.to_string().contains("workspace_snapshot_unavailable"));
+        assert!(service.show_case(&case_id).unwrap().scan_runs.is_empty());
+    }
+
+    #[test]
+    fn missing_managed_gateway_blocks_a_home_network_scan_before_persistence() {
+        let (directory, state, case_id) = ready_internal_network_state();
+        let service = state.case_service();
+        let missing_gateway = directory.path().join("missing-egress-gateway");
+
+        let error = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["naabu".into()],
+                },
+                |plan| {
+                    validate_execution_inputs_static_with_gateway(&state, plan, || {
+                        Ok(missing_gateway.clone())
+                    })
+                    .map_err(DesktopExecutionBlocker::into_error)
+                },
+            )
+            .expect_err("missing packaged gateway must block persistence");
+
+        assert!(error.to_string().contains("egress_gateway_unavailable"));
+        assert!(service.show_case(&case_id).unwrap().scan_runs.is_empty());
     }
 
     fn verified_aws_authorization(
@@ -5467,6 +6081,26 @@ mod tests {
             .save_case(&mut stored, "test.captured_cloud_resume")
             .unwrap();
 
+        let mut captured_execution = initial_execution.clone();
+        captured_execution.resume_checkpoint = Some(checkpoint.clone());
+        let mut missing_ids = checkpoint.clone();
+        missing_ids.artifact_ids.clear();
+        assert!(
+            captured_execution_artifacts(&state, &captured_execution, &missing_ids)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly match")
+        );
+        let mut duplicate_ids = checkpoint.clone();
+        let duplicated_id = duplicate_ids.artifact_ids[0].clone();
+        duplicate_ids.artifact_ids.push(duplicated_id);
+        assert!(
+            captured_execution_artifacts(&state, &captured_execution, &duplicate_ids)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly match")
+        );
+
         state
             .source_authorizations
             .revoke_source(&case_id, &source_id, Utc::now())
@@ -5479,9 +6113,48 @@ mod tests {
                 .is_none()
         );
 
+        std::fs::write(&output, b"tampered-after-capture").unwrap();
+        let error = service
+            .plan_resume_checked(&case_id, &initial.scan_run.id, |plan| {
+                prepare_desktop_execution_with_checks(
+                    &state,
+                    plan,
+                    || validate_execution_inputs_static(&state, plan),
+                    || Ok(()),
+                )
+                .map(|_| ())
+            })
+            .expect_err("changed captured evidence must block before persistence");
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:captured_evidence_unavailable")
+        );
+        let unchanged = service.show_case(&case_id).unwrap();
+        let unchanged_run = unchanged
+            .scan_runs
+            .iter()
+            .find(|run| run.id == initial.scan_run.id)
+            .unwrap();
+        let unchanged_engine = unchanged_run
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == initial_execution.engine_run_id)
+            .unwrap();
+        assert_eq!(unchanged_engine.status, EngineRunStatus::PartiallyCompleted);
+        assert_eq!(unchanged_engine.phase, "captured_awaiting_adapter");
+        assert!(unchanged_run.completed_at.is_some());
+
+        std::fs::write(&output, b"[]").unwrap();
         let resume = service
             .plan_resume_checked(&case_id, &initial.scan_run.id, |plan| {
-                validate_desktop_execution_with_runtime(&state, plan, || Ok(()))
+                prepare_desktop_execution_with_checks(
+                    &state,
+                    plan,
+                    || validate_execution_inputs_static(&state, plan),
+                    || Ok(()),
+                )
+                .map(|_| ())
             })
             .unwrap();
         let resumed_execution = resume.executable.first().unwrap();

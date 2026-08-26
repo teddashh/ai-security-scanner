@@ -106,3 +106,7 @@ jobs:
       - run: npm run build
       - run: npm run desktop:prepare-sidecar -- --target x86_64-unknown-linux-gnu
       - run: cargo check --locked --package ai-security-scanner --features desktop
+      - name: Test desktop scan preflight and persistence boundary
+        run: >-
+          cargo test --locked --package ai-security-scanner --features desktop --lib
+          commands::tests

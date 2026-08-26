@@ -224,6 +224,7 @@ pub enum ScanReadinessBlocker {
     EgressGatewayUnavailable,
     EngineExecutionContractInvalid,
     PassiveSourceUnavailable,
+    CapturedEvidenceUnavailable,
     ExecutionPreflightUnavailable,
 }
 
@@ -248,6 +249,7 @@ impl ScanReadinessBlocker {
             Self::EgressGatewayUnavailable => "egress_gateway_unavailable",
             Self::EngineExecutionContractInvalid => "engine_execution_contract_invalid",
             Self::PassiveSourceUnavailable => "passive_source_unavailable",
+            Self::CapturedEvidenceUnavailable => "captured_evidence_unavailable",
             Self::ExecutionPreflightUnavailable => "execution_preflight_unavailable",
         }
     }
@@ -3997,6 +3999,9 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
         ScanReadinessBlocker::PassiveSourceUnavailable => {
             "a passive data source is unavailable; retry the readiness check"
         }
+        ScanReadinessBlocker::CapturedEvidenceUnavailable => {
+            "saved scan evidence needed to continue is missing or changed; start a new scan for fresh results"
+        }
         ScanReadinessBlocker::ExecutionPreflightUnavailable => {
             "execution readiness could not be checked; no scan started; retry the readiness check"
         }
@@ -4025,6 +4030,7 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
         | ScanReadinessBlocker::EgressGatewayUnavailable
         | ScanReadinessBlocker::EngineExecutionContractInvalid
         | ScanReadinessBlocker::PassiveSourceUnavailable
+        | ScanReadinessBlocker::CapturedEvidenceUnavailable
         | ScanReadinessBlocker::ExecutionPreflightUnavailable => AppError::NotAvailable(detail),
     }
 }
