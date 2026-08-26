@@ -175,24 +175,24 @@ The current platform providers are:
 | --- | --- | --- | --- |
 | Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, `virtiofsd`, and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
 | macOS Intel/Apple silicon | rootless Podman machine + AppleHV | Universal Podman, vfkit, and gvproxy | A supported macOS release with Apple virtualization support. |
-| Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2. If unavailable or outdated, one explicit UAC approval lets the app run the fixed Microsoft WSL action. A required restart remains manual. |
+| Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2. The app checks it without elevation on first launch. If unavailable or outdated, the UI links to Microsoft's setup once and rechecks automatically on the next launch. |
 
 ## Lifecycle
 
 The desktop starts the managed machine on demand before engine execution and prefers it over
 compatibility runtimes.
 
-The desktop invokes `setup_managed_runtime` in a blocking worker while independently polling
-`get_managed_runtime_setup_status`; `cancel_managed_runtime_setup` only signals that worker and
-returns the current status immediately. This separation keeps the window responsive and makes a
-single active setup observable without starting a competing setup operation.
+On first desktop launch, the UI reads both runtime health and setup status before automatically
+invoking `setup_managed_runtime`. The command runs in a blocking worker while the responsive window
+independently polls `get_managed_runtime_setup_status`; `cancel_managed_runtime_setup` only signals
+that worker and returns the current status immediately. The automatic path verifies product-owned
+files, performs read-only host checks, downloads pinned runtime content, and starts the private
+machine. It does not request elevation, enable Windows optional features, or run Windows servicing
+commands. A missing or outdated WSL installation therefore becomes one clear link to Microsoft's
+official setup and one safe recheck instead of a repeating in-app Repair action.
 
-`repair_managed_runtime_prerequisite` is a zero-argument desktop command. While holding the setup
-state lock, the backend derives the only permitted repair from the current exact failed
-reason/action pair and enforces a process-local single-flight guard. Install/enable maps only to
-`System32\wsl.exe --install --no-distribution`; update maps only to
-`System32\wsl.exe --update`. Restart and generic retry never elevate. After the Microsoft process
-finishes, the ordinary setup command reruns the bounded read-only probes before any image download.
+The legacy prerequisite-repair implementation remains backend-internal for compatibility testing,
+but it is not registered as a desktop webview command and is not reachable from the current UI.
 
 The setup-status JSON uses `phase: "prerequisite"` while checking Windows. A failed Windows check
 returns one of `windows_wsl_not_installed`, `windows_wsl_optional_feature_disabled`,
@@ -200,9 +200,8 @@ returns one of `windows_wsl_not_installed`, `windows_wsl_optional_feature_disabl
 `failure_reason`, paired with `install_wsl`, `enable_wsl_optional_features`, `update_wsl`,
 `restart_windows`, or `retry_wsl_check` in `next_action`. Both fields are `null` outside a failed
 setup. Human-facing clients localize those stable values and keep the bounded diagnostic in an
-optional technical-details view. `prerequisite_repair_active` is true only while Windows is showing
-the UAC prompt or completing that fixed WSL operation; runtime-download cancellation does not claim
-to cancel Windows servicing.
+optional technical-details view. `prerequisite_repair_active` remains in the serialized status for
+backward compatibility; the current desktop UI never starts that operation.
 
 The standalone development CLI exposes the same durable lifecycle:
 

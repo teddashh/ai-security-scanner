@@ -40,14 +40,12 @@ import type {
   ProviderBootstrapInstalled,
   ProviderBootstrapPlan,
   InstalledProviderAuthorization,
-  ManagedRuntimePrerequisiteRepairResult,
   ManagedRuntimeSetupStatus,
   LocalNetworkCandidateInventory,
   ScanReadiness,
 } from "../types";
 import {
   adaptLocalNetworkCandidateInventory,
-  adaptManagedRuntimePrerequisiteRepairResult,
   adaptManagedRuntimeSetupStatus,
   adaptNativeCase,
   adaptNativeExport,
@@ -59,7 +57,6 @@ import {
   type NativeCaseExport,
   type NativeExportPreview,
   type NativeEngineManifest,
-  type NativeManagedRuntimePrerequisiteRepairResult,
   type NativeManagedRuntimeSetupStatus,
 } from "./nativeAdapter";
 
@@ -68,7 +65,6 @@ export const COMMANDS = {
   setupManagedRuntime: "setup_managed_runtime",
   getManagedRuntimeSetupStatus: "get_managed_runtime_setup_status",
   cancelManagedRuntimeSetup: "cancel_managed_runtime_setup",
-  repairManagedRuntimePrerequisite: "repair_managed_runtime_prerequisite",
   createCase: "create_case",
   selectCase: "select_case",
   seedDemoCase: "seed_demo_case",
@@ -331,21 +327,6 @@ export const scannerService = {
     if (!hasTauriRuntime()) return demoResult(demoRuntimeSetupStatus());
     const status = await invoke<NativeManagedRuntimeSetupStatus>(COMMANDS.cancelManagedRuntimeSetup);
     return nativeResult(adaptManagedRuntimeSetupStatus(status));
-  },
-
-  async repairManagedRuntimePrerequisite(): Promise<ServiceResult<ManagedRuntimePrerequisiteRepairResult>> {
-    if (!hasTauriRuntime()) return demoResult({
-      outcome: "failed",
-      restartRequired: false,
-      detail: serviceText(
-        "Windows setup is available only in the installed desktop app.",
-        "Windows 設定只能在已安裝的桌面應用程式中使用。",
-      ),
-    });
-    const result = await invoke<NativeManagedRuntimePrerequisiteRepairResult>(
-      COMMANDS.repairManagedRuntimePrerequisite,
-    );
-    return nativeResult(adaptManagedRuntimePrerequisiteRepairResult(result));
   },
 
   async createCase(input: CreateCaseInput): Promise<ServiceResult<AssessmentCase>> {

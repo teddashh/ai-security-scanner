@@ -137,6 +137,6 @@ test("runtime failures become plain-language guidance without echoing backend ou
   assert.equal(issue, "wsl");
 
   const guidance = i18n.translate("en", `runtime.prerequisite.${issue}`);
-  assert.match(guidance, /Windows needs WSL 2/u);
+  assert.match(guidance, /WSL 2 is not ready/u);
   assert.doesNotMatch(guidance, /exit status|System32|runtime error/u);
 });

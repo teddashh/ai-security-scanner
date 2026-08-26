@@ -247,7 +247,7 @@ test("native assets preserve the exact data-source provenance used for cloud bin
   assert.deepEqual(workspace.assets[0]?.discoveredFromSourceIds, ["aws-source-a"]);
 });
 
-test("native gateway failures preserve frozen authorization but restart before runtime scope", () => {
+const adaptGatewayFailure = (message: string) => {
   const checkpoint = JSON.stringify({
     case_id: "case-1",
     scan_run_id: "run-1",
@@ -259,9 +259,9 @@ test("native gateway failures preserve frozen authorization but restart before r
     scope_sha256: null,
     artifact_ids: [],
     cleanup_completed: true,
-    last_error: "runtime error: egress gateway exited before becoming ready",
+    last_error: message,
   });
-  const workspace = adaptNativeCase({
+  return adaptNativeCase({
     id: "case-1",
     title: "Internal IP scan",
     assessment_intent: "internal_it_environment",
@@ -304,13 +304,17 @@ test("native gateway failures preserve frozen authorization but restart before r
         scope_contract_sha256: "a".repeat(64),
         raw_artifact_ids: [],
         error_code: "execution_failed",
-        error_message: "runtime error: egress gateway exited before becoming ready",
+        error_message: message,
       }],
     }],
     findings: [],
     exports: [],
     comparisons: [],
   });
+};
+
+test("native gateway failures preserve frozen authorization but restart before runtime scope", () => {
+  const workspace = adaptGatewayFailure("runtime error: egress gateway exited before becoming ready");
 
   const failed = workspace.runs[0]?.engineRuns[0];
   assert.equal(failed?.scopeContractBound, true);
@@ -318,4 +322,26 @@ test("native gateway failures preserve frozen authorization but restart before r
   assert.equal(failed?.failureKind, "gateway_preparation_failed");
   assert.equal(failed?.recoveryAction, "restart_check");
   assert.equal(failed?.resumable, true);
+});
+
+test("every product-owned gateway preparation marker maps to one redacted failure category", () => {
+  const markers = [
+    "pinned egress gateway image pull",
+    "managed gateway uplink creation",
+    "egress gateway container creation",
+    "egress gateway container start",
+    "egress gateway container exited",
+    "egress gateway container did not report",
+    "egress gateway container reported",
+    "egress gateway internal-network attachment",
+  ];
+
+  for (const marker of markers) {
+    const secret = `private-target-${marker.replaceAll(" ", "-")}`;
+    const failed = adaptGatewayFailure(`runtime error: ${marker}: ${secret}`)
+      .runs[0]?.engineRuns[0];
+    assert.equal(failed?.failureKind, "gateway_preparation_failed", marker);
+    assert.equal(failed?.recoveryAction, "restart_check", marker);
+    assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret, "u"), marker);
+  }
 });

@@ -33,15 +33,18 @@ export const shouldShowRuntimeFirstLaunch = (
 
 /**
  * Starts only a safe, product-owned lifecycle operation. The backend performs
- * the authoritative read-only host check first and will stop for one explicit
- * UAC action if Windows needs WSL installed or updated.
+ * the authoritative read-only host check first. It never elevates or changes
+ * Windows optional features; when WSL is unavailable it stops with one typed
+ * instruction that the UI can explain clearly.
  */
 export const shouldAutomaticallyPrepareRuntime = (
   mode: AppMode,
   runtime: RuntimeHealth,
   status: ManagedRuntimeSetupStatus | undefined,
+  statusLoaded: boolean,
   alreadyAttempted: boolean,
-): boolean => !alreadyAttempted
+): boolean => statusLoaded
+  && !alreadyAttempted
   && isUnavailableManagedRuntime(mode, runtime)
-  && (status === undefined || status.phase === "idle")
+  && (status === undefined || status.phase === "idle" || status.phase === "completed")
   && automaticallyRecoverablePhases.has(runtime?.phase ?? "");

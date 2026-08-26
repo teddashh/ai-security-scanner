@@ -10,11 +10,10 @@ interface RuntimeFirstLaunchProps {
   setLocale: (locale: Locale) => void;
   runtime?: AppSnapshot["runtime"];
   status?: ManagedRuntimeSetupStatus;
+  statusLoaded: boolean;
   busy: boolean;
-  repairing: boolean;
   automaticAttemptFailed: boolean;
   onSetup: () => void;
-  onRepair: () => void;
   onCancel: () => void;
 }
 
@@ -26,8 +25,8 @@ const copy = {
       "ai-security-scanner is checking this computer and preparing its private scan tools now, so there is no extra setup after you enter the app.",
     checkingTitle: "Checking this computer",
     checkingDescription:
-      "No action is needed. If Windows needs WSL 2 installed or updated, we will show one Windows approval button here.",
-    restart: "If Windows asks for a restart, reopen ai-security-scanner afterward and setup will continue automatically.",
+      "No action is needed. The app detects WSL 2 and prepares the scan tools automatically. If WSL is not ready, you will get one clear Microsoft setup step.",
+    restart: "If Microsoft’s WSL setup asks for a restart, reopen ai-security-scanner afterward and preparation will continue automatically.",
     openingTitle: "Opening ai-security-scanner",
     openingDescription: "Checking the scan tools already installed on this computer.",
     language: "Language",
@@ -41,8 +40,8 @@ const copy = {
       "ai-security-scanner 現在就會檢查這台電腦並準備專用掃描工具，進入產品後不必再多做一次設定。",
     checkingTitle: "正在檢查這台電腦",
     checkingDescription:
-      "目前不需要操作。如果 Windows 需要安裝或更新 WSL 2，這裡只會出現一個 Windows 確認按鈕。",
-    restart: "如果 Windows 要求重新開機，再打開 ai-security-scanner 就會自動接著完成。",
+      "目前不需要操作。程式會自動偵測 WSL 2 並準備掃描工具；如果 WSL 尚未就緒，只會顯示一個清楚的 Microsoft 設定步驟。",
+    restart: "如果 Microsoft 的 WSL 設定要求重新開機，再打開 ai-security-scanner 就會自動接著完成。",
     openingTitle: "正在開啟 ai-security-scanner",
     openingDescription: "正在確認這台電腦已安裝的掃描工具。",
     language: "語言",
@@ -56,19 +55,18 @@ export function RuntimeFirstLaunch({
   setLocale,
   runtime,
   status,
+  statusLoaded,
   busy,
-  repairing,
   automaticAttemptFailed,
   onSetup,
-  onRepair,
   onCancel,
 }: RuntimeFirstLaunchProps) {
   const text = copy[locale];
   const checkingInstalledState = runtime === undefined;
-  const waitingForAutomaticCheck = !automaticAttemptFailed
-    && (!status
-      || status.phase === "idle"
-      || (status.phase === "completed" && runtime?.available !== true));
+  const waitingForAutomaticCheck = !statusLoaded
+    || busy
+    || status?.active === true
+    || (!automaticAttemptFailed && (!status || status.phase === "idle"));
 
   return (
     <main className="runtime-first-launch">
@@ -119,9 +117,7 @@ export function RuntimeFirstLaunch({
             runtime={runtime}
             status={status}
             busy={busy}
-            repairing={repairing}
             onSetup={onSetup}
-            onRepair={onRepair}
             onCancel={onCancel}
           />
         )}

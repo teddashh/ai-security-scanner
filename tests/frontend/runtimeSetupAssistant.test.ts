@@ -8,27 +8,40 @@ const source = readFileSync(
   new URL("../../src/components/RuntimeSetupAssistant.tsx", import.meta.url),
   "utf8",
 );
+const shellSource = readFileSync(
+  new URL("../../src/components/AppShell.tsx", import.meta.url),
+  "utf8",
+);
+const scannerSource = readFileSync(
+  new URL("../../src/services/scanner.ts", import.meta.url),
+  "utf8",
+);
+const tauriSource = readFileSync(
+  new URL("../../src-tauri/src/lib.rs", import.meta.url),
+  "utf8",
+);
 
-test("Windows prerequisite repair is the primary bilingual path", () => {
-  assert.match(source, /Let ai-security-scanner handle it/u);
-  assert.match(source, /交給 ai-security-scanner 處理/u);
-  assert.match(source, /Windows will ask for administrator approval once/u);
-  assert.match(source, /Windows 會顯示一次系統管理員確認/u);
-  assert.match(source, /never sees or saves your password/u);
-  assert.match(source, /不會看到或儲存你的密碼/u);
-  assert.match(source, /onClick=\{onRepair\}/u);
+test("missing WSL gets one bilingual Microsoft setup path and one safe recheck", () => {
+  for (const phrase of [
+    "Open Microsoft’s WSL setup",
+    "開啟 Microsoft 的 WSL 設定",
+    "I’m done — check again",
+    "我完成了，重新檢查",
+    "continue automatically",
+    "自動接著準備",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.match(source, /href=\{MICROSOFT_WSL_HELP\}/u);
+  assert.match(source, /setupFailed && showMicrosoftSetup/u);
+  assert.match(source, /onClick=\{onSetup\}/u);
 });
 
-test("manual commands remain available only under the secondary options", () => {
-  assert.match(source, /<details className="runtime-assistant__manual">/u);
-  assert.match(source, /Other ways/u);
-  assert.match(source, /其他方式/u);
-  assert.match(source, /wsl --install --no-distribution/u);
-  assert.match(source, /wsl --update/u);
-  assert.ok(
-    source.indexOf("onClick={onRepair}") < source.indexOf('className="runtime-assistant__manual"'),
-    "the automatic action should be wired before the secondary manual path",
-  );
+test("the desktop UI cannot elevate or change Windows optional features", () => {
+  for (const candidate of [source, shellSource, scannerSource]) {
+    assert.doesNotMatch(candidate, /onRepair|repairManagedRuntimePrerequisite|administrator approval|系統管理員確認|wsl --install|wsl --update|UAC/u);
+  }
+  assert.doesNotMatch(tauriSource, /commands::repair_managed_runtime_prerequisite/u);
+  assert.doesNotMatch(shellSource, /runtimeRepairing|onRepairRuntime|runtime\.setup\.repair/u);
 });
 
 test("packaged-component blockers remain visible without rerunning runtime setup", () => {

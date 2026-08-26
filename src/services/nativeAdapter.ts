@@ -889,6 +889,14 @@ const parseCheckpoint = (token: string | null, engineRun: NativeEngineRun): Engi
 };
 
 const gatewayPreparationMarkers = [
+  "pinned egress gateway image pull",
+  "managed gateway uplink creation",
+  "egress gateway container creation",
+  "egress gateway container start",
+  "egress gateway container exited",
+  "egress gateway container did not report",
+  "egress gateway container reported",
+  "egress gateway internal-network attachment",
   "egress gateway exited before becoming ready",
   "egress gateway did not become ready",
   "egress gateway could not start",
@@ -896,8 +904,10 @@ const gatewayPreparationMarkers = [
 
 /**
  * Convert only exact product-owned gateway markers into a safe category. The
- * backend text itself may contain target-controlled data, so it is never
- * copied into first-layer state or the shareable diagnostic.
+ * backend text itself may contain target-controlled data. After classification
+ * the adapter replaces both the scanner message and checkpoint error with one
+ * localized product message, so neither UI layer nor a shareable diagnostic
+ * can reproduce the raw text.
  */
 const engineFailureKind = (
   engineRun: NativeEngineRun,
@@ -1187,6 +1197,10 @@ export const adaptNativeCase = (
       const manifest = manifestById.get(engineRun.engine_id);
       const status = mapEngineStatus(engineRun.status);
       const checkpoint = parseCheckpoint(engineRun.resume_token, engineRun);
+      const failureKind = engineFailureKind(engineRun, checkpoint);
+      const publicCheckpoint = failureKind === "gateway_preparation_failed" && checkpoint
+        ? { ...checkpoint, lastError: undefined }
+        : checkpoint;
       const recoveryAction = engineRecoveryAction(status, Boolean(engineRun.resume_token), checkpoint);
       const exactFindingCount = nativeCase.findings.filter((finding) =>
         finding.evidence.some((evidence) => evidence.engine_run_id === engineRun.id)
@@ -1238,14 +1252,19 @@ export const adaptNativeCase = (
         rawArtifactCount: engineRun.raw_artifact_ids?.length ?? 0,
         findingCount: exactFindingCount,
         findingCountKnown: !hasLegacyUnattributedEvidence,
-        message: engineRun.error_message ?? (engineRun.error_code
-          ? adapterText(`Error code: ${engineRun.error_code}`, `錯誤代碼：${engineRun.error_code}`)
-          : engineRun.phase),
+        message: failureKind === "gateway_preparation_failed"
+          ? adapterText(
+            "The private scan connection could not be prepared.",
+            "無法準備這次掃描使用的專用連線。",
+          )
+          : engineRun.error_message ?? (engineRun.error_code
+            ? adapterText(`Error code: ${engineRun.error_code}`, `錯誤代碼：${engineRun.error_code}`)
+            : engineRun.phase),
         errorCode: engineRun.error_code ?? undefined,
-        checkpoint,
+        checkpoint: publicCheckpoint,
         scopeContractBound: typeof engineRun.scope_contract_sha256 === "string"
           && engineRun.scope_contract_sha256.length > 0,
-        failureKind: engineFailureKind(engineRun, checkpoint),
+        failureKind,
         recoveryAction,
         resumable: recoveryAction !== "none",
       };

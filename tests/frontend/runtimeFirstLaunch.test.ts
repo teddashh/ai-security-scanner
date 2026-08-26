@@ -34,7 +34,12 @@ const status = (phase: ManagedRuntimeSetupStatus["phase"]): ManagedRuntimeSetupS
 test("a release-managed runtime is prepared before the native workspace appears", () => {
   for (const phase of ["not_installed", "installed", "stopped", "starting"]) {
     assert.equal(
-      shouldAutomaticallyPrepareRuntime("native", runtime(phase), status("idle"), false),
+      shouldAutomaticallyPrepareRuntime("native", runtime(phase), status("idle"), false, false),
+      false,
+      phase,
+    );
+    assert.equal(
+      shouldAutomaticallyPrepareRuntime("native", runtime(phase), status("idle"), true, false),
       true,
       phase,
     );
@@ -57,21 +62,28 @@ test("existing cases and results stay accessible while scan tools start or need 
   assert.equal(shouldShowRuntimeFirstLaunch("native", runtime("installed"), true), false);
   assert.equal(shouldShowRuntimeFirstLaunch("native", runtime("corrupt"), false), false);
   assert.equal(
-    shouldAutomaticallyPrepareRuntime("native", runtime("stopped"), status("idle"), false),
+    shouldAutomaticallyPrepareRuntime("native", runtime("stopped"), status("idle"), false, false),
+    false,
+  );
+  assert.equal(
+    shouldAutomaticallyPrepareRuntime("native", runtime("stopped"), status("idle"), true, false),
     true,
   );
 });
 
 test("automatic first-launch preparation is single-flight and never repeats a failed action", () => {
   const missing = runtime("not_installed");
-  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, undefined, false), true);
-  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("idle"), true), false);
-  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("prerequisite"), false), false);
-  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("failed"), false), false);
-  assert.equal(shouldAutomaticallyPrepareRuntime("native", runtime("corrupt"), status("idle"), false), false);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, undefined, false, false), false);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, undefined, true, false), true);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("idle"), true, true), false);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("prerequisite"), true, false), false);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("failed"), true, false), false);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("completed"), true, false), true);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("completed"), true, true), false);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", runtime("corrupt"), status("idle"), true, false), false);
 });
 
-test("first-launch copy promises zero-click checking and one explicit Windows approval", () => {
+test("first-launch copy promises automatic checking without an in-app elevation loop", () => {
   const source = readFileSync(
     new URL("../../src/components/RuntimeFirstLaunch.tsx", import.meta.url),
     "utf8",
@@ -80,25 +92,29 @@ test("first-launch copy promises zero-click checking and one explicit Windows ap
   for (const phrase of [
     "No action is needed",
     "目前不需要操作",
-    "one Windows approval button",
-    "一個 Windows 確認按鈕",
-    "setup will continue automatically",
+    "one clear Microsoft setup step",
+    "一個清楚的 Microsoft 設定步驟",
+    "preparation will continue automatically",
     "就會自動接著完成",
   ]) assert.ok(source.includes(phrase), phrase);
 
-  assert.doesNotMatch(source, /prerequisite|gate|contract/iu);
+  assert.doesNotMatch(source, /administrator|系統管理員|approval|UAC|prerequisite|gate|contract/iu);
   assert.match(source, /waitingForAutomaticCheck[\s\S]*role="status"/u);
-  assert.match(source, /status\.phase === "idle"/u);
+  assert.match(source, /!statusLoaded[\s\S]*status\?\.active === true/u);
+  assert.doesNotMatch(source, /status\.phase === "completed" && runtime\?\.available !== true/u);
 });
 
 test("the native app checks installed tools automatically before rendering its workspace", () => {
   const source = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
-  assert.match(source, /shouldAutomaticallyPrepareRuntime\([\s\S]*automaticRuntimeSetupAttempted\.current/u);
+  assert.match(source, /shouldAutomaticallyPrepareRuntime\([\s\S]*runtimeSetupStatusLoaded[\s\S]*automaticRuntimeSetupAttempted\.current/u);
   assert.match(source, /automaticRuntimeSetupAttempted\.current = true;[\s\S]*setupManagedRuntime\(\{ automatic: true \}\)/u);
+  assert.match(source, /snapshot\.runtime\.available === true[\s\S]*automaticRuntimeSetupAttempted\.current = false/u);
+  assert.match(source, /getManagedRuntimeSetupStatus\(\)[\s\S]*setRuntimeSetupStatusLoaded\(true\)/u);
   assert.match(source, /snapshot !== undefined[\s\S]*shouldShowRuntimeFirstLaunch\([\s\S]*snapshot\.cases\.length > 0/u);
   assert.match(source, /showRuntimeFirstLaunch \? \([\s\S]*<RuntimeFirstLaunch/u);
   assert.match(source, /if \(!automatic && !result\.data\.accepted && !cancelled\)/u);
   assert.match(source, /if \(!result\.data\.accepted && setupResult\.data\.phase === "idle"\) \{[\s\S]*setRuntimeAutomaticAttemptFailed\(true\)/u);
   assert.doesNotMatch(source, /if \(automatic && !result\.data\.accepted && setupResult\.data\.phase === "idle"\)/u);
+  assert.doesNotMatch(source, /repairManagedRuntimePrerequisite|runtime-repair/u);
 });

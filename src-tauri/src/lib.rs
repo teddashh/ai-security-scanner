@@ -174,7 +174,6 @@ pub fn run() {
             commands::setup_managed_runtime,
             commands::get_managed_runtime_setup_status,
             commands::cancel_managed_runtime_setup,
-            commands::repair_managed_runtime_prerequisite,
             commands::create_case,
             commands::select_case,
             commands::archive_case,

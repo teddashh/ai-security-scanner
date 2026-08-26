@@ -109,9 +109,7 @@ interface AppShellProps {
   runtime?: AppSnapshot["runtime"];
   runtimeSetup?: ManagedRuntimeSetupStatus;
   runtimeBusy?: boolean;
-  runtimeRepairing?: boolean;
   onSetupRuntime: () => void;
-  onRepairRuntime: () => void;
   onCancelRuntime: () => void;
 }
 
@@ -130,9 +128,7 @@ export function AppShell({
   runtime,
   runtimeSetup,
   runtimeBusy,
-  runtimeRepairing,
   onSetupRuntime,
-  onRepairRuntime,
   onCancelRuntime,
 }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -148,10 +144,6 @@ export function AppShell({
   const runtimeGuidance = runtimeSetup?.nextAction
     ? runtimeRecoveryKeys[runtimeSetup.nextAction]
     : runtimeIssue;
-  const runtimeRepairAction = runtimeSetup?.nextAction;
-  const canRepairRuntime = runtimeRepairAction === "install_wsl"
-    || runtimeRepairAction === "enable_wsl_optional_features"
-    || runtimeRepairAction === "update_wsl";
 
   useEffect(() => setMobileOpen(false), [page]);
 
@@ -297,16 +289,6 @@ export function AppShell({
                 >
                   <Icon name="close" size={15} />
                   {runtimeSetup.cancelRequested ? t("runtime.cancel.pending") : t("runtime.cancel.action")}
-                </button>
-              ) : canRepairRuntime && runtimeRepairAction ? (
-                <button
-                  className="button button--small"
-                  type="button"
-                  disabled={runtimeBusy}
-                  onClick={onRepairRuntime}
-                >
-                  <Icon name="settings" size={15} />
-                  {runtimeRepairing ? t("runtime.setup.repairing") : t("runtime.setup.repair")}
                 </button>
               ) : (
                 <button className="button button--small" type="button" disabled={runtimeBusy} onClick={onSetupRuntime}>
