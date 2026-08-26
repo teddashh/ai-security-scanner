@@ -34,6 +34,7 @@ COPY engines/images/gitleaks/patches/0001-add-scanner-owned-ignore-policy.patch 
 WORKDIR /src/gitleaks
 RUN echo '3fd66952713338b561c71c7ed608c5cce41355a7594c4eb8ffb4303abae29ccd  go.sum' | sha256sum -c - \
     && echo 'e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf  config/gitleaks.toml' | sha256sum -c - \
+    && echo '9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7  /tmp/0001-add-scanner-owned-ignore-policy.patch' | sha256sum -c - \
     && git apply --check /tmp/0001-add-scanner-owned-ignore-policy.patch \
     && git apply /tmp/0001-add-scanner-owned-ignore-policy.patch \
     && go mod verify \
@@ -60,7 +61,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Gitleaks engine" \
       org.opencontainers.image.version="8.30.1-1" \
       org.opencontainers.image.licenses="MIT AND Apache-2.0" \
       io.ai-security-scanner.gitleaks-config-sha256="e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf" \
-      io.ai-security-scanner.patch-sha256="ade80d84a22ba907e75905d1e314411c97361d747cdefa641395886f7dee340a"
+      io.ai-security-scanner.patch-sha256="9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7"
 
 ENV HOME="/tmp/ai-security-scanner-home" \
     XDG_CACHE_HOME="/tmp/ai-security-scanner-cache"

@@ -7,7 +7,6 @@ on:
     paths:
       - engines/images/gitleaks/**
       - '!engines/images/gitleaks/plan.json'
-      - .github/workflows/engine-image-gitleaks.yml
   workflow_dispatch:
 
 permissions:
@@ -112,7 +111,7 @@ jobs:
             "${IMAGE}@${DIGEST}" version 2>&1 | grep -Fx '8.30.1'
 
           output="$(mktemp -d)"
-          docker run --platform linux/amd64 --rm \
+          if ! docker run --platform linux/amd64 --rm \
             --read-only --network none --cap-drop ALL \
             --security-opt no-new-privileges:true \
             --user "$(id -u):$(id -g)" \
@@ -121,11 +120,36 @@ jobs:
             --mount "type=bind,src=${PWD}/engines/images/gitleaks/testdata,dst=/workspace,readonly" \
             --mount "type=bind,src=${output},dst=/output" \
             "${IMAGE}@${DIGEST}" \
-            --workspace /workspace --output /output
+            --workspace /workspace --output /output; then
+            echo '::error::The managed launcher did not complete its synthetic fixture scan.'
+            exit 1
+          fi
 
-          jq -e 'length >= 1 and all(.[]; .Secret == "REDACTED") and any(.[]; .RuleID == "generic-api-key")' \
-            "${output}/gitleaks.json" >/dev/null
-          ! grep -F 'z9K4mP7qR2sT8vW3xY6a' "${output}/gitleaks.json"
+          report="${output}/gitleaks.json"
+          if ! test -f "${report}"; then
+            echo '::error::The managed launcher completed without its required JSON evidence file.'
+            exit 1
+          fi
+          if ! jq -e 'type == "array"' "${report}" >/dev/null 2>&1; then
+            echo '::error::The managed launcher produced evidence that is not a JSON array.'
+            exit 1
+          fi
+          if ! jq -e 'length >= 1' "${report}" >/dev/null 2>&1; then
+            echo '::error::The scanner-owned policy found no fixture result; a target-controlled ignore mechanism may have narrowed coverage.'
+            exit 1
+          fi
+          if ! jq -e 'all(.[]; .Secret == "REDACTED")' "${report}" >/dev/null 2>&1; then
+            echo '::error::The managed evidence did not preserve the full-redaction contract.'
+            exit 1
+          fi
+          if ! jq -e 'any(.[]; .RuleID == "generic-api-key")' "${report}" >/dev/null 2>&1; then
+            echo '::error::The pinned scanner-owned generic API key rule did not report the fixture.'
+            exit 1
+          fi
+          if grep -Fq 'z9K4mP7qR2sT8vW3xY6a' "${report}"; then
+            echo '::error::The synthetic raw secret survived evidence redaction.'
+            exit 1
+          fi
           evidence_sha256="sha256:$(sha256sum "${output}/gitleaks.json" | cut -d ' ' -f 1)"
           {
             echo "amd64_digest=${amd64_digest}"

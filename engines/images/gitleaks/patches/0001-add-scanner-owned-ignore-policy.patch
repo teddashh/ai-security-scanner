@@ -1,5 +1,5 @@
 diff --git a/cmd/root.go b/cmd/root.go
-index 54efe18..a4f4c22 100644
+index 61a163e..da3325d 100644
 --- a/cmd/root.go
 +++ b/cmd/root.go
 @@ -83,6 +83,7 @@ func init() {
@@ -10,18 +10,46 @@ index 54efe18..a4f4c22 100644
  	rootCmd.PersistentFlags().Uint("redact", 0, "redact secrets from logs and stdout. To redact only parts of the secret just apply a percent value from 0..100. For example --redact=20 (default 100%)")
  	rootCmd.Flag("redact").NoOptDefVal = "100"
  	rootCmd.PersistentFlags().Bool("no-banner", false, "suppress banner")
-@@ -314,9 +315,15 @@ func Detector(cmd *cobra.Command, cfg config.Config, source string) *detect.Det
- 		}
+@@ -297,26 +298,33 @@ func Detector(cmd *cobra.Command, cfg config.Config, source string) *detect.Dete
+ 		logging.Fatal().Err(err).Send()
  	}
+ 
+-	gitleaksIgnorePath, err := cmd.Flags().GetString("gitleaks-ignore-path")
++	noSourceIgnore, err := cmd.Flags().GetBool("no-source-ignore")
+ 	if err != nil {
+-		logging.Fatal().Err(err).Msg("could not get .gitleaksignore path")
++		logging.Fatal().Err(err).Msg("could not get no-source-ignore")
+ 	}
+ 
+-	if fileExists(gitleaksIgnorePath) {
+-		if err = detector.AddGitleaksIgnore(gitleaksIgnorePath); err != nil {
+-			logging.Fatal().Err(err).Msg("could not call AddGitleaksIgnore")
++	if !noSourceIgnore {
++		gitleaksIgnorePath, err := cmd.Flags().GetString("gitleaks-ignore-path")
++		if err != nil {
++			logging.Fatal().Err(err).Msg("could not get .gitleaksignore path")
+ 		}
+-	}
+ 
+-	if fileExists(filepath.Join(gitleaksIgnorePath, ".gitleaksignore")) {
+-		if err = detector.AddGitleaksIgnore(filepath.Join(gitleaksIgnorePath, ".gitleaksignore")); err != nil {
+-			logging.Fatal().Err(err).Msg("could not call AddGitleaksIgnore")
++		if fileExists(gitleaksIgnorePath) {
++			if err = detector.AddGitleaksIgnore(gitleaksIgnorePath); err != nil {
++				logging.Fatal().Err(err).Msg("could not call AddGitleaksIgnore")
++			}
+ 		}
+-	}
  
 -	if fileExists(filepath.Join(source, ".gitleaksignore")) {
 -		if err = detector.AddGitleaksIgnore(filepath.Join(source, ".gitleaksignore")); err != nil {
 -			logging.Fatal().Err(err).Msg("could not call AddGitleaksIgnore")
-+	noSourceIgnore, err := cmd.Flags().GetBool("no-source-ignore")
-+	if err != nil {
-+		logging.Fatal().Err(err).Msg("could not get no-source-ignore")
-+	}
-+	if !noSourceIgnore {
++		if fileExists(filepath.Join(gitleaksIgnorePath, ".gitleaksignore")) {
++			if err = detector.AddGitleaksIgnore(filepath.Join(gitleaksIgnorePath, ".gitleaksignore")); err != nil {
++				logging.Fatal().Err(err).Msg("could not call AddGitleaksIgnore")
++			}
++		}
++
 +		if fileExists(filepath.Join(source, ".gitleaksignore")) {
 +			if err = detector.AddGitleaksIgnore(filepath.Join(source, ".gitleaksignore")); err != nil {
 +				logging.Fatal().Err(err).Msg("could not call AddGitleaksIgnore")
