@@ -18,6 +18,12 @@ RUN go test ./... \
         -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \
         -o /out/ai-security-scanner-engine-entrypoint .
 
+WORKDIR /src/httpx-patch
+COPY engines/images/httpx/patch_live_dns.go engines/images/httpx/patch_live_dns_test.go ./
+RUN go test patch_live_dns.go patch_live_dns_test.go \
+    && go build -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \
+        -o /out/patch-httpx-live-dns patch_live_dns.go
+
 ADD --checksum=sha256:94ae90ef3a2551bbc81c0814bd157387ab9c9bda54d1f5e38aaa708b95570946 \
     https://github.com/projectdiscovery/httpx/archive/13037dd08b9715cfbd960a70ae1edfef6686a857.tar.gz \
     /tmp/httpx-source.tar.gz
@@ -28,6 +34,13 @@ RUN mkdir -p /src/httpx \
     && grep -Fq 'const Version = `v1.10.0`' runner/banner.go \
     && echo '97ea2eed27767ae6d1e31b4d56b1e2c9a69235cdc76f89cdb79c199e621029b5  go.sum' | sha256sum -c - \
     && go mod verify \
+    && echo '748502c7633140c7395d73d3b7d91eaa2efa324a5567cfc7b7a57485a1f9a641  runner/runner.go' | sha256sum -c - \
+    && HTTPX_PINNED_RUNNER=/src/httpx/runner/runner.go go test \
+        /src/httpx-patch/patch_live_dns.go /src/httpx-patch/patch_live_dns_test.go \
+    && /out/patch-httpx-live-dns --source /src/httpx/runner/runner.go \
+    && echo '6e8c7c8e59f6f7e574af0ff3b87cf3cd74e8e9d814618108dedeb9620fdbab95  runner/runner.go' | sha256sum -c - \
+    && ! grep -Fq 'getDNSData(hp, onlyHost)' runner/runner.go \
+    && grep -Fq 'var ips4, ips6, cnames, resolvers []string' runner/runner.go \
     && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \
         -o /out/httpx ./cmd/httpx \

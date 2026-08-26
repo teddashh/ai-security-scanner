@@ -43,7 +43,7 @@ func fixtureDocument(engineID string, now time.Time) *scopeDocument {
 				ID: grantID, Permission: permission, ConfirmedBy: "owner@example.test",
 				ConfirmedAt: approved, ExpiresAt: &expires,
 				AuthorizationReference: stringPointer("ticket SEC-1042"),
-				ResolvedAddresses: []string{resolvedAddress},
+				ResolvedAddresses:      []string{resolvedAddress},
 				ExternalScope: &externalScope{
 					ID: grantID, CaseID: "case-1", AssetID: assetID,
 					Target: canonicalTarget{Kind: "hostname", Value: target}, Ports: ports,
@@ -56,7 +56,7 @@ func fixtureDocument(engineID string, now time.Time) *scopeDocument {
 		}
 	}
 	return &scopeDocument{
-		SchemaVersion: "1", EngineID: engineID, GeneratedAt: now,
+		SchemaVersion: "2", EngineID: engineID, GeneratedAt: now,
 		Assets: []scopeAsset{
 			makeAsset("asset-a", "grant-a", "a.example.test", []uint16{443, 8443}),
 			makeAsset("asset-b", "grant-b", "b.example.test", []uint16{9443}),
@@ -299,7 +299,7 @@ func TestEvidenceIsReattributedAndOutOfScopeRecordsFail(t *testing.T) {
 		Port: 443, ResolvedAddresses: []string{"192.0.2.10"},
 	}
 	path := filepath.Join(t.TempDir(), "httpx.jsonl")
-	if err := os.WriteFile(path, []byte(`{"url":"https://a.example.test:443/","status_code":200,"body":"discard me"}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"url":"https://a.example.test:443/","status_code":200,"body":"discard me","host_ip":"192.0.2.10","a":["192.0.2.10"],"aaaa":["2001:db8::10"],"cname":["edge.example.test"],"resolvers":["198.51.100.53"]}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
@@ -317,6 +317,11 @@ func TestEvidenceIsReattributedAndOutOfScopeRecordsFail(t *testing.T) {
 	}
 	if record["asset_id"] != "asset-a" || record["scope_grant_id"] != "grant-a" || record["body"] != nil {
 		t.Fatalf("unexpected normalized evidence: %#v", record)
+	}
+	for _, key := range []string{"host_ip", "a", "aaaa", "cname", "resolvers"} {
+		if _, exists := record[key]; exists {
+			t.Fatalf("non-authoritative live DNS field %s survived normalization: %#v", key, record)
+		}
 	}
 
 	if err := os.WriteFile(path, []byte(`{"url":"https://b.example.test:443/","status_code":200}`+"\n"), 0o600); err != nil {
@@ -385,6 +390,34 @@ func TestScopeDecoderRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := loadScope(path, "httpx"); err == nil {
 		t.Fatal("unknown scope field was accepted")
+	}
+}
+
+func TestScopeDecoderRequiresWireVersionTwoForEveryExternalEngine(t *testing.T) {
+	now := time.Now().UTC()
+	for _, engineID := range []string{"naabu", "httpx", "nuclei"} {
+		document := fixtureDocument(engineID, now)
+		path := filepath.Join(t.TempDir(), engineID+"-scope.json")
+		write := func() {
+			value, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, value, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write()
+		if _, err := loadScope(path, engineID); err != nil {
+			t.Fatalf("%s rejected exact external wire schema 2: %v", engineID, err)
+		}
+		for _, incompatible := range []string{"1", "3", "2.0"} {
+			document.SchemaVersion = incompatible
+			write()
+			if _, err := loadScope(path, engineID); err == nil {
+				t.Fatalf("%s accepted incompatible external wire schema %s", engineID, incompatible)
+			}
+		}
 	}
 }
 

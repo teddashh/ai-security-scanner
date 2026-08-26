@@ -871,7 +871,7 @@ impl<'a> ScopeDocument<'a> {
             })
             .collect::<AppResult<Vec<_>>>()?;
         Ok(Self {
-            schema_version: "1",
+            schema_version: if external_launcher { "2" } else { "1" },
             engine_id: &manifest.id,
             generated_at: Utc::now().to_rfc3339(),
             assets,
@@ -1185,6 +1185,7 @@ mod tests {
         );
         assert_eq!(json["assets"][0]["identifiers"][0]["value"], "one.example");
         assert!(!json.to_string().contains("not-authorized.example"));
+        assert_eq!(json["schema_version"], "1");
         assert!(
             json["assets"][0]["grants"][0]
                 .get("resolved_addresses")
@@ -1283,6 +1284,7 @@ mod tests {
             json["assets"][0]["grants"][0]["resolved_addresses"],
             serde_json::json!(["192.0.2.10", "2001:db8::10"])
         );
+        assert_eq!(json["schema_version"], "2");
         assert!(ScopeDocument::new(&manifest, &scope, None).is_err());
 
         let unrelated = vec![GatewayDestination {

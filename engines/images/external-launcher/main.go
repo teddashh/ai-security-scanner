@@ -296,7 +296,7 @@ func loadScope(path, expectedEngine string) (*scopeDocument, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return nil, errors.New("scope document has trailing data")
 	}
-	if document.SchemaVersion != "1" || document.EngineID != expectedEngine || len(document.Assets) == 0 || len(document.Assets) > maxAssets {
+	if document.SchemaVersion != "2" || document.EngineID != expectedEngine || len(document.Assets) == 0 || len(document.Assets) > maxAssets {
 		return nil, errors.New("scope document version, engine, or asset count is invalid")
 	}
 	return &document, nil
@@ -769,6 +769,11 @@ func normalizeEvidence(path string, destination *bufio.Writer, written *int64, e
 		object["scope_target"] = targetValue
 		for _, key := range []string{"request", "response", "template", "curl-command", "body", "raw"} {
 			delete(object, key)
+		}
+		if engineID == "httpx" {
+			for _, key := range []string{"host_ip", "a", "aaaa", "cname", "resolvers"} {
+				delete(object, key)
+			}
 		}
 		normalized, err := json.Marshal(object)
 		if err != nil {
