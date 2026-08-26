@@ -100,11 +100,11 @@ later desktop adapter revision does not auto-trigger image publication, rewrite 
 build identity, or claim that an unchanged image was republished.
 
 The downloadable manifest follows
-[`engine-image-supply-chain.schema.json`](engine-image-supply-chain.schema.json). Workflow
-artifacts retain the manifest, four SBOM files, five Sigstore bundles, and `SHA256SUMS.txt` for 90
-days. The signed SBOM predicates and provenance remain independently retrievable through both the
-GitHub attestation API and GHCR OCI referrers; the workflow artifact is a convenience copy, not the
-only evidence store.
+[`engine-image-supply-chain.schema.json`](engine-image-supply-chain.schema.json). Publication
+workflows that upload a `package-evidence` artifact retain the manifest, four SBOM files, five
+Sigstore bundles, and `SHA256SUMS.txt` for 90 days. The signed SBOM predicates and provenance remain
+independently retrievable through both the GitHub attestation API and GHCR OCI referrers; a workflow
+artifact is a convenience copy, not the evidence store.
 
 The self-test uses a synthetic exact two-platform index, multi-platform SBOMs, and Sigstore
 envelopes. It proves the manifest has five exact attestations, rejects a wrong source revision,
