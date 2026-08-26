@@ -28,6 +28,9 @@ import type {
   FindingGroupEvent,
   FindingWorkflowState,
   LocalInputProfile,
+  LocalNetworkCandidateInventory,
+  LocalNetworkCandidateStatus,
+  LocalPrivateSubnetCandidate,
   ManagedRuntimePrerequisiteRepairOutcome,
   ManagedRuntimePrerequisiteRepairResult,
   ManagedRuntimeSetupFailureReason,
@@ -500,6 +503,92 @@ export const adaptManagedRuntimeSetupStatus = (
     nextAction: hasValidRecovery ? status.next_action ?? undefined : undefined,
     detail: status.detail,
   };
+};
+
+const unavailableLocalNetworkInventory = (): LocalNetworkCandidateInventory => ({
+  status: "unavailable",
+  candidates: [],
+});
+
+const localNetworkCandidateStatuses = new Set<LocalNetworkCandidateStatus>([
+  "ready",
+  "none",
+  "ambiguous",
+  "unavailable",
+  "unsupported",
+]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const canonicalPrivateIpv4Cidr = (value: unknown): { target: string; addressCount: number } | undefined => {
+  if (typeof value !== "string" || value.length > 18) return undefined;
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/u.exec(value);
+  if (!match) return undefined;
+  const octets = match.slice(1, 5).map(Number);
+  const prefix = Number(match[5]);
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return undefined;
+  if (!Number.isInteger(prefix) || prefix < 20 || prefix > 30) return undefined;
+  const first = octets[0] ?? -1;
+  const second = octets[1] ?? -1;
+  const isPrivate = first === 10
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168);
+  if (!isPrivate) return undefined;
+
+  const address = octets.reduce((result, octet) => ((result * 256) + octet) >>> 0, 0);
+  const hostBits = 32 - prefix;
+  const mask = (0xffff_ffff << hostBits) >>> 0;
+  if ((address & mask) >>> 0 !== address) return undefined;
+  return { target: value, addressCount: 2 ** hostBits };
+};
+
+const adaptLocalPrivateSubnetCandidate = (value: unknown): LocalPrivateSubnetCandidate | undefined => {
+  if (!isRecord(value)) return undefined;
+  const cidr = canonicalPrivateIpv4Cidr(value.target);
+  if (
+    !cidr
+    || typeof value.id !== "string"
+    || !/^local-ipv4-[a-f0-9]{64}$/u.test(value.id)
+    || value.kind !== "local_ipv4_subnet"
+    || value.useCase !== "internal_it_environment"
+    || value.internetExposure !== "internal"
+    || value.addressCount !== cidr.addressCount
+    || value.requiresConfirmation !== true
+  ) return undefined;
+  return {
+    id: value.id,
+    target: cidr.target,
+    kind: "local_ipv4_subnet",
+    useCase: "internal_it_environment",
+    internetExposure: "internal",
+    addressCount: cidr.addressCount,
+    requiresConfirmation: true,
+  };
+};
+
+/**
+ * Fail closed if the native detector ever returns a widened, public, malformed,
+ * or ambiguous target. Only one canonical RFC1918 /20-/30 can reach the UI.
+ */
+export const adaptLocalNetworkCandidateInventory = (
+  value: unknown,
+): LocalNetworkCandidateInventory => {
+  if (!isRecord(value) || !localNetworkCandidateStatuses.has(value.status as LocalNetworkCandidateStatus)) {
+    return unavailableLocalNetworkInventory();
+  }
+  const status = value.status as LocalNetworkCandidateStatus;
+  if (!Array.isArray(value.candidates)) return unavailableLocalNetworkInventory();
+  if (status !== "ready") {
+    return value.candidates.length === 0
+      ? { status, candidates: [] }
+      : unavailableLocalNetworkInventory();
+  }
+  if (value.candidates.length !== 1) return unavailableLocalNetworkInventory();
+  const candidate = adaptLocalPrivateSubnetCandidate(value.candidates[0]);
+  return candidate
+    ? { status: "ready", candidates: [candidate] }
+    : unavailableLocalNetworkInventory();
 };
 
 const unique = <T,>(values: T[]): T[] => [...new Set(values)];

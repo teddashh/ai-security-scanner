@@ -11,6 +11,7 @@ import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/
 import { StatusPill } from "../components/StatusPill";
 import { useI18n, type BilingualText, type StaticTranslationKey } from "../i18n";
 import { phaseMeta, runStatusMeta } from "../lib";
+import { scannerService } from "../services/scanner";
 import type {
   AssessmentActivity,
   AssessmentCase,
@@ -20,6 +21,7 @@ import type {
   CompanySize,
   CreateCaseInput,
   DataClass,
+  LocalNetworkCandidateInventory,
   ScanRun,
 } from "../types";
 import {
@@ -122,6 +124,38 @@ const pageCopy = {
   internalTargetsHelp: {
     en: "Enter one server, device, or small network range per line.",
     zhTW: "每行輸入一台伺服器、設備或小型網段。",
+  },
+  localNetworkDetectingTitle: { en: "Looking for your local network", zhTW: "正在找這台電腦的區域網路" },
+  localNetworkDetectingBody: {
+    en: "We're only reading this computer's network settings. No device or website is contacted.",
+    zhTW: "現在只讀取這台電腦的網路設定，不會連線到任何設備或網站。",
+  },
+  localNetworkFoundTitle: { en: "We found a likely local network", zhTW: "找到一個可能的區域網路" },
+  localNetworkFoundBody: {
+    en: "Is {target} the network you want to check? Using it only fills the box below. It does not start the scan.",
+    zhTW: "你要檢查的是 {target} 嗎？使用它只會填入下方欄位，不會開始掃描。",
+  },
+  localNetworkUseTarget: { en: "Use {target}", zhTW: "使用 {target}" },
+  localNetworkTargetAdded: { en: "Added to the target list", zhTW: "已加入目標清單" },
+  localNetworkNoneTitle: { en: "Enter the network you want to check", zhTW: "請輸入想檢查的網路" },
+  localNetworkNoneBody: {
+    en: "We couldn't safely identify one local range. Enter an internal IP address or a small network range below.",
+    zhTW: "目前無法安全判斷唯一網段；請在下方輸入一個內部 IP 或小型網段。",
+  },
+  localNetworkAmbiguousTitle: { en: "Choose the exact network yourself", zhTW: "請自行指定正確網路" },
+  localNetworkAmbiguousBody: {
+    en: "This computer is connected to more than one possible network, so we won't guess. Enter the exact internal IP or range below.",
+    zhTW: "這台電腦連到多個可能的網路，因此我們不會猜測；請在下方輸入精確的內部 IP 或網段。",
+  },
+  localNetworkUnavailableTitle: { en: "Automatic fill isn't available right now", zhTW: "目前無法自動帶入網段" },
+  localNetworkUnavailableBody: {
+    en: "You can still continue. Enter the internal IP address or small network range you want to check below.",
+    zhTW: "你仍可繼續；請在下方輸入想檢查的內部 IP 或小型網段。",
+  },
+  localNetworkUnsupportedTitle: { en: "Enter your local network", zhTW: "請輸入你的區域網路" },
+  localNetworkUnsupportedBody: {
+    en: "This version can't fill the network for you. Enter an internal IP address or small range below.",
+    zhTW: "這個版本無法替你帶入網段；請在下方輸入內部 IP 或小型網段。",
   },
   repositories: { en: "Source project or repository", zhTW: "程式碼專案或儲存庫" },
   repositoriesPlaceholder: { en: "Local project name or read-only repository coordinate", zhTW: "本機專案名稱或唯讀程式碼儲存庫位置" },
@@ -452,6 +486,8 @@ export function CasesPage({
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [publicTargets, setPublicTargets] = useState("");
   const [internalTargets, setInternalTargets] = useState("");
+  const [localNetworkInventory, setLocalNetworkInventory] = useState<LocalNetworkCandidateInventory>();
+  const [detectingLocalNetwork, setDetectingLocalNetwork] = useState(false);
   const [repositories, setRepositories] = useState("");
   const [iacProjects, setIacProjects] = useState("");
   const [containerImages, setContainerImages] = useState("");
@@ -517,8 +553,41 @@ export function CasesPage({
     setAssetDraftError(undefined);
   }, [selectedDefinition, selectionKey]);
 
+  useEffect(() => {
+    let active = true;
+    if (selectedDefinition?.id !== "internal_it_environment") {
+      setDetectingLocalNetwork(false);
+      setLocalNetworkInventory(undefined);
+      return () => { active = false; };
+    }
+    setDetectingLocalNetwork(true);
+    setLocalNetworkInventory(undefined);
+    void scannerService.detectLocalPrivateSubnets()
+      .then(({ data }) => {
+        if (active) setLocalNetworkInventory(data);
+      })
+      .catch(() => {
+        if (active) setLocalNetworkInventory({ status: "unavailable", candidates: [] });
+      })
+      .finally(() => {
+        if (active) setDetectingLocalNetwork(false);
+      });
+    return () => { active = false; };
+  }, [selectedDefinition?.id, selectionKey]);
+
   const platformLabel = (platform: CloudPlatform): string => t(platformKeys[platform]);
   const activityLabel = (activity: AssessmentActivity): string => text(activityCopy[activity].label);
+
+  const useDetectedLocalNetwork = (target: string) => {
+    setInternalTargets((current) => {
+      const existing = current.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+      return existing.includes(target)
+        ? current
+        : [...existing, target].join("\n");
+    });
+    setAssetDraftError(undefined);
+    internalTargetsInputRef.current?.focus();
+  };
 
   const togglePlatform = (platform: CloudPlatform) => {
     setPlatforms((current) => current.includes(platform)
@@ -648,6 +717,14 @@ export function CasesPage({
     await onDeleteArtifacts(artifactDeleteConfirmation);
   };
 
+  const detectedLocalNetwork = localNetworkInventory?.status === "ready"
+    ? localNetworkInventory.candidates[0]
+    : undefined;
+  const detectedLocalNetworkAdded = Boolean(
+    detectedLocalNetwork
+    && internalTargets.split(/\r?\n/u).some((value) => value.trim() === detectedLocalNetwork.target),
+  );
+
   const primaryTarget = selectedDefinition && (
     <fieldset className="choice-fieldset case-primary-target">
       <legend>{text(pageCopy.selectedGoal)}</legend>
@@ -721,24 +798,72 @@ export function CasesPage({
       )}
 
       {useCaseNeeds(selectedDefinition, "internal_it_environment") && (
-        <label className="field">
-          <span>{text(pageCopy.internalTargets)}</span>
-          <textarea
-            ref={internalTargetsInputRef}
-            required
-            rows={4}
-            value={internalTargets}
-            aria-invalid={assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" || undefined}
-            aria-describedby="internal-targets-help internal-targets-error"
-            onInvalid={() => setAssetDraftError({ kind: "missing_target", target: "internal" })}
-            onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }}
-            placeholder={text(pageCopy.internalTargetsPlaceholder)}
-          />
-          <small id="internal-targets-help">{text(pageCopy.internalTargetsHelp)}</small>
-          {assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" && (
-            <small id="internal-targets-error" className="field-error" role="alert">{text(pageCopy.internalTargetRequired)}</small>
-          )}
-        </label>
+        <>
+          <div aria-live="polite">
+            {detectingLocalNetwork && (
+              <InlineNotice tone="info" title={text(pageCopy.localNetworkDetectingTitle)}>
+                <p>{text(pageCopy.localNetworkDetectingBody)}</p>
+              </InlineNotice>
+            )}
+            {!detectingLocalNetwork && detectedLocalNetwork && (
+              <InlineNotice tone="success" title={text(pageCopy.localNetworkFoundTitle)}>
+                <p>{text(pageCopy.localNetworkFoundBody, { target: detectedLocalNetwork.target })}</p>
+                <button
+                  className="button button--secondary button--small"
+                  type="button"
+                  disabled={detectedLocalNetworkAdded}
+                  onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}
+                >
+                  <Icon name={detectedLocalNetworkAdded ? "check" : "plus"} size={15} />
+                  {text(
+                    detectedLocalNetworkAdded
+                      ? pageCopy.localNetworkTargetAdded
+                      : pageCopy.localNetworkUseTarget,
+                    { target: detectedLocalNetwork.target },
+                  )}
+                </button>
+              </InlineNotice>
+            )}
+            {!detectingLocalNetwork && localNetworkInventory?.status === "none" && (
+              <InlineNotice tone="info" title={text(pageCopy.localNetworkNoneTitle)}>
+                <p>{text(pageCopy.localNetworkNoneBody)}</p>
+              </InlineNotice>
+            )}
+            {!detectingLocalNetwork && localNetworkInventory?.status === "ambiguous" && (
+              <InlineNotice tone="warning" title={text(pageCopy.localNetworkAmbiguousTitle)}>
+                <p>{text(pageCopy.localNetworkAmbiguousBody)}</p>
+              </InlineNotice>
+            )}
+            {!detectingLocalNetwork && localNetworkInventory?.status === "unavailable" && (
+              <InlineNotice tone="info" title={text(pageCopy.localNetworkUnavailableTitle)}>
+                <p>{text(pageCopy.localNetworkUnavailableBody)}</p>
+              </InlineNotice>
+            )}
+            {!detectingLocalNetwork && localNetworkInventory?.status === "unsupported" && (
+              <InlineNotice tone="info" title={text(pageCopy.localNetworkUnsupportedTitle)}>
+                <p>{text(pageCopy.localNetworkUnsupportedBody)}</p>
+              </InlineNotice>
+            )}
+          </div>
+          <label className="field">
+            <span>{text(pageCopy.internalTargets)}</span>
+            <textarea
+              ref={internalTargetsInputRef}
+              required
+              rows={4}
+              value={internalTargets}
+              aria-invalid={assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" || undefined}
+              aria-describedby="internal-targets-help internal-targets-error"
+              onInvalid={() => setAssetDraftError({ kind: "missing_target", target: "internal" })}
+              onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }}
+              placeholder={text(pageCopy.internalTargetsPlaceholder)}
+            />
+            <small id="internal-targets-help">{text(pageCopy.internalTargetsHelp)}</small>
+            {assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" && (
+              <small id="internal-targets-error" className="field-error" role="alert">{text(pageCopy.internalTargetRequired)}</small>
+            )}
+          </label>
+        </>
       )}
 
       {guidedLocalUseCase && (

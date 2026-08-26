@@ -94,6 +94,20 @@ test("guided public and internal target fields expose required field errors", ()
   assert.ok(casesPageSource.includes("pageCopy.internalTargetRequired"));
 });
 
+test("internal network detection stays an explicit bilingual suggestion", () => {
+  for (const phrase of [
+    "We found a likely local network",
+    "找到一個可能的區域網路",
+    "This computer is connected to more than one possible network, so we won't guess.",
+    "這台電腦連到多個可能的網路，因此我們不會猜測",
+    "Using it only fills the box below. It does not start the scan.",
+    "使用它只會填入下方欄位，不會開始掃描",
+  ]) assert.ok(casesPageSource.includes(phrase), phrase);
+  assert.ok(casesPageSource.includes("scannerService.detectLocalPrivateSubnets()"));
+  assert.ok(casesPageSource.includes("onClick={() => useDetectedLocalNetwork(detectedLocalNetwork.target)}"));
+  assert.ok(casesPageSource.includes('status: "unavailable", candidates: []'));
+});
+
 test("local artifacts never inherit an external-contact activity", () => {
   for (const id of ["source_code", "container_image"] as const) {
     assert.deepEqual(useCaseById(id).suggestedActivities, ["local_artifact_analysis"]);

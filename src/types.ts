@@ -97,6 +97,29 @@ export interface KnownAssetInput {
   };
 }
 
+export type LocalNetworkCandidateStatus =
+  | "ready"
+  | "none"
+  | "ambiguous"
+  | "unavailable"
+  | "unsupported";
+
+export interface LocalPrivateSubnetCandidate {
+  id: string;
+  target: string;
+  kind: "local_ipv4_subnet";
+  useCase: "internal_it_environment";
+  internetExposure: "internal";
+  addressCount: number;
+  /** Detection only suggests this range; a person must explicitly add it. */
+  requiresConfirmation: true;
+}
+
+export interface LocalNetworkCandidateInventory {
+  status: LocalNetworkCandidateStatus;
+  candidates: LocalPrivateSubnetCandidate[];
+}
+
 export type CoverageState =
   | "discovered_authorized_scanned"
   | "discovered_not_authorized"
@@ -577,6 +600,39 @@ export interface ScanRun {
   engineRuns: EngineRun[];
   coveredAssetCount: number;
   totalAssetCount: number;
+}
+
+export type ScanReadinessState =
+  | "ready"
+  | "case_unavailable"
+  | "scan_in_progress"
+  | "scope_required"
+  | "ownership_required"
+  | "no_compatible_authorized_targets"
+  | "no_runnable_authorized_targets";
+
+export type ScanReadinessBlocker =
+  | "demo_case"
+  | "archived_case"
+  | "scan_already_active"
+  | "no_effective_scope_grants"
+  | "no_ownership_confirmed_targets"
+  | "no_compatible_authorized_targets"
+  | "no_runnable_authorized_targets";
+
+export type ScanReadinessNextStep = "cases" | "coverage" | "progress" | "scanner_setup";
+
+/** Authoritative, non-mutating backend preflight for the primary scan action. */
+export interface ScanReadiness {
+  caseId: string;
+  ready: boolean;
+  state: ScanReadinessState;
+  authorizedTargetCount: number;
+  pendingTargetCount: number;
+  compatibleEngineCount: number;
+  runnableEngineCount: number;
+  blockerCode?: ScanReadinessBlocker;
+  nextStep?: ScanReadinessNextStep;
 }
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";

@@ -32,6 +32,7 @@ import type {
   ExportFormat,
   ManagedRuntimeSetupStatus,
   PageId,
+  ScanReadiness,
   ScanRun,
   ServiceResult,
   ToastMessage,
@@ -76,6 +77,25 @@ const busyActionCopy = {
 
 const unknownBusyActionCopy = { en: "the current task", zhTW: "目前工作" } as const;
 
+const scanStartIssueCopy = {
+  no_effective_scope_grants: {
+    en: "Choose the exact target you want to check, then confirm it once.",
+    zhTW: "請先選擇這次要檢查的確切目標，並確認一次即可。",
+  },
+  no_ownership_confirmed_targets: {
+    en: "Return to scan setup and confirm the target shown there.",
+    zhTW: "請回到掃描設定，確認畫面上的目標。",
+  },
+  no_compatible_authorized_targets: {
+    en: "The current input is not usable by any check yet. Finish the target step in scan setup.",
+    zhTW: "目前的輸入還不能交給任何檢查使用；請完成掃描設定中的目標步驟。",
+  },
+  no_runnable_authorized_targets: {
+    en: "The target is ready, but its scan tools still need setup or repair.",
+    zhTW: "目標已準備好，但對應的掃描工具仍需要設定或修復。",
+  },
+} as const;
+
 const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
 
@@ -91,6 +111,7 @@ export default function App() {
   const [artifactCleanupPlan, setArtifactCleanupPlan] = useState<CaseArtifactDeletionPlan>();
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
+  const [scanReadiness, setScanReadiness] = useState<ScanReadiness>();
   const [focusedFindingId, setFocusedFindingId] = useState<string>();
   const [verificationBaselineRunId, setVerificationBaselineRunId] = useState<string>();
   const [selectedUseCase, setSelectedUseCase] = useState<{
@@ -120,6 +141,18 @@ export default function App() {
       const result = await scannerService.getSnapshot(caseId);
       applyServiceMeta(result);
       setSnapshot(result.data);
+      const readinessCaseId = result.data.workspace?.case.id;
+      if (readinessCaseId) {
+        try {
+          const readiness = await scannerService.getScanReadiness(readinessCaseId);
+          setScanReadiness(readiness.data);
+        } catch (error) {
+          setScanReadiness(undefined);
+          recordTechnicalError("check scan readiness", error);
+        }
+      } else {
+        setScanReadiness(undefined);
+      }
       setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
     } catch (error) {
       recordTechnicalError("load local cases", error);
@@ -394,6 +427,13 @@ export default function App() {
       const result = await scannerService.selectCase(caseId);
       applyServiceMeta(result);
       setSnapshot((current) => current ? { ...current, selectedCaseId: caseId, workspace: result.data } : current);
+      try {
+        const readiness = await scannerService.getScanReadiness(caseId);
+        setScanReadiness(readiness.data);
+      } catch (error) {
+        setScanReadiness(undefined);
+        recordTechnicalError("check selected case scan readiness", error);
+      }
     } catch (error) {
       recordTechnicalError("select case", error);
       pushToast({
@@ -447,6 +487,8 @@ export default function App() {
     try {
       const result = await action();
       applyServiceMeta(result);
+      if (!result.data.accepted) recordTechnicalError(`action ${key} did not start`, result.data.message);
+      const preflightCode = Object.keys(scanStartIssueCopy).find((code) => result.data.message.includes(`scan_preflight:${code}`)) as keyof typeof scanStartIssueCopy | undefined;
       pushToast({
         tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
         title: result.data.accepted
@@ -456,6 +498,8 @@ export default function App() {
             : text({ en: "The work did not start", zhTW: "工作尚未開始" }),
         detail: result.data.accepted
           ? text({ en: "Open Scan progress to follow each scanner.", zhTW: "可到「掃描進度」查看每個工具的狀態。" })
+          : preflightCode
+            ? text(scanStartIssueCopy[preflightCode])
           : text({ en: "No target was contacted. Check the current step and try again.", zhTW: "沒有接觸任何目標；請確認目前步驟後再試一次。" }),
       });
       if (result.data.snapshot) setSnapshot(result.data.snapshot);
@@ -823,8 +867,21 @@ export default function App() {
         return (
           <ProgressPage
             runs={workspace.runs}
+            readiness={scanReadiness?.caseId === currentCaseId ? scanReadiness : undefined}
+            diagnosticContext={{
+              productVersion: snapshot?.productVersion,
+              runtime: snapshot?.runtime,
+            }}
             busy={Boolean(busyAction)}
             onStart={() => runAction("start-scan", () => scannerService.startScan(currentCaseId))}
+            onFixSetup={() => {
+              if (scanReadiness?.nextStep === "scanner_setup") {
+                navigate("start");
+                void setupManagedRuntime();
+                return;
+              }
+              navigate(scanReadiness?.nextStep === "cases" ? "cases" : "coverage");
+            }}
             onPause={(runId) => runAction("pause-scan", () => scannerService.pauseScan(currentCaseId, runId))}
             onResume={(runId) => runAction("resume-scan", () => scannerService.resumeScan(currentCaseId, runId))}
             onCancel={(runId) => runAction("cancel-scan", () => scannerService.cancelScan(currentCaseId, runId))}

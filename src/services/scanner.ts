@@ -42,8 +42,11 @@ import type {
   InstalledProviderAuthorization,
   ManagedRuntimePrerequisiteRepairResult,
   ManagedRuntimeSetupStatus,
+  LocalNetworkCandidateInventory,
+  ScanReadiness,
 } from "../types";
 import {
+  adaptLocalNetworkCandidateInventory,
   adaptManagedRuntimePrerequisiteRepairResult,
   adaptManagedRuntimeSetupStatus,
   adaptNativeCase,
@@ -70,6 +73,8 @@ export const COMMANDS = {
   selectCase: "select_case",
   seedDemoCase: "seed_demo_case",
   listEngineManifests: "list_engine_manifests",
+  detectLocalPrivateSubnets: "detect_local_private_subnets",
+  getScanReadiness: "get_scan_readiness",
   startDiscovery: "start_discovery",
   cancelDiscovery: "cancel_discovery",
   connectSourceSnapshot: "connect_source_snapshot",
@@ -135,6 +140,30 @@ const serviceText = (en: string, zhTW: string): string =>
   getActiveLocale() === "en" ? en : zhTW;
 
 const nativeResult = <T,>(data: T): ServiceResult<T> => ({ data, mode: "native" });
+
+interface NativeScanReadiness {
+  case_id: string;
+  ready: boolean;
+  state: ScanReadiness["state"];
+  authorized_target_count: number;
+  pending_target_count: number;
+  compatible_engine_count: number;
+  runnable_engine_count: number;
+  blocker_code: ScanReadiness["blockerCode"] | null;
+  next_step: ScanReadiness["nextStep"] | null;
+}
+
+const adaptScanReadiness = (value: NativeScanReadiness): ScanReadiness => ({
+  caseId: value.case_id,
+  ready: value.ready,
+  state: value.state,
+  authorizedTargetCount: value.authorized_target_count,
+  pendingTargetCount: value.pending_target_count,
+  compatibleEngineCount: value.compatible_engine_count,
+  runnableEngineCount: value.runnable_engine_count,
+  blockerCode: value.blocker_code ?? undefined,
+  nextStep: value.next_step ?? undefined,
+});
 
 const demoResult = <T,>(data: T, reason?: string): ServiceResult<T> => {
   if (reason) console.warn("[ai-security-scanner] desktop service unavailable", reason);
@@ -363,6 +392,40 @@ export const scannerService = {
     } catch (error) {
       return demoResult(demo, errorMessage(error));
     }
+  },
+
+  async detectLocalPrivateSubnets(): Promise<ServiceResult<LocalNetworkCandidateInventory>> {
+    const fallback: LocalNetworkCandidateInventory = {
+      status: hasTauriRuntime() ? "unavailable" : "unsupported",
+      candidates: [],
+    };
+    if (!hasTauriRuntime()) return demoResult(fallback);
+    try {
+      const inventory = await invoke<unknown>(COMMANDS.detectLocalPrivateSubnets);
+      return nativeResult(adaptLocalNetworkCandidateInventory(inventory));
+    } catch {
+      // Interface detection is an optional convenience. Never expose native
+      // details or turn a detection failure into a guessed scan target.
+      return nativeResult(fallback);
+    }
+  },
+
+  async getScanReadiness(caseId: string): Promise<ServiceResult<ScanReadiness>> {
+    if (!hasTauriRuntime()) return demoResult({
+      caseId,
+      ready: false,
+      state: "case_unavailable",
+      authorizedTargetCount: 0,
+      pendingTargetCount: 0,
+      compatibleEngineCount: 0,
+      runnableEngineCount: 0,
+      blockerCode: "demo_case",
+      nextStep: "cases",
+    });
+    return nativeResult(adaptScanReadiness(await invoke<NativeScanReadiness>(
+      COMMANDS.getScanReadiness,
+      { caseId },
+    )));
   },
 
   async beginProviderAuthorization(

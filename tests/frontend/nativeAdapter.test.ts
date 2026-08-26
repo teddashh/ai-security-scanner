@@ -15,7 +15,7 @@ const scannerSource = readFileSync(
 
 const bundled = await build({
   stdin: {
-    contents: 'export { adaptDeclaredWebServiceMetadata, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus } from "./src/services/nativeAdapter.ts";',
+    contents: 'export { adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus } from "./src/services/nativeAdapter.ts";',
     loader: "ts",
     resolveDir: process.cwd(),
     sourcefile: "native-adapter-test-entry.ts",
@@ -30,11 +30,51 @@ const source = bundled.outputFiles[0]?.text;
 assert.ok(source, "the native adapter test bundle should contain JavaScript");
 const {
   adaptDeclaredWebServiceMetadata,
+  adaptLocalNetworkCandidateInventory,
   adaptManagedRuntimePrerequisiteRepairResult,
   adaptManagedRuntimeSetupStatus,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
+
+const localCandidate = (overrides: Record<string, unknown> = {}) => ({
+  id: `local-ipv4-${"a".repeat(64)}`,
+  target: "192.168.50.0/24",
+  kind: "local_ipv4_subnet",
+  useCase: "internal_it_environment",
+  internetExposure: "internal",
+  addressCount: 256,
+  requiresConfirmation: true,
+  ...overrides,
+});
+
+test("local network candidate adapter accepts one canonical private range", () => {
+  assert.deepEqual(adaptLocalNetworkCandidateInventory({
+    status: "ready",
+    candidates: [localCandidate()],
+  }), {
+    status: "ready",
+    candidates: [localCandidate()],
+  });
+});
+
+test("local network candidate adapter fails closed for widened or malformed suggestions", () => {
+  for (const candidate of [
+    localCandidate({ target: "203.0.113.0/24" }),
+    localCandidate({ target: "192.168.50.1/24" }),
+    localCandidate({ target: "10.0.0.0/16", addressCount: 65_536 }),
+    localCandidate({ requiresConfirmation: false }),
+  ]) {
+    assert.deepEqual(adaptLocalNetworkCandidateInventory({
+      status: "ready",
+      candidates: [candidate],
+    }), { status: "unavailable", candidates: [] });
+  }
+  assert.deepEqual(adaptLocalNetworkCandidateInventory({
+    status: "ambiguous",
+    candidates: [localCandidate()],
+  }), { status: "unavailable", candidates: [] });
+});
 
 const runtimeSetupDto = (overrides: Record<string, unknown> = {}) => ({
   phase: "failed",

@@ -34,6 +34,21 @@ test("all progress controls remain wired while raw scanner status stays in detai
   assert.match(source, /未執行的檢查不能視為已通過/u);
 });
 
+test("scan readiness blocks empty runs and sends each fix to the useful screen", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(progress, /action=\{readiness\?\.ready \?/u);
+  assert.match(progress, /readiness\?\.nextStep === "scanner_setup"[\s\S]*copy\.setupTools/u);
+  assert.match(progress, /Nothing was scanned/u);
+  assert.match(progress, /這次其實沒有開始掃描/u);
+  assert.match(progress, /Download diagnostic log/u);
+  assert.match(progress, /下載診斷紀錄/u);
+
+  assert.match(app, /scanReadiness\?\.nextStep === "scanner_setup"[\s\S]*navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
+  assert.match(app, /scanReadiness\?\.nextStep === "cases" \? "cases" : "coverage"/u);
+});
+
 test("progress keeps scanner implementation data below the first layer", async () => {
   const source = await readPage("ProgressPage.tsx");
   const ledger = source.indexOf('<div className="engine-state-ledger"');

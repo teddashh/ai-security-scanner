@@ -5,14 +5,18 @@ import { EmptyState, InlineNotice, MetricCard, PageHeader, ProgressBar } from ".
 import { StatusPill } from "../components/StatusPill";
 import { useI18n } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
-import type { EngineRun, EngineRunStatus, ExecutionStage, ScanRun } from "../types";
+import { blockedRunSummary, buildScanDiagnostic, type ScanDiagnosticContext } from "../scanDiagnostics";
+import type { EngineRun, EngineRunStatus, ExecutionStage, ScanReadiness, ScanRun } from "../types";
 import "./page-technical-details.css";
 import { displayTechnicalDetail } from "./pageTechnicalDetails";
 
 interface ProgressPageProps {
   runs: ScanRun[];
+  readiness?: ScanReadiness;
+  diagnosticContext?: ScanDiagnosticContext;
   busy?: boolean;
   onStart: () => Promise<void>;
+  onFixSetup: () => void;
   onPause: (runId: string) => Promise<void>;
   onResume: (runId: string) => Promise<void>;
   onCancel: (runId: string) => Promise<void>;
@@ -31,6 +35,34 @@ const copy = {
     zhTW: "準備好後就開始掃描；每項檢查與新結果都會顯示在這裡。",
   },
   start: { en: "Start scan", zhTW: "開始掃描" },
+  checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
+  finishSetup: { en: "Finish scan setup", zhTW: "完成掃描設定" },
+  setupTools: { en: "Set up scan tools automatically", zhTW: "自動準備掃描工具" },
+  chooseProject: { en: "Choose a scan project", zhTW: "選擇掃描專案" },
+  readiness: {
+    demo_case: { en: "Create or open a real scan project before starting.", zhTW: "請先建立或開啟真正的掃描專案。" },
+    archived_case: { en: "This scan project is archived. Choose an active project to continue.", zhTW: "這個掃描專案已封存；請選擇仍在使用的專案。" },
+    scan_already_active: { en: "A scan is already running or paused for this project.", zhTW: "這個專案已有正在執行或暫停中的掃描。" },
+    no_effective_scope_grants: { en: "Choose the exact target you want to check, then confirm it once.", zhTW: "請選擇這次要檢查的確切目標，並確認一次即可。" },
+    no_ownership_confirmed_targets: { en: "The target has not been confirmed yet. Return to setup and confirm it.", zhTW: "目標尚未確認；請回到設定頁確認這次要掃描的目標。" },
+    no_compatible_authorized_targets: { en: "The current input cannot be scanned yet. Finish the target step shown in setup.", zhTW: "目前的輸入還不能掃描；請完成設定頁顯示的目標步驟。" },
+    no_runnable_authorized_targets: { en: "Your target is ready, but its scan tools still need setup or repair.", zhTW: "目標已準備好，但對應的掃描工具仍需要設定或修復。" },
+  },
+  blockedTitle: { en: "Nothing was scanned", zhTW: "這次其實沒有開始掃描" },
+  blockedNoTargets: {
+    en: "This older attempt had no confirmed target that any selected check could use. No device, website, account, or file was contacted.",
+    zhTW: "這筆舊紀錄沒有任何檢查可使用的已確認目標；沒有接觸任何設備、網站、帳號或檔案。",
+  },
+  blockedNoChecks: {
+    en: "The target was recorded, but none of its checks could run. No result was produced.",
+    zhTW: "目標已有紀錄，但沒有任何檢查能執行，因此沒有產生結果。",
+  },
+  downloadLog: { en: "Download diagnostic log", zhTW: "下載診斷紀錄" },
+  skippedTechnical: { en: "Technical records from {count} skipped checks", zhTW: "{count} 項未執行檢查的技術紀錄" },
+  diagnosticPrivacy: {
+    en: "The diagnostic log excludes target names, asset IDs, raw evidence, paths, and scanner messages.",
+    zhTW: "診斷紀錄不包含目標名稱、資產 ID、原始證據、檔案路徑或掃描工具訊息。",
+  },
   pause: { en: "Pause", zhTW: "暫停" },
   resume: { en: "Continue unfinished work", zhTW: "繼續未完成的工作" },
   cancel: { en: "Cancel this run", zhTW: "取消這一輪" },
@@ -195,9 +227,14 @@ const engineIcon = (engine: EngineRun) => {
   return "settings" as const;
 };
 
-export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel }: ProgressPageProps) {
+export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart, onFixSetup, onPause, onResume, onCancel }: ProgressPageProps) {
   const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id);
+  const fixActionLabel = readiness?.nextStep === "scanner_setup"
+    ? copy.setupTools
+    : readiness?.nextStep === "cases"
+      ? copy.chooseProject
+      : copy.finishSetup;
 
   useEffect(() => {
     if (!runs.some((run) => run.id === selectedRunId)) setSelectedRunId(runs[0]?.id);
@@ -219,6 +256,16 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
     return text(copy.unknownPhase);
   };
 
+  const downloadDiagnostic = (run: ScanRun) => {
+    const blob = new Blob([buildScanDiagnostic(run, diagnosticContext)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ai-security-scanner-diagnostic-${run.id}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (!selectedRun) {
     return (
       <div className="page">
@@ -227,22 +274,39 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
           icon="progress"
           title={text(copy.emptyTitle)}
           description={text(copy.emptyDescription)}
-          action={(
+          action={readiness?.ready ? (
             <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStart()}>
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
+          ) : readiness ? (
+            <button className="button button--primary" type="button" disabled={busy || readiness.nextStep === "progress"} onClick={onFixSetup}>
+              <Icon name="arrow" size={17} />{text(fixActionLabel)}
+            </button>
+          ) : (
+            <button className="button button--secondary" type="button" disabled>
+              <Icon name="refresh" size={17} />{text(copy.checkingReady)}
+            </button>
           )}
         />
+        {readiness && !readiness.ready && readiness.blockerCode && (
+          <InlineNotice tone="warning" title={text(copy.finishSetup)}>
+            <p>{text(copy.readiness[readiness.blockerCode])}</p>
+          </InlineNotice>
+        )}
       </div>
     );
   }
 
   const runMeta = runStatusMeta[selectedRun.status];
+  const blocked = blockedRunSummary(selectedRun);
   const canPause = selectedRun.status === "running";
   const hasResumableEngine = selectedRun.engineRuns.some((engine) => engine.resumable);
   const canResume = selectedRun.status === "paused"
     || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine);
   const canCancel = selectedRun.status === "running" || selectedRun.status === "paused" || selectedRun.status === "queued";
+  const hasDiagnosticIssue = selectedRun.status === "failed"
+    || selectedRun.status === "partial"
+    || selectedRun.engineRuns.some((engine) => Boolean(engine.errorCode));
   const interruptedEngines = selectedRun.engineRuns.filter(
     (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
   );
@@ -274,6 +338,11 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
         description={text(copy.description)}
         actions={(
           <div className="button-group">
+            {hasDiagnosticIssue && (
+              <button className="button button--secondary" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
+                <Icon name="file" size={17} />{text(copy.downloadLog)}
+              </button>
+            )}
             {canPause && (
               <button className="button button--secondary" type="button" disabled={busy} aria-label={text(copy.pauseAria, { id: selectedRun.id })} onClick={() => void onPause(selectedRun.id)}>
                 <Icon name="pause" size={17} />{text(copy.pause)}
@@ -338,21 +407,38 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
       <section className="run-overview run-overview--single">
         <div className="run-overview__copy">
           <div className="run-overview__meta">
-            <StatusPill label={runMeta.label} tone={runMeta.tone} />
+            <StatusPill label={blocked ? text(copy.blockedTitle) : runMeta.label} tone={blocked ? "warning" : runMeta.tone} />
             <span>{selectedRun.label}</span>
           </div>
           <h2>{text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
-          <p>
+          <p>{blocked ? text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks) : (
+            <>
             {text(copy.runSummary, {
               covered: formatNumber(selectedRun.coveredAssetCount),
               total: formatNumber(selectedRun.totalAssetCount),
               started: showDateTime(selectedRun.startedAt),
             })}
             {selectedRun.finishedAt ? text(copy.finished, { finished: showDateTime(selectedRun.finishedAt) }) : ""}
-          </p>
+            </>
+          )}</p>
           <ProgressBar value={selectedRun.progress} label={text(copy.overallProgress)} tone={selectedRun.status === "failed" ? "danger" : selectedRun.status === "partial" ? "warning" : "accent"} />
         </div>
       </section>
+
+      {blocked && (
+        <InlineNotice tone="warning" title={text(copy.blockedTitle)}>
+          <p>{text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)}</p>
+          <div className="button-group">
+            <button className="button button--primary button--small" type="button" onClick={onFixSetup}>
+              <Icon name="arrow" size={15} />{text(fixActionLabel)}
+            </button>
+            <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
+              <Icon name="file" size={15} />{text(copy.downloadLog)}
+            </button>
+          </div>
+          <small>{text(copy.diagnosticPrivacy)}</small>
+        </InlineNotice>
+      )}
 
       <details className="page-technical-details page-technical-details--guide">
         <summary>{text(copy.scanTechnicalDetails)}</summary>
@@ -379,14 +465,14 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
         </div>
       </details>
 
-      <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
+      {!blocked && <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
         <MetricCard label={text(copy.completed)} value={formatNumber(stateCounts.completed)} detail={text(copy.completedDetail)} icon="check" tone="accent" />
         <MetricCard label={text(copy.partial)} value={formatNumber(stateCounts.partial)} detail={text(copy.partialDetail)} icon="warning" tone={stateCounts.partial ? "warning" : "default"} />
         <MetricCard label={text(copy.failedCancelled)} value={formatNumber(stateCounts.failed + stateCounts.cancelled)} detail={text(copy.failedCancelledDetail)} icon="stop" tone={stateCounts.failed ? "danger" : "default"} />
         <MetricCard label={text(copy.notRun)} value={formatNumber(stateCounts.not_executed)} detail={text(copy.notRunDetail)} icon="clock" tone={stateCounts.not_executed ? "warning" : "default"} />
-      </section>
+      </section>}
 
-      {incompleteCount > 0 && (
+      {!blocked && incompleteCount > 0 && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
           <p>{text(copy.incompleteBody)}</p>
         </InlineNotice>
@@ -402,7 +488,17 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
           <span className="count-label">{text(copy.workCount, { count: formatNumber(selectedRun.engineRuns.length) })}</span>
         </div>
 
-        {selectedRun.engineRuns.length === 0 ? (
+        {blocked ? (
+          <details className="page-technical-details">
+            <summary>{text(copy.skippedTechnical, { count: formatNumber(blocked.skippedCheckCount) })}</summary>
+            <dl>
+              <div><dt>{text(copy.errorCode)}</dt><dd><code>{blocked.reasonCodes.join(", ") || text(copy.noneReported)}</code></dd></div>
+              <div><dt>{text(copy.targets)}</dt><dd>0</dd></div>
+              <div><dt>{text(copy.rawEvidenceFiles)}</dt><dd>0</dd></div>
+            </dl>
+            <p>{text(copy.diagnosticPrivacy)}</p>
+          </details>
+        ) : selectedRun.engineRuns.length === 0 ? (
           <EmptyState icon="progress" title={text(copy.noWorkTitle)} description={text(copy.noWorkDescription)} />
         ) : (
           <div className="engine-list">
@@ -527,7 +623,10 @@ export function ProgressPage({ runs, busy, onStart, onPause, onResume, onCancel 
                 <strong>{run.label}</strong>
                 <span>{showDateTime(run.startedAt)} · {text(copy.historySnapshot, { date: showDateTime(run.knowledgeDate) })}</span>
               </span>
-              <StatusPill label={runStatusMeta[run.status].label} tone={runStatusMeta[run.status].tone} />
+              <StatusPill
+                label={blockedRunSummary(run) ? text(copy.blockedTitle) : runStatusMeta[run.status].label}
+                tone={blockedRunSummary(run) ? "warning" : runStatusMeta[run.status].tone}
+              />
               <b>{formatNumber(run.progress)}%</b>
             </button>
           ))}
