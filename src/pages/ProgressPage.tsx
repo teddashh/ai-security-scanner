@@ -12,7 +12,7 @@ import {
   skippedEngineRunSummary,
   type ScanDiagnosticContext,
 } from "../scanDiagnostics";
-import { engineNextStepFor, engineOutcomeFor } from "../scanPresentation";
+import { engineNextStepFor, engineOutcomeFor, skippedChecksNextStepFor } from "../scanPresentation";
 import type {
   EngineRun,
   EngineRunStatus,
@@ -150,10 +150,6 @@ const copy = {
   downloadLog: { en: "Download diagnostic log", zhTW: "下載診斷紀錄" },
   skippedTechnical: { en: "Technical records from {count} skipped checks", zhTW: "{count} 項未執行檢查的技術紀錄" },
   skippedGroupTitle: { en: "{count} planned checks did not start", zhTW: "{count} 項預定檢查沒有開始" },
-  skippedGroupAction: {
-    en: "Finish the target or scan-tool setup shown above, then start a new scan.",
-    zhTW: "請完成上方顯示的目標或掃描工具設定，再開始新的掃描。",
-  },
   sharedFailureTitle: { en: "The private scan engine did not start", zhTW: "私有掃描引擎沒有啟動" },
   sharedFailureBody: {
     en: "One scan-tool problem stopped {count} checks before they could inspect anything. Open scan-tool setup, make sure the engine is ready, then start a new scan.",
@@ -241,10 +237,6 @@ const copy = {
     zhTW: "目前沒有掃描結果可查看；請完成掃描設定，再開始新的掃描。",
   },
   notStarted: { en: "This check did not start", zhTW: "這項檢查沒有開始" },
-  notStartedReason: {
-    en: "Finish the suggested setup step, then start a new scan.",
-    zhTW: "請完成建議的設定步驟，再開始新的掃描。",
-  },
   checkProgress: { en: "Check progress", zhTW: "檢查進度" },
   currentStep: { en: "Current step: ", zhTW: "目前步驟：" },
   interruptedPhase: { en: "Stopped when the desktop app restarted", zhTW: "桌面程式重新啟動時中斷" },
@@ -761,13 +753,13 @@ export function ProgressPage({
                   <span className="engine-icon engine-icon--unknown"><Icon name="info" size={19} /></span>
                   <span>
                     <strong>{text(copy.skippedGroupTitle, { count: formatNumber(skipped.checkCount) })}</strong>
-                    <small>{text(copy.skippedGroupAction)}</small>
+                    <small>{text(skippedChecksNextStepFor(skipped.reasonCodes))}</small>
                   </span>
                 </div>
                 <div className="engine-row__progress">
                   <div className="engine-not-executed">
                     <Icon name="info" size={16} />
-                    <span><strong>{text(copy.notStarted)}</strong><small>{text(copy.notStartedReason)}</small></span>
+                    <span><strong>{text(copy.notStarted)}</strong><small>{text(skippedChecksNextStepFor(skipped.reasonCodes))}</small></span>
                   </div>
                   {aggregateTechnicalRecords(
                     selectedRun.engineRuns.filter((engine) => engine.status === "not_executed"),
@@ -797,7 +789,7 @@ export function ProgressPage({
                     {engine.status === "not_executed" ? (
                       <div className="engine-not-executed">
                         <Icon name="info" size={16} />
-                        <span><strong>{text(copy.notStarted)}</strong><small>{text(copy.notStartedReason)}</small></span>
+                        <span><strong>{text(copy.notStarted)}</strong><small>{text(engineNextStepFor(engine))}</small></span>
                       </div>
                     ) : (
                       <ProgressBar value={engine.progress} label={text(copy.checkProgress)} tone={engine.status === "failed" ? "danger" : engine.status === "partial" ? "warning" : "accent"} />

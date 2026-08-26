@@ -1,13 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
+import { build } from "esbuild";
+import type { EngineRun } from "../../src/types.ts";
+
+const bundled = await build({
+  entryPoints: [new URL("../../src/scanPresentation.ts", import.meta.url).pathname],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node22",
+  write: false,
+});
+const bundledSource = bundled.outputFiles[0]?.text;
+assert.ok(bundledSource, "scan presentation bundle should contain JavaScript");
+const {
   catalogEngineIds,
   engineNextStepFor,
   engineOutcomeCopy,
   engineOutcomeFor,
-} from "../../src/scanPresentation.ts";
-import type { EngineRun } from "../../src/types.ts";
+  skippedChecksNextStepFor,
+} = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString("base64")}`);
 
 const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   id: "engine-run-1",
@@ -59,9 +72,96 @@ test("every check state provides an actionable bilingual next step without raw e
 
 test("known setup failures lead to the matching safe next step", () => {
   const target = engineNextStepFor(engine({ status: "not_executed", errorCode: "no_compatible_authorized_assets" }));
-  const tools = engineNextStepFor(engine({ status: "failed", errorCode: "execution_failed" }));
+  const tools = engineNextStepFor(engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    rawArtifactCount: 0,
+    findingCount: 0,
+    checkpoint: {
+      attempt: 1,
+      stage: "failed",
+      artifactCount: 0,
+      cleanupCompleted: true,
+      scopeBound: false,
+      lastError: "bounded local failure",
+    },
+  }));
   assert.match(target.en, /scan setup/u);
   assert.match(target.zhTW, /掃描設定/u);
   assert.match(tools.en, /scan-tool setup/u);
   assert.match(tools.zhTW, /掃描工具設定/u);
+});
+
+test("execution_failed only recommends tool setup with explicit pre-start evidence", () => {
+  const missingCheckpoint = engineNextStepFor(engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    checkpoint: undefined,
+    rawArtifactCount: 0,
+    findingCount: 0,
+  }));
+  assert.doesNotMatch(missingCheckpoint.en, /scan-tool setup/u);
+  assert.match(missingCheckpoint.en, /diagnostic log/u);
+  assert.match(missingCheckpoint.zhTW, /診斷紀錄/u);
+
+  for (const started of [
+    engine({
+      status: "failed",
+      phase: "failed",
+      errorCode: "execution_failed",
+      runtimeProvider: "managed",
+      checkpoint: { attempt: 1, stage: "failed", artifactCount: 0, cleanupCompleted: true, scopeBound: false },
+    }),
+    engine({
+      status: "failed",
+      phase: "failed",
+      errorCode: "execution_failed",
+      exitCode: 2,
+      checkpoint: { attempt: 1, stage: "failed", artifactCount: 0, cleanupCompleted: true, scopeBound: true },
+    }),
+  ]) {
+    const action = engineNextStepFor(started);
+    assert.doesNotMatch(action.en, /scan-tool setup/u);
+    assert.match(action.en, /did not finish|diagnostic log/u);
+    assert.match(action.zhTW, /沒有完成|診斷紀錄/u);
+  }
+});
+
+test("post-start failures preserve results and cleanup guidance", () => {
+  const withResults = engineNextStepFor(engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    rawArtifactCount: 1,
+    findingCount: 2,
+    checkpoint: { attempt: 1, stage: "failed", artifactCount: 1, cleanupCompleted: true, scopeBound: true },
+  }));
+  assert.match(withResults.en, /Review the results already saved/u);
+  assert.match(withResults.zhTW, /查看已保存的結果/u);
+
+  const cleanup = engineNextStepFor(engine({ status: "failed", errorCode: "runtime_cleanup_pending" }));
+  assert.match(cleanup.en, /cleanup status/u);
+  assert.match(cleanup.zhTW, /清理狀態/u);
+  assert.doesNotMatch(cleanup.en, /scan-tool setup/u);
+});
+
+test("typed skipped reasons choose a specific bilingual next step without rendering the code", () => {
+  const cases = [
+    [["no_compatible_authorized_assets"], /scan setup/u, /掃描設定/u],
+    [["provider_source_required"], /cloud setup/u, /雲端設定/u],
+    [["runtime_image_unavailable"], /scan-tool setup/u, /掃描工具設定/u],
+    [["engine_release_unavailable"], /not available in this version/u, /目前版本無法使用/u],
+  ] as const;
+  for (const [codes, english, traditionalChinese] of cases) {
+    const action = skippedChecksNextStepFor(codes);
+    assert.match(action.en, english);
+    assert.match(action.zhTW, traditionalChinese);
+    assert.doesNotMatch(`${action.en}${action.zhTW}`, new RegExp(codes[0], "u"));
+  }
+
+  const mixed = skippedChecksNextStepFor(["no_compatible_authorized_assets", "runtime_image_unavailable"]);
+  assert.match(mixed.en, /more than one fix/u);
+  assert.match(mixed.zhTW, /不只一項問題/u);
 });

@@ -54,6 +54,24 @@ export const skippedEngineRunSummary = (run: ScanRun): AggregatedEngineRunSummar
 };
 
 /**
+ * Evidence that a failure happened before runtime preflight or a frozen scope
+ * was established. Missing checkpoint data is unknown, never proof that a
+ * scanner failed before start.
+ */
+export const isExplicitPreScannerInfrastructureFailure = (engine: EngineRun): boolean => Boolean(
+  engine.status === "failed"
+  && engine.errorCode === "execution_failed"
+  && engine.checkpoint
+  && engine.checkpoint.stage === "failed"
+  && !engine.checkpoint.scopeBound
+  && engine.checkpoint.artifactCount === 0
+  && engine.rawArtifactCount === 0
+  && engine.findingCount === 0
+  && engine.exitCode === undefined
+  && !engine.runtimeProvider,
+);
+
+/**
  * Collapse a fan-out caused by one pre-scanner infrastructure failure. The
  * comparison never displays or interprets raw messages; it only verifies that
  * every runnable check stopped at the same pre-scope boundary.
@@ -63,18 +81,7 @@ export const sharedInfrastructureFailureSummary = (
 ): AggregatedEngineRunSummary | undefined => {
   const attempted = run.engineRuns.filter((engine) => engine.status !== "not_executed");
   if (attempted.length < 2) return undefined;
-  const preScannerFailures = attempted.every((engine) =>
-    engine.status === "failed"
-    && engine.errorCode === "execution_failed"
-    && engine.rawArtifactCount === 0
-    && engine.findingCount === 0
-    && engine.exitCode === undefined
-    && !engine.runtimeProvider
-    && (!engine.checkpoint || (
-      engine.checkpoint.stage === "failed"
-      && !engine.checkpoint.scopeBound
-    )),
-  );
+  const preScannerFailures = attempted.every(isExplicitPreScannerInfrastructureFailure);
   if (!preScannerFailures) return undefined;
 
   const failureSignatures = new Set(attempted.map((engine) =>

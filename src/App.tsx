@@ -15,6 +15,10 @@ import { StartPage } from "./pages/StartPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import { isProviderConfigurationBlocker } from "./scanReadiness";
 import {
+  isCurrentScanReadinessRequest,
+  isCurrentScanReadinessResponse,
+} from "./scanReadinessRequest";
+import {
   checkForAppUpdate,
   installAppUpdate,
   type AppUpdateState,
@@ -154,6 +158,7 @@ export default function App() {
   });
   const toastId = useRef(0);
   const snapshotLocale = useRef(locale);
+  const scanReadinessRequestGeneration = useRef(0);
 
   const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
     const id = ++toastId.current;
@@ -167,28 +172,40 @@ export default function App() {
   }, []);
 
   const loadSnapshot = useCallback(async (caseId?: string, quiet = false) => {
+    const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
     if (!quiet) setLoading(true);
     try {
       const result = await scannerService.getSnapshot(caseId);
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
       setSnapshot(result.data);
       const readinessCaseId = result.data.workspace?.case.id;
       if (readinessCaseId) {
         try {
           const readiness = await scannerService.getScanReadiness(readinessCaseId);
+          if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+          if (!isCurrentScanReadinessResponse(
+            scanReadinessRequestGeneration.current,
+            readinessRequestGeneration,
+            readinessCaseId,
+            readiness.data.caseId,
+          )) throw new Error("scan readiness response did not match the requested case");
           setScanReadiness(readiness.data);
           setScanReadinessErrorCaseId(undefined);
         } catch (error) {
-          setScanReadiness(undefined);
-          setScanReadinessErrorCaseId(readinessCaseId);
-          recordTechnicalError("check scan readiness", error);
+          if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
+            setScanReadiness(undefined);
+            setScanReadinessErrorCaseId(readinessCaseId);
+            recordTechnicalError("check scan readiness", error);
+          }
         }
-      } else {
+      } else if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
         setScanReadiness(undefined);
         setScanReadinessErrorCaseId(undefined);
       }
       setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
     } catch (error) {
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       recordTechnicalError("load local cases", error);
       if (!quiet) {
         pushToast({
@@ -456,21 +473,33 @@ export default function App() {
   };
 
   const selectCase = async (caseId: string) => {
+    const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
     setLoading(true);
     try {
       const result = await scannerService.selectCase(caseId);
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
       setSnapshot((current) => current ? { ...current, selectedCaseId: caseId, workspace: result.data } : current);
       try {
         const readiness = await scannerService.getScanReadiness(caseId);
+        if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+        if (!isCurrentScanReadinessResponse(
+          scanReadinessRequestGeneration.current,
+          readinessRequestGeneration,
+          caseId,
+          readiness.data.caseId,
+        )) throw new Error("scan readiness response did not match the selected case");
         setScanReadiness(readiness.data);
         setScanReadinessErrorCaseId(undefined);
       } catch (error) {
-        setScanReadiness(undefined);
-        setScanReadinessErrorCaseId(caseId);
-        recordTechnicalError("check selected case scan readiness", error);
+        if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
+          setScanReadiness(undefined);
+          setScanReadinessErrorCaseId(caseId);
+          recordTechnicalError("check selected case scan readiness", error);
+        }
       }
     } catch (error) {
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       recordTechnicalError("select case", error);
       pushToast({
         tone: "danger",
@@ -486,23 +515,33 @@ export default function App() {
   };
 
   const retryScanReadiness = async (caseId: string) => {
+    const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
     setBusyAction("scan-readiness");
     try {
       const result = await scannerService.getScanReadiness(caseId);
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+      if (!isCurrentScanReadinessResponse(
+        scanReadinessRequestGeneration.current,
+        readinessRequestGeneration,
+        caseId,
+        result.data.caseId,
+      )) throw new Error("scan readiness response did not match the requested case");
       applyServiceMeta(result);
       setScanReadiness(result.data);
       setScanReadinessErrorCaseId(undefined);
     } catch (error) {
-      setScanReadinessErrorCaseId(caseId);
-      recordTechnicalError("retry scan readiness", error);
-      pushToast({
-        tone: "warning",
-        title: text({ en: "Could not check yet", zhTW: "目前仍無法完成檢查" }),
-        detail: text({
-          en: "No scan started and nothing changed. Check again in a moment.",
-          zhTW: "掃描尚未開始，也沒有變更任何資料；請稍後重新檢查。",
-        }),
-      });
+      if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
+        setScanReadinessErrorCaseId(caseId);
+        recordTechnicalError("retry scan readiness", error);
+        pushToast({
+          tone: "warning",
+          title: text({ en: "Could not check yet", zhTW: "目前仍無法完成檢查" }),
+          detail: text({
+            en: "No scan started and nothing changed. Check again in a moment.",
+            zhTW: "掃描尚未開始，也沒有變更任何資料；請稍後重新檢查。",
+          }),
+        });
+      }
     } finally {
       setBusyAction(undefined);
     }

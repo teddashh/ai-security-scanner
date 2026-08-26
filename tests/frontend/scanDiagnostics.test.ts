@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   blockedRunSummary,
   buildScanDiagnostic,
+  isExplicitPreScannerInfrastructureFailure,
   sharedInfrastructureFailureSummary,
   skippedEngineRunSummary,
 } from "../../src/scanDiagnostics.ts";
@@ -120,6 +121,27 @@ test("scanner-specific or different failures are never collapsed as one infrastr
     first,
     { ...second, message: "first", checkpoint: { ...second.checkpoint!, lastError: "first", scopeBound: true } },
   ])), undefined);
+});
+
+test("missing checkpoint, runtime preflight, or an exit code is not pre-start evidence", () => {
+  const base = engine({
+    status: "failed",
+    phase: "failed",
+    errorCode: "execution_failed",
+    message: "same failure",
+    rawArtifactCount: 0,
+    findingCount: 0,
+  });
+  assert.equal(isExplicitPreScannerInfrastructureFailure(base), false);
+  assert.equal(sharedInfrastructureFailureSummary(run([
+    base,
+    { ...base, id: "engine-run-2" },
+  ])), undefined);
+
+  const checkpoint = { attempt: 1, stage: "failed" as const, artifactCount: 0, cleanupCompleted: true, scopeBound: false, lastError: "same failure" };
+  assert.equal(isExplicitPreScannerInfrastructureFailure({ ...base, checkpoint, runtimeProvider: "managed" }), false);
+  assert.equal(isExplicitPreScannerInfrastructureFailure({ ...base, checkpoint, exitCode: 125 }), false);
+  assert.equal(isExplicitPreScannerInfrastructureFailure({ ...base, checkpoint }), true);
 });
 
 test("shareable diagnostic omits target-controlled messages, warnings, paths, and asset ids", () => {

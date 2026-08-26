@@ -1,4 +1,5 @@
 import type { BilingualText } from "./i18n";
+import { isExplicitPreScannerInfrastructureFailure } from "./scanDiagnostics";
 import type { EngineRun } from "./types";
 
 export const catalogEngineIds = [
@@ -101,6 +102,38 @@ const nextStepCopy = {
     en: "Open scan-tool setup, make sure the private engine is ready, then start a new scan.",
     zhTW: "開啟掃描工具設定，確認私有引擎已就緒，再開始新的掃描。",
   },
+  executionStoppedWithResults: {
+    en: "Review the results already saved, download the diagnostic log, then retry this check.",
+    zhTW: "先查看已保存的結果並下載診斷紀錄，再重試這項檢查。",
+  },
+  executionStopped: {
+    en: "This check began but did not finish. Download the diagnostic log, then retry it.",
+    zhTW: "這項檢查已開始但沒有完成；請下載診斷紀錄後再重試。",
+  },
+  executionUnknown: {
+    en: "This check stopped without enough detail to blame setup. Download the diagnostic log, then retry it.",
+    zhTW: "目前沒有足夠資訊判定是設定問題；請下載診斷紀錄後重試這項檢查。",
+  },
+  cleanupPending: {
+    en: "Review the saved results and cleanup status, then retry after cleanup finishes.",
+    zhTW: "請查看已保存的結果與清理狀態，待清理完成後再重試。",
+  },
+  providerSetup: {
+    en: "Return to cloud setup and reconnect or review the selected account.",
+    zhTW: "請回到雲端設定，重新連接或檢查所選帳號。",
+  },
+  unavailableInRelease: {
+    en: "These checks are not available in this version. Review completed results and update the app before trying again.",
+    zhTW: "這些檢查在目前版本無法使用；請先查看已完成的結果，更新程式後再試。",
+  },
+  mixedSkippedSetup: {
+    en: "The skipped checks need more than one fix. Finish target or cloud setup and update or repair the scan tools, then start a new scan.",
+    zhTW: "未執行的檢查需要處理不只一項問題；請完成目標或雲端設定，並更新或修復掃描工具，再開始新的掃描。",
+  },
+  skippedUnknown: {
+    en: "Open the technical records for the skipped checks, finish the indicated setup, then start a new scan.",
+    zhTW: "請展開未執行檢查的技術紀錄，完成其中指出的設定，再開始新的掃描。",
+  },
   retry: {
     en: "Try this check again. If it stops again, download the diagnostic log for support.",
     zhTW: "請再試一次；若再次停止，請下載診斷紀錄以便排查。",
@@ -116,28 +149,68 @@ const targetSetupErrorCodes = new Set([
   "no_effective_scope_grants",
   "no_ownership_confirmed_targets",
   "no_compatible_authorized_targets",
+]);
+
+const providerSetupErrorCodes = new Set([
+  "provider_connection_required",
+  "provider_capability_required",
+  "provider_review_required",
   "provider_source_required",
+  "provider_capability_unavailable",
+  "provider_source_ambiguous",
+  "provider_authorization_binding_mismatch",
   "provider_target_binding_mismatch",
+  "provider_preflight_unavailable",
 ]);
 
 const toolSetupErrorCodes = new Set([
-  "execution_failed",
-  "runtime_cleanup_pending",
+  "manifest_unavailable",
+  "adapter_unavailable",
+  "adapter_version_mismatch",
   "runtime_image_unavailable",
   "runtime_image_unpinned",
   "command_unavailable",
   "external_executable_unsupported",
 ]);
 
+const releaseUnavailableErrorCodes = new Set([
+  "engine_release_unavailable",
+  "engine_deprecated",
+  "research_only",
+  "license_review",
+]);
+
 export const engineOutcomeFor = (engine: Pick<EngineRun, "engineId">): BilingualText =>
   engineOutcomeCopy[engine.engineId as CatalogEngineId] ?? fallbackOutcome;
 
+export const skippedChecksNextStepFor = (reasonCodes: readonly string[]): BilingualText => {
+  const hasTargetIssue = reasonCodes.some((code) => targetSetupErrorCodes.has(code));
+  const hasProviderIssue = reasonCodes.some((code) => providerSetupErrorCodes.has(code));
+  const hasToolIssue = reasonCodes.some((code) => toolSetupErrorCodes.has(code));
+  const hasReleaseIssue = reasonCodes.some((code) => releaseUnavailableErrorCodes.has(code));
+  const knownCount = Number(hasTargetIssue) + Number(hasProviderIssue) + Number(hasToolIssue) + Number(hasReleaseIssue);
+
+  if (knownCount > 1) return nextStepCopy.mixedSkippedSetup;
+  if (hasTargetIssue) return nextStepCopy.targetSetup;
+  if (hasProviderIssue) return nextStepCopy.providerSetup;
+  if (hasToolIssue) return nextStepCopy.toolSetup;
+  if (hasReleaseIssue) return nextStepCopy.unavailableInRelease;
+  return nextStepCopy.skippedUnknown;
+};
+
 export const engineNextStepFor = (engine: EngineRun): BilingualText => {
+  if (engine.status === "completed") {
+    return engine.findingCount > 0
+      ? nextStepCopy.completedWithFindings
+      : nextStepCopy.completedClear;
+  }
   if (engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted") {
     return nextStepCopy.interrupted;
   }
   if (engine.errorCode === "provider_rate_limited") return nextStepCopy.providerBusy;
+  if (engine.status === "partial") return nextStepCopy.partial;
   if (targetSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.targetSetup;
+  if (providerSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.providerSetup;
 
   switch (engine.status) {
     case "pending":
@@ -146,21 +219,25 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
       return nextStepCopy.running;
     case "paused":
       return nextStepCopy.paused;
-    case "completed":
-      return engine.findingCount > 0
-        ? nextStepCopy.completedWithFindings
-        : nextStepCopy.completedClear;
-    case "partial":
-      return nextStepCopy.partial;
     case "not_executed":
-      return toolSetupErrorCodes.has(engine.errorCode ?? "")
-        ? nextStepCopy.toolSetup
-        : nextStepCopy.targetSetup;
+      return skippedChecksNextStepFor(engine.errorCode ? [engine.errorCode] : []);
     case "cancelled":
       return nextStepCopy.cancelled;
-    case "failed":
-      return toolSetupErrorCodes.has(engine.errorCode ?? "")
-        ? nextStepCopy.toolSetup
-        : nextStepCopy.retry;
+    case "failed": {
+      if (engine.errorCode === "runtime_cleanup_pending") return nextStepCopy.cleanupPending;
+      if (engine.errorCode === "execution_failed") {
+        if (isExplicitPreScannerInfrastructureFailure(engine)) return nextStepCopy.toolSetup;
+        if (engine.rawArtifactCount > 0 || engine.findingCount > 0 || (engine.checkpoint?.artifactCount ?? 0) > 0) {
+          return nextStepCopy.executionStoppedWithResults;
+        }
+        if (engine.checkpoint?.scopeBound || engine.runtimeProvider || engine.exitCode !== undefined) {
+          return nextStepCopy.executionStopped;
+        }
+        return nextStepCopy.executionUnknown;
+      }
+      if (toolSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.toolSetup;
+      if (releaseUnavailableErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.unavailableInRelease;
+      return nextStepCopy.retry;
+    }
   }
 };

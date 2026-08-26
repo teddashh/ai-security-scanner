@@ -140,6 +140,10 @@ test("readiness errors remain retryable and runtime setup receives focus", async
   assert.match(progress, /readiness \|\| readinessCheckFailed[\s\S]*onClick=\{onFixSetup\}/u);
   assert.match(app, /setScanReadinessErrorCaseId\(readinessCaseId\)/u);
   assert.match(app, /setScanReadinessErrorCaseId\(caseId\)/u);
+  assert.match(app, /scanReadinessRequestGeneration = useRef\(0\)/u);
+  assert.match(app, /\+\+scanReadinessRequestGeneration\.current/u);
+  assert.match(app, /isCurrentScanReadinessResponse\([\s\S]*readiness\.data\.caseId/u);
+  assert.match(app, /isCurrentScanReadinessRequest\(scanReadinessRequestGeneration\.current, readinessRequestGeneration\)[\s\S]*setScanReadinessErrorCaseId/u);
   assert.match(app, /scanReadinessErrorCaseId === currentCaseId[\s\S]*retryScanReadiness\(currentCaseId\)/u);
   assert.match(app, /setRuntimeSetupFocusKey\(\(key\) => key \+ 1\)[\s\S]*navigate\("start"\)/u);
   assert.match(start, /id="start-page-runtime-setup"[\s\S]*tabIndex=\{-1\}/u);
@@ -157,6 +161,8 @@ test("progress aggregates empty, skipped, and shared-infrastructure attempts", a
   assert.match(progress, /blocked \? 1 : visibleWorkCount/u);
   assert.match(progress, /selectedRun\.engineRuns\.filter\(\(engine\) => engine\.status !== "not_executed"\)/u);
   assert.match(progress, /skipped && !blocked/u);
+  assert.match(progress, /skippedChecksNextStepFor\(skipped\.reasonCodes\)/u);
+  assert.doesNotMatch(progress, /<small>\{skipped\.reasonCodes/u);
   assert.match(progress, /sharedInfrastructureFailure[\s\S]*aggregateTechnicalRecords/u);
   assert.match(progress, /aggregateTechnicalRecords[\s\S]*engine\.engineName[\s\S]*engine\.errorCode[\s\S]*engine\.message/u);
   assert.match(progress, /historyBlocked \|\| historySharedFailure \? text\(copy\.historyNotStarted\)/u);
