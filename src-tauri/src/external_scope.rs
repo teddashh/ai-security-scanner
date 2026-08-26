@@ -312,7 +312,25 @@ impl ExternalScopeGrant {
         }
         self.rate_policy.validate(self.activity)?;
         self.template_policy.validate(self.activity)?;
+        self.validate_static_target()?;
         Ok(())
+    }
+
+    /// Rejects address and CIDR scopes that can never become an executable
+    /// frozen plan. Hostnames remain a runtime concern because their bounded
+    /// DNS answer can legitimately change between setup and execution.
+    fn validate_static_target(&self) -> AppResult<()> {
+        match &self.target {
+            CanonicalTarget::Hostname(_) => Ok(()),
+            CanonicalTarget::Address(address) => validate_resolved_address(self, *address),
+            CanonicalTarget::Network(network) => {
+                let addresses = bounded_network_addresses(network)?;
+                for address in addresses {
+                    validate_resolved_address(self, address)?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -412,20 +430,22 @@ pub fn resolve_external_plan(
             }
             resolved
         }
-        CanonicalTarget::Network(network) => {
-            let addresses = network
-                .hosts()
-                .take(MAX_FROZEN_ADDRESSES + 1)
-                .collect::<BTreeSet<_>>();
-            if addresses.len() > MAX_FROZEN_ADDRESSES {
-                return Err(AppError::InvalidRequest(format!(
-                    "authorized network expands beyond the {MAX_FROZEN_ADDRESSES}-address execution limit"
-                )));
-            }
-            addresses
-        }
+        CanonicalTarget::Network(network) => bounded_network_addresses(network)?,
     };
     freeze_external_plan(grant, addresses, now)
+}
+
+fn bounded_network_addresses(network: &IpNet) -> AppResult<BTreeSet<IpAddr>> {
+    let addresses = network
+        .hosts()
+        .take(MAX_FROZEN_ADDRESSES + 1)
+        .collect::<BTreeSet<_>>();
+    if addresses.len() > MAX_FROZEN_ADDRESSES {
+        return Err(AppError::InvalidRequest(format!(
+            "authorized network expands beyond the {MAX_FROZEN_ADDRESSES}-address execution limit"
+        )));
+    }
+    Ok(addresses)
 }
 
 impl ResolvedExternalPlan {
@@ -653,6 +673,34 @@ mod tests {
         )
         .expect_err("large network refused");
         assert!(matches!(error, AppError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn static_network_mistakes_are_rejected_during_setup() {
+        let now = Utc::now();
+        let oversized = grant("203.0.0.0/16", ExternalActivity::LowImpactExternal);
+        assert!(
+            oversized
+                .validate(now)
+                .unwrap_err()
+                .to_string()
+                .contains("4096-address execution limit")
+        );
+
+        let private = grant("192.168.50.0/30", ExternalActivity::LowImpactExternal);
+        assert!(
+            private
+                .validate(now)
+                .unwrap_err()
+                .to_string()
+                .contains("explicit internal-network grant")
+        );
+
+        let mut approved_private = private;
+        approved_private.allow_sensitive_networks = true;
+        approved_private
+            .validate(now)
+            .expect("bounded explicitly approved private network");
     }
 
     #[test]

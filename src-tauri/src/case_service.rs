@@ -5809,6 +5809,7 @@ mod tests {
         target: &str,
         permission: ScanPermission,
         protocol: crate::external_scope::TransportProtocol,
+        internet_exposed: bool,
     ) -> Id {
         let (mut discovered, asset_id) = fixture.discovered_asset(case_id, kind);
         let asset = discovered
@@ -5821,7 +5822,7 @@ mod tests {
             namespace: "external_target".into(),
             value: target.into(),
         }];
-        asset.internet_exposed = Some(true);
+        asset.internet_exposed = Some(internet_exposed);
         fixture
             .storage
             .save_case(&mut discovered, "test.direct_external_target_attributed")
@@ -5866,7 +5867,7 @@ mod tests {
                             allowed_template_ids,
                         ),
                         asserted_authority: "Approved change CHANGE-4242".into(),
-                        allow_sensitive_networks: false,
+                        allow_sensitive_networks: !internet_exposed,
                     }),
                 },
             )
@@ -6282,6 +6283,7 @@ mod tests {
             "198.51.100.0/30",
             ScanPermission::LowImpactExternalConnection,
             crate::external_scope::TransportProtocol::Tcp,
+            true,
         );
         let service = fixture.service();
 
@@ -6309,6 +6311,36 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_private_network_is_ready_for_the_compatible_internal_scanner() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let asset_id = approve_direct_external_target(
+            &fixture,
+            &created.id,
+            AssetKind::IpAddress,
+            "192.168.50.0/30",
+            ScanPermission::LowImpactExternalConnection,
+            crate::external_scope::TransportProtocol::Tcp,
+            false,
+        );
+        let service = fixture.service();
+
+        let readiness = service.scan_readiness(&created.id).unwrap();
+        assert!(readiness.ready);
+        assert_eq!(readiness.authorized_target_count, 1);
+        assert_eq!(readiness.compatible_engine_count, 1);
+        assert_eq!(readiness.runnable_engine_count, 1);
+
+        let plan = service
+            .plan_scan_for_execution(&created.id, ScanPlanRequest::default())
+            .unwrap();
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "naabu");
+        assert_eq!(plan.executable[0].assets[0].id, asset_id);
+        assert!(plan.not_executed.is_empty());
+    }
+
+    #[test]
     fn tcp_address_scope_plans_greenbone_without_planning_nuclei() {
         let fixture = Fixture::new();
         let created = fixture.create();
@@ -6319,6 +6351,7 @@ mod tests {
             "198.51.100.10",
             ScanPermission::ActiveExternalTesting,
             crate::external_scope::TransportProtocol::Tcp,
+            true,
         );
         let service = fixture.service();
 
