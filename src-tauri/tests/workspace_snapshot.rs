@@ -2,7 +2,7 @@ use ai_security_scanner_lib::domain::AssetKind;
 use ai_security_scanner_lib::workspace_snapshot::{
     LOCAL_INPUT_PROFILE_FILENAME, WorkspaceInputProfile, WorkspaceSnapshotLimits,
     WorkspaceSnapshotReference, create_workspace_snapshot, create_workspace_snapshot_with_profile,
-    resolve_workspace_snapshot,
+    inspect_workspace_snapshot, resolve_workspace_snapshot,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -707,6 +707,63 @@ fn resolver_rejects_tampered_content_and_injected_storage_ids() {
     let injection = resolve_workspace_snapshot(&artifact_root, "case-tamper", &injected)
         .expect_err("injected storage path rejected");
     assert!(injection.to_string().contains("reference is invalid"));
+}
+
+#[test]
+fn preflight_inspector_is_read_only_and_rejects_missing_or_tampered_snapshots() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(source.join("code.rs"), b"fn original() {}\n").unwrap();
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-inspect",
+        "source-safe",
+        &source,
+        small_limits(),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    fs::set_permissions(&artifact_root, fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    let root_mode_before = fs::metadata(&artifact_root).unwrap().permissions().mode() & 0o777;
+
+    let inspected = inspect_workspace_snapshot(&artifact_root, "case-inspect", &snapshot.reference)
+        .expect("read-only snapshot inspection");
+
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(&artifact_root).unwrap().permissions().mode() & 0o777,
+        root_mode_before,
+        "preflight inspection must not chmod the artifact root"
+    );
+
+    let mut missing = snapshot.reference.clone();
+    missing.storage_id = format!("workspace-artifact-{}", "0".repeat(32));
+    let missing_path = artifact_root
+        .join("case-inspect/workspace-snapshots")
+        .join(&missing.storage_id);
+    let error = inspect_workspace_snapshot(&artifact_root, "case-inspect", &missing)
+        .expect_err("missing snapshot rejected");
+    assert!(error.to_string().contains("directory is unavailable"));
+    assert!(
+        !missing_path.exists(),
+        "inspection must not create a missing snapshot directory"
+    );
+
+    let copied = inspected.tree_path.join("code.rs");
+    #[cfg(unix)]
+    fs::set_permissions(&copied, fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(not(unix))]
+    {
+        let mut permissions = fs::metadata(&copied).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&copied, permissions).unwrap();
+    }
+    fs::write(&copied, b"fn tampered() {}\n").unwrap();
+
+    let error = inspect_workspace_snapshot(&artifact_root, "case-inspect", &snapshot.reference)
+        .expect_err("tampered snapshot rejected");
+    assert!(error.to_string().contains("immutable manifest"));
 }
 
 #[cfg(unix)]

@@ -307,11 +307,32 @@ pub fn create_workspace_snapshot_with_profile(
     })
 }
 
+/// Inspects and fully verifies a stored snapshot without changing the
+/// filesystem.
+///
+/// This is the pre-persistence counterpart to [`resolve_workspace_snapshot`].
+/// It never creates a directory or changes permissions. The execution worker
+/// must still call `resolve_workspace_snapshot` so a change after this
+/// inspection fails closed at the final mount boundary.
+pub fn inspect_workspace_snapshot(
+    artifact_root: impl AsRef<Path>,
+    case_id: &str,
+    reference: &WorkspaceSnapshotReference,
+) -> AppResult<ResolvedWorkspaceSnapshot> {
+    validate_safe_id("case id", case_id)?;
+    validate_reference(reference)?;
+    let artifact_root = inspect_existing_directory(artifact_root.as_ref(), "artifact root")?;
+    verify_workspace_snapshot(&artifact_root, case_id, reference)
+}
+
 /// Resolves and fully verifies a stored snapshot before execution.
 ///
 /// The manifest hash, all directory names, every file size/hash, and aggregate
 /// counts are checked. Symlinks and special files fail closed. The returned path
 /// is never taken from persisted case data; it is derived from validated IDs.
+/// The artifact root's private mode is re-applied at this worker boundary; use
+/// [`inspect_workspace_snapshot`] for a strictly read-only pre-persistence
+/// check.
 pub fn resolve_workspace_snapshot(
     artifact_root: impl AsRef<Path>,
     case_id: &str,
@@ -320,7 +341,15 @@ pub fn resolve_workspace_snapshot(
     validate_safe_id("case id", case_id)?;
     validate_reference(reference)?;
     let artifact_root = prepare_existing_directory(artifact_root.as_ref(), "artifact root")?;
-    let case_directory = resolve_real_child_directory(&artifact_root, case_id)?;
+    verify_workspace_snapshot(&artifact_root, case_id, reference)
+}
+
+fn verify_workspace_snapshot(
+    artifact_root: &Path,
+    case_id: &str,
+    reference: &WorkspaceSnapshotReference,
+) -> AppResult<ResolvedWorkspaceSnapshot> {
+    let case_directory = resolve_real_child_directory(artifact_root, case_id)?;
     let snapshots_directory = resolve_real_child_directory(&case_directory, SNAPSHOT_DIRECTORY)?;
     let final_container =
         resolve_real_child_directory(&snapshots_directory, &reference.storage_id)?;
@@ -1278,6 +1307,12 @@ fn snapshot_asset(
 }
 
 fn prepare_existing_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
+    let canonical = inspect_existing_directory(path, label)?;
+    set_private_directory(&canonical)?;
+    Ok(canonical)
+}
+
+fn inspect_existing_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         AppError::InvalidRequest(format!("{label} could not be inspected: {error}"))
     })?;
@@ -1289,7 +1324,6 @@ fn prepare_existing_directory(path: &Path, label: &str) -> AppResult<PathBuf> {
     let canonical = fs::canonicalize(path).map_err(|error| {
         AppError::InvalidRequest(format!("{label} could not be resolved: {error}"))
     })?;
-    set_private_directory(&canonical)?;
     Ok(canonical)
 }
 

@@ -369,7 +369,7 @@ impl EgressGatewayPolicy {
                 "egress gateway must listen on port {GATEWAY_PORT}"
             )));
         }
-        validate_provider_service_request(&plan.request, now)?;
+        validate_provider_service_request_static(&plan.request, now)?;
         if plan.frozen_at > now
             || plan.destinations.is_empty()
             || plan.destinations.len() > MAX_DESTINATIONS
@@ -445,7 +445,7 @@ pub fn resolve_provider_service_plan(
     request: ProviderServiceEgressRequest,
     now: DateTime<Utc>,
 ) -> AppResult<ResolvedProviderServicePlan> {
-    validate_provider_service_request(&request, now)?;
+    validate_provider_service_request_static(&request, now)?;
     let mut destinations = Vec::with_capacity(request.exact_destinations.len());
     let mut total_addresses = 0_usize;
     for endpoint in &request.exact_destinations {
@@ -496,7 +496,11 @@ pub fn resolve_provider_service_plan(
     })
 }
 
-fn validate_provider_service_request(
+/// Validates the complete static provider-service contract without resolving
+/// DNS, opening a socket, provisioning a network, or starting the gateway.
+/// Execution still resolves and freezes the exact endpoint addresses in
+/// [`resolve_provider_service_plan`] immediately before provisioning.
+pub(crate) fn validate_provider_service_request_static(
     request: &ProviderServiceEgressRequest,
     now: DateTime<Utc>,
 ) -> AppResult<()> {
@@ -676,7 +680,7 @@ impl ManagedNetworkController {
         gateway_launcher: Arc<dyn GatewayLauncher>,
         readiness: Arc<dyn GatewayReadiness>,
     ) -> AppResult<Self> {
-        let gateway_binary = validate_gateway_binary(gateway_binary)?;
+        let gateway_binary = inspect_gateway_binary(gateway_binary)?;
         let policy_directory = validate_policy_directory(policy_directory)?;
         let registry_directory = validate_policy_directory(registry_directory)?;
         Ok(Self {
@@ -697,7 +701,7 @@ impl ManagedNetworkController {
         now: DateTime<Utc>,
     ) -> AppResult<ManagedNetworkLease> {
         owner.validate()?;
-        validate_gateway_binary(&self.gateway_binary)?;
+        inspect_gateway_binary(&self.gateway_binary)?;
         validate_policy_directory(&self.policy_directory)?;
         validate_policy_directory(&self.registry_directory)?;
         // Validate the plans before making any host or runtime changes. The bridge-specific
@@ -730,10 +734,10 @@ impl ManagedNetworkController {
         now: DateTime<Utc>,
     ) -> AppResult<ManagedNetworkLease> {
         owner.validate()?;
-        validate_gateway_binary(&self.gateway_binary)?;
+        inspect_gateway_binary(&self.gateway_binary)?;
         validate_policy_directory(&self.policy_directory)?;
         validate_policy_directory(&self.registry_directory)?;
-        validate_provider_service_request(&plan.request, now)?;
+        validate_provider_service_request_static(&plan.request, now)?;
         if plan.request.case_id != owner.case_id {
             return Err(AppError::InvalidRequest(
                 "managed-network owner does not match provider-service provenance".into(),
@@ -2402,7 +2406,10 @@ fn validate_policy_id(policy_id: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_gateway_binary(path: &Path) -> AppResult<PathBuf> {
+/// Proves an already-installed gateway path is a canonical, non-symlink,
+/// executable regular file. This function is inspection-only: it never
+/// creates, chmods, opens for writing, or executes the file.
+pub(crate) fn inspect_gateway_binary(path: &Path) -> AppResult<PathBuf> {
     if !path.is_absolute() || path.as_os_str().len() > 4096 {
         return Err(AppError::InvalidRequest(
             "egress gateway binary must be a bounded absolute path".into(),
@@ -2809,7 +2816,7 @@ mod tests {
         };
         let mut mismatched_provider = request.clone();
         mismatched_provider.exact_destinations = vec!["attacker.example:443".into()];
-        assert!(validate_provider_service_request(&mismatched_provider, now).is_err());
+        assert!(validate_provider_service_request_static(&mismatched_provider, now).is_err());
         let plan = ResolvedProviderServicePlan {
             request,
             frozen_at: now,
@@ -2839,6 +2846,43 @@ mod tests {
             policy.allowed_destination_labels(),
             vec!["iam.amazonaws.com:443"]
         );
+    }
+
+    #[test]
+    fn static_provider_service_validation_rejects_invalid_requests_without_dns() {
+        let now = Utc::now();
+        let request = ProviderServiceEgressRequest {
+            case_id: "case-1".into(),
+            source_id: "source-1".into(),
+            source_kind: "dns".into(),
+            source_profile: "snapshot:dns-response".into(),
+            manifest_id: "passive-dns".into(),
+            manifest_revision: "0123456789abcdef0123456789abcdef01234567".into(),
+            // `.invalid` is deliberately non-resolving. Static validation must
+            // accept its canonical shape without attempting a lookup.
+            exact_destinations: vec!["preflight-does-not-resolve.invalid:443".into()],
+            expires_at: now + ChronoDuration::minutes(30),
+        };
+        validate_provider_service_request_static(&request, now)
+            .expect("static request validation does not resolve DNS");
+
+        let mut expired = request.clone();
+        expired.expires_at = now;
+        assert!(validate_provider_service_request_static(&expired, now).is_err());
+
+        let mut duplicated = request.clone();
+        duplicated
+            .exact_destinations
+            .push("preflight-does-not-resolve.invalid:443".into());
+        assert!(validate_provider_service_request_static(&duplicated, now).is_err());
+
+        let mut unpinned = request.clone();
+        unpinned.manifest_revision.clear();
+        assert!(validate_provider_service_request_static(&unpinned, now).is_err());
+
+        let mut wrong_provider = request;
+        wrong_provider.source_kind = "aws_organization".into();
+        assert!(validate_provider_service_request_static(&wrong_provider, now).is_err());
     }
 
     #[test]
@@ -3522,6 +3566,47 @@ mod tests {
         assert!(
             ManagedNetworkController::new(RuntimeProvider::Docker, &link, temporary.path())
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn static_gateway_inspection_rejects_a_missing_sidecar_without_creating_it() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let missing = temporary.path().join("ai-security-scanner-egress-gateway");
+
+        let error = inspect_gateway_binary(&missing).expect_err("missing sidecar rejected");
+
+        assert!(error.to_string().contains("could not be inspected"));
+        assert!(!missing.exists(), "inspection must not create the sidecar");
+        assert!(
+            fs::read_dir(temporary.path())
+                .expect("temporary directory")
+                .next()
+                .is_none(),
+            "inspection must not create support files"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_gateway_inspection_never_makes_a_sidecar_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let gateway = temporary.path().join("ai-security-scanner-egress-gateway");
+        fs::write(&gateway, b"not executable").expect("gateway fixture");
+        fs::set_permissions(&gateway, fs::Permissions::from_mode(0o600)).expect("gateway mode");
+
+        let error = inspect_gateway_binary(&gateway).expect_err("non-executable sidecar rejected");
+
+        assert!(error.to_string().contains("not executable"));
+        assert_eq!(
+            fs::metadata(&gateway)
+                .expect("gateway metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "inspection must not chmod the sidecar"
         );
     }
 }
