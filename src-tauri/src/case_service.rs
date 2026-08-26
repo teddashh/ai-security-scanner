@@ -6,6 +6,7 @@
 
 use crate::adapter::AdapterRegistry;
 use crate::adapters::{FINGERPRINT_SCHEMA_VERSION, control_mapping_version};
+use crate::artifact_store::inspect_raw_artifacts;
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
     LIVE_PROVIDER_ARTIFACT_SET_SCHEMA, LiveProviderArtifactSet, MAX_LIVE_PROVIDER_PAGES,
@@ -2400,7 +2401,7 @@ impl<'a> CaseService<'a> {
             &case.scan_runs[run_index].engine_runs[engine_index],
             report,
         )?;
-        validate_artifact_files(&self.artifact_root, &report.raw_artifacts)?;
+        inspect_raw_artifacts(&self.artifact_root, &report.raw_artifacts)?;
         for artifact in &report.raw_artifacts {
             insert_or_validate_artifact(&mut case, artifact)?;
         }
@@ -4817,67 +4818,6 @@ fn validate_report_text(label: &str, value: &str, maximum_chars: usize) -> AppRe
         return Err(AppError::Runtime(format!(
             "{label} exceeds its durable storage boundary"
         )));
-    }
-    Ok(())
-}
-
-fn validate_artifact_files(artifact_root: &Path, artifacts: &[RawArtifact]) -> AppResult<()> {
-    if artifacts.is_empty() {
-        return Ok(());
-    }
-    let root = fs::canonicalize(artifact_root).map_err(|error| {
-        AppError::Runtime(format!(
-            "artifact root {} is unavailable: {error}",
-            artifact_root.display()
-        ))
-    })?;
-    for artifact in artifacts {
-        let relative = Path::new(&artifact.relative_path);
-        if relative.as_os_str().is_empty()
-            || relative.is_absolute()
-            || artifact.relative_path.contains(['\\', '\0'])
-            || relative
-                .components()
-                .any(|component| !matches!(component, Component::Normal(_)))
-        {
-            return Err(AppError::Runtime(format!(
-                "artifact {} has an unsafe relative path",
-                artifact.id
-            )));
-        }
-        let path = root.join(relative);
-        let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            AppError::Runtime(format!(
-                "artifact {} is not available for durable reconciliation: {error}",
-                artifact.id
-            ))
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(AppError::Runtime(format!(
-                "artifact {} must be a regular non-symlink file",
-                artifact.id
-            )));
-        }
-        let canonical = fs::canonicalize(&path)?;
-        if !canonical.starts_with(&root) {
-            return Err(AppError::Runtime(format!(
-                "artifact {} escapes the private artifact root",
-                artifact.id
-            )));
-        }
-        if metadata.len() != artifact.byte_length {
-            return Err(AppError::Runtime(format!(
-                "artifact {} byte length differs from its durable record",
-                artifact.id
-            )));
-        }
-        let observed_sha256 = sha256_file(&canonical)?;
-        if !observed_sha256.eq_ignore_ascii_case(&artifact.sha256) {
-            return Err(AppError::Runtime(format!(
-                "artifact {} hash differs from its durable record",
-                artifact.id
-            )));
-        }
     }
     Ok(())
 }

@@ -45,6 +45,155 @@ pub struct ArtifactStore {
     max_output_files: usize,
 }
 
+/// Read and verify already-captured raw artifacts without changing the
+/// filesystem. This is intentionally separate from [`ArtifactStore::open`],
+/// which creates and restricts the artifact root for new executions.
+///
+/// The caller can use this before persisting a resume attempt, then call it
+/// again immediately before consuming the artifacts to close the ordinary
+/// time-of-check/time-of-use window as far as a portable path-based API can.
+pub fn inspect_raw_artifacts(artifact_root: &Path, artifacts: &[RawArtifact]) -> AppResult<()> {
+    let root_metadata = fs::symlink_metadata(artifact_root).map_err(|error| {
+        AppError::Runtime(format!(
+            "artifact root {} is unavailable: {error}",
+            artifact_root.display()
+        ))
+    })?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(AppError::Runtime(format!(
+            "artifact root {} must be an existing non-symlink directory",
+            artifact_root.display()
+        )));
+    }
+    let root = fs::canonicalize(artifact_root).map_err(|error| {
+        AppError::Runtime(format!(
+            "artifact root {} could not be resolved: {error}",
+            artifact_root.display()
+        ))
+    })?;
+
+    for artifact in artifacts {
+        let relative = normalized_artifact_relative_path(artifact)?;
+        if artifact.sha256.len() != 64
+            || !artifact
+                .sha256
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            return Err(AppError::Runtime(format!(
+                "artifact {} has an invalid durable SHA-256 digest",
+                artifact.id
+            )));
+        }
+        if artifact.byte_length == u64::MAX {
+            return Err(AppError::Runtime(format!(
+                "artifact {} has an unsupported durable byte length",
+                artifact.id
+            )));
+        }
+
+        let mut path = root.clone();
+        let component_count = relative.components().count();
+        for (index, component) in relative.components().enumerate() {
+            let Component::Normal(component) = component else {
+                return Err(unsafe_artifact_path(artifact));
+            };
+            path.push(component);
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                AppError::Runtime(format!(
+                    "artifact {} is not available for durable reconciliation: {error}",
+                    artifact.id
+                ))
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(AppError::Runtime(format!(
+                    "artifact {} path may not contain symlinks",
+                    artifact.id
+                )));
+            }
+            if index + 1 == component_count {
+                if !metadata.is_file() {
+                    return Err(AppError::Runtime(format!(
+                        "artifact {} must be a regular non-symlink file",
+                        artifact.id
+                    )));
+                }
+                if metadata.len() != artifact.byte_length {
+                    return Err(AppError::Runtime(format!(
+                        "artifact {} byte length differs from its durable record",
+                        artifact.id
+                    )));
+                }
+            } else if !metadata.is_dir() {
+                return Err(AppError::Runtime(format!(
+                    "artifact {} path contains a non-directory component",
+                    artifact.id
+                )));
+            }
+        }
+
+        let canonical = fs::canonicalize(&path).map_err(|error| {
+            AppError::Runtime(format!(
+                "artifact {} could not be resolved for durable reconciliation: {error}",
+                artifact.id
+            ))
+        })?;
+        if !canonical.starts_with(&root) {
+            return Err(AppError::Runtime(format!(
+                "artifact {} escapes the private artifact root",
+                artifact.id
+            )));
+        }
+
+        let file = open_readonly_no_follow(&path).map_err(|error| {
+            AppError::Runtime(format!(
+                "artifact {} could not be opened for durable reconciliation: {error}",
+                artifact.id
+            ))
+        })?;
+        let opened_metadata = file.metadata().map_err(|error| {
+            AppError::Runtime(format!(
+                "artifact {} metadata could not be read after opening: {error}",
+                artifact.id
+            ))
+        })?;
+        if opened_metadata.file_type().is_symlink() || !opened_metadata.is_file() {
+            return Err(AppError::Runtime(format!(
+                "artifact {} changed and is no longer a regular file",
+                artifact.id
+            )));
+        }
+        if opened_metadata.len() != artifact.byte_length {
+            return Err(AppError::Runtime(format!(
+                "artifact {} byte length differs from its durable record",
+                artifact.id
+            )));
+        }
+
+        let (observed_sha256, observed_length) =
+            hash_opened_file_bounded(file, artifact.byte_length + 1).map_err(|error| {
+                AppError::Runtime(format!(
+                    "artifact {} could not be hashed for durable reconciliation: {error}",
+                    artifact.id
+                ))
+            })?;
+        if observed_length != artifact.byte_length {
+            return Err(AppError::Runtime(format!(
+                "artifact {} byte length changed while it was being inspected",
+                artifact.id
+            )));
+        }
+        if !observed_sha256.eq_ignore_ascii_case(&artifact.sha256) {
+            return Err(AppError::Runtime(format!(
+                "artifact {} hash differs from its durable record",
+                artifact.id
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 impl ArtifactStore {
     pub fn open(root: impl AsRef<Path>) -> AppResult<Self> {
         let root = root.as_ref();
@@ -300,6 +449,65 @@ fn safe_filename(value: &str) -> AppResult<&str> {
     Ok(value)
 }
 
+fn normalized_artifact_relative_path(artifact: &RawArtifact) -> AppResult<&Path> {
+    let relative = Path::new(&artifact.relative_path);
+    let slash_components_are_normal = !artifact.relative_path.is_empty()
+        && !artifact.relative_path.contains(['\\', '\0'])
+        && artifact
+            .relative_path
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..");
+    if !slash_components_are_normal
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_artifact_path(artifact));
+    }
+    Ok(relative)
+}
+
+fn unsafe_artifact_path(artifact: &RawArtifact) -> AppError {
+    AppError::Runtime(format!(
+        "artifact {} has an unsafe or non-normalized relative path",
+        artifact.id
+    ))
+}
+
+fn open_readonly_no_follow(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+fn hash_opened_file_bounded(mut file: File, maximum_bytes: u64) -> std::io::Result<(String, u64)> {
+    let mut digest = Sha256::new();
+    let mut byte_length = 0_u64;
+    let mut buffer = [0_u8; HASH_BUFFER_BYTES];
+    let mut reader = (&mut file).take(maximum_bytes);
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        byte_length += read as u64;
+    }
+    Ok((hex::encode(digest.finalize()), byte_length))
+}
+
 fn create_private_file(path: &Path) -> AppResult<File> {
     let file = OpenOptions::new()
         .write(true)
@@ -398,6 +606,27 @@ fn restrict_file(_path: &Path) -> AppResult<()> {
 mod tests {
     use super::*;
 
+    fn raw_artifact(relative_path: &str, bytes: &[u8]) -> RawArtifact {
+        RawArtifact {
+            id: "artifact-1".into(),
+            case_id: "case-1".into(),
+            run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            relative_path: relative_path.into(),
+            media_type: "application/octet-stream".into(),
+            sha256: sha256_bytes(bytes),
+            byte_length: bytes.len() as u64,
+            created_at: Utc::now(),
+            contains_sensitive_data: true,
+        }
+    }
+
+    fn write_raw_artifact(root: &Path, relative_path: &str, bytes: &[u8]) {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("artifact parent")).expect("artifact directories");
+        fs::write(path, bytes).expect("artifact bytes");
+    }
+
     fn context() -> ArtifactContext {
         ArtifactContext {
             case_id: "case-1".into(),
@@ -456,5 +685,166 @@ mod tests {
             .collect_output_artifacts(&context(), &directories)
             .expect_err("limit rejected");
         assert!(error.to_string().contains("artifact limit"));
+    }
+
+    #[test]
+    fn captured_artifact_inspection_accepts_an_unchanged_regular_file() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("artifacts");
+        let bytes = b"captured scanner evidence\n";
+        write_raw_artifact(&root, "case-1/run-1/evidence.json", bytes);
+        let artifact = raw_artifact("case-1/run-1/evidence.json", bytes);
+
+        inspect_raw_artifacts(&root, &[artifact]).expect("valid artifact");
+    }
+
+    #[test]
+    fn captured_artifact_inspection_rejects_a_missing_file() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("artifacts");
+        fs::create_dir(&root).expect("artifact root");
+        let artifact = raw_artifact("case-1/run-1/missing.json", b"missing");
+
+        let error = inspect_raw_artifacts(&root, &[artifact]).expect_err("missing file rejected");
+
+        assert!(error.to_string().contains("not available"));
+    }
+
+    #[test]
+    fn captured_artifact_inspection_requires_an_existing_root() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let missing_root = temp.path().join("missing-artifacts");
+
+        let error = inspect_raw_artifacts(&missing_root, &[]).expect_err("missing root rejected");
+
+        assert!(error.to_string().contains("artifact root"));
+        assert!(
+            !missing_root.exists(),
+            "inspection must not create the root"
+        );
+    }
+
+    #[test]
+    fn captured_artifact_inspection_rejects_modified_bytes() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("artifacts");
+        let artifact = raw_artifact("case-1/evidence.bin", b"trusted");
+        write_raw_artifact(&root, "case-1/evidence.bin", b"altered");
+
+        let error = inspect_raw_artifacts(&root, &[artifact]).expect_err("modified file rejected");
+
+        assert!(error.to_string().contains("hash differs"));
+    }
+
+    #[test]
+    fn captured_artifact_inspection_rejects_a_changed_byte_length() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("artifacts");
+        let artifact = raw_artifact("case-1/evidence.bin", b"trusted");
+        write_raw_artifact(&root, "case-1/evidence.bin", b"now longer");
+
+        let error = inspect_raw_artifacts(&root, &[artifact]).expect_err("changed length rejected");
+
+        assert!(error.to_string().contains("byte length differs"));
+    }
+
+    #[test]
+    fn captured_artifact_inspection_rejects_non_normalized_or_traversing_paths() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("artifacts");
+        fs::create_dir(&root).expect("artifact root");
+
+        for relative_path in [
+            "../outside.bin",
+            "case-1/./evidence.bin",
+            "case-1//evidence.bin",
+            "case-1/evidence.bin/",
+            "/absolute/evidence.bin",
+            "case-1\\evidence.bin",
+        ] {
+            let artifact = raw_artifact(relative_path, b"evidence");
+            let error = inspect_raw_artifacts(&root, &[artifact])
+                .expect_err("unsafe artifact path rejected");
+            assert!(
+                error.to_string().contains("unsafe or non-normalized"),
+                "unexpected error for {relative_path}: {error}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_artifact_inspection_rejects_final_and_intermediate_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("artifacts");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("artifact root");
+        fs::create_dir_all(&outside).expect("outside directory");
+        fs::write(outside.join("evidence.bin"), b"evidence").expect("outside file");
+
+        symlink(outside.join("evidence.bin"), root.join("final-link.bin")).expect("final symlink");
+        let final_link = raw_artifact("final-link.bin", b"evidence");
+        let final_error =
+            inspect_raw_artifacts(&root, &[final_link]).expect_err("final symlink rejected");
+        assert!(final_error.to_string().contains("symlink"));
+
+        symlink(&outside, root.join("intermediate-link")).expect("intermediate symlink");
+        let intermediate_link = raw_artifact("intermediate-link/evidence.bin", b"evidence");
+        let intermediate_error = inspect_raw_artifacts(&root, &[intermediate_link])
+            .expect_err("intermediate symlink rejected");
+        assert!(intermediate_error.to_string().contains("symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_artifact_inspection_rejects_a_symlink_root() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let actual_root = temp.path().join("actual-artifacts");
+        fs::create_dir(&actual_root).expect("actual artifact root");
+        write_raw_artifact(&actual_root, "case-1/evidence.bin", b"evidence");
+        let linked_root = temp.path().join("linked-artifacts");
+        symlink(&actual_root, &linked_root).expect("artifact root symlink");
+        let artifact = raw_artifact("case-1/evidence.bin", b"evidence");
+
+        let error =
+            inspect_raw_artifacts(&linked_root, &[artifact]).expect_err("symlink root rejected");
+
+        assert!(error.to_string().contains("non-symlink directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_artifact_inspection_does_not_change_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("artifacts");
+        let directory = root.join("case-1");
+        let file = directory.join("evidence.bin");
+        write_raw_artifact(&root, "case-1/evidence.bin", b"evidence");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o751)).expect("root permissions");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o711))
+            .expect("directory permissions");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).expect("file permissions");
+        let artifact = raw_artifact("case-1/evidence.bin", b"evidence");
+
+        inspect_raw_artifacts(&root, &[artifact]).expect("valid artifact");
+
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o751
+        );
+        assert_eq!(
+            fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o711
+        );
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
     }
 }
