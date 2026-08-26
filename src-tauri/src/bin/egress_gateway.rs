@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::timeout;
+use tokio::time::{Instant as TokioInstant, timeout};
 
 const POLICY_PATH: &str = "/run/ai-security-scanner/egress-policy.json";
 const STATUS_FILE_NAME: &str = "status.json";
@@ -176,13 +176,7 @@ async fn handle_authorized_client(
         .acquire_owned()
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "gateway stopped"))?;
-    if !take_rate_slot(&policy, &rate_window).await {
-        return Err(io::Error::new(
-            io::ErrorKind::WouldBlock,
-            "connection rate denied",
-        ));
-    }
-    handle_client(client, &policy).await
+    handle_client(client, &policy, &rate_window).await
 }
 
 async fn take_rate_slot(policy: &ValidatedPolicy, rate_window: &Mutex<VecDeque<Instant>>) -> bool {
@@ -204,17 +198,25 @@ async fn take_rate_slot(policy: &ValidatedPolicy, rate_window: &Mutex<VecDeque<I
     true
 }
 
-async fn handle_client(mut client: TcpStream, policy: &ValidatedPolicy) -> io::Result<()> {
+async fn handle_client(
+    mut client: TcpStream,
+    policy: &ValidatedPolicy,
+    rate_window: &Mutex<VecDeque<Instant>>,
+) -> io::Result<()> {
     let remaining = policy_remaining(policy)
         .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "expired policy"))?;
-    timeout(remaining, handle_client_before_expiry(&mut client, policy))
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "policy expired"))?
+    timeout(
+        remaining,
+        handle_client_before_expiry(&mut client, policy, rate_window),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "policy expired"))?
 }
 
 async fn handle_client_before_expiry(
     client: &mut TcpStream,
     policy: &ValidatedPolicy,
+    rate_window: &Mutex<VecDeque<Instant>>,
 ) -> io::Result<()> {
     timeout(HANDSHAKE_TIMEOUT, negotiate(client))
         .await
@@ -222,18 +224,29 @@ async fn handle_client_before_expiry(
     let (target, port) = timeout(HANDSHAKE_TIMEOUT, read_request(client))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request timeout"))??;
-    let destination = resolve_request(policy, target, port)
+    let destinations = resolve_request(policy, target, port)
         .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "destination denied"))?;
-    let mut upstream = match timeout(policy.connect_timeout, TcpStream::connect(destination)).await
+    // A TCP-only proxy liveness check may open and close the socket without
+    // sending CONNECT. Count only a syntactically valid, policy-authorized
+    // upstream request so those checks cannot consume the scanner's rate.
+    if !take_rate_slot(policy, rate_window).await {
+        send_reply(client, 2, None).await?;
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "connection rate denied",
+        ));
+    }
+    let mut upstream = match connect_frozen_destinations(destinations, policy.connect_timeout).await
     {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(error)) => {
-            send_reply(client, 5, None).await?;
+        Ok(stream) => stream,
+        Err(error) => {
+            let reply = if error.kind() == io::ErrorKind::TimedOut {
+                6
+            } else {
+                5
+            };
+            send_reply(client, reply, None).await?;
             return Err(error);
-        }
-        Err(_) => {
-            send_reply(client, 6, None).await?;
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "connect timeout"));
         }
     };
     let bound = upstream.local_addr().ok();
@@ -258,6 +271,54 @@ fn policy_remaining(policy: &ValidatedPolicy) -> Option<Duration> {
         .to_std()
         .ok()
         .filter(|duration| !duration.is_zero())
+}
+
+/// Connects to the complete host-side frozen address set without performing
+/// DNS. Candidates are attempted one at a time so the policy's concurrency
+/// bound is never widened, and every remaining address receives a fair share
+/// of the one aggregate timeout.
+async fn connect_frozen_destinations(
+    destinations: Vec<SocketAddr>,
+    budget: Duration,
+) -> io::Result<TcpStream> {
+    if destinations.is_empty() || budget.is_zero() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "frozen destination set is empty",
+        ));
+    }
+
+    let deadline = TokioInstant::now() + budget;
+    let mut last_error = None;
+    let mut remaining_count = destinations.len();
+    for destination in destinations {
+        let remaining = deadline.saturating_duration_since(TokioInstant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "aggregate connect timeout",
+            ));
+        }
+        let divisor = u32::try_from(remaining_count).unwrap_or(u32::MAX);
+        let attempt_budget = remaining.checked_div(divisor).unwrap_or(remaining);
+        match timeout(attempt_budget, TcpStream::connect(destination)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => last_error = Some(error),
+            Err(_) => {
+                last_error = Some(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "candidate connect timeout",
+                ));
+            }
+        }
+        remaining_count = remaining_count.saturating_sub(1);
+    }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "all frozen addresses failed",
+        )
+    }))
 }
 
 async fn negotiate(client: &mut TcpStream) -> io::Result<()> {
@@ -385,15 +446,14 @@ where
     if !policy_path.is_absolute() || policy_path.as_os_str().len() > 4096 {
         return Err("policy path must be a bounded absolute path");
     }
-    if let Some(status_file) = status_file.as_deref() {
-        if !status_file.is_absolute()
+    if let Some(status_file) = status_file.as_deref()
+        && (!status_file.is_absolute()
             || status_file.as_os_str().len() > 4096
             || status_file.file_name() != Some(OsStr::new(STATUS_FILE_NAME))
             || status_file.parent().is_none()
-            || status_file == policy_path
-        {
-            return Err("status file must be the bounded absolute status.json path");
-        }
+            || status_file == policy_path)
+    {
+        return Err("status file must be the bounded absolute status.json path");
     }
     Ok(GatewayInvocation {
         policy_path,
@@ -528,6 +588,12 @@ fn validate_policy(
             }
         }
     }
+    for ports in by_host.values_mut() {
+        for addresses in ports.values_mut() {
+            addresses.sort_unstable();
+            addresses.dedup();
+        }
+    }
     Ok(ValidatedPolicy {
         expires_at: raw.expires_at,
         listen_address: raw.listen_address,
@@ -624,19 +690,25 @@ fn resolve_request(
     policy: &ValidatedPolicy,
     target: RequestedTarget,
     port: u16,
-) -> Result<SocketAddr, &'static str> {
+) -> Result<Vec<SocketAddr>, &'static str> {
     match target {
         RequestedTarget::Address(address) => policy
             .by_address
             .contains(&(address, port))
-            .then_some(SocketAddr::new(address, port))
+            .then_some(vec![SocketAddr::new(address, port)])
             .ok_or("address is outside policy"),
         RequestedTarget::Hostname(hostname) => policy
             .by_host
             .get(&hostname)
             .and_then(|ports| ports.get(&port))
-            .and_then(|addresses| addresses.first().copied())
-            .map(|address| SocketAddr::new(address, port))
+            .filter(|addresses| !addresses.is_empty())
+            .map(|addresses| {
+                addresses
+                    .iter()
+                    .copied()
+                    .map(|address| SocketAddr::new(address, port))
+                    .collect()
+            })
             .ok_or("hostname is outside policy"),
     }
 }
@@ -764,7 +836,11 @@ mod tests {
 
     #[test]
     fn frozen_hostname_never_performs_live_dns_resolution() {
-        let policy = validate_policy(raw_policy(), Utc::now()).expect("policy");
+        let mut raw = raw_policy();
+        raw.destinations[0]
+            .addresses
+            .insert("203.0.113.10".parse().expect("second address"));
+        let policy = validate_policy(raw, Utc::now()).expect("policy");
         assert_eq!(
             resolve_request(
                 &policy,
@@ -772,7 +848,10 @@ mod tests {
                 443
             )
             .expect("destination"),
-            "203.0.113.9:443".parse().expect("socket")
+            vec![
+                "203.0.113.9:443".parse().expect("first socket"),
+                "203.0.113.10:443".parse().expect("second socket")
+            ]
         );
         assert!(
             resolve_request(
@@ -831,16 +910,55 @@ mod tests {
         let mut policy = validate_policy(raw_policy(), Utc::now()).expect("policy");
         policy.expires_at = Utc::now() - chrono::Duration::milliseconds(1);
         assert!(policy_remaining(&policy).is_none());
+        let rate_window = Mutex::new(VecDeque::new());
 
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let address = listener.local_addr().expect("address");
         let client = TcpStream::connect(address).await.expect("client");
         let (server, _) = listener.accept().await.expect("accepted");
-        let error = handle_client(server, &policy)
+        let error = handle_client(server, &policy, &rate_window)
             .await
             .expect_err("expired socket denied before reading a greeting");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         drop(client);
+    }
+
+    #[tokio::test]
+    async fn tcp_only_proxy_probe_does_not_consume_an_upstream_rate_slot() {
+        let policy = Arc::new(validate_policy(raw_policy(), Utc::now()).expect("policy"));
+        let concurrency = Arc::new(Semaphore::new(1));
+        let rate_window = Arc::new(Mutex::new(VecDeque::new()));
+        let (mut probe_client, probe_server) = connected_pair().await;
+        let handler = tokio::spawn(handle_authorized_client(
+            probe_server,
+            policy,
+            concurrency,
+            Arc::clone(&rate_window),
+        ));
+        probe_client.shutdown().await.expect("probe EOF");
+        handler
+            .await
+            .expect("probe handler task")
+            .expect_err("TCP-only probe has no SOCKS request");
+        assert!(rate_window.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn frozen_address_connect_falls_back_within_one_bounded_budget() {
+        let refused_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("temporary refused listener");
+        let refused = refused_listener.local_addr().expect("refused address");
+        drop(refused_listener);
+        let reachable_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reachable listener");
+        let reachable = reachable_listener.local_addr().expect("reachable address");
+
+        let stream = connect_frozen_destinations(vec![refused, reachable], Duration::from_secs(1))
+            .await
+            .expect("second frozen address should be attempted");
+        assert_eq!(stream.peer_addr().expect("peer"), reachable);
     }
 
     #[tokio::test]
