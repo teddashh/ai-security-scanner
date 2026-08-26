@@ -310,6 +310,7 @@ fi
 run_managed start start
 assert_managed_ssh_identity
 run_managed running-status status
+run_managed egress-qualification qualify-egress
 run_managed container-qualification qualify
 run_managed stop stop
 [[ -d "${short_runtime}" && ! -L "${short_runtime}" ]]
@@ -399,6 +400,7 @@ const observations = {
     passed("uninstall_purge", "uninstall-purge"),
     passed("final_status", "final-status"),
   ],
+  egressGateway: { outcome: "passed", result: read("egress-qualification") },
   containerExecution: { outcome: "passed", result: read("container-qualification") },
   cleanup: { managedRuntimePurged: true, machineImageCachePurged: true, installerRemoved: true, privateDataRemoved: true },
   installedManifestSnapshot: "installed-runtime-manifest.json",

@@ -243,7 +243,7 @@ async function mergeFlat(source, destination) {
   }
 }
 
-async function createQualificationFixture(output, platform) {
+async function createQualificationFixture(output, platform, installerType) {
   const runtimeManifestFile = path.join(output, `managed-runtime-${platform}.manifest.json`);
   const runtimeManifest = await readJson(runtimeManifestFile);
   const manifestSha256 = await sha256File(runtimeManifestFile);
@@ -273,8 +273,8 @@ async function createQualificationFixture(output, platform) {
   await copyFile(runtimeManifestFile, path.join(qualificationRoot, "installed-runtime-manifest.json"));
   const installedPath = platform === "windows-x86_64" ? path.win32 : path.posix;
   const prefix = platform === "windows-x86_64"
-    ? installedPath.join("C:\\fixture-installed", platform)
-    : installedPath.join("/fixture-installed", platform);
+    ? installedPath.join("C:\\fixture-installed", platform, installerType)
+    : installedPath.join("/fixture-installed", platform, installerType);
   const extension = platform === "windows-x86_64" ? ".exe" : "";
   const observations = {
     installedLayout: {
@@ -294,8 +294,8 @@ async function createQualificationFixture(output, platform) {
       installedExecutable: installedPath.join(prefix, `ai-security-scanner${extension}`),
     },
     privateDataDirectory: platform === "windows-x86_64"
-      ? installedPath.join("C:\\fixture-private", platform)
-      : installedPath.join("/fixture-private", platform),
+      ? installedPath.join("C:\\fixture-private", platform, installerType)
+      : installedPath.join("/fixture-private", platform, installerType),
     operations: platform === "macos-universal"
       ? [
           notObserved("initial_status"),
@@ -319,6 +319,49 @@ async function createQualificationFixture(output, platform) {
           passed("uninstall_purge", "not_installed", false),
           passed("final_status", "not_installed", false),
         ],
+    egressGateway: platform === "macos-universal"
+      ? { outcome: "not_observed", reasonCode: macosHostedLimitation }
+      : {
+          outcome: "passed",
+          result: {
+            schema_version: "1.0.0",
+            status: "passed",
+            qualification_kind: "managed_egress_gateway_readiness",
+            product_version: VERSION,
+            runtime: {
+              provider: "managed_local",
+              server_version: runtimeManifest.runtime_version,
+              command_provenance: {
+                kind: "managed_local",
+                runtime_version: runtimeManifest.runtime_version,
+                manifest_sha256: manifestSha256,
+                machine_image_sha256: target.machine_image.sha256,
+              },
+            },
+            gateway: {
+              image: `ghcr.io/teddashh/ai-security-scanner-egress-gateway@sha256:${"14".repeat(32)}`,
+              backend: "pinned_container",
+              ready: true,
+              scanner_reachable: true,
+              reachability_probe: "socks5_no_connect_greeting",
+              upstream_connection_attempted: false,
+              container_id: "15".repeat(32),
+              probe_container_id: "19".repeat(32),
+              internal_network_id: "16".repeat(32),
+              uplink_network_id: "17".repeat(32),
+              policy_sha256: "18".repeat(32),
+            },
+            cleanup: {
+              gateway_container_removed: true,
+              probe_container_removed: true,
+              internal_network_removed: true,
+              uplink_network_removed: true,
+              policy_file_removed: true,
+              status_directory_removed: true,
+              registry_record_removed: true,
+            },
+          },
+        },
     containerExecution: platform === "macos-universal"
       ? { outcome: "not_observed", reasonCode: macosHostedLimitation }
       : {
@@ -387,8 +430,9 @@ async function createQualificationFixture(output, platform) {
   await createPlatformQualification({
     artifactDirectory: output,
     observationsFile,
-    outputFile: path.join(output, `platform-qualification-${platform}.json`),
+    outputFile: path.join(output, `platform-qualification-${platform}-${installerType}.json`),
     platform,
+    installerType,
     version: VERSION,
     tag: TAG,
     commit: COMMIT,
@@ -531,9 +575,10 @@ async function main() {
         ["msi", `ai-security-scanner_${VERSION}_x64_en-US.msi`],
       ], signingKey),
     ];
-    for (const [index, platform] of ["linux-x86_64", "macos-universal", "windows-x86_64"].entries()) {
-      await createQualificationFixture(outputs[index], platform);
-    }
+    await createQualificationFixture(outputs[0], "linux-x86_64", "deb");
+    await createQualificationFixture(outputs[1], "macos-universal", "dmg");
+    await createQualificationFixture(outputs[2], "windows-x86_64", "msi");
+    await createQualificationFixture(outputs[2], "windows-x86_64", "nsis");
     const release = path.join(temporary, "release-assets");
     await mkdir(release);
     for (const output of outputs) {
@@ -604,7 +649,7 @@ async function main() {
       "--tauri-config",
       tauriConfig,
     ];
-    const macQualification = path.join(release, "platform-qualification-macos-universal.json");
+    const macQualification = path.join(release, "platform-qualification-macos-universal-dmg.json");
     const hiddenMacQualification = `${macQualification}.missing`;
     await rename(macQualification, hiddenMacQualification);
     expectFailure(() => run("finalize-release.mjs", finalizeArguments), "missing platform qualification");
@@ -625,6 +670,15 @@ async function main() {
       () => validatePlatformQualification(skippedMacContainer),
       "untyped macOS container observation",
     );
+    const dishonestMacGateway = JSON.parse(JSON.stringify(validMacQualification));
+    dishonestMacGateway.egressGateway = {
+      outcome: "passed",
+      result: { status: "passed" },
+    };
+    expectFailure(
+      () => validatePlatformQualification(dishonestMacGateway),
+      "dishonest hosted-macOS egress gateway observation",
+    );
     const unsupportedMacStart = JSON.parse(JSON.stringify(validMacQualification));
     unsupportedMacStart.managedRuntime.operations[3] = {
       name: "start",
@@ -642,7 +696,7 @@ async function main() {
       "stable release with runtime-not-observed macOS evidence",
     );
     const legacyMacSchema = JSON.parse(JSON.stringify(validMacQualification));
-    legacyMacSchema.schemaVersion = 1;
+    legacyMacSchema.schemaVersion = 2;
     expectFailure(
       () => validatePlatformQualification(legacyMacSchema),
       "legacy platform qualification schema",
@@ -665,7 +719,7 @@ async function main() {
       () => validatePlatformQualification(wrongMacTarget),
       "wrong macOS qualification runtime target",
     );
-    const linuxQualification = path.join(release, "platform-qualification-linux-x86_64.json");
+    const linuxQualification = path.join(release, "platform-qualification-linux-x86_64-deb.json");
     const validLinuxQualification = await readFile(linuxQualification);
     const tamperedQualification = JSON.parse(validLinuxQualification.toString("utf8"));
     const expectedQualificationImage =
@@ -700,6 +754,30 @@ async function main() {
       () => validatePlatformQualification(skippedLinuxContainer, { expectedQualificationImage }),
       "skipped Linux container qualification",
     );
+    const unsafeLinuxGateway = JSON.parse(validLinuxQualification.toString("utf8"));
+    unsafeLinuxGateway.egressGateway.result.gateway.upstream_connection_attempted = true;
+    expectFailure(
+      () => validatePlatformQualification(unsafeLinuxGateway, { expectedQualificationImage }),
+      "egress qualification that contacted an upstream destination",
+    );
+    const unreachableLinuxGateway = JSON.parse(validLinuxQualification.toString("utf8"));
+    unreachableLinuxGateway.egressGateway.result.gateway.scanner_reachable = false;
+    expectFailure(
+      () => validatePlatformQualification(unreachableLinuxGateway, { expectedQualificationImage }),
+      "egress gateway unreachable from the isolated scanner network",
+    );
+    const connectingLinuxProbe = JSON.parse(validLinuxQualification.toString("utf8"));
+    connectingLinuxProbe.egressGateway.result.gateway.reachability_probe = "socks5_connect";
+    expectFailure(
+      () => validatePlatformQualification(connectingLinuxProbe, { expectedQualificationImage }),
+      "egress gateway qualification using a CONNECT probe",
+    );
+    const incompleteGatewayCleanup = JSON.parse(validLinuxQualification.toString("utf8"));
+    incompleteGatewayCleanup.egressGateway.result.cleanup.probe_container_removed = false;
+    expectFailure(
+      () => validatePlatformQualification(incompleteGatewayCleanup, { expectedQualificationImage }),
+      "egress gateway qualification with an unremoved probe container",
+    );
     run("finalize-release.mjs", finalizeArguments);
     const finalizedVerificationArguments = [
       "--dir",
@@ -732,23 +810,25 @@ async function main() {
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
       latest.version !== VERSION ||
-      !latest.notes.includes("automatic first-launch scan-tool preparation") ||
-      !latest.notes.includes("fixed Ready/Repair loop") ||
-      !latest.notes.includes("timestamped activity before and during scans") ||
-      !releaseNotes.includes("On first launch, the app checks installed Windows prerequisites") ||
-      !releaseNotes.includes("The Ready/Repair loop is removed") ||
-      !releaseNotes.includes("Before a scan starts, the activity view records") ||
-      !releaseNotes.includes("download a redacted diagnostic") ||
+      !latest.notes.includes("Fixes the local scan connection") ||
+      !latest.notes.includes("gateway readiness honest") ||
+      !latest.notes.includes("both Windows installers") ||
+      !releaseNotes.includes("Local network scans no longer depend on a Windows process") ||
+      !releaseNotes.includes("Gateway readiness comes from the running gateway itself") ||
+      !releaseNotes.includes("Windows Setup executable and MSI") ||
+      !releaseNotes.includes("without making an upstream connection") ||
       latest.notes.includes("repair release") ||
       releaseNotes.includes("This patch release") ||
       !checksums.includes("ai-security-scanner-egress-gateway") ||
       !checksums.includes("ai-security-scanner-bootstrap-broker") ||
       !checksums.includes("ai-security-scanner-cli") ||
-      !checksums.includes("platform-qualification-linux-x86_64.json") ||
-      !checksums.includes("platform-qualification-macos-universal.json") ||
-      !checksums.includes("platform-qualification-windows-x86_64.json") ||
-      !releaseNotes.includes("Linux and Windows completed managed-runtime install, start, status, fixed") ||
-      !releaseNotes.includes("managed-runtime and container lifecycle is explicitly recorded as not observed") ||
+      !checksums.includes("platform-qualification-linux-x86_64-deb.json") ||
+      !checksums.includes("platform-qualification-macos-universal-dmg.json") ||
+      !checksums.includes("platform-qualification-windows-x86_64-msi.json") ||
+      !checksums.includes("platform-qualification-windows-x86_64-nsis.json") ||
+      !releaseNotes.includes("Linux and both Windows installers completed") ||
+      !releaseNotes.includes("fixed no-upstream managed egress gateway readiness") ||
+      !releaseNotes.includes("managed-runtime, egress gateway, and container lifecycle is explicitly recorded as not observed") ||
       Object.keys(latest.platforms).length !== 11 ||
       !latest.platforms["windows-x86_64-nsis"] ||
       !latest.platforms["windows-x86_64-msi"] ||
@@ -763,7 +843,7 @@ async function main() {
       throw new Error("finalized release did not preserve updater and companion executable evidence");
     }
     process.stdout.write(
-      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact runtime-manifest evidence sets, and three strict hosted platform qualifications.\n",
+      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact runtime-manifest evidence sets, and four strict hosted installer qualifications.\n",
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });

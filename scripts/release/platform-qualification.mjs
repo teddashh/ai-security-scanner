@@ -14,7 +14,7 @@ import {
 
 const PLATFORM_CONTRACTS = Object.freeze({
   "linux-x86_64": Object.freeze({
-    bundleType: "deb",
+    bundleTypes: Object.freeze(["deb"]),
     runnerLabel: "ubuntu-24.04",
     runnerOs: "Linux",
     runnerArch: "X64",
@@ -24,7 +24,7 @@ const PLATFORM_CONTRACTS = Object.freeze({
     targetProvider: "qemu",
   }),
   "macos-universal": Object.freeze({
-    bundleType: "dmg",
+    bundleTypes: Object.freeze(["dmg"]),
     runnerLabel: "macos-15-intel",
     runnerOs: "macOS",
     runnerArch: "X64",
@@ -34,7 +34,7 @@ const PLATFORM_CONTRACTS = Object.freeze({
     targetProvider: "applehv",
   }),
   "windows-x86_64": Object.freeze({
-    bundleType: "msi",
+    bundleTypes: Object.freeze(["msi", "nsis"]),
     runnerLabel: "windows-2025",
     runnerOs: "Windows",
     runnerArch: "X64",
@@ -45,10 +45,11 @@ const PLATFORM_CONTRACTS = Object.freeze({
   }),
 });
 
-const QUALIFICATION_SCHEMA_VERSION = 2;
+const QUALIFICATION_SCHEMA_VERSION = 3;
 const MACOS_HOSTED_LIMITATION = "github_hosted_macos_nested_virtualization_unsupported";
 const MAX_QUALIFICATION_DOCUMENT_BYTES = 1024 * 1024;
 const MAX_CONTAINER_REPORT_BYTES = 1024 * 1024;
+const GATEWAY_IMAGE_REPOSITORY = "ghcr.io/teddashh/ai-security-scanner-egress-gateway";
 
 const STATUS_KEYS = [
   "architecture",
@@ -107,6 +108,10 @@ function requireAbsolutePath(value, platform, label) {
   assert(absolute, `${label} must be an absolute installed path`);
 }
 
+function qualificationId(platform, installerType) {
+  return `${platform}-${installerType}`;
+}
+
 function validateStatus(status, phase, available, runtime, target, label) {
   exactKeys(status, STATUS_KEYS, label);
   assert(status.provider === "managed_local", `${label} provider must be managed_local`);
@@ -154,6 +159,86 @@ function validateContainerResult(result, runtime, target, version, expectedImage
   assert(result.evidence.finding_count === 0, "fixed container qualification fixture unexpectedly produced findings");
 }
 
+function validateEgressGatewayResult(result, runtime, target, version) {
+  exactKeys(
+    result,
+    ["schema_version", "status", "qualification_kind", "product_version", "runtime", "gateway", "cleanup"],
+    "egress gateway qualification",
+  );
+  assert(result.schema_version === "1.0.0", "egress gateway qualification schema is unsupported");
+  assert(result.status === "passed", "egress gateway qualification did not pass");
+  assert(
+    result.qualification_kind === "managed_egress_gateway_readiness",
+    "egress gateway qualification kind is incorrect",
+  );
+  assert(result.product_version === version, "egress gateway qualification product version mismatch");
+  exactKeys(result.runtime, ["provider", "server_version", "command_provenance"], "egress gateway runtime");
+  assert(result.runtime.provider === "managed_local", "egress gateway qualification did not use managed_local");
+  requireText(result.runtime.server_version, "egress gateway runtime server version");
+  exactKeys(
+    result.runtime.command_provenance,
+    ["kind", "runtime_version", "manifest_sha256", "machine_image_sha256"],
+    "egress gateway command provenance",
+  );
+  assert(result.runtime.command_provenance.kind === "managed_local", "egress gateway provenance kind is incorrect");
+  assert(result.runtime.command_provenance.runtime_version === runtime.runtimeVersion, "egress gateway runtime version mismatch");
+  assert(result.runtime.command_provenance.manifest_sha256 === runtime.manifestSha256, "egress gateway manifest digest mismatch");
+  assert(result.runtime.command_provenance.machine_image_sha256 === target.sha256, "egress gateway machine-image digest mismatch");
+  exactKeys(
+    result.gateway,
+    [
+      "image",
+      "backend",
+      "ready",
+      "scanner_reachable",
+      "reachability_probe",
+      "upstream_connection_attempted",
+      "container_id",
+      "probe_container_id",
+      "internal_network_id",
+      "uplink_network_id",
+      "policy_sha256",
+    ],
+    "egress gateway readiness",
+  );
+  assert(
+    new RegExp(`^${GATEWAY_IMAGE_REPOSITORY.replaceAll(".", "\\.")}@sha256:[0-9a-f]{64}$`, "u").test(result.gateway.image),
+    "egress gateway qualification image is not the immutable first-party gateway image",
+  );
+  assert(result.gateway.backend === "pinned_container", "egress gateway qualification used the wrong backend");
+  assert(result.gateway.ready === true, "egress gateway did not become ready");
+  assert(result.gateway.scanner_reachable === true, "the isolated scanner network could not reach the gateway");
+  assert(
+    result.gateway.reachability_probe === "socks5_no_connect_greeting",
+    "egress gateway qualification did not use the fixed no-CONNECT scanner-side probe",
+  );
+  assert(
+    result.gateway.upstream_connection_attempted === false,
+    "egress gateway qualification must not attempt an upstream connection",
+  );
+  for (const field of ["container_id", "probe_container_id", "internal_network_id", "uplink_network_id"]) {
+    assert(/^[0-9a-f]{64}$/u.test(result.gateway[field]), `egress gateway ${field} is not an immutable runtime id`);
+  }
+  requireDigest(result.gateway.policy_sha256, "egress gateway policy digest");
+  exactKeys(
+    result.cleanup,
+    [
+      "gateway_container_removed",
+      "probe_container_removed",
+      "internal_network_removed",
+      "uplink_network_removed",
+      "policy_file_removed",
+      "status_directory_removed",
+      "registry_record_removed",
+    ],
+    "egress gateway cleanup",
+  );
+  assert(
+    Object.values(result.cleanup).every((value) => value === true),
+    "egress gateway qualification did not remove every exact runtime resource",
+  );
+}
+
 function qualificationImageFromCatalog(catalog) {
   const engine = catalog.find((candidate) => candidate?.id === "gitleaks");
   assert(engine?.distribution_mode === "pull_pinned_image", "catalog has no pull-pinned Gitleaks qualification image");
@@ -195,13 +280,20 @@ function validateMacosHostedOperations(operations) {
 }
 
 export function validatePlatformQualification(evidence, context = {}) {
-  exactKeys(evidence, ["schemaVersion", "evidenceType", "product", "platform", "qualificationState", "releaseIdentity", "runner", "sourceArtifact", "installer", "installedLayout", "runtime", "desktopStartup", "managedRuntime", "containerExecution", "cleanup"], "platform qualification");
+  exactKeys(evidence, ["schemaVersion", "evidenceType", "product", "platform", "qualificationId", "qualificationState", "releaseIdentity", "runner", "sourceArtifact", "installer", "installedLayout", "runtime", "desktopStartup", "managedRuntime", "egressGateway", "containerExecution", "cleanup"], "platform qualification");
   assert(evidence.schemaVersion === QUALIFICATION_SCHEMA_VERSION, `platform qualification schemaVersion must be ${QUALIFICATION_SCHEMA_VERSION}`);
   assert(evidence.evidenceType === "hosted-platform-qualification", "platform qualification evidenceType is incorrect");
   assert(evidence.product === "ai-security-scanner", "platform qualification product is incorrect");
   const contract = PLATFORM_CONTRACTS[evidence.platform];
   assert(contract, `unsupported qualification platform: ${String(evidence.platform)}`);
   if (context.platform) assert(evidence.platform === context.platform, "platform qualification filename/platform mismatch");
+  assert(
+    evidence.qualificationId === qualificationId(evidence.platform, evidence.installer?.bundleType),
+    "platform qualification id does not match its platform and installer",
+  );
+  if (context.installerType) {
+    assert(evidence.installer?.bundleType === context.installerType, "platform qualification installer type mismatch");
+  }
   assert(evidence.qualificationState === contract.qualificationState, `${evidence.platform} qualification state is dishonest`);
 
   exactKeys(evidence.releaseIdentity, ["version", "tag", "sourceCommit", "releaseChannel"], "qualification release identity");
@@ -227,7 +319,7 @@ export function validatePlatformQualification(evidence, context = {}) {
   exactKeys(evidence.sourceArtifact, ["name"], "qualification source artifact");
   assert(evidence.sourceArtifact.name === `release-${evidence.platform}`, "qualification source artifact is incorrect");
   exactKeys(evidence.installer, ["bundleType", "file", "bytes", "sha256"], "qualified installer");
-  assert(evidence.installer.bundleType === contract.bundleType, "qualification used the wrong installer kind");
+  assert(contract.bundleTypes.includes(evidence.installer.bundleType), "qualification used the wrong installer kind");
   requireText(evidence.installer.file, "qualified installer filename");
   assert(path.posix.basename(evidence.installer.file) === evidence.installer.file && path.win32.basename(evidence.installer.file) === evidence.installer.file, "qualified installer filename is not flat");
   requireInteger(evidence.installer.bytes, "qualified installer bytes", 1);
@@ -275,6 +367,9 @@ export function validatePlatformQualification(evidence, context = {}) {
   requireAbsolutePath(evidence.managedRuntime.privateDataDirectory, evidence.platform, "managed runtime private data directory");
   if (evidence.platform === "macos-universal") {
     validateMacosHostedOperations(evidence.managedRuntime.operations);
+    exactKeys(evidence.egressGateway, ["outcome", "reasonCode"], "egress gateway execution");
+    assert(evidence.egressGateway.outcome === "not_observed", "hosted macOS egress gateway execution must be recorded as not observed");
+    assert(evidence.egressGateway.reasonCode === MACOS_HOSTED_LIMITATION, "hosted macOS egress gateway has an unsupported limitation code");
     exactKeys(evidence.containerExecution, ["outcome", "reasonCode"], "container execution");
     assert(evidence.containerExecution.outcome === "not_observed", "hosted macOS container execution must be recorded as not observed");
     assert(evidence.containerExecution.reasonCode === MACOS_HOSTED_LIMITATION, "hosted macOS container execution has an unsupported limitation code");
@@ -286,6 +381,14 @@ export function validatePlatformQualification(evidence, context = {}) {
     assert(evidence.cleanup.machineImageCacheState === "not_created", "macOS qualification made an unsupported machine-image cleanup claim");
   } else {
     validateFullOperations(evidence.managedRuntime.operations, evidence.runtime, evidence.runtime.selectedTarget);
+    exactKeys(evidence.egressGateway, ["outcome", "result"], "egress gateway execution");
+    assert(evidence.egressGateway.outcome === "passed", "managed egress gateway qualification did not pass");
+    validateEgressGatewayResult(
+      evidence.egressGateway.result,
+      evidence.runtime,
+      evidence.runtime.selectedTarget,
+      evidence.releaseIdentity.version,
+    );
     exactKeys(evidence.containerExecution, ["outcome", "result"], "container execution");
     assert(evidence.containerExecution.outcome === "passed", "managed container execution did not pass");
     assert(typeof context.expectedQualificationImage === "string", "validator has no released qualification image identity");
@@ -299,7 +402,7 @@ export function validatePlatformQualification(evidence, context = {}) {
 function observationsToEvidence(observations, inputs) {
   const { platform, version, tag, commit, releaseChannel, runnerLabel, installer, runtimeManifest, runtimeManifestSha256, installedManifestSha256, expectedQualificationImage, environment } = inputs;
   const contract = PLATFORM_CONTRACTS[platform];
-  exactKeys(observations, ["installedLayout", "desktopStartup", "privateDataDirectory", "operations", "containerExecution", "cleanup", "installedManifestSnapshot"], "platform observations");
+  exactKeys(observations, ["installedLayout", "desktopStartup", "privateDataDirectory", "operations", "egressGateway", "containerExecution", "cleanup", "installedManifestSnapshot"], "platform observations");
   exactKeys(observations.installedLayout, ["pathsVerifiedAbsolute", "desktop", "cli", "companions", "runtimeManifestOriginalPath"], "observed installed layout");
   assert(observations.installedManifestSnapshot === "installed-runtime-manifest.json", "installed manifest snapshot must use the fixed local filename");
   const machineImages = runtimeManifest.targets.map((target) => ({
@@ -335,6 +438,7 @@ function observationsToEvidence(observations, inputs) {
     evidenceType: "hosted-platform-qualification",
     product: "ai-security-scanner",
     platform,
+    qualificationId: qualificationId(platform, installer.bundleType),
     qualificationState: contract.qualificationState,
     releaseIdentity: { version, tag, sourceCommit: commit, releaseChannel },
     runner: {
@@ -370,15 +474,17 @@ function observationsToEvidence(observations, inputs) {
       privateDataDirectory: observations.privateDataDirectory,
       operations: observations.operations,
     },
+    egressGateway: observations.egressGateway,
     containerExecution: observations.containerExecution,
     cleanup: observations.cleanup,
   };
   return validatePlatformQualification(evidence, { platform, version, tag, commit, expectedQualificationImage });
 }
 
-export async function createPlatformQualification({ artifactDirectory, observationsFile, outputFile, platform, version, tag, commit, releaseChannel, runnerLabel, environment = process.env }) {
+export async function createPlatformQualification({ artifactDirectory, observationsFile, outputFile, platform, installerType, version, tag, commit, releaseChannel, runnerLabel, environment = process.env }) {
   const contract = PLATFORM_CONTRACTS[platform];
   assert(contract, `unsupported qualification platform: ${platform}`);
+  assert(contract.bundleTypes.includes(installerType), `unsupported ${platform} qualification installer type: ${installerType}`);
   assert(runnerLabel === contract.runnerLabel, `runner label ${runnerLabel} is not released for ${platform}`);
   assert(environment.GITHUB_ACTIONS === "true", "platform qualification creation is restricted to GitHub Actions");
   assert(environment.RUNNER_ENVIRONMENT === "github-hosted", "platform qualification creation requires a GitHub-hosted runner");
@@ -390,14 +496,14 @@ export async function createPlatformQualification({ artifactDirectory, observati
 
   const installerManifest = await readJson(path.join(artifactDirectory, `installers-${platform}.json`));
   assert(installerManifest.version === version && installerManifest.tag === tag && installerManifest.sourceCommit === commit && installerManifest.platform === platform, "installer manifest release identity mismatch");
-  const installers = installerManifest.installers?.filter((candidate) => candidate.bundleType === contract.bundleType) ?? [];
-  assert(installers.length === 1, `${platform} must have exactly one ${contract.bundleType} qualification installer`);
+  const installers = installerManifest.installers?.filter((candidate) => candidate.bundleType === installerType) ?? [];
+  assert(installers.length === 1, `${platform} must have exactly one ${installerType} qualification installer`);
   const installerRecord = installers[0];
   assert(path.posix.basename(installerRecord.file) === installerRecord.file && path.win32.basename(installerRecord.file) === installerRecord.file, "qualification installer manifest path is not flat");
   const installerPath = path.join(artifactDirectory, installerRecord.file);
   const installerMetadata = await lstat(installerPath);
   assert(installerMetadata.isFile() && !installerMetadata.isSymbolicLink(), "qualification installer is not a regular file");
-  const installer = { bundleType: contract.bundleType, file: installerRecord.file, bytes: installerMetadata.size, sha256: await sha256File(installerPath) };
+  const installer = { bundleType: installerType, file: installerRecord.file, bytes: installerMetadata.size, sha256: await sha256File(installerPath) };
   assert(installer.bytes === installerRecord.bytes && installer.sha256 === installerRecord.sha256, "qualification installer bytes differ from their release manifest");
 
   const runtimeManifestFile = path.join(artifactDirectory, `managed-runtime-${platform}.manifest.json`);
@@ -465,6 +571,7 @@ async function main() {
       observationsFile: path.resolve(requireString(args, "observations")),
       outputFile,
       platform: requireString(args, "platform"),
+      installerType: requireString(args, "installer-type"),
       version: requireString(args, "version"),
       tag: requireString(args, "tag"),
       commit: requireString(args, "commit"),
@@ -477,6 +584,7 @@ async function main() {
   if (command === "validate") {
     const evidence = await verifyPlatformQualificationFile(path.resolve(requireString(args, "file")), {
       platform: requireString(args, "platform"),
+      installerType: requireString(args, "installer-type"),
       version: requireString(args, "version"),
       tag: requireString(args, "tag"),
       commit: requireString(args, "commit"),
@@ -486,7 +594,7 @@ async function main() {
     process.stdout.write(`Validated strict ${evidence.qualificationState} qualification evidence for ${evidence.platform}.\n`);
     return;
   }
-  throw new Error("usage: platform-qualification.mjs <create|validate> --platform ... --version ... --tag ... --commit ... --release-channel ...");
+  throw new Error("usage: platform-qualification.mjs <create|validate> --platform ... --installer-type ... --version ... --tag ... --commit ... --release-channel ...");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runMain(main);

@@ -145,6 +145,7 @@ const observations = {
     notObserved("uninstall_purge"),
     notObserved("final_status"),
   ],
+  egressGateway: { outcome: "not_observed", reasonCode },
   containerExecution: { outcome: "not_observed", reasonCode },
   cleanup: {
     diskImageDetached: true,

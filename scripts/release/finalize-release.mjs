@@ -27,6 +27,33 @@ function assert(condition, message) {
 
 const RELEASE_COPY = new Map([
   [
+    "0.1.6",
+    {
+      updaterNotes:
+        "Fixes the local scan connection so network checks can start reliably, keeps gateway readiness honest, and independently tests both Windows installers. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **Public testing pre-release.** This build repairs the private connection used by local",
+        "> network scanners. It has not completed the planned formal QC/code review.",
+        "",
+        "Local network scans no longer depend on a Windows process listening on an address that",
+        "exists only inside WSL. The gateway now runs beside the scanners in the private managed",
+        "runtime, with separate scanner and uplink networks.",
+        "",
+        "Gateway readiness comes from the running gateway itself. If setup fails, the scan preserves",
+        "the concrete failure and cleanup result instead of returning to an unexplained Ready/Repair",
+        "loop. Existing event logs and redacted technical downloads remain available for diagnosis.",
+        "",
+        "The downloadable Windows Setup executable and MSI are now installed and exercised in",
+        "separate fresh qualification jobs. Each one must prove the gateway is ready and reachable",
+        "from the scanner side without making an upstream connection, then remove every exact test",
+        "resource before the release can continue.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "",
+      ],
+    },
+  ],
+  [
     "0.1.5",
     {
       updaterNotes:
@@ -556,13 +583,19 @@ async function main() {
   }
 
   const platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"];
+  const qualificationSpecs = [
+    { platform: "linux-x86_64", installerType: "deb" },
+    { platform: "macos-universal", installerType: "dmg" },
+    { platform: "windows-x86_64", installerType: "msi" },
+    { platform: "windows-x86_64", installerType: "nsis" },
+  ];
   const qualificationNames = (await regularFiles(directory))
     .map((file) => file.relative)
     .filter((name) => name.startsWith("platform-qualification-") && name.endsWith(".json"))
     .sort();
   assert(
-    JSON.stringify(qualificationNames) === JSON.stringify(platforms.map((platform) => `platform-qualification-${platform}.json`).sort()),
-    "release must contain exactly the three recognized platform qualification records",
+    JSON.stringify(qualificationNames) === JSON.stringify(qualificationSpecs.map(({ platform, installerType }) => `platform-qualification-${platform}-${installerType}.json`).sort()),
+    "release must contain exactly the four recognized installer qualification records",
   );
   const installers = [];
   const sidecars = [];
@@ -575,10 +608,13 @@ async function main() {
     sidecars.push(...verified.sidecars);
     updaters.push(...verified.updaters);
     runtimeComponents.push(...(await verifyRuntimeEvidence(directory, platform)));
+  }
+  for (const { platform, installerType } of qualificationSpecs) {
     platformQualifications.push(await verifyPlatformQualificationFile(
-      path.join(directory, `platform-qualification-${platform}.json`),
+      path.join(directory, `platform-qualification-${platform}-${installerType}.json`),
       {
         platform,
+        installerType,
         version,
         tag,
         commit,
@@ -642,14 +678,15 @@ async function main() {
     "artifact attestation before installing.",
     "",
     "Fresh GitHub-hosted qualification jobs independently installed the Debian package, macOS DMG,",
-    "and Windows MSI. Linux and Windows completed managed-runtime install, start, status, fixed",
+    "Windows MSI, and Windows NSIS Setup executable. Linux and both Windows installers completed",
+    "managed-runtime install, start, status, fixed no-upstream managed egress gateway readiness,",
     "network-disabled Gitleaks container execution, stop, uninstall with image-cache purge, and",
     "private-state cleanup. The universal macOS artifact's DMG installation, bundled layout, exact",
     "runtime manifest, CLI, desktop startup, and cleanup passed on GitHub's Intel macos-15-intel",
-    "runner. Its managed-runtime and container lifecycle is explicitly recorded as not observed",
+    "runner. Its managed-runtime, egress gateway, and container lifecycle is explicitly recorded as not observed",
     "because GitHub-hosted macOS does not support the nested virtualization required by AppleHV.",
     "This limited macOS evidence is accepted only for a pre-release. Exact evidence is published",
-    "per platform.",
+    "per installer.",
     "",
     "> The current installers are not signed with Apple Developer ID or Windows Authenticode and",
     "> are not Apple-notarized. Application update payloads are separately signed with the updater",

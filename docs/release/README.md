@@ -4,7 +4,7 @@ The release workflow builds native Tauri installers from either a manual `main` 
 exact numeric SemVer tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`, receives
 no publication privileges, creates no tag or GitHub Release, and preserves the finalized candidate
 as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag such as
-`v0.1.5` must exactly match the versions in `package.json`, `package-lock.json`,
+`v0.1.6` must exactly match the versions in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
 
 `package.json` declares whether that exact build uses the `prerelease` or `stable` publication
@@ -54,7 +54,9 @@ a claim that every end-user machine or every security assessment will behave ide
 
 The build-runner observation is preserved, then a separate qualification matrix starts on fresh
 GitHub-hosted `ubuntu-24.04`, `macos-15-intel`, and `windows-2025` machines. Each job downloads only its
-named `release-<platform>` artifact and independently installs the Debian package, DMG, or MSI. It
+named `release-<platform>` artifact and independently installs the Debian package, DMG, Windows MSI,
+or Windows NSIS Setup executable. MSI and NSIS run in separate fresh Windows jobs with separate
+install and private-data roots; a pass from one installer cannot stand in for the other. Each job
 locates the installed desktop, all three companion executables, and the packaged managed-runtime
 manifest; the installed manifest must byte-hash to the release copy. Every CLI operation uses a
 new private data directory. Linux and Windows must prove this exact sequence:
@@ -62,11 +64,15 @@ new private data directory. Linux and Windows must prove this exact sequence:
 1. initial `not_installed` status;
 2. managed payload install and independent `installed` status;
 3. real managed machine start and `running` status;
-4. the built-in fixed Gitleaks container qualification (immutable catalog digest, no network,
+4. a fixed managed-egress qualification that creates the production internal scanner network and
+   dual-network pinned gateway container, observes its ready status, and runs a second internal-only
+   container from that same pinned image. The probe exchanges only a SOCKS greeting, sends no CONNECT request,
+   and exact-removes both containers, both networks, the policy, status directory, and recovery record;
+5. the built-in fixed Gitleaks container qualification (immutable catalog digest, no network,
    read-only root, all capabilities dropped, no-new-privileges, zero credentials, and exact
    container cleanup);
-5. real machine stop and `stopped` status; and
-6. forced uninstall with the exact machine-image cache purged, final `not_installed` status,
+6. real machine stop and `stopped` status; and
+7. forced uninstall with the exact machine-image cache purged, final `not_installed` status,
    package removal, and private-directory removal. Windows additionally inventories WSL through
    the real absolute System32 executable resolved from the operating-system directory API, captures
    its output as bounded raw bytes, strictly decodes UTF-8 or UTF-16LE, and proves the deterministic
@@ -99,25 +105,26 @@ installed manifest exactly matches the release copy, render CLI help, keep the i
 alive through the startup observation window, detach the DMG, and remove both the installed app and
 its exact private test directory.
 
-The hosted macOS job deliberately does not call managed-runtime install, start, container qualify,
+The hosted macOS job deliberately does not call managed-runtime install, start, egress qualify, container qualify,
 stop, or uninstall. GitHub documents that nested virtualization on GitHub-hosted runners is not
 officially supported, while the packaged AppleHV machine requires that capability. The evidence
-therefore records every managed-runtime operation and the container probe as `not_observed` with the
+therefore records every managed-runtime operation, the egress gateway probe, and the container probe as `not_observed` with the
 fixed reason code `github_hosted_macos_nested_virtualization_unsupported`; it never emits a passing
-runtime status or container result. See GitHub's
+runtime status, gateway result, or container result. See GitHub's
 [hosted-runner documentation](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
 This limited macOS contract can publish only a `prerelease`. A stable release must replace it with
 real managed-runtime lifecycle evidence from a suitable Mac execution surface.
 
-Each runner emits one strict `platform-qualification-<platform>.json`. The record is bound to the
+Each installer job emits one strict `platform-qualification-<platform>-<installer>.json`. The record is bound to the
 exact version, candidate tag, 40-character source commit, source artifact name, installer bytes and
 SHA-256, hosted runner label and machine-image version, installed/release runtime-manifest SHA-256,
 all released managed machine-image URLs/digests/sizes, desktop startup, and cleanup results. Linux
-and Windows additionally contain ordered raw CLI status documents and the fixed container result;
+and Windows additionally contain ordered raw CLI status documents, the fixed no-upstream managed
+egress result, and the fixed container result;
 macOS instead contains the exact ordered `not_observed` records and fixed hosted-runner limitation
 code. Unknown fields, missing operations, caller-selected commands/images, inconsistent status
 phases, digest changes, a fabricated runtime pass, and a false cleanup claim fail closed.
-Finalization requires all three records; the global checksum index and GitHub provenance attestation
+Finalization requires all four records (DEB, DMG, MSI, and NSIS); the global checksum index and GitHub provenance attestation
 cover them like every other published release file.
 
 The workflow compiles all three real companion executables before every desktop build; no placeholder binary is kept
@@ -147,7 +154,7 @@ Each GitHub Release contains:
 - explicit SBOM entries with the digest and role of each platform companion executable;
 - `THIRD_PARTY_NOTICES.txt`, `ENGINE_NOTICES.md`, and machine-readable engine notices;
 - `release-metadata.json` and `release-assets.json` for automated consumers;
-- strict `platform-qualification-<platform>.json` evidence for Linux, macOS, and Windows;
+- strict `platform-qualification-<platform>-<installer>.json` evidence for DEB, DMG, MSI, and NSIS;
 - the signed updater payloads, their detached `.sig` files, and `latest.json`;
 - the project license and release notes; and
 - a GitHub build-provenance attestation over every published file.
@@ -156,7 +163,8 @@ Release-line details are recorded in the source tree. See the
 [`v0.1.2` initial public testing notes](v0.1.2.md),
 [`v0.1.3` one-click Windows setup notes](v0.1.3.md),
 [`v0.1.4` actionable scan-flow notes](v0.1.4.md),
-[`v0.1.5` Windows launch and scan-activity notes](v0.1.5.md), the planned
+[`v0.1.5` Windows launch and scan-activity notes](v0.1.5.md),
+[`v0.1.6` managed scan connection repair notes](v0.1.6.md), the planned
 [`v0.2.0` stable completion notes](v0.2.0.md), and the historical
 [`v0.1.1` security and consistency repair notes](v0.1.1.md).
 
@@ -197,7 +205,7 @@ First run the local metadata validator and normal implementation checks. Dispatc
 workflow from `main` before creating a tag:
 
 ```sh
-npm run release:validate -- --tag v0.1.5
+npm run release:validate -- --tag v0.1.6
 gh workflow run release.yml --ref main
 ```
 
@@ -209,12 +217,12 @@ its immutable `headSha`, and retain or download its `release-finalized` artifact
 commit—not a later `main` tip:
 
 ```sh
-git tag -a v0.1.5 <preflight-head-sha> -m "ai-security-scanner v0.1.5"
-git push origin v0.1.5
+git tag -a v0.1.6 <preflight-head-sha> -m "ai-security-scanner v0.1.6"
+git push origin v0.1.6
 ```
 
 The tag run rebuilds from the same commit rather than reusing preflight binaries. The GitHub Release
-is created only after all three platform builds, all three strict platform qualifications, both
+is created only after all three platform builds, all four strict installer qualifications, both
 SBOMs, notices, checksum verification, signed updater-manifest assembly, finalized-candidate
 reverification, and provenance attestation succeed. A source-declared preview is published as a
 non-draft pre-release and does not replace the latest stable release; a source-declared stable build

@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory = $true)][string]$ArtifactDirectory,
-  [Parameter(Mandatory = $true)][string]$WorkDirectory
+  [Parameter(Mandatory = $true)][string]$WorkDirectory,
+  [Parameter(Mandatory = $true)][ValidateSet("msi", "nsis")][string]$InstallerType
 )
 
 $ErrorActionPreference = "Stop"
@@ -521,7 +522,7 @@ if (-not $workRoot.StartsWith($runnerTemp + [IO.Path]::DirectorySeparatorChar, [
   throw "Qualification work directory must be below RUNNER_TEMP."
 }
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
-$installDirectory = Join-Path $runnerTemp "ai-security-scanner-platform-qualification-installed"
+$installDirectory = Join-Path $runnerTemp "ai-security-scanner-platform-qualification-$InstallerType-installed"
 $reportedLocalApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 if ([String]::IsNullOrWhiteSpace($reportedLocalApplicationData) -or
     -not [IO.Path]::IsPathFullyQualified($reportedLocalApplicationData)) {
@@ -534,7 +535,7 @@ if (-not $localApplicationDataItem.PSIsContainer -or
   throw "OS-resolved LocalApplicationData is not a real directory."
 }
 $dataDirectory = [IO.Path]::GetFullPath(
-  (Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-data")
+  (Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-$InstallerType-data")
 )
 if (-not [String]::Equals(
     [IO.Path]::GetDirectoryName($dataDirectory),
@@ -554,6 +555,7 @@ if (Test-ExactEntryExists $dataDirectory) {
 
 $installed = $false
 $installerPath = $null
+$uninstallerPath = $null
 $cli = $null
 $wsl = $null
 $systemRoot = $null
@@ -565,20 +567,28 @@ $cleanupFailures = [Collections.Generic.List[string]]::new()
 try {
   $installerManifestPath = Join-Path $artifactRoot "installers-windows-x86_64.json"
   $installerManifest = Get-Content -LiteralPath $installerManifestPath -Raw | ConvertFrom-Json
-  $installers = @($installerManifest.installers | Where-Object { $_.bundleType -eq "msi" })
+  $installers = @($installerManifest.installers | Where-Object { $_.bundleType -eq $InstallerType })
   if ($installers.Count -ne 1 -or [IO.Path]::GetFileName($installers[0].file) -ne $installers[0].file) {
-    throw "Windows qualification requires exactly one flat MSI installer."
+    throw "Windows qualification requires exactly one flat $InstallerType installer."
   }
   $installerPath = (Resolve-Path -LiteralPath (Join-Path $artifactRoot $installers[0].file)).Path
   if ([IO.Path]::GetDirectoryName($installerPath) -ne $artifactRoot) {
-    throw "MSI installer escaped the downloaded release artifact directory."
+    throw "$InstallerType installer escaped the downloaded release artifact directory."
   }
 
-  $install = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
-    "/i", $installerPath, "INSTALLDIR=$installDirectory", "/qn", "/norestart"
-  ) -Wait -PassThru
+  if ($InstallerType -eq "msi") {
+    $install = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
+      "/i", $installerPath, "INSTALLDIR=$installDirectory", "/qn", "/norestart"
+    ) -Wait -PassThru
+  } else {
+    # NSIS requires /D to be the final argument. The bounded RUNNER_TEMP path
+    # deliberately contains no shell expansion or caller-selected component.
+    $install = Start-Process -FilePath $installerPath -ArgumentList @(
+      "/S", "/D=$installDirectory"
+    ) -Wait -PassThru
+  }
   if ($install.ExitCode -ne 0) {
-    throw "MSI installation failed with status $($install.ExitCode)."
+    throw "$InstallerType installation failed with status $($install.ExitCode)."
   }
   $installed = $true
 
@@ -597,6 +607,13 @@ try {
   $egress = Find-OneInstalledFile "ai-security-scanner-egress-gateway.exe"
   $broker = Find-OneInstalledFile "ai-security-scanner-bootstrap-broker.exe"
   $cli = Find-OneInstalledFile "ai-security-scanner-cli.exe"
+  if ($InstallerType -eq "nsis") {
+    $uninstallers = @(Get-ChildItem -LiteralPath $installDirectory -Filter "uninstall.exe" -File -Recurse)
+    if ($uninstallers.Count -ne 1 -or -not [IO.Path]::IsPathFullyQualified($uninstallers[0].FullName)) {
+      throw "Expected exactly one absolute installed NSIS uninstaller, found $($uninstallers.Count)."
+    }
+    $uninstallerPath = $uninstallers[0].FullName
+  }
   $runtimeManifests = @(
     Get-ChildItem -LiteralPath $installDirectory -Filter "manifest.json" -File -Recurse |
       Where-Object { $_.FullName -match "(?i)[\\/]managed-runtime[\\/]manifest\.json$" }
@@ -687,6 +704,7 @@ try {
   $startStatus = Invoke-Managed "start" @("start")
   Assert-ManagedSshIdentity $providerReleaseHome
   $runningStatus = Invoke-Managed "running-status" @("status")
+  $egressQualification = Invoke-Managed "egress-qualification" @("qualify-egress")
   $containerQualification = Invoke-Managed "container-qualification" @("qualify")
   $stopStatus = Invoke-Managed "stop" @("stop")
   $stoppedStatus = Invoke-Managed "stopped-status" @("status")
@@ -712,18 +730,25 @@ try {
     }
   }
 
-  $uninstall = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
-    "/x", $installerPath, "/qn", "/norestart"
-  ) -Wait -PassThru
+  if ($InstallerType -eq "msi") {
+    $uninstall = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
+      "/x", $installerPath, "/qn", "/norestart"
+    ) -Wait -PassThru
+  } else {
+    if ($null -eq $uninstallerPath) {
+      throw "Installed NSIS uninstaller is unavailable."
+    }
+    $uninstall = Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -Wait -PassThru
+  }
   if ($uninstall.ExitCode -ne 0) {
-    throw "MSI uninstall failed with status $($uninstall.ExitCode)."
+    throw "$InstallerType uninstall failed with status $($uninstall.ExitCode)."
   }
   $installed = $false
   if (Test-Path -LiteralPath $installDirectory) {
     Remove-Item -LiteralPath $installDirectory -Recurse -Force
   }
   if (Test-Path -LiteralPath $installDirectory) {
-    throw "MSI installation directory remains after cleanup."
+    throw "$InstallerType installation directory remains after cleanup."
   }
   Remove-Item -LiteralPath $dataDirectory -Recurse -Force
   if (Test-Path -LiteralPath $dataDirectory) {
@@ -758,6 +783,7 @@ try {
       (Passed "uninstall_purge" $uninstallStatus),
       (Passed "final_status" $finalStatus)
     )
+    egressGateway = [ordered]@{ outcome = "passed"; result = $egressQualification }
     containerExecution = [ordered]@{ outcome = "passed"; result = $containerQualification }
     cleanup = [ordered]@{ managedRuntimePurged = $true; machineImageCachePurged = $true; installerRemoved = $true; privateDataRemoved = $true }
     installedManifestSnapshot = "installed-runtime-manifest.json"
@@ -821,9 +847,24 @@ try {
   }
   if ($installed -and $null -ne $installerPath) {
     try {
-      Invoke-BoundedCleanupProcess "msiexec.exe" @("/x", $installerPath, "/qn", "/norestart") 120000 "MSI uninstall"
+      if ($InstallerType -eq "msi") {
+        Invoke-BoundedCleanupProcess "msiexec.exe" @("/x", $installerPath, "/qn", "/norestart") 120000 "MSI uninstall"
+      } else {
+        if ($null -eq $uninstallerPath -and (Test-Path -LiteralPath $installDirectory -PathType Container)) {
+          $fallbackUninstallers = @(
+            Get-ChildItem -LiteralPath $installDirectory -Filter "uninstall.exe" -File -Recurse
+          )
+          if ($fallbackUninstallers.Count -eq 1) {
+            $uninstallerPath = $fallbackUninstallers[0].FullName
+          }
+        }
+        if ($null -eq $uninstallerPath) {
+          throw "Installed NSIS uninstaller is unavailable for bounded cleanup."
+        }
+        Invoke-BoundedCleanupProcess $uninstallerPath @("/S") 120000 "NSIS uninstall"
+      }
     } catch {
-      $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "MSI uninstall"))
+      $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "$InstallerType uninstall"))
     }
   }
   foreach ($boundedPath in @($installDirectory, $dataDirectory)) {

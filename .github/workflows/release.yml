@@ -525,10 +525,20 @@ jobs:
         include:
           - platform: linux-x86_64
             runner: ubuntu-24.04
+            qualification_id: linux-x86_64-deb
+            installer_type: deb
           - platform: macos-universal
             runner: macos-15-intel
+            qualification_id: macos-universal-dmg
+            installer_type: dmg
           - platform: windows-x86_64
             runner: windows-2025
+            qualification_id: windows-x86_64-msi
+            installer_type: msi
+          - platform: windows-x86_64
+            runner: windows-2025
+            qualification_id: windows-x86_64-nsis
+            installer_type: nsis
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -565,13 +575,14 @@ jobs:
           release-input
           "${RUNNER_TEMP}/ai-security-scanner-platform-qualification-evidence"
 
-      - name: Independently install and qualify the Windows MSI
+      - name: Independently install and qualify the Windows installer
         if: matrix.platform == 'windows-x86_64'
         shell: pwsh
         run: >-
           scripts/release/qualify-windows.ps1
           -ArtifactDirectory release-input
           -WorkDirectory "$env:RUNNER_TEMP/ai-security-scanner-platform-qualification-evidence"
+          -InstallerType "${{ matrix.installer_type }}"
 
       - name: Create and fail-closed validate platform qualification evidence
         shell: bash
@@ -583,12 +594,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p qualification-evidence
-          evidence="qualification-evidence/platform-qualification-${{ matrix.platform }}.json"
+          evidence="qualification-evidence/platform-qualification-${{ matrix.qualification_id }}.json"
           node scripts/release/platform-qualification.mjs create \
             --artifact-dir release-input \
             --observations "${RUNNER_TEMP}/ai-security-scanner-platform-qualification-evidence/observations.json" \
             --out "${evidence}" \
             --platform "${{ matrix.platform }}" \
+            --installer-type "${{ matrix.installer_type }}" \
             --runner-label "${{ matrix.runner }}" \
             --version "${RELEASE_VERSION}" \
             --tag "${RELEASE_TAG}" \
@@ -598,6 +610,7 @@ jobs:
             --file "${evidence}" \
             --artifact-dir release-input \
             --platform "${{ matrix.platform }}" \
+            --installer-type "${{ matrix.installer_type }}" \
             --version "${RELEASE_VERSION}" \
             --tag "${RELEASE_TAG}" \
             --commit "${SOURCE_COMMIT}" \
@@ -606,8 +619,8 @@ jobs:
       - name: Preserve strict platform qualification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: platform-qualification-${{ matrix.platform }}
-          path: qualification-evidence/platform-qualification-${{ matrix.platform }}.json
+          name: platform-qualification-${{ matrix.qualification_id }}
+          path: qualification-evidence/platform-qualification-${{ matrix.qualification_id }}.json
           if-no-files-found: error
           retention-days: 14
 
@@ -664,19 +677,25 @@ jobs:
       - name: Download Linux platform qualification
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: platform-qualification-linux-x86_64
+          name: platform-qualification-linux-x86_64-deb
           path: release-assets
 
       - name: Download macOS platform qualification
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: platform-qualification-macos-universal
+          name: platform-qualification-macos-universal-dmg
           path: release-assets
 
-      - name: Download Windows platform qualification
+      - name: Download Windows MSI platform qualification
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: platform-qualification-windows-x86_64
+          name: platform-qualification-windows-x86_64-msi
+          path: release-assets
+
+      - name: Download Windows NSIS platform qualification
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: platform-qualification-windows-x86_64-nsis
           path: release-assets
 
       - name: Verify installers and create the release index

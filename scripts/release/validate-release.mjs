@@ -253,11 +253,12 @@ function validateReleaseWorkflow(workflow) {
   assert(Number.isInteger(qualification["timeout-minutes"]) && qualification["timeout-minutes"] >= 180, "platform qualification timeout cannot truncate managed runtime lifecycle proof");
   assert(
     JSON.stringify(qualification.strategy?.matrix?.include) === JSON.stringify([
-      { platform: "linux-x86_64", runner: "ubuntu-24.04" },
-      { platform: "macos-universal", runner: "macos-15-intel" },
-      { platform: "windows-x86_64", runner: "windows-2025" },
+      { platform: "linux-x86_64", runner: "ubuntu-24.04", qualification_id: "linux-x86_64-deb", installer_type: "deb" },
+      { platform: "macos-universal", runner: "macos-15-intel", qualification_id: "macos-universal-dmg", installer_type: "dmg" },
+      { platform: "windows-x86_64", runner: "windows-2025", qualification_id: "windows-x86_64-msi", installer_type: "msi" },
+      { platform: "windows-x86_64", runner: "windows-2025", qualification_id: "windows-x86_64-nsis", installer_type: "nsis" },
     ]),
-    "platform qualification matrix must use the exact three released hosted runner images",
+    "installer qualification matrix must independently cover the exact four released installer contracts",
   );
   assert(qualification["runs-on"] === "${{ matrix.runner }}", "platform qualification must run on its declared fresh matrix runner");
   const qualificationSource = JSON.stringify(qualification);
@@ -269,8 +270,9 @@ function validateReleaseWorkflow(workflow) {
     "platform-qualification.mjs create",
     "platform-qualification.mjs validate",
     "--release-channel",
+    "--installer-type",
     "needs.validate.outputs.release_channel",
-    "platform-qualification-${{ matrix.platform }}.json",
+    "platform-qualification-${{ matrix.qualification_id }}.json",
   ]) {
     assert(qualificationSource.includes(required), `platform qualification job is missing: ${required}`);
   }
@@ -287,7 +289,7 @@ function validateReleaseWorkflow(workflow) {
     "assemble job must not receive write permissions",
   );
   const assembleSource = JSON.stringify(assemble);
-  for (const platform of ["linux-x86_64", "macos-universal", "windows-x86_64"]) {
+  for (const platform of ["linux-x86_64-deb", "macos-universal-dmg", "windows-x86_64-msi", "windows-x86_64-nsis"]) {
     assert(
       assembleSource.includes(`platform-qualification-${platform}`),
       `assemble job does not download ${platform} qualification evidence`,
@@ -359,9 +361,10 @@ function validateReleaseWorkflow(workflow) {
     "workflow_dispatch",
     "release-finalized",
     "verify-finalized-release.mjs",
-    "platform-qualification-linux-x86_64",
-    "platform-qualification-macos-universal",
-    "platform-qualification-windows-x86_64",
+    "platform-qualification-linux-x86_64-deb",
+    "platform-qualification-macos-universal-dmg",
+    "platform-qualification-windows-x86_64-msi",
+    "platform-qualification-windows-x86_64-nsis",
   ]) {
     assert(serialized.includes(required), `release workflow is missing required element: ${required}`);
   }
@@ -382,6 +385,7 @@ function validatePlatformQualificationSources(sources) {
     "run_managed installed-status status",
     "run_managed start start",
     "run_managed running-status status",
+    "run_managed egress-qualification qualify-egress",
     "run_managed container-qualification qualify",
     "run_managed stop stop",
     "run_managed stopped-status status",
@@ -441,6 +445,7 @@ function validatePlatformQualificationSources(sources) {
     'notObserved("install")',
     'notObserved("start")',
     'notObserved("uninstall_purge")',
+    'egressGateway: { outcome: "not_observed", reasonCode }',
     'containerExecution: { outcome: "not_observed", reasonCode }',
     'diskImageDetached: true',
     'installedApplicationRemoved: true',
@@ -453,11 +458,15 @@ function validatePlatformQualificationSources(sources) {
     'Invoke-Managed "initial-status"',
     'Invoke-Managed "install"',
     'Invoke-Managed "start"',
+    'Invoke-Managed "egress-qualification"',
     'Invoke-Managed "container-qualification"',
     'Invoke-Managed "stop"',
     'Invoke-Managed "uninstall-purge"',
     '"--purge-image-cache"',
     '"msiexec.exe"',
+    '[ValidateSet("msi", "nsis")]',
+    '"/S", "/D=$installDirectory"',
+    'Filter "uninstall.exe"',
     "GetSystemWindowsDirectoryW",
     'Join-Path $systemRoot "System32"',
     'Join-Path $system32 "wsl.exe"',
@@ -485,7 +494,7 @@ function validatePlatformQualificationSources(sources) {
     "Managed runtime uninstall left its exact WSL distribution registered:",
     "managed-runtime\\provider-home",
     "GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-    '(Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-data")',
+    '(Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-$InstallerType-data")',
     "Where-Object { [String]::Equals($_.Name, $name, [StringComparison]::OrdinalIgnoreCase) }",
     "OS-resolved LocalApplicationData is not a real directory.",
     "Qualification data directory escaped OS-resolved LocalApplicationData.",
@@ -504,6 +513,7 @@ function validatePlatformQualificationSources(sources) {
     "Managed runtime Linux gvproxy socket exceeds Podman 5.8.2 path budget.",
     "run_managed start start",
     "run_managed running-status status",
+    "run_managed egress-qualification qualify-egress",
     "run_managed container-qualification qualify",
     "run_managed stop stop",
     'flock -n "${virtiofs_pid}" true',
@@ -523,12 +533,13 @@ function validatePlatformQualificationSources(sources) {
     "github_hosted_macos_nested_virtualization_unsupported",
     'notObserved("initial_status")',
     'notObserved("final_status")',
+    'egressGateway: { outcome: "not_observed", reasonCode }',
     'containerExecution: { outcome: "not_observed", reasonCode }',
     'diskImageDetached: true',
   ], "macOS qualification");
   assertOrderedTokens(windows, [
     "GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-    '(Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-data")',
+    '(Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-$InstallerType-data")',
     "if (Test-ExactEntryExists $dataDirectory)",
     "New-Item -ItemType Directory -Path $dataDirectory -Force",
     '$initialStatus = Invoke-Managed "initial-status" @("status")',
@@ -537,6 +548,7 @@ function validatePlatformQualificationSources(sources) {
     '$podmanNamespaceDirectories = @(',
     '$startStatus = Invoke-Managed "start" @("start")',
     '$runningStatus = Invoke-Managed "running-status" @("status")',
+    '$egressQualification = Invoke-Managed "egress-qualification" @("qualify-egress")',
     '$containerQualification = Invoke-Managed "container-qualification" @("qualify")',
     '$stopStatus = Invoke-Managed "stop" @("stop")',
     '$stoppedStatus = Invoke-Managed "stopped-status" @("status")',
@@ -544,7 +556,7 @@ function validatePlatformQualificationSources(sources) {
     '$finalStatus = Invoke-Managed "final-status" @("status")',
   ], "Windows qualification");
   assert(
-    !windows.includes('$dataDirectory = Join-Path $runnerTemp "ai-security-scanner-platform-qualification-windows-data"'),
+    !windows.includes('$dataDirectory = Join-Path $runnerTemp "ai-security-scanner-platform-qualification-windows-$InstallerType-data"'),
     "Windows qualification regressed its managed data directory to RUNNER_TEMP",
   );
   for (const [name, source] of [["Linux", linux], ["macOS", macos], ["Windows", windows]]) {
@@ -573,7 +585,18 @@ function validatePlatformQualificationSources(sources) {
     "installedManifestExactMatch",
     "github-hosted",
     "macos-15-intel",
-    "QUALIFICATION_SCHEMA_VERSION = 2",
+    "QUALIFICATION_SCHEMA_VERSION = 3",
+    "managed_egress_gateway_readiness",
+    "scanner_reachable",
+    "reachability_probe",
+    "socks5_no_connect_greeting",
+    "upstream_connection_attempted",
+    "probe_container_id",
+    "probe_container_removed",
+    "registry_record_removed",
+    "pinned_container",
+    "qualificationId",
+    'bundleTypes: Object.freeze(["msi", "nsis"])',
     'qualificationState: "installer_passed_runtime_not_observed"',
     "github_hosted_macos_nested_virtualization_unsupported",
     'operation.outcome === "not_observed"',
@@ -834,10 +857,10 @@ async function main() {
     "release guide commands are out of sync",
   );
   assert(
-    releaseGuide.includes("`macos-15-intel`") &&
+      releaseGuide.includes("`macos-15-intel`") &&
       releaseGuide.includes("Linux and Windows must prove this exact sequence") &&
       releaseGuide.includes("github_hosted_macos_nested_virtualization_unsupported") &&
-      releaseGuide.includes("records every managed-runtime operation and the container probe as `not_observed`") &&
+      releaseGuide.includes("records every managed-runtime operation, the egress gateway probe, and the container probe as `not_observed`") &&
       releaseGuide.includes("can publish only a `prerelease`") &&
       releaseGuide.includes("https://docs.github.com/en/actions/concepts/runners/github-hosted-runners") &&
       !releaseGuide.includes("`not_run`"),
@@ -849,13 +872,19 @@ async function main() {
       releaseGuide.includes("bounded raw bytes") &&
       releaseGuide.includes("both fixed staging names are absent") &&
       releaseGuide.includes("provider-home directory itself must be absent") &&
+      releaseGuide.includes("Windows NSIS Setup executable") &&
+      releaseGuide.includes("dual-network pinned gateway container") &&
+      releaseGuide.includes("exchanges only a SOCKS greeting") &&
+      releaseGuide.includes("sends no CONNECT request") &&
       releaseGuide.includes("never emits a passing") &&
-      releaseGuide.includes("runtime status or container result"),
+      releaseGuide.includes("runtime status, gateway result, or container result"),
     "release guide omits the exact per-platform managed-runtime qualification contract",
   );
   assert(
-    releaseLineNotes.includes("macOS 15 Intel") &&
+      releaseLineNotes.includes("macOS 15 Intel") &&
       releaseLineNotes.includes("network-disabled Gitleaks container probe") &&
+      releaseLineNotes.includes("Windows NSIS Setup") &&
+      releaseLineNotes.includes("never sends CONNECT") &&
       releaseLineNotes.includes("`not_observed`, not passed") &&
       releaseLineNotes.includes("limited evidence is accepted only for a pre-release"),
     "release-line notes omit the honest hosted-macOS pre-release qualification contract",
