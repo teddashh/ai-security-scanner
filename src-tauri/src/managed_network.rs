@@ -1,4 +1,6 @@
-use crate::container_runtime::{NetworkPolicy, RuntimeCommandContext, RuntimeProvider};
+use crate::container_runtime::{
+    NetworkPolicy, PinnedImage, RuntimeCommandContext, RuntimeProvider,
+};
 use crate::error::{AppError, AppResult};
 use crate::external_scope::{
     CanonicalTarget, ExternalActivity, ResolvedExternalPlan, TransportProtocol,
@@ -10,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -26,8 +28,10 @@ const MAX_POLICY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REGISTRY_RECORD_BYTES: usize = 64 * 1024;
 const MAX_REGISTRY_RECORDS: usize = 3_072;
 const MAX_INSPECT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_GATEWAY_STATUS_BYTES: usize = 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 const RUNTIME_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const GATEWAY_IMAGE_PULL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_DESTINATIONS: usize = 10_000;
 const MAX_EXTERNAL_PLANS_PER_LEASE: usize = 128;
 const MAX_AUTHORIZED_ENDPOINTS: usize = 10_000;
@@ -36,6 +40,15 @@ const GATEWAY_READY_INTERVAL: Duration = Duration::from_millis(25);
 const GATEWAY_CONNECT_PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 const MANAGED_LABEL_KEY: &str = "ai.security-scanner.managed";
 const POLICY_LABEL_KEY: &str = "ai.security-scanner.policy-id";
+const RESOURCE_ROLE_LABEL_KEY: &str = "ai.security-scanner.resource-role";
+const UPLINK_RESOURCE_ROLE: &str = "gateway-uplink";
+const GATEWAY_CONTAINER_RESOURCE_ROLE: &str = "egress-gateway";
+const GATEWAY_PROBE_RESOURCE_ROLE: &str = "egress-gateway-probe";
+const CONTAINER_POLICY_PATH: &str = "/run/ai-security-scanner/egress-policy.json";
+const CONTAINER_PROBE_BINARY: &str = "/usr/local/bin/ai-security-scanner-egress-probe";
+const GATEWAY_CONTAINER_USER_MEMORY_MB: u16 = 128;
+const GATEWAY_CONTAINER_PIDS: u16 = 64;
+const GATEWAY_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Bounded, non-secret identity copied into the durable execution checkpoint.
 ///
@@ -49,6 +62,20 @@ pub struct ManagedNetworkIdentity {
     pub provider: RuntimeProvider,
     pub network_name: String,
     pub network_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uplink_network_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uplink_network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_container_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_container_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_listener_ip: Option<IpAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_image_repository: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_image_digest: Option<String>,
     pub policy_id: String,
     pub policy_sha256: String,
     pub expires_at: DateTime<Utc>,
@@ -66,6 +93,16 @@ impl ManagedNetworkIdentity {
         validate_runtime_id(&self.network_id)?;
         validate_policy_id(&self.policy_id)?;
         validate_network_policy_relation(&self.network_name, &self.policy_id)?;
+        validate_optional_gateway_identity(
+            &self.policy_id,
+            self.uplink_network_name.as_deref(),
+            self.uplink_network_id.as_deref(),
+            self.gateway_container_name.as_deref(),
+            self.gateway_container_id.as_deref(),
+            self.gateway_listener_ip,
+            self.gateway_image_repository.as_deref(),
+            self.gateway_image_digest.as_deref(),
+        )?;
         decode_sha256(&self.policy_sha256)?;
         validate_egress_provenance(&self.provenance)?;
         Ok(())
@@ -129,7 +166,12 @@ impl ManagedNetworkOwner {
 enum RegistryPhase {
     Intent,
     NetworkVerified,
+    /// Final phase written by releases that used a native host process.
     Ready,
+    UplinkVerified,
+    PolicyReady,
+    GatewayContainerVerified,
+    ContainerReady,
 }
 
 impl RegistryPhase {
@@ -138,6 +180,10 @@ impl RegistryPhase {
             Self::Intent => 0,
             Self::NetworkVerified => 1,
             Self::Ready => 2,
+            Self::UplinkVerified => 3,
+            Self::PolicyReady => 4,
+            Self::GatewayContainerVerified => 5,
+            Self::ContainerReady => 6,
         }
     }
 }
@@ -154,13 +200,104 @@ struct ManagedNetworkRecord {
     expires_at: DateTime<Utc>,
     phase: RegistryPhase,
     network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uplink_network_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uplink_network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gateway_container_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gateway_container_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gateway_listener_ip: Option<IpAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gateway_image_repository: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gateway_image_digest: Option<String>,
     policy_sha256: Option<String>,
+}
+
+/// Immutable release input for the first-party managed egress gateway image.
+///
+/// The repository and digest must come from a verified release manifest. This
+/// type intentionally has no default and never accepts a tag-only reference,
+/// so an unpublished or mutable image cannot silently enter production.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayContainerSpec {
+    repository: String,
+    digest: String,
+}
+
+impl GatewayContainerSpec {
+    pub fn new(repository: impl Into<String>, digest: impl Into<String>) -> AppResult<Self> {
+        let repository = repository.into();
+        let digest = digest.into();
+        let image = PinnedImage::new(&repository, &digest)?;
+        let reference = image.reference();
+        let (repository, digest) = reference.rsplit_once('@').ok_or_else(|| {
+            AppError::Internal("pinned gateway image reference lost its digest".into())
+        })?;
+        Ok(Self {
+            repository: repository.to_owned(),
+            digest: digest.to_owned(),
+        })
+    }
+
+    pub fn repository(&self) -> &str {
+        &self.repository
+    }
+
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    pub fn reference(&self) -> String {
+        format!("{}@{}", self.repository, self.digest)
+    }
+
+    fn validate(&self) -> AppResult<()> {
+        let image = PinnedImage::new(&self.repository, &self.digest)?;
+        if image.reference() != self.reference() {
+            return Err(AppError::NotAuthorized(
+                "managed gateway image identity is not canonical".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ManagedNetworkCleanupOutcome {
     pub removed: bool,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedGatewayQualificationCleanup {
+    pub gateway_container_removed: bool,
+    pub probe_container_removed: bool,
+    pub internal_network_removed: bool,
+    pub uplink_network_removed: bool,
+    pub policy_file_removed: bool,
+    pub status_directory_removed: bool,
+    pub registry_record_removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedGatewayQualification {
+    pub image: String,
+    pub gateway_container_id: String,
+    pub probe_container_id: String,
+    pub internal_network_id: String,
+    pub uplink_network_id: String,
+    pub policy_sha256: String,
+    pub reachability_probe: String,
+    pub gateway_reachable: bool,
+    pub upstream_connect_attempted: bool,
+    pub cleanup: ManagedGatewayQualificationCleanup,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -202,6 +339,12 @@ pub enum EgressGatewayProvenance {
         source_profile: String,
         manifest_id: String,
         manifest_revision: String,
+    },
+    /// Fixed, no-upstream release qualification. This is deliberately
+    /// distinct from human asset grants and provider-service authorization.
+    ReleaseQualification {
+        case_id: String,
+        qualification_id: String,
     },
 }
 
@@ -439,6 +582,10 @@ impl EgressGatewayPolicy {
         }
         labels.into_iter().collect()
     }
+
+    pub fn destinations(&self) -> &[GatewayDestination] {
+        &self.destinations
+    }
 }
 
 pub fn resolve_provider_service_plan(
@@ -607,12 +754,22 @@ fn parse_exact_provider_destination(value: &str) -> AppResult<(String, u16)> {
 /// Owns the runtime network and gateway process for one bounded scan operation.
 pub struct ManagedNetworkController {
     provider: RuntimeProvider,
-    gateway_binary: PathBuf,
     policy_directory: PathBuf,
     registry_directory: PathBuf,
     runtime: Arc<dyn RuntimeCommands>,
-    gateway_launcher: Arc<dyn GatewayLauncher>,
-    readiness: Arc<dyn GatewayReadiness>,
+    gateway_backend: GatewayBackend,
+}
+
+enum GatewayBackend {
+    Direct {
+        binary: PathBuf,
+        launcher: Arc<dyn GatewayLauncher>,
+        readiness: Arc<dyn GatewayReadiness>,
+    },
+    Container {
+        spec: GatewayContainerSpec,
+        readiness: Arc<dyn GatewayContainerReadiness>,
+    },
 }
 
 impl ManagedNetworkController {
@@ -671,6 +828,27 @@ impl ManagedNetworkController {
         )
     }
 
+    /// Creates the production-safe gateway backend for a runtime whose network
+    /// namespace may live in a VM (ManagedLocal, Docker Desktop, or remote
+    /// Podman). Both the scanner bridge and the gateway uplink are runtime-owned;
+    /// no native host process is asked to bind a guest-only address.
+    pub fn new_with_registry_context_and_container(
+        context: RuntimeCommandContext,
+        gateway: GatewayContainerSpec,
+        policy_directory: impl AsRef<Path>,
+        registry_directory: impl AsRef<Path>,
+    ) -> AppResult<Self> {
+        let provider = context.provider();
+        Self::with_container_components(
+            provider,
+            gateway,
+            policy_directory.as_ref(),
+            registry_directory.as_ref(),
+            Arc::new(ContextRuntimeCommands { context }),
+            Arc::new(RuntimeGatewayContainerReadiness),
+        )
+    }
+
     fn with_components(
         provider: RuntimeProvider,
         gateway_binary: &Path,
@@ -680,17 +858,47 @@ impl ManagedNetworkController {
         gateway_launcher: Arc<dyn GatewayLauncher>,
         readiness: Arc<dyn GatewayReadiness>,
     ) -> AppResult<Self> {
+        if provider == RuntimeProvider::ManagedLocal {
+            return Err(AppError::NotAvailable(
+                "managed-local egress requires the pinned gateway-container backend".into(),
+            ));
+        }
         let gateway_binary = inspect_gateway_binary(gateway_binary)?;
         let policy_directory = validate_policy_directory(policy_directory)?;
         let registry_directory = validate_policy_directory(registry_directory)?;
         Ok(Self {
             provider,
-            gateway_binary,
             policy_directory,
             registry_directory,
             runtime,
-            gateway_launcher,
-            readiness,
+            gateway_backend: GatewayBackend::Direct {
+                binary: gateway_binary,
+                launcher: gateway_launcher,
+                readiness,
+            },
+        })
+    }
+
+    fn with_container_components(
+        provider: RuntimeProvider,
+        gateway: GatewayContainerSpec,
+        policy_directory: &Path,
+        registry_directory: &Path,
+        runtime: Arc<dyn RuntimeCommands>,
+        readiness: Arc<dyn GatewayContainerReadiness>,
+    ) -> AppResult<Self> {
+        gateway.validate()?;
+        let policy_directory = validate_policy_directory(policy_directory)?;
+        let registry_directory = validate_policy_directory(registry_directory)?;
+        Ok(Self {
+            provider,
+            policy_directory,
+            registry_directory,
+            runtime,
+            gateway_backend: GatewayBackend::Container {
+                spec: gateway,
+                readiness,
+            },
         })
     }
 
@@ -701,7 +909,7 @@ impl ManagedNetworkController {
         now: DateTime<Utc>,
     ) -> AppResult<ManagedNetworkLease> {
         owner.validate()?;
-        inspect_gateway_binary(&self.gateway_binary)?;
+        self.validate_gateway_backend()?;
         validate_policy_directory(&self.policy_directory)?;
         validate_policy_directory(&self.registry_directory)?;
         // Validate the plans before making any host or runtime changes. The bridge-specific
@@ -734,7 +942,7 @@ impl ManagedNetworkController {
         now: DateTime<Utc>,
     ) -> AppResult<ManagedNetworkLease> {
         owner.validate()?;
-        inspect_gateway_binary(&self.gateway_binary)?;
+        self.validate_gateway_backend()?;
         validate_policy_directory(&self.policy_directory)?;
         validate_policy_directory(&self.registry_directory)?;
         validate_provider_service_request_static(&plan.request, now)?;
@@ -755,7 +963,203 @@ impl ManagedNetworkController {
         )
     }
 
+    /// Performs the release-only managed gateway proof. The probe container is
+    /// attached only to the isolated scanner bridge, sends one SOCKS greeting,
+    /// and exits before any CONNECT request can be sent. It uses the same
+    /// immutable image as the gateway and always exact-cleans every resource
+    /// before a successful result can be returned.
+    pub fn qualify_gateway_container(
+        &self,
+        owner: &ManagedNetworkOwner,
+        qualification_id: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<ManagedGatewayQualification> {
+        owner.validate()?;
+        validate_owner_segment(qualification_id, "qualification")?;
+        self.validate_gateway_backend()?;
+        let GatewayBackend::Container { spec, .. } = &self.gateway_backend else {
+            return Err(AppError::NotAvailable(
+                "managed gateway qualification requires the pinned container backend".into(),
+            ));
+        };
+        let expires_at = now + ChronoDuration::minutes(5);
+        let mut lease = self.provision_policy(
+            owner,
+            expires_at,
+            now,
+            |policy_id, listen_address, allowed_client_network| {
+                validate_bridge_network(allowed_client_network, listen_address.ip())?;
+                if listen_address.port() != GATEWAY_PORT {
+                    return Err(AppError::Internal(
+                        "managed gateway qualification listener used the wrong port".into(),
+                    ));
+                }
+                Ok(EgressGatewayPolicy {
+                    schema_version: POLICY_SCHEMA_VERSION.into(),
+                    policy_id: policy_id.into(),
+                    expires_at,
+                    listen_address,
+                    allowed_client_network,
+                    limits: EgressGatewayLimits {
+                        max_concurrency: 1,
+                        max_connections_per_second: 1,
+                        connect_timeout_seconds: 1,
+                        max_connection_seconds: 5,
+                    },
+                    provenance: EgressGatewayProvenance::ReleaseQualification {
+                        case_id: owner.case_id.clone(),
+                        qualification_id: qualification_id.into(),
+                    },
+                    // The gateway's policy format requires one bounded
+                    // destination. The probe never sends CONNECT, so this
+                    // documentation address is never contacted.
+                    destinations: vec![GatewayDestination {
+                        hostname: None,
+                        addresses: BTreeSet::from([IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))]),
+                        ports: BTreeSet::from([9]),
+                        allow_sensitive_networks: false,
+                    }],
+                })
+            },
+        )?;
+        let durable = lease.durable_identity()?;
+        let gateway_container_id = durable
+            .gateway_container_id
+            .clone()
+            .ok_or_else(|| AppError::Internal("qualification gateway ID is absent".into()))?;
+        let uplink_network_id = durable
+            .uplink_network_id
+            .clone()
+            .ok_or_else(|| AppError::Internal("qualification uplink ID is absent".into()))?;
+        let listener_ip = durable
+            .gateway_listener_ip
+            .ok_or_else(|| AppError::Internal("qualification listener is absent".into()))?;
+        let policy_path = lease
+            .policy_path()
+            .ok_or_else(|| AppError::Internal("qualification policy path is absent".into()))?
+            .to_owned();
+        let status_path = lease
+            .gateway_status_directory
+            .as_ref()
+            .ok_or_else(|| AppError::Internal("qualification status path is absent".into()))?
+            .path
+            .clone();
+        let registry_paths = lease
+            .registry_files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+        let unique = durable.policy_id.strip_prefix("egress-").ok_or_else(|| {
+            AppError::Internal("qualification policy identity is malformed".into())
+        })?;
+        let mut probe = GatewayProbeRuntimeIdentity {
+            name: format!("ass-probe-{unique}"),
+            id: None,
+            policy_id: durable.policy_id.clone(),
+            image: spec.clone(),
+            internal_network_name: durable.network_name.clone(),
+            gateway: SocketAddr::new(listener_ip, GATEWAY_PORT),
+        };
+
+        let probe_result = (|| {
+            create_gateway_probe(self.runtime.as_ref(), self.provider, &mut probe)?;
+            run_gateway_probe(self.runtime.as_ref(), self.provider, &probe)
+        })();
+        let probe_container_id = probe.id.clone();
+        let probe_cleanup = remove_gateway_probe(self.runtime.as_ref(), self.provider, &probe);
+        let gateway_cleanup = lease.cleanup();
+
+        let mut cleanup_failures = Vec::new();
+        if let Err(error) = probe_cleanup {
+            cleanup_failures.push(format!("probe cleanup: {error}"));
+        }
+        if let Err(error) = gateway_cleanup {
+            cleanup_failures.push(format!("gateway cleanup: {error}"));
+        }
+        if !cleanup_failures.is_empty() {
+            return Err(AppError::Runtime(format!(
+                "managed gateway qualification cleanup was incomplete: {}",
+                cleanup_failures.join("; ")
+            )));
+        }
+        let probe_result = probe_result?;
+        let probe_container_id = probe_container_id.ok_or_else(|| {
+            AppError::Runtime("managed gateway qualification probe had no runtime ID".into())
+        })?;
+        let policy_file_removed = exact_path_is_absent(&policy_path)?;
+        let status_directory_removed = exact_path_is_absent(&status_path)?;
+        let registry_record_removed = registry_paths
+            .iter()
+            .map(|path| exact_path_is_absent(path))
+            .collect::<AppResult<Vec<_>>>()?
+            .into_iter()
+            .all(|absent| absent);
+        if lease.is_active()
+            || !policy_file_removed
+            || !status_directory_removed
+            || !registry_record_removed
+        {
+            return Err(AppError::Runtime(
+                "managed gateway qualification retained a durable resource".into(),
+            ));
+        }
+        Ok(ManagedGatewayQualification {
+            image: spec.reference(),
+            gateway_container_id,
+            probe_container_id,
+            internal_network_id: durable.network_id,
+            uplink_network_id,
+            policy_sha256: durable.policy_sha256,
+            reachability_probe: probe_result.reachability_probe,
+            gateway_reachable: probe_result.gateway_reachable,
+            upstream_connect_attempted: probe_result.upstream_connect_attempted,
+            cleanup: ManagedGatewayQualificationCleanup {
+                gateway_container_removed: true,
+                probe_container_removed: true,
+                internal_network_removed: true,
+                uplink_network_removed: true,
+                policy_file_removed,
+                status_directory_removed,
+                registry_record_removed,
+            },
+        })
+    }
+
     fn provision_policy<F>(
+        &self,
+        owner: &ManagedNetworkOwner,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+        build_policy: F,
+    ) -> AppResult<ManagedNetworkLease>
+    where
+        F: FnOnce(&str, SocketAddr, IpNet) -> AppResult<EgressGatewayPolicy>,
+    {
+        match &self.gateway_backend {
+            GatewayBackend::Direct { .. } => {
+                self.provision_direct_policy(owner, expires_at, now, build_policy)
+            }
+            GatewayBackend::Container { .. } => {
+                self.provision_container_policy(owner, expires_at, now, build_policy)
+            }
+        }
+    }
+
+    fn validate_gateway_backend(&self) -> AppResult<()> {
+        match &self.gateway_backend {
+            GatewayBackend::Direct { binary, .. } => {
+                if self.provider == RuntimeProvider::ManagedLocal {
+                    return Err(AppError::NotAvailable(
+                        "managed-local egress requires the pinned gateway-container backend".into(),
+                    ));
+                }
+                inspect_gateway_binary(binary).map(|_| ())
+            }
+            GatewayBackend::Container { spec, .. } => spec.validate(),
+        }
+    }
+
+    fn provision_direct_policy<F>(
         &self,
         owner: &ManagedNetworkOwner,
         expires_at: DateTime<Utc>,
@@ -779,21 +1183,16 @@ impl ManagedNetworkController {
             expires_at,
             phase: RegistryPhase::Intent,
             network_id: None,
+            uplink_network_name: None,
+            uplink_network_id: None,
+            gateway_container_name: None,
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: None,
+            gateway_image_digest: None,
             policy_sha256: None,
         };
-        let mut registry_files = vec![write_registry_snapshot(&self.registry_directory, &record)?];
-        if let Err(error) = create_internal_network(
-            self.runtime.as_ref(),
-            self.provider,
-            &network_name,
-            &expected_labels,
-        ) {
-            for file in registry_files {
-                let _ = remove_registry_file(&file);
-            }
-            return Err(error);
-        }
-
+        let registry_files = vec![write_registry_snapshot(&self.registry_directory, &record)?];
         let mut lease = ManagedNetworkLease {
             provider: self.provider,
             runtime: Arc::clone(&self.runtime),
@@ -802,11 +1201,22 @@ impl ManagedNetworkController {
             remove_unverified_network: true,
             expected_labels: expected_labels.clone(),
             gateway_process: None,
+            gateway_container: None,
+            gateway_status_directory: None,
             policy_file: None,
             network_policy: None,
             egress_policy: None,
-            registry_files: std::mem::take(&mut registry_files),
+            registry_files,
+            uplink_network_name: None,
+            uplink_network_id: None,
+            uplink_expected_labels: BTreeMap::new(),
         };
+        create_internal_network(
+            self.runtime.as_ref(),
+            self.provider,
+            &network_name,
+            &expected_labels,
+        )?;
 
         let inspected = inspect_network(
             self.runtime.as_ref(),
@@ -837,17 +1247,23 @@ impl ManagedNetworkController {
             .push(write_registry_snapshot(&self.registry_directory, &record)?);
         lease.policy_file = Some(policy_file);
 
-        let gateway_process = self
-            .gateway_launcher
-            .spawn(
-                &self.gateway_binary,
-                lease.policy_path().expect("policy path set"),
-            )
+        let GatewayBackend::Direct {
+            binary,
+            launcher,
+            readiness,
+        } = &self.gateway_backend
+        else {
+            return Err(AppError::Internal(
+                "managed gateway backend changed while provisioning".into(),
+            ));
+        };
+        let gateway_process = launcher
+            .spawn(binary, lease.policy_path().expect("policy path set"))
             .map_err(|error| {
                 AppError::Runtime(format!("egress gateway could not start: {error}"))
             })?;
         lease.gateway_process = Some(gateway_process);
-        self.readiness.wait_until_ready(
+        readiness.wait_until_ready(
             lease
                 .gateway_process
                 .as_mut()
@@ -867,6 +1283,197 @@ impl ManagedNetworkController {
         lease.egress_policy = Some(egress_policy);
         Ok(lease)
     }
+
+    fn provision_container_policy<F>(
+        &self,
+        owner: &ManagedNetworkOwner,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+        build_policy: F,
+    ) -> AppResult<ManagedNetworkLease>
+    where
+        F: FnOnce(&str, SocketAddr, IpNet) -> AppResult<EgressGatewayPolicy>,
+    {
+        let GatewayBackend::Container { spec, readiness } = &self.gateway_backend else {
+            return Err(AppError::Internal(
+                "managed gateway backend changed while provisioning".into(),
+            ));
+        };
+        ensure_gateway_container_image(self.runtime.as_ref(), self.provider, spec)?;
+        let unique = Uuid::new_v4().simple().to_string();
+        let policy_id = format!("egress-{unique}");
+        let network_name = format!("ass-egress-{unique}");
+        let uplink_network_name = format!("ass-uplink-{unique}");
+        let gateway_container_name = format!("ass-gateway-{unique}");
+        let expected_labels = expected_labels(&policy_id);
+        let uplink_expected_labels = expected_uplink_labels(&policy_id);
+        let mut record = ManagedNetworkRecord {
+            schema_version: REGISTRY_SCHEMA_VERSION.into(),
+            owner: owner.clone(),
+            provider: self.provider,
+            network_name: network_name.clone(),
+            policy_id: policy_id.clone(),
+            created_at: now,
+            expires_at,
+            phase: RegistryPhase::Intent,
+            network_id: None,
+            uplink_network_name: Some(uplink_network_name.clone()),
+            uplink_network_id: None,
+            gateway_container_name: Some(gateway_container_name.clone()),
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: Some(spec.repository().to_owned()),
+            gateway_image_digest: Some(spec.digest().to_owned()),
+            policy_sha256: None,
+        };
+        let registry_files = vec![write_registry_snapshot(&self.registry_directory, &record)?];
+        let mut lease = ManagedNetworkLease {
+            provider: self.provider,
+            runtime: Arc::clone(&self.runtime),
+            network_name: Some(network_name.clone()),
+            network_id: None,
+            remove_unverified_network: true,
+            expected_labels: expected_labels.clone(),
+            uplink_network_name: Some(uplink_network_name.clone()),
+            uplink_network_id: None,
+            uplink_expected_labels: uplink_expected_labels.clone(),
+            gateway_process: None,
+            gateway_container: None,
+            gateway_status_directory: None,
+            policy_file: None,
+            network_policy: None,
+            egress_policy: None,
+            registry_files,
+        };
+        create_internal_network(
+            self.runtime.as_ref(),
+            self.provider,
+            &network_name,
+            &expected_labels,
+        )?;
+
+        let internal = inspect_network(
+            self.runtime.as_ref(),
+            self.provider,
+            &network_name,
+            &expected_labels,
+        )?;
+        lease.network_id = Some(internal.id.clone());
+        lease.remove_unverified_network = false;
+        record.phase = RegistryPhase::NetworkVerified;
+        record.network_id = Some(internal.id.clone());
+        lease
+            .registry_files
+            .push(write_registry_snapshot(&self.registry_directory, &record)?);
+
+        create_uplink_network(
+            self.runtime.as_ref(),
+            self.provider,
+            &uplink_network_name,
+            &uplink_expected_labels,
+        )?;
+        let uplink = inspect_uplink_network(
+            self.runtime.as_ref(),
+            self.provider,
+            &uplink_network_name,
+            &uplink_expected_labels,
+        )?;
+        lease.uplink_network_id = Some(uplink.id.clone());
+        record.phase = RegistryPhase::UplinkVerified;
+        record.uplink_network_id = Some(uplink.id.clone());
+        lease
+            .registry_files
+            .push(write_registry_snapshot(&self.registry_directory, &record)?);
+
+        let listener_ip = select_gateway_container_ip(internal.subnet, internal.gateway)?;
+        let listen_address = SocketAddr::new(listener_ip, GATEWAY_PORT);
+        let egress_policy = build_policy(&policy_id, listen_address, internal.subnet)?;
+        if egress_policy.expires_at != expires_at {
+            return Err(AppError::Internal(
+                "managed egress policy lifetime diverged from its durable registry".into(),
+            ));
+        }
+        reject_destination_overlap(&egress_policy, uplink.subnet)?;
+        let policy_file = write_policy_file(&self.policy_directory, &egress_policy)?;
+        record.phase = RegistryPhase::PolicyReady;
+        record.gateway_listener_ip = Some(listener_ip);
+        record.policy_sha256 = Some(hex::encode(policy_file.sha256));
+        lease.policy_file = Some(policy_file);
+        lease
+            .registry_files
+            .push(write_registry_snapshot(&self.registry_directory, &record)?);
+
+        let status_directory = create_gateway_status_directory(&self.policy_directory, &policy_id)?;
+        lease.gateway_status_directory = Some(status_directory);
+
+        let container = GatewayContainerRuntimeIdentity {
+            name: gateway_container_name,
+            id: None,
+            policy_id: policy_id.clone(),
+            listener_ip,
+            image: spec.clone(),
+            internal_network_name: network_name.clone(),
+            uplink_network_name,
+        };
+        lease.gateway_container = Some(container);
+        let policy_path = lease.policy_path().expect("policy path set").to_path_buf();
+        let gateway_status_directory = lease
+            .gateway_status_directory
+            .as_ref()
+            .expect("status directory set")
+            .clone();
+        let inspected = create_gateway_container(
+            self.runtime.as_ref(),
+            self.provider,
+            lease
+                .gateway_container
+                .as_mut()
+                .expect("gateway container identity set"),
+            &policy_path,
+            &gateway_status_directory,
+            &policy_id,
+        )?;
+        record.phase = RegistryPhase::GatewayContainerVerified;
+        record.gateway_container_id = Some(inspected.id);
+        lease
+            .registry_files
+            .push(write_registry_snapshot(&self.registry_directory, &record)?);
+
+        let container = lease
+            .gateway_container
+            .as_ref()
+            .expect("verified gateway identity")
+            .clone();
+        start_gateway_container(
+            self.runtime.as_ref(),
+            self.provider,
+            container.id.as_deref().expect("verified gateway id"),
+        )?;
+        readiness.wait_until_ready(
+            self.runtime.as_ref(),
+            self.provider,
+            &container,
+            lease
+                .gateway_status_directory
+                .as_ref()
+                .expect("status directory set"),
+            &policy_id,
+        )?;
+        record.phase = RegistryPhase::ContainerReady;
+        lease
+            .registry_files
+            .push(write_registry_snapshot(&self.registry_directory, &record)?);
+
+        let network_policy = NetworkPolicy::managed(
+            network_name,
+            policy_id,
+            egress_policy.allowed_destination_labels(),
+            gateway_endpoint(listener_ip),
+        )?;
+        lease.network_policy = Some(network_policy);
+        lease.egress_policy = Some(egress_policy);
+        Ok(lease)
+    }
 }
 
 /// Keeping this value alive keeps the gateway process and its isolated bridge alive.
@@ -878,7 +1485,12 @@ pub struct ManagedNetworkLease {
     network_id: Option<String>,
     remove_unverified_network: bool,
     expected_labels: BTreeMap<String, String>,
+    uplink_network_name: Option<String>,
+    uplink_network_id: Option<String>,
+    uplink_expected_labels: BTreeMap<String, String>,
     gateway_process: Option<Box<dyn GatewayProcess>>,
+    gateway_container: Option<GatewayContainerRuntimeIdentity>,
+    gateway_status_directory: Option<GatewayStatusDirectory>,
     policy_file: Option<PolicyFile>,
     network_policy: Option<NetworkPolicy>,
     egress_policy: Option<EgressGatewayPolicy>,
@@ -920,6 +1532,28 @@ impl ManagedNetworkLease {
                 .network_id
                 .clone()
                 .ok_or_else(|| AppError::Runtime("managed network has no runtime id".into()))?,
+            uplink_network_name: self.uplink_network_name.clone(),
+            uplink_network_id: self.uplink_network_id.clone(),
+            gateway_container_name: self
+                .gateway_container
+                .as_ref()
+                .map(|container| container.name.clone()),
+            gateway_container_id: self
+                .gateway_container
+                .as_ref()
+                .and_then(|container| container.id.clone()),
+            gateway_listener_ip: self
+                .gateway_container
+                .as_ref()
+                .map(|container| container.listener_ip),
+            gateway_image_repository: self
+                .gateway_container
+                .as_ref()
+                .map(|container| container.image.repository().to_owned()),
+            gateway_image_digest: self
+                .gateway_container
+                .as_ref()
+                .map(|container| container.image.digest().to_owned()),
             policy_id: policy.policy_id.clone(),
             policy_sha256: hex::encode(policy_file.sha256),
             expires_at: policy.expires_at,
@@ -937,7 +1571,10 @@ impl ManagedNetworkLease {
 
     pub fn is_active(&self) -> bool {
         self.gateway_process.is_some()
+            || self.gateway_container.is_some()
+            || self.gateway_status_directory.is_some()
             || self.network_name.is_some()
+            || self.uplink_network_name.is_some()
             || self.policy_file.is_some()
             || !self.registry_files.is_empty()
     }
@@ -959,7 +1596,25 @@ impl ManagedNetworkLease {
             }
         }
 
-        if let Some(network_name) = self.network_name.clone() {
+        if let Some(container) = self.gateway_container.take() {
+            match remove_gateway_container(
+                self.runtime.as_ref(),
+                self.provider,
+                &container,
+                &container.policy_id,
+            ) {
+                Ok(()) => details.push("exact gateway container removed or already absent".into()),
+                Err(error) => {
+                    failures.push(error.to_string());
+                    self.gateway_container = Some(container);
+                }
+            }
+        }
+
+        if self.gateway_process.is_none()
+            && self.gateway_container.is_none()
+            && let Some(network_name) = self.network_name.clone()
+        {
             let removal = if self.remove_unverified_network {
                 remove_intent_network(
                     self.runtime.as_ref(),
@@ -980,7 +1635,44 @@ impl ManagedNetworkLease {
             }
         }
 
-        if let Some(policy_file) = self.policy_file.as_ref() {
+        if self.gateway_process.is_none()
+            && self.gateway_container.is_none()
+            && self.network_name.is_none()
+            && let Some(network_name) = self.uplink_network_name.clone()
+        {
+            let removal = self.remove_verified_uplink_network(&network_name);
+            match removal {
+                Ok(()) => {
+                    self.uplink_network_name = None;
+                    self.uplink_network_id = None;
+                    details.push("exact gateway uplink removed or already absent".to_owned());
+                }
+                Err(error) => failures.push(error.to_string()),
+            }
+        }
+
+        if self.gateway_process.is_none()
+            && self.gateway_container.is_none()
+            && self.network_name.is_none()
+            && self.uplink_network_name.is_none()
+            && let Some(status_directory) = self.gateway_status_directory.as_ref()
+        {
+            match remove_gateway_status_directory(status_directory) {
+                Ok(()) => {
+                    self.gateway_status_directory = None;
+                    details.push("bounded gateway status removed or already absent".to_owned());
+                }
+                Err(error) => failures.push(error.to_string()),
+            }
+        }
+
+        if self.gateway_process.is_none()
+            && self.gateway_container.is_none()
+            && self.network_name.is_none()
+            && self.uplink_network_name.is_none()
+            && self.gateway_status_directory.is_none()
+            && let Some(policy_file) = self.policy_file.as_ref()
+        {
             match remove_policy_file(policy_file) {
                 Ok(()) => {
                     self.policy_file = None;
@@ -1043,6 +1735,28 @@ impl ManagedNetworkLease {
         }
         remove_network(self.runtime.as_ref(), self.provider, &inspected.id)
     }
+
+    fn remove_verified_uplink_network(&self, network_name: &str) -> AppResult<()> {
+        let inspected = inspect_optional_uplink_network(
+            self.runtime.as_ref(),
+            self.provider,
+            network_name,
+            &self.uplink_expected_labels,
+        )?;
+        let Some(inspected) = inspected else {
+            return Ok(());
+        };
+        if self
+            .uplink_network_id
+            .as_deref()
+            .is_some_and(|expected| expected != inspected.id)
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "refusing to remove replaced gateway uplink network {network_name}"
+            )));
+        }
+        remove_network(self.runtime.as_ref(), self.provider, &inspected.id)
+    }
 }
 
 impl Drop for ManagedNetworkLease {
@@ -1058,6 +1772,240 @@ struct InspectedNetwork {
     gateway: IpAddr,
 }
 
+#[derive(Debug, Clone)]
+struct GatewayContainerRuntimeIdentity {
+    name: String,
+    id: Option<String>,
+    policy_id: String,
+    listener_ip: IpAddr,
+    image: GatewayContainerSpec,
+    internal_network_name: String,
+    uplink_network_name: String,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayProbeRuntimeIdentity {
+    name: String,
+    id: Option<String>,
+    policy_id: String,
+    image: GatewayContainerSpec,
+    internal_network_name: String,
+    gateway: SocketAddr,
+}
+
+#[derive(Debug)]
+struct InspectedGatewayContainer {
+    id: String,
+    running: bool,
+    exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayStatusDirectory {
+    path: PathBuf,
+}
+
+impl GatewayStatusDirectory {
+    fn status_path(&self) -> PathBuf {
+        self.path.join("status.json")
+    }
+}
+
+fn create_gateway_status_directory(
+    policy_directory: &Path,
+    policy_id: &str,
+) -> AppResult<GatewayStatusDirectory> {
+    let root = validate_policy_directory(policy_directory)?;
+    validate_policy_id(policy_id)?;
+    let path = root.join(format!("gateway-status-{policy_id}"));
+    if path.parent() != Some(root.as_path()) {
+        return Err(AppError::InvalidRequest(
+            "gateway status path escaped its control directory".into(),
+        ));
+    }
+    ensure_private_directory(&path)?;
+    let canonical = fs::canonicalize(&path).map_err(|error| {
+        AppError::Runtime(format!(
+            "gateway status directory could not be resolved: {error}"
+        ))
+    })?;
+    if canonical != path {
+        return Err(AppError::NotAuthorized(
+            "gateway status directory may not traverse symlinks or aliases".into(),
+        ));
+    }
+    Ok(GatewayStatusDirectory { path })
+}
+
+fn read_gateway_status(
+    status_directory: &GatewayStatusDirectory,
+) -> AppResult<Option<GatewayStatusDocument>> {
+    let path = status_directory.status_path();
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AppError::Runtime(format!(
+                "gateway status could not be inspected: {error}"
+            )));
+        }
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_GATEWAY_STATUS_BYTES as u64
+    {
+        return Err(AppError::NotAuthorized(
+            "gateway status was not a bounded regular file".into(),
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    configure_no_follow_open(&mut options);
+    let file = options
+        .open(&path)
+        .map_err(|error| AppError::Runtime(format!("gateway status could not be read: {error}")))?;
+    let opened = file.metadata()?;
+    if !opened.is_file() || opened.len() != metadata.len() {
+        return Err(AppError::NotAuthorized(
+            "gateway status identity changed during inspection".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(opened.len() as usize);
+    file.take((MAX_GATEWAY_STATUS_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() > MAX_GATEWAY_STATUS_BYTES {
+        return Err(AppError::NotAuthorized(
+            "gateway status was empty or oversized".into(),
+        ));
+    }
+    let status: GatewayStatusDocument = serde_json::from_slice(&bytes)
+        .map_err(|_| AppError::NotAuthorized("gateway status was malformed".into()))?;
+    if status.schema_version != "1.0.0" {
+        return Err(AppError::NotAuthorized(
+            "gateway status schema is unsupported".into(),
+        ));
+    }
+    bounded_gateway_status_code(&status.code)?;
+    let valid_pair = match status.phase {
+        GatewayStatusPhase::Starting => status.code == "initializing",
+        GatewayStatusPhase::Ready => status.code == "ready",
+        GatewayStatusPhase::Failed => matches!(
+            status.code.as_str(),
+            "policy_inspection_failed"
+                | "policy_invalid"
+                | "listener_bind_failed"
+                | "listener_failed"
+                | "signal_handler_failed"
+                | "status_write_failed"
+        ),
+        GatewayStatusPhase::Stopped => status.code == "policy_expired",
+    };
+    if !valid_pair {
+        return Err(AppError::NotAuthorized(
+            "gateway status used an unsupported phase/code pair".into(),
+        ));
+    }
+    Ok(Some(status))
+}
+
+#[cfg(unix)]
+fn configure_no_follow_open(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+}
+
+#[cfg(not(unix))]
+fn configure_no_follow_open(_options: &mut OpenOptions) {}
+
+fn bounded_gateway_status_code(code: &str) -> AppResult<&str> {
+    const CODES: &[&str] = &[
+        "initializing",
+        "ready",
+        "policy_inspection_failed",
+        "policy_invalid",
+        "listener_bind_failed",
+        "listener_failed",
+        "signal_handler_failed",
+        "status_write_failed",
+        "policy_expired",
+    ];
+    if CODES.contains(&code) {
+        Ok(code)
+    } else {
+        Err(AppError::NotAuthorized(
+            "gateway status contained an unsupported code".into(),
+        ))
+    }
+}
+
+fn remove_gateway_status_directory(status_directory: &GatewayStatusDirectory) -> AppResult<()> {
+    let metadata = match fs::symlink_metadata(&status_directory.path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::NotAuthorized(
+            "refusing to remove a replaced gateway status path".into(),
+        ));
+    }
+    let mut entries = fs::read_dir(&status_directory.path)?;
+    let mut files = Vec::new();
+    while let Some(entry) = entries.next().transpose()? {
+        let name = entry.file_name();
+        if name != OsStr::new("status.json") && name != OsStr::new("status.tmp") {
+            return Err(AppError::NotAuthorized(
+                "gateway status directory contained an unexpected entry".into(),
+            ));
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_GATEWAY_STATUS_BYTES as u64
+        {
+            return Err(AppError::NotAuthorized(
+                "gateway status directory contained a replaced entry".into(),
+            ));
+        }
+        files.push(entry.path());
+    }
+    for file in files {
+        fs::remove_file(file)?;
+    }
+    fs::remove_dir(&status_directory.path)?;
+    if let Some(parent) = status_directory.path.parent() {
+        sync_directory(parent)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct GatewayStatusDocument {
+    schema_version: String,
+    phase: GatewayStatusPhase,
+    code: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum GatewayStatusPhase {
+    Starting,
+    Ready,
+    Failed,
+    Stopped,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct GatewayProbeDocument {
+    schema_version: String,
+    reachability_probe: String,
+    gateway_reachable: bool,
+    upstream_connect_attempted: bool,
+}
+
 #[derive(Debug)]
 struct RuntimeOutput {
     success: bool,
@@ -1067,6 +2015,15 @@ struct RuntimeOutput {
 
 trait RuntimeCommands: Send + Sync {
     fn output(&self, provider: RuntimeProvider, args: &[OsString]) -> io::Result<RuntimeOutput>;
+
+    fn output_with_timeout(
+        &self,
+        provider: RuntimeProvider,
+        args: &[OsString],
+        _timeout: Duration,
+    ) -> io::Result<RuntimeOutput> {
+        self.output(provider, args)
+    }
 }
 
 struct DirectRuntimeCommands;
@@ -1098,15 +2055,24 @@ struct ContextRuntimeCommands {
 
 impl RuntimeCommands for ContextRuntimeCommands {
     fn output(&self, provider: RuntimeProvider, args: &[OsString]) -> io::Result<RuntimeOutput> {
+        self.output_with_timeout(provider, args, RUNTIME_COMMAND_TIMEOUT)
+    }
+
+    fn output_with_timeout(
+        &self,
+        provider: RuntimeProvider,
+        args: &[OsString],
+        timeout: Duration,
+    ) -> io::Result<RuntimeOutput> {
         if provider != self.context.provider() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "durable managed-network provider differs from the trusted runtime context",
             ));
         }
-        let output =
-            self.context
-                .output(args, MAX_INSPECT_BYTES as u64, RUNTIME_COMMAND_TIMEOUT)?;
+        let output = self
+            .context
+            .output(args, MAX_INSPECT_BYTES as u64, timeout)?;
         Ok(RuntimeOutput {
             success: output.status.success(),
             stdout: output.stdout,
@@ -1184,6 +2150,78 @@ impl GatewayReadiness for SocketGatewayReadiness {
             if Instant::now() >= deadline {
                 return Err(AppError::Runtime(
                     "egress gateway did not become ready within five seconds".into(),
+                ));
+            }
+            thread::sleep(GATEWAY_READY_INTERVAL);
+        }
+    }
+}
+
+trait GatewayContainerReadiness: Send + Sync {
+    fn wait_until_ready(
+        &self,
+        runtime: &dyn RuntimeCommands,
+        provider: RuntimeProvider,
+        container: &GatewayContainerRuntimeIdentity,
+        status_directory: &GatewayStatusDirectory,
+        policy_id: &str,
+    ) -> AppResult<()>;
+}
+
+struct RuntimeGatewayContainerReadiness;
+
+impl GatewayContainerReadiness for RuntimeGatewayContainerReadiness {
+    fn wait_until_ready(
+        &self,
+        runtime: &dyn RuntimeCommands,
+        provider: RuntimeProvider,
+        container: &GatewayContainerRuntimeIdentity,
+        status_directory: &GatewayStatusDirectory,
+        policy_id: &str,
+    ) -> AppResult<()> {
+        let deadline = Instant::now() + GATEWAY_READY_TIMEOUT;
+        loop {
+            let inspected =
+                inspect_required_gateway_container(runtime, provider, container, policy_id)?;
+            if !inspected.running {
+                return Err(AppError::Runtime(format!(
+                    "egress gateway container exited before becoming ready (exit code {})",
+                    inspected
+                        .exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "unavailable".into())
+                )));
+            }
+            match read_gateway_status(status_directory)? {
+                Some(status)
+                    if status.phase == GatewayStatusPhase::Ready && status.code == "ready" =>
+                {
+                    return Ok(());
+                }
+                Some(status)
+                    if matches!(
+                        status.phase,
+                        GatewayStatusPhase::Failed | GatewayStatusPhase::Stopped
+                    ) =>
+                {
+                    return Err(AppError::Runtime(format!(
+                        "egress gateway container reported {}",
+                        bounded_gateway_status_code(&status.code)?
+                    )));
+                }
+                Some(status)
+                    if status.phase == GatewayStatusPhase::Starting
+                        && status.code == "initializing" => {}
+                Some(_) => {
+                    return Err(AppError::NotAuthorized(
+                        "egress gateway status used an unsupported phase/code pair".into(),
+                    ));
+                }
+                None => {}
+            }
+            if Instant::now() >= deadline {
+                return Err(AppError::Runtime(
+                    "egress gateway container did not report ready within five seconds".into(),
                 ));
             }
             thread::sleep(GATEWAY_READY_INTERVAL);
@@ -1293,7 +2331,8 @@ impl ManagedNetworkRegistry {
         validate_identity_relation(identity)?;
         let provenance_case = match &identity.provenance {
             EgressGatewayProvenance::ExternalAssetGrants { case_id, .. }
-            | EgressGatewayProvenance::ProviderService { case_id, .. } => case_id,
+            | EgressGatewayProvenance::ProviderService { case_id, .. }
+            | EgressGatewayProvenance::ReleaseQualification { case_id, .. } => case_id,
         };
         if provenance_case != &owner.case_id {
             return Err(AppError::NotAuthorized(
@@ -1319,6 +2358,19 @@ impl ManagedNetworkRegistry {
                     .policy_sha256
                     .as_deref()
                     .is_some_and(|sha| sha != identity.policy_sha256)
+                || latest.uplink_network_name != identity.uplink_network_name
+                || latest
+                    .uplink_network_id
+                    .as_deref()
+                    .is_some_and(|id| Some(id) != identity.uplink_network_id.as_deref())
+                || latest.gateway_container_name != identity.gateway_container_name
+                || latest
+                    .gateway_container_id
+                    .as_deref()
+                    .is_some_and(|id| Some(id) != identity.gateway_container_id.as_deref())
+                || latest.gateway_listener_ip != identity.gateway_listener_ip
+                || latest.gateway_image_repository != identity.gateway_image_repository
+                || latest.gateway_image_digest != identity.gateway_image_digest
             {
                 return Err(AppError::NotAuthorized(
                     "durable checkpoint does not match its managed-network registry record".into(),
@@ -1326,12 +2378,16 @@ impl ManagedNetworkRegistry {
             }
         }
 
+        self.remove_gateway_probe_from_identity(identity)?;
+        self.remove_gateway_container_from_identity(identity)?;
         self.remove_exact_runtime_network(
             identity.provider,
             &identity.network_name,
             &identity.network_id,
             &identity.policy_id,
         )?;
+        self.remove_uplink_network_from_identity(identity)?;
+        self.remove_exact_gateway_status(&owner.case_id, &identity.policy_id)?;
         self.remove_exact_policy(
             &owner.case_id,
             &identity.policy_id,
@@ -1355,8 +2411,12 @@ impl ManagedNetworkRegistry {
         entries: &[(ManagedNetworkRecord, RegistryFile)],
     ) -> AppResult<ManagedNetworkCleanupOutcome> {
         let latest = latest_record(entries)?;
+        self.remove_gateway_probe_from_record(latest)?;
+        self.remove_gateway_container_from_record(latest)?;
         let expected_id = latest.network_id.as_deref();
         self.remove_runtime_network_from_record(latest, expected_id)?;
+        self.remove_uplink_network_from_record(latest)?;
+        self.remove_exact_gateway_status(&latest.owner.case_id, &latest.policy_id)?;
         self.remove_exact_policy(
             &latest.owner.case_id,
             &latest.policy_id,
@@ -1398,6 +2458,102 @@ impl ManagedNetworkRegistry {
         // Remove by the immutable id returned by the exact name/label/internal
         // inspection, never by a prefix or an unverified reusable name.
         remove_network(self.runtime.as_ref(), record.provider, &inspected.id)
+    }
+
+    fn remove_gateway_container_from_record(&self, record: &ManagedNetworkRecord) -> AppResult<()> {
+        let Some(identity) = gateway_container_identity_from_record(record)? else {
+            return Ok(());
+        };
+        remove_gateway_container(
+            self.runtime.as_ref(),
+            record.provider,
+            &identity,
+            &record.policy_id,
+        )
+    }
+
+    fn remove_gateway_probe_from_record(&self, record: &ManagedNetworkRecord) -> AppResult<()> {
+        let Some(probe) = gateway_probe_identity_from_record(record)? else {
+            return Ok(());
+        };
+        remove_gateway_probe(self.runtime.as_ref(), record.provider, &probe)
+    }
+
+    fn remove_gateway_probe_from_identity(
+        &self,
+        identity: &ManagedNetworkIdentity,
+    ) -> AppResult<()> {
+        let Some(probe) = gateway_probe_identity_from_durable(identity)? else {
+            return Ok(());
+        };
+        remove_gateway_probe(self.runtime.as_ref(), identity.provider, &probe)
+    }
+
+    fn remove_gateway_container_from_identity(
+        &self,
+        identity: &ManagedNetworkIdentity,
+    ) -> AppResult<()> {
+        let Some(container) = gateway_container_identity_from_durable(identity)? else {
+            return Ok(());
+        };
+        remove_gateway_container(
+            self.runtime.as_ref(),
+            identity.provider,
+            &container,
+            &identity.policy_id,
+        )
+    }
+
+    fn remove_uplink_network_from_record(&self, record: &ManagedNetworkRecord) -> AppResult<()> {
+        let Some(name) = record.uplink_network_name.as_deref() else {
+            return Ok(());
+        };
+        let inspected = inspect_optional_uplink_network(
+            self.runtime.as_ref(),
+            record.provider,
+            name,
+            &expected_uplink_labels(&record.policy_id),
+        )?;
+        let Some(inspected) = inspected else {
+            return Ok(());
+        };
+        if record
+            .uplink_network_id
+            .as_deref()
+            .is_some_and(|expected| expected != inspected.id)
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "refusing to remove replaced gateway uplink network {name}"
+            )));
+        }
+        remove_network(self.runtime.as_ref(), record.provider, &inspected.id)
+    }
+
+    fn remove_uplink_network_from_identity(
+        &self,
+        identity: &ManagedNetworkIdentity,
+    ) -> AppResult<()> {
+        let (Some(name), Some(expected_id)) = (
+            identity.uplink_network_name.as_deref(),
+            identity.uplink_network_id.as_deref(),
+        ) else {
+            return Ok(());
+        };
+        let inspected = inspect_optional_uplink_network(
+            self.runtime.as_ref(),
+            identity.provider,
+            name,
+            &expected_uplink_labels(&identity.policy_id),
+        )?;
+        let Some(inspected) = inspected else {
+            return Ok(());
+        };
+        if inspected.id != expected_id {
+            return Err(AppError::NotAuthorized(format!(
+                "refusing to remove replaced gateway uplink network {name}"
+            )));
+        }
+        remove_network(self.runtime.as_ref(), identity.provider, expected_id)
     }
 
     fn remove_exact_runtime_network(
@@ -1494,7 +2650,8 @@ impl ManagedNetworkRegistry {
         validate_egress_provenance(&policy.provenance)?;
         let provenance_case = match &policy.provenance {
             EgressGatewayProvenance::ExternalAssetGrants { case_id, .. }
-            | EgressGatewayProvenance::ProviderService { case_id, .. } => case_id,
+            | EgressGatewayProvenance::ProviderService { case_id, .. }
+            | EgressGatewayProvenance::ReleaseQualification { case_id, .. } => case_id,
         };
         if provenance_case != case_id {
             return Err(AppError::NotAuthorized(
@@ -1511,6 +2668,42 @@ impl ManagedNetworkRegistry {
             path,
             sha256: actual,
         })
+    }
+
+    fn remove_exact_gateway_status(&self, case_id: &str, policy_id: &str) -> AppResult<()> {
+        validate_owner_segment(case_id, "case")?;
+        validate_policy_id(policy_id)?;
+        let case_root = self.artifact_root.join(case_id);
+        let policy_directory = case_root.join("network-policies");
+        for (directory, expected_parent) in [
+            (case_root.as_path(), self.artifact_root.as_path()),
+            (policy_directory.as_path(), case_root.as_path()),
+        ] {
+            let metadata = match fs::symlink_metadata(directory) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(AppError::NotAuthorized(
+                    "managed-network recovery status path is not a real directory".into(),
+                ));
+            }
+            let canonical = directory.canonicalize()?;
+            let canonical_parent = expected_parent.canonicalize()?;
+            if canonical.parent() != Some(canonical_parent.as_path()) {
+                return Err(AppError::NotAuthorized(
+                    "managed-network recovery status path escaped the artifact root".into(),
+                ));
+            }
+        }
+        let path = policy_directory.join(format!("gateway-status-{policy_id}"));
+        if path.parent() != Some(policy_directory.as_path()) {
+            return Err(AppError::NotAuthorized(
+                "managed-network recovery status path escaped its case directory".into(),
+            ));
+        }
+        remove_gateway_status_directory(&GatewayStatusDirectory { path })
     }
 
     fn load_groups(
@@ -1572,19 +2765,87 @@ fn validate_record_shape(record: &ManagedNetworkRecord, now: DateTime<Utc>) -> A
             "managed-network registry lifetime is invalid".into(),
         ));
     }
-    match record.phase {
-        RegistryPhase::Intent if record.network_id.is_none() && record.policy_sha256.is_none() => {}
-        RegistryPhase::NetworkVerified
-            if record.network_id.is_some() && record.policy_sha256.is_none() => {}
-        RegistryPhase::Ready if record.network_id.is_some() && record.policy_sha256.is_some() => {}
-        _ => {
+    let container_mode = record.uplink_network_name.is_some()
+        || record.uplink_network_id.is_some()
+        || record.gateway_container_name.is_some()
+        || record.gateway_container_id.is_some()
+        || record.gateway_listener_ip.is_some()
+        || record.gateway_image_repository.is_some()
+        || record.gateway_image_digest.is_some();
+    if container_mode {
+        validate_gateway_static_identity(
+            &record.policy_id,
+            record.uplink_network_name.as_deref(),
+            record.gateway_container_name.as_deref(),
+            record.gateway_image_repository.as_deref(),
+            record.gateway_image_digest.as_deref(),
+        )?;
+        let consistent = match record.phase {
+            RegistryPhase::Intent => {
+                record.network_id.is_none()
+                    && record.uplink_network_id.is_none()
+                    && record.gateway_container_id.is_none()
+                    && record.gateway_listener_ip.is_none()
+                    && record.policy_sha256.is_none()
+            }
+            RegistryPhase::NetworkVerified => {
+                record.network_id.is_some()
+                    && record.uplink_network_id.is_none()
+                    && record.gateway_container_id.is_none()
+                    && record.gateway_listener_ip.is_none()
+                    && record.policy_sha256.is_none()
+            }
+            RegistryPhase::UplinkVerified => {
+                record.network_id.is_some()
+                    && record.uplink_network_id.is_some()
+                    && record.gateway_container_id.is_none()
+                    && record.gateway_listener_ip.is_none()
+                    && record.policy_sha256.is_none()
+            }
+            RegistryPhase::PolicyReady => {
+                record.network_id.is_some()
+                    && record.uplink_network_id.is_some()
+                    && record.gateway_container_id.is_none()
+                    && record.gateway_listener_ip.is_some()
+                    && record.policy_sha256.is_some()
+            }
+            RegistryPhase::GatewayContainerVerified | RegistryPhase::ContainerReady => {
+                record.network_id.is_some()
+                    && record.uplink_network_id.is_some()
+                    && record.gateway_container_id.is_some()
+                    && record.gateway_listener_ip.is_some()
+                    && record.policy_sha256.is_some()
+            }
+            RegistryPhase::Ready => false,
+        };
+        if !consistent {
             return Err(AppError::InvalidRequest(
-                "managed-network registry phase is inconsistent".into(),
+                "managed gateway-container registry phase is inconsistent".into(),
             ));
+        }
+    } else {
+        match record.phase {
+            RegistryPhase::Intent
+                if record.network_id.is_none() && record.policy_sha256.is_none() => {}
+            RegistryPhase::NetworkVerified
+                if record.network_id.is_some() && record.policy_sha256.is_none() => {}
+            RegistryPhase::Ready
+                if record.network_id.is_some() && record.policy_sha256.is_some() => {}
+            _ => {
+                return Err(AppError::InvalidRequest(
+                    "managed-network registry phase is inconsistent".into(),
+                ));
+            }
         }
     }
     if let Some(network_id) = record.network_id.as_deref() {
         validate_runtime_id(network_id)?;
+    }
+    if let Some(network_id) = record.uplink_network_id.as_deref() {
+        validate_runtime_id(network_id)?;
+    }
+    if let Some(container_id) = record.gateway_container_id.as_deref() {
+        validate_runtime_id(container_id)?;
     }
     if let Some(sha256) = record.policy_sha256.as_deref() {
         decode_sha256(sha256)?;
@@ -1608,6 +2869,10 @@ fn validate_record_chain(entries: &[(ManagedNetworkRecord, RegistryFile)]) -> Ap
             || record.policy_id != first.policy_id
             || record.created_at != first.created_at
             || record.expires_at != first.expires_at
+            || record.uplink_network_name != first.uplink_network_name
+            || record.gateway_container_name != first.gateway_container_name
+            || record.gateway_image_repository != first.gateway_image_repository
+            || record.gateway_image_digest != first.gateway_image_digest
         {
             return Err(AppError::NotAuthorized(
                 "managed-network registry snapshots do not form one exact identity chain".into(),
@@ -1637,6 +2902,10 @@ fn registry_filename(record: &ManagedNetworkRecord) -> String {
             RegistryPhase::Intent => "intent",
             RegistryPhase::NetworkVerified => "network",
             RegistryPhase::Ready => "ready",
+            RegistryPhase::UplinkVerified => "uplink",
+            RegistryPhase::PolicyReady => "policy",
+            RegistryPhase::GatewayContainerVerified => "gateway",
+            RegistryPhase::ContainerReady => "container-ready",
         }
     )
 }
@@ -1845,6 +3114,89 @@ fn validate_network_policy_relation(network_name: &str, policy_id: &str) -> AppR
     Ok(())
 }
 
+fn validate_gateway_static_identity(
+    policy_id: &str,
+    uplink_network_name: Option<&str>,
+    gateway_container_name: Option<&str>,
+    image_repository: Option<&str>,
+    image_digest: Option<&str>,
+) -> AppResult<()> {
+    validate_policy_id(policy_id)?;
+    let unique = policy_id.strip_prefix("egress-").ok_or_else(|| {
+        AppError::InvalidRequest("managed egress policy id has no generated prefix".into())
+    })?;
+    let uplink_network_name = uplink_network_name.ok_or_else(|| {
+        AppError::InvalidRequest("managed gateway uplink identity is incomplete".into())
+    })?;
+    let gateway_container_name = gateway_container_name.ok_or_else(|| {
+        AppError::InvalidRequest("managed gateway container identity is incomplete".into())
+    })?;
+    validate_network_name(uplink_network_name)?;
+    validate_network_name(gateway_container_name)?;
+    if uplink_network_name != format!("ass-uplink-{unique}")
+        || gateway_container_name != format!("ass-gateway-{unique}")
+    {
+        return Err(AppError::NotAuthorized(
+            "managed gateway resources do not match their policy identity".into(),
+        ));
+    }
+    GatewayContainerSpec::new(
+        image_repository.ok_or_else(|| {
+            AppError::InvalidRequest("managed gateway image repository is missing".into())
+        })?,
+        image_digest.ok_or_else(|| {
+            AppError::InvalidRequest("managed gateway image digest is missing".into())
+        })?,
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_optional_gateway_identity(
+    policy_id: &str,
+    uplink_network_name: Option<&str>,
+    uplink_network_id: Option<&str>,
+    gateway_container_name: Option<&str>,
+    gateway_container_id: Option<&str>,
+    gateway_listener_ip: Option<IpAddr>,
+    image_repository: Option<&str>,
+    image_digest: Option<&str>,
+) -> AppResult<()> {
+    let present = [
+        uplink_network_name.is_some(),
+        uplink_network_id.is_some(),
+        gateway_container_name.is_some(),
+        gateway_container_id.is_some(),
+        gateway_listener_ip.is_some(),
+        image_repository.is_some(),
+        image_digest.is_some(),
+    ];
+    if present.iter().all(|value| !value) {
+        return Ok(());
+    }
+    if !present.iter().all(|value| *value) {
+        return Err(AppError::InvalidRequest(
+            "managed gateway checkpoint identity is incomplete".into(),
+        ));
+    }
+    validate_gateway_static_identity(
+        policy_id,
+        uplink_network_name,
+        gateway_container_name,
+        image_repository,
+        image_digest,
+    )?;
+    validate_runtime_id(uplink_network_id.expect("all optional gateway fields present"))?;
+    validate_runtime_id(gateway_container_id.expect("all optional gateway fields present"))?;
+    let listener = gateway_listener_ip.expect("all optional gateway fields present");
+    if !is_sensitive_address(listener) || is_cloud_metadata(listener) || listener.is_unspecified() {
+        return Err(AppError::NotAuthorized(
+            "managed gateway listener must be a private runtime address".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_identity_relation(identity: &ManagedNetworkIdentity) -> AppResult<()> {
     validate_network_policy_relation(&identity.network_name, &identity.policy_id)
 }
@@ -1883,6 +3235,10 @@ fn validate_egress_provenance(provenance: &EgressGatewayProvenance) -> AppResult
         ]
         .into_iter()
         .all(valid_text),
+        EgressGatewayProvenance::ReleaseQualification {
+            case_id,
+            qualification_id,
+        } => valid_text(case_id) && valid_text(qualification_id),
     };
     if !valid {
         return Err(AppError::InvalidRequest(
@@ -2124,6 +3480,682 @@ fn validate_plan_rate_policy(plan: &ResolvedExternalPlan) -> AppResult<()> {
     Ok(())
 }
 
+fn ensure_gateway_container_image(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    spec: &GatewayContainerSpec,
+) -> AppResult<()> {
+    spec.validate()?;
+    let output = runtime_output_with_timeout(
+        runtime,
+        provider,
+        &["pull".into(), spec.reference().into()],
+        GATEWAY_IMAGE_PULL_TIMEOUT,
+    )?;
+    if output.success {
+        Ok(())
+    } else {
+        Err(runtime_failure("pinned egress gateway image pull", &output))
+    }
+}
+
+fn create_uplink_network(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    network_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> AppResult<()> {
+    let mut args = vec![
+        "network".into(),
+        "create".into(),
+        "--driver".into(),
+        "bridge".into(),
+    ];
+    for (key, value) in labels {
+        args.push("--label".into());
+        args.push(format!("{key}={value}").into());
+    }
+    args.push(network_name.into());
+    let output = runtime_output(runtime, provider, &args)?;
+    if output.success {
+        Ok(())
+    } else {
+        Err(runtime_failure("managed gateway uplink creation", &output))
+    }
+}
+
+fn inspect_uplink_network(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    network_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> AppResult<InspectedNetwork> {
+    let output = runtime_output(
+        runtime,
+        provider,
+        &["network".into(), "inspect".into(), network_name.into()],
+    )?;
+    if !output.success {
+        return Err(runtime_failure("gateway uplink inspection", &output));
+    }
+    parse_network_inspect_with_mode(provider, &output.stdout, network_name, labels, false)
+}
+
+fn inspect_optional_uplink_network(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    network_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> AppResult<Option<InspectedNetwork>> {
+    let output = runtime_output(
+        runtime,
+        provider,
+        &["network".into(), "inspect".into(), network_name.into()],
+    )?;
+    if !output.success {
+        if runtime_reports_absent(&output.stderr) {
+            return Ok(None);
+        }
+        return Err(runtime_failure("gateway uplink inspection", &output));
+    }
+    parse_network_inspect_with_mode(provider, &output.stdout, network_name, labels, false).map(Some)
+}
+
+fn select_gateway_container_ip(subnet: IpNet, gateway: IpAddr) -> AppResult<IpAddr> {
+    match (subnet, gateway) {
+        (IpNet::V4(network), IpAddr::V4(gateway)) => network
+            .hosts()
+            .find(|address| *address != gateway)
+            .map(IpAddr::V4),
+        (IpNet::V6(network), IpAddr::V6(gateway)) => network
+            .hosts()
+            .find(|address| *address != gateway)
+            .map(IpAddr::V6),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        AppError::Runtime("internal scanner bridge has no address for its gateway container".into())
+    })
+}
+
+fn reject_destination_overlap(policy: &EgressGatewayPolicy, uplink: IpNet) -> AppResult<()> {
+    if policy
+        .destinations
+        .iter()
+        .flat_map(|destination| destination.addresses.iter())
+        .any(|address| uplink.contains(address))
+    {
+        return Err(AppError::NotAvailable(
+            "gateway uplink overlaps an approved destination; retry with a new isolated network"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn gateway_container_user(provider: RuntimeProvider) -> AppResult<(String, Option<String>)> {
+    #[cfg(unix)]
+    let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    #[cfg(not(unix))]
+    let (uid, gid) = (65_532_u32, 65_532_u32);
+    gateway_container_user_for_ids(provider, uid, gid)
+}
+
+fn gateway_container_user_for_ids(
+    provider: RuntimeProvider,
+    uid: u32,
+    gid: u32,
+) -> AppResult<(String, Option<String>)> {
+    if uid == 0 {
+        return Err(AppError::NotAuthorized(
+            "managed gateway container cannot run from a root-owned desktop process".into(),
+        ));
+    }
+    let user = format!("{uid}:{gid}");
+    let userns = matches!(
+        provider,
+        RuntimeProvider::ManagedLocal | RuntimeProvider::Podman
+    )
+    .then(|| format!("keep-id:uid={uid},gid={gid}"));
+    Ok((user, userns))
+}
+
+fn gateway_bind_mount(source: &Path, destination: &str, read_only: bool) -> AppResult<String> {
+    let source = source
+        .to_str()
+        .ok_or_else(|| AppError::Runtime("gateway bind mount path is not valid UTF-8".into()))?;
+    if source.contains([',', '\n', '\r', '\0'])
+        || !destination.starts_with('/')
+        || destination.contains([',', '\n', '\r', '\0'])
+    {
+        return Err(AppError::NotAuthorized(
+            "gateway bind mount cannot be represented by the runtime grammar".into(),
+        ));
+    }
+    let suffix = if read_only { ",readonly" } else { "" };
+    Ok(format!("type=bind,src={source},dst={destination}{suffix}"))
+}
+
+fn create_gateway_probe(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    probe: &mut GatewayProbeRuntimeIdentity,
+) -> AppResult<()> {
+    probe.image.validate()?;
+    validate_policy_id(&probe.policy_id)?;
+    let unique = probe.policy_id.strip_prefix("egress-").ok_or_else(|| {
+        AppError::InvalidRequest("gateway probe policy identity is malformed".into())
+    })?;
+    if probe.name != format!("ass-probe-{unique}") || probe.gateway.port() != GATEWAY_PORT {
+        return Err(AppError::NotAuthorized(
+            "gateway probe identity does not match its policy".into(),
+        ));
+    }
+    let (user, userns) = gateway_container_user(provider)?;
+    let labels = expected_gateway_probe_labels(&probe.policy_id);
+    let mut args = vec![
+        "container".into(),
+        "create".into(),
+        "--name".into(),
+        probe.name.clone().into(),
+        "--pull=never".into(),
+        "--read-only".into(),
+        "--cap-drop=ALL".into(),
+        "--security-opt=no-new-privileges:true".into(),
+        format!("--user={user}").into(),
+        "--pids-limit".into(),
+        "16".into(),
+        "--memory".into(),
+        "32m".into(),
+        "--cpus".into(),
+        "0.250".into(),
+        "--restart=no".into(),
+        "--log-driver=none".into(),
+        "--network".into(),
+        probe.internal_network_name.clone().into(),
+    ];
+    if let Some(userns) = userns {
+        args.push(format!("--userns={userns}").into());
+    }
+    for (key, value) in labels {
+        args.push("--label".into());
+        args.push(format!("{key}={value}").into());
+    }
+    args.extend([
+        "--entrypoint".into(),
+        CONTAINER_PROBE_BINARY.into(),
+        probe.image.reference().into(),
+        "--gateway".into(),
+        probe.gateway.to_string().into(),
+    ]);
+    let output = runtime_output(runtime, provider, &args)?;
+    if !output.success {
+        return Err(runtime_failure(
+            "managed gateway reachability probe creation",
+            &output,
+        ));
+    }
+    probe.id = Some(parse_created_container_id(&output.stdout)?);
+    inspect_optional_gateway_probe(runtime, provider, probe)?.ok_or_else(|| {
+        AppError::Runtime("managed gateway reachability probe disappeared after creation".into())
+    })?;
+    Ok(())
+}
+
+fn run_gateway_probe(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    probe: &GatewayProbeRuntimeIdentity,
+) -> AppResult<GatewayProbeDocument> {
+    let id = probe.id.as_deref().ok_or_else(|| {
+        AppError::Internal("managed gateway reachability probe has no runtime ID".into())
+    })?;
+    validate_gateway_container_id(id)?;
+    let output = runtime_output_with_timeout(
+        runtime,
+        provider,
+        &[
+            "container".into(),
+            "start".into(),
+            "--attach".into(),
+            id.into(),
+        ],
+        GATEWAY_PROBE_TIMEOUT,
+    )?;
+    if !output.success {
+        return Err(runtime_failure(
+            "managed gateway reachability probe",
+            &output,
+        ));
+    }
+    if output.stdout.is_empty() || output.stdout.len() > MAX_GATEWAY_STATUS_BYTES {
+        return Err(AppError::Runtime(
+            "managed gateway reachability probe output was empty or oversized".into(),
+        ));
+    }
+    let document: GatewayProbeDocument = serde_json::from_slice(&output.stdout).map_err(|_| {
+        AppError::Runtime("managed gateway reachability probe output was malformed".into())
+    })?;
+    if document.schema_version != "1.0.0"
+        || document.reachability_probe != "socks5_no_connect_greeting"
+        || !document.gateway_reachable
+        || document.upstream_connect_attempted
+    {
+        return Err(AppError::NotAuthorized(
+            "managed gateway reachability probe did not prove a no-CONNECT greeting".into(),
+        ));
+    }
+    let inspected = inspect_optional_gateway_probe(runtime, provider, probe)?.ok_or_else(|| {
+        AppError::Runtime("managed gateway reachability probe disappeared before cleanup".into())
+    })?;
+    if inspected.running || inspected.exit_code != Some(0) {
+        return Err(AppError::Runtime(
+            "managed gateway reachability probe did not exit successfully".into(),
+        ));
+    }
+    Ok(document)
+}
+
+fn inspect_optional_gateway_probe(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    probe: &GatewayProbeRuntimeIdentity,
+) -> AppResult<Option<InspectedGatewayContainer>> {
+    validate_policy_id(&probe.policy_id)?;
+    let selector = probe.id.as_deref().unwrap_or(&probe.name);
+    let output = runtime_output(
+        runtime,
+        provider,
+        &["container".into(), "inspect".into(), selector.into()],
+    )?;
+    if !output.success {
+        if runtime_reports_container_absent(&output.stderr) {
+            return Ok(None);
+        }
+        return Err(runtime_failure(
+            "gateway reachability probe inspection",
+            &output,
+        ));
+    }
+    let mut entries: Vec<GatewayContainerInspect> = serde_json::from_slice(&output.stdout)
+        .map_err(|_| {
+            AppError::Runtime("gateway reachability probe inspection was malformed".into())
+        })?;
+    if entries.len() != 1 {
+        return Err(AppError::NotAuthorized(
+            "runtime did not return exactly one gateway reachability probe".into(),
+        ));
+    }
+    let entry = entries.pop().expect("one gateway probe inspect entry");
+    validate_gateway_container_id(&entry.id)?;
+    if probe.id.as_deref().is_some_and(|id| id != entry.id) {
+        return Err(AppError::NotAuthorized(
+            "refusing a replaced gateway reachability probe".into(),
+        ));
+    }
+    if entry.name.strip_prefix('/').unwrap_or(&entry.name) != probe.name {
+        return Err(AppError::NotAuthorized(
+            "gateway reachability probe name changed during inspection".into(),
+        ));
+    }
+    let expected_image = probe.image.reference();
+    if entry
+        .image_name
+        .as_deref()
+        .or(entry.config.image.as_deref())
+        != Some(expected_image.as_str())
+    {
+        return Err(AppError::NotAuthorized(
+            "gateway reachability probe did not retain its pinned image".into(),
+        ));
+    }
+    let expected_labels = expected_gateway_probe_labels(&probe.policy_id);
+    if expected_labels
+        .iter()
+        .any(|(key, value)| entry.config.labels.get(key) != Some(value))
+        || entry.network_settings.networks.len() != 1
+        || !entry
+            .network_settings
+            .networks
+            .contains_key(&probe.internal_network_name)
+    {
+        return Err(AppError::NotAuthorized(
+            "gateway reachability probe is not isolated on the exact scanner bridge".into(),
+        ));
+    }
+    Ok(Some(InspectedGatewayContainer {
+        id: entry.id,
+        running: entry.state.running,
+        exit_code: entry.state.exit_code,
+    }))
+}
+
+fn remove_gateway_probe(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    probe: &GatewayProbeRuntimeIdentity,
+) -> AppResult<()> {
+    let Some(inspected) = inspect_optional_gateway_probe(runtime, provider, probe)? else {
+        return Ok(());
+    };
+    let output = runtime_output(
+        runtime,
+        provider,
+        &[
+            "container".into(),
+            "rm".into(),
+            "--force".into(),
+            inspected.id.clone().into(),
+        ],
+    )?;
+    if !output.success && !runtime_reports_container_absent(&output.stderr) {
+        return Err(runtime_failure(
+            "gateway reachability probe removal",
+            &output,
+        ));
+    }
+    let mut exact = probe.clone();
+    exact.id = Some(inspected.id);
+    if inspect_optional_gateway_probe(runtime, provider, &exact)?.is_some() {
+        return Err(AppError::Runtime(
+            "gateway reachability probe remained after exact removal".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn create_gateway_container(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container: &mut GatewayContainerRuntimeIdentity,
+    policy_path: &Path,
+    status_directory: &GatewayStatusDirectory,
+    policy_id: &str,
+) -> AppResult<InspectedGatewayContainer> {
+    container.image.validate()?;
+    validate_policy_id(policy_id)?;
+    if container.policy_id != policy_id {
+        return Err(AppError::NotAuthorized(
+            "gateway container policy identity changed before creation".into(),
+        ));
+    }
+    let (user, userns) = gateway_container_user(provider)?;
+    let labels = expected_gateway_container_labels(policy_id);
+    let mut args = vec![
+        "container".into(),
+        "create".into(),
+        "--name".into(),
+        container.name.clone().into(),
+        "--pull=never".into(),
+        "--read-only".into(),
+        "--cap-drop=ALL".into(),
+        "--security-opt=no-new-privileges:true".into(),
+        format!("--user={user}").into(),
+        "--pids-limit".into(),
+        GATEWAY_CONTAINER_PIDS.to_string().into(),
+        "--memory".into(),
+        format!("{GATEWAY_CONTAINER_USER_MEMORY_MB}m").into(),
+        "--cpus".into(),
+        "0.500".into(),
+        "--restart=no".into(),
+        "--log-driver=none".into(),
+        "--tmpfs".into(),
+        "/tmp:rw,noexec,nosuid,nodev,mode=1777,size=8m".into(),
+        "--network".into(),
+        container.uplink_network_name.clone().into(),
+    ];
+    if let Some(userns) = userns {
+        args.push(format!("--userns={userns}").into());
+    }
+    for (key, value) in labels {
+        args.push("--label".into());
+        args.push(format!("{key}={value}").into());
+    }
+    args.extend([
+        "--mount".into(),
+        gateway_bind_mount(policy_path, CONTAINER_POLICY_PATH, true)?.into(),
+        "--mount".into(),
+        gateway_bind_mount(
+            &status_directory.path,
+            "/run/ai-security-scanner/status",
+            false,
+        )?
+        .into(),
+        container.image.reference().into(),
+        "--policy".into(),
+        CONTAINER_POLICY_PATH.into(),
+        "--status-file".into(),
+        "/run/ai-security-scanner/status/status.json".into(),
+    ]);
+    let output = runtime_output(runtime, provider, &args)?;
+    if !output.success {
+        return Err(runtime_failure(
+            "egress gateway container creation",
+            &output,
+        ));
+    }
+    container.id = Some(parse_created_container_id(&output.stdout)?);
+    inspect_required_gateway_container_with_mode(runtime, provider, container, policy_id, false)?;
+
+    let connect = runtime_output(
+        runtime,
+        provider,
+        &[
+            "network".into(),
+            "connect".into(),
+            "--ip".into(),
+            container.listener_ip.to_string().into(),
+            container.internal_network_name.clone().into(),
+            container.name.clone().into(),
+        ],
+    )?;
+    if !connect.success {
+        return Err(runtime_failure(
+            "egress gateway internal-network attachment",
+            &connect,
+        ));
+    }
+    inspect_required_gateway_container(runtime, provider, container, policy_id)
+}
+
+fn start_gateway_container(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container_id: &str,
+) -> AppResult<()> {
+    validate_runtime_id(container_id)?;
+    let output = runtime_output(
+        runtime,
+        provider,
+        &["container".into(), "start".into(), container_id.into()],
+    )?;
+    if output.success {
+        Ok(())
+    } else {
+        Err(runtime_failure("egress gateway container start", &output))
+    }
+}
+
+fn remove_gateway_container(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container: &GatewayContainerRuntimeIdentity,
+    policy_id: &str,
+) -> AppResult<()> {
+    let Some(inspected) =
+        inspect_optional_gateway_container(runtime, provider, container, policy_id)?
+    else {
+        return Ok(());
+    };
+    let output = runtime_output(
+        runtime,
+        provider,
+        &[
+            "container".into(),
+            "rm".into(),
+            "--force".into(),
+            inspected.id.clone().into(),
+        ],
+    )?;
+    if !output.success && !runtime_reports_container_absent(&output.stderr) {
+        return Err(runtime_failure("egress gateway container removal", &output));
+    }
+    let mut exact = container.clone();
+    exact.id = Some(inspected.id);
+    if inspect_optional_gateway_container(runtime, provider, &exact, policy_id)?.is_some() {
+        return Err(AppError::Runtime(
+            "egress gateway container remained after exact removal".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn gateway_container_identity_from_record(
+    record: &ManagedNetworkRecord,
+) -> AppResult<Option<GatewayContainerRuntimeIdentity>> {
+    let Some(listener_ip) = record.gateway_listener_ip else {
+        return Ok(None);
+    };
+    validate_gateway_static_identity(
+        &record.policy_id,
+        record.uplink_network_name.as_deref(),
+        record.gateway_container_name.as_deref(),
+        record.gateway_image_repository.as_deref(),
+        record.gateway_image_digest.as_deref(),
+    )?;
+    if let Some(id) = record.gateway_container_id.as_deref() {
+        validate_gateway_container_id(id)?;
+    }
+    Ok(Some(GatewayContainerRuntimeIdentity {
+        name: record
+            .gateway_container_name
+            .clone()
+            .expect("validated gateway name"),
+        id: record.gateway_container_id.clone(),
+        policy_id: record.policy_id.clone(),
+        listener_ip,
+        image: GatewayContainerSpec::new(
+            record
+                .gateway_image_repository
+                .clone()
+                .expect("validated gateway repository"),
+            record
+                .gateway_image_digest
+                .clone()
+                .expect("validated gateway digest"),
+        )?,
+        internal_network_name: record.network_name.clone(),
+        uplink_network_name: record
+            .uplink_network_name
+            .clone()
+            .expect("validated gateway uplink"),
+    }))
+}
+
+fn gateway_container_identity_from_durable(
+    identity: &ManagedNetworkIdentity,
+) -> AppResult<Option<GatewayContainerRuntimeIdentity>> {
+    identity.validate()?;
+    let Some(listener_ip) = identity.gateway_listener_ip else {
+        return Ok(None);
+    };
+    let container_id = identity
+        .gateway_container_id
+        .clone()
+        .expect("validated complete gateway identity");
+    validate_gateway_container_id(&container_id)?;
+    Ok(Some(GatewayContainerRuntimeIdentity {
+        name: identity
+            .gateway_container_name
+            .clone()
+            .expect("validated gateway name"),
+        id: Some(container_id),
+        policy_id: identity.policy_id.clone(),
+        listener_ip,
+        image: GatewayContainerSpec::new(
+            identity
+                .gateway_image_repository
+                .clone()
+                .expect("validated gateway repository"),
+            identity
+                .gateway_image_digest
+                .clone()
+                .expect("validated gateway digest"),
+        )?,
+        internal_network_name: identity.network_name.clone(),
+        uplink_network_name: identity
+            .uplink_network_name
+            .clone()
+            .expect("validated gateway uplink"),
+    }))
+}
+
+fn gateway_probe_identity_from_record(
+    record: &ManagedNetworkRecord,
+) -> AppResult<Option<GatewayProbeRuntimeIdentity>> {
+    let Some(listener_ip) = record.gateway_listener_ip else {
+        return Ok(None);
+    };
+    validate_gateway_static_identity(
+        &record.policy_id,
+        record.uplink_network_name.as_deref(),
+        record.gateway_container_name.as_deref(),
+        record.gateway_image_repository.as_deref(),
+        record.gateway_image_digest.as_deref(),
+    )?;
+    let unique = record
+        .policy_id
+        .strip_prefix("egress-")
+        .expect("validated policy prefix");
+    Ok(Some(GatewayProbeRuntimeIdentity {
+        name: format!("ass-probe-{unique}"),
+        id: None,
+        policy_id: record.policy_id.clone(),
+        image: GatewayContainerSpec::new(
+            record
+                .gateway_image_repository
+                .clone()
+                .expect("validated gateway repository"),
+            record
+                .gateway_image_digest
+                .clone()
+                .expect("validated gateway digest"),
+        )?,
+        internal_network_name: record.network_name.clone(),
+        gateway: SocketAddr::new(listener_ip, GATEWAY_PORT),
+    }))
+}
+
+fn gateway_probe_identity_from_durable(
+    identity: &ManagedNetworkIdentity,
+) -> AppResult<Option<GatewayProbeRuntimeIdentity>> {
+    identity.validate()?;
+    let Some(listener_ip) = identity.gateway_listener_ip else {
+        return Ok(None);
+    };
+    let unique = identity
+        .policy_id
+        .strip_prefix("egress-")
+        .expect("validated policy prefix");
+    Ok(Some(GatewayProbeRuntimeIdentity {
+        name: format!("ass-probe-{unique}"),
+        id: None,
+        policy_id: identity.policy_id.clone(),
+        image: GatewayContainerSpec::new(
+            identity
+                .gateway_image_repository
+                .clone()
+                .expect("validated gateway repository"),
+            identity
+                .gateway_image_digest
+                .clone()
+                .expect("validated gateway digest"),
+        )?,
+        internal_network_name: identity.network_name.clone(),
+        gateway: SocketAddr::new(listener_ip, GATEWAY_PORT),
+    }))
+}
+
 fn create_internal_network(
     runtime: &dyn RuntimeCommands,
     provider: RuntimeProvider,
@@ -2205,6 +4237,28 @@ fn runtime_output(
     Ok(output)
 }
 
+fn runtime_output_with_timeout(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    args: &[OsString],
+    timeout: Duration,
+) -> AppResult<RuntimeOutput> {
+    let output = runtime
+        .output_with_timeout(provider, args, timeout)
+        .map_err(|error| {
+            AppError::Runtime(format!(
+                "{} could not be executed directly: {error}",
+                runtime_program(provider).to_string_lossy()
+            ))
+        })?;
+    if output.stdout.len() > MAX_INSPECT_BYTES || output.stderr.len() > MAX_INSPECT_BYTES {
+        return Err(AppError::Runtime(
+            "container runtime returned an oversized response".into(),
+        ));
+    }
+    Ok(output)
+}
+
 fn runtime_program(provider: RuntimeProvider) -> &'static OsStr {
     match provider {
         RuntimeProvider::ManagedLocal => OsStr::new("managed-local-context-required"),
@@ -2227,6 +4281,30 @@ fn expected_labels(policy_id: &str) -> BTreeMap<String, String> {
         (MANAGED_LABEL_KEY.into(), "true".into()),
         (POLICY_LABEL_KEY.into(), policy_id.into()),
     ])
+}
+
+fn expected_uplink_labels(policy_id: &str) -> BTreeMap<String, String> {
+    let mut labels = expected_labels(policy_id);
+    labels.insert(RESOURCE_ROLE_LABEL_KEY.into(), UPLINK_RESOURCE_ROLE.into());
+    labels
+}
+
+fn expected_gateway_container_labels(policy_id: &str) -> BTreeMap<String, String> {
+    let mut labels = expected_labels(policy_id);
+    labels.insert(
+        RESOURCE_ROLE_LABEL_KEY.into(),
+        GATEWAY_CONTAINER_RESOURCE_ROLE.into(),
+    );
+    labels
+}
+
+fn expected_gateway_probe_labels(policy_id: &str) -> BTreeMap<String, String> {
+    let mut labels = expected_labels(policy_id);
+    labels.insert(
+        RESOURCE_ROLE_LABEL_KEY.into(),
+        GATEWAY_PROBE_RESOURCE_ROLE.into(),
+    );
+    labels
 }
 
 #[derive(Debug, Deserialize)]
@@ -2275,11 +4353,254 @@ struct PodmanSubnet {
     gateway: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GatewayContainerInspect {
+    #[serde(rename = "Id", alias = "ID")]
+    id: String,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "ImageName", default)]
+    image_name: Option<String>,
+    #[serde(rename = "Config")]
+    config: GatewayContainerConfig,
+    #[serde(rename = "State")]
+    state: GatewayContainerState,
+    #[serde(rename = "NetworkSettings")]
+    network_settings: GatewayContainerNetworkSettings,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayContainerConfig {
+    #[serde(rename = "Image", default)]
+    image: Option<String>,
+    #[serde(rename = "Labels", default)]
+    labels: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayContainerState {
+    #[serde(rename = "Running", default)]
+    running: bool,
+    #[serde(rename = "ExitCode", default)]
+    exit_code: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayContainerNetworkSettings {
+    #[serde(rename = "Networks", default)]
+    networks: BTreeMap<String, GatewayContainerNetworkAttachment>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GatewayContainerNetworkAttachment {
+    #[serde(rename = "IPAddress", default)]
+    ipv4_address: String,
+    #[serde(rename = "GlobalIPv6Address", default)]
+    ipv6_address: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InternalAttachmentMode {
+    Absent,
+    Present,
+    Either,
+}
+
+fn parse_created_container_id(bytes: &[u8]) -> AppResult<String> {
+    if bytes.is_empty() || bytes.len() > 256 {
+        return Err(AppError::Runtime(
+            "container runtime returned an empty or oversized gateway identity".into(),
+        ));
+    }
+    let id = std::str::from_utf8(bytes)
+        .map_err(|_| AppError::Runtime("gateway container identity was not UTF-8".into()))?
+        .trim();
+    validate_gateway_container_id(id)?;
+    Ok(id.to_owned())
+}
+
+fn validate_gateway_container_id(value: &str) -> AppResult<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(AppError::NotAuthorized(
+            "gateway container identity was not an immutable runtime digest".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn inspect_required_gateway_container(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container: &GatewayContainerRuntimeIdentity,
+    policy_id: &str,
+) -> AppResult<InspectedGatewayContainer> {
+    inspect_required_gateway_container_with_mode(runtime, provider, container, policy_id, true)
+}
+
+fn inspect_required_gateway_container_with_mode(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container: &GatewayContainerRuntimeIdentity,
+    policy_id: &str,
+    expected_internal: bool,
+) -> AppResult<InspectedGatewayContainer> {
+    inspect_gateway_container_with_attachment_mode(
+        runtime,
+        provider,
+        container,
+        policy_id,
+        if expected_internal {
+            InternalAttachmentMode::Present
+        } else {
+            InternalAttachmentMode::Absent
+        },
+    )?
+    .ok_or_else(|| AppError::Runtime("expected gateway container is absent".into()))
+}
+
+fn inspect_optional_gateway_container(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container: &GatewayContainerRuntimeIdentity,
+    policy_id: &str,
+) -> AppResult<Option<InspectedGatewayContainer>> {
+    inspect_gateway_container_with_attachment_mode(
+        runtime,
+        provider,
+        container,
+        policy_id,
+        InternalAttachmentMode::Either,
+    )
+}
+
+fn inspect_gateway_container_with_attachment_mode(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container: &GatewayContainerRuntimeIdentity,
+    policy_id: &str,
+    internal_mode: InternalAttachmentMode,
+) -> AppResult<Option<InspectedGatewayContainer>> {
+    validate_policy_id(policy_id)?;
+    if container.policy_id != policy_id {
+        return Err(AppError::NotAuthorized(
+            "gateway container policy identity changed during inspection".into(),
+        ));
+    }
+    let selector = container.id.as_deref().unwrap_or(&container.name);
+    let output = runtime_output(
+        runtime,
+        provider,
+        &["container".into(), "inspect".into(), selector.into()],
+    )?;
+    if !output.success {
+        if runtime_reports_container_absent(&output.stderr) {
+            return Ok(None);
+        }
+        return Err(runtime_failure(
+            "egress gateway container inspection",
+            &output,
+        ));
+    }
+    if output.stdout.is_empty() || output.stdout.len() > MAX_INSPECT_BYTES {
+        return Err(AppError::Runtime(
+            "gateway container inspection was empty or oversized".into(),
+        ));
+    }
+    let mut entries: Vec<GatewayContainerInspect> = serde_json::from_slice(&output.stdout)
+        .map_err(|_| AppError::Runtime("gateway container inspection was malformed".into()))?;
+    if entries.len() != 1 {
+        return Err(AppError::NotAuthorized(
+            "runtime did not return exactly one gateway container".into(),
+        ));
+    }
+    let entry = entries.pop().expect("one gateway inspect entry");
+    validate_gateway_container_id(&entry.id)?;
+    if container.id.as_deref().is_some_and(|id| id != entry.id) {
+        return Err(AppError::NotAuthorized(
+            "refusing a replaced gateway container runtime identity".into(),
+        ));
+    }
+    let inspected_name = entry.name.strip_prefix('/').unwrap_or(&entry.name);
+    if inspected_name != container.name {
+        return Err(AppError::NotAuthorized(
+            "gateway container name changed during inspection".into(),
+        ));
+    }
+    let image = entry
+        .image_name
+        .as_deref()
+        .or(entry.config.image.as_deref());
+    if image != Some(container.image.reference().as_str()) {
+        return Err(AppError::NotAuthorized(
+            "gateway container did not retain its pinned image reference".into(),
+        ));
+    }
+    let expected_labels = expected_gateway_container_labels(policy_id);
+    if expected_labels
+        .iter()
+        .any(|(key, value)| entry.config.labels.get(key) != Some(value))
+    {
+        return Err(AppError::NotAuthorized(
+            "gateway container labels do not match its durable policy identity".into(),
+        ));
+    }
+    let networks = &entry.network_settings.networks;
+    let has_uplink = networks.contains_key(&container.uplink_network_name);
+    let has_internal = networks.contains_key(&container.internal_network_name);
+    let expected_count = if has_internal { 2 } else { 1 };
+    if !has_uplink
+        || networks.len() != expected_count
+        || match internal_mode {
+            InternalAttachmentMode::Absent => has_internal,
+            InternalAttachmentMode::Present => !has_internal,
+            InternalAttachmentMode::Either => false,
+        }
+    {
+        return Err(AppError::NotAuthorized(
+            "gateway container is not attached to the exact dual-network topology".into(),
+        ));
+    }
+    if has_internal {
+        let attachment = networks
+            .get(&container.internal_network_name)
+            .expect("internal attachment present");
+        let address = match container.listener_ip {
+            IpAddr::V4(_) => attachment.ipv4_address.parse::<IpAddr>(),
+            IpAddr::V6(_) => attachment.ipv6_address.parse::<IpAddr>(),
+        }
+        .map_err(|_| AppError::Runtime("gateway listener attachment was malformed".into()))?;
+        if address != container.listener_ip {
+            return Err(AppError::NotAuthorized(
+                "gateway container listener address changed during inspection".into(),
+            ));
+        }
+    }
+    Ok(Some(InspectedGatewayContainer {
+        id: entry.id,
+        running: entry.state.running,
+        exit_code: entry.state.exit_code,
+    }))
+}
+
 fn parse_network_inspect(
     provider: RuntimeProvider,
     bytes: &[u8],
     expected_name: &str,
     expected_labels: &BTreeMap<String, String>,
+) -> AppResult<InspectedNetwork> {
+    parse_network_inspect_with_mode(provider, bytes, expected_name, expected_labels, true)
+}
+
+fn parse_network_inspect_with_mode(
+    provider: RuntimeProvider,
+    bytes: &[u8],
+    expected_name: &str,
+    expected_labels: &BTreeMap<String, String>,
+    expected_internal: bool,
 ) -> AppResult<InspectedNetwork> {
     if bytes.is_empty() || bytes.len() > MAX_INSPECT_BYTES {
         return Err(AppError::Runtime(
@@ -2339,7 +4660,7 @@ fn parse_network_inspect(
         || id.len() > 256
         || id.contains(['\n', '\r', '\0'])
         || driver != "bridge"
-        || !internal
+        || internal != expected_internal
         || labels != *expected_labels
         || subnets.len() != 1
     {
@@ -2642,6 +4963,14 @@ fn remove_exact_regular_file(path: &Path) -> io::Result<()> {
     }
 }
 
+fn exact_path_is_absent(path: &Path) -> AppResult<bool> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Ok(_) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn stop_gateway(process: &mut dyn GatewayProcess) -> AppResult<()> {
     let exited = process.has_exited().map_err(|error| {
         AppError::Runtime(format!("egress gateway status could not be read: {error}"))
@@ -2685,6 +5014,13 @@ fn runtime_reports_absent(stderr: &[u8]) -> bool {
     message.contains("no such network")
         || message.contains("network not found")
         || message.contains("does not exist")
+}
+
+fn runtime_reports_container_absent(stderr: &[u8]) -> bool {
+    let message = bounded_diagnostic(stderr).to_ascii_lowercase();
+    message.contains("no such container")
+        || message.contains("container not found")
+        || (message.contains("container") && message.contains("does not exist"))
 }
 
 fn is_unique_local_v6(address: Ipv6Addr) -> bool {
@@ -3152,6 +5488,322 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone)]
+    struct FakeContainerNetwork {
+        id: String,
+        internal: bool,
+        labels: BTreeMap<String, String>,
+        subnet: String,
+        gateway: String,
+        removed: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    struct FakeGatewayContainer {
+        id: String,
+        name: String,
+        image: String,
+        labels: BTreeMap<String, String>,
+        uplink: String,
+        internal: Option<(String, String)>,
+        running: bool,
+        removed: bool,
+    }
+
+    #[derive(Debug, Default)]
+    struct FakeContainerRuntimeState {
+        calls: Vec<Vec<String>>,
+        pull_timeout: Option<Duration>,
+        networks: BTreeMap<String, FakeContainerNetwork>,
+        container: Option<FakeGatewayContainer>,
+        probe: Option<FakeGatewayContainer>,
+    }
+
+    struct FakeContainerRuntime {
+        state: Arc<Mutex<FakeContainerRuntimeState>>,
+    }
+
+    impl FakeContainerRuntime {
+        fn new() -> (Self, Arc<Mutex<FakeContainerRuntimeState>>) {
+            let state = Arc::new(Mutex::new(FakeContainerRuntimeState::default()));
+            (
+                Self {
+                    state: Arc::clone(&state),
+                },
+                state,
+            )
+        }
+
+        fn execute(&self, args: &[OsString]) -> io::Result<RuntimeOutput> {
+            let args = args
+                .iter()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let mut state = self.state.lock().expect("fake container runtime");
+            state.calls.push(args.clone());
+            if args.first().is_some_and(|argument| argument == "pull") {
+                return Ok(success_output(Vec::new()));
+            }
+            match args.get(0..2) {
+                Some([network, create]) if network == "network" && create == "create" => {
+                    let name = args.last().expect("network name").clone();
+                    let internal = args.iter().any(|argument| argument == "--internal");
+                    let mut labels = BTreeMap::new();
+                    let mut index = 0;
+                    while index < args.len() {
+                        if args[index] == "--label" {
+                            let (key, value) = args[index + 1]
+                                .split_once('=')
+                                .expect("network label assignment");
+                            labels.insert(key.into(), value.into());
+                            index += 2;
+                        } else {
+                            index += 1;
+                        }
+                    }
+                    let (id, subnet, gateway) = if internal {
+                        ("a".repeat(64), "10.89.1.0/24", "10.89.1.1")
+                    } else {
+                        ("b".repeat(64), "10.90.1.0/24", "10.90.1.1")
+                    };
+                    state.networks.insert(
+                        name,
+                        FakeContainerNetwork {
+                            id,
+                            internal,
+                            labels,
+                            subnet: subnet.into(),
+                            gateway: gateway.into(),
+                            removed: false,
+                        },
+                    );
+                    Ok(success_output(Vec::new()))
+                }
+                Some([network, inspect]) if network == "network" && inspect == "inspect" => {
+                    let selector = args.get(2).expect("network selector");
+                    let network = state
+                        .networks
+                        .iter()
+                        .find(|(name, network)| {
+                            !network.removed && (*name == selector || &network.id == selector)
+                        })
+                        .map(|(name, network)| (name.clone(), network.clone()));
+                    let Some((name, network)) = network else {
+                        return Ok(failure_output("network not found"));
+                    };
+                    let value = json!([{
+                        "name": name,
+                        "id": network.id,
+                        "driver": "bridge",
+                        "internal": network.internal,
+                        "labels": network.labels,
+                        "subnets": [{ "subnet": network.subnet, "gateway": network.gateway }]
+                    }]);
+                    Ok(success_output(
+                        serde_json::to_vec(&value).expect("network JSON"),
+                    ))
+                }
+                Some([network, remove]) if network == "network" && remove == "rm" => {
+                    let selector = args.get(2).expect("network selector");
+                    let Some(network) = state
+                        .networks
+                        .values_mut()
+                        .find(|network| !network.removed && &network.id == selector)
+                    else {
+                        return Ok(failure_output("network not found"));
+                    };
+                    network.removed = true;
+                    Ok(success_output(Vec::new()))
+                }
+                Some([container, create]) if container == "container" && create == "create" => {
+                    let name = args
+                        .windows(2)
+                        .find(|pair| pair[0] == "--name")
+                        .map(|pair| pair[1].clone())
+                        .expect("container name");
+                    let uplink = args
+                        .windows(2)
+                        .find(|pair| pair[0] == "--network")
+                        .map(|pair| pair[1].clone())
+                        .expect("container uplink");
+                    let image = args
+                        .iter()
+                        .find(|argument| argument.contains("@sha256:"))
+                        .cloned()
+                        .expect("pinned container image");
+                    let mut labels = BTreeMap::new();
+                    for pair in args.windows(2).filter(|pair| pair[0] == "--label") {
+                        let (key, value) =
+                            pair[1].split_once('=').expect("container label assignment");
+                        labels.insert(key.into(), value.into());
+                    }
+                    let is_probe = name.starts_with("ass-probe-");
+                    let id = if is_probe {
+                        "e".repeat(64)
+                    } else {
+                        "c".repeat(64)
+                    };
+                    let created = FakeGatewayContainer {
+                        id: id.clone(),
+                        name,
+                        image,
+                        labels,
+                        uplink,
+                        internal: None,
+                        running: false,
+                        removed: false,
+                    };
+                    if is_probe {
+                        state.probe = Some(created);
+                    } else {
+                        state.container = Some(created);
+                    }
+                    Ok(success_output(format!("{id}\n").into_bytes()))
+                }
+                Some([container, inspect]) if container == "container" && inspect == "inspect" => {
+                    let selector = args.get(2).expect("container selector");
+                    let selected = state
+                        .container
+                        .as_ref()
+                        .into_iter()
+                        .chain(state.probe.as_ref())
+                        .find(|container| {
+                            !container.removed
+                                && (&container.id == selector || &container.name == selector)
+                        });
+                    let Some(container) = selected else {
+                        return Ok(failure_output("no such container"));
+                    };
+                    let mut networks = serde_json::Map::new();
+                    networks.insert(
+                        container.uplink.clone(),
+                        json!({ "IPAddress": "10.90.1.2", "GlobalIPv6Address": "" }),
+                    );
+                    if let Some((name, address)) = &container.internal {
+                        networks.insert(
+                            name.clone(),
+                            json!({ "IPAddress": address, "GlobalIPv6Address": "" }),
+                        );
+                    }
+                    let value = json!([{
+                        "Id": container.id,
+                        "Name": container.name,
+                        "ImageName": container.image,
+                        "Config": { "Image": container.image, "Labels": container.labels },
+                        "State": { "Running": container.running, "ExitCode": 0 },
+                        "NetworkSettings": { "Networks": networks }
+                    }]);
+                    Ok(success_output(
+                        serde_json::to_vec(&value).expect("container JSON"),
+                    ))
+                }
+                Some([network, connect]) if network == "network" && connect == "connect" => {
+                    if args.len() != 6 || args[2] != "--ip" {
+                        return Ok(failure_output("unexpected network connect argv"));
+                    }
+                    let Some(container) = state.container.as_mut() else {
+                        return Ok(failure_output("no such container"));
+                    };
+                    if args[5] != container.name {
+                        return Ok(failure_output("wrong gateway container"));
+                    }
+                    container.internal = Some((args[4].clone(), args[3].clone()));
+                    Ok(success_output(Vec::new()))
+                }
+                Some([container, start]) if container == "container" && start == "start" => {
+                    if args.get(2).is_some_and(|argument| argument == "--attach") {
+                        let Some(probe) = state.probe.as_mut() else {
+                            return Ok(failure_output("no such container"));
+                        };
+                        if args.get(3) != Some(&probe.id) {
+                            return Ok(failure_output("wrong gateway probe"));
+                        }
+                        probe.running = false;
+                        return Ok(success_output(
+                            "{\"schema_version\":\"1.0.0\",\"reachability_probe\":\"socks5_no_connect_greeting\",\"gateway_reachable\":true,\"upstream_connect_attempted\":false}\n"
+                                .as_bytes()
+                                .to_vec(),
+                        ));
+                    }
+                    let Some(container) = state.container.as_mut() else {
+                        return Ok(failure_output("no such container"));
+                    };
+                    if args.get(2) != Some(&container.id) {
+                        return Ok(failure_output("wrong gateway container"));
+                    }
+                    container.running = true;
+                    Ok(success_output(Vec::new()))
+                }
+                Some([container, remove]) if container == "container" && remove == "rm" => {
+                    let selector = args.get(3).expect("container removal selector");
+                    let selected =
+                        if state.container.as_ref().is_some_and(|container| {
+                            !container.removed && &container.id == selector
+                        }) {
+                            state.container.as_mut()
+                        } else if state.probe.as_ref().is_some_and(|container| {
+                            !container.removed && &container.id == selector
+                        }) {
+                            state.probe.as_mut()
+                        } else {
+                            None
+                        };
+                    let Some(container) = selected else {
+                        return Ok(failure_output("no such container"));
+                    };
+                    container.removed = true;
+                    container.running = false;
+                    Ok(success_output(Vec::new()))
+                }
+                _ => Ok(failure_output("unexpected command")),
+            }
+        }
+    }
+
+    impl RuntimeCommands for FakeContainerRuntime {
+        fn output(
+            &self,
+            _provider: RuntimeProvider,
+            args: &[OsString],
+        ) -> io::Result<RuntimeOutput> {
+            self.execute(args)
+        }
+
+        fn output_with_timeout(
+            &self,
+            _provider: RuntimeProvider,
+            args: &[OsString],
+            timeout: Duration,
+        ) -> io::Result<RuntimeOutput> {
+            self.state
+                .lock()
+                .expect("fake container runtime")
+                .pull_timeout = Some(timeout);
+            self.execute(args)
+        }
+    }
+
+    struct FakeContainerReadiness {
+        fail: bool,
+    }
+
+    impl GatewayContainerReadiness for FakeContainerReadiness {
+        fn wait_until_ready(
+            &self,
+            _runtime: &dyn RuntimeCommands,
+            _provider: RuntimeProvider,
+            _container: &GatewayContainerRuntimeIdentity,
+            _status_directory: &GatewayStatusDirectory,
+            _policy_id: &str,
+        ) -> AppResult<()> {
+            if self.fail {
+                Err(AppError::Runtime("fake container readiness failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     #[derive(Default)]
     struct FakeProcessState {
         killed: bool,
@@ -3280,6 +5932,423 @@ mod tests {
         fs::create_dir(&policies).expect("policy directory");
         fs::create_dir(&registry).expect("registry directory");
         (temporary, gateway, artifacts, policies, registry)
+    }
+
+    fn gateway_container_spec() -> GatewayContainerSpec {
+        GatewayContainerSpec::new(
+            "ghcr.io/teddashh/ai-security-scanner-egress-gateway",
+            format!("sha256:{}", "d".repeat(64)),
+        )
+        .expect("gateway image spec")
+    }
+
+    #[test]
+    fn managed_local_rejects_the_native_direct_gateway_backend() {
+        let (_temporary, gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, _state) = FakeRuntime::new(FakeInspectKind::Podman);
+        let process_state = Arc::new(Mutex::new(FakeProcessState::default()));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let error = ManagedNetworkController::with_components(
+            RuntimeProvider::ManagedLocal,
+            &gateway,
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeLauncher {
+                state: process_state,
+            }),
+            Arc::new(FakeReadiness {
+                fail: false,
+                observed,
+            }),
+        )
+        .err()
+        .expect("managed local direct backend must be rejected");
+        assert!(error.to_string().contains("gateway-container backend"));
+    }
+
+    #[test]
+    fn managed_local_maps_the_rootless_machine_user_to_the_container_identity() {
+        assert_eq!(
+            gateway_container_user_for_ids(RuntimeProvider::ManagedLocal, 65_532, 65_532)
+                .expect("managed user mapping"),
+            (
+                "65532:65532".into(),
+                Some("keep-id:uid=65532,gid=65532".into())
+            )
+        );
+        assert!(gateway_container_user_for_ids(RuntimeProvider::ManagedLocal, 0, 0).is_err());
+    }
+
+    #[test]
+    fn managed_local_container_backend_uses_exact_dual_network_argv_and_cleanup_order() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let mut lease = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .expect("dual-network gateway");
+        let identity = lease.durable_identity().expect("durable identity");
+        assert_eq!(
+            lease.network_policy().gateway_endpoint(),
+            Some(
+                format!(
+                    "socks5h://{}:1080",
+                    identity.gateway_listener_ip.expect("listener")
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            identity
+                .gateway_container_id
+                .as_deref()
+                .expect("container id"),
+            "c".repeat(64)
+        );
+        assert_eq!(identity.network_id, "a".repeat(64));
+        assert_eq!(
+            identity.uplink_network_id.as_deref().expect("uplink id"),
+            "b".repeat(64)
+        );
+
+        let status_path = lease
+            .gateway_status_directory
+            .as_ref()
+            .expect("status directory")
+            .path
+            .clone();
+        let policy_path = lease.policy_path().expect("policy path").to_owned();
+        {
+            let state = state.lock().expect("fake container runtime");
+            assert_eq!(state.pull_timeout, Some(GATEWAY_IMAGE_PULL_TIMEOUT));
+            let internal_name = identity.network_name.clone();
+            let uplink_name = identity.uplink_network_name.clone().expect("uplink name");
+            let container_name = identity
+                .gateway_container_name
+                .clone()
+                .expect("container name");
+            assert!(state.calls.iter().any(|call| {
+                call == &vec![
+                    "network".to_owned(),
+                    "connect".to_owned(),
+                    "--ip".to_owned(),
+                    "10.89.1.2".to_owned(),
+                    internal_name.clone(),
+                    container_name.clone(),
+                ]
+            }));
+            let create = state
+                .calls
+                .iter()
+                .find(|call| call.get(0..2) == Some(&["container".into(), "create".into()]))
+                .expect("container create argv");
+            for required in [
+                "--pull=never",
+                "--read-only",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges:true",
+                "--restart=no",
+                "--log-driver=none",
+                "--userns=keep-id:uid=1000,gid=1000",
+                CONTAINER_POLICY_PATH,
+                "/run/ai-security-scanner/status/status.json",
+            ] {
+                if required.starts_with("--userns")
+                    && !create
+                        .iter()
+                        .any(|value| value.starts_with("--userns=keep-id:"))
+                {
+                    panic!("container create omitted rootless keep-id mapping");
+                }
+                if !required.starts_with("--userns") {
+                    assert!(
+                        create.iter().any(|value| value == required),
+                        "missing {required}"
+                    );
+                }
+            }
+            assert!(
+                create
+                    .windows(2)
+                    .any(|pair| pair == ["--network", uplink_name.as_str()])
+            );
+            let mounts = create
+                .windows(2)
+                .filter(|pair| pair[0] == "--mount")
+                .map(|pair| pair[1].as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(mounts.len(), 2);
+            assert!(mounts[0].starts_with(&format!("type=bind,src={}", policy_path.display())));
+            assert!(mounts[0].ends_with(&format!("dst={CONTAINER_POLICY_PATH},readonly")));
+            assert!(mounts[1].starts_with(&format!("type=bind,src={}", status_path.display())));
+            assert!(mounts[1].ends_with("dst=/run/ai-security-scanner/status"));
+        }
+
+        lease.cleanup().expect("exact cleanup");
+        assert!(!policy_path.exists());
+        assert!(!status_path.exists());
+        let state = state.lock().expect("fake container runtime");
+        let remove_container = state
+            .calls
+            .iter()
+            .position(|call| {
+                call.get(0..3) == Some(&["container".into(), "rm".into(), "--force".into()])
+            })
+            .expect("container removal");
+        let remove_networks = state
+            .calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.get(0..2) == Some(&["network".into(), "rm".into()]))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(remove_networks.len(), 2);
+        assert!(remove_container < remove_networks[0]);
+        assert!(remove_networks[0] < remove_networks[1]);
+        assert!(state.networks.values().all(|network| network.removed));
+        assert!(
+            state
+                .container
+                .as_ref()
+                .is_some_and(|container| container.removed)
+        );
+    }
+
+    #[test]
+    fn release_qualification_uses_same_image_internal_only_greeting_and_exact_cleanup() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        let spec = gateway_container_spec();
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            spec.clone(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("qualification controller");
+        let result = controller
+            .qualify_gateway_container(&owner(), "linux-x86_64-deb", Utc::now())
+            .expect("gateway qualification");
+
+        assert_eq!(result.image, spec.reference());
+        assert_eq!(result.gateway_container_id, "c".repeat(64));
+        assert_eq!(result.probe_container_id, "e".repeat(64));
+        assert_eq!(result.internal_network_id, "a".repeat(64));
+        assert_eq!(result.uplink_network_id, "b".repeat(64));
+        assert_eq!(result.reachability_probe, "socks5_no_connect_greeting");
+        assert!(result.gateway_reachable);
+        assert!(!result.upstream_connect_attempted);
+        assert_eq!(
+            result.cleanup,
+            ManagedGatewayQualificationCleanup {
+                gateway_container_removed: true,
+                probe_container_removed: true,
+                internal_network_removed: true,
+                uplink_network_removed: true,
+                policy_file_removed: true,
+                status_directory_removed: true,
+                registry_record_removed: true,
+            }
+        );
+
+        let state = state.lock().expect("fake container runtime");
+        let probe_create = state
+            .calls
+            .iter()
+            .find(|call| {
+                call.get(0..2) == Some(&["container".into(), "create".into()])
+                    && call
+                        .windows(2)
+                        .any(|pair| pair == ["--entrypoint", CONTAINER_PROBE_BINARY])
+            })
+            .expect("probe create argv");
+        assert!(
+            probe_create
+                .iter()
+                .any(|argument| argument == &spec.reference())
+        );
+        assert!(!probe_create.iter().any(|argument| argument == "--mount"));
+        assert_eq!(
+            probe_create
+                .windows(2)
+                .filter(|pair| pair[0] == "--network")
+                .count(),
+            1
+        );
+        assert!(
+            probe_create
+                .windows(2)
+                .any(|pair| { pair[0] == "--gateway" && pair[1] == "10.89.1.2:1080" })
+        );
+        assert!(state.calls.iter().any(|call| {
+            call == &vec![
+                "container".to_owned(),
+                "start".to_owned(),
+                "--attach".to_owned(),
+                "e".repeat(64),
+            ]
+        }));
+        assert!(
+            state
+                .container
+                .as_ref()
+                .is_some_and(|container| container.removed)
+        );
+        assert!(state.probe.as_ref().is_some_and(|probe| probe.removed));
+        assert!(state.networks.values().all(|network| network.removed));
+        assert!(fs::read_dir(&registry).expect("registry").next().is_none());
+    }
+
+    #[test]
+    fn durable_registry_recovers_gateway_container_before_both_networks() {
+        let (_temporary, _gateway, artifacts, policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let runtime = Arc::new(runtime);
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry_root,
+            runtime.clone(),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let lease = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .expect("dual-network gateway");
+        let policy_path = lease.policy_path().expect("policy path").to_owned();
+        let status_path = lease
+            .gateway_status_directory
+            .as_ref()
+            .expect("status directory")
+            .path
+            .clone();
+        std::mem::forget(lease);
+
+        let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
+            .expect("durable registry");
+        let summary = registry.reconcile_all(now).expect("durable recovery");
+        assert_eq!(summary.reconciled, 1);
+        assert_eq!(summary.incomplete, 0);
+        assert!(!policy_path.exists());
+        assert!(!status_path.exists());
+        assert!(
+            fs::read_dir(&registry_root)
+                .expect("registry")
+                .next()
+                .is_none()
+        );
+        let state = state.lock().expect("fake container runtime");
+        let container_remove = state
+            .calls
+            .iter()
+            .position(|call| {
+                call.get(0..3) == Some(&["container".into(), "rm".into(), "--force".into()])
+            })
+            .expect("gateway removal");
+        let network_removes = state
+            .calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.get(0..2) == Some(&["network".into(), "rm".into()]))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(network_removes.len(), 2);
+        assert!(container_remove < network_removes[0]);
+        assert!(network_removes[0] < network_removes[1]);
+        assert!(
+            state
+                .container
+                .as_ref()
+                .is_some_and(|container| container.removed)
+        );
+        assert!(state.networks.values().all(|network| network.removed));
+    }
+
+    #[test]
+    fn gateway_container_readiness_failure_rolls_back_every_durable_resource() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: true }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let error = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .err()
+            .expect("readiness must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("fake container readiness failure")
+        );
+        assert!(fs::read_dir(&registry).expect("registry").next().is_none());
+        assert_eq!(
+            fs::read_dir(&policies).expect("policy directory").count(),
+            1,
+            "only the registry directory remains"
+        );
+        let state = state.lock().expect("fake container runtime");
+        assert!(
+            state
+                .container
+                .as_ref()
+                .is_some_and(|container| container.removed)
+        );
+        assert!(state.networks.values().all(|network| network.removed));
+    }
+
+    #[test]
+    fn gateway_status_contract_is_bounded_and_phase_code_strict() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let policy_id = format!("egress-{}", "e".repeat(32));
+        let status =
+            create_gateway_status_directory(&policies, &policy_id).expect("status directory");
+        fs::write(
+            status.status_path(),
+            br#"{"schema_version":"1.0.0","phase":"ready","code":"ready"}"#,
+        )
+        .expect("ready status");
+        assert_eq!(
+            read_gateway_status(&status).expect("read status"),
+            Some(GatewayStatusDocument {
+                schema_version: "1.0.0".into(),
+                phase: GatewayStatusPhase::Ready,
+                code: "ready".into(),
+            })
+        );
+        fs::write(
+            status.status_path(),
+            br#"{"schema_version":"1.0.0","phase":"stopped","code":"ready"}"#,
+        )
+        .expect("mismatched status");
+        assert!(read_gateway_status(&status).is_err());
+        fs::write(status.path.join("status.tmp"), b"bounded temporary").expect("status temporary");
+        remove_gateway_status_directory(&status).expect("status cleanup");
+        assert!(!status.path.exists());
     }
 
     #[test]
@@ -3563,6 +6632,13 @@ mod tests {
             expires_at: now + ChronoDuration::hours(1),
             phase: RegistryPhase::Intent,
             network_id: None,
+            uplink_network_name: None,
+            uplink_network_id: None,
+            gateway_container_name: None,
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: None,
+            gateway_image_digest: None,
             policy_sha256: None,
         };
         write_registry_snapshot(&registry_root, &record).expect("intent record");
