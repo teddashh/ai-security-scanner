@@ -50,15 +50,15 @@ jobs:
       matrix:
         include:
           - engine: naabu
-            tag: 2.6.1-2
+            tag: 2.6.1-3
             version: 2.6.1
             dockerfile: engines/images/naabu/Dockerfile
           - engine: httpx
-            tag: 1.10.0-2
+            tag: 1.10.0-3
             version: 1.10.0
             dockerfile: engines/images/httpx/Dockerfile
           - engine: nuclei
-            tag: 3.11.1-2
+            tag: 3.11.1-3
             version: 3.11.1
             dockerfile: engines/images/nuclei/Dockerfile
     env:
