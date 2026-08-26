@@ -1763,7 +1763,7 @@ impl ManagedNetworkLease {
     }
 
     fn remove_verified_uplink_network(&self, network_name: &str) -> AppResult<()> {
-        let inspected = inspect_optional_uplink_network(
+        let inspected = inspect_optional_uplink_network_for_cleanup(
             self.runtime.as_ref(),
             self.provider,
             network_name,
@@ -1798,6 +1798,19 @@ struct InspectedNetwork {
     gateway: IpAddr,
     ipv6_subnet: Option<IpNet>,
     ipv6_gateway: Option<IpAddr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NetworkTopologyRequirement {
+    InternalIpv4Only,
+    UplinkDualStack,
+    UplinkLegacyCompatible,
+}
+
+impl NetworkTopologyRequirement {
+    fn expected_internal(self) -> bool {
+        self == Self::InternalIpv4Only
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2573,7 +2586,7 @@ impl ManagedNetworkRegistry {
         let Some(name) = record.uplink_network_name.as_deref() else {
             return Ok(());
         };
-        let inspected = inspect_optional_uplink_network(
+        let inspected = inspect_optional_uplink_network_for_cleanup(
             self.runtime.as_ref(),
             record.provider,
             name,
@@ -2604,7 +2617,7 @@ impl ManagedNetworkRegistry {
         ) else {
             return Ok(());
         };
-        let inspected = inspect_optional_uplink_network(
+        let inspected = inspect_optional_uplink_network_for_cleanup(
             self.runtime.as_ref(),
             identity.provider,
             name,
@@ -3800,6 +3813,37 @@ fn inspect_optional_uplink_network(
     network_name: &str,
     labels: &BTreeMap<String, String>,
 ) -> AppResult<Option<InspectedNetwork>> {
+    inspect_optional_uplink_network_with_requirement(
+        runtime,
+        provider,
+        network_name,
+        labels,
+        NetworkTopologyRequirement::UplinkDualStack,
+    )
+}
+
+fn inspect_optional_uplink_network_for_cleanup(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    network_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> AppResult<Option<InspectedNetwork>> {
+    inspect_optional_uplink_network_with_requirement(
+        runtime,
+        provider,
+        network_name,
+        labels,
+        NetworkTopologyRequirement::UplinkLegacyCompatible,
+    )
+}
+
+fn inspect_optional_uplink_network_with_requirement(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    network_name: &str,
+    labels: &BTreeMap<String, String>,
+    requirement: NetworkTopologyRequirement,
+) -> AppResult<Option<InspectedNetwork>> {
     let output = runtime_output(
         runtime,
         provider,
@@ -3811,7 +3855,8 @@ fn inspect_optional_uplink_network(
         }
         return Err(runtime_failure("gateway uplink inspection", &output));
     }
-    parse_network_inspect_with_mode(provider, &output.stdout, network_name, labels, false).map(Some)
+    parse_network_inspect_with_mode(provider, &output.stdout, network_name, labels, requirement)
+        .map(Some)
 }
 
 fn select_gateway_container_ip(subnet: IpNet, gateway: IpAddr) -> AppResult<IpAddr> {
@@ -4925,7 +4970,13 @@ fn parse_network_inspect(
     expected_name: &str,
     expected_labels: &BTreeMap<String, String>,
 ) -> AppResult<InspectedNetwork> {
-    parse_network_inspect_with_mode(provider, bytes, expected_name, expected_labels, true)
+    parse_network_inspect_with_mode(
+        provider,
+        bytes,
+        expected_name,
+        expected_labels,
+        NetworkTopologyRequirement::InternalIpv4Only,
+    )
 }
 
 fn parse_network_inspect_with_mode(
@@ -4933,7 +4984,7 @@ fn parse_network_inspect_with_mode(
     bytes: &[u8],
     expected_name: &str,
     expected_labels: &BTreeMap<String, String>,
-    expected_internal: bool,
+    requirement: NetworkTopologyRequirement,
 ) -> AppResult<InspectedNetwork> {
     if bytes.is_empty() || bytes.len() > MAX_INSPECT_BYTES {
         return Err(AppError::Runtime(
@@ -4993,7 +5044,7 @@ fn parse_network_inspect_with_mode(
         || id.len() > 256
         || id.contains(['\n', '\r', '\0'])
         || driver != "bridge"
-        || internal != expected_internal
+        || internal != requirement.expected_internal()
         || labels != *expected_labels
     {
         return Err(AppError::NotAuthorized(
@@ -5025,7 +5076,12 @@ fn parse_network_inspect_with_mode(
             "container bridge did not prove its exact IPv4 subnet".into(),
         ));
     };
-    if expected_internal && ipv6.is_some() || !expected_internal && ipv6.is_none() {
+    let address_families_match = match requirement {
+        NetworkTopologyRequirement::InternalIpv4Only => ipv6.is_none(),
+        NetworkTopologyRequirement::UplinkDualStack => ipv6.is_some(),
+        NetworkTopologyRequirement::UplinkLegacyCompatible => true,
+    };
+    if !address_families_match {
         return Err(AppError::NotAuthorized(
             "container bridge did not prove its required address families".into(),
         ));
@@ -5689,7 +5745,7 @@ mod tests {
             &serde_json::to_vec(&docker_uplink).expect("JSON"),
             "ass-uplink-1",
             &expected_uplink_labels("policy-1"),
-            false,
+            NetworkTopologyRequirement::UplinkDualStack,
         )
         .expect("dual-stack Docker uplink");
         assert_eq!(
@@ -5713,7 +5769,7 @@ mod tests {
             &serde_json::to_vec(&podman_uplink).expect("JSON"),
             "ass-uplink-1",
             &expected_uplink_labels("policy-1"),
-            false,
+            NetworkTopologyRequirement::UplinkDualStack,
         )
         .expect("dual-stack Podman uplink");
         assert_eq!(
@@ -5735,9 +5791,19 @@ mod tests {
                 &serde_json::to_vec(&ipv4_only_uplink).expect("JSON"),
                 "ass-uplink-1",
                 &expected_uplink_labels("policy-1"),
-                false,
+                NetworkTopologyRequirement::UplinkDualStack,
             )
             .is_err()
+        );
+        assert!(
+            parse_network_inspect_with_mode(
+                RuntimeProvider::Podman,
+                &serde_json::to_vec(&ipv4_only_uplink).expect("JSON"),
+                "ass-uplink-1",
+                &expected_uplink_labels("policy-1"),
+                NetworkTopologyRequirement::UplinkLegacyCompatible,
+            )
+            .is_ok()
         );
     }
 
@@ -7026,6 +7092,63 @@ mod tests {
         assert_eq!(network_removes.len(), 2);
         assert!(container_remove < network_removes[0]);
         assert!(network_removes[0] < network_removes[1]);
+        assert!(
+            state
+                .container
+                .as_ref()
+                .is_some_and(|container| container.removed)
+        );
+        assert!(state.networks.values().all(|network| network.removed));
+    }
+
+    #[test]
+    fn durable_registry_recovers_v015_ipv4_only_uplink() {
+        let (_temporary, _gateway, artifacts, policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let runtime = Arc::new(runtime);
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry_root,
+            runtime.clone(),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let lease = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .expect("dual-network gateway");
+        {
+            let mut state = state.lock().expect("fake container runtime");
+            let uplink = state
+                .networks
+                .values_mut()
+                .find(|network| !network.internal)
+                .expect("gateway uplink");
+            // v0.1.5 created this exact labeled non-internal bridge without
+            // enabling IPv6. Its durable record did not persist address-family
+            // metadata, so upgrade cleanup must accept both that legacy shape
+            // and the current dual-stack shape before removing by exact ID.
+            uplink.ipv6_subnet = None;
+            uplink.ipv6_gateway = None;
+            state.container.as_mut().expect("gateway container").running = false;
+        }
+        std::mem::forget(lease);
+
+        let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
+            .expect("durable registry");
+        let summary = registry.reconcile_all(now).expect("legacy recovery");
+
+        assert_eq!(summary.reconciled, 1);
+        assert_eq!(summary.incomplete, 0);
+        assert!(
+            fs::read_dir(&registry_root)
+                .expect("registry")
+                .next()
+                .is_none()
+        );
+        let state = state.lock().expect("fake container runtime");
         assert!(
             state
                 .container
