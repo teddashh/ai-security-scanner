@@ -1,0 +1,191 @@
+name: Publish managed Gitleaks engine image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - engines/images/gitleaks/**
+      - '!engines/images/gitleaks/plan.json'
+      - .github/workflows/engine-image-gitleaks.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: managed-gitleaks-engine-image
+  cancel-in-progress: false
+
+env:
+  ENGINE: gitleaks
+  IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-gitleaks
+  IMAGE_TAG: 8.30.1-1
+
+jobs:
+  publish:
+    name: Publish Gitleaks for amd64 + arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate the dedicated non-shell launcher
+        run: |
+          docker run --rm \
+            -v "${PWD}/engines/images/gitleaks/launcher:/src:ro" \
+            -w /src \
+            golang:1.26.3-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d \
+            sh -ceu 'test -z "$(gofmt -d main.go main_test.go)"; go test ./...'
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.36.1
+          driver-opts: |
+            image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Guard the immutable managed version tag
+        id: guard
+        uses: ./.github/actions/engine-image-evidence/publication-guard
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the immutable multi-platform image
+        id: build
+        if: steps.guard.outputs.should_build == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: engines/images/gitleaks/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.guard.outputs.candidate_tag }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=managed-engine-gitleaks
+          cache-to: type=gha,mode=max,scope=managed-engine-gitleaks
+
+      - name: Publish anonymous pull access
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="${IMAGE#ghcr.io/teddashh/}"
+          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
+
+      - name: Verify platforms, version, redaction, and scanner-owned policy
+        id: verify
+        env:
+          DIGEST: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+        run: |
+          docker logout ghcr.io
+          raw_manifest="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}")"
+          amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' <<<"${raw_manifest}")"
+          arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' <<<"${raw_manifest}")"
+          test "${amd64_digest#sha256:}" != "${amd64_digest}"
+          test "${arm64_digest#sha256:}" != "${arm64_digest}"
+
+          docker run --platform linux/amd64 --rm \
+            --read-only --network none --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --entrypoint /usr/local/bin/gitleaks \
+            "${IMAGE}@${DIGEST}" --version 2>&1 | grep -Fx '8.30.1'
+
+          output="$(mktemp -d)"
+          docker run --platform linux/amd64 --rm \
+            --read-only --network none --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --user "$(id -u):$(id -g)" \
+            --pids-limit 256 --memory 1g --cpus 1 \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777,size=256m \
+            --mount "type=bind,src=${PWD}/engines/images/gitleaks/testdata,dst=/workspace,readonly" \
+            --mount "type=bind,src=${output},dst=/output" \
+            "${IMAGE}@${DIGEST}" \
+            --workspace /workspace --output /output
+
+          jq -e 'length >= 1 and all(.[]; .Secret == "REDACTED") and any(.[]; .RuleID == "generic-api-key")' \
+            "${output}/gitleaks.json" >/dev/null
+          ! grep -F 'z9K4mP7qR2sT8vW3xY6a' "${output}/gitleaks.json"
+          evidence_sha256="sha256:$(sha256sum "${output}/gitleaks.json" | cut -d ' ' -f 1)"
+          {
+            echo "amd64_digest=${amd64_digest}"
+            echo "arm64_digest=${arm64_digest}"
+            echo "evidence_sha256=${evidence_sha256}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Record the published index and platform digests
+        env:
+          AMD64_DIGEST: ${{ steps.verify.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.verify.outputs.arm64_digest }}
+          DIGEST: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+          EVIDENCE_SHA256: ${{ steps.verify.outputs.evidence_sha256 }}
+          REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p package-evidence
+          jq -n \
+            --arg engine "${ENGINE}" \
+            --arg image "${IMAGE}" \
+            --arg tag "${IMAGE_TAG}" \
+            --arg digest "${DIGEST}" \
+            --arg amd64Digest "${AMD64_DIGEST}" \
+            --arg arm64Digest "${ARM64_DIGEST}" \
+            --arg evidenceSha256 "${EVIDENCE_SHA256}" \
+            --arg revision "${REVISION}" \
+            '{schemaVersion: 1, engine: $engine, image: $image, tag: $tag, digest: $digest, platformDigests: {"linux/amd64": $amd64Digest, "linux/arm64": $arm64Digest}, sourceRevision: $revision, anonymousPullVerified: true, managedSmokeEvidenceSha256: $evidenceSha256}' \
+            > package-evidence/gitleaks-image-manifest.json
+
+      - name: Preserve signed publication and per-platform SBOM evidence
+        uses: ./.github/actions/engine-image-evidence
+        with:
+          engine: ${{ env.ENGINE }}
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote the signed candidate without overwriting a version
+        id: promote
+        uses: ./.github/actions/engine-image-evidence/promote
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify anonymous immutable version access
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          docker logout ghcr.io
+          resolved="$(docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{json .Manifest.Digest}}' | jq -er 'select(test("^sha256:[0-9a-f]{64}$"))')"
+          test "${resolved}" = "${DIGEST}"
+
+      - name: Upload publication and signed supply-chain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-image-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: package-evidence
+          if-no-files-found: error
+          retention-days: 90
