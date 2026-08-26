@@ -1142,7 +1142,7 @@ export const adaptNativeCase = (
     right.sequence - left.sequence ||
     right.created_at.localeCompare(left.created_at) ||
     right.id.localeCompare(left.id)
-  ).map((run) => {
+  ).map((run, runIndex) => {
     const engineRuns: EngineRun[] = run.engine_runs.map((engineRun) => {
       const manifest = manifestById.get(engineRun.engine_id);
       const status = mapEngineStatus(engineRun.status);
@@ -1209,17 +1209,26 @@ export const adaptNativeCase = (
       const applicableRuns = engineRuns.filter((engineRun) => engineRun.assetIds.includes(assetId));
       return applicableRuns.length > 0 && applicableRuns.every((engineRun) => engineRun.status === "completed");
     });
+    const status = runStatus(engineRuns);
+    const lastEngineActivityAt = [...run.engine_runs]
+      .flatMap((engineRun) => [engineRun.started_at, engineRun.finished_at])
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1);
     return {
       id: run.id,
       caseId: run.case_id,
       label: adapterText(`Scan ${run.sequence}`, `第 ${run.sequence} 次掃描`),
       verificationBaselineRunId: run.verification_baseline_run_id ?? undefined,
-      status: runStatus(engineRuns),
+      status,
       progress: engineRuns.length > 0
         ? Math.round(engineRuns.reduce((total, engineRun) => total + engineRun.progress, 0) / engineRuns.length)
         : 0,
       startedAt: run.engine_runs.map((engineRun) => engineRun.started_at).filter((value): value is string => Boolean(value)).sort()[0] ?? run.created_at,
       finishedAt: run.completed_at ?? undefined,
+      lastProgressAt: runIndex === 0 && ["queued", "running", "paused"].includes(status)
+        ? nativeCase.updated_at
+        : run.completed_at ?? lastEngineActivityAt ?? run.created_at,
       knowledgeDate: run.knowledge_cutoff,
       engineRuns,
       coveredAssetCount: coveredAssetIds.length,

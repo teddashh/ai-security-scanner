@@ -269,6 +269,9 @@ pub enum ScanReadinessNextStep {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScanReadiness {
     pub case_id: Id,
+    /// Timestamp of this read-only readiness evaluation. This is not a scan
+    /// start time and does not imply that any target was contacted.
+    pub checked_at: DateTime<Utc>,
     pub ready: bool,
     pub state: ScanReadinessState,
     /// Ownership-confirmed, non-candidate assets with at least one effective
@@ -3928,6 +3931,7 @@ fn scan_readiness_at(
 
     ScanReadiness {
         case_id: case.id.clone(),
+        checked_at: now,
         ready: state == ScanReadinessState::Ready,
         state,
         authorized_target_count: authorized_target_ids.len(),
@@ -6473,6 +6477,7 @@ mod tests {
         for (state, blocker, next_step, state_code, blocker_code, next_step_code) in contracts {
             let readiness = ScanReadiness {
                 case_id: "case-provider-readiness".into(),
+                checked_at: Utc::now(),
                 ready: false,
                 state,
                 authorized_target_count: 1,
@@ -6483,6 +6488,7 @@ mod tests {
                 next_step: Some(next_step),
             };
             let serialized = serde_json::to_value(readiness).unwrap();
+            assert!(serialized["checked_at"].is_string());
             assert_eq!(serialized["state"], state_code);
             assert_eq!(serialized["blocker_code"], blocker_code);
             assert_eq!(serialized["next_step"], next_step_code);

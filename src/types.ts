@@ -598,6 +598,8 @@ export interface ScanRun {
   progress: number;
   startedAt: string;
   finishedAt?: string;
+  /** Most recent durable scan lifecycle update; never derived from scanner output. */
+  lastProgressAt?: string;
   knowledgeDate: string;
   engineRuns: EngineRun[];
   coveredAssetCount: number;
@@ -648,6 +650,8 @@ export type ScanReadinessNextStep = "cases" | "coverage" | "progress" | "scanner
 /** Authoritative, non-mutating backend preflight for the primary scan action. */
 export interface ScanReadiness {
   caseId: string;
+  /** Backend timestamp for this read-only readiness evaluation. */
+  checkedAt: string;
   ready: boolean;
   state: ScanReadinessState;
   authorizedTargetCount: number;

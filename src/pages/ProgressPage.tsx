@@ -6,7 +6,13 @@ import { StatusPill } from "../components/StatusPill";
 import { useI18n, type BilingualText } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
 import {
+  buildScanActivity,
+  type ScanActivityEvent,
+  type ScanActivityState,
+} from "../scanActivity";
+import {
   blockedRunSummary,
+  buildReadinessDiagnostic,
   buildScanDiagnostic,
   sharedInfrastructureFailureSummary,
   skippedEngineRunSummary,
@@ -220,6 +226,86 @@ const copy = {
   diagnosticPrivacy: {
     en: "The diagnostic log excludes target names, asset IDs, raw evidence, paths, and scanner messages.",
     zhTW: "診斷紀錄不包含目標名稱、資產 ID、原始證據、檔案路徑或掃描工具訊息。",
+  },
+  activityEyebrow: { en: "SCAN ACTIVITY", zhTW: "掃描動態" },
+  activityTitle: { en: "See exactly where your scan is", zhTW: "清楚看見掃描進行到哪裡" },
+  activityDescription: {
+    en: "This timeline updates whenever the app saves a new scan step.",
+    zhTW: "每當程式保存新的掃描步驟，這裡就會更新。",
+  },
+  currentActivity: { en: "What is happening now", zhTW: "現在正在做什麼" },
+  lastProgress: { en: "Last progress update", zhTW: "最後一次進度更新" },
+  delayedProgress: {
+    en: "No newer progress has been saved for {count} minutes. The scan tool may still be working; the timeline below shows its last confirmed step.",
+    zhTW: "已有 {count} 分鐘沒有保存新的進度。掃描工具可能仍在執行；下方時間軸會顯示最後確認的步驟。",
+  },
+  activityLog: { en: "Event log", zhTW: "事件紀錄" },
+  activityLogDescription: {
+    en: "Plain-language lifecycle events only. Scanner output stays in technical details.",
+    zhTW: "這裡只顯示白話的執行事件；掃描工具輸出會留在技術細節中。",
+  },
+  downloadTechnicalLog: { en: "Download redacted technical log", zhTW: "下載已遮蔽的技術紀錄" },
+  activeScanTools: { en: "Current or next scan tool", zhTW: "目前或下一個掃描工具" },
+  noRunActivityTitle: { en: "This scan has not started", zhTW: "這次掃描尚未開始" },
+  noRunActivityDescription: {
+    en: "The app checked what is needed and stopped before contacting any target.",
+    zhTW: "程式已檢查所需條件，並在接觸任何目標前停止。",
+  },
+  readyToStartTitle: { en: "Everything is ready", zhTW: "一切都已準備完成" },
+  readyToStartBody: { en: "The scan is waiting for you to press Start.", zhTW: "掃描正在等待你按下「開始掃描」。" },
+  readinessChecked: { en: "Readiness checked", zhTW: "已檢查掃描準備狀態" },
+  scanNotStartedEvent: { en: "Scan did not start", zhTW: "掃描沒有開始" },
+  lastReadinessCheck: { en: "Last readiness check", zhTW: "最後一次準備狀態檢查" },
+  noReadinessTimestamp: { en: "No completed check was recorded", zhTW: "沒有已完成的檢查時間" },
+  technicalPreflight: { en: "Technical preflight record", zhTW: "技術準備檢查紀錄" },
+  blockerCode: { en: "Blocker code", zhTW: "阻擋代碼" },
+  readinessState: { en: "Readiness state", zhTW: "準備狀態" },
+  nextStepCode: { en: "Next-step code", zhTW: "下一步代碼" },
+  activityStates: {
+    waiting_to_start: {
+      title: { en: "Waiting for the next check to start", zhTW: "正在等待下一項檢查開始" },
+      body: { en: "The scan is queued. A check will start as soon as its local scan tool is available.", zhTW: "掃描已排入佇列；本機掃描工具可用後，就會開始下一項檢查。" },
+    },
+    checking_readiness: {
+      title: { en: "Checking the saved target and scan tool", zhTW: "正在確認已保存的目標與掃描工具" },
+      body: { en: "The app is confirming the exact inputs needed before this check runs.", zhTW: "程式正在確認這項檢查所需的確切輸入。" },
+    },
+    preparing_scanner: {
+      title: { en: "Preparing the scan tool", zhTW: "正在準備掃描工具" },
+      body: { en: "The private scan environment is getting the verified tool ready.", zhTW: "專用掃描環境正在準備已驗證的工具。" },
+    },
+    scanner_working: {
+      title: { en: "Waiting for the scan tool to report back", zhTW: "正在等待掃描工具回報" },
+      body: { en: "The check is running. Some targets take longer, and the next update arrives when the tool reaches a safe save point.", zhTW: "檢查正在執行；部分目標需要較長時間，工具到達可安全保存的步驟時就會更新。" },
+    },
+    preparing_results: {
+      title: { en: "Saving and organizing the results", zhTW: "正在保存並整理結果" },
+      body: { en: "The check has reported back, and the app is preparing the results you can review.", zhTW: "檢查已回報，程式正在整理成可以查看的結果。" },
+    },
+    closing_scanner: {
+      title: { en: "Closing the private scan environment", zhTW: "正在關閉專用掃描環境" },
+      body: { en: "Results stay saved while the app finishes the local cleanup step.", zhTW: "結果會保留，程式正在完成本機環境清理。" },
+    },
+    paused: {
+      title: { en: "This scan is paused", zhTW: "這次掃描已暫停" },
+      body: { en: "Continue the scan when you are ready; results already saved remain available.", zhTW: "準備好後即可繼續；已保存的結果仍可查看。" },
+    },
+    completed: {
+      title: { en: "This scan has finished", zhTW: "這次掃描已完成" },
+      body: { en: "The results are saved and ready to review.", zhTW: "結果已保存，可以開始查看。" },
+    },
+    stopped: {
+      title: { en: "This scan has stopped", zhTW: "這次掃描已停止" },
+      body: { en: "Review the results already saved and the next step shown for any unfinished check.", zhTW: "請查看已保存的結果，以及未完成檢查所顯示的下一步。" },
+    },
+  } satisfies Record<ScanActivityState, { title: BilingualText; body: BilingualText }>,
+  activityEvents: {
+    run_started: { en: "Scan started", zhTW: "掃描已開始" },
+    checks_started: { en: "{count} checks have started", zhTW: "已有 {count} 項檢查開始" },
+    progress_saved: { en: "Progress saved at {percent}%", zhTW: "已保存 {percent}% 的進度" },
+    checks_finished: { en: "{count} checks have finished", zhTW: "已有 {count} 項檢查完成" },
+    run_finished: { en: "Scan finished", zhTW: "掃描已結束" },
+    run_paused: { en: "Scan paused", zhTW: "掃描已暫停" },
   },
   pause: { en: "Pause", zhTW: "暫停" },
   resume: { en: "Continue unfinished work", zhTW: "繼續未完成的工作" },
@@ -510,6 +596,16 @@ export function ProgressPage({
   }, [runs, selectedRunId]);
 
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0];
+  const [activityClock, setActivityClock] = useState(() => new Date());
+  useEffect(() => {
+    if (!selectedRun || !["queued", "running", "paused"].includes(selectedRun.status)) return undefined;
+    const interval = window.setInterval(() => setActivityClock(new Date()), 30_000);
+    return () => window.clearInterval(interval);
+  }, [selectedRun]);
+  const activity = useMemo(
+    () => selectedRun ? buildScanActivity(selectedRun, activityClock) : undefined,
+    [activityClock, selectedRun],
+  );
   const stateCounts = useMemo(
     () => Object.fromEntries(
       engineStates.map((state) => [state, selectedRun?.engineRuns.filter((engine) => engine.status === state).length ?? 0]),
@@ -521,6 +617,17 @@ export function ProgressPage({
   const workCountLabel = (count: number): string => count === 1
     ? text(copy.workCountOne)
     : text(copy.workCount, { count: formatNumber(count) });
+  const activityEventLabel = (event: ScanActivityEvent): string => {
+    switch (event.code) {
+      case "checks_started":
+      case "checks_finished":
+        return text(copy.activityEvents[event.code], { count: formatNumber(event.count ?? 0) });
+      case "progress_saved":
+        return text(copy.activityEvents.progress_saved, { percent: formatNumber(event.progress ?? 0) });
+      default:
+        return text(copy.activityEvents[event.code]);
+    }
+  };
   const phaseLabel = (engine: EngineRun): string => {
     if (engine.phase === "interrupted_restart") return text(copy.interruptedPhase);
     if (engine.phase === "queued_for_resume") return text(copy.queuedResumePhase);
@@ -557,6 +664,18 @@ export function ProgressPage({
     URL.revokeObjectURL(url);
   };
 
+  const downloadPreflightDiagnostic = () => {
+    const blob = new Blob([
+      buildReadinessDiagnostic({ readiness, checkFailed: Boolean(readinessCheckFailed) }, diagnosticContext),
+    ], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ai-security-scanner-preflight-${readiness?.caseId ?? "unavailable"}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (!selectedRun) {
     return (
       <div className="page">
@@ -584,6 +703,76 @@ export function ProgressPage({
             </button>
           )}
         />
+        <section className={`scan-activity${readiness?.ready ? "" : " scan-activity--delayed"}`} aria-labelledby="scan-preflight-activity-title">
+          <div className="section-heading section-heading--row">
+            <div>
+              <p className="eyebrow">{text(copy.activityEyebrow)}</p>
+              <h2 id="scan-preflight-activity-title">{text(copy.noRunActivityTitle)}</h2>
+              <p>{text(readinessCheckFailed
+                ? copy.readinessUnavailableDescription
+                : readiness?.ready
+                  ? copy.readyToStartBody
+                  : readiness
+                    ? copy.noRunActivityDescription
+                    : copy.checkingReady)}</p>
+            </div>
+            <button className="button button--secondary button--small" type="button" disabled={!readiness && !readinessCheckFailed} onClick={downloadPreflightDiagnostic}>
+              <Icon name="download" size={15} />{text(copy.downloadTechnicalLog)}
+            </button>
+          </div>
+          <div className="scan-activity__current" aria-live="polite">
+            <span className="scan-activity__icon"><Icon name={readiness?.ready ? "check" : "clock"} size={20} /></span>
+            <div>
+              <small>{text(copy.currentActivity)}</small>
+              <strong>{text(readinessCheckFailed
+                ? copy.readinessUnavailableTitle
+                : readiness?.ready
+                  ? copy.readyToStartTitle
+                  : readiness
+                    ? blockerTitle
+                    : copy.checkingReady)}</strong>
+              <p>{text(readinessCheckFailed
+                ? copy.readinessUnavailableDescription
+                : readiness?.ready
+                  ? copy.readyToStartBody
+                  : readiness
+                    ? blockerDescription
+                    : copy.emptyDescription)}</p>
+              <span>{text(copy.lastReadinessCheck)} · {readiness?.checkedAt
+                ? showDateTime(readiness.checkedAt)
+                : text(copy.noReadinessTimestamp)}</span>
+            </div>
+          </div>
+          <div className="scan-activity__log">
+            <div>
+              <strong>{text(copy.activityLog)}</strong>
+              <small>{text(copy.activityLogDescription)}</small>
+            </div>
+            {readiness?.checkedAt ? (
+              <ol>
+                <li>
+                  <span aria-hidden="true" />
+                  <div><strong>{text(copy.readinessChecked)}</strong><time dateTime={readiness.checkedAt}>{showDateTime(readiness.checkedAt)}</time></div>
+                </li>
+                {!readiness.ready && (
+                  <li>
+                    <span aria-hidden="true" />
+                    <div><strong>{text(copy.scanNotStartedEvent)}</strong><time dateTime={readiness.checkedAt}>{showDateTime(readiness.checkedAt)}</time></div>
+                  </li>
+                )}
+              </ol>
+            ) : <p className="scan-activity__no-events">{text(copy.noReadinessTimestamp)}</p>}
+          </div>
+          <details className="page-technical-details scan-activity__technical">
+            <summary>{text(copy.technicalPreflight)}</summary>
+            <dl>
+              <div><dt>{text(copy.blockerCode)}</dt><dd><code>{readiness?.blockerCode ?? text(copy.noneReported)}</code></dd></div>
+              <div><dt>{text(copy.readinessState)}</dt><dd><code>{readiness?.state ?? text(copy.noneReported)}</code></dd></div>
+              <div><dt>{text(copy.nextStepCode)}</dt><dd><code>{readiness?.nextStep ?? text(copy.noneReported)}</code></dd></div>
+            </dl>
+          </details>
+          <small className="scan-activity__privacy"><Icon name="lock" size={13} />{text(copy.diagnosticPrivacy)}</small>
+        </section>
         {readiness && !readiness.ready && readiness.blockerCode && (
           <InlineNotice tone="warning" title={text(blockerTitle)}>
             <p>{text(blockerDescription)}</p>
@@ -615,9 +804,6 @@ export function ProgressPage({
     || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine)
   );
   const canCancel = selectedRun.status === "running" || selectedRun.status === "paused" || selectedRun.status === "queued";
-  const hasDiagnosticIssue = selectedRun.status === "failed"
-    || selectedRun.status === "partial"
-    || selectedRun.engineRuns.some((engine) => Boolean(engine.errorCode));
   const interruptedEngines = selectedRun.engineRuns.filter(
     (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
   );
@@ -649,11 +835,6 @@ export function ProgressPage({
         description={text(copy.description)}
         actions={(
           <div className="button-group">
-            {hasDiagnosticIssue && (
-              <button className="button button--secondary" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
-                <Icon name="file" size={17} />{text(copy.downloadLog)}
-              </button>
-            )}
             {canPause && (
               <button className="button button--secondary" type="button" disabled={busy} aria-label={text(copy.pauseAria, { id: selectedRun.id })} onClick={() => void onPause(selectedRun.id)}>
                 <Icon name="pause" size={17} />{text(copy.pause)}
@@ -770,6 +951,63 @@ export function ProgressPage({
           )}
         </div>
       </section>
+
+      {activity && (
+        <section className={`scan-activity${activity.stale ? " scan-activity--delayed" : ""}`} aria-labelledby="scan-activity-title">
+          <div className="section-heading section-heading--row">
+            <div>
+              <p className="eyebrow">{text(copy.activityEyebrow)}</p>
+              <h2 id="scan-activity-title">{text(copy.activityTitle)}</h2>
+              <p>{text(copy.activityDescription)}</p>
+            </div>
+            <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
+              <Icon name="download" size={15} />{text(copy.downloadTechnicalLog)}
+            </button>
+          </div>
+          <div className="scan-activity__current" aria-live="polite">
+            <span className="scan-activity__icon"><Icon name={activity.stale
+              ? "warning"
+              : activity.state === "paused"
+                ? "pause"
+                : activity.active
+                  ? "refresh"
+                  : "check"} size={20} /></span>
+            <div>
+              <small>{text(copy.currentActivity)}</small>
+              <strong>{text(copy.activityStates[activity.state].title)}</strong>
+              <p>{text(copy.activityStates[activity.state].body)}</p>
+              <span>{text(copy.lastProgress)} · {showDateTime(activity.lastProgressAt)}</span>
+              {activity.activeCheckNames.length > 0 && (
+                <span>{text(copy.activeScanTools)} · {activity.activeCheckNames.join(locale === "zh-TW" ? "、" : ", ")}</span>
+              )}
+            </div>
+          </div>
+          {activity.stale && (
+            <p className="scan-activity__delay">
+              <Icon name="clock" size={15} />
+              {text(copy.delayedProgress, { count: formatNumber(activity.staleMinutes) })}
+            </p>
+          )}
+          <div className="scan-activity__log">
+            <div>
+              <strong>{text(copy.activityLog)}</strong>
+              <small>{text(copy.activityLogDescription)}</small>
+            </div>
+            <ol>
+              {activity.events.map((event) => (
+                <li key={event.id}>
+                  <span aria-hidden="true" />
+                  <div>
+                    <strong>{activityEventLabel(event)}</strong>
+                    <time dateTime={event.occurredAt}>{showDateTime(event.occurredAt)}</time>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+          <small className="scan-activity__privacy"><Icon name="lock" size={13} />{text(copy.diagnosticPrivacy)}</small>
+        </section>
+      )}
 
       {blocked && (
         <InlineNotice tone="warning" title={text(copy.blockedTitle)}>

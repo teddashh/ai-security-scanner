@@ -277,6 +277,41 @@ test("progress aggregates empty, skipped, and shared-infrastructure attempts", a
   assert.match(progress, /historyBlocked \|\| historySharedFailure \? text\(copy\.historyNotStarted\)/u);
 });
 
+test("progress has a bilingual event log before and during every scan route", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  const diagnostics = await readFile(new URL("../../src/scanDiagnostics.ts", import.meta.url), "utf8");
+  const adapter = await readFile(new URL("../../src/services/scanner.ts", import.meta.url), "utf8");
+
+  for (const copy of [
+    "See exactly where your scan is",
+    "清楚看見掃描進行到哪裡",
+    "What is happening now",
+    "現在正在做什麼",
+    "Last progress update",
+    "最後一次進度更新",
+    "This scan has not started",
+    "這次掃描尚未開始",
+    "Download redacted technical log",
+    "下載已遮蔽的技術紀錄",
+  ]) assert.ok(progress.includes(copy), copy);
+
+  const noRunStart = progress.indexOf("if (!selectedRun)");
+  const noRunEnd = progress.indexOf("const runMeta", noRunStart);
+  const noRun = progress.slice(noRunStart, noRunEnd);
+  assert.match(noRun, /readiness\?\.checkedAt/u);
+  assert.match(progress, /buildReadinessDiagnostic/u);
+  assert.match(noRun, /readiness\?\.blockerCode/u);
+  assert.match(noRun, /scan-activity__log/u);
+  assert.match(progress, /activity\.activeCheckNames/u);
+  assert.match(diagnostics, /redacted-preflight-diagnostic\/v1/u);
+  assert.match(adapter, /checked_at/u);
+
+  const currentActivity = progress.indexOf('<div className="scan-activity__current"', noRunEnd);
+  const technicalChecks = progress.indexOf('<details className="page-technical-details', currentActivity);
+  assert.ok(currentActivity > noRunEnd && technicalChecks > currentActivity);
+  assert.doesNotMatch(progress.slice(currentActivity, technicalChecks), /engine\.message|checkpoint\?\.lastError|engine\.assetIds/u);
+});
+
 test("export preview, export, and both verification paths remain wired", async () => {
   const source = await readPage("ExportPage.tsx");
   for (const callback of ["onPreview", "onExport", "onVerify", "onVerifyReceived"]) {

@@ -1,4 +1,5 @@
-import type { EngineRun, ScanRun } from "./types";
+import type { EngineRun, ScanReadiness, ScanRun } from "./types";
+import { buildScanActivity } from "./scanActivity";
 
 export type BlockedRunKind = "no_targets" | "no_runnable_checks";
 
@@ -105,6 +106,11 @@ export interface ScanDiagnosticContext {
   };
 }
 
+export interface ReadinessDiagnosticInput {
+  readiness?: ScanReadiness;
+  checkFailed: boolean;
+}
+
 const safeEngineDiagnostic = (engine: EngineRun) => ({
   engine_id: engine.engineId,
   engine_run_id: engine.id,
@@ -132,27 +138,80 @@ const safeEngineDiagnostic = (engine: EngineRun) => ({
 export const buildScanDiagnostic = (
   run: ScanRun,
   context: ScanDiagnosticContext = {},
+): string => {
+  const activity = buildScanActivity(run);
+  return JSON.stringify({
+    schema_version: "ai-security-scanner.redacted-diagnostic/v2",
+    product_version: context.productVersion ?? null,
+    run: {
+      run_id: run.id,
+      case_id: run.caseId,
+      sequence_label: run.label,
+      status: run.status,
+      progress_percent: run.progress,
+      started_at: run.startedAt,
+      finished_at: run.finishedAt ?? null,
+      planned_check_count: run.engineRuns.length,
+      covered_target_count: run.coveredAssetCount,
+      total_target_count: run.totalAssetCount,
+      blocked_summary: blockedRunSummary(run) ?? null,
+    },
+    activity: {
+      current_state: activity.state,
+      last_progress_at: activity.lastProgressAt,
+      minutes_since_progress: activity.staleMinutes,
+      progress_update_delayed: activity.stale,
+      events: activity.events.map((event) => ({
+        event: event.code,
+        occurred_at: event.occurredAt,
+        count: event.count ?? null,
+        progress_percent: event.progress ?? null,
+      })),
+    },
+    runtime: context.runtime ? {
+      provider: context.runtime.provider ?? null,
+      phase: context.runtime.phase ?? null,
+      version: context.runtime.version ?? null,
+      available: context.runtime.available ?? null,
+    } : null,
+    checks: run.engineRuns.map(safeEngineDiagnostic),
+  }, null, 2);
+};
+
+/**
+ * Creates a shareable preflight record even when no scan run exists. Only
+ * typed readiness codes, aggregate counts, and bounded runtime metadata are
+ * included; target details and backend error strings are never accepted.
+ */
+export const buildReadinessDiagnostic = (
+  input: ReadinessDiagnosticInput,
+  context: ScanDiagnosticContext = {},
 ): string => JSON.stringify({
-  schema_version: "ai-security-scanner.redacted-diagnostic/v1",
+  schema_version: "ai-security-scanner.redacted-preflight-diagnostic/v1",
   product_version: context.productVersion ?? null,
-  run: {
-    run_id: run.id,
-    case_id: run.caseId,
-    sequence_label: run.label,
-    status: run.status,
-    progress_percent: run.progress,
-    started_at: run.startedAt,
-    finished_at: run.finishedAt ?? null,
-    planned_check_count: run.engineRuns.length,
-    covered_target_count: run.coveredAssetCount,
-    total_target_count: run.totalAssetCount,
-    blocked_summary: blockedRunSummary(run) ?? null,
-  },
+  readiness: input.readiness ? {
+    case_id: input.readiness.caseId,
+    checked_at: input.readiness.checkedAt,
+    ready: input.readiness.ready,
+    state: input.readiness.state,
+    blocker_code: input.readiness.blockerCode ?? null,
+    next_step: input.readiness.nextStep ?? null,
+    authorized_target_count: input.readiness.authorizedTargetCount,
+    pending_target_count: input.readiness.pendingTargetCount,
+    compatible_check_count: input.readiness.compatibleEngineCount,
+    runnable_check_count: input.readiness.runnableEngineCount,
+    scan_started: false,
+  } : null,
+  readiness_check_failed: input.checkFailed,
+  events: input.readiness ? [{
+    event: input.readiness.ready ? "ready_to_start" : "scan_start_blocked",
+    occurred_at: input.readiness.checkedAt,
+    blocker_code: input.readiness.blockerCode ?? null,
+  }] : [],
   runtime: context.runtime ? {
     provider: context.runtime.provider ?? null,
     phase: context.runtime.phase ?? null,
     version: context.runtime.version ?? null,
     available: context.runtime.available ?? null,
   } : null,
-  checks: run.engineRuns.map(safeEngineDiagnostic),
 }, null, 2);

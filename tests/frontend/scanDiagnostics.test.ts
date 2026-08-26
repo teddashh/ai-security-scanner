@@ -1,14 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
+import { build } from "esbuild";
+import type { EngineRun, ScanRun } from "../../src/types.ts";
+
+const bundled = await build({
+  entryPoints: [new URL("../../src/scanDiagnostics.ts", import.meta.url).pathname],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node22",
+  write: false,
+});
+const bundledSource = bundled.outputFiles[0]?.text;
+assert.ok(bundledSource);
+const {
   blockedRunSummary,
   buildScanDiagnostic,
+  buildReadinessDiagnostic,
   isExplicitPreScannerInfrastructureFailure,
   sharedInfrastructureFailureSummary,
   skippedEngineRunSummary,
-} from "../../src/scanDiagnostics.ts";
-import type { EngineRun, ScanRun } from "../../src/types.ts";
+} = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString("base64")}`);
 
 const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   id: "engine-run-1",
@@ -28,6 +41,29 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   message: "target-controlled detail must not leave the app",
   resumable: false,
   ...overrides,
+});
+
+test("preflight diagnostic remains available before any scan run exists", () => {
+  const diagnostic = buildReadinessDiagnostic({
+    checkFailed: false,
+    readiness: {
+      caseId: "case-1",
+      checkedAt: "2026-08-26T13:20:00Z",
+      ready: false,
+      state: "scanner_setup_required",
+      authorizedTargetCount: 1,
+      pendingTargetCount: 0,
+      compatibleEngineCount: 1,
+      runnableEngineCount: 1,
+      blockerCode: "egress_gateway_unavailable",
+      nextStep: "scanner_setup",
+    },
+  }, { productVersion: "0.1.4", runtime: { phase: "failed", available: false } });
+  assert.match(diagnostic, /redacted-preflight-diagnostic\/v1/u);
+  assert.match(diagnostic, /egress_gateway_unavailable/u);
+  assert.match(diagnostic, /2026-08-26T13:20:00Z/u);
+  assert.match(diagnostic, /"scan_started": false/u);
+  assert.doesNotMatch(diagnostic, /message|target_name|asset_id/u);
 });
 
 const run = (engineRuns: EngineRun[]): ScanRun => ({
@@ -150,8 +186,10 @@ test("shareable diagnostic omits target-controlled messages, warnings, paths, an
     assetIds: ["sensitive-asset-id"],
     cleanupDetail: "/private/path",
   })]), { productVersion: "0.1.4" });
-  assert.match(diagnostic, /redacted-diagnostic\/v1/);
+  assert.match(diagnostic, /redacted-diagnostic\/v2/);
   assert.match(diagnostic, /no_compatible_authorized_assets/);
+  assert.match(diagnostic, /"activity"/);
+  assert.match(diagnostic, /"last_progress_at"/);
   assert.doesNotMatch(diagnostic, /target-controlled/);
   assert.doesNotMatch(diagnostic, /secret warning/);
   assert.doesNotMatch(diagnostic, /sensitive-asset-id/);

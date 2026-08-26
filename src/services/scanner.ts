@@ -143,6 +143,7 @@ const nativeResult = <T,>(data: T): ServiceResult<T> => ({ data, mode: "native" 
 
 interface NativeScanReadiness {
   case_id: string;
+  checked_at: string;
   ready: boolean;
   state: ScanReadiness["state"];
   authorized_target_count: number;
@@ -155,6 +156,7 @@ interface NativeScanReadiness {
 
 const adaptScanReadiness = (value: NativeScanReadiness): ScanReadiness => ({
   caseId: value.case_id,
+  checkedAt: value.checked_at,
   ready: value.ready,
   state: value.state,
   authorizedTargetCount: value.authorized_target_count,
@@ -413,6 +415,7 @@ export const scannerService = {
   async getScanReadiness(caseId: string): Promise<ServiceResult<ScanReadiness>> {
     if (!hasTauriRuntime()) return demoResult({
       caseId,
+      checkedAt: new Date().toISOString(),
       ready: false,
       state: "case_unavailable",
       authorizedTargetCount: 0,
