@@ -39,9 +39,9 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 ## Want the details?
 
-<!-- Release line: v0.1.3. -->
+<!-- Release line: v0.1.4. -->
 
-> **Project status:** `v0.1.3` is the installable public preview on the way to `v0.2.0`. Use it to try the one-click Windows setup and guided scan flow; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
+> **Project status:** `v0.1.4` is the installable public preview on the way to `v0.2.0`. Use it to try the much simpler home-network, website, external-IP, code, cloud, container, and Kubernetes scan flows; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 
@@ -232,7 +232,7 @@ docs/usability/              Real-person study protocol and evidence schema
 
 ### Release and evidence status
 
-`v0.1.3` is the public hands-on preview for the planned `v0.2.0` release. Its installers must complete automated cross-platform builds and fresh-host qualification before GitHub publishes the pre-release. The required live first-run study with an IAM-naive participant and the subsequent formal QC/code review still belong to the stable release process.
+`v0.1.4` is the public hands-on preview for the planned `v0.2.0` release. It prevents empty scan runs, checks local tools and short-lived cloud connections before saving a run, guides each use case through only the setup it needs, offers a safe local-network suggestion, and turns setup failures into one useful next action plus a downloadable redacted diagnostic. Its installers must complete automated cross-platform builds and fresh-host qualification before GitHub publishes the pre-release. The required live first-run study with an IAM-naive participant and the subsequent formal QC/code review still belong to the stable release process.
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 

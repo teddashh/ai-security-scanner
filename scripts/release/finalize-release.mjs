@@ -27,6 +27,50 @@ function assert(condition, message) {
 
 const RELEASE_COPY = new Map([
   [
+    "0.1.4",
+    {
+      updaterNotes:
+        "Public testing pre-release with guided use-case setup, safe local-network suggestions, useful bounded network presets, deterministic scan readiness, actionable setup recovery, and redacted diagnostic downloads. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **Public testing pre-release.** This build fixes the empty 0/0 scan and repeated-consent",
+        "> experience reported during a first home-network test. It is not the latest stable release",
+        "> and has not completed the planned formal QC/code review.",
+        "",
+        "Choose what you want to check: a home or office network, website, external IP, source code,",
+        "infrastructure as code, cloud account, container image, or Kubernetes configuration. Each",
+        "choice now opens only the setup it actually needs and preserves that intent through the run.",
+        "",
+        "For a home or office network, the installed app can read local interface and route metadata",
+        "to suggest one safe private subnet. It does not probe the network, select the subnet, grant",
+        "permission, or start a scan automatically. One explicit click accepts the suggestion, and",
+        "the target remains editable before the single scan confirmation.",
+        "",
+        "A scan run is created only when at least one compatible engine has an authorized target,",
+        "the required local tools are ready, and every short-lived cloud connection has enough",
+        "capacity for the exact execution plan. A blocked attempt therefore stays in setup instead",
+        "of creating a 0/0 run or expanding one setup problem into many failed scanner checks.",
+        "",
+        "The guided network preset checks a useful bounded set of common TCP services. Website checks",
+        "preserve the entered URL protocol and port. Advanced controls remain available without",
+        "cluttering the first path.",
+        "",
+        "Setup problems now lead to one relevant action: prepare the private scan tools or reconnect",
+        "the exact cloud account. Failed or partial runs can export a redacted diagnostic containing",
+        "statuses, phases, error codes,",
+        "versions, and counts without target names, paths, evidence, or raw scanner messages.",
+        "",
+        "The macOS installer, app layout, packaged manifest, CLI, desktop startup, and cleanup are",
+        "qualified on a fresh GitHub-hosted Mac. Managed-runtime and container lifecycle operations",
+        "are explicitly recorded as not observed because that hosted environment does not provide the",
+        "nested virtualization required by AppleHV. This exception is accepted only for a pre-release;",
+        "a stable release still fails closed without real Mac runtime evidence.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "",
+      ],
+    },
+  ],
+  [
     "0.1.3",
     {
       updaterNotes:

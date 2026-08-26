@@ -1,7 +1,7 @@
 {
   "name": "ai-security-scanner",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "release": {
     "channel": "prerelease",
     "target": "0.2.0"

@@ -412,7 +412,7 @@ async function createQualificationFixture(output, platform) {
 }
 
 async function main() {
-  for (const version of ["0.1.2", "0.2.0", "2.3.4"]) {
+  for (const version of ["0.1.2", "0.1.4", "0.2.0", "2.3.4"]) {
     if (!isSemver(version)) throw new Error(`native-compatible release version was rejected: ${version}`);
   }
   for (const version of ["01.2.0", "0.02.0", "0.2.00", "0.2.0-rc.1", "0.2.0+build"]) {
@@ -732,12 +732,13 @@ async function main() {
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
       latest.version !== VERSION ||
-      !latest.notes.includes("one-click Windows WSL setup") ||
-      !latest.notes.includes("typed immutable local-input snapshots") ||
-      !latest.notes.includes("exact-scope AWS/Azure/GCP provider execution") ||
-      !releaseNotes.includes("typed immutable snapshots for repository, IaC, OCI") ||
-      !releaseNotes.includes("replaces the manual Administrator PowerShell") ||
-      !releaseNotes.includes("The required 21-engine catalog is bound") ||
+      !latest.notes.includes("guided use-case setup") ||
+      !latest.notes.includes("safe local-network suggestions") ||
+      !latest.notes.includes("deterministic scan readiness") ||
+      !releaseNotes.includes("fixes the empty 0/0 scan") ||
+      !releaseNotes.includes("Choose what you want to check") ||
+      !releaseNotes.includes("A scan run is created only when") ||
+      !releaseNotes.includes("export a redacted diagnostic") ||
       latest.notes.includes("repair release") ||
       releaseNotes.includes("This patch release") ||
       !checksums.includes("ai-security-scanner-egress-gateway") ||
