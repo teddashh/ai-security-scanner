@@ -51,6 +51,18 @@ test("an authorized asset remains selectable so a missing permission can be adde
   assert.equal(isScopeEligible({ authorizationState: "excluded" }), false);
 });
 
+test("a local questionnaire name cannot be approved before its immutable input is attached", () => {
+  assert.equal(isScopeEligible({
+    authorizationState: "pending",
+    questionnairePlaceholder: true,
+  }), false);
+  assert.equal(isScopeEligible({
+    authorizationState: "pending",
+    questionnairePlaceholder: true,
+    localInputProfile: "repository_working_tree",
+  }), true);
+});
+
 test("external activity is suggested only for an explicitly internet-exposed asset", () => {
   assert.deepEqual(
     suggestedModesForAsset(["active_external_vulnerability_tests"], {
@@ -65,5 +77,28 @@ test("external activity is suggested only for an explicitly internet-exposed ass
       internetExposed: true,
     }),
     ["active_external"],
+  );
+});
+
+test("an explicitly internal target receives the guided low-impact suggestion", () => {
+  assert.deepEqual(
+    suggestedModesForAsset(["low_impact_external_checks"], {
+      platform: "external",
+      internetExposed: false,
+    }),
+    ["low_impact_external"],
+  );
+});
+
+test("low-impact stays the safe preset when active testing is also requested", () => {
+  assert.deepEqual(
+    suggestedModesForAsset([
+      "low_impact_external_checks",
+      "active_external_vulnerability_tests",
+    ], {
+      platform: "external",
+      internetExposed: true,
+    }),
+    ["low_impact_external"],
   );
 });

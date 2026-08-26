@@ -57,6 +57,23 @@ test("public and internal target intent reaches separate known-asset records", (
   });
 });
 
+test("guided public and internal network cases require a real target", () => {
+  assert.deepEqual(buildKnownAssets({
+    ...emptyDraft,
+    selectedUseCase: "external_ip_or_domain",
+  }), {
+    ok: false,
+    error: { kind: "missing_target", target: "public" },
+  });
+  assert.deepEqual(buildKnownAssets({
+    ...emptyDraft,
+    selectedUseCase: "internal_it_environment",
+  }), {
+    ok: false,
+    error: { kind: "missing_target", target: "internal" },
+  });
+});
+
 test("the same target cannot silently acquire conflicting public and internal intent", () => {
   assert.deepEqual(buildKnownAssets({
     ...emptyDraft,
@@ -95,4 +112,22 @@ test("all existing local artifact coordinates remain available", () => {
       { kind: "kubernetes_cluster", value: "production-eks" },
     ],
   });
+});
+
+test("guided local routes wait for the real picker snapshot instead of creating text placeholders", () => {
+  for (const [selectedUseCase, field] of [
+    ["source_code", "repositories"],
+    ["infrastructure_as_code", "iacProjects"],
+    ["container_image", "containerImages"],
+    ["kubernetes", "kubernetesClusters"],
+  ] as const) {
+    assert.deepEqual(buildKnownAssets({
+      ...emptyDraft,
+      selectedUseCase,
+      [field]: "placeholder-that-must-not-become-an-asset",
+    }), {
+      ok: true,
+      knownAssets: [],
+    });
+  }
 });

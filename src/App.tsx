@@ -796,6 +796,7 @@ export default function App() {
         return (
           <CoveragePage
             caseId={currentCaseId}
+            assessmentIntent={workspace.case.assessmentIntent}
             requestedActivities={workspace.case.requestedActivities}
             coverage={workspace.coverage}
             sources={workspace.sources}

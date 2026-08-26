@@ -85,6 +85,7 @@ export interface CaseAssetDraft {
 
 export type CaseAssetDraftError =
   | { kind: "website"; error: WebsiteInputError }
+  | { kind: "missing_target"; target: "public" | "internal" }
   | { kind: "conflicting_exposure"; target: string };
 
 export type BuildKnownAssetsResult =
@@ -93,6 +94,13 @@ export type BuildKnownAssetsResult =
 
 export const lineValues = (value: string): string[] =>
   [...new Set(value.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean))];
+
+const guidedLocalUseCases: readonly UseCaseId[] = [
+  "source_code",
+  "infrastructure_as_code",
+  "container_image",
+  "kubernetes",
+];
 
 const externalComparisonKey = (value: string): string => {
   const trimmed = value.trim();
@@ -110,6 +118,9 @@ const externalComparisonKey = (value: string): string => {
 
 export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult => {
   const knownAssets: KnownAssetInput[] = [];
+  const waitsForLocalPicker = Boolean(
+    draft.selectedUseCase && guidedLocalUseCases.includes(draft.selectedUseCase),
+  );
 
   if (draft.selectedUseCase === "deployed_website") {
     const prepared = prepareDeployedWebsiteTarget(draft.websiteUrl);
@@ -126,6 +137,13 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
     });
   }
 
+  if (draft.selectedUseCase === "external_ip_or_domain" && lineValues(draft.publicTargets).length === 0) {
+    return { ok: false, error: { kind: "missing_target", target: "public" } };
+  }
+  if (draft.selectedUseCase === "internal_it_environment" && lineValues(draft.internalTargets).length === 0) {
+    return { ok: false, error: { kind: "missing_target", target: "internal" } };
+  }
+
   knownAssets.push(
     ...lineValues(draft.publicTargets).map((value) => ({
       kind: "external_target" as const,
@@ -137,19 +155,19 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
       value,
       internetExposure: "internal" as const,
     })),
-    ...lineValues(draft.repositories).map((value) => ({
+    ...lineValues(waitsForLocalPicker ? "" : draft.repositories).map((value) => ({
       kind: "repository" as const,
       value,
     })),
-    ...lineValues(draft.iacProjects).map((value) => ({
+    ...lineValues(waitsForLocalPicker ? "" : draft.iacProjects).map((value) => ({
       kind: "iac_project" as const,
       value,
     })),
-    ...lineValues(draft.containerImages).map((value) => ({
+    ...lineValues(waitsForLocalPicker ? "" : draft.containerImages).map((value) => ({
       kind: "container_image" as const,
       value,
     })),
-    ...lineValues(draft.kubernetesClusters).map((value) => ({
+    ...lineValues(waitsForLocalPicker ? "" : draft.kubernetesClusters).map((value) => ({
       kind: "kubernetes_cluster" as const,
       value,
     })),

@@ -53,7 +53,7 @@ test("technical detail is progressive and a website service remains a preset, no
   assert.match(source, /setExternalPorts\(service \? String\(service\.port\) : "443"\)/);
   assert.ok(source.includes("path is context, not permission"));
   assert.ok(source.includes("路徑只是提示，不是許可"));
-  assert.match(source, /internetExposed === false && allowSensitiveNetworks/);
+  assert.match(source, /internetExposed === false && effectiveAllowSensitiveNetworks/);
   assert.match(source, /internetExposed === undefined/);
 
   const advancedStart = source.indexOf('<details\n                  className="coverage-form-technical coverage-scan-advanced"');
@@ -72,13 +72,36 @@ test("technical detail is progressive and a website service remains a preset, no
   ]) {
     assert.ok(advancedSettings.includes(technicalControl), `${technicalControl} must stay behind advanced details`);
   }
-  assert.ok(source.indexOf("pageCopy.sensitiveTitle", advancedEnd) > advancedEnd, "internal-network confirmation must remain visible");
+  assert.ok(source.indexOf("pageCopy.sensitiveTitle", advancedEnd) > advancedEnd, "custom and active internal-network confirmation must remain available");
   assert.match(
     source.slice(advancedEnd, source.indexOf("</section>", advancedEnd)),
-    /isDirectExternal && selectedExternalAsset\.internetExposed === false/,
-    "internal-network confirmation must not clutter public website setup",
+    /isDirectExternal && selectedExternalAsset\.internetExposed === false && !guidedLowImpactNetwork/,
+    "the extra internal-network toggle must not clutter the guided low-impact setup",
   );
   assert.doesNotMatch(source.slice(advancedEnd, source.indexOf("</section>", advancedEnd)), /asset\.locator/);
+});
+
+test("the saved assessment intent opens one guided route and moves unrelated inputs under advanced options", () => {
+  assert.ok(source.includes("assessmentIntent?: UseCaseId"));
+  assert.ok(source.includes("localProfileByAssessmentIntent"));
+  assert.ok(source.includes("setShowProviderSetup(guidedCloudRoute)"));
+  assert.ok(source.includes("setShowWorkspaceForm(Boolean(guidedLocalProfile))"));
+  assert.ok(source.includes("guidedNetworkInputCard"));
+  assert.ok(source.includes('className="coverage-situation-details coverage-advanced-inputs"'));
+  assert.ok(source.includes("pageCopy.otherInputsSummary"));
+});
+
+test("guided low-impact and local setup use one explicit confirmation without auto-approval", () => {
+  assert.ok(source.includes("simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent"));
+  assert.ok(source.includes("pageCopy.confirmAndSave"));
+  assert.ok(source.includes("pageCopy.changeScanType"));
+  assert.ok(source.includes("effectiveAllowSensitiveNetworks"));
+  const approveStart = source.indexOf("const approve = async () =>");
+  const approveEnd = source.indexOf("const changeSourceKind", approveStart);
+  assert.notEqual(approveStart, -1);
+  assert.notEqual(approveEnd, -1);
+  assert.ok(source.slice(approveStart, approveEnd).includes("onApprovePending("));
+  assert.equal(source.slice(0, approveStart).includes("onApprovePending("), false, "route setup must not auto-approve");
 });
 
 test("the first layer uses plain-language scan choices in both locales", () => {

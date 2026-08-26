@@ -43,6 +43,7 @@ import type {
   VerificationSummary,
 } from "../types";
 import { getActiveLocale } from "../i18n/core";
+import type { UseCaseId } from "../useCases";
 
 const adapterText = (en: string, zhTW: string): string =>
   getActiveLocale() === "en" ? en : zhTW;
@@ -54,6 +55,7 @@ const localizedList = (values: string[]): string =>
 export interface NativeCaseSummary {
   id: string;
   title: string;
+  assessment_intent?: string | null;
   organization_name: string;
   employee_range: string;
   data_classes: string[];
@@ -350,6 +352,7 @@ interface NativeComparison {
 export interface NativeAssessmentCase {
   id: string;
   title: string;
+  assessment_intent?: string | null;
   profile: {
     organization_name: string;
     employee_range: string;
@@ -501,6 +504,20 @@ export const adaptManagedRuntimeSetupStatus = (
 
 const unique = <T,>(values: T[]): T[] => [...new Set(values)];
 
+const assessmentIntents: readonly UseCaseId[] = [
+  "deployed_website",
+  "external_ip_or_domain",
+  "internal_it_environment",
+  "source_code",
+  "infrastructure_as_code",
+  "cloud_account",
+  "container_image",
+  "kubernetes",
+];
+
+const mapAssessmentIntent = (value: string | null | undefined): UseCaseId | undefined =>
+  assessmentIntents.includes(value as UseCaseId) ? value as UseCaseId : undefined;
+
 const phaseMap: Record<string, CasePhase> = {
   draft: "draft",
   discovering: "discovering",
@@ -593,10 +610,15 @@ const localInputProfiles: LocalInputProfile[] = [
 
 const localInputProfileFromAsset = (asset: NativeAsset): LocalInputProfile | undefined => {
   const profile = asset.metadata?.local_input_profile;
-  return typeof profile === "string" && localInputProfiles.includes(profile as LocalInputProfile)
-    ? profile as LocalInputProfile
+  if (typeof profile === "string" && localInputProfiles.includes(profile as LocalInputProfile)) {
+    return profile as LocalInputProfile;
+  }
+  return asset.kind === "repository" && typeof asset.metadata?.workspace_snapshot_id === "string"
+    ? "repository_working_tree"
     : undefined;
 };
+
+const localQuestionnaireKinds = new Set(["repository", "iac_project", "container_image", "kubernetes_cluster"]);
 
 export const adaptDeclaredWebServiceMetadata = (
   metadata: Record<string, unknown> | undefined,
@@ -868,6 +890,7 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
 const adaptSummary = (summary: NativeCaseSummary): AssessmentCase => ({
   id: summary.id,
   name: summary.title,
+  assessmentIntent: mapAssessmentIntent(summary.assessment_intent),
   organizationName: summary.organization_name,
   companySize: mapCompanySize(summary.employee_range),
   dataClasses: mapDataClasses(summary.data_classes),
@@ -928,6 +951,7 @@ export const adaptNativeCase = (
     const coverageState = entry
       ? mapCoverageState(entry.status)
       : asset.candidate ? "discovered_not_authorized" : asset.owner_confirmed ? "authorized_incomplete" : "source_unavailable_unknown";
+    const localInputProfile = localInputProfileFromAsset(asset);
     return {
       id: asset.id,
       name: asset.name,
@@ -943,7 +967,8 @@ export const adaptNativeCase = (
       allowedModes: unique(grants.map((grant) => mapScopeMode(grant.permission))),
       findingCount: findingCount.get(asset.id) ?? 0,
       lastObservedAt: entry?.observed_at ?? undefined,
-      localInputProfile: localInputProfileFromAsset(asset),
+      questionnairePlaceholder: localQuestionnaireKinds.has(String(asset.metadata?.questionnaire_kind)) && !localInputProfile,
+      localInputProfile,
       declaredWebService: adaptDeclaredWebServiceMetadata(asset.metadata),
     };
   });
@@ -1191,6 +1216,7 @@ export const adaptNativeCase = (
   const assessmentCase: AssessmentCase = {
     id: nativeCase.id,
     name: nativeCase.title,
+    assessmentIntent: mapAssessmentIntent(nativeCase.assessment_intent),
     organizationName: nativeCase.profile.organization_name,
     companySize: mapCompanySize(nativeCase.profile.employee_range),
     dataClasses: mapDataClasses(nativeCase.profile.data_classes),

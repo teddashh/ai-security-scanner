@@ -23,11 +23,13 @@ import { StatusPill } from "../components/StatusPill";
 import { ProviderAuthorizationPanel } from "../components/ProviderAuthorizationPanel";
 import { useI18n, type BilingualText } from "../i18n";
 import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scopePolicy";
+import type { UseCaseId } from "../useCases";
 
 import "../coverage-page.css";
 
 interface CoveragePageProps {
   caseId: string;
+  assessmentIntent?: UseCaseId;
   requestedActivities: AssessmentActivity[];
   coverage: CoverageRecord[];
   sources: ConnectedSource[];
@@ -154,6 +156,19 @@ const parserProfileLabels: Record<SnapshotParserProfile, string> = {
 const allSourceKinds = Object.keys(sourceDefinitions) as SourceKind[];
 const coverageStates = Object.keys(coverageMeta) as CoverageState[];
 type LocalInputProfile = AttachWorkspaceSnapshotInput["inputProfile"];
+
+const networkAssessmentIntents: readonly UseCaseId[] = [
+  "deployed_website",
+  "external_ip_or_domain",
+  "internal_it_environment",
+];
+
+const localProfileByAssessmentIntent: Partial<Record<UseCaseId, LocalInputProfile>> = {
+  source_code: "repository_working_tree",
+  infrastructure_as_code: "iac_working_tree",
+  container_image: "container_image_oci_layout",
+  kubernetes: "kubernetes_manifests",
+};
 
 const localInputDefinitions: Record<LocalInputProfile, { label: BilingualText; detail: BilingualText; selection: BilingualText; technical: BilingualText }> = {
   repository_working_tree: {
@@ -292,6 +307,11 @@ const pageCopy = {
   workspaceClose: bilingual("Close local-files form", "關閉本機檔案表單"),
   knownTargetsTitle: bilingual("Website, IP, or internal system already added", "已加入的網站、IP 或內部系統"),
   knownTargetsBody: bilingual("Turn the targets from your scan project into a review list.", "把掃描專案中的目標整理成可確認的清單。"),
+  networkReadyTitle: bilingual("Your network target is ready to confirm", "網路目標已準備好，等待確認"),
+  networkReadyBody: bilingual("Review the exact website, IP, or internal system and our low-impact preset below. Nothing runs until you later press Start.", "在下方確認精確的網站、IP 或內部系統，以及低影響建議設定；之後仍要由你按下「開始」才會執行。"),
+  networkReadyAction: bilingual("Review this target", "確認這個目標"),
+  otherInputsSummary: bilingual("Other ways to add scan inputs", "其他加入掃描內容的方式"),
+  otherInputsBody: bilingual("Open these technical options only when the suggested path does not match what you have.", "只有建議路徑不符合現況時，才需要打開這些技術選項。"),
   selectDoesNotAuthorizeTitle: bilingual("How scan approval works", "掃描確認方式"),
   selectDoesNotAuthorizeBody: bilingual("Adding something here only prepares the scan. Before a network check runs, you'll review the exact target, scan type, and limits in step 3.", "在這裡加入內容只會準備掃描；執行網路檢查前，你會在步驟 3 確認目標、檢查方式與限制。"),
   situationSummary: bilingual("Not sure which option to choose?", "不確定該選哪一種？"),
@@ -417,6 +437,7 @@ const pageCopy = {
   noCommonTitle: bilingual("These items need different scan setups", "這些項目需要不同的掃描設定"),
   noCommonBody: bilingual("Set up websites and internal systems separately from cloud accounts and local projects.", "請把網站與內部系統，和雲端帳號與本機專案分開設定。"),
   allowedQuestion: bilingual("What should we check?", "想檢查哪些內容？"),
+  changeScanType: bilingual("Use a different scan type (advanced)", "改用其他掃描方式（進階）"),
 
   externalEyebrow: bilingual("Ready to scan", "準備掃描"),
   externalTitle: bilingual("Confirm {name}", "確認 {name}"),
@@ -473,8 +494,10 @@ const pageCopy = {
   activeAuthorityLength: bilingual("An active-test permission reference needs at least 8 characters.", "主動測試的授權參考至少需要 8 個字元。"),
   grantBoundaryHelp: bilingual("Next, open Scan progress and press Start when you're ready.", "下一步到「掃描進度」，準備好時再按下開始。"),
   saveGrant: bilingual("Save scan choices", "儲存掃描選項"),
+  confirmAndSave: bilingual("I confirm and prepare this scan", "我確認並準備這次掃描"),
   savingGrant: bilingual("Recording…", "正在記錄…"),
   defaultScopeNote: bilingual("The user confirmed ownership and the read-only boundary item by item in the local interface.", "使用者已在本機介面逐項確認資產所有權與唯讀範圍。"),
+  guidedNetworkConfirmation: bilingual("The user explicitly confirmed this exact low-impact network target in the guided local interface.", "使用者已在本機引導介面明確確認這個精確的低影響網路目標。"),
 
   emptyUnknownTitle: bilingual("No items yet because a source is still missing", "尚未看到項目，因為還缺少資料來源"),
   emptyUnknownBody: bilingual("At least one needed input is missing. Do not interpret the empty list as proof that the environment has no assets.", "至少一個需要的輸入尚未連接；不能把空清單解讀為環境沒有資產。"),
@@ -653,6 +676,7 @@ const fileNameFromPath = (path: string, fallback: string): string =>
 
 export function CoveragePage({
   caseId,
+  assessmentIntent,
   requestedActivities,
   coverage,
   sources,
@@ -669,19 +693,26 @@ export function CoveragePage({
   onApprovePending,
 }: CoveragePageProps) {
   const { text, formatDateTime, formatNumber } = useI18n();
+  const guidedLocalProfile = assessmentIntent ? localProfileByAssessmentIntent[assessmentIntent] : undefined;
+  const guidedNetworkRoute = Boolean(assessmentIntent && networkAssessmentIntents.includes(assessmentIntent));
+  const guidedCloudRoute = assessmentIntent === "cloud_account";
   const [filter, setFilter] = useState<CoverageState | "all">("all");
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
   const [showSourceForm, setShowSourceForm] = useState(false);
-  const [showWorkspaceForm, setShowWorkspaceForm] = useState(false);
-  const [showProviderSetup, setShowProviderSetup] = useState(false);
+  const [showWorkspaceForm, setShowWorkspaceForm] = useState(Boolean(guidedLocalProfile));
+  const [showProviderSetup, setShowProviderSetup] = useState(guidedCloudRoute);
   const [sourceKind, setSourceKind] = useState<SourceKind>("aws_organization");
   const [profile, setProfile] = useState<SnapshotParserProfile>("cloudquery");
   const [sourceLabel, setSourceLabel] = useState<string>(() => text(sourceDefinitions.aws_organization.label));
   const [selectedPath, setSelectedPath] = useState("");
   const [choosingSnapshot, setChoosingSnapshot] = useState(false);
   const [sourceFormError, setSourceFormError] = useState<BilingualText>();
-  const [workspaceLabel, setWorkspaceLabel] = useState(() => text(bilingual("Local source-code project", "本機程式碼專案")));
-  const [workspaceInputProfile, setWorkspaceInputProfile] = useState<LocalInputProfile>("repository_working_tree");
+  const [workspaceLabel, setWorkspaceLabel] = useState(() => text(
+    guidedLocalProfile
+      ? localInputDefinitions[guidedLocalProfile].label
+      : bilingual("Local source-code project", "本機程式碼專案"),
+  ));
+  const [workspaceInputProfile, setWorkspaceInputProfile] = useState<LocalInputProfile>(guidedLocalProfile ?? "repository_working_tree");
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState("");
   const [choosingWorkspace, setChoosingWorkspace] = useState(false);
   const [workspaceFormError, setWorkspaceFormError] = useState<BilingualText>();
@@ -710,7 +741,7 @@ export function CoveragePage({
   );
 
   const pendingAssets = assets.filter((asset) => asset.authorizationState === "pending");
-  const scopeEligibleAssets = assets.filter(isScopeEligible);
+  const scopeEligibleAssets = useMemo(() => assets.filter(isScopeEligible), [assets]);
   const scannedAssets = assets.filter((asset) => asset.coverageState === "discovered_authorized_scanned").length;
   const incompleteAssets = assets.filter((asset) => asset.coverageState === "authorized_incomplete").length;
   const unknownSourceCount = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
@@ -727,7 +758,20 @@ export function CoveragePage({
     : undefined;
   const externalMode = scopeModes.find((mode) => externalActivities[mode]);
   const externalActivity = externalMode ? externalActivities[externalMode] : undefined;
-  const requiresAuthorizationReference = Boolean(externalActivity);
+  const guidedLowImpactNetwork = guidedNetworkRoute && externalActivity === "low_impact_external";
+  const guidedLocalConsent = Boolean(
+    guidedLocalProfile
+    && selectedScopeAssets.length > 0
+    && selectedScopeAssets.every((asset) => Boolean(asset.localInputProfile))
+    && scopeModes.length === 1
+    && scopeModes[0] === "local_artifact",
+  );
+  const simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent;
+  const requiresAuthorizationReference = Boolean(externalActivity) && !guidedLowImpactNetwork;
+  const effectiveScopeConfirmation = scopeConfirmation.trim()
+    || (guidedLowImpactNetwork ? text(pageCopy.guidedNetworkConfirmation) : text(pageCopy.defaultScopeNote));
+  const effectiveAllowSensitiveNetworks = allowSensitiveNetworks
+    || Boolean(guidedLowImpactNetwork && selectedExternalAsset?.internetExposed === false);
   const limits = externalActivity ? rateLimits[externalActivity] : undefined;
   const externalTargetOptions = useMemo(() => {
     if (!selectedExternalAsset) return [];
@@ -742,12 +786,12 @@ export function CoveragePage({
   const templateRevisionPinned = /(?:^|@)(?:sha256:)?(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(templateRevision.trim());
   const isDirectExternal = externalActivity === "low_impact_external" || externalActivity === "active_external";
   const directNetworkBoundaryConfirmed = selectedExternalAsset?.internetExposed === true
-    || (selectedExternalAsset?.internetExposed === false && allowSensitiveNetworks);
+    || (selectedExternalAsset?.internetExposed === false && effectiveAllowSensitiveNetworks);
   const externalScopeReady = !externalActivity || Boolean(
     selectedExternalAsset
     && externalTarget
     && externalTargetOptions.includes(externalTarget)
-    && scopeConfirmation.trim()
+    && effectiveScopeConfirmation
     && (externalActivity !== "active_external" || scopeConfirmation.trim().length >= 8)
     && (externalActivity !== "active_external" || templateRevisionPinned)
     && parsedPorts
@@ -798,6 +842,40 @@ export function CoveragePage({
     setShowAdvancedExternalSettings(false);
   };
 
+  useEffect(() => {
+    resetScopeForm();
+    setShowSourceForm(false);
+    setShowProviderSetup(guidedCloudRoute);
+    setShowWorkspaceForm(Boolean(guidedLocalProfile));
+    if (guidedLocalProfile) {
+      setWorkspaceInputProfile(guidedLocalProfile);
+      setWorkspaceLabel(text(localInputDefinitions[guidedLocalProfile].label));
+      setSelectedWorkspacePath("");
+      setWorkspaceFormError(undefined);
+    }
+  }, [caseId, assessmentIntent]);
+
+  useEffect(() => {
+    if (!guidedNetworkRoute && !guidedLocalProfile) return;
+    const matching = scopeEligibleAssets.filter((asset) =>
+      asset.authorizationState === "pending"
+      && (guidedNetworkRoute
+        ? asset.platform === "external"
+        : asset.localInputProfile === guidedLocalProfile),
+    );
+    if (matching.length !== 1) return;
+    const asset = matching[0];
+    if (!asset) return;
+    setSelectedAssets((current) => {
+      if (current.length > 0) return current;
+      setScopeModes(suggestedModesForAsset(requestedActivities, asset));
+      if (guidedLocalProfile) {
+        window.requestAnimationFrame(() => scrollToCoverageStep("coverage-step-3"));
+      }
+      return [asset.id];
+    });
+  }, [caseId, assessmentIntent, guidedLocalProfile, guidedNetworkRoute, requestedActivities, scopeEligibleAssets]);
+
   const toggleAsset = (assetId: string) => {
     setSelectedAssets((current) => {
       const removing = current.includes(assetId);
@@ -815,6 +893,8 @@ export function CoveragePage({
       if (next.length === 0) {
         setScopeConfirmation("");
         setOwnershipConfirmed(false);
+      } else if (!removing && current.length === 0) {
+        window.requestAnimationFrame(() => scrollToCoverageStep("coverage-step-3"));
       }
       return next;
     });
@@ -828,7 +908,7 @@ export function CoveragePage({
   };
 
   const approve = async () => {
-    if (selectedAssets.length === 0 || scopeModes.length === 0 || !ownershipConfirmed) return;
+    if (selectedAssets.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed)) return;
     if (requiresAuthorizationReference && !scopeConfirmation.trim()) return;
     if (!externalScopeReady) return;
     const externalScope: ExternalScopeRequest | undefined = externalActivity && parsedPorts ? {
@@ -851,13 +931,13 @@ export function CoveragePage({
         allowDenialOfService: false,
         allowCredentialAttacks: false,
       },
-      assertedAuthority: scopeConfirmation.trim(),
-      allowSensitiveNetworks,
+      assertedAuthority: effectiveScopeConfirmation,
+      allowSensitiveNetworks: effectiveAllowSensitiveNetworks,
     } : undefined;
     const approved = await onApprovePending(
       selectedAssets,
       scopeModes,
-      scopeConfirmation.trim() || text(pageCopy.defaultScopeNote),
+      effectiveScopeConfirmation,
       externalScope,
     );
     if (approved) resetScopeForm();
@@ -942,6 +1022,81 @@ export function CoveragePage({
     });
   };
 
+  const providerInputCard = (
+    <article key="provider" className={showProviderSetup ? "coverage-input-card coverage-input-card--active" : "coverage-input-card"}>
+      <span><Icon name="database" size={20} /></span>
+      <div><strong>{text(pageCopy.providerTitle)}</strong><p>{text(pageCopy.providerBody)}</p></div>
+      <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showProviderSetup} onClick={() => { setShowProviderSetup((value) => !value); setShowSourceForm(false); setShowWorkspaceForm(false); }}>
+        {text(showProviderSetup ? pageCopy.providerClose : pageCopy.providerOpen)}
+      </button>
+    </article>
+  );
+  const sourceInputCard = (
+    <article key="snapshot" className={showSourceForm ? "coverage-input-card coverage-input-card--active" : "coverage-input-card"}>
+      <span><Icon name="file" size={20} /></span>
+      <div><strong>{text(pageCopy.snapshotTitle)}</strong><p>{text(pageCopy.snapshotBody)}</p></div>
+      <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showSourceForm} aria-controls="source-snapshot-form" onClick={() => { setShowSourceForm((value) => !value); setShowWorkspaceForm(false); setShowProviderSetup(false); }}>
+        {text(showSourceForm ? pageCopy.snapshotClose : pageCopy.snapshotOpen)}
+      </button>
+    </article>
+  );
+  const workspaceInputCard = (
+    <article key="workspace" className={showWorkspaceForm ? "coverage-input-card coverage-input-card--active" : "coverage-input-card"}>
+      <span><Icon name="database" size={20} /></span>
+      <div>
+        <strong>{text(guidedLocalProfile ? localInputDefinitions[guidedLocalProfile].label : pageCopy.workspaceTitle)}</strong>
+        <p>{text(guidedLocalProfile ? localInputDefinitions[guidedLocalProfile].detail : pageCopy.workspaceBody)}</p>
+      </div>
+      <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showWorkspaceForm} aria-controls="workspace-snapshot-form" onClick={() => { setShowWorkspaceForm((value) => !value); setShowSourceForm(false); setShowProviderSetup(false); }}>
+        {text(showWorkspaceForm ? pageCopy.workspaceClose : pageCopy.workspaceOpen)}
+      </button>
+    </article>
+  );
+  const knownTargetsInputCard = (
+    <article key="known-targets" className="coverage-input-card">
+      <span><Icon name="coverage" size={20} /></span>
+      <div><strong>{text(pageCopy.knownTargetsTitle)}</strong><p>{text(pageCopy.knownTargetsBody)}</p></div>
+      <button className="button button--secondary button--small" type="button" disabled={busy} onClick={() => void onStartDiscovery()}>
+        {busy ? text(pageCopy.refreshing) : text(pageCopy.refresh)}
+      </button>
+    </article>
+  );
+  const guidedNetworkInputCard = (
+    <article className="coverage-input-card coverage-input-card--active">
+      <span><Icon name="coverage" size={20} /></span>
+      <div><strong>{text(pageCopy.networkReadyTitle)}</strong><p>{text(pageCopy.networkReadyBody)}</p></div>
+      <button className="button button--primary button--small" type="button" onClick={() => scrollToCoverageStep("coverage-step-3")}>
+        {text(pageCopy.networkReadyAction)}
+      </button>
+    </article>
+  );
+  const scopeModeChooser = (
+    <fieldset className="scope-mode-fieldset">
+      <legend>{text(pageCopy.allowedQuestion)}</legend>
+      <div className="scope-mode-grid">
+        {availableScopeModes.map((mode) => {
+          const unavailableExternalMode = Boolean(
+            externalActivities[mode]
+            && mode !== "public_data"
+            && selectedExternalAsset?.internetExposed === undefined,
+          );
+          return (
+            <label key={mode} className={`${scopeModes.includes(mode) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}${unavailableExternalMode ? " scope-mode-card--disabled" : ""}`}>
+              <input
+                type={externalActivities[mode] ? "radio" : "checkbox"}
+                name={externalActivities[mode] ? "external-activity" : undefined}
+                checked={scopeModes.includes(mode)}
+                disabled={unavailableExternalMode}
+                onChange={() => toggleScopeMode(mode)}
+              />
+              <span><strong>{text(scopeModeLabels[mode].label)}</strong><small>{text(scopeModeLabels[mode].detail)}</small></span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+
   return (
     <div className="page page--coverage">
       <PageHeader
@@ -983,36 +1138,34 @@ export function CoveragePage({
           <p>{text(pageCopy.addDescription)}</p>
         </div>
 
-        <div className="coverage-input-grid">
-          <article className={showProviderSetup ? "coverage-input-card coverage-input-card--active" : "coverage-input-card"}>
-            <span><Icon name="database" size={20} /></span>
-            <div><strong>{text(pageCopy.providerTitle)}</strong><p>{text(pageCopy.providerBody)}</p></div>
-            <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showProviderSetup} onClick={() => setShowProviderSetup((value) => !value)}>
-              {text(showProviderSetup ? pageCopy.providerClose : pageCopy.providerOpen)}
-            </button>
-          </article>
-          <article className={showSourceForm ? "coverage-input-card coverage-input-card--active" : "coverage-input-card"}>
-            <span><Icon name="file" size={20} /></span>
-            <div><strong>{text(pageCopy.snapshotTitle)}</strong><p>{text(pageCopy.snapshotBody)}</p></div>
-            <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showSourceForm} aria-controls="source-snapshot-form" onClick={() => { setShowSourceForm((value) => !value); setShowWorkspaceForm(false); }}>
-              {text(showSourceForm ? pageCopy.snapshotClose : pageCopy.snapshotOpen)}
-            </button>
-          </article>
-          <article className={showWorkspaceForm ? "coverage-input-card coverage-input-card--active" : "coverage-input-card"}>
-            <span><Icon name="database" size={20} /></span>
-            <div><strong>{text(pageCopy.workspaceTitle)}</strong><p>{text(pageCopy.workspaceBody)}</p></div>
-            <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showWorkspaceForm} aria-controls="workspace-snapshot-form" onClick={() => { setShowWorkspaceForm((value) => !value); setShowSourceForm(false); }}>
-              {text(showWorkspaceForm ? pageCopy.workspaceClose : pageCopy.workspaceOpen)}
-            </button>
-          </article>
-          <article className="coverage-input-card">
-            <span><Icon name="coverage" size={20} /></span>
-            <div><strong>{text(pageCopy.knownTargetsTitle)}</strong><p>{text(pageCopy.knownTargetsBody)}</p></div>
-            <button className="button button--secondary button--small" type="button" disabled={busy} onClick={() => void onStartDiscovery()}>
-              {busy ? text(pageCopy.refreshing) : text(pageCopy.refresh)}
-            </button>
-          </article>
-        </div>
+        {assessmentIntent ? (
+          <>
+            <div className="coverage-input-grid coverage-input-grid--guided">
+              {guidedNetworkRoute
+                ? guidedNetworkInputCard
+                : guidedCloudRoute
+                  ? providerInputCard
+                  : workspaceInputCard}
+            </div>
+            <details className="coverage-situation-details coverage-advanced-inputs">
+              <summary>{text(pageCopy.otherInputsSummary)}</summary>
+              <p>{text(pageCopy.otherInputsBody)}</p>
+              <div className="coverage-input-grid">
+                {!guidedCloudRoute && providerInputCard}
+                {sourceInputCard}
+                {!guidedLocalProfile && workspaceInputCard}
+                {!guidedNetworkRoute && knownTargetsInputCard}
+              </div>
+            </details>
+          </>
+        ) : (
+          <div className="coverage-input-grid">
+            {providerInputCard}
+            {sourceInputCard}
+            {workspaceInputCard}
+            {knownTargetsInputCard}
+          </div>
+        )}
 
         <details className="coverage-situation-details">
           <summary>{text(pageCopy.selectDoesNotAuthorizeTitle)}</summary>
@@ -1350,32 +1503,12 @@ export function CoveragePage({
               <InlineNotice tone="warning" title={text(pageCopy.noCommonTitle)}>
                 <p>{text(pageCopy.noCommonBody)}</p>
               </InlineNotice>
-            ) : (
-              <fieldset className="scope-mode-fieldset">
-                <legend>{text(pageCopy.allowedQuestion)}</legend>
-                <div className="scope-mode-grid">
-                  {availableScopeModes.map((mode) => {
-                    const unavailableExternalMode = Boolean(
-                      externalActivities[mode]
-                      && mode !== "public_data"
-                      && selectedExternalAsset?.internetExposed === undefined,
-                    );
-                    return (
-                      <label key={mode} className={`${scopeModes.includes(mode) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}${unavailableExternalMode ? " scope-mode-card--disabled" : ""}`}>
-                        <input
-                          type={externalActivities[mode] ? "radio" : "checkbox"}
-                          name={externalActivities[mode] ? "external-activity" : undefined}
-                          checked={scopeModes.includes(mode)}
-                          disabled={unavailableExternalMode}
-                          onChange={() => toggleScopeMode(mode)}
-                        />
-                        <span><strong>{text(scopeModeLabels[mode].label)}</strong><small>{text(scopeModeLabels[mode].detail)}</small></span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </fieldset>
-            )}
+            ) : guidedLowImpactNetwork ? (
+              <details className="coverage-situation-details coverage-scan-type-advanced">
+                <summary>{text(pageCopy.changeScanType)}</summary>
+                {scopeModeChooser}
+              </details>
+            ) : !guidedLocalConsent ? scopeModeChooser : null}
 
             {externalActivity && selectedExternalAsset && limits && (
               <section className="external-scope-builder" aria-labelledby="external-scope-title">
@@ -1401,7 +1534,7 @@ export function CoveragePage({
                   </InlineNotice>
                 )}
 
-                {isDirectExternal && selectedExternalAsset.internetExposed === false && !allowSensitiveNetworks && (
+                {isDirectExternal && selectedExternalAsset.internetExposed === false && !effectiveAllowSensitiveNetworks && (
                   <InlineNotice tone="warning" title={text(pageCopy.internalGrantTitle)}>
                     <p>{text(pageCopy.internalGrantBody)}</p>
                   </InlineNotice>
@@ -1495,7 +1628,7 @@ export function CoveragePage({
                   </InlineNotice>
                 </details>
 
-                {isDirectExternal && selectedExternalAsset.internetExposed === false && (
+                {isDirectExternal && selectedExternalAsset.internetExposed === false && !guidedLowImpactNetwork && (
                   <label className="toggle-row toggle-row--danger">
                     <input type="checkbox" checked={allowSensitiveNetworks} onChange={(event) => setAllowSensitiveNetworks(event.target.checked)} />
                     <span><strong>{text(pageCopy.sensitiveTitle)}</strong><small>{text(pageCopy.sensitiveBody)}</small></span>
@@ -1508,26 +1641,30 @@ export function CoveragePage({
               {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small></span>)}
             </div>
 
-            <label className="toggle-row">
-              <input type="checkbox" checked={ownershipConfirmed} onChange={(event) => setOwnershipConfirmed(event.target.checked)} />
-              <span><strong>{text(selectedExternalAsset
-                ? selectedExternalAsset.internetExposed === false
-                  ? pageCopy.internalOwnershipTitle
-                  : pageCopy.externalOwnershipTitle
-                : pageCopy.ownershipTitle)}</strong><small>{text(pageCopy.ownershipBody)}</small></span>
-            </label>
+            {!simpleGuidedConsent && (
+              <>
+                <label className="toggle-row">
+                  <input type="checkbox" checked={ownershipConfirmed} onChange={(event) => setOwnershipConfirmed(event.target.checked)} />
+                  <span><strong>{text(selectedExternalAsset
+                    ? selectedExternalAsset.internetExposed === false
+                      ? pageCopy.internalOwnershipTitle
+                      : pageCopy.externalOwnershipTitle
+                    : pageCopy.ownershipTitle)}</strong><small>{text(pageCopy.ownershipBody)}</small></span>
+                </label>
 
-            <label className="field">
-              <span>{text(requiresAuthorizationReference ? pageCopy.authorityRequired : pageCopy.scopeNote)}</span>
-              <input value={scopeConfirmation} onChange={(event) => setScopeConfirmation(event.target.value)} placeholder={text(requiresAuthorizationReference ? pageCopy.authorityPlaceholder : pageCopy.notePlaceholder)} />
-              <small>{text(requiresAuthorizationReference ? pageCopy.authorityHelp : pageCopy.noteHelp)}</small>
-              {externalActivity === "active_external" && scopeConfirmation.trim().length > 0 && scopeConfirmation.trim().length < 8 && <small className="field-error">{text(pageCopy.activeAuthorityLength)}</small>}
-            </label>
+                <label className="field">
+                  <span>{text(requiresAuthorizationReference ? pageCopy.authorityRequired : pageCopy.scopeNote)}</span>
+                  <input value={scopeConfirmation} onChange={(event) => setScopeConfirmation(event.target.value)} placeholder={text(requiresAuthorizationReference ? pageCopy.authorityPlaceholder : pageCopy.notePlaceholder)} />
+                  <small>{text(requiresAuthorizationReference ? pageCopy.authorityHelp : pageCopy.noteHelp)}</small>
+                  {externalActivity === "active_external" && scopeConfirmation.trim().length > 0 && scopeConfirmation.trim().length < 8 && <small className="field-error">{text(pageCopy.activeAuthorityLength)}</small>}
+                </label>
+              </>
+            )}
 
             <div className="form-actions">
               <p><Icon name="lock" size={16} /> {text(pageCopy.grantBoundaryHelp)}</p>
-              <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || !ownershipConfirmed || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
-                <Icon name="lock" size={16} />{busy ? text(pageCopy.savingGrant) : text(pageCopy.saveGrant)}
+              <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed) || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
+                <Icon name="lock" size={16} />{busy ? text(pageCopy.savingGrant) : text(simpleGuidedConsent ? pageCopy.confirmAndSave : pageCopy.saveGrant)}
               </button>
             </div>
           </form>

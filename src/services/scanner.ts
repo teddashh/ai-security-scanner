@@ -322,6 +322,7 @@ export const scannerService = {
     const nativeCase = await invoke<NativeAssessmentCase>(COMMANDS.createCase, {
       request: {
         title: input.name,
+        assessment_intent: input.assessmentIntent ?? null,
         organization_name: input.organizationName,
         employee_range: employeeRanges[input.companySize],
         data_classes: input.dataClasses.map((dataClass) => nativeDataClasses[dataClass]),

@@ -1,3 +1,5 @@
+import type { UseCaseId } from "./useCases";
+
 export type AppMode = "native" | "demo";
 
 export type PageId =
@@ -44,6 +46,8 @@ export type CasePhase =
 export interface AssessmentCase {
   id: string;
   name: string;
+  /** The plain-language route the user chose when creating this scan project. */
+  assessmentIntent?: UseCaseId;
   organizationName: string;
   companySize: CompanySize;
   dataClasses: DataClass[];
@@ -63,6 +67,7 @@ export interface AssessmentCase {
 
 export interface CreateCaseInput {
   name: string;
+  assessmentIntent?: UseCaseId;
   organizationName: string;
   companySize: CompanySize;
   dataClasses: DataClass[];
@@ -409,6 +414,8 @@ export interface Asset {
   findingCount: number;
   lastObservedAt?: string;
   tags?: string[];
+  /** True only for a local item named in the questionnaire but not attached yet. */
+  questionnairePlaceholder?: boolean;
   localInputProfile?: LocalInputProfile;
   declaredWebService?: {
     protocol: "http" | "https";

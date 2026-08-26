@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { readFileSync } from "node:fs";
 import { build } from "esbuild";
+
+const adapterSource = readFileSync(
+  new URL("../../src/services/nativeAdapter.ts", import.meta.url),
+  "utf8",
+);
+const scannerSource = readFileSync(
+  new URL("../../src/services/scanner.ts", import.meta.url),
+  "utf8",
+);
 
 const bundled = await build({
   stdin: {
@@ -121,4 +131,16 @@ test("declared website metadata rejects malformed or query-bearing values", () =
   assert.equal(adaptDeclaredWebServiceMetadata({
     declared_web_service: { protocol: "http", port: 0, path: "/" },
   }), undefined);
+});
+
+test("native case summaries, workspaces, and case creation preserve assessment intent", () => {
+  assert.ok(adapterSource.includes("assessment_intent?: string | null"));
+  assert.equal((adapterSource.match(/assessmentIntent: mapAssessmentIntent/g) ?? []).length, 2);
+  assert.ok(scannerSource.includes("assessment_intent: input.assessmentIntent ?? null"));
+});
+
+test("questionnaire-only local names stay distinct from attached workspace snapshots", () => {
+  assert.ok(adapterSource.includes("localQuestionnaireKinds"));
+  assert.ok(adapterSource.includes("questionnairePlaceholder:"));
+  assert.ok(adapterSource.includes('asset.metadata?.workspace_snapshot_id === "string"'));
 });

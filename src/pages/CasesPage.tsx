@@ -87,6 +87,15 @@ const pageCopy = {
     en: "We'll add this to your scan project. You can review everything before the scan starts.",
     zhTW: "我們會先把它加入掃描專案；開始掃描前，你仍可檢查與調整所有內容。",
   },
+  localPickerNextTitle: { en: "Next, choose your project", zhTW: "下一步，選擇你的專案" },
+  localPickerNextBody: {
+    en: "Create the scan project, then pick the folder or exported image. We'll prepare the right local checks automatically.",
+    zhTW: "建立掃描專案後，選擇資料夾或匯出映像；我們會自動準備合適的本機檢查。",
+  },
+  localPickerBoundary: {
+    en: "You choose exactly what is checked, and nothing runs until you press Start.",
+    zhTW: "由你決定要檢查什麼；按下「開始」前不會執行任何檢查。",
+  },
   websiteUrl: { en: "Website or API URL", zhTW: "網站或 API 網址" },
   websitePlaceholder: { en: "https://portal.example.com/login", zhTW: "https://portal.example.com/login" },
   websiteHelp: {
@@ -138,10 +147,10 @@ const pageCopy = {
     en: "Name the cluster or project here. On the next screen, choose the configuration copy you want checked.",
     zhTW: "先填叢集或專案名稱；下一頁再選擇要檢查的設定副本。",
   },
-  cloudChoice: { en: "Which cloud services do you use?", zhTW: "你使用哪些雲端服務？" },
+  cloudChoice: { en: "Which cloud do you want to check first?", zhTW: "想先檢查哪一個雲端服務？" },
   cloudChoiceHelp: {
-    en: "Pick the services you want to review. We'll open each provider's official sign-in when you are ready.",
-    zhTW: "選擇想檢查的服務；準備好後，我們會開啟各平台的官方登入流程。",
+    en: "Pick one now. We'll open its official sign-in next, and you can add another source later.",
+    zhTW: "先選一個；下一步會開啟官方登入，之後仍可再加入其他來源。",
   },
   moreSummary: { en: "Customize this scan", zhTW: "自訂這次檢查" },
   moreSummaryHint: {
@@ -180,6 +189,8 @@ const pageCopy = {
     en: "{target} appears in both public and internal target lists. Keep it in the one list that describes where it is reached.",
     zhTW: "{target} 同時出現在公開與內部目標清單。請只保留在真正符合連線位置的那一邊。",
   },
+  publicTargetRequired: { en: "Enter at least one public IP address or domain.", zhTW: "請至少輸入一個公開 IP 位址或網域。" },
+  internalTargetRequired: { en: "Enter at least one internal IP address, range, or hostname.", zhTW: "請至少輸入一個內部 IP 位址、網段或主機名稱。" },
   demo: { en: "Demo", zhTW: "展示" },
   latestRun: { en: "Latest run: {status}", zhTW: "最新一輪：{status}" },
   updated: { en: "Updated {date}", zhTW: "更新於 {date}" },
@@ -297,6 +308,7 @@ const pageCopy = {
 
 const platformIds = ["aws", "azure", "gcp", "m365", "external", "code", "container", "kubernetes"] as const satisfies readonly CloudPlatform[];
 const cloudPlatformIds = ["aws", "azure", "gcp", "m365"] as const satisfies readonly CloudPlatform[];
+const guidedLocalUseCaseIds: readonly UseCaseId[] = ["source_code", "infrastructure_as_code", "container_image", "kubernetes"];
 
 const platformKeys: Record<CloudPlatform, StaticTranslationKey> = {
   aws: "platform.aws",
@@ -449,10 +461,15 @@ export function CasesPage({
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [artifactDeleteConfirmation, setArtifactDeleteConfirmation] = useState("");
   const websiteInputRef = useRef<HTMLInputElement>(null);
+  const publicTargetsInputRef = useRef<HTMLTextAreaElement>(null);
+  const internalTargetsInputRef = useRef<HTMLTextAreaElement>(null);
 
   const selectedDefinition = useMemo(
     () => selectedUseCase ? useCaseById(selectedUseCase) : undefined,
     [selectedUseCase],
+  );
+  const guidedLocalUseCase = Boolean(
+    selectedUseCase && guidedLocalUseCaseIds.includes(selectedUseCase),
   );
   const selectedUseCaseTitle = selectedUseCase
     ? text({
@@ -486,7 +503,9 @@ export function CasesPage({
     if (!selectedDefinition) return;
     setShowForm(true);
     setAdvancedOpen(false);
-    setPlatforms([...selectedDefinition.suggestedPlatforms]);
+    setPlatforms(selectedDefinition.id === "cloud_account"
+      ? [selectedDefinition.suggestedPlatforms[0] ?? "aws"]
+      : [...selectedDefinition.suggestedPlatforms]);
     setRequestedActivities([...selectedDefinition.suggestedActivities]);
     setWebsiteUrl("");
     setPublicTargets("");
@@ -573,6 +592,8 @@ export function CasesPage({
       setAssetDraftError(assets.error);
       if (assets.error.kind === "website") {
         websiteInputRef.current?.focus();
+      } else if (assets.error.kind === "missing_target") {
+        (assets.error.target === "public" ? publicTargetsInputRef : internalTargetsInputRef).current?.focus();
       } else {
         setAdvancedOpen(true);
       }
@@ -582,6 +603,7 @@ export function CasesPage({
     setAssetDraftError(undefined);
     const created = await onCreate({
       name: name.trim(),
+      assessmentIntent: selectedUseCase,
       organizationName: organizationName.trim(),
       companySize,
       platforms,
@@ -680,49 +702,49 @@ export function CasesPage({
       {useCaseNeeds(selectedDefinition, "external_ip_or_domain") && (
         <label className="field">
           <span>{text(pageCopy.publicTargets)}</span>
-          <textarea rows={4} value={publicTargets} onChange={(event) => { setPublicTargets(event.target.value); setAssetDraftError(undefined); }} placeholder={text(pageCopy.publicTargetsPlaceholder)} />
-          <small>{text(pageCopy.publicTargetsHelp)}</small>
+          <textarea
+            ref={publicTargetsInputRef}
+            required
+            rows={4}
+            value={publicTargets}
+            aria-invalid={assetDraftError?.kind === "missing_target" && assetDraftError.target === "public" || undefined}
+            aria-describedby="public-targets-help public-targets-error"
+            onInvalid={() => setAssetDraftError({ kind: "missing_target", target: "public" })}
+            onChange={(event) => { setPublicTargets(event.target.value); setAssetDraftError(undefined); }}
+            placeholder={text(pageCopy.publicTargetsPlaceholder)}
+          />
+          <small id="public-targets-help">{text(pageCopy.publicTargetsHelp)}</small>
+          {assetDraftError?.kind === "missing_target" && assetDraftError.target === "public" && (
+            <small id="public-targets-error" className="field-error" role="alert">{text(pageCopy.publicTargetRequired)}</small>
+          )}
         </label>
       )}
 
       {useCaseNeeds(selectedDefinition, "internal_it_environment") && (
         <label className="field">
           <span>{text(pageCopy.internalTargets)}</span>
-          <textarea rows={4} value={internalTargets} onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }} placeholder={text(pageCopy.internalTargetsPlaceholder)} />
-          <small>{text(pageCopy.internalTargetsHelp)}</small>
+          <textarea
+            ref={internalTargetsInputRef}
+            required
+            rows={4}
+            value={internalTargets}
+            aria-invalid={assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" || undefined}
+            aria-describedby="internal-targets-help internal-targets-error"
+            onInvalid={() => setAssetDraftError({ kind: "missing_target", target: "internal" })}
+            onChange={(event) => { setInternalTargets(event.target.value); setAssetDraftError(undefined); }}
+            placeholder={text(pageCopy.internalTargetsPlaceholder)}
+          />
+          <small id="internal-targets-help">{text(pageCopy.internalTargetsHelp)}</small>
+          {assetDraftError?.kind === "missing_target" && assetDraftError.target === "internal" && (
+            <small id="internal-targets-error" className="field-error" role="alert">{text(pageCopy.internalTargetRequired)}</small>
+          )}
         </label>
       )}
 
-      {useCaseNeeds(selectedDefinition, "source_code") && (
-        <label className="field">
-          <span>{text(pageCopy.repositories)}</span>
-          <textarea rows={4} value={repositories} onChange={(event) => setRepositories(event.target.value)} placeholder={text(pageCopy.repositoriesPlaceholder)} />
-          <small>{text(pageCopy.repositoriesHelp)}</small>
-        </label>
-      )}
-
-      {useCaseNeeds(selectedDefinition, "infrastructure_as_code") && (
-        <label className="field">
-          <span>{text(pageCopy.iacProjects)}</span>
-          <textarea rows={4} value={iacProjects} onChange={(event) => setIacProjects(event.target.value)} placeholder={text(pageCopy.iacPlaceholder)} />
-          <small>{text(pageCopy.iacHelp)}</small>
-        </label>
-      )}
-
-      {useCaseNeeds(selectedDefinition, "container_image") && (
-        <label className="field">
-          <span>{text(pageCopy.containerImages)}</span>
-          <textarea rows={4} value={containerImages} onChange={(event) => setContainerImages(event.target.value)} placeholder={text(pageCopy.containerPlaceholder)} />
-          <small>{text(pageCopy.containerHelp)}</small>
-        </label>
-      )}
-
-      {useCaseNeeds(selectedDefinition, "kubernetes") && (
-        <label className="field">
-          <span>{text(pageCopy.kubernetes)}</span>
-          <textarea rows={4} value={kubernetesClusters} onChange={(event) => setKubernetesClusters(event.target.value)} placeholder={text(pageCopy.kubernetesPlaceholder)} />
-          <small>{text(pageCopy.kubernetesHelp)}</small>
-        </label>
+      {guidedLocalUseCase && (
+        <InlineNotice tone="info" title={text(pageCopy.localPickerNextTitle)}>
+          <p>{text(pageCopy.localPickerNextBody)}</p>
+        </InlineNotice>
       )}
 
       {useCaseNeeds(selectedDefinition, "cloud_account") && (
@@ -732,7 +754,7 @@ export function CasesPage({
           <div className="choice-grid">
             {cloudPlatformIds.map((platform) => (
               <label key={platform} className="check-card">
-                <input type="checkbox" checked={platforms.includes(platform)} onChange={() => togglePlatform(platform)} />
+                <input type="radio" name="cloud-platform" checked={platforms.includes(platform)} onChange={() => setPlatforms([platform])} />
                 <span className="platform-avatar">{platformAbbreviations[platform]}</span>
                 <span>{platformLabel(platform)}</span>
               </label>
@@ -741,7 +763,7 @@ export function CasesPage({
         </fieldset>
       )}
 
-      <p className="case-primary-target__boundary"><Icon name="lock" size={15} /> {text(pageCopy.targetCandidateHelp)}</p>
+      <p className="case-primary-target__boundary"><Icon name="lock" size={15} /> {text(guidedLocalUseCase ? pageCopy.localPickerBoundary : pageCopy.targetCandidateHelp)}</p>
     </fieldset>
   );
 
@@ -834,10 +856,11 @@ export function CasesPage({
                 </fieldset>
               )}
 
-              <fieldset className="choice-fieldset">
-                <legend>{text(pageCopy.additionalCoordinates)}</legend>
-                <p>{text(pageCopy.targetCandidateHelp)}</p>
-                <div className="form-grid form-grid--two">
+              {!guidedLocalUseCase && (
+                <fieldset className="choice-fieldset">
+                  <legend>{text(pageCopy.additionalCoordinates)}</legend>
+                  <p>{text(pageCopy.targetCandidateHelp)}</p>
+                  <div className="form-grid form-grid--two">
                   {platforms.includes("external") && !useCaseNeeds(selectedDefinition, "external_ip_or_domain") && (
                     <label className="field">
                       <span>{text(pageCopy.publicTargets)}</span>
@@ -880,8 +903,9 @@ export function CasesPage({
                       <small>{text(pageCopy.kubernetesHelp)}</small>
                     </label>
                   )}
-                </div>
-              </fieldset>
+                  </div>
+                </fieldset>
+              )}
 
               <fieldset className="choice-fieldset">
                 <legend>{text(pageCopy.activities)}</legend>

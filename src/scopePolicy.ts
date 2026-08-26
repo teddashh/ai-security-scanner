@@ -30,15 +30,15 @@ export const suggestedModesForAsset = (
     suggested.push("local_artifact");
   }
 
-  const requestedExternalMode = requested.has("active_external_vulnerability_tests")
-    ? "active_external"
-    : requested.has("low_impact_external_checks")
-      ? "low_impact_external"
+  const requestedExternalMode = requested.has("low_impact_external_checks")
+    ? "low_impact_external"
+    : requested.has("active_external_vulnerability_tests")
+      ? "active_external"
       : undefined;
   if (
     requestedExternalMode
     && available.has(requestedExternalMode)
-    && asset.internetExposed === true
+    && (asset.internetExposed === true || (requestedExternalMode === "low_impact_external" && asset.internetExposed === false))
   ) {
     suggested.push(requestedExternalMode);
   }
@@ -46,5 +46,8 @@ export const suggestedModesForAsset = (
   return suggested;
 };
 
-export const isScopeEligible = (asset: Pick<Asset, "authorizationState">): boolean =>
-  asset.authorizationState === "pending" || asset.authorizationState === "authorized";
+export const isScopeEligible = (
+  asset: Pick<Asset, "authorizationState" | "questionnairePlaceholder" | "localInputProfile">,
+): boolean =>
+  (!asset.questionnairePlaceholder || Boolean(asset.localInputProfile))
+  && (asset.authorizationState === "pending" || asset.authorizationState === "authorized");

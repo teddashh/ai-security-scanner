@@ -25,6 +25,10 @@ const startPageSource = readFileSync(
   new URL("../../src/pages/StartPage.tsx", import.meta.url),
   "utf8",
 );
+const casesPageSource = readFileSync(
+  new URL("../../src/pages/CasesPage.tsx", import.meta.url),
+  "utf8",
+);
 
 test("the plain-language start page preserves every required assessment use case", () => {
   assert.deepEqual(useCaseDefinitions.map(({ id }) => id), requiredUseCases);
@@ -65,6 +69,29 @@ test("cloud onboarding names every released provider path", () => {
     "gcp",
     "m365",
   ]);
+});
+
+test("case creation persists the chosen route and starts cloud setup with exactly one provider", () => {
+  assert.ok(casesPageSource.includes("assessmentIntent: selectedUseCase"));
+  assert.ok(casesPageSource.includes('selectedDefinition.id === "cloud_account"'));
+  assert.ok(casesPageSource.includes('type="radio" name="cloud-platform"'));
+  assert.ok(casesPageSource.includes("setPlatforms([platform])"));
+});
+
+test("guided local routes defer asset creation to the real local picker", () => {
+  assert.ok(casesPageSource.includes("guidedLocalUseCase"));
+  assert.ok(casesPageSource.includes("pageCopy.localPickerNextTitle"));
+  assert.ok(casesPageSource.includes("pageCopy.localPickerBoundary"));
+  assert.ok(casesPageSource.includes("!guidedLocalUseCase && ("));
+});
+
+test("guided public and internal target fields expose required field errors", () => {
+  assert.ok(casesPageSource.includes("publicTargetsInputRef"));
+  assert.ok(casesPageSource.includes("internalTargetsInputRef"));
+  assert.ok(casesPageSource.includes('kind: "missing_target", target: "public"'));
+  assert.ok(casesPageSource.includes('kind: "missing_target", target: "internal"'));
+  assert.ok(casesPageSource.includes("pageCopy.publicTargetRequired"));
+  assert.ok(casesPageSource.includes("pageCopy.internalTargetRequired"));
 });
 
 test("local artifacts never inherit an external-contact activity", () => {
