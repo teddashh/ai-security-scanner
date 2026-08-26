@@ -475,6 +475,11 @@ pub async fn get_app_snapshot(state: State<'_, AppState>) -> AppResult<AppSnapsh
 }
 
 #[tauri::command]
+pub fn detect_local_private_subnets() -> crate::target_candidates::LocalNetworkCandidateInventory {
+    crate::target_candidates::detect_local_private_subnets()
+}
+
+#[tauri::command]
 pub fn get_scan_readiness(case_id: String, state: State<'_, AppState>) -> AppResult<ScanReadiness> {
     state.case_service().scan_readiness(&case_id)
 }

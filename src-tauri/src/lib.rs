@@ -29,6 +29,7 @@ pub mod source_authorization;
 #[cfg(feature = "desktop")]
 mod state;
 pub mod storage;
+pub mod target_candidates;
 pub mod workspace_snapshot;
 
 #[cfg(feature = "desktop")]
@@ -168,6 +169,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_snapshot,
+            commands::detect_local_private_subnets,
             commands::get_scan_readiness,
             commands::setup_managed_runtime,
             commands::get_managed_runtime_setup_status,
