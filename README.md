@@ -39,9 +39,9 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 ## Want the details?
 
-<!-- Release line: v0.1.2. -->
+<!-- Release line: v0.1.3. -->
 
-> **Project status:** `v0.1.2` is the installable public preview on the way to `v0.2.0`. Use it to try the real desktop setup and guided scan flow; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
+> **Project status:** `v0.1.3` is the installable public preview on the way to `v0.2.0`. Use it to try the one-click Windows setup and guided scan flow; the stable `v0.2.0` release remains reserved for the completed product and post-testing QC.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 
@@ -108,15 +108,15 @@ Read the [threat model](docs/threat-model.md), [provider authorization contract]
 
 Installed desktop packages carry a pinned, product-managed Podman machine client and platform helpers. The user does not separately install Docker, Podman, Python, PowerShell modules, vulnerability databases, or individual engine CLIs.
 
-First setup verifies the packaged runtime and checks host prerequisites **before** downloading the checksum-locked machine image. It then initializes a private rootless machine and reports each step. Downloads can be cancelled and resumed. The application does not modify the system `PATH`, run a package manager, enable operating-system features, or request administrator privileges for this runtime.
+First setup verifies the packaged runtime and checks host prerequisites **before** downloading the checksum-locked machine image. It then initializes a private rootless machine and reports each step. Downloads can be cancelled and resumed. The application does not modify the system `PATH` or use a package manager. On Windows, the only administrator action is an explicit one-time WSL install or update approved in the standard Windows confirmation dialog.
 
-On Windows, a failed WSL check is shown as one plain-language next action: install WSL, enable its optional components, update it, restart Windows, or retry the check. The setup card can copy the applicable Microsoft command, such as `wsl --install --no-distribution` or `wsl --update`, and links to Microsoft's instructions. The application does not execute those privileged operating-system changes itself. A missing WSL prerequisite therefore stops setup before the roughly 257 MB machine-image download begins.
+On Windows, click **Fix this for me** and approve the Windows dialog once. ai-security-scanner runs only Microsoft's trusted `wsl.exe` with the fixed action needed, checks the result, and continues automatically. It never receives or stores the administrator password. If Windows needs a restart, the app stops before the roughly 257 MB machine-image download and says so clearly. Manual Microsoft commands remain under **Other ways**.
 
 | Desktop host | Managed provider | Host prerequisite |
 | --- | --- | --- |
 | Linux x86-64 | Rootless Podman machine with packaged QEMU | None; KVM is used when available, otherwise slower QEMU software emulation is used. |
 | macOS Intel or Apple silicon | Rootless Podman machine with Apple virtualization | A supported macOS release with Apple virtualization support. |
-| Windows x86-64 | Rootless Podman machine with WSL | WSL 2. If it is unavailable, setup stops before the image download and shows the exact Windows action; the application never enables optional features itself. |
+| Windows x86-64 | Rootless Podman machine with WSL | WSL 2. If it is unavailable or outdated, one explicit Windows approval lets the app prepare it; a required restart remains a visible user action. |
 
 Docker or a user-installed Podman can be selected only as an explicitly labeled compatibility provider; they are not required or silently mixed with managed runs. See the [managed runtime contract](docs/managed-runtime.md) for lifecycle, recovery, verification, and exact cleanup behavior.
 
@@ -232,7 +232,7 @@ docs/usability/              Real-person study protocol and evidence schema
 
 ### Release and evidence status
 
-`v0.1.2` is the public hands-on preview for the planned `v0.2.0` release. Its installers must complete automated cross-platform builds and fresh-host qualification before GitHub publishes the pre-release. The required live first-run study with an IAM-naive participant and the subsequent formal QC/code review still belong to the stable release process.
+`v0.1.3` is the public hands-on preview for the planned `v0.2.0` release. Its installers must complete automated cross-platform builds and fresh-host qualification before GitHub publishes the pre-release. The required live first-run study with an IAM-naive participant and the subsequent formal QC/code review still belong to the stable release process.
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 

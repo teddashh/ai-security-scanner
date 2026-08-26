@@ -20,7 +20,9 @@ interface RuntimeSetupAssistantProps {
   runtime?: AppSnapshot["runtime"];
   status?: ManagedRuntimeSetupStatus;
   busy?: boolean;
+  repairing?: boolean;
   onSetup: () => void;
+  onRepair: () => void;
   onCancel: () => void;
 }
 
@@ -43,6 +45,10 @@ interface RuntimeAssistantCopy {
   progressDescription: string;
   start: string;
   retry: string;
+  repair: string;
+  repairing: string;
+  approval: string;
+  moreOptions: string;
   cancel: string;
   cancelling: string;
   docs: string;
@@ -73,7 +79,11 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     progressTitle: "Getting your scan tools ready",
     progressDescription: "We are downloading and setting up everything automatically. First-time setup may take a few minutes.",
     start: "Set up automatically",
-    retry: "I've done this — check again",
+    retry: "Check again",
+    repair: "Let ai-security-scanner handle it",
+    repairing: "Waiting for Windows…",
+    approval: "Windows will ask for administrator approval once. Choose Yes to continue. ai-security-scanner never sees or saves your password.",
+    moreOptions: "Other ways",
     cancel: "Stop setup and keep the download",
     cancelling: "Stopping…",
     docs: "Open Microsoft's WSL instructions",
@@ -99,8 +109,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     },
     actions: {
       install_wsl: {
-        title: "Install the Windows component used by the scan tools",
-        description: "Windows Subsystem for Linux (WSL 2) is not available yet. Install it once, then ai-security-scanner can finish automatically.",
+        title: "Windows needs one component",
+        description: "ai-security-scanner can install WSL 2 for you, then continue setting up the scan tools.",
         steps: [
           "Open PowerShell as Administrator.",
           "Run the command below.",
@@ -109,8 +119,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         command: "wsl --install --no-distribution",
       },
       enable_wsl_optional_features: {
-        title: "Turn on the Windows components used by the scan tools",
-        description: "WSL or Virtual Machine Platform is turned off. Windows must enable these components before automatic setup can continue.",
+        title: "Turn on the Windows tools used for scanning",
+        description: "ai-security-scanner can turn on WSL 2 for you, then continue setup.",
         steps: [
           "Open PowerShell as Administrator.",
           "Run the command below.",
@@ -119,8 +129,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         command: "wsl --install --no-distribution",
       },
       update_wsl: {
-        title: "Update Windows Subsystem for Linux",
-        description: "WSL is installed, but its current version cannot create the local scan workspace.",
+        title: "Windows needs a quick WSL update",
+        description: "ai-security-scanner can run the update for you and continue setup when it finishes.",
         steps: [
           "Open PowerShell.",
           "Run the command below and let Windows finish the update.",
@@ -156,7 +166,11 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     progressTitle: "正在準備掃描工具",
     progressDescription: "系統會自動下載並完成設定；第一次可能需要幾分鐘。",
     start: "自動完成設定",
-    retry: "我已完成，重新檢查",
+    retry: "重新檢查",
+    repair: "交給 ai-security-scanner 處理",
+    repairing: "正在等候 Windows…",
+    approval: "Windows 會顯示一次系統管理員確認；按「是」即可繼續。ai-security-scanner 不會看到或儲存你的密碼。",
+    moreOptions: "其他方式",
     cancel: "停止設定並保留下載進度",
     cancelling: "正在停止…",
     docs: "開啟 Microsoft 的 WSL 安裝說明",
@@ -182,8 +196,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     },
     actions: {
       install_wsl: {
-        title: "安裝掃描工具需要的 Windows 元件",
-        description: "這台電腦還沒有 Windows Subsystem for Linux（WSL 2）。安裝一次後，其餘設定會自動完成。",
+        title: "Windows 還差一個元件",
+        description: "ai-security-scanner 可以替你安裝 WSL 2，完成後會繼續準備掃描工具。",
         steps: [
           "以系統管理員身分開啟 PowerShell。",
           "執行下方指令。",
@@ -192,8 +206,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         command: "wsl --install --no-distribution",
       },
       enable_wsl_optional_features: {
-        title: "開啟掃描工具需要的 Windows 元件",
-        description: "WSL 或虛擬機器平台目前未開啟；Windows 啟用後，其餘設定就會自動繼續。",
+        title: "開啟掃描需要的 Windows 工具",
+        description: "ai-security-scanner 可以替你開啟 WSL 2，完成後會繼續設定。",
         steps: [
           "以系統管理員身分開啟 PowerShell。",
           "執行下方指令。",
@@ -202,8 +216,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         command: "wsl --install --no-distribution",
       },
       update_wsl: {
-        title: "更新 Windows Subsystem for Linux",
-        description: "WSL 已安裝，但目前版本還不能建立本機掃描工作區。",
+        title: "Windows 需要快速更新 WSL",
+        description: "ai-security-scanner 可以替你執行更新，完成後自動繼續。",
         steps: [
           "開啟 PowerShell。",
           "執行下方指令，等 Windows 完成更新。",
@@ -228,13 +242,22 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
 const byteCount = (value: number, locale: RuntimeSetupLocale): string =>
   `${new Intl.NumberFormat(locale).format(value)} ${locale === "en" ? "bytes" : "位元組"}`;
 
+const canRepairAutomatically = (
+  action: ManagedRuntimeSetupNextAction | undefined,
+): action is "install_wsl" | "enable_wsl_optional_features" | "update_wsl" =>
+  action === "install_wsl"
+  || action === "enable_wsl_optional_features"
+  || action === "update_wsl";
+
 export function RuntimeSetupAssistant({
   locale,
   mode,
   runtime,
   status,
   busy,
+  repairing,
   onSetup,
+  onRepair,
   onCancel,
 }: RuntimeSetupAssistantProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -242,6 +265,7 @@ export function RuntimeSetupAssistant({
   const ready = mode === "native" && runtime?.available === true;
   const active = status?.active === true;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
+  const repairable = canRepairAutomatically(status?.nextAction);
   const technicalDetail = displaySafeTechnicalDetail(status?.detail);
   const progress = useMemo(() => {
     if (!status?.totalBytes || status.totalBytes <= 0) return undefined;
@@ -329,6 +353,56 @@ export function RuntimeSetupAssistant({
 
       {failed && nextAction && (
         <div className="runtime-assistant__recovery">
+          {repairable ? (
+            <p className="runtime-assistant__approval">
+              <Icon name="info" size={17} />
+              <span>{text.approval}</span>
+            </p>
+          ) : (
+            <>
+              <ol>
+                {nextAction.steps.map((step) => <li key={step}>{step}</li>)}
+              </ol>
+              <a href={MICROSOFT_WSL_HELP} target="_blank" rel="noreferrer">
+                {text.docs} <Icon name="external" size={14} />
+              </a>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="runtime-assistant__actions">
+        {active ? (
+          <button
+            className="button button--danger-ghost"
+            type="button"
+            disabled={!status?.canCancel || status.cancelRequested}
+            onClick={onCancel}
+          >
+            <Icon name="close" size={16} />
+            {status?.cancelRequested ? text.cancelling : text.cancel}
+          </button>
+        ) : failed && repairable && status?.nextAction ? (
+          <button
+            className="button button--primary"
+            type="button"
+            disabled={busy}
+            onClick={onRepair}
+          >
+            <Icon name="settings" size={17} />
+            {repairing ? text.repairing : text.repair}
+          </button>
+        ) : (
+          <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
+            <Icon name="refresh" size={17} />
+            {failed ? text.retry : text.start}
+          </button>
+        )}
+      </div>
+
+      {failed && repairable && nextAction && (
+        <details className="runtime-assistant__manual">
+          <summary>{text.moreOptions}</summary>
           <ol>
             {nextAction.steps.map((step) => <li key={step}>{step}</li>)}
           </ol>
@@ -347,27 +421,8 @@ export function RuntimeSetupAssistant({
           <a href={MICROSOFT_WSL_HELP} target="_blank" rel="noreferrer">
             {text.docs} <Icon name="external" size={14} />
           </a>
-        </div>
+        </details>
       )}
-
-      <div className="runtime-assistant__actions">
-        {active ? (
-          <button
-            className="button button--danger-ghost"
-            type="button"
-            disabled={!status?.canCancel || status.cancelRequested}
-            onClick={onCancel}
-          >
-            <Icon name="close" size={16} />
-            {status?.cancelRequested ? text.cancelling : text.cancel}
-          </button>
-        ) : (
-          <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
-            <Icon name="refresh" size={17} />
-            {failed ? text.retry : text.start}
-          </button>
-        )}
-      </div>
 
       {technicalDetail && failed && (
         <details className="runtime-assistant__technical">

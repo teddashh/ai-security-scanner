@@ -109,7 +109,8 @@
   background: rgba(255, 255, 255, 0.82);
 }
 
-.runtime-assistant__recovery ol {
+.runtime-assistant__recovery ol,
+.runtime-assistant__manual ol {
   display: grid;
   gap: 8px;
   margin: 0;
@@ -117,6 +118,40 @@
   color: var(--ink);
   font-size: 0.8rem;
   line-height: 1.5;
+}
+
+.runtime-assistant__approval {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.runtime-assistant__approval svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--teal);
+}
+
+.runtime-assistant__manual {
+  border-top: 1px solid rgba(126, 143, 137, 0.25);
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.runtime-assistant__manual summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.runtime-assistant__manual[open] > :not(summary) {
+  margin-top: 12px;
 }
 
 .runtime-assistant__command {
@@ -137,7 +172,8 @@
   font-size: 0.75rem;
 }
 
-.runtime-assistant__recovery > a {
+.runtime-assistant__recovery > a,
+.runtime-assistant__manual > a {
   display: inline-flex;
   align-items: center;
   gap: 5px;

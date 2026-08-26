@@ -456,10 +456,31 @@ pub enum ManagedRuntimeSetupNextAction {
     RetryWslCheck,
 }
 
+/// Terminal result of the deliberately narrow Windows prerequisite repair.
+/// The backend derives the action from its current typed failure state;
+/// executable paths and arguments can never be supplied by the webview.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedRuntimePrerequisiteRepairOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManagedRuntimePrerequisiteRepairResult {
+    pub outcome: ManagedRuntimePrerequisiteRepairOutcome,
+    pub restart_required: bool,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ManagedRuntimeSetupStatus {
     pub phase: ManagedRuntimeSetupPhase,
     pub active: bool,
+    /// A separate Windows servicing operation is waiting for UAC or WSL to
+    /// finish. It cannot be cancelled through the runtime download control.
+    pub prerequisite_repair_active: bool,
     pub cancel_requested: bool,
     pub received_bytes: u64,
     pub total_bytes: Option<u64>,
@@ -482,6 +503,7 @@ impl Default for ManagedRuntimeSetupStatus {
         Self {
             phase: ManagedRuntimeSetupPhase::Idle,
             active: false,
+            prerequisite_repair_active: false,
             cancel_requested: false,
             received_bytes: 0,
             total_bytes: None,
@@ -504,6 +526,7 @@ impl Default for ManagedRuntimeSetupStatus {
 pub struct ManagedRuntimeSetupController {
     status: Mutex<ManagedRuntimeSetupStatus>,
     cancel_requested: AtomicBool,
+    prerequisite_repair_active: AtomicBool,
 }
 
 impl ManagedRuntimeSetupController {
@@ -520,6 +543,11 @@ impl ManagedRuntimeSetupController {
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
         })?;
+        if self.prerequisite_repair_active.load(Ordering::Acquire) {
+            return Err(AppError::Conflict(
+                "a Windows prerequisite repair is already active".into(),
+            ));
+        }
         if status.active {
             return Err(AppError::InvalidRequest(
                 "managed runtime setup is already active".into(),
@@ -529,6 +557,7 @@ impl ManagedRuntimeSetupController {
         *status = ManagedRuntimeSetupStatus {
             phase: ManagedRuntimeSetupPhase::Install,
             active: true,
+            prerequisite_repair_active: false,
             cancel_requested: false,
             received_bytes: 0,
             total_bytes: None,
@@ -541,6 +570,77 @@ impl ManagedRuntimeSetupController {
             detail: "installing and verifying the release-managed runtime payload".into(),
         };
         Ok(())
+    }
+
+    #[cfg(any(feature = "desktop", test))]
+    pub(crate) fn begin_prerequisite_repair(&self) -> AppResult<ManagedRuntimeSetupNextAction> {
+        let mut status = self.status.lock().map_err(|_| {
+            AppError::Internal("managed runtime setup status lock was poisoned".into())
+        })?;
+        let action = status.next_action.ok_or_else(|| {
+            AppError::Conflict("there is no current Windows prerequisite action to repair".into())
+        })?;
+        let has_exact_repair_pair = matches!(
+            (status.failure_reason, action),
+            (
+                Some(ManagedRuntimeSetupFailureReason::WslNotInstalled),
+                ManagedRuntimeSetupNextAction::InstallWsl,
+            ) | (
+                Some(ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled),
+                ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures,
+            ) | (
+                Some(ManagedRuntimeSetupFailureReason::WslUpdateRequired),
+                ManagedRuntimeSetupNextAction::UpdateWsl,
+            )
+        );
+        if !has_exact_repair_pair {
+            return Err(AppError::InvalidRequest(
+                "this managed runtime prerequisite cannot be changed automatically".into(),
+            ));
+        }
+        if status.active || status.phase != ManagedRuntimeSetupPhase::Failed {
+            return Err(AppError::Conflict(
+                "the Windows prerequisite no longer needs automatic repair".into(),
+            ));
+        }
+        if self.prerequisite_repair_active.swap(true, Ordering::AcqRel) {
+            return Err(AppError::Conflict(
+                "a Windows prerequisite repair is already active".into(),
+            ));
+        }
+        status.prerequisite_repair_active = true;
+        status.can_cancel = false;
+        status.can_retry = false;
+        Ok(action)
+    }
+
+    #[cfg(any(feature = "desktop", test))]
+    pub(crate) fn finish_prerequisite_repair(
+        &self,
+        result: Option<&ManagedRuntimePrerequisiteRepairResult>,
+    ) {
+        let Ok(mut status) = self.status.lock() else {
+            self.prerequisite_repair_active
+                .store(false, Ordering::Release);
+            return;
+        };
+        status.prerequisite_repair_active = false;
+        status.can_retry = true;
+        if let Some(result) = result {
+            if result.restart_required {
+                status.phase = ManagedRuntimeSetupPhase::Failed;
+                status.active = false;
+                status.can_cancel = false;
+                status.can_retry = true;
+                status.failure_reason = Some(ManagedRuntimeSetupFailureReason::RestartRequired);
+                status.next_action = Some(ManagedRuntimeSetupNextAction::RestartWindows);
+                status.detail = result.detail.clone();
+            } else if result.outcome != ManagedRuntimePrerequisiteRepairOutcome::Completed {
+                status.detail = result.detail.clone();
+            }
+        }
+        self.prerequisite_repair_active
+            .store(false, Ordering::Release);
     }
 
     pub fn request_cancel(&self) -> AppResult<ManagedRuntimeSetupStatus> {
@@ -2043,9 +2143,10 @@ impl ManagedRuntimeManager {
     }
 
     /// Proves the Windows-owned WSL boundary before downloading the release
-    /// machine image. The check is intentionally read-only: this product never
-    /// requests elevation, installs WSL, enables optional features, or updates
-    /// Windows on the user's behalf.
+    /// machine image. This probe is intentionally read-only. The separate,
+    /// explicit prerequisite-repair command may request one Windows UAC
+    /// approval, then this probe remains the authority on whether setup can
+    /// continue.
     fn require_windows_wsl_prerequisite_locked(
         &self,
         target: &ManagedTarget,
@@ -5248,6 +5349,253 @@ fn machine_name(target: &ManagedTarget) -> String {
     );
     debug_assert!(name.len() <= MAX_MACHINE_NAME_BYTES);
     name
+}
+
+#[cfg(any(feature = "desktop", test))]
+fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppResult<&'static str> {
+    match action {
+        ManagedRuntimeSetupNextAction::InstallWsl
+        | ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures => {
+            Ok("--install --no-distribution")
+        }
+        ManagedRuntimeSetupNextAction::UpdateWsl => Ok("--update"),
+        ManagedRuntimeSetupNextAction::RestartWindows
+        | ManagedRuntimeSetupNextAction::RetryWslCheck => Err(AppError::InvalidRequest(
+            "this managed runtime prerequisite cannot be changed automatically".into(),
+        )),
+    }
+}
+
+#[cfg(any(feature = "desktop", test))]
+fn windows_wsl_repair_result_from_exit_code(
+    exit_code: u32,
+) -> ManagedRuntimePrerequisiteRepairResult {
+    match exit_code {
+        0 => ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+            restart_required: false,
+            detail: "Windows completed the requested WSL change".into(),
+        },
+        // Windows Installer and DISM both use these stable success codes when
+        // the requested change has been accepted but requires a restart.
+        1641 | 3010 | 3011 | 0x8007_0bc2 | 0x8007_0bc3 | 0xc004_000d => {
+            ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                restart_required: true,
+                detail: "Windows completed the requested WSL change and needs a restart".into(),
+            }
+        }
+        _ => ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+            restart_required: false,
+            detail: format!("Windows did not complete the requested WSL change (code {exit_code})"),
+        },
+    }
+}
+
+/// Runs exactly one product-defined WSL prerequisite action through Windows'
+/// standard UAC prompt. No executable, parameter, working-directory, secret,
+/// or environment input crosses the webview boundary.
+#[cfg(any(feature = "desktop", test))]
+pub(crate) fn repair_windows_wsl_prerequisite(
+    action: ManagedRuntimeSetupNextAction,
+) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
+    let parameters = windows_wsl_repair_parameters(action)?;
+    repair_windows_wsl_prerequisite_platform(parameters)
+}
+
+#[cfg(all(windows, any(feature = "desktop", test)))]
+fn repair_windows_wsl_prerequisite_platform(
+    parameters: &'static str,
+) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_CANCELLED, HANDLE, RPC_E_CHANGED_MODE, WAIT_FAILED, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, INFINITE, WaitForSingleObject,
+    };
+    use windows_sys::Win32::UI::Shell::{
+        SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+        ShellExecuteExW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    struct OwnedProcessHandle(HANDLE);
+
+    struct ComInitializationGuard(bool);
+
+    impl Drop for ComInitializationGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+
+    impl Drop for OwnedProcessHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    fn wide_nul(value: &OsStr) -> AppResult<Vec<u16>> {
+        let encoded = value.encode_wide().collect::<Vec<_>>();
+        if encoded.contains(&0) {
+            return Err(AppError::NotAuthorized(
+                "Windows prerequisite repair input contained an invalid NUL".into(),
+            ));
+        }
+        Ok(encoded.into_iter().chain(std::iter::once(0)).collect())
+    }
+
+    fn shell_execute_path_wide_nul(value: &OsStr) -> AppResult<Vec<u16>> {
+        const VERBATIM_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+        const UNC_PREFIX: &[u16] = &[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+        let encoded = value.encode_wide().collect::<Vec<_>>();
+        let shell_path = if let Some(remainder) = encoded.strip_prefix(VERBATIM_PREFIX) {
+            if let Some(unc) = remainder.strip_prefix(UNC_PREFIX) {
+                let mut path = vec![b'\\' as u16, b'\\' as u16];
+                path.extend_from_slice(unc);
+                path
+            } else if remainder.len() >= 3
+                && remainder[0] <= u16::from(b'z')
+                && (remainder[0] as u8).is_ascii_alphabetic()
+                && remainder[1] == b':' as u16
+                && remainder[2] == b'\\' as u16
+            {
+                remainder.to_vec()
+            } else {
+                return Err(AppError::NotAuthorized(
+                    "Windows prerequisite repair path used an unsupported namespace".into(),
+                ));
+            }
+        } else {
+            encoded
+        };
+        if shell_path.contains(&0) {
+            return Err(AppError::NotAuthorized(
+                "Windows prerequisite repair path contained an invalid NUL".into(),
+            ));
+        }
+        Ok(shell_path.into_iter().chain(std::iter::once(0)).collect())
+    }
+
+    let com_result = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
+    let _com = if com_result >= 0 {
+        ComInitializationGuard(true)
+    } else if com_result == RPC_E_CHANGED_MODE {
+        ComInitializationGuard(false)
+    } else {
+        return Ok(ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+            restart_required: false,
+            detail: "Windows could not prepare the administrator confirmation".into(),
+        });
+    };
+
+    let directories = windows_system_directories()?;
+    let executable = directories.system32.join("wsl.exe");
+    verify_regular_file(&executable, "Windows System32 wsl.exe")?;
+    use std::os::windows::fs::MetadataExt;
+    let executable_metadata = fs::symlink_metadata(&executable).map_err(|error| {
+        AppError::NotAvailable(format!("Windows System32 wsl.exe is unavailable: {error}"))
+    })?;
+    if executable_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(AppError::NotAuthorized(
+            "Windows System32 wsl.exe must not be a reparse point".into(),
+        ));
+    }
+
+    let verb = wide_nul(OsStr::new("runas"))?;
+    let executable = shell_execute_path_wide_nul(executable.as_os_str())?;
+    let parameters = wide_nul(OsStr::new(parameters))?;
+    let working_directory = shell_execute_path_wide_nul(directories.system32.as_os_str())?;
+    let mut execution = SHELLEXECUTEINFOW {
+        cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>())
+            .expect("SHELLEXECUTEINFOW size fits u32"),
+        fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: verb.as_ptr(),
+        lpFile: executable.as_ptr(),
+        lpParameters: parameters.as_ptr(),
+        lpDirectory: working_directory.as_ptr(),
+        nShow: SW_SHOWNORMAL,
+        ..SHELLEXECUTEINFOW::default()
+    };
+    if unsafe { ShellExecuteExW(&mut execution) } == 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_CANCELLED as i32) {
+            return Ok(ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Cancelled,
+                restart_required: false,
+                detail: "Windows administrator confirmation was cancelled; no change was made"
+                    .into(),
+            });
+        }
+        return Ok(ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+            restart_required: false,
+            detail: "Windows could not start the requested WSL change".into(),
+        });
+    }
+    if execution.hProcess.is_null() {
+        return Ok(ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+            restart_required: false,
+            detail: "Windows started the WSL change but did not provide completion status".into(),
+        });
+    }
+    let process = OwnedProcessHandle(execution.hProcess);
+    match unsafe { WaitForSingleObject(process.0, INFINITE) } {
+        WAIT_OBJECT_0 => {}
+        WAIT_FAILED => {
+            return Ok(ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                restart_required: false,
+                detail: "Windows could not report whether the WSL change finished".into(),
+            });
+        }
+        _ => {
+            return Ok(ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                restart_required: false,
+                detail: "Windows returned an unexpected WSL setup state".into(),
+            });
+        }
+    }
+    let mut exit_code = 0_u32;
+    if unsafe { GetExitCodeProcess(process.0, &mut exit_code) } == 0 {
+        return Ok(ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+            restart_required: false,
+            detail: "Windows could not report the WSL setup result".into(),
+        });
+    }
+    Ok(windows_wsl_repair_result_from_exit_code(exit_code))
+}
+
+#[cfg(all(not(windows), any(feature = "desktop", test)))]
+fn repair_windows_wsl_prerequisite_platform(
+    _parameters: &'static str,
+) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
+    Err(AppError::NotAvailable(
+        "Windows prerequisite repair is unavailable on this host".into(),
+    ))
 }
 
 fn linux_machine_volume_spec(application_data: &Path) -> AppResult<OsString> {
@@ -10071,6 +10419,125 @@ mod tests {
             assert_eq!(classified.action, action, "{diagnostic}");
             assert_eq!(classified.exit_code, Some(1));
         }
+    }
+
+    #[test]
+    fn windows_wsl_repair_uses_only_fixed_backend_arguments() {
+        let _typed_entrypoint: fn(
+            ManagedRuntimeSetupNextAction,
+        ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> = repair_windows_wsl_prerequisite;
+        assert_eq!(
+            windows_wsl_repair_parameters(ManagedRuntimeSetupNextAction::InstallWsl).unwrap(),
+            "--install --no-distribution"
+        );
+        assert_eq!(
+            windows_wsl_repair_parameters(ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures)
+                .unwrap(),
+            "--install --no-distribution"
+        );
+        assert_eq!(
+            windows_wsl_repair_parameters(ManagedRuntimeSetupNextAction::UpdateWsl).unwrap(),
+            "--update"
+        );
+        for action in [
+            ManagedRuntimeSetupNextAction::RestartWindows,
+            ManagedRuntimeSetupNextAction::RetryWslCheck,
+        ] {
+            assert!(windows_wsl_repair_parameters(action).is_err());
+        }
+    }
+
+    #[test]
+    fn windows_wsl_repair_exit_codes_preserve_restart_requirements() {
+        let completed = windows_wsl_repair_result_from_exit_code(0);
+        assert_eq!(
+            completed.outcome,
+            ManagedRuntimePrerequisiteRepairOutcome::Completed
+        );
+        assert!(!completed.restart_required);
+
+        for exit_code in [1641, 3010, 3011, 0x8007_0bc2, 0x8007_0bc3, 0xc004_000d] {
+            let result = windows_wsl_repair_result_from_exit_code(exit_code);
+            assert_eq!(
+                result.outcome,
+                ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                "exit code {exit_code:#x}"
+            );
+            assert!(result.restart_required, "exit code {exit_code:#x}");
+        }
+
+        let failed = windows_wsl_repair_result_from_exit_code(1);
+        assert_eq!(
+            failed.outcome,
+            ManagedRuntimePrerequisiteRepairOutcome::Failed
+        );
+        assert!(!failed.restart_required);
+    }
+
+    #[test]
+    fn windows_wsl_repair_is_derived_from_exact_failed_pair_and_single_flight() {
+        let controller = ManagedRuntimeSetupController::default();
+        {
+            let mut status = controller.status.lock().expect("setup status");
+            status.phase = ManagedRuntimeSetupPhase::Failed;
+            status.failure_reason = Some(ManagedRuntimeSetupFailureReason::WslUpdateRequired);
+            status.next_action = Some(ManagedRuntimeSetupNextAction::UpdateWsl);
+        }
+        assert_eq!(
+            controller.begin_prerequisite_repair().unwrap(),
+            ManagedRuntimeSetupNextAction::UpdateWsl
+        );
+        let repairing = controller.status().expect("repairing status");
+        assert!(repairing.prerequisite_repair_active);
+        assert!(!repairing.can_retry);
+        assert!(controller.begin_prerequisite_repair().is_err());
+        assert!(controller.begin().is_err());
+
+        let completed = windows_wsl_repair_result_from_exit_code(0);
+        controller.finish_prerequisite_repair(Some(&completed));
+        let repaired = controller.status().expect("repaired status");
+        assert!(!repaired.prerequisite_repair_active);
+        assert!(repaired.can_retry);
+        assert_eq!(
+            controller.begin_prerequisite_repair().unwrap(),
+            ManagedRuntimeSetupNextAction::UpdateWsl
+        );
+        controller.finish_prerequisite_repair(None);
+
+        {
+            let mut status = controller.status.lock().expect("setup status");
+            status.failure_reason = Some(ManagedRuntimeSetupFailureReason::WslNotInstalled);
+            status.next_action = Some(ManagedRuntimeSetupNextAction::UpdateWsl);
+        }
+        assert!(controller.begin_prerequisite_repair().is_err());
+    }
+
+    #[test]
+    fn windows_wsl_repair_restart_result_becomes_the_only_next_action() {
+        let controller = ManagedRuntimeSetupController::default();
+        {
+            let mut status = controller.status.lock().expect("setup status");
+            status.phase = ManagedRuntimeSetupPhase::Failed;
+            status.failure_reason = Some(ManagedRuntimeSetupFailureReason::WslNotInstalled);
+            status.next_action = Some(ManagedRuntimeSetupNextAction::InstallWsl);
+        }
+        assert_eq!(
+            controller.begin_prerequisite_repair().unwrap(),
+            ManagedRuntimeSetupNextAction::InstallWsl
+        );
+        let restart = windows_wsl_repair_result_from_exit_code(3010);
+        controller.finish_prerequisite_repair(Some(&restart));
+
+        let status = controller.status().expect("restart status");
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::RestartRequired)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::RestartWindows)
+        );
+        assert!(controller.begin_prerequisite_repair().is_err());
     }
 
     #[test]

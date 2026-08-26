@@ -63,6 +63,8 @@ jobs:
       - run: >-
           cargo test --locked --package ai-security-scanner --no-default-features --lib
           managed_runtime::tests
+      - name: Compile Windows desktop and UAC prerequisite repair
+        run: cargo check --locked --package ai-security-scanner --features desktop --lib
 
   desktop-linux:
     name: Tauri Linux compile

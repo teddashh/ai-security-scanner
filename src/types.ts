@@ -861,6 +861,7 @@ export type ManagedRuntimeSetupNextAction =
 export interface ManagedRuntimeSetupStatus {
   phase: ManagedRuntimeSetupPhase;
   active: boolean;
+  prerequisiteRepairActive: boolean;
   cancelRequested: boolean;
   receivedBytes: number;
   totalBytes?: number;
@@ -870,6 +871,17 @@ export interface ManagedRuntimeSetupStatus {
   canRetry: boolean;
   failureReason?: ManagedRuntimeSetupFailureReason;
   nextAction?: ManagedRuntimeSetupNextAction;
+  detail: string;
+}
+
+export type ManagedRuntimePrerequisiteRepairOutcome =
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export interface ManagedRuntimePrerequisiteRepairResult {
+  outcome: ManagedRuntimePrerequisiteRepairOutcome;
+  restartRequired: boolean;
   detail: string;
 }
 

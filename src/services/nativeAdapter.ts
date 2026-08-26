@@ -28,6 +28,8 @@ import type {
   FindingGroupEvent,
   FindingWorkflowState,
   LocalInputProfile,
+  ManagedRuntimePrerequisiteRepairOutcome,
+  ManagedRuntimePrerequisiteRepairResult,
   ManagedRuntimeSetupFailureReason,
   ManagedRuntimeSetupNextAction,
   ManagedRuntimeSetupPhase,
@@ -416,6 +418,7 @@ export interface NativeAppSnapshot {
 export interface NativeManagedRuntimeSetupStatus {
   phase: ManagedRuntimeSetupPhase;
   active: boolean;
+  prerequisite_repair_active: boolean;
   cancel_requested: boolean;
   received_bytes: number;
   total_bytes: number | null;
@@ -427,6 +430,38 @@ export interface NativeManagedRuntimeSetupStatus {
   next_action: ManagedRuntimeSetupNextAction | null;
   detail: string;
 }
+
+export interface NativeManagedRuntimePrerequisiteRepairResult {
+  outcome: string;
+  restart_required: boolean;
+  detail: string;
+}
+
+const managedRuntimePrerequisiteRepairOutcomes = new Set<ManagedRuntimePrerequisiteRepairOutcome>([
+  "completed",
+  "cancelled",
+  "failed",
+]);
+
+export const adaptManagedRuntimePrerequisiteRepairResult = (
+  result: NativeManagedRuntimePrerequisiteRepairResult,
+): ManagedRuntimePrerequisiteRepairResult => {
+  const outcome = managedRuntimePrerequisiteRepairOutcomes.has(
+    result.outcome as ManagedRuntimePrerequisiteRepairOutcome,
+  )
+    ? result.outcome as ManagedRuntimePrerequisiteRepairOutcome
+    : "failed";
+  const detail = typeof result.detail === "string"
+    && result.detail.length <= 1_024
+    && !/[\0\u2028\u2029]/u.test(result.detail)
+    ? result.detail
+    : "Windows prerequisite repair returned no safe detail";
+  return {
+    outcome,
+    restartRequired: outcome === "completed" && result.restart_required === true,
+    detail,
+  };
+};
 
 const managedRuntimeRecoveryActions = {
   windows_wsl_not_installed: "install_wsl",
@@ -450,6 +485,7 @@ export const adaptManagedRuntimeSetupStatus = (
   return {
     phase: status.phase,
     active: status.active,
+    prerequisiteRepairActive: status.prerequisite_repair_active,
     cancelRequested: status.cancel_requested,
     receivedBytes: status.received_bytes,
     totalBytes: status.total_bytes ?? undefined,

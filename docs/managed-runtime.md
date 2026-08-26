@@ -9,8 +9,9 @@ explicit compatibility providers; they are not silently mixed with managed runs.
 - A release carries an immutable, platform-specific Podman machine client bundle in the app
   resources directory. Every bundled file has an exact size and SHA-256 in `manifest.json`.
 - The app verifies the resource bundle before copying it to a versioned directory under its own
-  local application-data directory. It never changes the system `PATH`, invokes a package manager,
-  enables an operating-system feature, or requests administrator privileges.
+  local application-data directory. It never changes the system `PATH` or invokes a package
+  manager. The only elevated host change is the explicit Windows WSL prerequisite repair described
+  below; scanner engines and the managed runtime remain rootless.
 - On Windows, setup first resolves the trusted `SystemRoot\System32\wsl.exe` boundary and runs
   bounded, read-only `--status` and `-l --quiet` probes, matching the inventory command used by the
   pinned Podman WSL provider. The probe requests UTF-8 output while retaining bounded UTF-16LE
@@ -18,8 +19,14 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   before any VM-image bytes are downloaded. It records one stable `failure_reason` and paired
   `next_action`: install WSL, enable its optional components, update WSL, restart Windows, or retry
   the check. Console output is accepted only as bounded UTF-8 or UTF-16LE; mixed or unsafe bytes are
-  never interpolated into UI errors. The app does not elevate, enable features, update WSL, or
-  restart Windows.
+  never interpolated into UI errors. For install, enable, and update actions only, the user may
+  choose one-click repair. The backend derives the action from the exact failed reason/action pair,
+  resolves the real `System32\wsl.exe`, and invokes either fixed
+  `--install --no-distribution` or fixed `--update` arguments through the standard Windows UAC
+  dialog. No executable or arguments come from the webview, no shell is involved, and the app never
+  sees the administrator password. UAC cancellation makes no change. Restart codes become the sole
+  visible restart action; the app never restarts Windows automatically. Manual commands are retained
+  only as a secondary fallback.
 - The VM image is downloaded from the exact HTTPS URL pinned in the release manifest. Bounded
   resumable downloads are accepted only from approved GitHub release hosts and are committed only
   after the locked size and SHA-256 match.
@@ -161,7 +168,7 @@ The current platform providers are:
 | --- | --- | --- | --- |
 | Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, `virtiofsd`, and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
 | macOS Intel/Apple silicon | rootless Podman machine + AppleHV | Universal Podman, vfkit, and gvproxy | A supported macOS release with Apple virtualization support. |
-| Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2. If it is unavailable, setup stops before image download and reports the exact user action. The app never enables Windows optional features. |
+| Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2. If unavailable or outdated, one explicit UAC approval lets the app run the fixed Microsoft WSL action. A required restart remains manual. |
 
 ## Lifecycle
 
@@ -173,13 +180,22 @@ The desktop invokes `setup_managed_runtime` in a blocking worker while independe
 returns the current status immediately. This separation keeps the window responsive and makes a
 single active setup observable without starting a competing setup operation.
 
+`repair_managed_runtime_prerequisite` is a zero-argument desktop command. While holding the setup
+state lock, the backend derives the only permitted repair from the current exact failed
+reason/action pair and enforces a process-local single-flight guard. Install/enable maps only to
+`System32\wsl.exe --install --no-distribution`; update maps only to
+`System32\wsl.exe --update`. Restart and generic retry never elevate. After the Microsoft process
+finishes, the ordinary setup command reruns the bounded read-only probes before any image download.
+
 The setup-status JSON uses `phase: "prerequisite"` while checking Windows. A failed Windows check
 returns one of `windows_wsl_not_installed`, `windows_wsl_optional_feature_disabled`,
 `windows_wsl_update_required`, `windows_restart_required`, or `windows_wsl_command_failed` in
 `failure_reason`, paired with `install_wsl`, `enable_wsl_optional_features`, `update_wsl`,
 `restart_windows`, or `retry_wsl_check` in `next_action`. Both fields are `null` outside a failed
 setup. Human-facing clients localize those stable values and keep the bounded diagnostic in an
-optional technical-details view.
+optional technical-details view. `prerequisite_repair_active` is true only while Windows is showing
+the UAC prompt or completing that fixed WSL operation; runtime-download cancellation does not claim
+to cancel Windows servicing.
 
 The standalone development CLI exposes the same durable lifecycle:
 

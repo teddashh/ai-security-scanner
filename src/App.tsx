@@ -53,6 +53,7 @@ const recordTechnicalError = (context: string, error: unknown): void => {
 
 const busyActionCopy = {
   "runtime-setup": { en: "scan-tool setup", zhTW: "掃描工具設定" },
+  "runtime-repair": { en: "Windows setup", zhTW: "Windows 設定" },
   create: { en: "scan project creation", zhTW: "建立掃描專案" },
   "archive-case": { en: "case archiving", zhTW: "封存案件" },
   "delete-case": { en: "case-record deletion", zhTW: "刪除案件紀錄" },
@@ -158,7 +159,10 @@ export default function App() {
     };
   }, []);
 
-  const runtimeSetupPolling = busyAction === "runtime-setup" || runtimeSetup?.active === true;
+  const runtimeSetupPolling = busyAction === "runtime-setup"
+    || busyAction === "runtime-repair"
+    || runtimeSetup?.active === true
+    || runtimeSetup?.prerequisiteRepairActive === true;
 
   useEffect(() => {
     if (!scannerService.isNative() || !runtimeSetupPolling) return;
@@ -247,6 +251,61 @@ export default function App() {
         detail: text({
           en: "Nothing was changed. Return to the setup card and try again.",
           zhTW: "這次沒有變更任何設定；請回到設定卡片再試一次。",
+        }),
+      });
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const repairManagedRuntimePrerequisite = async () => {
+    setBusyAction("runtime-repair");
+    try {
+      const result = await scannerService.repairManagedRuntimePrerequisite();
+      applyServiceMeta(result);
+      if (result.data.outcome === "cancelled") {
+        pushToast({
+          tone: "info",
+          title: text({ en: "Windows made no changes", zhTW: "Windows 沒有進行變更" }),
+          detail: text({
+            en: "You can try again whenever you are ready.",
+            zhTW: "準備好時可以再按一次，由程式重新處理。",
+          }),
+        });
+        return;
+      }
+      if (result.data.restartRequired) {
+        const latest = await scannerService.getManagedRuntimeSetupStatus();
+        setRuntimeSetup(latest.data);
+        pushToast({
+          tone: "warning",
+          title: text({ en: "Restart Windows once", zhTW: "請重新啟動 Windows 一次" }),
+          detail: text({
+            en: "The Windows change is complete. Reopen ai-security-scanner after the restart and setup will continue.",
+            zhTW: "Windows 變更已完成；重新開機後再打開 ai-security-scanner，設定就會繼續。",
+          }),
+        });
+        return;
+      }
+
+      // Re-run the existing read-only prerequisite check even after a
+      // non-zero installer result. The probe is authoritative: it either
+      // continues setup or shows the one remaining Windows action.
+      await setupManagedRuntime();
+    } catch (error) {
+      recordTechnicalError("repair Windows runtime prerequisite", error);
+      try {
+        const latest = await scannerService.getManagedRuntimeSetupStatus();
+        setRuntimeSetup(latest.data);
+      } catch {
+        // Keep the already-rendered recovery action when status refresh fails.
+      }
+      pushToast({
+        tone: "danger",
+        title: text({ en: "Windows setup could not start", zhTW: "無法啟動 Windows 設定" }),
+        detail: text({
+          en: "No change was made. Return to the setup card and try again.",
+          zhTW: "這次沒有進行任何變更；請回到設定卡片再試一次。",
         }),
       });
     } finally {
@@ -651,8 +710,12 @@ export default function App() {
               mode={mode}
               runtime={snapshot?.runtime}
               status={runtimeSetup}
-              busy={busyAction === "runtime-setup" || runtimeSetup?.active}
+              busy={["runtime-setup", "runtime-repair"].includes(busyAction ?? "")
+                || runtimeSetup?.active
+                || runtimeSetup?.prerequisiteRepairActive}
+              repairing={busyAction === "runtime-repair" || runtimeSetup?.prerequisiteRepairActive}
               onSetup={() => void setupManagedRuntime()}
+              onRepair={() => void repairManagedRuntimePrerequisite()}
               onCancel={() => void cancelManagedRuntimeSetup()}
             />
           }
@@ -846,8 +909,12 @@ export default function App() {
         onInstallUpdate={(version) => void installUpdate(version)}
         runtime={snapshot?.runtime}
         runtimeSetup={runtimeSetup}
-        runtimeBusy={busyAction === "runtime-setup" || runtimeSetup?.active}
+        runtimeBusy={["runtime-setup", "runtime-repair"].includes(busyAction ?? "")
+          || runtimeSetup?.active
+          || runtimeSetup?.prerequisiteRepairActive}
+        runtimeRepairing={busyAction === "runtime-repair" || runtimeSetup?.prerequisiteRepairActive}
         onSetupRuntime={() => void setupManagedRuntime()}
+        onRepairRuntime={() => void repairManagedRuntimePrerequisite()}
         onCancelRuntime={() => void cancelManagedRuntimeSetup()}
       >
         {content}

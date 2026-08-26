@@ -688,9 +688,11 @@ async function main() {
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
       latest.version !== VERSION ||
+      !latest.notes.includes("one-click Windows WSL setup") ||
       !latest.notes.includes("typed immutable local-input snapshots") ||
       !latest.notes.includes("exact-scope AWS/Azure/GCP provider execution") ||
       !releaseNotes.includes("typed immutable snapshots for repository, IaC, OCI") ||
+      !releaseNotes.includes("replaces the manual Administrator PowerShell") ||
       !releaseNotes.includes("The required 21-engine catalog is bound") ||
       latest.notes.includes("repair release") ||
       releaseNotes.includes("This patch release") ||

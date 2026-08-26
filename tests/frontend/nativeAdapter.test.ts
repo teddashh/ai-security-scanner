@@ -5,7 +5,7 @@ import { build } from "esbuild";
 
 const bundled = await build({
   stdin: {
-    contents: 'export { adaptDeclaredWebServiceMetadata, adaptManagedRuntimeSetupStatus } from "./src/services/nativeAdapter.ts";',
+    contents: 'export { adaptDeclaredWebServiceMetadata, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus } from "./src/services/nativeAdapter.ts";',
     loader: "ts",
     resolveDir: process.cwd(),
     sourcefile: "native-adapter-test-entry.ts",
@@ -18,13 +18,18 @@ const bundled = await build({
 });
 const source = bundled.outputFiles[0]?.text;
 assert.ok(source, "the native adapter test bundle should contain JavaScript");
-const { adaptDeclaredWebServiceMetadata, adaptManagedRuntimeSetupStatus } = await import(
+const {
+  adaptDeclaredWebServiceMetadata,
+  adaptManagedRuntimePrerequisiteRepairResult,
+  adaptManagedRuntimeSetupStatus,
+} = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
 
 const runtimeSetupDto = (overrides: Record<string, unknown> = {}) => ({
   phase: "failed",
   active: false,
+  prerequisite_repair_active: false,
   cancel_requested: false,
   received_bytes: 0,
   total_bytes: null,
@@ -42,6 +47,7 @@ test("managed runtime setup adapter preserves the exact failed recovery contract
   assert.deepEqual(adaptManagedRuntimeSetupStatus(runtimeSetupDto()), {
     phase: "failed",
     active: false,
+    prerequisiteRepairActive: false,
     cancelRequested: false,
     receivedBytes: 0,
     totalBytes: undefined,
@@ -68,6 +74,35 @@ test("managed runtime setup adapter hides recovery fields outside failed or when
   }));
   assert.equal(mismatched.failureReason, undefined);
   assert.equal(mismatched.nextAction, undefined);
+});
+
+test("managed runtime prerequisite repair adapter accepts only bounded terminal results", () => {
+  assert.deepEqual(adaptManagedRuntimePrerequisiteRepairResult({
+    outcome: "completed",
+    restart_required: true,
+    detail: "Windows needs a restart",
+  }), {
+    outcome: "completed",
+    restartRequired: true,
+    detail: "Windows needs a restart",
+  });
+  assert.deepEqual(adaptManagedRuntimePrerequisiteRepairResult({
+    outcome: "cancelled",
+    restart_required: true,
+    detail: "No change was made",
+  }), {
+    outcome: "cancelled",
+    restartRequired: false,
+    detail: "No change was made",
+  });
+  const malformed = adaptManagedRuntimePrerequisiteRepairResult({
+    outcome: "surprise",
+    restart_required: true,
+    detail: `unsafe\0${"x".repeat(1_100)}`,
+  });
+  assert.equal(malformed.outcome, "failed");
+  assert.equal(malformed.restartRequired, false);
+  assert.equal(malformed.detail, "Windows prerequisite repair returned no safe detail");
 });
 
 test("declared website metadata adapts a bounded preset", () => {

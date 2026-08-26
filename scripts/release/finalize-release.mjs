@@ -27,6 +27,45 @@ function assert(condition, message) {
 
 const RELEASE_COPY = new Map([
   [
+    "0.1.3",
+    {
+      updaterNotes:
+        "Public testing pre-release with one-click Windows WSL setup, plain-language bilingual guidance, typed immutable local-input snapshots, exact-scope AWS/Azure/GCP provider execution, and digest-pinned engine integration. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **Public testing pre-release.** This build replaces the manual Administrator PowerShell",
+        "> step with one in-app action and the standard Windows confirmation dialog. It is not the",
+        "> latest stable release and has not completed the planned formal QC/code review.",
+        "",
+        "When WSL 2 is missing, disabled, or outdated, choose **Fix this for me** /",
+        "**交給程式處理**. Windows asks for administrator approval once, then the app checks the",
+        "result and continues automatically. A required restart remains explicit and is never",
+        "triggered by the app.",
+        "",
+        "The backend accepts no executable or arguments from the UI. It derives the only allowed",
+        "operation from the current failed prerequisite, runs the Windows-owned System32 wsl.exe",
+        "with fixed Microsoft arguments, and never receives or stores the administrator password.",
+        "",
+        "Manual Microsoft commands remain available under **Other ways** as a fallback. The same",
+        "plain-language flow is available in English and Traditional Chinese on the setup page and",
+        "in the sidebar.",
+        "",
+        "This candidate retains typed immutable snapshots for repository, IaC, OCI image-layout,",
+        "Kubernetes manifest, and node-configuration inputs.",
+        "",
+        "Provider discovery stays inside its released AWS Organizations, Azure subscription, or GCP",
+        "organization source boundary. Prowler execution remains separately bound to one exact AWS",
+        "account, Azure subscription, or GCP project.",
+        "",
+        "The required 21-engine catalog is bound to immutable image, launcher, adapter, evidence,",
+        "coverage, license, and verification contracts. Scanner images remain separate artifacts",
+        "and are not bundled in the desktop installers.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "",
+      ],
+    },
+  ],
+  [
     "0.1.2",
     {
       updaterNotes:

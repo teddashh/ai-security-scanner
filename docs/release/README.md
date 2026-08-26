@@ -4,7 +4,7 @@ The release workflow builds native Tauri installers from either a manual `main` 
 exact numeric SemVer tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`, receives
 no publication privileges, creates no tag or GitHub Release, and preserves the finalized candidate
 as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag such as
-`v0.1.2` must exactly match the versions in `package.json`, `package-lock.json`,
+`v0.1.3` must exactly match the versions in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
 
 `package.json` declares whether that exact build uses the `prerelease` or `stable` publication
@@ -145,8 +145,9 @@ Each GitHub Release contains:
 - the project license and release notes; and
 - a GitHub build-provenance attestation over every published file.
 
-Release-line details are recorded in the source tree. See the current
-[`v0.1.2` public testing notes](v0.1.2.md), the planned
+Release-line details are recorded in the source tree. See the
+[`v0.1.2` initial public testing notes](v0.1.2.md),
+[`v0.1.3` one-click Windows setup notes](v0.1.3.md), the planned
 [`v0.2.0` stable completion notes](v0.2.0.md), and the historical
 [`v0.1.1` security and consistency repair notes](v0.1.1.md).
 
@@ -187,7 +188,7 @@ First run the local metadata validator and normal implementation checks. Dispatc
 workflow from `main` before creating a tag:
 
 ```sh
-npm run release:validate -- --tag v0.1.2
+npm run release:validate -- --tag v0.1.3
 gh workflow run release.yml --ref main
 ```
 
@@ -198,8 +199,8 @@ its immutable `headSha`, and retain or download its `release-finalized` artifact
 commit—not a later `main` tip:
 
 ```sh
-git tag -a v0.1.2 <preflight-head-sha> -m "ai-security-scanner v0.1.2"
-git push origin v0.1.2
+git tag -a v0.1.3 <preflight-head-sha> -m "ai-security-scanner v0.1.3"
+git push origin v0.1.3
 ```
 
 The tag run rebuilds from the same commit rather than reusing preflight binaries. The GitHub Release
