@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  hasExactGuidedCloudConsent,
   matchesGuidedCoverageRoute,
   shouldPromptForFirstAsset,
   singleGuidedPendingAsset,
@@ -59,6 +60,35 @@ test("guided matching never selects an already confirmed item or a different rou
   assert.equal(matchesGuidedCoverageRoute(confirmedCloud, { kind: "cloud" }), false);
   assert.equal(matchesGuidedCoverageRoute(asset({}), { kind: "cloud" }), false);
   assert.equal(matchesGuidedCoverageRoute(asset({ platform: "gcp", type: "project" }), { kind: "none" }), false);
+});
+
+test("a signed-in cloud source cannot simplify consent for another account on the same platform", () => {
+  const accountA = asset({
+    id: "aws-account-a",
+    platform: "aws",
+    type: "cloud_account",
+    discoveredFromSourceIds: ["aws-source-a"],
+  });
+  const sourceA = { sourceId: "aws-source-a", platform: "aws" as const };
+  const sourceB = { sourceId: "aws-source-b", platform: "aws" as const };
+
+  assert.equal(hasExactGuidedCloudConsent([accountA], sourceA), true);
+  assert.equal(hasExactGuidedCloudConsent([accountA], sourceB), false);
+  assert.equal(hasExactGuidedCloudConsent([
+    accountA,
+    asset({
+      id: "aws-account-b",
+      platform: "aws",
+      type: "cloud_account",
+      discoveredFromSourceIds: ["aws-source-b"],
+    }),
+  ], sourceA), false);
+  assert.equal(hasExactGuidedCloudConsent([
+    asset({ ...accountA, discoveredFromSourceIds: undefined }),
+  ], sourceA), false);
+  assert.equal(hasExactGuidedCloudConsent([
+    asset({ ...accountA, discoveredFromSourceIds: ["aws-source-a", "aws-source-b"] }),
+  ], sourceA), false);
 });
 
 test("the choose-item prompt disappears as soon as a guided item is selected", () => {

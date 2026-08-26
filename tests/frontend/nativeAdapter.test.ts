@@ -15,7 +15,7 @@ const scannerSource = readFileSync(
 
 const bundled = await build({
   stdin: {
-    contents: 'export { adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus } from "./src/services/nativeAdapter.ts";',
+    contents: 'export { adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus, adaptNativeCase } from "./src/services/nativeAdapter.ts";',
     loader: "ts",
     resolveDir: process.cwd(),
     sourcefile: "native-adapter-test-entry.ts",
@@ -33,6 +33,7 @@ const {
   adaptLocalNetworkCandidateInventory,
   adaptManagedRuntimePrerequisiteRepairResult,
   adaptManagedRuntimeSetupStatus,
+  adaptNativeCase,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
@@ -183,4 +184,65 @@ test("questionnaire-only local names stay distinct from attached workspace snaps
   assert.ok(adapterSource.includes("localQuestionnaireKinds"));
   assert.ok(adapterSource.includes("questionnairePlaceholder:"));
   assert.ok(adapterSource.includes('asset.metadata?.workspace_snapshot_id === "string"'));
+});
+
+test("native assets preserve the exact data-source provenance used for cloud binding", () => {
+  const workspace = adaptNativeCase({
+    id: "case-1",
+    title: "Two AWS accounts",
+    assessment_intent: "cloud_account",
+    profile: {
+      organization_name: "Example",
+      employee_range: "small",
+      data_classes: [],
+      notes: null,
+    },
+    status: "scope_review",
+    created_at: "2026-08-26T00:00:00Z",
+    updated_at: "2026-08-26T00:00:00Z",
+    is_demo: false,
+    requested_activities: ["configuration_assessment"],
+    data_sources: [
+      {
+        id: "aws-source-a",
+        kind: "aws_organization",
+        label: "AWS account A",
+        status: "connected",
+        connected_at: "2026-08-26T00:00:00Z",
+        last_discovered_at: "2026-08-26T00:00:00Z",
+        read_only: true,
+      },
+      {
+        id: "aws-source-b",
+        kind: "aws_organization",
+        label: "AWS account B",
+        status: "connected",
+        connected_at: "2026-08-26T00:00:00Z",
+        last_discovered_at: "2026-08-26T00:00:00Z",
+        read_only: true,
+      },
+    ],
+    assets: [{
+      id: "aws-account-a",
+      kind: "cloud_account",
+      name: "AWS account A",
+      provider: "aws",
+      region: null,
+      identifiers: [{ namespace: "aws_account_id", value: "111111111111" }],
+      discovered_from: ["aws-source-a"],
+      candidate: true,
+      owner_confirmed: false,
+      internet_exposed: null,
+      contains_sensitive_data: null,
+      metadata: {},
+    }],
+    scope_grants: [],
+    coverage: [],
+    scan_runs: [],
+    findings: [],
+    exports: [],
+    comparisons: [],
+  });
+
+  assert.deepEqual(workspace.assets[0]?.discoveredFromSourceIds, ["aws-source-a"]);
 });

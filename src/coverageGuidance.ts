@@ -8,6 +8,11 @@ export type GuidedCoverageRoute =
 
 const cloudPlatforms = new Set<Asset["platform"]>(["aws", "azure", "gcp", "m365"]);
 
+interface GuidedCloudConnection {
+  sourceId: string;
+  platform: Asset["platform"];
+}
+
 export const matchesGuidedCoverageRoute = (asset: Asset, route: GuidedCoverageRoute): boolean => {
   if (asset.authorizationState !== "pending") return false;
   if (route.kind === "network") return asset.platform === "external";
@@ -31,3 +36,19 @@ export const shouldPromptForFirstAsset = (
 
 export const isCloudAsset = (asset: Pick<Asset, "platform">): boolean =>
   cloudPlatforms.has(asset.platform);
+
+/**
+ * Simplified cloud confirmation is safe only when the selected asset came from
+ * this exact signed-in source. Same-provider accounts are not interchangeable,
+ * and missing or multi-source provenance remains an explicit review path.
+ */
+export const hasExactGuidedCloudConsent = (
+  selectedAssets: readonly Asset[],
+  connection: GuidedCloudConnection | undefined,
+): boolean => {
+  if (!connection || selectedAssets.length !== 1) return false;
+  const asset = selectedAssets[0];
+  if (!asset || !isCloudAsset(asset) || asset.platform !== connection.platform) return false;
+  return asset.discoveredFromSourceIds?.length === 1
+    && asset.discoveredFromSourceIds[0] === connection.sourceId;
+};

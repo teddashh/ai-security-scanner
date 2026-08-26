@@ -91,6 +91,7 @@ interface NativeAsset {
   provider: string | null;
   region: string | null;
   identifiers: Array<{ namespace: string; value: string }>;
+  discovered_from: string[];
   candidate: boolean;
   owner_confirmed: boolean;
   internet_exposed?: boolean | null;
@@ -947,7 +948,7 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
     .map((provider): CloudPlatform | undefined => provider === "microsoft365" ? "m365" : ["aws", "azure", "gcp"].includes(provider) ? provider as CloudPlatform : undefined)
     .filter((provider): provider is CloudPlatform => Boolean(provider));
   const platforms = supportedProviders.length > 0 ? supportedProviders : unique(manifest.supported_asset_kinds.map((kind) =>
-    platformFromAsset({ id: "", kind, name: "", provider: null, region: null, identifiers: [], candidate: false, owner_confirmed: false }),
+    platformFromAsset({ id: "", kind, name: "", provider: null, region: null, identifiers: [], discovered_from: [], candidate: false, owner_confirmed: false }),
   ));
   const distribution: EngineManifest["redistribution"] = manifest.distribution_mode === "bundled_image"
     ? "bundled"
@@ -1048,6 +1049,7 @@ export const adaptNativeCase = (
       platform: platformFromAsset(asset),
       locator: asset.identifiers[0]?.value ?? asset.name,
       identifiers: asset.identifiers,
+      discoveredFromSourceIds: [...asset.discovered_from],
       region: asset.region ?? undefined,
       internetExposed: asset.internet_exposed ?? undefined,
       containsSensitiveData: asset.contains_sensitive_data ?? undefined,

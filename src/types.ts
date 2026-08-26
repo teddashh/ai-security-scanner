@@ -427,6 +427,8 @@ export interface Asset {
   platform: CloudPlatform;
   locator: string;
   identifiers?: AssetIdentifier[];
+  /** Exact saved data sources that discovered this asset. Missing provenance is never authorization. */
+  discoveredFromSourceIds?: string[];
   region?: string;
   owner?: string;
   internetExposed?: boolean;

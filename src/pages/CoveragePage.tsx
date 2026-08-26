@@ -29,7 +29,7 @@ import type { CoverageSetupFocus } from "../scanReadiness";
 import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scopePolicy";
 import type { UseCaseId } from "../useCases";
 import {
-  isCloudAsset,
+  hasExactGuidedCloudConsent,
   shouldPromptForFirstAsset,
   singleGuidedPendingAsset,
   type GuidedCoverageRoute,
@@ -870,12 +870,8 @@ export function CoveragePage({
     && scopeModes.length === 1
     && scopeModes[0] === "local_artifact",
   );
-  const guidedCloudConsent = Boolean(
-    guidedCloudRoute
-    && providerConnection
-    && selectedScopeAssets.length === 1
-    && selectedScopeAssets.every((asset) => isCloudAsset(asset) && asset.platform === providerConnection.platform),
-  );
+  const guidedCloudConsent = guidedCloudRoute
+    && hasExactGuidedCloudConsent(selectedScopeAssets, providerConnection);
   const simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent;
   const requiresAuthorizationReference = Boolean(externalActivity) && !guidedLowImpactNetwork;
   const effectiveScopeConfirmation = scopeConfirmation.trim()

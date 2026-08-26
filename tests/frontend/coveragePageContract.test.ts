@@ -137,8 +137,7 @@ test("guided network, local, and signed-in cloud setup use one explicit confirma
 });
 
 test("cloud sign-in leads to one exact read-only scan confirmation instead of another ownership form", () => {
-  assert.match(source, /guidedCloudRoute[\s\S]*providerConnection[\s\S]*selectedScopeAssets\.every\(\(asset\) => isCloudAsset\(asset\) && asset\.platform === providerConnection\.platform\)/u);
-  assert.match(source, /selectedScopeAssets\.length === 1/u);
+  assert.match(source, /guidedCloudRoute[\s\S]*hasExactGuidedCloudConsent\(selectedScopeAssets, providerConnection\)/u);
   assert.match(source, /asset\.platform === "external" \|\| selectedIncludesExternal \|\| guidedCloudRoute/u);
   assert.match(source, /!simpleGuidedConsent && \([\s\S]*ownershipConfirmed/u);
   assert.match(source, /guidedLowImpactNetwork \|\| guidedCloudConsent[\s\S]*pageCopy\.changeScanType/u);
