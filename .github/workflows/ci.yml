@@ -67,6 +67,11 @@ jobs:
       - run: >-
           cargo test --locked --package ai-security-scanner --no-default-features --lib
           managed_runtime::tests
+      - name: Test Windows installed gateway path normalization
+        run: >-
+          cargo test --locked --package ai-security-scanner --no-default-features --lib
+          managed_network::tests::installed_gateway_is_resolved_from_the_canonical_desktop_directory
+          -- --exact
       - run: npm ci --ignore-scripts
       - name: Build and stage required Windows sidecars
         run: npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc

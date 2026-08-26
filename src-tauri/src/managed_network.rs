@@ -2439,6 +2439,38 @@ pub(crate) fn inspect_gateway_binary(path: &Path) -> AppResult<PathBuf> {
     Ok(canonical)
 }
 
+/// Resolves the packaged gateway from the canonical directory of the desktop
+/// executable that is already running, then applies the strict gateway
+/// inspection above. Windows `fs::canonicalize` commonly changes a normal
+/// drive path such as `C:\...` into the equivalent `\\?\C:\...` form. If the
+/// sibling path is built before that normalization, a correctly installed
+/// gateway is rejected by the canonical-path equality check on every poll.
+///
+/// Canonicalizing the trusted desktop executable first keeps the companion's
+/// no-symlink/alias guarantee while ensuring both sides of its comparison use
+/// the same platform-native path form. This remains inspection-only.
+pub(crate) fn inspect_installed_gateway_binary(desktop_executable: &Path) -> AppResult<PathBuf> {
+    if !desktop_executable.is_absolute() || desktop_executable.as_os_str().len() > 4096 {
+        return Err(AppError::Runtime(
+            "desktop executable path is not a bounded absolute path".into(),
+        ));
+    }
+    let canonical_desktop = fs::canonicalize(desktop_executable).map_err(|error| {
+        AppError::Runtime(format!(
+            "desktop executable path could not be resolved: {error}"
+        ))
+    })?;
+    let parent = canonical_desktop.parent().ok_or_else(|| {
+        AppError::Runtime("desktop executable has no containing directory".into())
+    })?;
+    let name = if cfg!(windows) {
+        "ai-security-scanner-egress-gateway.exe"
+    } else {
+        "ai-security-scanner-egress-gateway"
+    };
+    inspect_gateway_binary(&parent.join(name))
+}
+
 fn validate_policy_directory(path: &Path) -> AppResult<PathBuf> {
     if !path.is_absolute() || path.as_os_str().len() > 4096 {
         return Err(AppError::InvalidRequest(
@@ -3585,6 +3617,36 @@ mod tests {
                 .is_none(),
             "inspection must not create support files"
         );
+    }
+
+    #[test]
+    fn installed_gateway_is_resolved_from_the_canonical_desktop_directory() {
+        let temporary = tempfile::tempdir().expect("temporary install directory");
+        let install = temporary.path().join("installed app");
+        fs::create_dir(&install).expect("installed app directory");
+        let desktop = install.join(if cfg!(windows) {
+            "ai-security-scanner.exe"
+        } else {
+            "ai-security-scanner"
+        });
+        let gateway = install.join(if cfg!(windows) {
+            "ai-security-scanner-egress-gateway.exe"
+        } else {
+            "ai-security-scanner-egress-gateway"
+        });
+        fs::write(&desktop, b"desktop fixture").expect("desktop fixture");
+        fs::write(&gateway, b"gateway fixture").expect("gateway fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700))
+                .expect("gateway executable mode");
+        }
+
+        let located =
+            inspect_installed_gateway_binary(&desktop).expect("installed gateway beside desktop");
+
+        assert_eq!(located, fs::canonicalize(gateway).unwrap());
     }
 
     #[cfg(unix)]

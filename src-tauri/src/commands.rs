@@ -26,7 +26,8 @@ use crate::external_scope::{ExternalScopeGrant, ResolvedExternalPlan, resolve_ex
 use crate::managed_network::{
     ManagedNetworkCleanupOutcome, ManagedNetworkController, ManagedNetworkLease,
     ManagedNetworkOwner, ProviderServiceEgressRequest, inspect_gateway_binary,
-    resolve_provider_service_plan, validate_provider_service_request_static,
+    inspect_installed_gateway_binary, resolve_provider_service_plan,
+    validate_provider_service_request_static,
 };
 use crate::managed_runtime::{
     ManagedRuntimePrerequisiteRepairResult, ManagedRuntimeSetupController,
@@ -3924,15 +3925,7 @@ fn locate_egress_gateway_binary() -> AppResult<std::path::PathBuf> {
             "desktop executable path could not be resolved: {error}"
         ))
     })?;
-    let parent = current.parent().ok_or_else(|| {
-        AppError::Runtime("desktop executable has no containing directory".into())
-    })?;
-    let name = if cfg!(windows) {
-        "ai-security-scanner-egress-gateway.exe"
-    } else {
-        "ai-security-scanner-egress-gateway"
-    };
-    inspect_gateway_binary(&parent.join(name)).map_err(|error| {
+    inspect_installed_gateway_binary(&current).map_err(|error| {
         AppError::NotAvailable(format!(
             "the managed egress gateway sidecar is unavailable beside the desktop executable: {error}"
         ))

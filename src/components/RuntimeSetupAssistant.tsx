@@ -66,12 +66,14 @@ interface RuntimeAssistantCopy {
     title: string;
     description: string;
     action: string;
+    releaseHref: string;
   }>>;
   phases: Record<ManagedRuntimeSetupPhase, string>;
   actions: Record<ManagedRuntimeSetupNextAction, RuntimeActionCopy>;
 }
 
 const MICROSOFT_WSL_HELP = "https://learn.microsoft.com/windows/wsl/install";
+const PRODUCT_RELEASES = "https://github.com/teddashh/ai-security-scanner/releases";
 
 const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
   en: {
@@ -104,14 +106,16 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     failedDescription: "Follow the single action below, then check again. Your scan projects are unchanged.",
     scannerIssues: {
       egress_gateway_unavailable: {
-        title: "Repair the scan-tool connection",
-        description: "The local scan tools are installed, but their private connection needs to be checked before this scan can start.",
-        action: "Check and repair",
+        title: "Restore one installed scan component",
+        description: "The private connection component installed with this app could not be verified. Install the newest release again; your local scan projects will stay on this device.",
+        action: "Get the latest installer",
+        releaseHref: PRODUCT_RELEASES,
       },
       engine_execution_contract_invalid: {
-        title: "Repair one scan tool",
-        description: "A required part of this check is missing or out of date. Let ai-security-scanner check and repair the local tools.",
-        action: "Check and repair",
+        title: "Restore one installed scan component",
+        description: "A required part of this check is missing or out of date. Install the newest release again; your local scan projects will stay on this device.",
+        action: "Get the latest installer",
+        releaseHref: PRODUCT_RELEASES,
       },
     },
     phases: {
@@ -203,14 +207,16 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     failedDescription: "照著下方唯一的操作完成後，再重新檢查；你的掃描專案不會受到影響。",
     scannerIssues: {
       egress_gateway_unavailable: {
-        title: "修復掃描工具的專用連線",
-        description: "本機掃描工具已安裝，但開始這次掃描前，需要先檢查它們使用的專用連線。",
-        action: "檢查並修復",
+        title: "恢復一項安裝元件",
+        description: "程式無法確認隨附的專用連線元件。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
+        action: "取得最新安裝程式",
+        releaseHref: PRODUCT_RELEASES,
       },
       engine_execution_contract_invalid: {
-        title: "修復一項掃描工具",
-        description: "這項檢查缺少必要元件，或元件已過期；讓 ai-security-scanner 檢查並修復本機工具。",
-        action: "檢查並修復",
+        title: "恢復一項安裝元件",
+        description: "這項檢查缺少必要元件，或元件已過期。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
+        action: "取得最新安裝程式",
+        releaseHref: PRODUCT_RELEASES,
       },
     },
     phases: {
@@ -431,10 +437,20 @@ export function RuntimeSetupAssistant({
             <Icon name="settings" size={17} />
             {repairing ? text.repairing : text.repair}
           </button>
+        ) : scannerIssue ? (
+          <a
+            className="button button--primary"
+            href={scannerIssue.releaseHref}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Icon name="external" size={17} />
+            {scannerIssue.action}
+          </a>
         ) : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
-            {failed ? text.retry : scannerIssue?.action ?? text.start}
+            {failed ? text.retry : text.start}
           </button>
         )}
       </div>
