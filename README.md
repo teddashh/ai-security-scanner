@@ -108,9 +108,9 @@ Read the [threat model](docs/threat-model.md), [provider authorization contract]
 
 Installed desktop packages carry a pinned, product-managed Podman machine client and platform helpers. The user does not separately install Docker, Podman, Python, PowerShell modules, vulnerability databases, or individual engine CLIs.
 
-First setup verifies the packaged runtime and checks host prerequisites **before** downloading the checksum-locked machine image. It then initializes a private rootless machine and reports each step. Downloads can be cancelled and resumed. The application does not modify the system `PATH` or use a package manager. On Windows, the only administrator action is an explicit one-time WSL install or update approved in the standard Windows confirmation dialog.
+The installed desktop app prepares its private scan tools automatically on first launch, before the scan workspace appears. It verifies the packaged runtime and checks the computer **before** downloading the checksum-locked machine image, then initializes a private rootless machine while showing progress. Downloads can be cancelled and resumed. The application does not modify the system `PATH` or use a package manager.
 
-On Windows, click **Fix this for me** and approve the Windows dialog once. ai-security-scanner runs only Microsoft's trusted `wsl.exe` with the fixed action needed, checks the result, and continues automatically. It never receives or stores the administrator password. If Windows needs a restart, the app stops before the roughly 257 MB machine-image download and says so clearly. Manual Microsoft commands remain under **Other ways**.
+On Windows, an already-ready WSL 2 setup requires no click. If the automatic read-only check proves that WSL must be installed or updated, the first-launch screen shows one clear action and Windows asks for administrator approval once. ai-security-scanner runs only Microsoft's trusted `wsl.exe` with the fixed action needed; it never receives or stores the administrator password. If Windows needs a restart, the app stops before the roughly 257 MB machine-image download. Reopen ai-security-scanner after restarting and setup continues automatically. Manual Microsoft commands remain under **Other ways**.
 
 | Desktop host | Managed provider | Host prerequisite |
 | --- | --- | --- |

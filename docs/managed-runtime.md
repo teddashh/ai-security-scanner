@@ -12,7 +12,13 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   local application-data directory. It never changes the system `PATH` or invokes a package
   manager. The only elevated host change is the explicit Windows WSL prerequisite repair described
   below; scanner engines and the managed runtime remain rootless.
-- On Windows, setup first resolves the trusted `SystemRoot\System32\wsl.exe` boundary and runs
+- A fresh installed desktop with no existing cases enters a first-launch scan-tool installation
+  phase whenever the release-managed runtime has not been prepared yet. It starts this
+  product-owned lifecycle operation automatically; an already-ready host reaches the scan workspace
+  without a setup click. Existing cases and results are never hidden by runtime setup or failure: a
+  stopped or missing runtime starts in the background while the workspace remains available. Failed
+  or cancelled attempts are never repeated automatically in the same process.
+- On Windows, first launch resolves the trusted `SystemRoot\System32\wsl.exe` boundary and runs
   bounded, read-only `--status` and `-l --quiet` probes, matching the inventory command used by the
   pinned Podman WSL provider. The probe requests UTF-8 output while retaining bounded UTF-16LE
   compatibility for older inbox WSL builds. A failed prerequisite check stops
@@ -25,8 +31,9 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   `--install --no-distribution` or fixed `--update` arguments through the standard Windows UAC
   dialog. No executable or arguments come from the webview, no shell is involved, and the app never
   sees the administrator password. UAC cancellation makes no change. Restart codes become the sole
-  visible restart action; the app never restarts Windows automatically. Manual commands are retained
-  only as a secondary fallback.
+  visible restart action; the app never restarts Windows automatically. Reopening the app after the
+  restart repeats the read-only check and continues the private runtime setup automatically. Manual
+  commands are retained only as a secondary fallback.
 - The VM image is downloaded from the exact HTTPS URL pinned in the release manifest. Bounded
   resumable downloads are accepted only from approved GitHub release hosts and are committed only
   after the locked size and SHA-256 match.

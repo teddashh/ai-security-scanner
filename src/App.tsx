@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
 import { Icon } from "./components/Icon";
+import { RuntimeFirstLaunch } from "./components/RuntimeFirstLaunch";
 import { RuntimeSetupAssistant } from "./components/RuntimeSetupAssistant";
 import { EmptyState } from "./components/Shared";
 import { getDemoNotice } from "./data/demo";
@@ -22,6 +23,10 @@ import {
   isCurrentScanReadinessRequest,
   isCurrentScanReadinessResponse,
 } from "./scanReadinessRequest";
+import {
+  shouldAutomaticallyPrepareRuntime,
+  shouldShowRuntimeFirstLaunch,
+} from "./runtimeFirstLaunch";
 import {
   checkForAppUpdate,
   installAppUpdate,
@@ -162,7 +167,7 @@ const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
 
 export default function App() {
-  const { locale, text, formatNumber } = useI18n();
+  const { locale, setLocale, text, formatNumber } = useI18n();
   const [page, setPage] = useState<PageId>(pageFromHash);
   const [snapshot, setSnapshot] = useState<AppSnapshot>();
   const [mode, setMode] = useState<AppMode>(scannerService.isNative() ? "native" : "demo");
@@ -173,6 +178,7 @@ export default function App() {
   const [artifactCleanupPlan, setArtifactCleanupPlan] = useState<CaseArtifactDeletionPlan>();
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
+  const [runtimeAutomaticAttemptFailed, setRuntimeAutomaticAttemptFailed] = useState(false);
   const [scanReadiness, setScanReadiness] = useState<ScanReadiness>();
   const [scanReadinessErrorCaseId, setScanReadinessErrorCaseId] = useState<string>();
   const [runtimeSetupFocusKey, setRuntimeSetupFocusKey] = useState(0);
@@ -188,6 +194,7 @@ export default function App() {
   const toastId = useRef(0);
   const snapshotLocale = useRef(locale);
   const scanReadinessRequestGeneration = useRef(0);
+  const automaticRuntimeSetupAttempted = useRef(false);
 
   const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
     const id = ++toastId.current;
@@ -326,16 +333,20 @@ export default function App() {
     }
   }, [pushToast, text]);
 
-  const setupManagedRuntime = async () => {
+  const setupManagedRuntime = async ({ automatic = false }: { automatic?: boolean } = {}) => {
+    setRuntimeAutomaticAttemptFailed(false);
     setBusyAction("runtime-setup");
     try {
       const result = await scannerService.setupManagedRuntime();
       applyServiceMeta(result);
       const setupResult = await scannerService.getManagedRuntimeSetupStatus();
       setRuntimeSetup(setupResult.data);
+      if (automatic && !result.data.accepted && setupResult.data.phase === "idle") {
+        setRuntimeAutomaticAttemptFailed(true);
+      }
       await loadSnapshot(snapshot?.selectedCaseId, true);
       const cancelled = setupResult.data.phase === "cancelled";
-      if (!result.data.accepted && !cancelled) {
+      if (!automatic && !result.data.accepted && !cancelled) {
         window.location.hash = "start";
         setPage("start");
       }
@@ -347,16 +358,27 @@ export default function App() {
             ? text({ en: "Scan-engine setup was stopped", zhTW: "已停止掃描引擎設定" })
             : text({ en: "One setup step still needs attention", zhTW: "設定還有一個步驟需要處理" }),
         detail: result.data.accepted
-          ? text({
-            en: "You can continue with your chosen check.",
-            zhTW: "現在可以繼續設定你選擇的檢查。",
-          })
-          : text({
-            en: "Follow the step shown on the start page, then check again.",
-            zhTW: "請照首頁顯示的步驟處理，再重新檢查。",
-          }),
+          ? automatic
+            ? text({
+              en: "Setup is complete. You can start using ai-security-scanner.",
+              zhTW: "安裝已完成，現在可以直接使用 ai-security-scanner。",
+            })
+            : text({
+              en: "You can continue with your chosen check.",
+              zhTW: "現在可以繼續設定你選擇的檢查。",
+            })
+          : automatic
+            ? text({
+              en: "Existing results remain available. Use the one setup action shown when you are ready.",
+              zhTW: "既有結果仍可查看；準備好時，再使用畫面顯示的唯一設定操作。",
+            })
+            : text({
+              en: "Follow the step shown on the start page, then check again.",
+              zhTW: "請照首頁顯示的步驟處理，再重新檢查。",
+            }),
       });
     } catch (error) {
+      if (automatic) setRuntimeAutomaticAttemptFailed(true);
       recordTechnicalError("prepare managed runtime", error);
       pushToast({
         tone: "danger",
@@ -370,6 +392,17 @@ export default function App() {
       setBusyAction(undefined);
     }
   };
+
+  useEffect(() => {
+    if (!shouldAutomaticallyPrepareRuntime(
+      mode,
+      snapshot?.runtime,
+      runtimeSetup,
+      automaticRuntimeSetupAttempted.current,
+    )) return;
+    automaticRuntimeSetupAttempted.current = true;
+    void setupManagedRuntime({ automatic: true });
+  }, [mode, runtimeSetup?.phase, snapshot?.runtime?.available, snapshot?.runtime?.phase, snapshot?.runtime?.provider]);
 
   const repairManagedRuntimePrerequisite = async () => {
     setBusyAction("runtime-repair");
@@ -1102,32 +1135,57 @@ export default function App() {
     }
   })();
 
+  const showRuntimeFirstLaunch = mode === "native"
+    && snapshot !== undefined
+    && shouldShowRuntimeFirstLaunch(
+      mode,
+      snapshot.runtime,
+      snapshot.cases.length > 0,
+    );
+
   return (
     <>
-      <AppShell
-        page={page}
-        mode={mode}
-        cases={snapshot?.cases ?? []}
-        selectedCase={selectedCase}
-        loading={loading}
-        onNavigate={navigate}
-        onSelectCase={(caseId) => void selectCase(caseId)}
-        demoNotice={notice ?? getDemoNotice()}
-        appUpdate={appUpdate}
-        onCheckForUpdate={() => void checkAppUpdate()}
-        onInstallUpdate={(version) => void installUpdate(version)}
-        runtime={snapshot?.runtime}
-        runtimeSetup={runtimeSetup}
-        runtimeBusy={["runtime-setup", "runtime-repair"].includes(busyAction ?? "")
-          || runtimeSetup?.active
-          || runtimeSetup?.prerequisiteRepairActive}
-        runtimeRepairing={busyAction === "runtime-repair" || runtimeSetup?.prerequisiteRepairActive}
-        onSetupRuntime={() => void setupManagedRuntime()}
-        onRepairRuntime={() => void repairManagedRuntimePrerequisite()}
-        onCancelRuntime={() => void cancelManagedRuntimeSetup()}
-      >
-        {content}
-      </AppShell>
+      {showRuntimeFirstLaunch ? (
+        <RuntimeFirstLaunch
+          locale={locale}
+          setLocale={setLocale}
+          runtime={snapshot?.runtime}
+          status={runtimeSetup}
+          busy={["runtime-setup", "runtime-repair"].includes(busyAction ?? "")
+            || runtimeSetup?.active === true
+            || runtimeSetup?.prerequisiteRepairActive === true}
+          repairing={busyAction === "runtime-repair" || runtimeSetup?.prerequisiteRepairActive === true}
+          automaticAttemptFailed={runtimeAutomaticAttemptFailed}
+          onSetup={() => void setupManagedRuntime()}
+          onRepair={() => void repairManagedRuntimePrerequisite()}
+          onCancel={() => void cancelManagedRuntimeSetup()}
+        />
+      ) : (
+        <AppShell
+          page={page}
+          mode={mode}
+          cases={snapshot?.cases ?? []}
+          selectedCase={selectedCase}
+          loading={loading}
+          onNavigate={navigate}
+          onSelectCase={(caseId) => void selectCase(caseId)}
+          demoNotice={notice ?? getDemoNotice()}
+          appUpdate={appUpdate}
+          onCheckForUpdate={() => void checkAppUpdate()}
+          onInstallUpdate={(version) => void installUpdate(version)}
+          runtime={snapshot?.runtime}
+          runtimeSetup={runtimeSetup}
+          runtimeBusy={["runtime-setup", "runtime-repair"].includes(busyAction ?? "")
+            || runtimeSetup?.active
+            || runtimeSetup?.prerequisiteRepairActive}
+          runtimeRepairing={busyAction === "runtime-repair" || runtimeSetup?.prerequisiteRepairActive}
+          onSetupRuntime={() => void setupManagedRuntime()}
+          onRepairRuntime={() => void repairManagedRuntimePrerequisite()}
+          onCancelRuntime={() => void cancelManagedRuntimeSetup()}
+        >
+          {content}
+        </AppShell>
+      )}
 
       <div
         className="toast-region"
