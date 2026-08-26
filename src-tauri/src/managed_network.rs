@@ -6,7 +6,7 @@ use crate::external_scope::{
     CanonicalTarget, ExternalActivity, ResolvedExternalPlan, TransportProtocol,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use ipnet::IpNet;
+use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,6 +49,8 @@ const CONTAINER_PROBE_BINARY: &str = "/usr/local/bin/ai-security-scanner-egress-
 const GATEWAY_CONTAINER_USER_MEMORY_MB: u16 = 128;
 const GATEWAY_CONTAINER_PIDS: u16 = 64;
 const GATEWAY_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_NETWORK_SUBNET_ATTEMPTS: usize = 24;
+const MAX_NETWORK_CANDIDATE_SEARCH: usize = 4_096;
 
 /// Bounded, non-secret identity copied into the durable execution checkpoint.
 ///
@@ -930,9 +932,16 @@ impl ManagedNetworkController {
             .min()
             .unwrap_or(now)
             .min(now + ChronoDuration::hours(24));
-        self.provision_policy(owner, expires_at, now, |policy_id, listen, subnet| {
-            EgressGatewayPolicy::from_resolved_plans(policy_id, listen, subnet, plans, now)
-        })
+        let prohibited_networks = frozen_plan_networks(plans);
+        self.provision_policy(
+            owner,
+            expires_at,
+            now,
+            &prohibited_networks,
+            |policy_id, listen, subnet| {
+                EgressGatewayPolicy::from_resolved_plans(policy_id, listen, subnet, plans, now)
+            },
+        )
     }
 
     pub fn provision_provider_service(
@@ -955,6 +964,7 @@ impl ManagedNetworkController {
             owner,
             plan.request.expires_at.min(now + ChronoDuration::hours(1)),
             now,
+            &provider_plan_networks(plan),
             |policy_id, listen, subnet| {
                 EgressGatewayPolicy::from_provider_service_plan(
                     policy_id, listen, subnet, plan, now,
@@ -983,10 +993,12 @@ impl ManagedNetworkController {
             ));
         };
         let expires_at = now + ChronoDuration::minutes(5);
+        let qualification_networks = vec![host_network(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)))];
         let mut lease = self.provision_policy(
             owner,
             expires_at,
             now,
+            &qualification_networks,
             |policy_id, listen_address, allowed_client_network| {
                 validate_bridge_network(allowed_client_network, listen_address.ip())?;
                 if listen_address.port() != GATEWAY_PORT {
@@ -1130,18 +1142,27 @@ impl ManagedNetworkController {
         owner: &ManagedNetworkOwner,
         expires_at: DateTime<Utc>,
         now: DateTime<Utc>,
+        prohibited_networks: &[IpNet],
         build_policy: F,
     ) -> AppResult<ManagedNetworkLease>
     where
         F: FnOnce(&str, SocketAddr, IpNet) -> AppResult<EgressGatewayPolicy>,
     {
         match &self.gateway_backend {
-            GatewayBackend::Direct { .. } => {
-                self.provision_direct_policy(owner, expires_at, now, build_policy)
-            }
-            GatewayBackend::Container { .. } => {
-                self.provision_container_policy(owner, expires_at, now, build_policy)
-            }
+            GatewayBackend::Direct { .. } => self.provision_direct_policy(
+                owner,
+                expires_at,
+                now,
+                prohibited_networks,
+                build_policy,
+            ),
+            GatewayBackend::Container { .. } => self.provision_container_policy(
+                owner,
+                expires_at,
+                now,
+                prohibited_networks,
+                build_policy,
+            ),
         }
     }
 
@@ -1164,6 +1185,7 @@ impl ManagedNetworkController {
         owner: &ManagedNetworkOwner,
         expires_at: DateTime<Utc>,
         now: DateTime<Utc>,
+        prohibited_networks: &[IpNet],
         build_policy: F,
     ) -> AppResult<ManagedNetworkLease>
     where
@@ -1211,18 +1233,13 @@ impl ManagedNetworkController {
             uplink_network_id: None,
             uplink_expected_labels: BTreeMap::new(),
         };
-        create_internal_network(
+        let inspected = create_internal_network(
             self.runtime.as_ref(),
             self.provider,
             &network_name,
             &expected_labels,
-        )?;
-
-        let inspected = inspect_network(
-            self.runtime.as_ref(),
-            self.provider,
-            &network_name,
-            &expected_labels,
+            &policy_id,
+            prohibited_networks,
         )?;
         lease.network_id = Some(inspected.id.clone());
         lease.remove_unverified_network = false;
@@ -1289,6 +1306,7 @@ impl ManagedNetworkController {
         owner: &ManagedNetworkOwner,
         expires_at: DateTime<Utc>,
         now: DateTime<Utc>,
+        prohibited_networks: &[IpNet],
         build_policy: F,
     ) -> AppResult<ManagedNetworkLease>
     where
@@ -1345,18 +1363,13 @@ impl ManagedNetworkController {
             egress_policy: None,
             registry_files,
         };
-        create_internal_network(
+        let internal = create_internal_network(
             self.runtime.as_ref(),
             self.provider,
             &network_name,
             &expected_labels,
-        )?;
-
-        let internal = inspect_network(
-            self.runtime.as_ref(),
-            self.provider,
-            &network_name,
-            &expected_labels,
+            &policy_id,
+            prohibited_networks,
         )?;
         lease.network_id = Some(internal.id.clone());
         lease.remove_unverified_network = false;
@@ -1366,17 +1379,18 @@ impl ManagedNetworkController {
             .registry_files
             .push(write_registry_snapshot(&self.registry_directory, &record)?);
 
-        create_uplink_network(
+        let mut uplink_prohibited = prohibited_networks.to_vec();
+        uplink_prohibited.push(internal.subnet);
+        if let Some(subnet) = internal.ipv6_subnet {
+            uplink_prohibited.push(subnet);
+        }
+        let uplink = create_uplink_network(
             self.runtime.as_ref(),
             self.provider,
             &uplink_network_name,
             &uplink_expected_labels,
-        )?;
-        let uplink = inspect_uplink_network(
-            self.runtime.as_ref(),
-            self.provider,
-            &uplink_network_name,
-            &uplink_expected_labels,
+            &policy_id,
+            &uplink_prohibited,
         )?;
         lease.uplink_network_id = Some(uplink.id.clone());
         record.phase = RegistryPhase::UplinkVerified;
@@ -1393,7 +1407,7 @@ impl ManagedNetworkController {
                 "managed egress policy lifetime diverged from its durable registry".into(),
             ));
         }
-        reject_destination_overlap(&egress_policy, uplink.subnet)?;
+        reject_destination_overlap(&egress_policy, &uplink)?;
         let policy_file = write_policy_file(&self.policy_directory, &egress_policy)?;
         record.phase = RegistryPhase::PolicyReady;
         record.gateway_listener_ip = Some(listener_ip);
@@ -1414,6 +1428,12 @@ impl ManagedNetworkController {
             image: spec.clone(),
             internal_network_name: network_name.clone(),
             uplink_network_name,
+            uplink_subnets: Some((
+                uplink.subnet,
+                uplink.ipv6_subnet.ok_or_else(|| {
+                    AppError::Internal("verified gateway uplink lost its IPv6 subnet".into())
+                })?,
+            )),
         };
         lease.gateway_container = Some(container);
         let policy_path = lease.policy_path().expect("policy path set").to_path_buf();
@@ -1457,6 +1477,12 @@ impl ManagedNetworkController {
                 .gateway_status_directory
                 .as_ref()
                 .expect("status directory set"),
+            &policy_id,
+        )?;
+        inspect_required_gateway_container(
+            self.runtime.as_ref(),
+            self.provider,
+            &container,
             &policy_id,
         )?;
         record.phase = RegistryPhase::ContainerReady;
@@ -1770,6 +1796,16 @@ struct InspectedNetwork {
     id: String,
     subnet: IpNet,
     gateway: IpAddr,
+    ipv6_subnet: Option<IpNet>,
+    ipv6_gateway: Option<IpAddr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NetworkCandidate {
+    ipv4_subnet: IpNet,
+    ipv4_gateway: IpAddr,
+    ipv6_subnet: Option<IpNet>,
+    ipv6_gateway: Option<IpAddr>,
 }
 
 #[derive(Debug, Clone)]
@@ -1781,6 +1817,7 @@ struct GatewayContainerRuntimeIdentity {
     image: GatewayContainerSpec,
     internal_network_name: String,
     uplink_network_name: String,
+    uplink_subnets: Option<(IpNet, IpNet)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1862,13 +1899,23 @@ fn read_gateway_status(
     let mut options = OpenOptions::new();
     options.read(true);
     configure_no_follow_open(&mut options);
-    let file = options
-        .open(&path)
-        .map_err(|error| AppError::Runtime(format!("gateway status could not be read: {error}")))?;
+    let file = match options.open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AppError::Runtime(format!(
+                "gateway status could not be read: {error}"
+            )));
+        }
+    };
+    read_opened_gateway_status(file).map(Some)
+}
+
+fn read_opened_gateway_status(file: fs::File) -> AppResult<GatewayStatusDocument> {
     let opened = file.metadata()?;
-    if !opened.is_file() || opened.len() != metadata.len() {
+    if !opened.is_file() || opened.len() == 0 || opened.len() > MAX_GATEWAY_STATUS_BYTES as u64 {
         return Err(AppError::NotAuthorized(
-            "gateway status identity changed during inspection".into(),
+            "opened gateway status was not a bounded regular file".into(),
         ));
     }
     let mut bytes = Vec::with_capacity(opened.len() as usize);
@@ -1906,7 +1953,7 @@ fn read_gateway_status(
             "gateway status used an unsupported phase/code pair".into(),
         ));
     }
-    Ok(Some(status))
+    Ok(status)
 }
 
 #[cfg(unix)]
@@ -2181,22 +2228,11 @@ impl GatewayContainerReadiness for RuntimeGatewayContainerReadiness {
     ) -> AppResult<()> {
         let deadline = Instant::now() + GATEWAY_READY_TIMEOUT;
         loop {
-            let inspected =
-                inspect_required_gateway_container(runtime, provider, container, policy_id)?;
-            if !inspected.running {
-                return Err(AppError::Runtime(format!(
-                    "egress gateway container exited before becoming ready (exit code {})",
-                    inspected
-                        .exit_code
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "unavailable".into())
-                )));
-            }
-            match read_gateway_status(status_directory)? {
+            let ready = match read_gateway_status(status_directory)? {
                 Some(status)
                     if status.phase == GatewayStatusPhase::Ready && status.code == "ready" =>
                 {
-                    return Ok(());
+                    true
                 }
                 Some(status)
                     if matches!(
@@ -2211,13 +2247,42 @@ impl GatewayContainerReadiness for RuntimeGatewayContainerReadiness {
                 }
                 Some(status)
                     if status.phase == GatewayStatusPhase::Starting
-                        && status.code == "initializing" => {}
+                        && status.code == "initializing" =>
+                {
+                    false
+                }
                 Some(_) => {
                     return Err(AppError::NotAuthorized(
                         "egress gateway status used an unsupported phase/code pair".into(),
                     ));
                 }
-                None => {}
+                None => false,
+            };
+            let inspected = inspect_required_gateway_container_with_mode(
+                runtime,
+                provider,
+                container,
+                policy_id,
+                InternalAttachmentMode::PresentAllowUnassigned,
+            )?;
+            if !inspected.running {
+                return Err(AppError::Runtime(format!(
+                    "egress gateway container exited before becoming ready (exit code {})",
+                    inspected
+                        .exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "unavailable".into())
+                )));
+            }
+            if ready {
+                let exact =
+                    inspect_required_gateway_container(runtime, provider, container, policy_id)?;
+                if !exact.running {
+                    return Err(AppError::Runtime(
+                        "egress gateway container exited after reporting ready".into(),
+                    ));
+                }
+                return Ok(());
             }
             if Instant::now() >= deadline {
                 return Err(AppError::Runtime(
@@ -3328,6 +3393,131 @@ fn restrict_registry_file(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+fn host_network(address: IpAddr) -> IpNet {
+    match address {
+        IpAddr::V4(address) => IpNet::V4(Ipv4Net::new(address, 32).expect("IPv4 host prefix")),
+        IpAddr::V6(address) => IpNet::V6(Ipv6Net::new(address, 128).expect("IPv6 host prefix")),
+    }
+}
+
+fn frozen_plan_networks(plans: &[ResolvedExternalPlan]) -> Vec<IpNet> {
+    let mut networks = BTreeSet::new();
+    for plan in plans {
+        if let CanonicalTarget::Network(network) = &plan.target {
+            networks.insert(*network);
+        }
+        networks.extend(plan.resolution.addresses.iter().copied().map(host_network));
+    }
+    networks.into_iter().collect()
+}
+
+fn provider_plan_networks(plan: &ResolvedProviderServicePlan) -> Vec<IpNet> {
+    plan.destinations
+        .iter()
+        .flat_map(|destination| destination.addresses.iter().copied())
+        .map(host_network)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn networks_overlap(first: IpNet, second: IpNet) -> bool {
+    match (first, second) {
+        (IpNet::V4(first), IpNet::V4(second)) => {
+            first.contains(&second.network()) || second.contains(&first.network())
+        }
+        (IpNet::V6(first), IpNet::V6(second)) => {
+            first.contains(&second.network()) || second.contains(&first.network())
+        }
+        _ => false,
+    }
+}
+
+fn candidate_private_networks(
+    policy_id: &str,
+    role: &str,
+    prohibited: &[IpNet],
+    dual_stack: bool,
+) -> AppResult<Vec<NetworkCandidate>> {
+    validate_policy_id(policy_id)?;
+    let seed_digest = Sha256::digest(format!("{policy_id}:{role}").as_bytes());
+    let seed = u64::from_be_bytes(seed_digest[..8].try_into().expect("eight digest bytes"));
+    let mut candidates = Vec::new();
+    let mut seen_v4 = BTreeSet::new();
+    let mut seen_v6 = BTreeSet::new();
+    for ordinal in 0..MAX_NETWORK_CANDIDATE_SEARCH {
+        if candidates.len() == MAX_NETWORK_SUBNET_ATTEMPTS {
+            break;
+        }
+        let mixed = seed.wrapping_add((ordinal as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let pool = (ordinal + usize::from(role == UPLINK_RESOURCE_ROLE)) % 3;
+        let (base, count) = match pool {
+            0 => (u32::from(Ipv4Addr::new(10, 0, 0, 0)), 1_u64 << 20),
+            1 => (u32::from(Ipv4Addr::new(172, 16, 0, 0)), 1_u64 << 16),
+            _ => (u32::from(Ipv4Addr::new(192, 168, 0, 0)), 1_u64 << 12),
+        };
+        let subnet_offset = u32::try_from(mixed % count).expect("private subnet index") * 16;
+        let network_address = Ipv4Addr::from(base + subnet_offset);
+        let ipv4 = IpNet::V4(
+            Ipv4Net::new(network_address, 28)
+                .map_err(|_| AppError::Internal("private IPv4 candidate was malformed".into()))?,
+        );
+        if !seen_v4.insert(ipv4)
+            || prohibited
+                .iter()
+                .any(|network| networks_overlap(ipv4, *network))
+        {
+            continue;
+        }
+
+        let (ipv6_subnet, ipv6_gateway) = if dual_stack {
+            let candidate_digest =
+                Sha256::digest(format!("{policy_id}:{role}:ipv6:{ordinal}").as_bytes());
+            let segments = [
+                0xfd00 | u16::from(candidate_digest[0]),
+                u16::from_be_bytes([candidate_digest[1], candidate_digest[2]]),
+                u16::from_be_bytes([candidate_digest[3], candidate_digest[4]]),
+                u16::from_be_bytes([candidate_digest[5], candidate_digest[6]]),
+                0,
+                0,
+                0,
+                0,
+            ];
+            let network =
+                IpNet::V6(Ipv6Net::new(Ipv6Addr::from(segments), 64).map_err(|_| {
+                    AppError::Internal("private IPv6 candidate was malformed".into())
+                })?);
+            if !seen_v6.insert(network)
+                || prohibited
+                    .iter()
+                    .any(|prohibited| networks_overlap(network, *prohibited))
+            {
+                continue;
+            }
+            let mut gateway_segments = segments;
+            gateway_segments[7] = 1;
+            (
+                Some(network),
+                Some(IpAddr::V6(Ipv6Addr::from(gateway_segments))),
+            )
+        } else {
+            (None, None)
+        };
+        candidates.push(NetworkCandidate {
+            ipv4_subnet: ipv4,
+            ipv4_gateway: IpAddr::V4(Ipv4Addr::from(base + subnet_offset + 1)),
+            ipv6_subnet,
+            ipv6_gateway,
+        });
+    }
+    if candidates.is_empty() {
+        return Err(AppError::NotAvailable(
+            "no collision-free private container subnet is available for this scan".into(),
+        ));
+    }
+    Ok(candidates)
+}
+
 fn validate_plans_without_bridge(
     plans: &[ResolvedExternalPlan],
     now: DateTime<Utc>,
@@ -3504,41 +3694,104 @@ fn create_uplink_network(
     provider: RuntimeProvider,
     network_name: &str,
     labels: &BTreeMap<String, String>,
-) -> AppResult<()> {
-    let mut args = vec![
-        "network".into(),
-        "create".into(),
-        "--driver".into(),
-        "bridge".into(),
-    ];
-    for (key, value) in labels {
-        args.push("--label".into());
-        args.push(format!("{key}={value}").into());
-    }
-    args.push(network_name.into());
-    let output = runtime_output(runtime, provider, &args)?;
-    if output.success {
-        Ok(())
-    } else {
-        Err(runtime_failure("managed gateway uplink creation", &output))
-    }
+    policy_id: &str,
+    prohibited: &[IpNet],
+) -> AppResult<InspectedNetwork> {
+    create_network_with_candidates(
+        runtime,
+        provider,
+        network_name,
+        labels,
+        policy_id,
+        UPLINK_RESOURCE_ROLE,
+        false,
+        true,
+        prohibited,
+    )
 }
 
-fn inspect_uplink_network(
+#[allow(clippy::too_many_arguments)]
+fn create_network_with_candidates(
     runtime: &dyn RuntimeCommands,
     provider: RuntimeProvider,
     network_name: &str,
     labels: &BTreeMap<String, String>,
+    policy_id: &str,
+    role: &str,
+    internal: bool,
+    dual_stack: bool,
+    prohibited: &[IpNet],
 ) -> AppResult<InspectedNetwork> {
-    let output = runtime_output(
-        runtime,
-        provider,
-        &["network".into(), "inspect".into(), network_name.into()],
-    )?;
-    if !output.success {
-        return Err(runtime_failure("gateway uplink inspection", &output));
+    let candidates = candidate_private_networks(policy_id, role, prohibited, dual_stack)?;
+    for candidate in candidates {
+        let mut args = vec![
+            "network".into(),
+            "create".into(),
+            "--driver".into(),
+            "bridge".into(),
+        ];
+        if internal {
+            args.push("--internal".into());
+        }
+        args.extend([
+            "--subnet".into(),
+            candidate.ipv4_subnet.to_string().into(),
+            "--gateway".into(),
+            candidate.ipv4_gateway.to_string().into(),
+        ]);
+        if let (Some(subnet), Some(gateway)) = (candidate.ipv6_subnet, candidate.ipv6_gateway) {
+            args.extend([
+                "--ipv6".into(),
+                "--subnet".into(),
+                subnet.to_string().into(),
+                "--gateway".into(),
+                gateway.to_string().into(),
+            ]);
+        }
+        for (key, value) in labels {
+            args.push("--label".into());
+            args.push(format!("{key}={value}").into());
+        }
+        args.push(network_name.into());
+        let output = runtime_output(runtime, provider, &args)?;
+        let inspected = if internal {
+            inspect_optional_network(runtime, provider, network_name, labels)?
+        } else {
+            inspect_optional_uplink_network(runtime, provider, network_name, labels)?
+        };
+        if let Some(inspected) = inspected {
+            validate_network_candidate(&inspected, candidate)?;
+            return Ok(inspected);
+        }
+        if output.success {
+            return Err(AppError::Runtime(
+                "container runtime reported network creation without a verifiable network".into(),
+            ));
+        }
+        if !runtime_reports_subnet_conflict(&output.stderr) {
+            return Err(runtime_failure("managed private network creation", &output));
+        }
     }
-    parse_network_inspect_with_mode(provider, &output.stdout, network_name, labels, false)
+    Err(AppError::NotAvailable(
+        "container runtime could not reserve a collision-free private subnet after bounded retries"
+            .into(),
+    ))
+}
+
+fn validate_network_candidate(
+    inspected: &InspectedNetwork,
+    candidate: NetworkCandidate,
+) -> AppResult<()> {
+    if inspected.subnet != candidate.ipv4_subnet
+        || inspected.gateway != candidate.ipv4_gateway
+        || inspected.ipv6_subnet != candidate.ipv6_subnet
+        || inspected.ipv6_gateway != candidate.ipv6_gateway
+    {
+        return Err(AppError::NotAuthorized(
+            "container runtime changed the reserved private subnet".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn inspect_optional_uplink_network(
@@ -3578,12 +3831,20 @@ fn select_gateway_container_ip(subnet: IpNet, gateway: IpAddr) -> AppResult<IpAd
     })
 }
 
-fn reject_destination_overlap(policy: &EgressGatewayPolicy, uplink: IpNet) -> AppResult<()> {
+fn reject_destination_overlap(
+    policy: &EgressGatewayPolicy,
+    uplink: &InspectedNetwork,
+) -> AppResult<()> {
     if policy
         .destinations
         .iter()
         .flat_map(|destination| destination.addresses.iter())
-        .any(|address| uplink.contains(address))
+        .any(|address| {
+            uplink.subnet.contains(address)
+                || uplink
+                    .ipv6_subnet
+                    .is_some_and(|subnet| subnet.contains(address))
+        })
     {
         return Err(AppError::NotAvailable(
             "gateway uplink overlaps an approved destination; retry with a new isolated network"
@@ -3935,7 +4196,13 @@ fn create_gateway_container(
         ));
     }
     container.id = Some(parse_created_container_id(&output.stdout)?);
-    inspect_required_gateway_container_with_mode(runtime, provider, container, policy_id, false)?;
+    inspect_required_gateway_container_with_mode(
+        runtime,
+        provider,
+        container,
+        policy_id,
+        InternalAttachmentMode::Absent,
+    )?;
 
     let connect = runtime_output(
         runtime,
@@ -3955,7 +4222,13 @@ fn create_gateway_container(
             &connect,
         ));
     }
-    inspect_required_gateway_container(runtime, provider, container, policy_id)
+    inspect_required_gateway_container_with_mode(
+        runtime,
+        provider,
+        container,
+        policy_id,
+        InternalAttachmentMode::PresentAllowUnassigned,
+    )
 }
 
 fn start_gateway_container(
@@ -4049,6 +4322,7 @@ fn gateway_container_identity_from_record(
             .uplink_network_name
             .clone()
             .expect("validated gateway uplink"),
+        uplink_subnets: None,
     }))
 }
 
@@ -4087,6 +4361,7 @@ fn gateway_container_identity_from_durable(
             .uplink_network_name
             .clone()
             .expect("validated gateway uplink"),
+        uplink_subnets: None,
     }))
 }
 
@@ -4161,44 +4436,20 @@ fn create_internal_network(
     provider: RuntimeProvider,
     network_name: &str,
     labels: &BTreeMap<String, String>,
-) -> AppResult<()> {
-    let mut args = vec![
-        "network".into(),
-        "create".into(),
-        "--driver".into(),
-        "bridge".into(),
-        "--internal".into(),
-    ];
-    for (key, value) in labels {
-        args.push("--label".into());
-        args.push(format!("{key}={value}").into());
-    }
-    args.push(network_name.into());
-    let output = runtime_output(runtime, provider, &args)?;
-    if !output.success {
-        return Err(runtime_failure(
-            "managed internal network creation",
-            &output,
-        ));
-    }
-    Ok(())
-}
-
-fn inspect_network(
-    runtime: &dyn RuntimeCommands,
-    provider: RuntimeProvider,
-    network_name: &str,
-    labels: &BTreeMap<String, String>,
+    policy_id: &str,
+    prohibited: &[IpNet],
 ) -> AppResult<InspectedNetwork> {
-    let output = runtime_output(
+    create_network_with_candidates(
         runtime,
         provider,
-        &["network".into(), "inspect".into(), network_name.into()],
-    )?;
-    if !output.success {
-        return Err(runtime_failure("managed network inspection", &output));
-    }
-    parse_network_inspect(provider, &output.stdout, network_name, labels)
+        network_name,
+        labels,
+        policy_id,
+        "scanner-internal",
+        true,
+        false,
+        prohibited,
+    )
 }
 
 fn remove_network(
@@ -4402,7 +4653,8 @@ struct GatewayContainerNetworkAttachment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InternalAttachmentMode {
     Absent,
-    Present,
+    PresentAllowUnassigned,
+    PresentAssigned,
     Either,
 }
 
@@ -4438,7 +4690,13 @@ fn inspect_required_gateway_container(
     container: &GatewayContainerRuntimeIdentity,
     policy_id: &str,
 ) -> AppResult<InspectedGatewayContainer> {
-    inspect_required_gateway_container_with_mode(runtime, provider, container, policy_id, true)
+    inspect_required_gateway_container_with_mode(
+        runtime,
+        provider,
+        container,
+        policy_id,
+        InternalAttachmentMode::PresentAssigned,
+    )
 }
 
 fn inspect_required_gateway_container_with_mode(
@@ -4446,18 +4704,14 @@ fn inspect_required_gateway_container_with_mode(
     provider: RuntimeProvider,
     container: &GatewayContainerRuntimeIdentity,
     policy_id: &str,
-    expected_internal: bool,
+    internal_mode: InternalAttachmentMode,
 ) -> AppResult<InspectedGatewayContainer> {
     inspect_gateway_container_with_attachment_mode(
         runtime,
         provider,
         container,
         policy_id,
-        if expected_internal {
-            InternalAttachmentMode::Present
-        } else {
-            InternalAttachmentMode::Absent
-        },
+        internal_mode,
     )?
     .ok_or_else(|| AppError::Runtime("expected gateway container is absent".into()))
 }
@@ -4556,7 +4810,8 @@ fn inspect_gateway_container_with_attachment_mode(
         || networks.len() != expected_count
         || match internal_mode {
             InternalAttachmentMode::Absent => has_internal,
-            InternalAttachmentMode::Present => !has_internal,
+            InternalAttachmentMode::PresentAllowUnassigned
+            | InternalAttachmentMode::PresentAssigned => !has_internal,
             InternalAttachmentMode::Either => false,
         }
     {
@@ -4564,18 +4819,62 @@ fn inspect_gateway_container_with_attachment_mode(
             "gateway container is not attached to the exact dual-network topology".into(),
         ));
     }
+    let uplink_attachment = networks
+        .get(&container.uplink_network_name)
+        .expect("validated uplink attachment");
+    let require_assigned = internal_mode == InternalAttachmentMode::PresentAssigned;
+    match container.uplink_subnets {
+        Some((ipv4_subnet @ IpNet::V4(_), ipv6_subnet @ IpNet::V6(_))) => {
+            validate_gateway_attachment_address(
+                &uplink_attachment.ipv4_address,
+                ipv4_subnet,
+                require_assigned,
+                "IPv4 uplink",
+            )?;
+            validate_gateway_attachment_address(
+                &uplink_attachment.ipv6_address,
+                ipv6_subnet,
+                require_assigned,
+                "IPv6 uplink",
+            )?;
+        }
+        Some(_) => {
+            return Err(AppError::Internal(
+                "gateway uplink identity did not retain one IPv4 and one IPv6 subnet".into(),
+            ));
+        }
+        None if require_assigned => {
+            return Err(AppError::Internal(
+                "running gateway container has no verified uplink subnet identity".into(),
+            ));
+        }
+        None => {}
+    }
     if has_internal {
         let attachment = networks
             .get(&container.internal_network_name)
             .expect("internal attachment present");
-        let address = match container.listener_ip {
-            IpAddr::V4(_) => attachment.ipv4_address.parse::<IpAddr>(),
-            IpAddr::V6(_) => attachment.ipv6_address.parse::<IpAddr>(),
-        }
-        .map_err(|_| AppError::Runtime("gateway listener attachment was malformed".into()))?;
-        if address != container.listener_ip {
+        let (raw_address, unexpected_address) = match container.listener_ip {
+            IpAddr::V4(_) => (&attachment.ipv4_address, &attachment.ipv6_address),
+            IpAddr::V6(_) => (&attachment.ipv6_address, &attachment.ipv4_address),
+        };
+        if !unexpected_address.is_empty() {
             return Err(AppError::NotAuthorized(
-                "gateway container listener address changed during inspection".into(),
+                "gateway container listener attachment changed address families".into(),
+            ));
+        }
+        if !raw_address.is_empty() {
+            let address = raw_address.parse::<IpAddr>().map_err(|_| {
+                AppError::Runtime("gateway listener attachment was malformed".into())
+            })?;
+            if address != container.listener_ip {
+                return Err(AppError::NotAuthorized(
+                    "gateway container listener address changed during inspection".into(),
+                ));
+            }
+        } else if internal_mode == InternalAttachmentMode::PresentAssigned {
+            return Err(AppError::Runtime(
+                "running gateway container has no assigned listener address".into(),
             ));
         }
     }
@@ -4584,6 +4883,40 @@ fn inspect_gateway_container_with_attachment_mode(
         running: entry.state.running,
         exit_code: entry.state.exit_code,
     }))
+}
+
+fn validate_gateway_attachment_address(
+    raw_address: &str,
+    subnet: IpNet,
+    required: bool,
+    description: &str,
+) -> AppResult<()> {
+    if raw_address.is_empty() {
+        if required {
+            return Err(AppError::Runtime(format!(
+                "running gateway container has no assigned {description} address"
+            )));
+        }
+        return Ok(());
+    }
+    let address = raw_address.parse::<IpAddr>().map_err(|_| {
+        AppError::Runtime(format!(
+            "gateway container {description} address was malformed"
+        ))
+    })?;
+    let unusable = match (subnet, address) {
+        (IpNet::V4(network), IpAddr::V4(address)) => {
+            address == network.network() || address == network.broadcast()
+        }
+        (IpNet::V6(network), IpAddr::V6(address)) => address == network.network(),
+        _ => true,
+    };
+    if unusable || !subnet.contains(&address) {
+        return Err(AppError::NotAuthorized(format!(
+            "gateway container {description} address escaped its verified subnet"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_network_inspect(
@@ -4662,24 +4995,50 @@ fn parse_network_inspect_with_mode(
         || driver != "bridge"
         || internal != expected_internal
         || labels != *expected_labels
-        || subnets.len() != 1
     {
         return Err(AppError::NotAuthorized(
             "container runtime did not prove the exact internal labeled bridge".into(),
         ));
     }
-    let (subnet, gateway) = &subnets[0];
-    let subnet = subnet
-        .parse::<IpNet>()
-        .map_err(|_| AppError::Runtime("container bridge subnet is malformed".into()))?;
-    let gateway = gateway
-        .parse::<IpAddr>()
-        .map_err(|_| AppError::Runtime("container bridge gateway is malformed".into()))?;
-    validate_bridge_network(subnet, gateway)?;
+    let mut ipv4 = None;
+    let mut ipv6 = None;
+    for (subnet, gateway) in subnets {
+        let subnet = subnet
+            .parse::<IpNet>()
+            .map_err(|_| AppError::Runtime("container bridge subnet is malformed".into()))?;
+        let gateway = gateway
+            .parse::<IpAddr>()
+            .map_err(|_| AppError::Runtime("container bridge gateway is malformed".into()))?;
+        validate_bridge_network(subnet, gateway)?;
+        let slot = match subnet {
+            IpNet::V4(_) => &mut ipv4,
+            IpNet::V6(_) => &mut ipv6,
+        };
+        if slot.replace((subnet, gateway)).is_some() {
+            return Err(AppError::NotAuthorized(
+                "container bridge returned duplicate address families".into(),
+            ));
+        }
+    }
+    let Some((subnet, gateway)) = ipv4 else {
+        return Err(AppError::NotAuthorized(
+            "container bridge did not prove its exact IPv4 subnet".into(),
+        ));
+    };
+    if expected_internal && ipv6.is_some() || !expected_internal && ipv6.is_none() {
+        return Err(AppError::NotAuthorized(
+            "container bridge did not prove its required address families".into(),
+        ));
+    }
+    let (ipv6_subnet, ipv6_gateway) = ipv6
+        .map(|(subnet, gateway)| (Some(subnet), Some(gateway)))
+        .unwrap_or((None, None));
     Ok(InspectedNetwork {
         id,
         subnet,
         gateway,
+        ipv6_subnet,
+        ipv6_gateway,
     })
 }
 
@@ -5019,8 +5378,18 @@ fn runtime_reports_absent(stderr: &[u8]) -> bool {
 fn runtime_reports_container_absent(stderr: &[u8]) -> bool {
     let message = bounded_diagnostic(stderr).to_ascii_lowercase();
     message.contains("no such container")
+        || message.contains("no such object")
         || message.contains("container not found")
         || (message.contains("container") && message.contains("does not exist"))
+}
+
+fn runtime_reports_subnet_conflict(stderr: &[u8]) -> bool {
+    let message = bounded_diagnostic(stderr).to_ascii_lowercase();
+    message.contains("overlap")
+        || message.contains("already allocated")
+        || message.contains("address pool") && message.contains("used")
+        || message.contains("subnet") && message.contains("conflict")
+        || message.contains("subnet") && message.contains("already used")
 }
 
 fn is_unique_local_v6(address: Ipv6Addr) -> bool {
@@ -5302,6 +5671,112 @@ mod tests {
         )
         .expect("managed-local Podman network");
         assert_eq!(inspected.id, "podman-network-id");
+
+        let uplink_labels = expected_uplink_labels("policy-1");
+        let docker_uplink = json!([{
+            "Name": "ass-uplink-1",
+            "Id": "docker-uplink-id",
+            "Driver": "bridge",
+            "Internal": false,
+            "Labels": uplink_labels,
+            "IPAM": { "Config": [
+                { "Subnet": "172.30.0.0/28", "Gateway": "172.30.0.1" },
+                { "Subnet": "fd42:1234:5678:9abc::/64", "Gateway": "fd42:1234:5678:9abc::1" }
+            ] }
+        }]);
+        let docker_uplink = parse_network_inspect_with_mode(
+            RuntimeProvider::Docker,
+            &serde_json::to_vec(&docker_uplink).expect("JSON"),
+            "ass-uplink-1",
+            &expected_uplink_labels("policy-1"),
+            false,
+        )
+        .expect("dual-stack Docker uplink");
+        assert_eq!(
+            docker_uplink.ipv6_subnet,
+            Some("fd42:1234:5678:9abc::/64".parse().expect("IPv6 subnet"))
+        );
+
+        let podman_uplink = json!([{
+            "name": "ass-uplink-1",
+            "id": "podman-uplink-id",
+            "driver": "bridge",
+            "internal": false,
+            "labels": expected_uplink_labels("policy-1"),
+            "subnets": [
+                { "subnet": "10.90.1.0/28", "gateway": "10.90.1.1" },
+                { "subnet": "fd55:aaaa:bbbb:cccc::/64", "gateway": "fd55:aaaa:bbbb:cccc::1" }
+            ]
+        }]);
+        let podman_uplink = parse_network_inspect_with_mode(
+            RuntimeProvider::Podman,
+            &serde_json::to_vec(&podman_uplink).expect("JSON"),
+            "ass-uplink-1",
+            &expected_uplink_labels("policy-1"),
+            false,
+        )
+        .expect("dual-stack Podman uplink");
+        assert_eq!(
+            podman_uplink.ipv6_gateway,
+            Some("fd55:aaaa:bbbb:cccc::1".parse().expect("IPv6 gateway"))
+        );
+
+        let ipv4_only_uplink = json!([{
+            "name": "ass-uplink-1",
+            "id": "podman-uplink-id",
+            "driver": "bridge",
+            "internal": false,
+            "labels": expected_uplink_labels("policy-1"),
+            "subnets": [{ "subnet": "10.90.1.0/28", "gateway": "10.90.1.1" }]
+        }]);
+        assert!(
+            parse_network_inspect_with_mode(
+                RuntimeProvider::Podman,
+                &serde_json::to_vec(&ipv4_only_uplink).expect("JSON"),
+                "ass-uplink-1",
+                &expected_uplink_labels("policy-1"),
+                false,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_network_candidates_exclude_frozen_destinations_in_default_runtime_ranges() {
+        let prohibited = vec![
+            "10.89.1.8/32".parse::<IpNet>().expect("IPv4 target"),
+            "fd42:1234:5678:9abc::8/128"
+                .parse::<IpNet>()
+                .expect("IPv6 target"),
+        ];
+        let candidates = candidate_private_networks(
+            "egress-0123456789abcdef0123456789abcdef",
+            UPLINK_RESOURCE_ROLE,
+            &prohibited,
+            true,
+        )
+        .expect("collision-free candidates");
+        assert_eq!(candidates.len(), MAX_NETWORK_SUBNET_ATTEMPTS);
+        assert!(candidates.iter().all(|candidate| {
+            !prohibited
+                .iter()
+                .any(|network| networks_overlap(candidate.ipv4_subnet, *network))
+                && candidate.ipv6_subnet.is_some_and(|subnet| {
+                    !prohibited
+                        .iter()
+                        .any(|network| networks_overlap(subnet, *network))
+                })
+        }));
+    }
+
+    #[test]
+    fn podman_already_used_subnet_diagnostic_is_a_bounded_retryable_conflict() {
+        assert!(runtime_reports_subnet_conflict(
+            b"Error: subnet 10.89.1.0/28 is already used on the host or by another config"
+        ));
+        assert!(!runtime_reports_subnet_conflict(
+            b"Error: permission denied while creating network"
+        ));
     }
 
     #[test]
@@ -5395,6 +5870,8 @@ mod tests {
         calls: Vec<(RuntimeProvider, Vec<String>)>,
         network_name: Option<String>,
         labels: BTreeMap<String, String>,
+        subnet: Option<String>,
+        gateway: Option<String>,
         removed: bool,
     }
 
@@ -5409,6 +5886,8 @@ mod tests {
                 calls: Vec::new(),
                 network_name: None,
                 labels: BTreeMap::new(),
+                subnet: None,
+                gateway: None,
                 removed: false,
             }));
             (
@@ -5435,6 +5914,16 @@ mod tests {
             match args.get(0..2) {
                 Some([network, create]) if network == "network" && create == "create" => {
                     let name = args.last().expect("network name").clone();
+                    let subnet = args
+                        .windows(2)
+                        .find(|pair| pair[0] == "--subnet")
+                        .map(|pair| pair[1].clone())
+                        .expect("explicit network subnet");
+                    let gateway = args
+                        .windows(2)
+                        .find(|pair| pair[0] == "--gateway")
+                        .map(|pair| pair[1].clone())
+                        .expect("explicit network gateway");
                     let mut labels = BTreeMap::new();
                     let mut index = 0;
                     while index < args.len() {
@@ -5449,6 +5938,8 @@ mod tests {
                     }
                     state.network_name = Some(name);
                     state.labels = labels;
+                    state.subnet = Some(subnet);
+                    state.gateway = Some(gateway);
                     state.removed = false;
                     Ok(success_output(Vec::new()))
                 }
@@ -5459,6 +5950,8 @@ mod tests {
                     if state.removed {
                         return Ok(failure_output("network not found"));
                     }
+                    let subnet = state.subnet.as_deref().expect("created subnet");
+                    let gateway = state.gateway.as_deref().expect("created gateway");
                     let value = match state.kind {
                         FakeInspectKind::Docker => json!([{
                             "Name": name,
@@ -5466,7 +5959,7 @@ mod tests {
                             "Driver": "bridge",
                             "Internal": true,
                             "Labels": state.labels.clone(),
-                            "IPAM": { "Config": [{ "Subnet": "172.29.0.0/24", "Gateway": "172.29.0.1" }] }
+                            "IPAM": { "Config": [{ "Subnet": subnet, "Gateway": gateway }] }
                         }]),
                         FakeInspectKind::Podman => json!([{
                             "name": name,
@@ -5474,7 +5967,7 @@ mod tests {
                             "driver": "bridge",
                             "internal": true,
                             "labels": state.labels.clone(),
-                            "subnets": [{ "subnet": "10.89.1.0/24", "gateway": "10.89.1.1" }]
+                            "subnets": [{ "subnet": subnet, "gateway": gateway }]
                         }]),
                     };
                     Ok(success_output(serde_json::to_vec(&value).expect("JSON")))
@@ -5495,6 +5988,8 @@ mod tests {
         labels: BTreeMap<String, String>,
         subnet: String,
         gateway: String,
+        ipv6_subnet: Option<String>,
+        ipv6_gateway: Option<String>,
         removed: bool,
     }
 
@@ -5510,10 +6005,19 @@ mod tests {
         removed: bool,
     }
 
+    fn fake_assigned_address(subnet: &str) -> String {
+        match subnet.parse::<IpNet>().expect("fake network subnet") {
+            IpNet::V4(network) => Ipv4Addr::from(u32::from(network.network()) + 2).to_string(),
+            IpNet::V6(network) => Ipv6Addr::from(u128::from(network.network()) + 2).to_string(),
+        }
+    }
+
     #[derive(Debug, Default)]
     struct FakeContainerRuntimeState {
         calls: Vec<Vec<String>>,
         pull_timeout: Option<Duration>,
+        internal_conflicts_remaining: usize,
+        uplink_conflicts_remaining: usize,
         networks: BTreeMap<String, FakeContainerNetwork>,
         container: Option<FakeGatewayContainer>,
         probe: Option<FakeGatewayContainer>,
@@ -5548,6 +6052,36 @@ mod tests {
                 Some([network, create]) if network == "network" && create == "create" => {
                     let name = args.last().expect("network name").clone();
                     let internal = args.iter().any(|argument| argument == "--internal");
+                    let subnets = args
+                        .windows(2)
+                        .filter(|pair| pair[0] == "--subnet")
+                        .map(|pair| pair[1].clone())
+                        .collect::<Vec<_>>();
+                    let gateways = args
+                        .windows(2)
+                        .filter(|pair| pair[0] == "--gateway")
+                        .map(|pair| pair[1].clone())
+                        .collect::<Vec<_>>();
+                    assert_eq!(subnets.len(), gateways.len());
+                    if internal {
+                        assert_eq!(subnets.len(), 1);
+                        assert!(!args.iter().any(|argument| argument == "--ipv6"));
+                    } else {
+                        assert_eq!(subnets.len(), 2);
+                        assert!(args.iter().any(|argument| argument == "--ipv6"));
+                    }
+                    let conflicts_remaining = if internal {
+                        &mut state.internal_conflicts_remaining
+                    } else {
+                        &mut state.uplink_conflicts_remaining
+                    };
+                    if *conflicts_remaining > 0 {
+                        *conflicts_remaining -= 1;
+                        return Ok(failure_output(&format!(
+                            "subnet {} is already used on the host or by another config",
+                            subnets[0]
+                        )));
+                    }
                     let mut labels = BTreeMap::new();
                     let mut index = 0;
                     while index < args.len() {
@@ -5561,10 +6095,10 @@ mod tests {
                             index += 1;
                         }
                     }
-                    let (id, subnet, gateway) = if internal {
-                        ("a".repeat(64), "10.89.1.0/24", "10.89.1.1")
+                    let id = if internal {
+                        "a".repeat(64)
                     } else {
-                        ("b".repeat(64), "10.90.1.0/24", "10.90.1.1")
+                        "b".repeat(64)
                     };
                     state.networks.insert(
                         name,
@@ -5572,8 +6106,10 @@ mod tests {
                             id,
                             internal,
                             labels,
-                            subnet: subnet.into(),
-                            gateway: gateway.into(),
+                            subnet: subnets[0].clone(),
+                            gateway: gateways[0].clone(),
+                            ipv6_subnet: subnets.get(1).cloned(),
+                            ipv6_gateway: gateways.get(1).cloned(),
                             removed: false,
                         },
                     );
@@ -5591,13 +6127,22 @@ mod tests {
                     let Some((name, network)) = network else {
                         return Ok(failure_output("network not found"));
                     };
+                    let mut subnets = vec![json!({
+                        "subnet": network.subnet,
+                        "gateway": network.gateway,
+                    })];
+                    if let (Some(subnet), Some(gateway)) =
+                        (network.ipv6_subnet, network.ipv6_gateway)
+                    {
+                        subnets.push(json!({ "subnet": subnet, "gateway": gateway }));
+                    }
                     let value = json!([{
                         "name": name,
                         "id": network.id,
                         "driver": "bridge",
                         "internal": network.internal,
                         "labels": network.labels,
-                        "subnets": [{ "subnet": network.subnet, "gateway": network.gateway }]
+                        "subnets": subnets,
                     }]);
                     Ok(success_output(
                         serde_json::to_vec(&value).expect("network JSON"),
@@ -5670,19 +6215,46 @@ mod tests {
                         .find(|container| {
                             !container.removed
                                 && (&container.id == selector || &container.name == selector)
-                        });
+                        })
+                        .cloned();
                     let Some(container) = selected else {
                         return Ok(failure_output("no such container"));
                     };
                     let mut networks = serde_json::Map::new();
+                    let attached_network = state
+                        .networks
+                        .get(&container.uplink)
+                        .expect("attached fake network");
+                    let ipv4_address = if container.running {
+                        fake_assigned_address(&attached_network.subnet)
+                    } else {
+                        String::new()
+                    };
+                    let ipv6_address = if container.running {
+                        attached_network
+                            .ipv6_subnet
+                            .as_deref()
+                            .map(fake_assigned_address)
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
                     networks.insert(
                         container.uplink.clone(),
-                        json!({ "IPAddress": "10.90.1.2", "GlobalIPv6Address": "" }),
+                        json!({
+                            "IPAddress": ipv4_address,
+                            "GlobalIPv6Address": ipv6_address,
+                        }),
                     );
                     if let Some((name, address)) = &container.internal {
+                        let inspected_address = if container.running {
+                            address.as_str()
+                        } else {
+                            ""
+                        };
                         networks.insert(
                             name.clone(),
-                            json!({ "IPAddress": address, "GlobalIPv6Address": "" }),
+                            json!({ "IPAddress": inspected_address, "GlobalIPv6Address": "" }),
                         );
                     }
                     let value = json!([{
@@ -6044,7 +6616,10 @@ mod tests {
                     "network".to_owned(),
                     "connect".to_owned(),
                     "--ip".to_owned(),
-                    "10.89.1.2".to_owned(),
+                    identity
+                        .gateway_listener_ip
+                        .expect("gateway listener")
+                        .to_string(),
                     internal_name.clone(),
                     container_name.clone(),
                 ]
@@ -6096,6 +6671,13 @@ mod tests {
             assert!(mounts[1].ends_with("dst=/run/ai-security-scanner/status"));
         }
 
+        state
+            .lock()
+            .expect("fake container runtime")
+            .container
+            .as_mut()
+            .expect("gateway container")
+            .running = false;
         lease.cleanup().expect("exact cleanup");
         assert!(!policy_path.exists());
         assert!(!status_path.exists());
@@ -6124,6 +6706,136 @@ mod tests {
                 .as_ref()
                 .is_some_and(|container| container.removed)
         );
+    }
+
+    #[test]
+    fn container_network_creation_retries_distinct_explicit_internal_and_uplink_subnets() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        {
+            let mut state = state.lock().expect("fake container runtime");
+            state.internal_conflicts_remaining = 1;
+            state.uplink_conflicts_remaining = 1;
+        }
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let mut lease = controller
+            .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
+            .expect("network conflict retries");
+        {
+            let state = state.lock().expect("fake container runtime");
+            let creates = state
+                .calls
+                .iter()
+                .filter(|call| call.get(0..2) == Some(&["network".into(), "create".into()]))
+                .collect::<Vec<_>>();
+            assert_eq!(creates.len(), 4);
+            for internal in [true, false] {
+                let role_creates = creates
+                    .iter()
+                    .filter(|call| call.iter().any(|argument| argument == "--internal") == internal)
+                    .collect::<Vec<_>>();
+                assert_eq!(role_creates.len(), 2);
+                let subnets = role_creates
+                    .iter()
+                    .map(|call| {
+                        call.windows(2)
+                            .find(|pair| pair[0] == "--subnet")
+                            .map(|pair| pair[1].clone())
+                            .expect("explicit subnet")
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(subnets.len(), 2, "retry must select a new explicit subnet");
+            }
+        }
+        lease.cleanup().expect("retry cleanup");
+    }
+
+    #[test]
+    fn explicit_container_subnets_do_not_capture_a_frozen_default_podman_range_target() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let mut internal_plan = plan(now, "10.89.1.8", 5, 2, 30);
+        internal_plan.allow_sensitive_networks = true;
+        let mut lease = controller
+            .provision(&owner(), &[internal_plan], now)
+            .expect("private destination scan network");
+        {
+            let state = state.lock().expect("fake container runtime");
+            let target = "10.89.1.8".parse::<IpAddr>().expect("target");
+            assert!(state.networks.values().all(|network| {
+                !network
+                    .subnet
+                    .parse::<IpNet>()
+                    .expect("runtime subnet")
+                    .contains(&target)
+            }));
+            assert!(
+                state
+                    .calls
+                    .iter()
+                    .filter(|call| { call.get(0..2) == Some(&["network".into(), "create".into()]) })
+                    .all(|call| call.windows(2).any(|pair| pair[0] == "--subnet"))
+            );
+        }
+        lease.cleanup().expect("private destination cleanup");
+    }
+
+    #[test]
+    fn ipv6_frozen_destination_runs_through_a_proven_dual_stack_uplink() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let registry = test_registry(&policies);
+        let (runtime, state) = FakeContainerRuntime::new();
+        let controller = ManagedNetworkController::with_container_components(
+            RuntimeProvider::ManagedLocal,
+            gateway_container_spec(),
+            &policies,
+            &registry,
+            Arc::new(runtime),
+            Arc::new(FakeContainerReadiness { fail: false }),
+        )
+        .expect("container controller");
+        let now = Utc::now();
+        let mut lease = controller
+            .provision(&owner(), &[plan(now, "2001:db8::8", 5, 2, 30)], now)
+            .expect("IPv6 destination");
+        {
+            let state = state.lock().expect("fake container runtime");
+            let uplink = state
+                .networks
+                .values()
+                .find(|network| !network.internal)
+                .expect("gateway uplink");
+            assert!(uplink.ipv6_subnet.is_some());
+            assert!(uplink.ipv6_gateway.is_some());
+            assert!(
+                state
+                    .container
+                    .as_ref()
+                    .is_some_and(|container| container.running)
+            );
+        }
+        lease.cleanup().expect("IPv6 cleanup");
     }
 
     #[test]
@@ -6167,6 +6879,41 @@ mod tests {
         );
 
         let state = state.lock().expect("fake container runtime");
+        let network_creates = state
+            .calls
+            .iter()
+            .filter(|call| call.get(0..2) == Some(&["network".into(), "create".into()]))
+            .collect::<Vec<_>>();
+        assert_eq!(network_creates.len(), 2);
+        let internal_create = network_creates
+            .iter()
+            .find(|call| call.iter().any(|argument| argument == "--internal"))
+            .expect("qualification internal network");
+        assert_eq!(
+            internal_create
+                .windows(2)
+                .filter(|pair| pair[0] == "--subnet")
+                .count(),
+            1
+        );
+        let uplink_create = network_creates
+            .iter()
+            .find(|call| !call.iter().any(|argument| argument == "--internal"))
+            .expect("qualification uplink network");
+        assert!(uplink_create.iter().any(|argument| argument == "--ipv6"));
+        assert_eq!(
+            uplink_create
+                .windows(2)
+                .filter(|pair| pair[0] == "--subnet")
+                .count(),
+            2
+        );
+        let listener = state
+            .calls
+            .iter()
+            .find(|call| call.get(0..2) == Some(&["network".into(), "connect".into()]))
+            .and_then(|call| call.get(3))
+            .expect("gateway listener");
         let probe_create = state
             .calls
             .iter()
@@ -6193,7 +6940,7 @@ mod tests {
         assert!(
             probe_create
                 .windows(2)
-                .any(|pair| { pair[0] == "--gateway" && pair[1] == "10.89.1.2:1080" })
+                .any(|pair| pair[0] == "--gateway" && pair[1] == format!("{listener}:1080"))
         );
         assert!(state.calls.iter().any(|call| {
             call == &vec![
@@ -6239,6 +6986,13 @@ mod tests {
             .expect("status directory")
             .path
             .clone();
+        state
+            .lock()
+            .expect("fake container runtime")
+            .container
+            .as_mut()
+            .expect("gateway container")
+            .running = false;
         std::mem::forget(lease);
 
         let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
@@ -6352,6 +7106,112 @@ mod tests {
     }
 
     #[test]
+    fn gateway_status_atomic_replacement_with_a_new_length_is_read_from_the_open_file() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let policy_id = format!("egress-{}", "7".repeat(32));
+        let status =
+            create_gateway_status_directory(&policies, &policy_id).expect("status directory");
+        let status_path = status.status_path();
+        fs::write(
+            &status_path,
+            br#"{"schema_version":"1.0.0","phase":"starting","code":"initializing"}"#,
+        )
+        .expect("starting status");
+        let stale_length = fs::symlink_metadata(&status_path)
+            .expect("stale status metadata")
+            .len();
+        let replacement = status.path.join("status.replacement");
+        fs::write(
+            &replacement,
+            br#"{"schema_version":"1.0.0","phase":"ready","code":"ready"}"#,
+        )
+        .expect("ready replacement");
+        fs::rename(&replacement, &status_path).expect("atomic status replacement");
+
+        let mut options = OpenOptions::new();
+        options.read(true);
+        configure_no_follow_open(&mut options);
+        let opened = options.open(&status_path).expect("replacement status");
+        assert_ne!(
+            stale_length,
+            opened.metadata().expect("opened metadata").len(),
+            "fixture must model a replacement between path stat and open"
+        );
+        assert_eq!(
+            read_opened_gateway_status(opened).expect("opened replacement"),
+            GatewayStatusDocument {
+                schema_version: "1.0.0".into(),
+                phase: GatewayStatusPhase::Ready,
+                code: "ready".into(),
+            }
+        );
+        remove_gateway_status_directory(&status).expect("status cleanup");
+    }
+
+    #[test]
+    fn readiness_surfaces_terminal_gateway_status_before_generic_stopped_state() {
+        let (_temporary, _gateway, policies) = test_paths();
+        let policy_id = format!("egress-{}", "8".repeat(32));
+        let status =
+            create_gateway_status_directory(&policies, &policy_id).expect("status directory");
+        fs::write(
+            status.status_path(),
+            br#"{"schema_version":"1.0.0","phase":"failed","code":"listener_bind_failed"}"#,
+        )
+        .expect("terminal status");
+        let (runtime, runtime_state) = FakeContainerRuntime::new();
+        let container = GatewayContainerRuntimeIdentity {
+            name: format!("ass-gateway-{}", "8".repeat(32)),
+            id: Some("c".repeat(64)),
+            policy_id: policy_id.clone(),
+            listener_ip: "10.89.1.2".parse().expect("listener"),
+            image: gateway_container_spec(),
+            internal_network_name: format!("ass-egress-{}", "8".repeat(32)),
+            uplink_network_name: format!("ass-uplink-{}", "8".repeat(32)),
+            uplink_subnets: Some((
+                "10.90.1.0/28".parse().expect("IPv4 uplink"),
+                "fd55:aaaa:bbbb:cccc::/64".parse().expect("IPv6 uplink"),
+            )),
+        };
+        runtime_state.lock().expect("fake runtime").container = Some(FakeGatewayContainer {
+            id: "c".repeat(64),
+            name: container.name.clone(),
+            image: container.image.reference(),
+            labels: expected_gateway_container_labels(&policy_id),
+            uplink: container.uplink_network_name.clone(),
+            internal: Some((
+                container.internal_network_name.clone(),
+                container.listener_ip.to_string(),
+            )),
+            running: false,
+            removed: false,
+        });
+
+        let error = RuntimeGatewayContainerReadiness
+            .wait_until_ready(
+                &runtime,
+                RuntimeProvider::ManagedLocal,
+                &container,
+                &status,
+                &policy_id,
+            )
+            .expect_err("terminal status must fail readiness");
+        assert!(error.to_string().contains("listener_bind_failed"));
+        assert!(
+            runtime_state.lock().expect("fake runtime").calls.is_empty(),
+            "terminal status must win the fast-exit race before inspect"
+        );
+        remove_gateway_status_directory(&status).expect("status cleanup");
+    }
+
+    #[test]
+    fn docker_no_such_object_is_an_absent_container_result() {
+        assert!(runtime_reports_container_absent(
+            b"Error response from daemon: No such object: cccccccccccccccc"
+        ));
+    }
+
+    #[test]
     fn provision_writes_private_policy_and_cleanup_removes_exact_resources() {
         let (_temporary, gateway, policies) = test_paths();
         let (runtime, runtime_state) = FakeRuntime::new(FakeInspectKind::Docker);
@@ -6378,13 +7238,10 @@ mod tests {
             .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
             .expect("managed network");
 
+        let observed_address = observed.lock().expect("readiness")[0];
         assert_eq!(
             lease.network_policy().gateway_endpoint(),
-            Some("socks5h://172.29.0.1:1080")
-        );
-        assert_eq!(
-            observed.lock().expect("readiness").as_slice(),
-            &["172.29.0.1:1080".parse::<SocketAddr>().expect("socket")]
+            Some(gateway_endpoint(observed_address.ip()).as_str())
         );
         let policy_path = lease.policy_path().expect("policy path").to_owned();
         assert!(policy_path.is_absolute());
@@ -6464,7 +7321,7 @@ mod tests {
             }),
             Arc::new(FakeReadiness {
                 fail: false,
-                observed,
+                observed: Arc::clone(&observed),
             }),
         )
         .expect("controller");
@@ -6472,9 +7329,10 @@ mod tests {
         let lease = controller
             .provision(&owner(), &[plan(now, "203.0.113.8", 5, 2, 30)], now)
             .expect("managed network");
+        let observed_address = observed.lock().expect("readiness")[0];
         assert_eq!(
             lease.network_policy().gateway_endpoint(),
-            Some("socks5h://10.89.1.1:1080")
+            Some(gateway_endpoint(observed_address.ip()).as_str())
         );
     }
 
@@ -6646,6 +7504,8 @@ mod tests {
             let mut state = runtime_state.lock().expect("runtime");
             state.network_name = Some(network_name);
             state.labels = expected_labels(&policy_id);
+            state.subnet = Some("172.29.0.0/24".into());
+            state.gateway = Some("172.29.0.1".into());
             state.removed = false;
         }
         let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
