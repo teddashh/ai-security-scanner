@@ -41,6 +41,12 @@ interface ProviderAuthorizationPanelProps {
   nativeMode: boolean;
   disabled?: boolean;
   onAuthorizationChanged: () => Promise<void>;
+  onConnectionStateChanged?: (connection: ProviderConnectionBoundary | undefined) => void;
+}
+
+export interface ProviderConnectionBoundary {
+  sourceId: string;
+  platform: "aws" | "azure" | "gcp" | "m365";
 }
 
 interface FieldCopy {
@@ -765,6 +771,7 @@ export function ProviderAuthorizationPanel({
   nativeMode,
   disabled,
   onAuthorizationChanged,
+  onConnectionStateChanged,
 }: ProviderAuthorizationPanelProps) {
   const { text, formatDateTime, formatNumber } = useI18n();
   const providerSources = useMemo(
@@ -850,6 +857,7 @@ export function ProviderAuthorizationPanel({
       return;
     }
     let disposed = false;
+    setInstalled((current) => current?.source_id === selectedSource.id ? current : undefined);
     void scannerService.providerAuthorizationStatus(caseId, selectedSource.id)
       .then((result) => { if (!disposed) setInstalled(result.data ?? undefined); })
       .catch((statusError) => {
@@ -860,6 +868,13 @@ export function ProviderAuthorizationPanel({
       });
     return () => { disposed = true; };
   }, [caseId, nativeMode, selectedSource, showError]);
+
+  useEffect(() => {
+    onConnectionStateChanged?.(installed ? {
+      sourceId: installed.source_id,
+      platform: installed.provider === "microsoft365" ? "m365" : installed.provider,
+    } : undefined);
+  }, [installed?.provider, installed?.source_id, onConnectionStateChanged]);
 
   useEffect(() => {
     let disposed = false;

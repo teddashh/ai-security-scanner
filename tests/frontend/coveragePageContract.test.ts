@@ -88,7 +88,13 @@ test("guided IP and internal scans use a useful bounded TCP service preset", () 
   assert.match(source, /setExternalProtocol\("tcp"\)/u);
   assert.match(source, /setExternalPorts\(recommendedTcpPorts\(externalTarget\)\.join\(", "\)\)/u);
   assert.ok(source.includes("pageCopy.guidedNetworkPreset"));
-  assert.ok(source.includes("這次只會檢查 {target}"));
+  assert.ok(source.includes("這次只會用保守的連線設定檢查 {target}"));
+  assert.doesNotMatch(
+    source.match(/guidedNetworkPreset: bilingual\(([\s\S]*?)\n\s*\),/u)?.[1] ?? "",
+    /\{protocol\}|\{count\}/u,
+    "protocol and port counts must not appear in the first-layer preset",
+  );
+  assert.match(source, /coverage-technical-preset-summary[\s\S]*guidedNetworkTechnicalPreset[\s\S]*protocol: externalProtocol[\s\S]*count: formatNumber\(parsedPorts\.length\)/u);
 });
 
 test("the saved assessment intent opens one guided route and moves unrelated inputs under advanced options", () => {
@@ -101,9 +107,11 @@ test("the saved assessment intent opens one guided route and moves unrelated inp
   assert.ok(source.includes("pageCopy.otherInputsSummary"));
 });
 
-test("guided low-impact and local setup use one explicit confirmation without auto-approval", () => {
-  assert.ok(source.includes("simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent"));
+test("guided network, local, and signed-in cloud setup use one explicit confirmation without auto-approval", () => {
+  assert.ok(source.includes("simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
   assert.ok(source.includes("pageCopy.confirmAndSave"));
+  assert.ok(source.includes("pageCopy.useSignedInCloud"));
+  assert.ok(source.includes("pageCopy.guidedCloudConfirmation"));
   assert.ok(source.includes("pageCopy.changeScanType"));
   assert.ok(source.includes("effectiveAllowSensitiveNetworks"));
   const approveStart = source.indexOf("const approve = async () =>");
@@ -112,6 +120,21 @@ test("guided low-impact and local setup use one explicit confirmation without au
   assert.notEqual(approveEnd, -1);
   assert.ok(source.slice(approveStart, approveEnd).includes("onApprovePending("));
   assert.equal(source.slice(0, approveStart).includes("onApprovePending("), false, "route setup must not auto-approve");
+});
+
+test("cloud sign-in leads to one exact read-only scan confirmation instead of another ownership form", () => {
+  assert.match(source, /guidedCloudRoute[\s\S]*providerConnection[\s\S]*selectedScopeAssets\.every\(\(asset\) => isCloudAsset\(asset\) && asset\.platform === providerConnection\.platform\)/u);
+  assert.match(source, /selectedScopeAssets\.length === 1/u);
+  assert.match(source, /asset\.platform === "external" \|\| selectedIncludesExternal \|\| guidedCloudRoute/u);
+  assert.match(source, /!simpleGuidedConsent && \([\s\S]*ownershipConfirmed/u);
+  assert.match(source, /guidedLowImpactNetwork \|\| guidedCloudConsent[\s\S]*pageCopy\.changeScanType/u);
+  for (const [english, traditionalChinese] of [
+    ["Your provider sign-in already identifies the account", "雲端服務商登入已確認帳號"],
+    ["Use this signed-in account", "使用這個已登入帳號"],
+  ]) {
+    assert.ok(source.includes(english), english);
+    assert.ok(source.includes(traditionalChinese), traditionalChinese);
+  }
 });
 
 test("the first layer uses plain-language scan choices in both locales", () => {
@@ -138,12 +161,36 @@ test("local-project formats stay available behind technical details", () => {
   assert.notEqual(technicalEnd, -1);
   const visibleSetup = source.slice(workspaceStart, technicalStart);
   const technicalSetup = source.slice(technicalStart, technicalEnd);
-  assert.ok(visibleSetup.includes("pageCopy.gitWarningBody"));
+  assert.ok(visibleSetup.includes("selectedLocalInput.cautionBody"));
   assert.ok(visibleSetup.includes("localInputDefinitions[workspaceInputProfile].detail"));
+  assert.match(visibleSetup, /!guidedLocalProfile && <label className="field">[\s\S]*pageCopy\.inputType/u);
+  assert.match(technicalSetup, /guidedLocalProfile && \([\s\S]*pageCopy\.advancedLocalInputSummary[\s\S]*Object\.keys\(localInputDefinitions\)/u);
   assert.ok(technicalSetup.includes("pageCopy.gitTechnicalBody"));
   assert.ok(technicalSetup.includes("localInputDefinitions[workspaceInputProfile].technical"));
   assert.ok(source.includes("Prepare this project for scanning"));
   assert.ok(source.includes("準備這份專案進行掃描"));
+});
+
+test("each guided local route has plain-language first-layer copy in both locales", () => {
+  for (const [english, traditionalChinese] of [
+    ["Choose the source code you want checked", "選擇想檢查的程式碼"],
+    ["Choose the infrastructure code you want checked", "選擇想檢查的基礎設施程式碼"],
+    ["Choose the container image you want checked", "選擇想檢查的容器映像"],
+    ["Choose the Kubernetes settings you want checked", "選擇想檢查的 Kubernetes 設定"],
+    ["Add this source-code project", "加入這份程式碼專案"],
+    ["Add this infrastructure code", "加入這份基礎設施程式碼"],
+    ["Add this container image", "加入這份容器映像"],
+    ["Add these Kubernetes settings", "加入這些 Kubernetes 設定"],
+  ]) {
+    assert.ok(source.includes(english), english);
+    assert.ok(source.includes(traditionalChinese), traditionalChinese);
+  }
+});
+
+test("guided selection status is honest and does not keep prompting after auto-selection", () => {
+  assert.doesNotMatch(source, /bilingual\("Ready to scan"|bilingual\([^\n]+, "準備掃描"\)|Choose your first item/u);
+  assert.ok(source.includes('authorized: bilingual("Target confirmed", "目標已確認")'));
+  assert.ok(source.includes("shouldPromptForFirstAsset(pendingAssets.length, selectedAssets.length)"));
 });
 
 test("every journey step is directly reachable and step 2 points to scan choices", () => {

@@ -126,6 +126,13 @@ test("provider sign-in leads with the setup-file journey and keeps manual entry 
   assert.doesNotMatch(primaryJourney, /copy\.fields\./u);
 });
 
+test("the guided cloud confirmation is bound to a verified provider session", () => {
+  assert.match(panelSource, /onConnectionStateChanged\?: \(connection: ProviderConnectionBoundary \| undefined\)/u);
+  assert.match(panelSource, /onConnectionStateChanged\?\.\(installed \? \{/u);
+  assert.match(panelSource, /sourceId: installed\.source_id/u);
+  assert.match(panelSource, /installed\.provider === "microsoft365" \? "m365" : installed\.provider/u);
+});
+
 test("connection setup files are bounded, exact, credential-free, and never retained", () => {
   assert.match(panelSource, /CONNECTION_SETUP_MAX_BYTES = 64 \* 1024/u);
   assert.match(panelSource, /CONNECTION_SETUP_MAX_DEPTH = 4/u);

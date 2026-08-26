@@ -20,10 +20,19 @@ import type {
 import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
-import { ProviderAuthorizationPanel } from "../components/ProviderAuthorizationPanel";
+import {
+  ProviderAuthorizationPanel,
+  type ProviderConnectionBoundary,
+} from "../components/ProviderAuthorizationPanel";
 import { useI18n, type BilingualText } from "../i18n";
 import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scopePolicy";
 import type { UseCaseId } from "../useCases";
+import {
+  isCloudAsset,
+  shouldPromptForFirstAsset,
+  singleGuidedPendingAsset,
+  type GuidedCoverageRoute,
+} from "../coverageGuidance";
 
 import "../coverage-page.css";
 
@@ -170,35 +179,78 @@ const localProfileByAssessmentIntent: Partial<Record<UseCaseId, LocalInputProfil
   kubernetes: "kubernetes_manifests",
 };
 
-const localInputDefinitions: Record<LocalInputProfile, { label: BilingualText; detail: BilingualText; selection: BilingualText; technical: BilingualText }> = {
+interface LocalInputDefinition {
+  label: BilingualText;
+  detail: BilingualText;
+  formTitle: BilingualText;
+  formIntro: BilingualText;
+  cautionTitle: BilingualText;
+  cautionBody: BilingualText;
+  directoryLabel: BilingualText;
+  selection: BilingualText;
+  attachAction: BilingualText;
+  technical: BilingualText;
+}
+
+const localInputDefinitions: Record<LocalInputProfile, LocalInputDefinition> = {
   repository_working_tree: {
     label: bilingual("Source-code project", "程式碼專案"),
     detail: bilingual("Check the files in one project folder. Git history stays out.", "檢查一個專案資料夾內的檔案，不會包含 Git 版本紀錄。"),
+    formTitle: bilingual("Choose the source code you want checked", "選擇想檢查的程式碼"),
+    formIntro: bilingual("Pick one project folder. We'll make a private local copy and look for risky code, exposed secrets, and vulnerable packages.", "選擇一個專案資料夾；我們會建立私密的本機副本，檢查危險程式碼、外洩秘密與有弱點的套件。"),
+    cautionTitle: bilingual("Remove passwords, keys, and tokens from this folder first", "請先移除這個資料夾裡的密碼、金鑰與 token"),
+    cautionBody: bilingual("Git history stays out, but files such as .env are part of the copy. Remove secrets you do not want included.", "Git 版本紀錄不會包含在內，但 .env 等檔案會進入副本；請先移除不想納入的秘密值。"),
+    directoryLabel: bilingual("Source-code folder", "程式碼資料夾"),
     selection: bilingual("Choose the source-code folder", "選擇程式碼資料夾"),
+    attachAction: bilingual("Add this source-code project", "加入這份程式碼專案"),
     technical: bilingual("Input profile: repository_working_tree. Every .git directory, including refs and hooks, is excluded from the saved copy.", "輸入格式：repository_working_tree。保存副本時會排除所有 .git 目錄，包括 refs 與 hooks。"),
   },
   iac_working_tree: {
     label: bilingual("Infrastructure-code project", "基礎設施程式碼專案"),
     detail: bilingual("Check the Terraform, JSON, and YAML files in one project folder without changing them.", "檢查一個專案資料夾內的 Terraform、JSON 與 YAML 檔案，不會修改內容。"),
+    formTitle: bilingual("Choose the infrastructure code you want checked", "選擇想檢查的基礎設施程式碼"),
+    formIntro: bilingual("Pick the folder that contains your Terraform, CloudFormation, JSON, or YAML deployment files. We'll look for risky settings before they go live.", "選擇包含 Terraform、CloudFormation、JSON 或 YAML 部署檔案的資料夾；我們會在上線前找出危險設定。"),
+    cautionTitle: bilingual("Remove secret values from deployment files first", "請先移除部署檔案中的秘密值"),
+    cautionBody: bilingual("The selected files are copied for local checks. Replace embedded passwords, keys, and tokens before adding the folder.", "所選檔案會複製到本機進行檢查；加入資料夾前，請先移除檔案內的密碼、金鑰與 token。"),
+    directoryLabel: bilingual("Infrastructure-code folder", "基礎設施程式碼資料夾"),
     selection: bilingual("Choose the infrastructure-code folder", "選擇基礎設施程式碼資料夾"),
+    attachAction: bilingual("Add this infrastructure code", "加入這份基礎設施程式碼"),
     technical: bilingual("Input profile: iac_working_tree. The saved copy accepts Terraform, JSON, and YAML deployment files.", "輸入格式：iac_working_tree。保存副本接受 Terraform、JSON 與 YAML 部署檔案。"),
   },
   container_image_oci_layout: {
     label: bilingual("Exported container image", "匯出的容器映像"),
     detail: bilingual("Check one exported container image on this computer without signing in to a registry.", "在這台電腦上檢查一份匯出的容器映像，不必登入映像倉庫。"),
+    formTitle: bilingual("Choose the container image you want checked", "選擇想檢查的容器映像"),
+    formIntro: bilingual("Pick one exported OCI image folder. We'll inspect its packages and known vulnerabilities locally without running the image.", "選擇一個匯出的 OCI 映像資料夾；我們會在本機檢查其中套件與已知弱點，不會執行映像。"),
+    cautionTitle: bilingual("Choose an exported image, not a running container", "請選擇匯出的映像，不是正在執行的容器"),
+    cautionBody: bilingual("The app reads only this exported copy. It does not start the image or sign in to a container registry.", "產品只讀取這份匯出副本，不會啟動映像，也不會登入容器映像倉庫。"),
+    directoryLabel: bilingual("Exported image folder", "匯出映像資料夾"),
     selection: bilingual("Choose the exported container-image folder", "選擇匯出的容器映像資料夾"),
+    attachAction: bilingual("Add this container image", "加入這份容器映像"),
     technical: bilingual("Input profile: container_image_oci_layout. Choose one digest-bound OCI Image Layout containing oci-layout, index.json, and blobs/.", "輸入格式：container_image_oci_layout。請選擇一份綁定精確內容指紋、且包含 oci-layout、index.json 與 blobs/ 的 OCI Image Layout。"),
   },
   kubernetes_manifests: {
     label: bilingual("Kubernetes configuration", "Kubernetes 設定"),
     detail: bilingual("Check exported Kubernetes settings on this computer without connecting to the live cluster.", "在這台電腦上檢查匯出的 Kubernetes 設定，不會連線到正在運作的叢集。"),
+    formTitle: bilingual("Choose the Kubernetes settings you want checked", "選擇想檢查的 Kubernetes 設定"),
+    formIntro: bilingual("Pick a folder of exported YAML or JSON settings. We'll find risky workload and cluster settings without connecting to the live cluster.", "選擇包含匯出 YAML 或 JSON 設定的資料夾；我們會找出危險的工作負載與叢集設定，不會連線到正式叢集。"),
+    cautionTitle: bilingual("Use exported settings, not live-cluster credentials", "請使用匯出設定，不要加入正式叢集憑證"),
+    cautionBody: bilingual("Do not include kubeconfig files, tokens, or certificates. This route checks saved settings only.", "請勿加入 kubeconfig、token 或憑證；這條路線只檢查已保存的設定。"),
+    directoryLabel: bilingual("Kubernetes settings folder", "Kubernetes 設定資料夾"),
     selection: bilingual("Choose the Kubernetes configuration folder", "選擇 Kubernetes 設定資料夾"),
+    attachAction: bilingual("Add these Kubernetes settings", "加入這些 Kubernetes 設定"),
     technical: bilingual("Input profile: kubernetes_manifests. The folder may contain Kubernetes YAML and JSON manifest files.", "輸入格式：kubernetes_manifests。資料夾可包含 Kubernetes YAML 與 JSON manifest 檔。"),
   },
   kubernetes_node_snapshot: {
     label: bilingual("Exported Kubernetes node settings", "匯出的 Kubernetes 節點設定"),
     detail: bilingual("Check an exported copy of one node's security settings on this computer.", "在這台電腦上檢查一份節點安全設定的匯出副本。"),
+    formTitle: bilingual("Choose the Kubernetes node settings you want checked", "選擇想檢查的 Kubernetes 節點設定"),
+    formIntro: bilingual("Pick one exported node-settings folder. We'll check the saved security settings without mounting or reading the live node.", "選擇一個匯出的節點設定資料夾；我們會檢查已保存的安全設定，不會掛載或讀取正式節點。"),
+    cautionTitle: bilingual("Use an exported node snapshot", "請使用匯出的節點快照"),
+    cautionBody: bilingual("This route checks the saved snapshot only. Do not add live-cluster credentials or unrelated host files.", "這條路線只檢查已保存的快照；請勿加入正式叢集憑證或其他主機檔案。"),
+    directoryLabel: bilingual("Exported node-settings folder", "匯出節點設定資料夾"),
     selection: bilingual("Choose the exported node-settings folder", "選擇匯出的節點設定資料夾"),
+    attachAction: bilingual("Add these node settings", "加入這些節點設定"),
     technical: bilingual("Input profile: kubernetes_node_snapshot. Choose the parent of node-snapshot/; the bounded CIS snapshot is read without mounting the host filesystem.", "輸入格式：kubernetes_node_snapshot。請選擇 node-snapshot/ 的父目錄；產品不掛載 host filesystem，只讀取有限範圍的 CIS 快照。"),
   },
 };
@@ -305,10 +357,12 @@ const pageCopy = {
   workspaceBody: bilingual("Choose a local folder and find issues without uploading the project.", "選擇本機資料夾，不必上傳專案就能找問題。"),
   workspaceOpen: bilingual("Choose a project", "選擇專案"),
   workspaceClose: bilingual("Close local-files form", "關閉本機檔案表單"),
+  guidedWorkspaceOpen: bilingual("Show setup", "顯示設定"),
+  guidedWorkspaceClose: bilingual("Hide setup", "隱藏設定"),
   knownTargetsTitle: bilingual("Website, IP, or internal system already added", "已加入的網站、IP 或內部系統"),
   knownTargetsBody: bilingual("Turn the targets from your scan project into a review list.", "把掃描專案中的目標整理成可確認的清單。"),
-  networkReadyTitle: bilingual("Your network target is ready to confirm", "網路目標已準備好，等待確認"),
-  networkReadyBody: bilingual("Review the exact website, IP, or internal system and our low-impact preset below. Nothing runs until you later press Start.", "在下方確認精確的網站、IP 或內部系統，以及低影響建議設定；之後仍要由你按下「開始」才會執行。"),
+  networkReadyTitle: bilingual("Review your network target", "確認你的網路目標"),
+  networkReadyBody: bilingual("Check the exact website, IP address, or internal network below. We've already chosen a useful low-impact starting point.", "在下方確認精確的網站、IP 位址或內部網路；我們已準備好實用的低影響起始設定。"),
   networkReadyAction: bilingual("Review this target", "確認這個目標"),
   otherInputsSummary: bilingual("Other ways to add scan inputs", "其他加入掃描內容的方式"),
   otherInputsBody: bilingual("Open these technical options only when the suggested path does not match what you have.", "只有建議路徑不符合現況時，才需要打開這些技術選項。"),
@@ -361,7 +415,7 @@ const pageCopy = {
   localLabelHelp: bilingual("Use a name you will recognize later. Do not include passwords, keys, or tokens.", "使用之後容易辨識的名稱，不要放入密碼、金鑰或 token。"),
   localDirectory: bilingual("Folder to copy", "要複製的資料夾"),
   localPathHelp: bilingual("Only the folder name is shown here. Its full location stays on this computer.", "這裡只會顯示資料夾名稱；完整位置會留在這台電腦上。"),
-  workspaceAfterHelp: bilingual("After the copy is created, confirm ownership and allowed checks in step 3.", "建立副本後，仍要在步驟 3 確認所有權與允許的檢查。"),
+  workspaceAfterHelp: bilingual("This creates a private local copy. It does not start a scan.", "這只會建立私密的本機副本，不會開始掃描。"),
   attachWorkspace: bilingual("Prepare this project for scanning", "準備這份專案進行掃描"),
   attachingWorkspace: bilingual("Creating the copy…", "正在建立副本…"),
   folderFallback: bilingual("Selected folder", "已選取資料夾"),
@@ -406,7 +460,7 @@ const pageCopy = {
   allowEyebrow: bilingual("Step 3", "步驟 3"),
   allowTitle: bilingual("Choose what to scan", "選擇要掃描的內容"),
   allowDescription: bilingual("Select one or more items, choose the checks, and save. Recommended settings work for most scans; advanced controls are still available.", "選擇一個或多個項目、挑選檢查方式並儲存。大多數情況直接使用建議設定即可，進階控制仍完整保留。"),
-  pendingNoticeTitle: bilingual("Choose your first item below", "從下方選擇第一個項目"),
+  pendingNoticeTitle: bilingual("Choose an item below", "從下方選擇一個項目"),
   pendingNoticeBody: bilingual("Select an item to see the checks we recommend for it.", "選取項目後，就會看到我們建議的檢查方式。"),
   selectedCount: bilingual("{count} selected", "已選 {count} 項"),
   chooseAsset: bilingual("Choose {name}", "選取 {name}"),
@@ -431,21 +485,29 @@ const pageCopy = {
   clearSelection: bilingual("Clear selected items", "清除已選項目"),
   grantEyebrow: bilingual("Scan choices", "掃描選項"),
   grantTitle: bilingual("Set up checks for {count} selected items", "設定 {count} 個已選項目的檢查"),
-  grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then save. The scan starts only when you press Start on the progress page.", "確認建議內容與你有權執行這些檢查，再儲存；到掃描進度頁按下開始後才會正式執行。"),
+  grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then save.", "確認建議內容與你有權執行這些檢查，再儲存。"),
+  guidedNetworkGrantDescription: bilingual("The exact target and recommended low-impact check are shown below.", "下方會顯示精確目標與建議的低影響檢查。"),
+  guidedLocalGrantDescription: bilingual("Review the saved local copy and the recommended checks, then add it to this scan.", "確認已保存的本機副本與建議檢查，再加入這次掃描。"),
+  guidedCloudGrantDescription: bilingual("Your provider sign-in already identifies the account. Review the exact account and read-only checks below, then add it to this scan.", "雲端服務商登入已確認帳號；請查看下方的精確帳號與唯讀檢查，再加入這次掃描。"),
   presetTitle: bilingual("Recommended settings are ready", "建議設定已準備好"),
   presetBody: bilingual("We picked a safe, useful starting point for the selected items. You can still change anything before saving.", "我們已依所選項目準備安全又實用的起始設定；儲存前仍可調整。"),
   guidedNetworkPreset: bilingual(
-    "We'll check only {target}, using {protocol} on {count} common service ports with one connection at a time. The scan still waits for you to press Start.",
-    "這次只會檢查 {target}，使用 {protocol} 連接 {count} 個常見服務連接埠，一次只進行一個連線；仍要等你按下「開始」才會執行。",
+    "We'll check only {target} with conservative connection settings. You can change the technical details if needed.",
+    "這次只會用保守的連線設定檢查 {target}；需要時可修改技術細節。",
+  ),
+  guidedNetworkTechnicalPreset: bilingual(
+    "Current preset: {protocol}, {count} exact service ports, one connection at a time.",
+    "目前設定：{protocol}、{count} 個精確服務連接埠、一次一個連線。",
   ),
   noCommonTitle: bilingual("These items need different scan setups", "這些項目需要不同的掃描設定"),
   noCommonBody: bilingual("Set up websites and internal systems separately from cloud accounts and local projects.", "請把網站與內部系統，和雲端帳號與本機專案分開設定。"),
   allowedQuestion: bilingual("What should we check?", "想檢查哪些內容？"),
   changeScanType: bilingual("Use a different scan type (advanced)", "改用其他掃描方式（進階）"),
 
-  externalEyebrow: bilingual("Ready to scan", "準備掃描"),
+  externalEyebrow: bilingual("Target confirmation", "確認掃描目標"),
   externalTitle: bilingual("Confirm {name}", "確認 {name}"),
   externalDescription: bilingual("We've chosen conservative settings. Confirm this is your website or internal system, then save.", "我們已選好保守設定；確認這是你的網站或內部系統，再儲存即可。"),
+  guidedExternalDescription: bilingual("This is the exact target saved in your scan project.", "這是掃描專案中保存的精確目標。"),
   advancedScanSettings: bilingual("Advanced scan settings", "進階掃描設定"),
   advancedScanSettingsHelp: bilingual("Connection details, speed limits, and the active-test list", "連線細節、速度限制與主動測試清單"),
   activeSetupTitle: bilingual("Active testing needs one more step", "主動測試還需要一個步驟"),
@@ -499,9 +561,14 @@ const pageCopy = {
   grantBoundaryHelp: bilingual("Next, open Scan progress and press Start when you're ready.", "下一步到「掃描進度」，準備好時再按下開始。"),
   saveGrant: bilingual("Save scan choices", "儲存掃描選項"),
   confirmAndSave: bilingual("I confirm and prepare this scan", "我確認並準備這次掃描"),
+  useSignedInCloud: bilingual("Use this signed-in account", "使用這個已登入帳號"),
   savingGrant: bilingual("Recording…", "正在記錄…"),
   defaultScopeNote: bilingual("The user confirmed ownership and the read-only boundary item by item in the local interface.", "使用者已在本機介面逐項確認資產所有權與唯讀範圍。"),
   guidedNetworkConfirmation: bilingual("The user explicitly confirmed this exact low-impact network target in the guided local interface.", "使用者已在本機引導介面明確確認這個精確的低影響網路目標。"),
+  guidedLocalConfirmation: bilingual("The user explicitly selected this saved local copy and confirmed the recommended read-only checks.", "使用者已明確選擇這份已保存的本機副本，並確認建議的唯讀檢查。"),
+  guidedCloudConfirmation: bilingual("The user signed in through the provider and explicitly added this exact account with the displayed read-only checks.", "使用者已透過雲端服務商登入，並明確以畫面所列唯讀檢查加入這個精確帳號。"),
+  advancedLocalInputSummary: bilingual("Use a different kind of local input", "改用其他本機輸入類型"),
+  advancedLocalInputHelp: bilingual("The route you chose is already selected. Change this only when you meant to attach a different kind of project or export.", "你選擇的路線已經設定完成；只有要改附加其他類型的專案或匯出檔時才需要變更。"),
 
   emptyUnknownTitle: bilingual("No items yet because a source is still missing", "尚未看到項目，因為還缺少資料來源"),
   emptyUnknownBody: bilingual("At least one needed input is missing. Do not interpret the empty list as proof that the environment has no assets.", "至少一個需要的輸入尚未連接；不能把空清單解讀為環境沒有資產。"),
@@ -604,7 +671,7 @@ const assetTypeLabels: Record<Asset["type"], BilingualText> = {
 };
 
 const authorizationStateLabels: Record<Asset["authorizationState"], BilingualText> = {
-  authorized: bilingual("Ready to scan", "可以掃描"),
+  authorized: bilingual("Target confirmed", "目標已確認"),
   pending: bilingual("Choose checks first", "請先選擇檢查方式"),
   excluded: bilingual("Not included in this scan", "未納入這次掃描"),
   unknown: bilingual("Confirm who owns it", "請確認負責人"),
@@ -716,6 +783,12 @@ export function CoveragePage({
   const guidedLocalProfile = assessmentIntent ? localProfileByAssessmentIntent[assessmentIntent] : undefined;
   const guidedNetworkRoute = Boolean(assessmentIntent && networkAssessmentIntents.includes(assessmentIntent));
   const guidedCloudRoute = assessmentIntent === "cloud_account";
+  const guidedCoverageRoute = useMemo<GuidedCoverageRoute>(() => {
+    if (guidedNetworkRoute) return { kind: "network" };
+    if (guidedCloudRoute) return { kind: "cloud" };
+    if (guidedLocalProfile) return { kind: "local", profile: guidedLocalProfile };
+    return { kind: "none" };
+  }, [guidedCloudRoute, guidedLocalProfile, guidedNetworkRoute]);
   const [filter, setFilter] = useState<CoverageState | "all">("all");
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
   const [showSourceForm, setShowSourceForm] = useState(false);
@@ -749,6 +822,7 @@ export function CoveragePage({
   const [allowedTemplateIds, setAllowedTemplateIds] = useState("");
   const [allowSensitiveNetworks, setAllowSensitiveNetworks] = useState(false);
   const [showAdvancedExternalSettings, setShowAdvancedExternalSettings] = useState(false);
+  const [providerConnection, setProviderConnection] = useState<ProviderConnectionBoundary>();
 
   const counts = useMemo(
     () => Object.fromEntries(coverageStates.map((state) => [state, coverage.filter((item) => item.state === state).length])) as Record<CoverageState, number>,
@@ -762,12 +836,17 @@ export function CoveragePage({
 
   const pendingAssets = assets.filter((asset) => asset.authorizationState === "pending");
   const scopeEligibleAssets = useMemo(() => assets.filter(isScopeEligible), [assets]);
+  const guidedPendingAsset = useMemo(
+    () => singleGuidedPendingAsset(scopeEligibleAssets, guidedCoverageRoute),
+    [guidedCoverageRoute, scopeEligibleAssets],
+  );
   const scannedAssets = assets.filter((asset) => asset.coverageState === "discovered_authorized_scanned").length;
   const incompleteAssets = assets.filter((asset) => asset.coverageState === "authorized_incomplete").length;
   const unknownSourceCount = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
   const connectedNoAssetCount = coverage.filter((item) => item.state === "source_connected_none").length;
   const frozenExternalGrants = scopeGrants.filter((grant) => grant.externalScope);
   const selectedSource = sourceDefinitions[sourceKind];
+  const selectedLocalInput = localInputDefinitions[workspaceInputProfile];
   const selectedScopeAssets = assets.filter((asset) => selectedAssets.includes(asset.id));
   const firstSelectedScopeAsset = selectedScopeAssets[0];
   const availableScopeModes = !firstSelectedScopeAsset
@@ -786,10 +865,22 @@ export function CoveragePage({
     && scopeModes.length === 1
     && scopeModes[0] === "local_artifact",
   );
-  const simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent;
+  const guidedCloudConsent = Boolean(
+    guidedCloudRoute
+    && providerConnection
+    && selectedScopeAssets.length === 1
+    && selectedScopeAssets.every((asset) => isCloudAsset(asset) && asset.platform === providerConnection.platform),
+  );
+  const simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent;
   const requiresAuthorizationReference = Boolean(externalActivity) && !guidedLowImpactNetwork;
   const effectiveScopeConfirmation = scopeConfirmation.trim()
-    || (guidedLowImpactNetwork ? text(pageCopy.guidedNetworkConfirmation) : text(pageCopy.defaultScopeNote));
+    || (guidedLowImpactNetwork
+      ? text(pageCopy.guidedNetworkConfirmation)
+      : guidedLocalConsent
+        ? text(pageCopy.guidedLocalConfirmation)
+        : guidedCloudConsent
+          ? text(pageCopy.guidedCloudConfirmation)
+          : text(pageCopy.defaultScopeNote));
   const effectiveAllowSensitiveNetworks = allowSensitiveNetworks
     || Boolean(guidedLowImpactNetwork && selectedExternalAsset?.internetExposed === false);
   const limits = externalActivity ? rateLimits[externalActivity] : undefined;
@@ -879,6 +970,7 @@ export function CoveragePage({
     setShowSourceForm(false);
     setShowProviderSetup(guidedCloudRoute);
     setShowWorkspaceForm(Boolean(guidedLocalProfile));
+    setProviderConnection(undefined);
     if (guidedLocalProfile) {
       setWorkspaceInputProfile(guidedLocalProfile);
       setWorkspaceLabel(text(localInputDefinitions[guidedLocalProfile].label));
@@ -888,25 +980,17 @@ export function CoveragePage({
   }, [caseId, assessmentIntent]);
 
   useEffect(() => {
-    if (!guidedNetworkRoute && !guidedLocalProfile) return;
-    const matching = scopeEligibleAssets.filter((asset) =>
-      asset.authorizationState === "pending"
-      && (guidedNetworkRoute
-        ? asset.platform === "external"
-        : asset.localInputProfile === guidedLocalProfile),
-    );
-    if (matching.length !== 1) return;
-    const asset = matching[0];
+    const asset = guidedPendingAsset;
     if (!asset) return;
     setSelectedAssets((current) => {
       if (current.length > 0) return current;
       setScopeModes(suggestedModesForAsset(requestedActivities, asset));
-      if (guidedLocalProfile) {
+      if (guidedLocalProfile || guidedCloudRoute) {
         window.requestAnimationFrame(() => scrollToCoverageStep("coverage-step-3"));
       }
       return [asset.id];
     });
-  }, [caseId, assessmentIntent, guidedLocalProfile, guidedNetworkRoute, requestedActivities, scopeEligibleAssets]);
+  }, [caseId, assessmentIntent, guidedCloudRoute, guidedLocalProfile, guidedPendingAsset, requestedActivities]);
 
   const toggleAsset = (assetId: string) => {
     setSelectedAssets((current) => {
@@ -1080,7 +1164,9 @@ export function CoveragePage({
         <p>{text(guidedLocalProfile ? localInputDefinitions[guidedLocalProfile].detail : pageCopy.workspaceBody)}</p>
       </div>
       <button className="button button--secondary button--small" type="button" disabled={busy} aria-expanded={showWorkspaceForm} aria-controls="workspace-snapshot-form" onClick={() => { setShowWorkspaceForm((value) => !value); setShowSourceForm(false); setShowProviderSetup(false); }}>
-        {text(showWorkspaceForm ? pageCopy.workspaceClose : pageCopy.workspaceOpen)}
+        {text(guidedLocalProfile
+          ? showWorkspaceForm ? pageCopy.guidedWorkspaceClose : pageCopy.guidedWorkspaceOpen
+          : showWorkspaceForm ? pageCopy.workspaceClose : pageCopy.workspaceOpen)}
       </button>
     </article>
   );
@@ -1225,6 +1311,7 @@ export function CoveragePage({
               nativeMode={nativeMode}
               disabled={busy}
               onAuthorizationChanged={onAuthorizationChanged}
+              onConnectionStateChanged={setProviderConnection}
             />
           </div>
         )}
@@ -1306,12 +1393,12 @@ export function CoveragePage({
         <form id="workspace-snapshot-form" className="source-connect-panel" aria-labelledby="workspace-snapshot-title" onSubmit={attachWorkspace}>
           <div className="section-heading">
             <p className="eyebrow">{text(pageCopy.workspaceEyebrow)}</p>
-            <h2 id="workspace-snapshot-title">{text(pageCopy.workspaceFormTitle)}</h2>
-            <p>{text(pageCopy.workspaceIntro)}</p>
+            <h2 id="workspace-snapshot-title">{text(guidedLocalProfile ? selectedLocalInput.formTitle : pageCopy.workspaceFormTitle)}</h2>
+            <p>{text(guidedLocalProfile ? selectedLocalInput.formIntro : pageCopy.workspaceIntro)}</p>
           </div>
 
-          <InlineNotice tone="warning" title={text(pageCopy.gitWarningTitle)}>
-            <p>{text(pageCopy.gitWarningBody)}</p>
+          <InlineNotice tone="warning" title={text(guidedLocalProfile ? selectedLocalInput.cautionTitle : pageCopy.gitWarningTitle)}>
+            <p>{text(guidedLocalProfile ? selectedLocalInput.cautionBody : pageCopy.gitWarningBody)}</p>
           </InlineNotice>
 
           {!nativeMode && (
@@ -1321,7 +1408,7 @@ export function CoveragePage({
           )}
 
           <div className="form-grid form-grid--two">
-            <label className="field">
+            {!guidedLocalProfile && <label className="field">
               <span>{text(pageCopy.inputType)}</span>
               <select
                 value={workspaceInputProfile}
@@ -1337,14 +1424,14 @@ export function CoveragePage({
                 ))}
               </select>
               <small>{text(localInputDefinitions[workspaceInputProfile].detail)}</small>
-            </label>
+            </label>}
             <label className="field">
               <span>{text(pageCopy.localLabel)}</span>
               <input required maxLength={120} value={workspaceLabel} onChange={(event) => setWorkspaceLabel(event.target.value)} placeholder={text(pageCopy.localLabelPlaceholder)} />
               <small>{text(pageCopy.localLabelHelp)}</small>
             </label>
             <div className="field">
-              <span id="workspace-directory-label">{text(pageCopy.localDirectory)}</span>
+              <span id="workspace-directory-label">{text(guidedLocalProfile ? selectedLocalInput.directoryLabel : pageCopy.localDirectory)}</span>
               <button className="snapshot-picker" type="button" disabled={!nativeMode || busy || choosingWorkspace} aria-describedby="workspace-directory-help" onClick={() => void chooseWorkspace()}>
                 <Icon name="database" size={18} />
                 <span>{selectedWorkspacePath
@@ -1360,7 +1447,27 @@ export function CoveragePage({
 
           <details className="coverage-form-technical">
             <summary>{text(pageCopy.inputTechnicalSummary)}</summary>
-            <p>{text(pageCopy.gitTechnicalBody)}</p>
+            {guidedLocalProfile && (
+              <label className="field">
+                <span>{text(pageCopy.advancedLocalInputSummary)}</span>
+                <select
+                  value={workspaceInputProfile}
+                  onChange={(event) => {
+                    const next = event.target.value as LocalInputProfile;
+                    setWorkspaceInputProfile(next);
+                    setWorkspaceLabel(text(localInputDefinitions[next].label));
+                    setSelectedWorkspacePath("");
+                    setWorkspaceFormError(undefined);
+                  }}
+                >
+                  {(Object.keys(localInputDefinitions) as LocalInputProfile[]).map((inputProfile) => (
+                    <option key={inputProfile} value={inputProfile}>{text(localInputDefinitions[inputProfile].label)}</option>
+                  ))}
+                </select>
+                <small>{text(pageCopy.advancedLocalInputHelp)}</small>
+              </label>
+            )}
+            {workspaceInputProfile === "repository_working_tree" && <p>{text(pageCopy.gitTechnicalBody)}</p>}
             <p>{text(localInputDefinitions[workspaceInputProfile].technical)}</p>
             <p><strong>{text(pageCopy.localNoGrantTitle)}</strong></p>
             <p>{text(pageCopy.localNoGrantBody)}</p>
@@ -1371,9 +1478,9 @@ export function CoveragePage({
           {workspaceFormError && <p className="form-error" role="alert"><Icon name="warning" size={16} />{text(workspaceFormError)}</p>}
 
           <div className="form-actions">
-            <p><Icon name="lock" size={16} /> {text(pageCopy.workspaceAfterHelp)}</p>
+            {!guidedLocalProfile && <p><Icon name="lock" size={16} /> {text(pageCopy.workspaceAfterHelp)}</p>}
             <button className="button button--primary" type="submit" disabled={!nativeMode || busy || choosingWorkspace || !workspaceLabel.trim() || !selectedWorkspacePath}>
-              {busy ? text(pageCopy.attachingWorkspace) : text(pageCopy.attachWorkspace)}
+              {busy ? text(pageCopy.attachingWorkspace) : text(guidedLocalProfile ? selectedLocalInput.attachAction : pageCopy.attachWorkspace)}
               <Icon name="arrow" size={17} />
             </button>
           </div>
@@ -1496,7 +1603,7 @@ export function CoveragePage({
       </details>
       </section>
 
-      {pendingAssets.length > 0 && (
+      {shouldPromptForFirstAsset(pendingAssets.length, selectedAssets.length) && (
         <InlineNotice tone="warning" title={text(pageCopy.pendingNoticeTitle)}>
           <p>{text(pageCopy.pendingNoticeBody)}</p>
         </InlineNotice>
@@ -1518,7 +1625,13 @@ export function CoveragePage({
               <div>
                 <p className="eyebrow">{text(pageCopy.grantEyebrow)}</p>
                 <h3>{text(pageCopy.grantTitle, { count: formatNumber(selectedAssets.length) })}</h3>
-                <p>{text(pageCopy.grantDescription)}</p>
+                <p>{text(guidedLowImpactNetwork
+                  ? pageCopy.guidedNetworkGrantDescription
+                  : guidedLocalConsent
+                    ? pageCopy.guidedLocalGrantDescription
+                    : guidedCloudConsent
+                      ? pageCopy.guidedCloudGrantDescription
+                      : pageCopy.grantDescription)}</p>
               </div>
               <button className="icon-button" type="button" aria-label={text(pageCopy.clearSelection)} onClick={resetScopeForm}><Icon name="close" size={17} /></button>
             </div>
@@ -1530,8 +1643,6 @@ export function CoveragePage({
                 <p>{guidedLowImpactNetwork && selectedExternalAsset && parsedPorts
                   ? text(pageCopy.guidedNetworkPreset, {
                     target: externalTarget || selectedExternalAsset.name,
-                    protocol: externalProtocol.toUpperCase(),
-                    count: formatNumber(parsedPorts.length),
                   })
                   : text(pageCopy.presetBody)}</p>
               </div>
@@ -1541,7 +1652,7 @@ export function CoveragePage({
               <InlineNotice tone="warning" title={text(pageCopy.noCommonTitle)}>
                 <p>{text(pageCopy.noCommonBody)}</p>
               </InlineNotice>
-            ) : guidedLowImpactNetwork ? (
+            ) : guidedLowImpactNetwork || guidedCloudConsent ? (
               <details className="coverage-situation-details coverage-scan-type-advanced">
                 <summary>{text(pageCopy.changeScanType)}</summary>
                 {scopeModeChooser}
@@ -1554,7 +1665,7 @@ export function CoveragePage({
                   <div>
                     <p className="eyebrow">{text(pageCopy.externalEyebrow)}</p>
                     <h4 id="external-scope-title">{text(pageCopy.externalTitle, { name: selectedExternalAsset.name })}</h4>
-                    <p>{text(pageCopy.externalDescription)}</p>
+                    <p>{text(guidedLowImpactNetwork ? pageCopy.guidedExternalDescription : pageCopy.externalDescription)}</p>
                   </div>
                   <StatusPill
                     label={text(selectedExternalAsset.internetExposed === true
@@ -1599,6 +1710,12 @@ export function CoveragePage({
                     <span>{text(pageCopy.advancedScanSettings)}</span>
                     <small>{text(pageCopy.advancedScanSettingsHelp)}</small>
                   </summary>
+                  {guidedLowImpactNetwork && parsedPorts && (
+                    <p className="coverage-technical-preset-summary">{text(pageCopy.guidedNetworkTechnicalPreset, {
+                      protocol: externalProtocol.toUpperCase(),
+                      count: formatNumber(parsedPorts.length),
+                    })}</p>
+                  )}
                   {selectedExternalAsset.declaredWebService && (
                     <InlineNotice tone="info" title={text(pageCopy.declaredServiceTitle)}>
                       <p>{text(pageCopy.declaredServiceBody, {
@@ -1702,7 +1819,13 @@ export function CoveragePage({
             <div className="form-actions">
               <p><Icon name="lock" size={16} /> {text(pageCopy.grantBoundaryHelp)}</p>
               <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed) || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
-                <Icon name="lock" size={16} />{busy ? text(pageCopy.savingGrant) : text(simpleGuidedConsent ? pageCopy.confirmAndSave : pageCopy.saveGrant)}
+                <Icon name="lock" size={16} />{busy
+                  ? text(pageCopy.savingGrant)
+                  : text(guidedCloudConsent
+                    ? pageCopy.useSignedInCloud
+                    : simpleGuidedConsent
+                      ? pageCopy.confirmAndSave
+                      : pageCopy.saveGrant)}
               </button>
             </div>
           </form>
@@ -1733,7 +1856,8 @@ export function CoveragePage({
               const meta = coverageMeta[asset.coverageState];
               const anotherAssetSelected = selectedAssets.length > 0 && !selectedAssets.includes(asset.id);
               const selectedIncludesExternal = selectedScopeAssets.some((item) => item.platform === "external");
-              const incompatibleWithSelection = anotherAssetSelected && (asset.platform === "external" || selectedIncludesExternal);
+              const incompatibleWithSelection = anotherAssetSelected
+                && (asset.platform === "external" || selectedIncludesExternal || guidedCloudRoute);
               return (
                 <article key={asset.id} className={selectedAssets.includes(asset.id) ? "asset-review-card asset-review-card--selected" : "asset-review-card"}>
                   <label className="asset-review-card__choice">
