@@ -111,11 +111,14 @@ test("the saved assessment intent opens one guided route and moves unrelated inp
   assert.ok(source.includes("pageCopy.otherInputsSummary"));
 });
 
-test("a cloud readiness fix opens the exact connection step", () => {
-  assert.ok(source.includes("focusProviderSetup?: boolean"));
-  assert.match(source, /focusProviderSetup[\s\S]*setShowProviderSetup\(true\)[\s\S]*setShowSourceForm\(false\)[\s\S]*setShowWorkspaceForm\(false\)/u);
-  assert.match(source, /getElementById\("coverage-cloud-connection"\)\?\.scrollIntoView/u);
+test("a readiness fix opens the exact cloud, workspace, or read-only source step", () => {
+  assert.ok(source.includes("focusSetup?: CoverageSetupFocus"));
+  assert.match(source, /focusSetup === "provider"[\s\S]*focusSetup === "source"[\s\S]*focusSetup === "workspace"/u);
+  assert.match(source, /"coverage-cloud-connection"[\s\S]*"source-snapshot-form"[\s\S]*"workspace-snapshot-form"/u);
+  assert.match(source, /getElementById\(targetId\)\?\.scrollIntoView/u);
   assert.match(source, /id="coverage-cloud-connection" className="coverage-provider-slot"/u);
+  assert.match(source, /id="source-snapshot-form"/u);
+  assert.match(source, /id="workspace-snapshot-form"/u);
 });
 
 test("guided network, local, and signed-in cloud setup use one explicit confirmation without auto-approval", () => {

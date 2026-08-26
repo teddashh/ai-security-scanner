@@ -50,10 +50,10 @@ test("scan readiness blocks empty runs and sends each fix to the useful screen",
   assert.match(progress, /Download diagnostic log/u);
   assert.match(progress, /下載診斷紀錄/u);
 
-  assert.match(app, /scanReadiness\?\.blockerCode === "runtime_unavailable" \|\| scanReadiness\?\.nextStep === "scanner_setup"[\s\S]*navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
-  assert.match(app, /scanReadiness\?\.nextStep === "retry"[\s\S]*retryScanReadiness\(currentCaseId\)/u);
-  assert.match(app, /isProviderConfigurationBlocker\(scanReadiness\?\.blockerCode\)[\s\S]*navigate\("coverage"\)/u);
-  assert.match(app, /focusProviderSetup=\{isProviderConfigurationBlocker\(scanReadiness\?\.blockerCode\)\}/u);
+  assert.match(app, /isScannerSetupBlocker\(scanReadiness\?\.blockerCode\) \|\| scanReadiness\?\.nextStep === "scanner_setup"[\s\S]*navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
+  assert.match(app, /isReadinessRetryBlocker\(scanReadiness\?\.blockerCode\) \|\| scanReadiness\?\.nextStep === "retry"[\s\S]*retryScanReadiness\(currentCaseId\)/u);
+  assert.match(app, /coverageSetupFocusFor\(scanReadiness\?\.blockerCode\)[\s\S]*navigate\("coverage"\)/u);
+  assert.match(app, /focusSetup=\{coverageSetupFocusFor\(scanReadiness\?\.blockerCode\)\}/u);
   assert.match(app, /scanReadiness\?\.nextStep === "cases" \? "cases" : "coverage"/u);
 });
 
@@ -73,6 +73,14 @@ test("desktop readiness states stay typed and never render backend messages", as
     "provider_authorization_binding_mismatch",
     "provider_target_binding_mismatch",
     "provider_preflight_unavailable",
+    "execution_input_unavailable",
+    "scanner_setup_required",
+    "execution_check_unavailable",
+    "workspace_snapshot_unavailable",
+    "egress_gateway_unavailable",
+    "engine_execution_contract_invalid",
+    "passive_source_unavailable",
+    "execution_preflight_unavailable",
     "retry",
   ]) {
     assert.match(types, new RegExp(`\\| "${value}"`, "u"));
@@ -98,13 +106,68 @@ test("cloud readiness failures use distinct plain-language fixes without exposin
     assert.match(app, new RegExp(`${blocker}:`, "u"));
   }
 
-  const presentationStart = progress.indexOf("const providerReadinessPresentation");
+  const presentationStart = progress.indexOf("const readinessPresentation");
   const capabilityStart = progress.indexOf("provider_capability_unavailable:", presentationStart);
   const ambiguousStart = progress.indexOf("provider_source_ambiguous:", capabilityStart);
   assert.match(progress.slice(capabilityStart, ambiguousStart), /reconnectCloud/u);
   assert.doesNotMatch(progress.slice(ambiguousStart), /action: copy\.reconnectCloud/u);
   assert.match(progress, /No scan started/u);
   assert.match(progress, /掃描尚未開始/u);
+  assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
+});
+
+test("execution readiness failures have distinct bilingual fixes and typed destinations", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+  const presentationStart = progress.indexOf("const readinessPresentation");
+  const presentationEnd = progress.indexOf("const engineStates", presentationStart);
+  const presentations = progress.slice(presentationStart, presentationEnd);
+
+  for (const [blocker, action] of [
+    ["workspace_snapshot_unavailable", "copy.chooseLocalInputAgain"],
+    ["passive_source_unavailable", "copy.reconnectReadOnlySource"],
+    ["egress_gateway_unavailable", "copy.repairScanNetwork"],
+    ["engine_execution_contract_invalid", "copy.repairScanTool"],
+    ["execution_preflight_unavailable", "copy.checkAgain"],
+  ] as const) {
+    assert.match(presentations, new RegExp(`${blocker}:[\\s\\S]*?action: ${action.replace(".", "\\.")}`, "u"));
+    assert.match(app, new RegExp(`${blocker}:`, "u"));
+  }
+
+  for (const [english, traditionalChinese] of [
+    ["Choose the local files again", "請重新選擇本機檔案"],
+    ["Reconnect the saved data source", "請重新連接已保存的資料來源"],
+    ["The scan-tool connection needs attention", "掃描工具的專用連線需要處理"],
+    ["One scan tool needs repair", "有一項掃描工具需要修復"],
+    ["The app could not finish checking the selected inputs and scan tools", "程式尚未完成所選輸入與掃描工具的準備檢查"],
+  ] as const) {
+    assert.ok(progress.includes(english), english);
+    assert.ok(progress.includes(traditionalChinese), traditionalChinese);
+  }
+
+  for (const [english, traditionalChinese] of [
+    ["The saved local copy is missing or changed", "掃描用的本機副本已遺失或有變更"],
+    ["The private connection used by the scan tools is not ready", "掃描工具使用的專用連線尚未就緒"],
+    ["One scan tool is missing a required component", "有一項掃描工具缺少必要元件"],
+    ["The saved read-only data source is missing or changed", "已保存的唯讀資料來源已遺失或有變更"],
+    ["The final readiness check could not finish", "最後的準備狀態檢查尚未完成"],
+  ] as const) {
+    assert.ok(app.includes(english), english);
+    assert.ok(app.includes(traditionalChinese), traditionalChinese);
+  }
+
+  assert.match(app, /as const satisfies Partial<Record<ScanReadinessBlocker, BilingualText>>/u);
+  assert.match(app, /scannerSetupBlocker=\{scanReadiness && scanReadiness\.caseId === currentCaseId && isScannerSetupBlocker/u);
+  assert.match(progress, /satisfies Record<ScanReadinessBlocker, BilingualText>/u);
+  assert.match(progress, /copy\.readiness\[readiness\.blockerCode\] \?\? copy\.readinessUnavailableDescription/u);
+  assert.equal(
+    [...progress.matchAll(/readiness && !readiness\.ready && readiness\.blockerCode/g)].length,
+    2,
+    "the typed blocker should remain visible before the first scan and beside scan history",
+  );
+  const actionStart = app.indexOf("const executeAction = async");
+  const actionEnd = app.indexOf("const runAction = async", actionStart);
+  assert.doesNotMatch(app.slice(actionStart, actionEnd), /detail:\s*result\.data\.message/u);
   assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
 });
 

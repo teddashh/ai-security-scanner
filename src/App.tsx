@@ -5,7 +5,7 @@ import { Icon } from "./components/Icon";
 import { RuntimeSetupAssistant } from "./components/RuntimeSetupAssistant";
 import { EmptyState } from "./components/Shared";
 import { getDemoNotice } from "./data/demo";
-import { useI18n } from "./i18n";
+import { useI18n, type BilingualText } from "./i18n";
 import { CasesPage } from "./pages/CasesPage";
 import { CoveragePage } from "./pages/CoveragePage";
 import { ExportPage } from "./pages/ExportPage";
@@ -13,7 +13,11 @@ import { FindingsPage } from "./pages/FindingsPage";
 import { ProgressPage } from "./pages/ProgressPage";
 import { StartPage } from "./pages/StartPage";
 import { VerificationPage } from "./pages/VerificationPage";
-import { isProviderConfigurationBlocker } from "./scanReadiness";
+import {
+  coverageSetupFocusFor,
+  isReadinessRetryBlocker,
+  isScannerSetupBlocker,
+} from "./scanReadiness";
 import {
   isCurrentScanReadinessRequest,
   isCurrentScanReadinessResponse,
@@ -38,6 +42,7 @@ import type {
   ManagedRuntimeSetupStatus,
   PageId,
   ScanReadiness,
+  ScanReadinessBlocker,
   ScanRun,
   ServiceResult,
   ToastMessage,
@@ -127,7 +132,27 @@ const scanStartIssueCopy = {
     en: "The cloud readiness check could not finish. No scan started. Check again.",
     zhTW: "雲端準備狀態尚未檢查完成；掃描尚未開始。請重新檢查。",
   },
-} as const;
+  workspace_snapshot_unavailable: {
+    en: "The saved local copy is missing or changed. Choose the local project again before scanning.",
+    zhTW: "掃描用的本機副本已遺失或有變更；請重新選擇本機專案後再掃描。",
+  },
+  egress_gateway_unavailable: {
+    en: "The private connection used by the scan tools is not ready. Open scan-tool setup to repair it.",
+    zhTW: "掃描工具使用的專用連線尚未就緒；請開啟掃描工具設定進行修復。",
+  },
+  engine_execution_contract_invalid: {
+    en: "One scan tool is missing a required component. Open scan-tool setup to repair it.",
+    zhTW: "有一項掃描工具缺少必要元件；請開啟掃描工具設定進行修復。",
+  },
+  passive_source_unavailable: {
+    en: "The saved read-only data source is missing or changed. Reconnect it before scanning.",
+    zhTW: "已保存的唯讀資料來源已遺失或有變更；請重新連接後再掃描。",
+  },
+  execution_preflight_unavailable: {
+    en: "The final readiness check could not finish. No scan started. Check again.",
+    zhTW: "最後的準備狀態檢查尚未完成；掃描尚未開始。請重新檢查。",
+  },
+} as const satisfies Partial<Record<ScanReadinessBlocker, BilingualText>>;
 
 const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
@@ -857,6 +882,9 @@ export default function App() {
                 || runtimeSetup?.active
                 || runtimeSetup?.prerequisiteRepairActive}
               repairing={busyAction === "runtime-repair" || runtimeSetup?.prerequisiteRepairActive}
+              scannerSetupBlocker={scanReadiness && scanReadiness.caseId === currentCaseId && isScannerSetupBlocker(scanReadiness.blockerCode)
+                ? scanReadiness.blockerCode
+                : undefined}
               onSetup={() => void setupManagedRuntime()}
               onRepair={() => void repairManagedRuntimePrerequisite()}
               onCancel={() => void cancelManagedRuntimeSetup()}
@@ -940,7 +968,7 @@ export default function App() {
           <CoveragePage
             caseId={currentCaseId}
             assessmentIntent={workspace.case.assessmentIntent}
-            focusProviderSetup={isProviderConfigurationBlocker(scanReadiness?.blockerCode)}
+            focusSetup={coverageSetupFocusFor(scanReadiness?.blockerCode)}
             requestedActivities={workspace.case.requestedActivities}
             coverage={workspace.coverage}
             sources={workspace.sources}
@@ -981,17 +1009,17 @@ export default function App() {
                 void retryScanReadiness(currentCaseId);
                 return;
               }
-              if (scanReadiness?.blockerCode === "runtime_unavailable" || scanReadiness?.nextStep === "scanner_setup") {
+              if (isScannerSetupBlocker(scanReadiness?.blockerCode) || scanReadiness?.nextStep === "scanner_setup") {
                 setRuntimeSetupFocusKey((key) => key + 1);
                 navigate("start");
                 void setupManagedRuntime();
                 return;
               }
-              if (scanReadiness?.nextStep === "retry") {
+              if (isReadinessRetryBlocker(scanReadiness?.blockerCode) || scanReadiness?.nextStep === "retry") {
                 void retryScanReadiness(currentCaseId);
                 return;
               }
-              if (isProviderConfigurationBlocker(scanReadiness?.blockerCode)) {
+              if (coverageSetupFocusFor(scanReadiness?.blockerCode)) {
                 navigate("coverage");
                 return;
               }

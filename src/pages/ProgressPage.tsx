@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, MetricCard, PageHeader, ProgressBar } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
-import { useI18n } from "../i18n";
+import { useI18n, type BilingualText } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
 import {
   blockedRunSummary,
@@ -64,6 +64,10 @@ const copy = {
   chooseConnection: { en: "Choose connection", zhTW: "選擇連線" },
   reviewConnection: { en: "Review connection", zhTW: "檢查連線" },
   reviewTarget: { en: "Review target", zhTW: "檢查目標" },
+  chooseLocalInputAgain: { en: "Choose local input again", zhTW: "重新選擇本機輸入" },
+  reconnectReadOnlySource: { en: "Reconnect read-only source", zhTW: "重新連接唯讀來源" },
+  repairScanNetwork: { en: "Repair scan-tool connection", zhTW: "修復掃描工具連線" },
+  repairScanTool: { en: "Repair scan tool", zhTW: "修復掃描工具" },
   checkAgain: { en: "Check again", zhTW: "重新檢查" },
   chooseProject: { en: "Choose a scan project", zhTW: "選擇掃描專案" },
   runtimeEmptyTitle: { en: "One quick setup, then scan", zhTW: "先完成一次設定，就可以開始掃描" },
@@ -101,6 +105,31 @@ const copy = {
     en: "The app could not finish checking cloud readiness. Nothing was contacted or changed. Check again.",
     zhTW: "程式尚未完成雲端準備狀態檢查；沒有接觸目標，也沒有變更資料。請重新檢查。",
   },
+  workspaceSnapshotTitle: { en: "Choose the local files again", zhTW: "請重新選擇本機檔案" },
+  workspaceSnapshotDescription: {
+    en: "The saved private copy is missing or changed. Choose the local project again before scanning.",
+    zhTW: "掃描用的本機副本已遺失或有變更；請重新選擇本機專案後再掃描。",
+  },
+  egressGatewayTitle: { en: "The scan-tool connection needs attention", zhTW: "掃描工具的專用連線需要處理" },
+  egressGatewayDescription: {
+    en: "Open setup and let the app repair the private connection used by the scan tools. No scan has started.",
+    zhTW: "請開啟設定，讓程式修復掃描工具使用的專用連線；掃描尚未開始。",
+  },
+  engineContractTitle: { en: "One scan tool needs repair", zhTW: "有一項掃描工具需要修復" },
+  engineContractDescription: {
+    en: "A required part of this check is missing or out of date. Open setup to repair it before scanning.",
+    zhTW: "這項檢查缺少必要元件，或元件已過期；請開啟設定修復後再掃描。",
+  },
+  passiveSourceTitle: { en: "Reconnect the saved data source", zhTW: "請重新連接已保存的資料來源" },
+  passiveSourceDescription: {
+    en: "The read-only source used by this check is missing or changed. Reconnect it before scanning.",
+    zhTW: "這項檢查使用的唯讀來源已遺失或有變更；請重新連接後再掃描。",
+  },
+  executionCheckTitle: { en: "No scan started", zhTW: "掃描尚未開始" },
+  executionCheckDescription: {
+    en: "The app could not finish checking the selected inputs and scan tools. Nothing was contacted or changed. Check again.",
+    zhTW: "程式尚未完成所選輸入與掃描工具的準備檢查；沒有接觸目標，也沒有變更資料。請重新檢查。",
+  },
   readiness: {
     demo_case: { en: "Create or open a real scan project before starting.", zhTW: "請先建立或開啟真正的掃描專案。" },
     archived_case: { en: "This scan project is archived. Choose an active project to continue.", zhTW: "這個掃描專案已封存；請選擇仍在使用的專案。" },
@@ -137,7 +166,27 @@ const copy = {
       en: "The cloud readiness check could not finish. No scan started and no target was contacted. Check again.",
       zhTW: "雲端準備狀態尚未檢查完成；掃描尚未開始，也沒有接觸任何目標。請重新檢查。",
     },
-  },
+    workspace_snapshot_unavailable: {
+      en: "The saved local copy is missing or changed. Choose the local project again before scanning.",
+      zhTW: "掃描用的本機副本已遺失或有變更；請重新選擇本機專案後再掃描。",
+    },
+    egress_gateway_unavailable: {
+      en: "The private connection used by the scan tools is not ready. Open scan-tool setup to repair it.",
+      zhTW: "掃描工具使用的專用連線尚未就緒；請開啟掃描工具設定進行修復。",
+    },
+    engine_execution_contract_invalid: {
+      en: "One scan tool is missing a required component. Open scan-tool setup to repair it.",
+      zhTW: "有一項掃描工具缺少必要元件；請開啟掃描工具設定進行修復。",
+    },
+    passive_source_unavailable: {
+      en: "The saved read-only data source is missing or changed. Reconnect it before scanning.",
+      zhTW: "已保存的唯讀資料來源已遺失或有變更；請重新連接後再掃描。",
+    },
+    execution_preflight_unavailable: {
+      en: "The final readiness check could not finish. No scan started and no target was contacted. Check again.",
+      zhTW: "最後的準備狀態檢查尚未完成；掃描尚未開始，也沒有接觸任何目標。請重新檢查。",
+    },
+  } satisfies Record<ScanReadinessBlocker, BilingualText>,
   blockedTitle: { en: "Nothing was scanned", zhTW: "這次其實沒有開始掃描" },
   blockedNoTargets: {
     en: "Choose the website, system, account, or files you want to check, then start a new scan.",
@@ -302,7 +351,7 @@ const copy = {
   historyNotStarted: { en: "Not started", zhTW: "未開始" },
 } as const;
 
-const providerReadinessPresentation: Partial<Record<ScanReadinessBlocker, {
+const readinessPresentation: Partial<Record<ScanReadinessBlocker, {
   action: { en: string; zhTW: string };
   title: { en: string; zhTW: string };
   description: { en: string; zhTW: string };
@@ -336,6 +385,31 @@ const providerReadinessPresentation: Partial<Record<ScanReadinessBlocker, {
     action: copy.checkAgain,
     title: copy.providerCheckTitle,
     description: copy.providerCheckDescription,
+  },
+  workspace_snapshot_unavailable: {
+    action: copy.chooseLocalInputAgain,
+    title: copy.workspaceSnapshotTitle,
+    description: copy.workspaceSnapshotDescription,
+  },
+  egress_gateway_unavailable: {
+    action: copy.repairScanNetwork,
+    title: copy.egressGatewayTitle,
+    description: copy.egressGatewayDescription,
+  },
+  engine_execution_contract_invalid: {
+    action: copy.repairScanTool,
+    title: copy.engineContractTitle,
+    description: copy.engineContractDescription,
+  },
+  passive_source_unavailable: {
+    action: copy.reconnectReadOnlySource,
+    title: copy.passiveSourceTitle,
+    description: copy.passiveSourceDescription,
+  },
+  execution_preflight_unavailable: {
+    action: copy.checkAgain,
+    title: copy.executionCheckTitle,
+    description: copy.executionCheckDescription,
   },
 };
 
@@ -379,12 +453,15 @@ export function ProgressPage({
 }: ProgressPageProps) {
   const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id);
-  const providerPresentation = readiness?.blockerCode
-    ? providerReadinessPresentation[readiness.blockerCode]
+  const blockerPresentation = readiness?.blockerCode
+    ? readinessPresentation[readiness.blockerCode]
     : undefined;
+  const blockerDescription = readiness?.blockerCode
+    ? copy.readiness[readiness.blockerCode] ?? copy.readinessUnavailableDescription
+    : copy.readinessUnavailableDescription;
   const fixActionLabel = readinessCheckFailed
     ? copy.checkAgain
-    : providerPresentation?.action
+    : blockerPresentation?.action
     ?? (readiness?.nextStep === "scanner_setup"
       ? copy.setupTools
       : readiness?.nextStep === "cases"
@@ -392,13 +469,13 @@ export function ProgressPage({
         : copy.finishSetup);
   const emptyTitle = readinessCheckFailed
     ? copy.readinessUnavailableTitle
-    : providerPresentation?.title
+    : blockerPresentation?.title
     ?? (readiness?.blockerCode === "runtime_unavailable"
       ? copy.runtimeEmptyTitle
       : copy.emptyTitle);
   const emptyDescription = readinessCheckFailed
     ? copy.readinessUnavailableDescription
-    : providerPresentation?.description
+    : blockerPresentation?.description
     ?? (readiness?.blockerCode === "runtime_unavailable"
       ? copy.runtimeEmptyDescription
       : copy.emptyDescription);
@@ -479,7 +556,7 @@ export function ProgressPage({
         />
         {readiness && !readiness.ready && readiness.blockerCode && (
           <InlineNotice tone="warning" title={text(fixActionLabel)}>
-            <p>{text(copy.readiness[readiness.blockerCode])}</p>
+            <p>{text(blockerDescription)}</p>
           </InlineNotice>
         )}
         {readinessCheckFailed && (
@@ -569,6 +646,15 @@ export function ProgressPage({
           <p>{text(copy.readinessUnavailableDescription)}</p>
           <button className="button button--primary button--small" type="button" disabled={busy} onClick={onFixSetup}>
             <Icon name="refresh" size={15} />{text(copy.checkAgain)}
+          </button>
+        </InlineNotice>
+      )}
+
+      {readiness && !readiness.ready && readiness.blockerCode && readiness.nextStep !== "progress" && (
+        <InlineNotice tone="warning" title={text(fixActionLabel)}>
+          <p>{text(blockerDescription)}</p>
+          <button className="button button--primary button--small" type="button" disabled={busy} onClick={onFixSetup}>
+            <Icon name="arrow" size={15} />{text(fixActionLabel)}
           </button>
         </InlineNotice>
       )}

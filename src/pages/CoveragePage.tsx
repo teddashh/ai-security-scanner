@@ -25,6 +25,7 @@ import {
   type ProviderConnectionBoundary,
 } from "../components/ProviderAuthorizationPanel";
 import { useI18n, type BilingualText } from "../i18n";
+import type { CoverageSetupFocus } from "../scanReadiness";
 import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scopePolicy";
 import type { UseCaseId } from "../useCases";
 import {
@@ -39,7 +40,7 @@ import "../coverage-page.css";
 interface CoveragePageProps {
   caseId: string;
   assessmentIntent?: UseCaseId;
-  focusProviderSetup?: boolean;
+  focusSetup?: CoverageSetupFocus;
   requestedActivities: AssessmentActivity[];
   coverage: CoverageRecord[];
   sources: ConnectedSource[];
@@ -766,7 +767,7 @@ const fileNameFromPath = (path: string, fallback: string): string =>
 export function CoveragePage({
   caseId,
   assessmentIntent,
-  focusProviderSetup,
+  focusSetup,
   requestedActivities,
   coverage,
   sources,
@@ -984,15 +985,20 @@ export function CoveragePage({
   }, [caseId, assessmentIntent]);
 
   useEffect(() => {
-    if (!focusProviderSetup) return undefined;
-    setShowProviderSetup(true);
-    setShowSourceForm(false);
-    setShowWorkspaceForm(false);
+    if (!focusSetup) return undefined;
+    setShowProviderSetup(focusSetup === "provider");
+    setShowSourceForm(focusSetup === "source");
+    setShowWorkspaceForm(focusSetup === "workspace");
+    const targetId = focusSetup === "provider"
+      ? "coverage-cloud-connection"
+      : focusSetup === "source"
+        ? "source-snapshot-form"
+        : "workspace-snapshot-form";
     const frame = window.requestAnimationFrame(() => {
-      document.getElementById("coverage-cloud-connection")?.scrollIntoView({ block: "start" });
+      document.getElementById(targetId)?.scrollIntoView({ block: "start" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [caseId, focusProviderSetup]);
+  }, [caseId, focusSetup]);
 
   useEffect(() => {
     const asset = guidedPendingAsset;

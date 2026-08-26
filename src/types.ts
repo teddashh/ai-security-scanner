@@ -614,7 +614,10 @@ export type ScanReadinessState =
   | "provider_connection_required"
   | "provider_capability_required"
   | "provider_review_required"
-  | "provider_check_unavailable";
+  | "provider_check_unavailable"
+  | "execution_input_unavailable"
+  | "scanner_setup_required"
+  | "execution_check_unavailable";
 
 export type ScanReadinessBlocker =
   | "demo_case"
@@ -630,7 +633,12 @@ export type ScanReadinessBlocker =
   | "provider_source_ambiguous"
   | "provider_authorization_binding_mismatch"
   | "provider_target_binding_mismatch"
-  | "provider_preflight_unavailable";
+  | "provider_preflight_unavailable"
+  | "workspace_snapshot_unavailable"
+  | "egress_gateway_unavailable"
+  | "engine_execution_contract_invalid"
+  | "passive_source_unavailable"
+  | "execution_preflight_unavailable";
 
 export type ScanReadinessNextStep = "cases" | "coverage" | "progress" | "scanner_setup" | "retry";
 

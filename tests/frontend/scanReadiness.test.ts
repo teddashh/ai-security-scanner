@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isProviderConfigurationBlocker } from "../../src/scanReadiness.ts";
+import {
+  coverageSetupFocusFor,
+  isProviderConfigurationBlocker,
+  isReadinessRetryBlocker,
+  isScannerSetupBlocker,
+} from "../../src/scanReadiness.ts";
 import type { ScanReadinessBlocker } from "../../src/types.ts";
 
 test("only fixable provider configuration blockers open cloud setup", () => {
@@ -22,3 +27,18 @@ test("only fixable provider configuration blockers open cloud setup", () => {
   assert.equal(isProviderConfigurationBlocker(undefined), false);
 });
 
+test("execution readiness blockers open the exact safe recovery surface", () => {
+  assert.equal(coverageSetupFocusFor("workspace_snapshot_unavailable"), "workspace");
+  assert.equal(coverageSetupFocusFor("passive_source_unavailable"), "source");
+  assert.equal(coverageSetupFocusFor("provider_source_required"), "provider");
+  assert.equal(coverageSetupFocusFor("egress_gateway_unavailable"), undefined);
+
+  assert.equal(isScannerSetupBlocker("egress_gateway_unavailable"), true);
+  assert.equal(isScannerSetupBlocker("engine_execution_contract_invalid"), true);
+  assert.equal(isScannerSetupBlocker("runtime_unavailable"), true);
+  assert.equal(isScannerSetupBlocker("workspace_snapshot_unavailable"), false);
+
+  assert.equal(isReadinessRetryBlocker("execution_preflight_unavailable"), true);
+  assert.equal(isReadinessRetryBlocker("provider_preflight_unavailable"), true);
+  assert.equal(isReadinessRetryBlocker("engine_execution_contract_invalid"), false);
+});
