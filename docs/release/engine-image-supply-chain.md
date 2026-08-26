@@ -68,15 +68,20 @@ and before a new version tag is promoted:
    may add one project-owned application component. Before doing so it requires the matching SPDX
    document to contain only its `CONTAINER` package plus the two executable files cataloged from the
    image (`ai-security-scanner-egress-gateway` and `ai-security-scanner-egress-probe`), with unique
-   SPDX identities and nonzero SHA-1 and SHA-256 checksums. Because the container package declares
+   SPDX identities and Syft's exact all-zero SHA-1 placeholder. Syft 1.51.0 uses that placeholder
+   when a loose `scratch`-image file has no independently established file checksum; the helper
+   records it explicitly as unavailable and never presents it as integrity evidence. The signed OCI
+   platform-manifest digest remains the integrity identity for the image. Because the container
+   package declares
    `filesAnalyzed=false`, those executables remain loose SPDX file records: the only permitted edge
    is one exact `DOCUMENT DESCRIBES container-root`; `CONTAINS` would make a false package-membership
    claim and is rejected. The SPDX bytes,
-   file records, hashes, and relationships are never rewritten; that original document is signed as
+   file records, checksum placeholders, and relationships are never rewritten; that original document is signed as
    the SPDX predicate. The CycloneDX-only application component records the workflow source revision
    and platform-manifest digest without claiming a binary hash. The downloadable evidence manifest
-   records `spdxPreserved`, the file count and SPDX hash, along with the transformation tool. Any
-   discovered package, missing or unexpected file, missing hash, dangling relationship, dependency,
+   records `spdxPreserved`, the file count, the unavailable-checksum status, placeholder count, and
+   SPDX-document hash, along with the transformation tool. Any discovered package, missing or
+   unexpected file, changed placeholder contract, dangling relationship, dependency,
    wrong Syft provenance, label, digest, engine, or repository still fails closed.
 3. `actions/attest` creates one SLSA build-provenance attestation for the index and an SPDX plus a
    CycloneDX SBOM attestation for each platform manifest. The five Sigstore statements are stored
@@ -105,9 +110,9 @@ The self-test uses a synthetic exact two-platform index, multi-platform SBOMs, a
 envelopes. It proves the manifest has five exact attestations, rejects a wrong source revision,
 extra platform, wrong image digest, or SPDX checksum mismatch, and verifies cloud changed-input
 selection keeps full manual dispatch while narrowing an engine-only push. It also proves the
-gateway-only transformation keeps realistic gateway file records and hashes byte-for-byte for both
-platforms, and rejects a wrong engine, repository, inventory, scanner provenance, relationship,
-source label, or platform digest:
+gateway-only transformation keeps realistic gateway file records and checksum placeholders
+byte-for-byte for both platforms, and rejects a wrong engine, repository, inventory, scanner
+provenance, relationship, source label, or platform digest:
 
 ```sh
 node scripts/engine-image-evidence.mjs self-test

@@ -57,31 +57,14 @@ const GATEWAY_SCRATCH_SBOM = Object.freeze({
     "usr/local/bin/ai-security-scanner-egress-probe",
   ]),
   normalizationProperty: "ai-security-scanner:normalization:components",
-  normalizationValue: "first-party-scratch-application-from-preserved-spdx-v2",
+  normalizationValue: "first-party-scratch-application-from-preserved-spdx-v3",
+  fileChecksumStatus: "unavailable-syft-zero-sha1-placeholder",
 });
 const PROJECT_SBOM_TRANSFORMER = Object.freeze({
   name: "ai-security-scanner/scripts/engine-image-evidence.mjs",
-  version: "2",
+  version: "3",
 });
-const SPDX_CHECKSUM_HEX_LENGTHS = Object.freeze({
-  ADLER32: 8,
-  MD2: 32,
-  MD4: 32,
-  MD5: 32,
-  MD6: 32,
-  SHA1: 40,
-  SHA224: 56,
-  SHA256: 64,
-  SHA384: 96,
-  SHA512: 128,
-  "SHA3-256": 64,
-  "SHA3-384": 96,
-  "SHA3-512": 128,
-  "BLAKE2b-256": 64,
-  "BLAKE2b-384": 96,
-  "BLAKE2b-512": 128,
-  BLAKE3: 64,
-});
+const SYFT_UNAVAILABLE_FILE_SHA1 = "0".repeat(40);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -506,26 +489,14 @@ function validateGatewayScratchSpdxInventory(document, root) {
     );
     seenNames.add(normalizedName);
     assert(
-      Array.isArray(file.checksums) && file.checksums.length > 0,
-      "gateway scratch SPDX file is missing its checksum inventory",
+      Array.isArray(file.checksums) && file.checksums.length === 1 &&
+        file.checksums[0]?.algorithm === "SHA1" &&
+        file.checksums[0]?.checksumValue === SYFT_UNAVAILABLE_FILE_SHA1,
+      "gateway scratch SPDX file checksum contract changed from Syft's explicit unavailable placeholder",
     );
-    const algorithms = new Set();
-    for (const checksum of file.checksums) {
-      const length = SPDX_CHECKSUM_HEX_LENGTHS[checksum?.algorithm];
-      assert(
-        Number.isInteger(length) &&
-          typeof checksum?.checksumValue === "string" &&
-          checksum.checksumValue.length === length &&
-          /^[0-9a-f]+$/u.test(checksum.checksumValue) &&
-          !/^0+$/u.test(checksum.checksumValue) &&
-          !algorithms.has(checksum.algorithm),
-        "gateway scratch SPDX file checksum is invalid or duplicated",
-      );
-      algorithms.add(checksum.algorithm);
-    }
     assert(
-      algorithms.has("SHA1") && algorithms.has("SHA256"),
-      "gateway scratch SPDX file must retain Syft SHA1 and SHA256 evidence",
+      /^layerID: sha256:[0-9a-f]{64}$/u.test(file.comment ?? ""),
+      "gateway scratch SPDX file is missing its Syft layer identity",
     );
   }
   assert(
@@ -563,7 +534,11 @@ function validateGatewayScratchSpdxInventory(document, root) {
     );
   }
   assert(describesCount === 1, "gateway scratch SPDX must have exactly one DESCRIBES relationship");
-  return { fileCount: document.files.length };
+  return {
+    fileCount: document.files.length,
+    fileChecksumStatus: GATEWAY_SCRATCH_SBOM.fileChecksumStatus,
+    zeroSha1PlaceholderCount: document.files.length,
+  };
 }
 
 function normalizeGatewayScratchCycloneDx({
@@ -657,7 +632,12 @@ function normalizeGatewayScratchCycloneDx({
     name: GATEWAY_SCRATCH_SBOM.normalizationProperty,
     value: GATEWAY_SCRATCH_SBOM.normalizationValue,
   });
-  return { componentBomRef, spdxFileCount: spdxInventory.fileCount };
+  return {
+    componentBomRef,
+    spdxFileCount: spdxInventory.fileCount,
+    spdxFileChecksumStatus: spdxInventory.fileChecksumStatus,
+    spdxZeroSha1PlaceholderCount: spdxInventory.zeroSha1PlaceholderCount,
+  };
 }
 
 async function normalizeGatewayScratchCycloneDxFile({
@@ -690,7 +670,7 @@ async function normalizeGatewayScratchCycloneDxFile({
     "gateway scratch normalization changed the source SPDX document",
   );
   return {
-    kind: "cyclonedx-first-party-scratch-application-v2",
+    kind: "cyclonedx-first-party-scratch-application-v3",
     platform,
     platformDigest,
     sourceRevision,
@@ -699,6 +679,8 @@ async function normalizeGatewayScratchCycloneDxFile({
     componentBomRef: normalization.componentBomRef,
     spdxPreserved: true,
     spdxFileCount: normalization.spdxFileCount,
+    spdxFileChecksumStatus: normalization.spdxFileChecksumStatus,
+    spdxZeroSha1PlaceholderCount: normalization.spdxZeroSha1PlaceholderCount,
     spdxSha256: sourceSpdxSha256,
     tool: PROJECT_SBOM_TRANSFORMER,
   };
@@ -810,6 +792,18 @@ async function createPreparedEvidence({ engine, image, tag, indexDigest, sourceR
       digest,
       sboms: [spdxRecord, cycloneDxRecord],
     });
+  }
+  const transformationPlatforms = sbomTransformations.map((entry) => entry.platform);
+  if (engine === GATEWAY_SCRATCH_SBOM.engine) {
+    assert(
+      isDeepStrictEqual(transformationPlatforms, ["linux/amd64", "linux/arm64"]),
+      "gateway evidence must retain one exact SBOM transformation per supported platform",
+    );
+  } else {
+    assert(
+      transformationPlatforms.length === 0,
+      "gateway scratch SBOM transformation escaped its engine contract",
+    );
   }
 
   const evidence = {
@@ -1034,11 +1028,7 @@ function fakeGatewayScratchSboms(digest) {
   fixtures.spdx.files = GATEWAY_SCRATCH_SBOM.fileNames.map((fileName, index) => ({
     fileName,
     SPDXID: `SPDXRef-File-egress-gateway-${index + 1}`,
-    fileTypes: index < 2 ? ["APPLICATION", "BINARY"] : ["TEXT"],
-    checksums: [
-      { algorithm: "SHA1", checksumValue: `${index + 1}`.repeat(40) },
-      { algorithm: "SHA256", checksumValue: `${index + 4}`.repeat(64) },
-    ],
+    checksums: [{ algorithm: "SHA1", checksumValue: SYFT_UNAVAILABLE_FILE_SHA1 }],
     licenseConcluded: "NOASSERTION",
     licenseInfoInFiles: ["NOASSERTION"],
     copyrightText: "NOASSERTION",
@@ -1256,7 +1246,8 @@ async function selfTest() {
       const normalized = await readJson(path.join(gatewayRoot, `${prefix}.cyclonedx.json`));
       const component = normalized.components?.[0];
       assert(
-        transformation?.platformDigest === digest &&
+        transformation?.kind === "cyclonedx-first-party-scratch-application-v3" &&
+          transformation?.platformDigest === digest &&
           transformation?.sourceRevision === sourceRevision &&
           transformation?.sourceFile === `${prefix}.spdx.json` &&
           transformation?.outputFile === `${prefix}.cyclonedx.json` &&
@@ -1264,10 +1255,17 @@ async function selfTest() {
           transformation?.tool?.version === PROJECT_SBOM_TRANSFORMER.version &&
           transformation?.spdxPreserved === true &&
           transformation?.spdxFileCount === GATEWAY_SCRATCH_SBOM.fileNames.length &&
+          transformation?.spdxFileChecksumStatus === GATEWAY_SCRATCH_SBOM.fileChecksumStatus &&
+          transformation?.spdxZeroSha1PlaceholderCount === GATEWAY_SCRATCH_SBOM.fileNames.length &&
           transformation?.spdxSha256 === gatewaySpdxBefore.get(platform)?.bytesSha256 &&
           await sha256File(preservedSpdxFile) === gatewaySpdxBefore.get(platform)?.bytesSha256 &&
           isDeepStrictEqual(preservedSpdx.files, gatewaySpdxBefore.get(platform)?.files) &&
           normalized.version === 2 && normalized.components?.length === 1 &&
+          exactCycloneDxProperty(
+            normalized,
+            GATEWAY_SCRATCH_SBOM.normalizationProperty,
+            GATEWAY_SCRATCH_SBOM.normalizationValue,
+          ) &&
           component?.type === "application" &&
           component?.name === GATEWAY_SCRATCH_SBOM.componentName &&
           component?.hashes === undefined &&
@@ -1366,12 +1364,31 @@ async function selfTest() {
       "self-test allowed a filesAnalyzed=false gateway root to claim a loose file",
     );
 
-    const missingFileHashFixtures = fakeGatewayScratchSboms(gatewayDigest);
-    missingFileHashFixtures.spdx.files[0].checksums = [];
+    const missingFileChecksumPlaceholderFixtures = fakeGatewayScratchSboms(gatewayDigest);
+    missingFileChecksumPlaceholderFixtures.spdx.files[0].checksums = [];
     assertGatewayNormalizationRejected(
-      missingFileHashFixtures,
+      missingFileChecksumPlaceholderFixtures,
       {},
-      "self-test allowed a gateway SPDX file without preserved hashes",
+      "self-test allowed a gateway SPDX file without the pinned Syft checksum placeholder",
+    );
+
+    const fabricatedFileHashFixtures = fakeGatewayScratchSboms(gatewayDigest);
+    fabricatedFileHashFixtures.spdx.files[0].checksums[0].checksumValue = "1".repeat(40);
+    assertGatewayNormalizationRejected(
+      fabricatedFileHashFixtures,
+      {},
+      "self-test treated a nonzero loose-file checksum as evidence without independently verifying it",
+    );
+
+    const addedFileHashFixtures = fakeGatewayScratchSboms(gatewayDigest);
+    addedFileHashFixtures.spdx.files[0].checksums.push({
+      algorithm: "SHA256",
+      checksumValue: "1".repeat(64),
+    });
+    assertGatewayNormalizationRejected(
+      addedFileHashFixtures,
+      {},
+      "self-test accepted an unverified checksum added to the pinned Syft placeholder contract",
     );
 
     assertGatewayNormalizationRejected(
@@ -1488,7 +1505,7 @@ async function selfTest() {
         promotionAction.includes("run: docker logout ghcr.io"),
       "promotion action is not self-contained across anonymous-smoke credential state",
     );
-    process.stdout.write("Engine image evidence self-test passed (20 engines, immutable tag provenance, exact index, 5 attestations, 4 SBOMs, preserved gateway SPDX files/hashes, negative scope/provenance/relationship/digest checks).\n");
+    process.stdout.write("Engine image evidence self-test passed (20 engines, immutable tag provenance, exact index, 5 attestations, 4 SBOMs, preserved gateway SPDX inventory with explicit unavailable-checksum status, negative scope/provenance/relationship/digest checks).\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

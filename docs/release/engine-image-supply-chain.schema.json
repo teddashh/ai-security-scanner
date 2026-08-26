@@ -13,6 +13,7 @@
     "sourceRevision",
     "public",
     "generator",
+    "sbomTransformations",
     "imageBuild",
     "platforms",
     "attestations",
@@ -97,6 +98,30 @@
     },
     "checksumsFile": { "const": "SHA256SUMS.txt" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "engine": { "const": "egress-gateway" } },
+        "required": ["engine"]
+      },
+      "then": {
+        "properties": {
+          "sbomTransformations": {
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              { "properties": { "platform": { "const": "linux/amd64" } } },
+              { "properties": { "platform": { "const": "linux/arm64" } } }
+            ],
+            "items": false
+          }
+        }
+      },
+      "else": {
+        "properties": { "sbomTransformations": { "maxItems": 0 } }
+      }
+    }
+  ],
   "$defs": {
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -127,11 +152,13 @@
         "componentBomRef",
         "spdxPreserved",
         "spdxFileCount",
+        "spdxFileChecksumStatus",
+        "spdxZeroSha1PlaceholderCount",
         "spdxSha256",
         "tool"
       ],
       "properties": {
-        "kind": { "const": "cyclonedx-first-party-scratch-application-v2" },
+        "kind": { "const": "cyclonedx-first-party-scratch-application-v3" },
         "platform": { "enum": ["linux/amd64", "linux/arm64"] },
         "platformDigest": { "$ref": "#/$defs/digest" },
         "sourceRevision": {
@@ -152,6 +179,8 @@
         },
         "spdxPreserved": { "const": true },
         "spdxFileCount": { "const": 2 },
+        "spdxFileChecksumStatus": { "const": "unavailable-syft-zero-sha1-placeholder" },
+        "spdxZeroSha1PlaceholderCount": { "const": 2 },
         "spdxSha256": { "$ref": "#/$defs/hash" },
         "tool": {
           "type": "object",
@@ -159,7 +188,7 @@
           "required": ["name", "version"],
           "properties": {
             "name": { "const": "ai-security-scanner/scripts/engine-image-evidence.mjs" },
-            "version": { "const": "2" }
+            "version": { "const": "3" }
           }
         }
       }
