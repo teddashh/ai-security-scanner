@@ -583,6 +583,14 @@ fn validate_provenance(provenance: &EgressGatewayProvenance) -> Result<(), &'sta
                 return Err("provider-service policy provenance is invalid");
             }
         }
+        EgressGatewayProvenance::ReleaseQualification {
+            case_id,
+            qualification_id,
+        } => {
+            if !token(case_id) || !token(qualification_id) {
+                return Err("release-qualification policy provenance is invalid");
+            }
+        }
     }
     Ok(())
 }
@@ -800,6 +808,21 @@ mod tests {
     fn policy_expiry_and_limits_fail_closed() {
         let mut raw = raw_policy();
         raw.expires_at = Utc::now() - chrono::Duration::seconds(1);
+        assert!(validate_policy(raw, Utc::now()).is_err());
+    }
+
+    #[test]
+    fn release_qualification_provenance_is_bounded_and_machine_owned() {
+        let mut raw = raw_policy();
+        raw.provenance = EgressGatewayProvenance::ReleaseQualification {
+            case_id: "release-qualification".into(),
+            qualification_id: "gateway-no-connect".into(),
+        };
+        assert!(validate_policy(raw.clone(), Utc::now()).is_ok());
+        raw.provenance = EgressGatewayProvenance::ReleaseQualification {
+            case_id: "release-qualification".into(),
+            qualification_id: "unsafe\nidentifier".into(),
+        };
         assert!(validate_policy(raw, Utc::now()).is_err());
     }
 
