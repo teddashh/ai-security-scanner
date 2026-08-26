@@ -533,6 +533,20 @@ fn block_scan_readiness(readiness: &mut ScanReadiness, blocker: DesktopExecution
 }
 
 fn execution_requires_provider_capability(execution: &PlannedEngineExecution) -> bool {
+    // Captured-artifact resume never contacts the provider, provisions an
+    // egress network, or checks out credentials. Requiring a fresh live
+    // capability here would strand already-preserved evidence after the
+    // short-lived provider session expires. Every action that can reexecute
+    // the scanner remains subject to the ordinary provider-demand checks.
+    if execution
+        .resume_checkpoint
+        .as_ref()
+        .is_some_and(|checkpoint| {
+            checkpoint.resume_action() == ResumeAction::AdaptCapturedArtifacts
+        })
+    {
+        return false;
+    }
     execution
         .manifest
         .required_permissions
@@ -4225,5 +4239,130 @@ mod tests {
         assert_eq!(after.status, before.status);
         assert_eq!(after.updated_at, before.updated_at);
         assert_eq!(after.storage_revision, before.storage_revision);
+    }
+
+    #[test]
+    fn captured_cloud_resume_skips_provider_demand_but_reexecution_does_not() {
+        let issued_at = Utc::now();
+        let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 4);
+        let service = state.case_service();
+        let initial = service
+            .plan_scan(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
+        let initial_execution = initial.executable.first().unwrap();
+        let artifact_context = ArtifactContext {
+            case_id: case_id.clone(),
+            scan_run_id: initial.scan_run.id.clone(),
+            engine_run_id: initial_execution.engine_run_id.clone(),
+        };
+        let artifacts = ArtifactStore::open(state.artifact_root()).unwrap();
+        let directories = artifacts
+            .prepare_run(&artifact_context, initial_execution.attempt)
+            .unwrap();
+        let output = directories.output.join("steampipe.json");
+        std::fs::write(&output, b"[]").unwrap();
+        let artifact = artifacts
+            .describe_file(&artifact_context, &output, "application/json", true)
+            .unwrap();
+
+        let mut stored = service.show_case(&case_id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == initial.scan_run.id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == initial_execution.engine_run_id)
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+        checkpoint.artifact_ids = vec![artifact.id.clone()];
+        checkpoint.cleanup_completed = true;
+        checkpoint.runtime_provider = Some(RuntimeProvider::Docker);
+        checkpoint.runtime_command_provenance = Some(RuntimeCommandProvenance::Compatibility);
+        engine_run.status = EngineRunStatus::PartiallyCompleted;
+        engine_run.progress_percent = 85;
+        engine_run.phase = "captured_awaiting_adapter".into();
+        engine_run.raw_artifact_ids = vec![artifact.id.clone()];
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        run.completed_at = Some(Utc::now());
+        stored.raw_artifacts.push(artifact);
+        stored.status = CaseStatus::NeedsAttention;
+        state
+            .storage
+            .save_case(&mut stored, "test.captured_cloud_resume")
+            .unwrap();
+
+        state
+            .source_authorizations
+            .revoke_source(&case_id, &source_id, Utc::now())
+            .unwrap();
+        assert!(
+            state
+                .source_authorizations
+                .status(&case_id, &source_id, Utc::now())
+                .unwrap()
+                .is_none()
+        );
+
+        let resume = service
+            .plan_resume_checked(&case_id, &initial.scan_run.id, |plan| {
+                validate_desktop_execution_with_runtime(&state, plan, || Ok(()))
+            })
+            .unwrap();
+        let resumed_execution = resume.executable.first().unwrap();
+        let resumed_checkpoint = resumed_execution.resume_checkpoint.as_ref().unwrap();
+        assert_eq!(
+            resumed_checkpoint.resume_action(),
+            ResumeAction::AdaptCapturedArtifacts
+        );
+
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, "unused-runtime");
+        let report = resume_captured_execution(
+            &state,
+            &runtime,
+            &artifacts,
+            resumed_execution,
+            resumed_checkpoint,
+        )
+        .unwrap();
+        assert!(matches!(
+            report.checkpoint.stage,
+            ExecutionStage::Completed | ExecutionStage::CapturedAwaitingAdapter
+        ));
+        assert!(report.runtime_preflight.is_none());
+        assert!(report.checkpoint.managed_network.is_none());
+        assert!(
+            state
+                .source_authorizations
+                .status(&case_id, &source_id, Utc::now())
+                .unwrap()
+                .is_none()
+        );
+
+        for stage in [ExecutionStage::Failed, ExecutionStage::Running] {
+            let mut reexecution = resume.clone();
+            reexecution.executable[0]
+                .resume_checkpoint
+                .as_mut()
+                .unwrap()
+                .stage = stage;
+            let error = validate_desktop_execution_with_runtime(&state, &reexecution, || Ok(()))
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("scan_preflight:provider_capability_unavailable")
+            );
+        }
     }
 }
