@@ -1,6 +1,6 @@
 [package]
 name = "ai-security-scanner"
-version = "0.1.5"
+version = "0.1.6"
 description = "Local-first, repeatable security assessment casework"
 authors = ["Ted Huang and ai-security-scanner contributors"]
 edition = "2024"
@@ -53,6 +53,11 @@ required-features = ["adapter-launcher"]
 [[bin]]
 name = "ai-security-scanner-egress-gateway"
 path = "src/bin/egress_gateway.rs"
+required-features = ["egress-gateway"]
+
+[[bin]]
+name = "ai-security-scanner-egress-probe"
+path = "src/bin/egress_probe.rs"
 required-features = ["egress-gateway"]
 
 [[bin]]

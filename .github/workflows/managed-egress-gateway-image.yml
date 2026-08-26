@@ -7,6 +7,7 @@ on:
     paths:
       - engines/images/egress-gateway/Dockerfile
       - src-tauri/src/bin/egress_gateway.rs
+      - src-tauri/src/bin/egress_probe.rs
       - src-tauri/src/managed_network.rs
       - src-tauri/Cargo.toml
       - Cargo.toml
@@ -21,12 +22,12 @@ permissions:
   attestations: write
 
 concurrency:
-  group: managed-egress-gateway-image-0.1.5-1
+  group: managed-egress-gateway-image-0.1.6-1
   cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/teddashh/ai-security-scanner-egress-gateway
-  IMAGE_TAG: 0.1.5-1
+  IMAGE_TAG: 0.1.6-1
 
 jobs:
   publish:
@@ -93,6 +94,7 @@ jobs:
         run: |
           test "${DIGEST#sha256:}" != "${DIGEST}"
           network="ass-egress-image-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          runtime_user="$(id -u):$(id -g)"
           container_id=""
           cleanup() {
             if [[ -n "${container_id}" ]]; then docker rm --force "${container_id}" >/dev/null 2>&1 || true; fi
@@ -128,12 +130,48 @@ jobs:
             }]
           }' > gateway-policy.json
           chmod 0444 gateway-policy.json
+          install -d -m 0700 gateway-status
           container_id="$(docker run --detach --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user "${runtime_user}" \
             --network "${network}" --ip 172.29.252.2 \
             --volume "${PWD}/gateway-policy.json:/run/ai-security-scanner/egress-policy.json:ro" \
-            "${IMAGE}@${DIGEST}")"
-          sleep 2
+            --volume "${PWD}/gateway-status:/run/ai-security-scanner/status:rw" \
+            "${IMAGE}@${DIGEST}" \
+            --policy /run/ai-security-scanner/egress-policy.json \
+            --status-file /run/ai-security-scanner/status/status.json)"
+          for attempt in {1..50}; do
+            if jq -e '
+              length <= 3 and
+              .schema_version == "1.0.0" and
+              .phase == "ready" and
+              .code == "ready"
+            ' gateway-status/status.json >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.1
+          done
+          test "$(wc -c < gateway-status/status.json)" -le 1024
+          test ! -e gateway-status/status.tmp
+          jq -e '
+            length == 3 and
+            .schema_version == "1.0.0" and
+            .phase == "ready" and
+            .code == "ready"
+          ' gateway-status/status.json >/dev/null
           docker inspect "${container_id}" --format '{{.State.Running}}' | grep -Fx true
+          probe="$(docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user "${runtime_user}" \
+            --network "${network}" \
+            --entrypoint /usr/local/bin/ai-security-scanner-egress-probe \
+            "${IMAGE}@${DIGEST}" \
+            --gateway 172.29.252.2:1080)"
+          jq -e '
+            length == 4 and
+            .schema_version == "1.0.0" and
+            .reachability_probe == "socks5_no_connect_greeting" and
+            .gateway_reachable == true and
+            .upstream_connect_attempted == false
+          ' <<<"${probe}" >/dev/null
           docker rm --force "${container_id}"
           container_id=""
 

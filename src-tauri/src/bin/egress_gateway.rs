@@ -3,11 +3,12 @@ use ai_security_scanner_lib::managed_network::{EgressGatewayLimits, GatewayDesti
 use ai_security_scanner_lib::managed_network::{EgressGatewayPolicy, EgressGatewayProvenance};
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,6 +19,10 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::time::timeout;
 
 const POLICY_PATH: &str = "/run/ai-security-scanner/egress-policy.json";
+const STATUS_FILE_NAME: &str = "status.json";
+const STATUS_TEMP_FILE_NAME: &str = "status.tmp";
+const STATUS_SCHEMA_VERSION: &str = "1.0.0";
+const MAX_STATUS_BYTES: usize = 1024;
 const MAX_POLICY_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_DESTINATIONS: usize = 10_000;
 const MAX_PROVENANCE_GRANTS: usize = 128;
@@ -47,27 +52,77 @@ enum RequestedTarget {
 
 #[tokio::main]
 async fn main() {
-    let policy_path = match policy_path_from_args(env::args_os().skip(1)) {
-        Ok(path) => path,
+    let invocation = match invocation_from_args(env::args_os().skip(1)) {
+        Ok(invocation) => invocation,
         Err(_) => {
             eprintln!("egress gateway arguments were rejected");
             std::process::exit(2);
         }
     };
-    if run(&policy_path).await.is_err() {
+    if let Err(code) = run(&invocation).await {
+        if let Some(status_file) = invocation.status_file.as_deref() {
+            let _ = write_status(status_file, GatewayPhase::Failed, code);
+        }
         eprintln!("egress gateway stopped safely");
         std::process::exit(1);
     }
 }
 
-async fn run(policy_path: &Path) -> Result<(), &'static str> {
-    let policy = Arc::new(load_policy(policy_path)?);
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GatewayInvocation {
+    policy_path: PathBuf,
+    status_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum GatewayPhase {
+    Starting,
+    Ready,
+    Failed,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum GatewayStatusCode {
+    Initializing,
+    Ready,
+    PolicyInspectionFailed,
+    PolicyInvalid,
+    ListenerBindFailed,
+    ListenerFailed,
+    SignalHandlerFailed,
+    StatusWriteFailed,
+    PolicyExpired,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct GatewayStatus {
+    schema_version: String,
+    phase: GatewayPhase,
+    code: GatewayStatusCode,
+}
+
+async fn run(invocation: &GatewayInvocation) -> Result<(), GatewayStatusCode> {
+    if let Some(status_file) = invocation.status_file.as_deref() {
+        write_status(
+            status_file,
+            GatewayPhase::Starting,
+            GatewayStatusCode::Initializing,
+        )?;
+    }
+    let policy = Arc::new(load_policy(&invocation.policy_path)?);
     let concurrency = Arc::new(Semaphore::new(policy.max_concurrency));
     let rate_window = Arc::new(Mutex::new(VecDeque::<Instant>::new()));
     let listener = TcpListener::bind(policy.listen_address)
         .await
-        .map_err(|_| "gateway listener could not bind")?;
-    let expires_after = policy_remaining(&policy).ok_or("gateway policy expired")?;
+        .map_err(|_| GatewayStatusCode::ListenerBindFailed)?;
+    if let Some(status_file) = invocation.status_file.as_deref() {
+        write_status(status_file, GatewayPhase::Ready, GatewayStatusCode::Ready)?;
+    }
+    let expires_after = policy_remaining(&policy).ok_or(GatewayStatusCode::PolicyInvalid)?;
     let expiry_deadline = tokio::time::Instant::now() + expires_after;
 
     loop {
@@ -77,10 +132,17 @@ async fn run(policy_path: &Path) -> Result<(), &'static str> {
                 // Dropping the listener and Tokio runtime also aborts every
                 // in-flight relay. The sidecar therefore cannot outlive the
                 // durable authorization deadline even if its parent crashes.
+                if let Some(status_file) = invocation.status_file.as_deref() {
+                    write_status(
+                        status_file,
+                        GatewayPhase::Stopped,
+                        GatewayStatusCode::PolicyExpired,
+                    )?;
+                }
                 return Ok(());
             }
             accepted = listener.accept() => {
-                let (client, peer) = accepted.map_err(|_| "gateway listener failed")?;
+                let (client, peer) = accepted.map_err(|_| GatewayStatusCode::ListenerFailed)?;
                 if policy.expires_at <= Utc::now() || !authorized_client(&policy, peer.ip()) {
                     continue;
                 }
@@ -97,7 +159,7 @@ async fn run(policy_path: &Path) -> Result<(), &'static str> {
                 });
             }
             signal = tokio::signal::ctrl_c() => {
-                signal.map_err(|_| "gateway signal handler failed")?;
+                signal.map_err(|_| GatewayStatusCode::SignalHandlerFailed)?;
                 return Ok(());
             }
         }
@@ -287,35 +349,130 @@ async fn send_reply(
     }
 }
 
-fn load_raw_policy(path: &Path) -> Result<EgressGatewayPolicy, &'static str> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| "policy could not be inspected")?;
+fn load_raw_policy(path: &Path) -> Result<EgressGatewayPolicy, GatewayStatusCode> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| GatewayStatusCode::PolicyInspectionFailed)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_POLICY_BYTES
     {
-        return Err("policy is not a bounded regular file");
+        return Err(GatewayStatusCode::PolicyInvalid);
     }
-    let bytes = fs::read(path).map_err(|_| "policy could not be read")?;
-    serde_json::from_slice(&bytes).map_err(|_| "policy is malformed")
+    let bytes = fs::read(path).map_err(|_| GatewayStatusCode::PolicyInspectionFailed)?;
+    serde_json::from_slice(&bytes).map_err(|_| GatewayStatusCode::PolicyInvalid)
 }
 
-fn load_policy(path: &Path) -> Result<ValidatedPolicy, &'static str> {
+fn load_policy(path: &Path) -> Result<ValidatedPolicy, GatewayStatusCode> {
     validate_policy(load_raw_policy(path)?, Utc::now())
+        .map_err(|_| GatewayStatusCode::PolicyInvalid)
 }
 
-fn policy_path_from_args<I, S>(args: I) -> Result<PathBuf, &'static str>
+fn invocation_from_args<I, S>(args: I) -> Result<GatewayInvocation, &'static str>
 where
     I: IntoIterator<Item = S>,
     S: Into<OsString>,
 {
     let arguments = args.into_iter().map(Into::into).collect::<Vec<_>>();
-    let path = match arguments.as_slice() {
-        [] => PathBuf::from(POLICY_PATH),
-        [flag, path] if flag == OsStr::new("--policy") => PathBuf::from(path),
+    let (policy_path, status_file) = match arguments.as_slice() {
+        [] => (PathBuf::from(POLICY_PATH), None),
+        [flag, path] if flag == OsStr::new("--policy") => (PathBuf::from(path), None),
+        [policy_flag, policy_path, status_flag, status_file]
+            if policy_flag == OsStr::new("--policy")
+                && status_flag == OsStr::new("--status-file") =>
+        {
+            (PathBuf::from(policy_path), Some(PathBuf::from(status_file)))
+        }
         _ => return Err("only --policy <absolute-path> is accepted"),
     };
-    if !path.is_absolute() || path.as_os_str().len() > 4096 {
+    if !policy_path.is_absolute() || policy_path.as_os_str().len() > 4096 {
         return Err("policy path must be a bounded absolute path");
     }
-    Ok(path)
+    if let Some(status_file) = status_file.as_deref() {
+        if !status_file.is_absolute()
+            || status_file.as_os_str().len() > 4096
+            || status_file.file_name() != Some(OsStr::new(STATUS_FILE_NAME))
+            || status_file.parent().is_none()
+            || status_file == policy_path
+        {
+            return Err("status file must be the bounded absolute status.json path");
+        }
+    }
+    Ok(GatewayInvocation {
+        policy_path,
+        status_file,
+    })
+}
+
+fn write_status(
+    path: &Path,
+    phase: GatewayPhase,
+    code: GatewayStatusCode,
+) -> Result<(), GatewayStatusCode> {
+    if !path.is_absolute()
+        || path.as_os_str().len() > 4096
+        || path.file_name() != Some(OsStr::new(STATUS_FILE_NAME))
+    {
+        return Err(GatewayStatusCode::StatusWriteFailed);
+    }
+    let parent = path.parent().ok_or(GatewayStatusCode::StatusWriteFailed)?;
+    let parent_metadata =
+        fs::symlink_metadata(parent).map_err(|_| GatewayStatusCode::StatusWriteFailed)?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err(GatewayStatusCode::StatusWriteFailed);
+    }
+    let temporary = parent.join(STATUS_TEMP_FILE_NAME);
+    if temporary.parent() != Some(parent) {
+        return Err(GatewayStatusCode::StatusWriteFailed);
+    }
+    let bytes = serde_json::to_vec(&GatewayStatus {
+        schema_version: STATUS_SCHEMA_VERSION.to_owned(),
+        phase,
+        code,
+    })
+    .map_err(|_| GatewayStatusCode::StatusWriteFailed)?;
+    if bytes.is_empty() || bytes.len() > MAX_STATUS_BYTES {
+        return Err(GatewayStatusCode::StatusWriteFailed);
+    }
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    configure_private_status_create(&mut options);
+    let mut file = options
+        .open(&temporary)
+        .map_err(|_| GatewayStatusCode::StatusWriteFailed)?;
+    let write_result = file.write_all(&bytes).and_then(|_| file.sync_all());
+    drop(file);
+    if write_result.is_err() {
+        let _ = remove_exact_status_temporary(&temporary);
+        return Err(GatewayStatusCode::StatusWriteFailed);
+    }
+    let publish_result = fs::rename(&temporary, path)
+        .and_then(|_| fs::File::open(parent))
+        .and_then(|directory| directory.sync_all());
+    if publish_result.is_err() {
+        let _ = remove_exact_status_temporary(&temporary);
+        return Err(GatewayStatusCode::StatusWriteFailed);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn configure_private_status_create(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+}
+
+#[cfg(not(unix))]
+fn configure_private_status_create(_options: &mut OpenOptions) {}
+
+fn remove_exact_status_temporary(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            fs::remove_file(path)
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn validate_policy(
@@ -762,13 +919,104 @@ mod tests {
     }
 
     #[test]
-    fn policy_path_parser_rejects_relative_and_extra_arguments() {
+    fn invocation_parser_accepts_only_bounded_fixed_forms() {
         assert_eq!(
-            policy_path_from_args(Vec::<OsString>::new()).expect("default"),
-            PathBuf::from(POLICY_PATH)
+            invocation_from_args(Vec::<OsString>::new()).expect("default"),
+            GatewayInvocation {
+                policy_path: PathBuf::from(POLICY_PATH),
+                status_file: None,
+            }
         );
-        assert!(policy_path_from_args(["--policy", "relative.json"]).is_err());
-        assert!(policy_path_from_args(["--other", "/tmp/policy.json"]).is_err());
-        assert!(policy_path_from_args(["--policy", "/tmp/policy.json", "extra"]).is_err());
+        assert_eq!(
+            invocation_from_args([
+                "--policy",
+                "/tmp/policy.json",
+                "--status-file",
+                "/tmp/status/status.json",
+            ])
+            .expect("container invocation"),
+            GatewayInvocation {
+                policy_path: PathBuf::from("/tmp/policy.json"),
+                status_file: Some(PathBuf::from("/tmp/status/status.json")),
+            }
+        );
+        assert!(invocation_from_args(["--policy", "relative.json"]).is_err());
+        assert!(invocation_from_args(["--other", "/tmp/policy.json"]).is_err());
+        assert!(invocation_from_args(["--policy", "/tmp/policy.json", "extra"]).is_err());
+        assert!(
+            invocation_from_args([
+                "--status-file",
+                "/tmp/status/status.json",
+                "--policy",
+                "/tmp/policy.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            invocation_from_args([
+                "--policy",
+                "/tmp/policy.json",
+                "--status-file",
+                "relative/status.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            invocation_from_args([
+                "--policy",
+                "/tmp/policy.json",
+                "--status-file",
+                "/tmp/status/other.json",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn status_updates_are_bounded_atomic_and_machine_readable() {
+        let temporary = tempfile::tempdir().expect("temporary status directory");
+        let path = temporary.path().join(STATUS_FILE_NAME);
+        write_status(
+            &path,
+            GatewayPhase::Starting,
+            GatewayStatusCode::Initializing,
+        )
+        .expect("starting status");
+        write_status(&path, GatewayPhase::Ready, GatewayStatusCode::Ready).expect("ready status");
+        assert!(!temporary.path().join(STATUS_TEMP_FILE_NAME).exists());
+        let bytes = fs::read(&path).expect("status bytes");
+        assert!(bytes.len() <= MAX_STATUS_BYTES);
+        let status: GatewayStatus = serde_json::from_slice(&bytes).expect("status json");
+        assert_eq!(
+            status,
+            GatewayStatus {
+                schema_version: STATUS_SCHEMA_VERSION.to_owned(),
+                phase: GatewayPhase::Ready,
+                code: GatewayStatusCode::Ready,
+            }
+        );
+    }
+
+    #[test]
+    fn status_writer_rejects_wrong_name_and_stale_temporary() {
+        let temporary = tempfile::tempdir().expect("temporary status directory");
+        assert_eq!(
+            write_status(
+                &temporary.path().join("other.json"),
+                GatewayPhase::Starting,
+                GatewayStatusCode::Initializing,
+            ),
+            Err(GatewayStatusCode::StatusWriteFailed)
+        );
+        fs::write(temporary.path().join(STATUS_TEMP_FILE_NAME), b"occupied")
+            .expect("stale temporary");
+        assert_eq!(
+            write_status(
+                &temporary.path().join(STATUS_FILE_NAME),
+                GatewayPhase::Starting,
+                GatewayStatusCode::Initializing,
+            ),
+            Err(GatewayStatusCode::StatusWriteFailed)
+        );
     }
 }

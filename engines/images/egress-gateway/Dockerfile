@@ -17,8 +17,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --locked --release --manifest-path src-tauri/Cargo.toml \
       --no-default-features --features egress-gateway \
       --bin ai-security-scanner-egress-gateway \
-    && strip target/release/ai-security-scanner-egress-gateway \
-    && install -D -m 0555 target/release/ai-security-scanner-egress-gateway /out/ai-security-scanner-egress-gateway
+      --bin ai-security-scanner-egress-probe \
+    && strip target/release/ai-security-scanner-egress-gateway target/release/ai-security-scanner-egress-probe \
+    && install -D -m 0555 target/release/ai-security-scanner-egress-gateway /out/ai-security-scanner-egress-gateway \
+    && install -D -m 0555 target/release/ai-security-scanner-egress-probe /out/ai-security-scanner-egress-probe
 
 FROM scratch
 
@@ -28,6 +30,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner managed egress gateway
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /out/ai-security-scanner-egress-gateway /usr/local/bin/ai-security-scanner-egress-gateway
+COPY --from=build /out/ai-security-scanner-egress-probe /usr/local/bin/ai-security-scanner-egress-probe
 COPY LICENSE /usr/share/licenses/ai-security-scanner/LICENSE
 
 USER 65532:65532
