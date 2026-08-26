@@ -11,7 +11,6 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parse as parseYaml } from "yaml";
 
 import {
   PROJECT_ROOT,
@@ -65,25 +64,52 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function staticEnvironmentEvidenceEngines(workflow, relative) {
+function staticEnvironmentEvidenceEngines(workflowSource, relative) {
+  assert(typeof workflowSource === "string" && workflowSource.length > 0, `${relative}: workflow source is empty`);
+  const lines = workflowSource.split(/\r?\n/u);
+  const topLevelEnvIndexes = lines
+    .map((line, index) => line === "env:" ? index : -1)
+    .filter((index) => index >= 0);
+  const topLevelEngines = [];
+  for (const envIndex of topLevelEnvIndexes) {
+    for (let index = envIndex + 1; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (line.length > 0 && !/^\s/u.test(line)) break;
+      const match = line.match(/^  ENGINE:\s*([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\s*$/u);
+      if (match) topLevelEngines.push(match[1]);
+    }
+  }
+
   const resolved = new Set();
-  for (const [jobId, job] of Object.entries(workflow?.jobs ?? {})) {
-    for (const [stepIndex, step] of (job?.steps ?? []).entries()) {
-      if (step?.uses !== "./.github/actions/engine-image-evidence") continue;
-      const configured = step?.with?.engine;
-      if (configured === "${{ env.ENGINE }}") {
-        const engine = workflow?.env?.ENGINE;
-        assert(
-          typeof engine === "string" && ENGINE_PATTERN.test(engine),
-          `${relative}:jobs.${jobId}.steps[${stepIndex}] env.ENGINE must resolve to one static engine id`,
-        );
-        resolved.add(engine);
-        continue;
+  for (let index = 0; index < lines.length; index += 1) {
+    const uses = lines[index].match(/^(\s*)uses:\s*\.\/\.github\/actions\/engine-image-evidence\s*$/u);
+    if (!uses) continue;
+    const stepIndent = uses[1].length;
+    let configured = null;
+    for (let child = index + 1; child < lines.length; child += 1) {
+      const line = lines[child];
+      if (line.trim().length === 0 || line.trimStart().startsWith("#")) continue;
+      const indent = line.match(/^\s*/u)[0].length;
+      if (indent < stepIndent) break;
+      const engine = line.match(/^\s*engine:\s*(.+?)\s*$/u);
+      if (engine) {
+        assert(configured === null, `${relative}: evidence step has duplicate engine inputs`);
+        configured = engine[1];
       }
+    }
+    assert(typeof configured === "string", `${relative}: evidence step has no static engine input`);
+    if (configured === "${{ env.ENGINE }}") {
+      assert(topLevelEngines.length === 1, `${relative}: env.ENGINE must have one top-level literal value`);
+      const engine = topLevelEngines[0];
       assert(
-        typeof configured === "string" &&
-          (ENGINE_PATTERN.test(configured) || configured === "${{ matrix.engine }}"),
-        `${relative}:jobs.${jobId}.steps[${stepIndex}] evidence engine must be literal, static env.ENGINE, or matrix.engine`,
+        ENGINE_PATTERN.test(engine),
+        `${relative}: env.ENGINE must resolve to one static engine id`,
+      );
+      resolved.add(engine);
+    } else {
+      assert(
+        ENGINE_PATTERN.test(configured) || configured === "${{ matrix.engine }}",
+        `${relative}: evidence engine must be literal, static env.ENGINE, or matrix.engine`,
       );
     }
   }
@@ -1232,8 +1258,7 @@ async function selfTest() {
     let coveredEngines = 0;
     for (const [relative, engines] of workflowCoverage) {
       const workflow = await readFile(path.join(PROJECT_ROOT, relative), "utf8");
-      const workflowDocument = parseYaml(workflow);
-      const staticEnvironmentEngines = staticEnvironmentEvidenceEngines(workflowDocument, relative);
+      const staticEnvironmentEngines = staticEnvironmentEvidenceEngines(workflow, relative);
       assert(workflow.includes("uses: ./.github/actions/engine-image-evidence"), `${relative} does not invoke signed image evidence`);
       const guardIndex = workflow.indexOf("uses: ./.github/actions/engine-image-evidence/publication-guard");
       const evidenceIndex = workflow.lastIndexOf("uses: ./.github/actions/engine-image-evidence\n");
