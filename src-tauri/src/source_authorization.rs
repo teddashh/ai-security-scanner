@@ -337,6 +337,12 @@ impl fmt::Debug for SourceAuthorizationRequest {
 /// Process-memory capability. It intentionally implements no serde traits.
 pub struct SourceCapabilityHandle(Zeroizing<String>);
 
+/// Private identity for one installed capability generation. This is the
+/// digest already used as the in-memory vault key; it never crosses a public
+/// API or serialization boundary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SourceCapabilityGeneration([u8; 32]);
+
 impl SourceCapabilityHandle {
     fn from_random_bytes(bytes: &[u8; CAPABILITY_RANDOM_BYTES]) -> Self {
         let mut encoded = Zeroizing::new(String::with_capacity(
@@ -406,6 +412,7 @@ pub struct SourceAuthorizationReceipt {
     pub max_checkouts: u16,
     pub provider_verification: ProviderVerificationState,
     pub safety_notice: String,
+    capability_generation: SourceCapabilityGeneration,
 }
 
 impl fmt::Debug for SourceAuthorizationReceipt {
@@ -430,6 +437,17 @@ pub struct SourceCredentialCheckout<'a> {
     pub engine_id: &'a str,
     pub profile: ProviderSourceProfile,
     pub permissions: &'a [ReadOnlyCapability],
+}
+
+/// One prospective provider credential checkout. It contains only exact,
+/// non-secret binding coordinates; capability handles and credentials remain
+/// private to [`SourceAuthorizationBindings`]. Repeated entries intentionally
+/// represent repeated execution groups and each consume one future checkout.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SourceCheckoutDemand<'a> {
+    pub case_id: &'a str,
+    pub source_id: &'a str,
+    pub engine_id: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -566,13 +584,29 @@ impl SourceAuthorizationBindings {
         engine_id: &str,
         now: DateTime<Utc>,
     ) -> AppResult<ScannerCredentialSet> {
+        self.checkout_with_post_vault_observer(case_id, source_id, engine_id, now, || {})
+    }
+
+    fn checkout_with_post_vault_observer(
+        &self,
+        case_id: &str,
+        source_id: &str,
+        engine_id: &str,
+        now: DateTime<Utc>,
+        post_vault_checkout: impl FnOnce(),
+    ) -> AppResult<ScannerCredentialSet> {
         let key = (case_id.to_owned(), source_id.to_owned());
-        let receipt = self
+        let (receipt, generation) = self
             .receipts
             .lock()
             .map_err(|_| AppError::Internal("source authorization lock was poisoned".into()))?
             .get(&key)
-            .map(|binding| binding.receipt.clone())
+            .map(|binding| {
+                (
+                    binding.receipt.clone(),
+                    binding.receipt.capability_generation,
+                )
+            })
             .ok_or_else(|| {
                 AppError::NotAuthorized(
                     "connected source has no live backend authorization capability".into(),
@@ -589,15 +623,27 @@ impl SourceAuthorizationBindings {
             },
             now,
         )?;
+        post_vault_checkout();
         let mut receipts = self
             .receipts
             .lock()
             .map_err(|_| AppError::Internal("source authorization lock was poisoned".into()))?;
-        if let Some(binding) = receipts.get_mut(&key) {
-            binding.completed_checkouts = binding.completed_checkouts.saturating_add(1);
-            if binding.completed_checkouts >= binding.receipt.max_checkouts {
-                receipts.remove(&key);
-            }
+        let binding = receipts.get_mut(&key).ok_or_else(|| {
+            AppError::NotAuthorized(
+                "source authorization changed while credential checkout was in progress".into(),
+            )
+        })?;
+        if binding.receipt.capability_generation != generation {
+            return Err(AppError::NotAuthorized(
+                "source authorization changed while credential checkout was in progress".into(),
+            ));
+        }
+        binding.completed_checkouts =
+            binding.completed_checkouts.checked_add(1).ok_or_else(|| {
+                AppError::Internal("source authorization checkout counter overflowed".into())
+            })?;
+        if binding.completed_checkouts >= binding.receipt.max_checkouts {
+            receipts.remove(&key);
         }
         Ok(credentials)
     }
@@ -609,6 +655,76 @@ impl SourceAuthorizationBindings {
         engine_id: &str,
     ) -> AppResult<ScannerCredentialSet> {
         self.checkout(case_id, source_id, engine_id, Utc::now())
+    }
+
+    /// Validates all prospective provider checkout groups as one
+    /// non-consuming snapshot. Demands are aggregated by exact case/source
+    /// binding so repeated groups cannot individually pass while collectively
+    /// exceeding the capability's remaining checkout count.
+    pub fn validate_checkout_demands(
+        &self,
+        demands: &[SourceCheckoutDemand<'_>],
+        now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut grouped = BTreeMap::<(&str, &str), Vec<&str>>::new();
+        for demand in demands {
+            validate_identifier(demand.case_id, "case")?;
+            validate_identifier(demand.source_id, "source")?;
+            validate_identifier(demand.engine_id, "engine")?;
+            grouped
+                .entry((demand.case_id, demand.source_id))
+                .or_default()
+                .push(demand.engine_id);
+        }
+
+        let receipts = self
+            .receipts
+            .lock()
+            .map_err(|_| AppError::Internal("source authorization lock was poisoned".into()))?;
+        let entries = self.vault.entries.lock().map_err(|_| {
+            AppError::Internal("source authorization vault lock was poisoned".into())
+        })?;
+        for ((case_id, source_id), engine_ids) in grouped {
+            let binding = receipts
+                .get(&(case_id.to_owned(), source_id.to_owned()))
+                .ok_or_else(|| {
+                    AppError::NotAuthorized(
+                        "connected source has no live backend authorization capability".into(),
+                    )
+                })?;
+            let stored = entries
+                .get(&binding.receipt.capability_generation.0)
+                .ok_or_else(|| {
+                    AppError::NotAuthorized(
+                        "source capability is invalid, revoked, or exhausted".into(),
+                    )
+                })?;
+            for engine_id in &engine_ids {
+                authorize_checkout(
+                    stored,
+                    &SourceCredentialCheckout {
+                        case_id,
+                        source_id,
+                        engine_id,
+                        profile: binding.receipt.profile,
+                        permissions: &binding.receipt.permissions,
+                    },
+                    now,
+                )?;
+            }
+            let remaining = usize::from(
+                stored
+                    .max_checkouts
+                    .saturating_sub(stored.completed_checkouts),
+            );
+            if engine_ids.len() > remaining {
+                return Err(AppError::NotAuthorized(format!(
+                    "source capability has {remaining} checkout(s) remaining but this scan requires {}",
+                    engine_ids.len()
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub fn status(
@@ -771,6 +887,7 @@ impl SourceAuthorizationVault {
                 max_checkouts,
                 provider_verification: verification,
                 safety_notice: "Provider identity and the pinned read-only permission profile were verified with non-mutating provider APIs. The capability remains case/source/engine-bound and expires within one hour.".into(),
+                capability_generation: SourceCapabilityGeneration(digest),
             });
         }
         Err(AppError::Internal(
@@ -1483,5 +1600,209 @@ mod tests {
             ),
             Err(AppError::NotAuthorized(_))
         ));
+    }
+
+    fn install_aws_test_binding(
+        bindings: &SourceAuthorizationBindings,
+        case_id: &str,
+        source_id: &str,
+        max_checkouts: u16,
+        now: DateTime<Utc>,
+    ) {
+        bindings
+            .install(
+                SourceAuthorizationRequest {
+                    case_id: case_id.into(),
+                    source_id: source_id.into(),
+                    allowed_engine_ids: BTreeSet::from(["prowler".into()]),
+                    max_checkouts,
+                    verified_authorization: verified_for_limit_test(
+                        ProviderSourceProfile::AwsOrganizationReadOnlySession,
+                        now,
+                    ),
+                },
+                now,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn checkout_demand_validation_aggregates_each_execution_group_without_consuming() {
+        let now = Utc::now();
+        let bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(&bindings, "case-capacity", "source-capacity", 2, now);
+
+        let three_groups = [
+            SourceCheckoutDemand {
+                case_id: "case-capacity",
+                source_id: "source-capacity",
+                engine_id: "prowler",
+            },
+            SourceCheckoutDemand {
+                case_id: "case-capacity",
+                source_id: "source-capacity",
+                engine_id: "prowler",
+            },
+            SourceCheckoutDemand {
+                case_id: "case-capacity",
+                source_id: "source-capacity",
+                engine_id: "prowler",
+            },
+        ];
+        assert!(matches!(
+            bindings.validate_checkout_demands(&three_groups, now),
+            Err(AppError::NotAuthorized(_))
+        ));
+
+        let two_groups = &three_groups[..2];
+        bindings.validate_checkout_demands(two_groups, now).unwrap();
+        bindings.validate_checkout_demands(two_groups, now).unwrap();
+        bindings
+            .checkout("case-capacity", "source-capacity", "prowler", now)
+            .unwrap();
+        assert!(matches!(
+            bindings.validate_checkout_demands(two_groups, now),
+            Err(AppError::NotAuthorized(_))
+        ));
+        bindings
+            .validate_checkout_demands(&two_groups[..1], now)
+            .unwrap();
+        bindings
+            .checkout("case-capacity", "source-capacity", "prowler", now)
+            .unwrap();
+    }
+
+    #[test]
+    fn checkout_demand_validation_is_exact_across_bindings_engines_and_expiry() {
+        let now = Utc::now();
+        let bindings = SourceAuthorizationBindings::default();
+        install_aws_test_binding(&bindings, "case-batch", "source-a", 1, now);
+        install_aws_test_binding(&bindings, "case-batch", "source-b", 2, now);
+
+        bindings
+            .validate_checkout_demands(
+                &[
+                    SourceCheckoutDemand {
+                        case_id: "case-batch",
+                        source_id: "source-a",
+                        engine_id: "prowler",
+                    },
+                    SourceCheckoutDemand {
+                        case_id: "case-batch",
+                        source_id: "source-b",
+                        engine_id: "prowler",
+                    },
+                    SourceCheckoutDemand {
+                        case_id: "case-batch",
+                        source_id: "source-b",
+                        engine_id: "prowler",
+                    },
+                ],
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            bindings.validate_checkout_demands(
+                &[SourceCheckoutDemand {
+                    case_id: "case-other",
+                    source_id: "source-a",
+                    engine_id: "prowler",
+                }],
+                now,
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(matches!(
+            bindings.validate_checkout_demands(
+                &[SourceCheckoutDemand {
+                    case_id: "case-batch",
+                    source_id: "source-a",
+                    engine_id: "scoutsuite",
+                }],
+                now,
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert!(matches!(
+            bindings.validate_checkout_demands(
+                &[SourceCheckoutDemand {
+                    case_id: "case-batch",
+                    source_id: "source-a",
+                    engine_id: "prowler",
+                }],
+                now + Duration::minutes(31),
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+    }
+
+    #[test]
+    fn stale_checkout_generation_cannot_increment_or_remove_a_reinstalled_binding() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let now = Utc::now();
+        let bindings = Arc::new(SourceAuthorizationBindings::default());
+        install_aws_test_binding(&bindings, "case-race", "source-race", 2, now);
+        let old_generation = bindings
+            .receipts
+            .lock()
+            .unwrap()
+            .get(&("case-race".into(), "source-race".into()))
+            .unwrap()
+            .receipt
+            .capability_generation;
+
+        let checkout_reached_vault = Arc::new(Barrier::new(2));
+        let allow_checkout_completion = Arc::new(Barrier::new(2));
+        let worker_bindings = Arc::clone(&bindings);
+        let worker_reached = Arc::clone(&checkout_reached_vault);
+        let worker_allow = Arc::clone(&allow_checkout_completion);
+        let checkout = thread::spawn(move || {
+            worker_bindings.checkout_with_post_vault_observer(
+                "case-race",
+                "source-race",
+                "prowler",
+                now,
+                move || {
+                    worker_reached.wait();
+                    worker_allow.wait();
+                },
+            )
+        });
+
+        checkout_reached_vault.wait();
+        install_aws_test_binding(&bindings, "case-race", "source-race", 2, now);
+        let new_generation = bindings
+            .receipts
+            .lock()
+            .unwrap()
+            .get(&("case-race".into(), "source-race".into()))
+            .unwrap()
+            .receipt
+            .capability_generation;
+        assert!(old_generation != new_generation);
+        allow_checkout_completion.wait();
+
+        assert!(matches!(
+            checkout.join().unwrap(),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert_eq!(
+            bindings
+                .receipts
+                .lock()
+                .unwrap()
+                .get(&("case-race".into(), "source-race".into()))
+                .unwrap()
+                .completed_checkouts,
+            0
+        );
+        bindings
+            .checkout("case-race", "source-race", "prowler", now)
+            .unwrap();
+        bindings
+            .checkout("case-race", "source-race", "prowler", now)
+            .unwrap();
     }
 }
