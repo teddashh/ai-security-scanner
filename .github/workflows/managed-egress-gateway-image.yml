@@ -1,0 +1,166 @@
+name: Publish managed egress gateway image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - engines/images/egress-gateway/Dockerfile
+      - src-tauri/src/bin/egress_gateway.rs
+      - src-tauri/src/managed_network.rs
+      - src-tauri/Cargo.toml
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/managed-egress-gateway-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: managed-egress-gateway-image-0.1.5-1
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/teddashh/ai-security-scanner-egress-gateway
+  IMAGE_TAG: 0.1.5-1
+
+jobs:
+  publish:
+    name: Build and publish linux/amd64 + linux/arm64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          version: v0.36.1
+          driver-opts: |
+            image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Guard the immutable managed version tag
+        id: guard
+        uses: ./.github/actions/engine-image-evidence/publication-guard
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the immutable multi-platform image
+        id: build
+        if: steps.guard.outputs.should_build == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: engines/images/egress-gateway/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.guard.outputs.candidate_tag }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=managed-egress-gateway
+          cache-to: type=gha,mode=max,scope=managed-egress-gateway
+
+      - name: Publish anonymous pull access
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="${IMAGE#ghcr.io/teddashh/}"
+          gh api --method PATCH "/user/packages/container/${package}" -f visibility=public
+
+      - name: Verify the gateway starts without an upstream connection
+        env:
+          DIGEST: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+        run: |
+          test "${DIGEST#sha256:}" != "${DIGEST}"
+          network="ass-egress-image-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container_id=""
+          cleanup() {
+            if [[ -n "${container_id}" ]]; then docker rm --force "${container_id}" >/dev/null 2>&1 || true; fi
+            docker network rm "${network}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create --driver bridge --internal \
+            --subnet 172.29.252.0/24 --gateway 172.29.252.1 "${network}" >/dev/null
+          expires_at="$(date -u -d '10 minutes' '+%Y-%m-%dT%H:%M:%SZ')"
+          jq -n --arg expires "${expires_at}" '{
+            schema_version: "2.0.0",
+            policy_id: "image-startup-smoke",
+            expires_at: $expires,
+            listen_address: "172.29.252.2:1080",
+            allowed_client_network: "172.29.252.0/24",
+            limits: {
+              max_concurrency: 1,
+              max_connections_per_second: 1,
+              connect_timeout_seconds: 1,
+              max_connection_seconds: 1
+            },
+            provenance: {
+              kind: "external_asset_grants",
+              case_id: "image-startup-smoke",
+              grant_ids: ["image-startup-smoke"],
+              activities: ["active_external"]
+            },
+            destinations: [{
+              hostname: null,
+              addresses: ["203.0.113.1"],
+              ports: [443],
+              allow_sensitive_networks: false
+            }]
+          }' > gateway-policy.json
+          chmod 0444 gateway-policy.json
+          container_id="$(docker run --detach --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --network "${network}" --ip 172.29.252.2 \
+            --volume "${PWD}/gateway-policy.json:/run/ai-security-scanner/egress-policy.json:ro" \
+            "${IMAGE}@${DIGEST}")"
+          sleep 2
+          docker inspect "${container_id}" --format '{{.State.Running}}' | grep -Fx true
+          docker rm --force "${container_id}"
+          container_id=""
+
+      - name: Preserve signed publication evidence
+        uses: ./.github/actions/engine-image-evidence
+        with:
+          engine: egress-gateway
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote the signed candidate without overwriting a version
+        id: promote
+        uses: ./.github/actions/engine-image-evidence/promote
+        with:
+          image: ${{ env.IMAGE }}
+          tag: ${{ env.IMAGE_TAG }}
+          digest: ${{ steps.guard.outputs.digest || steps.build.outputs.digest }}
+          source-revision: ${{ github.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify anonymous immutable version access
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          docker logout ghcr.io
+          resolved="$(docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{json .Manifest.Digest}}' | jq -er 'select(test("^sha256:[0-9a-f]{64}$"))')"
+          test "${resolved}" = "${DIGEST}"
