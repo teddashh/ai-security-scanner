@@ -13,6 +13,7 @@ import { FindingsPage } from "./pages/FindingsPage";
 import { ProgressPage } from "./pages/ProgressPage";
 import { StartPage } from "./pages/StartPage";
 import { VerificationPage } from "./pages/VerificationPage";
+import { isProviderConfigurationBlocker } from "./scanReadiness";
 import {
   checkForAppUpdate,
   installAppUpdate,
@@ -98,9 +99,29 @@ const scanStartIssueCopy = {
     en: "The target is ready. Set up the private scan tools once, then start the scan.",
     zhTW: "目標已準備好。先完成一次專用掃描工具設定，就能開始掃描。",
   },
+  provider_source_required: {
+    en: "Connect the cloud account you want to scan. No scan has started yet.",
+    zhTW: "請先連接你要掃描的雲端帳號；掃描尚未開始。",
+  },
   provider_capability_unavailable: {
-    en: "Reconnect the cloud account chosen for this project with read-only access, then start the scan.",
-    zhTW: "請以唯讀權限重新連接這個專案選定的雲端帳號，再開始掃描。",
+    en: "The read-only connection has expired or is no longer available. Reconnect the same account, then start the scan.",
+    zhTW: "唯讀連線已失效或無法繼續使用。請重新連接同一個帳號，再開始掃描。",
+  },
+  provider_source_ambiguous: {
+    en: "More than one cloud connection matches this target. Choose the exact connection before scanning.",
+    zhTW: "有多個雲端連線可能符合這個目標；請先選擇正確的連線。",
+  },
+  provider_authorization_binding_mismatch: {
+    en: "The saved read-only access does not match this cloud connection. Review the connection before scanning.",
+    zhTW: "已保存的唯讀權限與這個雲端連線不一致；請先檢查連線。",
+  },
+  provider_target_binding_mismatch: {
+    en: "The connected cloud account does not match this scan target. Review the target before scanning.",
+    zhTW: "已連接的雲端帳號與這次掃描目標不一致；請先檢查目標。",
+  },
+  provider_preflight_unavailable: {
+    en: "The cloud readiness check could not finish. No scan started. Check again.",
+    zhTW: "雲端準備狀態尚未檢查完成；掃描尚未開始。請重新檢查。",
   },
 } as const;
 
@@ -454,6 +475,27 @@ export default function App() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const retryScanReadiness = async (caseId: string) => {
+    setBusyAction("scan-readiness");
+    try {
+      const result = await scannerService.getScanReadiness(caseId);
+      applyServiceMeta(result);
+      setScanReadiness(result.data);
+    } catch (error) {
+      recordTechnicalError("retry scan readiness", error);
+      pushToast({
+        tone: "warning",
+        title: text({ en: "Could not check yet", zhTW: "目前仍無法完成檢查" }),
+        detail: text({
+          en: "No scan started and nothing changed. Check again in a moment.",
+          zhTW: "掃描尚未開始，也沒有變更任何資料；請稍後重新檢查。",
+        }),
+      });
+    } finally {
+      setBusyAction(undefined);
     }
   };
 
@@ -849,7 +891,7 @@ export default function App() {
           <CoveragePage
             caseId={currentCaseId}
             assessmentIntent={workspace.case.assessmentIntent}
-            focusProviderSetup={scanReadiness?.blockerCode === "provider_capability_unavailable"}
+            focusProviderSetup={isProviderConfigurationBlocker(scanReadiness?.blockerCode)}
             requestedActivities={workspace.case.requestedActivities}
             coverage={workspace.coverage}
             sources={workspace.sources}
@@ -889,7 +931,11 @@ export default function App() {
                 void setupManagedRuntime();
                 return;
               }
-              if (scanReadiness?.blockerCode === "provider_capability_unavailable") {
+              if (scanReadiness?.nextStep === "retry") {
+                void retryScanReadiness(currentCaseId);
+                return;
+              }
+              if (isProviderConfigurationBlocker(scanReadiness?.blockerCode)) {
                 navigate("coverage");
                 return;
               }

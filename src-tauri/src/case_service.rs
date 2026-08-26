@@ -192,7 +192,10 @@ pub enum ScanReadinessState {
     NoCompatibleAuthorizedTargets,
     NoRunnableAuthorizedTargets,
     RuntimeUnavailable,
+    ProviderConnectionRequired,
     ProviderCapabilityRequired,
+    ProviderReviewRequired,
+    ProviderCheckUnavailable,
 }
 
 /// Machine-readable reason that the primary start-scan action is blocked.
@@ -207,7 +210,12 @@ pub enum ScanReadinessBlocker {
     NoCompatibleAuthorizedTargets,
     NoRunnableAuthorizedTargets,
     RuntimeUnavailable,
+    ProviderSourceRequired,
     ProviderCapabilityUnavailable,
+    ProviderSourceAmbiguous,
+    ProviderAuthorizationBindingMismatch,
+    ProviderTargetBindingMismatch,
+    ProviderPreflightUnavailable,
 }
 
 impl ScanReadinessBlocker {
@@ -221,7 +229,12 @@ impl ScanReadinessBlocker {
             Self::NoCompatibleAuthorizedTargets => "no_compatible_authorized_targets",
             Self::NoRunnableAuthorizedTargets => "no_runnable_authorized_targets",
             Self::RuntimeUnavailable => "runtime_unavailable",
+            Self::ProviderSourceRequired => "provider_source_required",
             Self::ProviderCapabilityUnavailable => "provider_capability_unavailable",
+            Self::ProviderSourceAmbiguous => "provider_source_ambiguous",
+            Self::ProviderAuthorizationBindingMismatch => "provider_authorization_binding_mismatch",
+            Self::ProviderTargetBindingMismatch => "provider_target_binding_mismatch",
+            Self::ProviderPreflightUnavailable => "provider_preflight_unavailable",
         }
     }
 }
@@ -234,6 +247,7 @@ pub enum ScanReadinessNextStep {
     Coverage,
     Progress,
     ScannerSetup,
+    Retry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3939,8 +3953,23 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
         ScanReadinessBlocker::RuntimeUnavailable => {
             "scan tools are not running; open scanner setup and try again"
         }
+        ScanReadinessBlocker::ProviderSourceRequired => {
+            "the cloud source for this target must be selected before the scan can start"
+        }
         ScanReadinessBlocker::ProviderCapabilityUnavailable => {
             "the cloud connection must be reconnected before this scan can start"
+        }
+        ScanReadinessBlocker::ProviderSourceAmbiguous => {
+            "more than one cloud connection matches this target; select the exact connection"
+        }
+        ScanReadinessBlocker::ProviderAuthorizationBindingMismatch => {
+            "the saved read-only authorization does not match this cloud source"
+        }
+        ScanReadinessBlocker::ProviderTargetBindingMismatch => {
+            "the saved cloud connection does not match this scan target"
+        }
+        ScanReadinessBlocker::ProviderPreflightUnavailable => {
+            "cloud readiness could not be checked; no scan started; retry the readiness check"
         }
     };
     let detail = format!(
@@ -3957,7 +3986,12 @@ pub(crate) fn scan_preflight_error(readiness: &ScanReadiness) -> AppError {
         ScanReadinessBlocker::NoCompatibleAuthorizedTargets
         | ScanReadinessBlocker::NoRunnableAuthorizedTargets
         | ScanReadinessBlocker::RuntimeUnavailable
-        | ScanReadinessBlocker::ProviderCapabilityUnavailable => AppError::NotAvailable(detail),
+        | ScanReadinessBlocker::ProviderSourceRequired
+        | ScanReadinessBlocker::ProviderCapabilityUnavailable
+        | ScanReadinessBlocker::ProviderSourceAmbiguous
+        | ScanReadinessBlocker::ProviderAuthorizationBindingMismatch
+        | ScanReadinessBlocker::ProviderTargetBindingMismatch
+        | ScanReadinessBlocker::ProviderPreflightUnavailable => AppError::NotAvailable(detail),
     }
 }
 
@@ -6402,6 +6436,79 @@ mod tests {
                 .contains("scan_preflight:no_compatible_authorized_targets")
         );
         assert!(service.show_case(&created.id).unwrap().scan_runs.is_empty());
+    }
+
+    #[test]
+    fn provider_readiness_contract_serializes_distinct_safe_routes() {
+        let contracts = [
+            (
+                ScanReadinessState::ProviderConnectionRequired,
+                ScanReadinessBlocker::ProviderSourceRequired,
+                ScanReadinessNextStep::Coverage,
+                "provider_connection_required",
+                "provider_source_required",
+                "coverage",
+            ),
+            (
+                ScanReadinessState::ProviderCapabilityRequired,
+                ScanReadinessBlocker::ProviderCapabilityUnavailable,
+                ScanReadinessNextStep::Coverage,
+                "provider_capability_required",
+                "provider_capability_unavailable",
+                "coverage",
+            ),
+            (
+                ScanReadinessState::ProviderReviewRequired,
+                ScanReadinessBlocker::ProviderSourceAmbiguous,
+                ScanReadinessNextStep::Coverage,
+                "provider_review_required",
+                "provider_source_ambiguous",
+                "coverage",
+            ),
+            (
+                ScanReadinessState::ProviderReviewRequired,
+                ScanReadinessBlocker::ProviderAuthorizationBindingMismatch,
+                ScanReadinessNextStep::Coverage,
+                "provider_review_required",
+                "provider_authorization_binding_mismatch",
+                "coverage",
+            ),
+            (
+                ScanReadinessState::ProviderReviewRequired,
+                ScanReadinessBlocker::ProviderTargetBindingMismatch,
+                ScanReadinessNextStep::Coverage,
+                "provider_review_required",
+                "provider_target_binding_mismatch",
+                "coverage",
+            ),
+            (
+                ScanReadinessState::ProviderCheckUnavailable,
+                ScanReadinessBlocker::ProviderPreflightUnavailable,
+                ScanReadinessNextStep::Retry,
+                "provider_check_unavailable",
+                "provider_preflight_unavailable",
+                "retry",
+            ),
+        ];
+
+        for (state, blocker, next_step, state_code, blocker_code, next_step_code) in contracts {
+            let readiness = ScanReadiness {
+                case_id: "case-provider-readiness".into(),
+                ready: false,
+                state,
+                authorized_target_count: 1,
+                pending_target_count: 0,
+                compatible_engine_count: 1,
+                runnable_engine_count: 1,
+                blocker_code: Some(blocker),
+                next_step: Some(next_step),
+            };
+            let serialized = serde_json::to_value(readiness).unwrap();
+            assert_eq!(serialized["state"], state_code);
+            assert_eq!(serialized["blocker_code"], blocker_code);
+            assert_eq!(serialized["next_step"], next_step_code);
+            assert_eq!(blocker.as_str(), blocker_code);
+        }
     }
 
     #[test]

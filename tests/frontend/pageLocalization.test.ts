@@ -40,19 +40,20 @@ test("scan readiness blocks empty runs and sends each fix to the useful screen",
 
   assert.match(progress, /action=\{readiness\?\.ready \?/u);
   assert.match(progress, /readiness\?\.nextStep === "scanner_setup"[\s\S]*copy\.setupTools/u);
-  assert.match(progress, /provider_capability_unavailable[\s\S]*copy\.connectCloud/u);
+  assert.match(progress, /provider_capability_unavailable:[\s\S]*action: copy\.reconnectCloud/u);
   assert.match(progress, /One quick setup, then scan/u);
   assert.match(progress, /先完成一次設定，就可以開始掃描/u);
-  assert.match(progress, /Connect the cloud account you chose/u);
-  assert.match(progress, /連接你剛剛選的雲端帳號/u);
+  assert.match(progress, /Connect the cloud account you want to scan/u);
+  assert.match(progress, /請先連接你要掃描的雲端帳號/u);
   assert.match(progress, /Nothing was scanned/u);
   assert.match(progress, /這次其實沒有開始掃描/u);
   assert.match(progress, /Download diagnostic log/u);
   assert.match(progress, /下載診斷紀錄/u);
 
   assert.match(app, /scanReadiness\?\.blockerCode === "runtime_unavailable" \|\| scanReadiness\?\.nextStep === "scanner_setup"[\s\S]*navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
-  assert.match(app, /scanReadiness\?\.blockerCode === "provider_capability_unavailable"[\s\S]*navigate\("coverage"\)/u);
-  assert.match(app, /focusProviderSetup=\{scanReadiness\?\.blockerCode === "provider_capability_unavailable"\}/u);
+  assert.match(app, /scanReadiness\?\.nextStep === "retry"[\s\S]*retryScanReadiness\(currentCaseId\)/u);
+  assert.match(app, /isProviderConfigurationBlocker\(scanReadiness\?\.blockerCode\)[\s\S]*navigate\("coverage"\)/u);
+  assert.match(app, /focusProviderSetup=\{isProviderConfigurationBlocker\(scanReadiness\?\.blockerCode\)\}/u);
   assert.match(app, /scanReadiness\?\.nextStep === "cases" \? "cases" : "coverage"/u);
 });
 
@@ -62,12 +63,48 @@ test("desktop readiness states stay typed and never render backend messages", as
 
   for (const value of [
     "runtime_unavailable",
+    "provider_connection_required",
     "provider_capability_required",
+    "provider_review_required",
+    "provider_check_unavailable",
+    "provider_source_required",
     "provider_capability_unavailable",
+    "provider_source_ambiguous",
+    "provider_authorization_binding_mismatch",
+    "provider_target_binding_mismatch",
+    "provider_preflight_unavailable",
+    "retry",
   ]) {
     assert.match(types, new RegExp(`\\| "${value}"`, "u"));
   }
   assert.match(progress, /copy\.readiness\[readiness\.blockerCode\]/u);
+  assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
+});
+
+test("cloud readiness failures use distinct plain-language fixes without exposing backend text", async () => {
+  const progress = await readPage("ProgressPage.tsx");
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+
+  const presentations = [
+    ["provider_source_required", "copy.connectCloud"],
+    ["provider_capability_unavailable", "copy.reconnectCloud"],
+    ["provider_source_ambiguous", "copy.chooseConnection"],
+    ["provider_authorization_binding_mismatch", "copy.reviewConnection"],
+    ["provider_target_binding_mismatch", "copy.reviewTarget"],
+    ["provider_preflight_unavailable", "copy.checkAgain"],
+  ] as const;
+  for (const [blocker, action] of presentations) {
+    assert.match(progress, new RegExp(`${blocker}:[\\s\\S]*?action: ${action.replace(".", "\\.")}`, "u"));
+    assert.match(app, new RegExp(`${blocker}:`, "u"));
+  }
+
+  const presentationStart = progress.indexOf("const providerReadinessPresentation");
+  const capabilityStart = progress.indexOf("provider_capability_unavailable:", presentationStart);
+  const ambiguousStart = progress.indexOf("provider_source_ambiguous:", capabilityStart);
+  assert.match(progress.slice(capabilityStart, ambiguousStart), /reconnectCloud/u);
+  assert.doesNotMatch(progress.slice(ambiguousStart), /action: copy\.reconnectCloud/u);
+  assert.match(progress, /No scan started/u);
+  assert.match(progress, /掃描尚未開始/u);
   assert.doesNotMatch(progress, /readiness\.(?:message|detail|error)/u);
 });
 

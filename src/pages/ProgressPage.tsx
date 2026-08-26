@@ -6,7 +6,14 @@ import { StatusPill } from "../components/StatusPill";
 import { useI18n } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
 import { blockedRunSummary, buildScanDiagnostic, type ScanDiagnosticContext } from "../scanDiagnostics";
-import type { EngineRun, EngineRunStatus, ExecutionStage, ScanReadiness, ScanRun } from "../types";
+import type {
+  EngineRun,
+  EngineRunStatus,
+  ExecutionStage,
+  ScanReadiness,
+  ScanReadinessBlocker,
+  ScanRun,
+} from "../types";
 import "./page-technical-details.css";
 import { displayTechnicalDetail } from "./pageTechnicalDetails";
 
@@ -38,17 +45,47 @@ const copy = {
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
   finishSetup: { en: "Finish scan setup", zhTW: "完成掃描設定" },
   setupTools: { en: "Set up scan tools for me", zhTW: "幫我準備掃描工具" },
-  connectCloud: { en: "Connect this cloud account", zhTW: "連接這個雲端帳號" },
+  connectCloud: { en: "Connect cloud account", zhTW: "連接雲端帳號" },
+  reconnectCloud: { en: "Reconnect account", zhTW: "重新連接帳號" },
+  chooseConnection: { en: "Choose connection", zhTW: "選擇連線" },
+  reviewConnection: { en: "Review connection", zhTW: "檢查連線" },
+  reviewTarget: { en: "Review target", zhTW: "檢查目標" },
+  checkAgain: { en: "Check again", zhTW: "重新檢查" },
   chooseProject: { en: "Choose a scan project", zhTW: "選擇掃描專案" },
   runtimeEmptyTitle: { en: "One quick setup, then scan", zhTW: "先完成一次設定，就可以開始掃描" },
   runtimeEmptyDescription: {
     en: "Your target is ready. Let ai-security-scanner prepare its private scan tools on this computer.",
     zhTW: "目標已經準備好。讓 ai-security-scanner 在這台電腦上自動準備專用掃描工具。",
   },
-  providerEmptyTitle: { en: "Connect the cloud account you chose", zhTW: "連接你剛剛選的雲端帳號" },
-  providerEmptyDescription: {
-    en: "Finish the read-only sign-in for this account, then come back here to scan it.",
-    zhTW: "完成這個帳號的唯讀登入後，就能回到這裡開始掃描。",
+  providerSourceTitle: { en: "Connect the cloud account you want to scan", zhTW: "請先連接你要掃描的雲端帳號" },
+  providerSourceDescription: {
+    en: "Choose the exact account in Cloud setup. No scan has started yet.",
+    zhTW: "請到雲端設定選擇正確帳號；掃描尚未開始。",
+  },
+  providerCapabilityTitle: { en: "Your read-only connection is no longer available", zhTW: "唯讀連線已失效" },
+  providerCapabilityDescription: {
+    en: "Reconnect the same account, then return here to start the scan.",
+    zhTW: "請重新連接同一個帳號，再回到這裡開始掃描。",
+  },
+  providerAmbiguousTitle: { en: "Choose the right cloud connection", zhTW: "請選擇正確的雲端連線" },
+  providerAmbiguousDescription: {
+    en: "More than one saved connection matches. Choose the exact one in Cloud setup before scanning.",
+    zhTW: "有多個已保存的連線可能符合；請到雲端設定選擇正確連線。",
+  },
+  providerAuthorizationTitle: { en: "Review this cloud connection", zhTW: "請檢查這個雲端連線" },
+  providerAuthorizationDescription: {
+    en: "Its saved read-only access does not match the selected connection. No scan has started.",
+    zhTW: "已保存的唯讀權限與所選連線不一致；掃描尚未開始。",
+  },
+  providerTargetTitle: { en: "Review the cloud target", zhTW: "請檢查雲端目標" },
+  providerTargetDescription: {
+    en: "The connected account does not match this scan target. Choose the intended target before scanning.",
+    zhTW: "已連接的帳號與這次掃描目標不一致；請先選擇正確目標。",
+  },
+  providerCheckTitle: { en: "No scan started", zhTW: "掃描尚未開始" },
+  providerCheckDescription: {
+    en: "The app could not finish checking cloud readiness. Nothing was contacted or changed. Check again.",
+    zhTW: "程式尚未完成雲端準備狀態檢查；沒有接觸目標，也沒有變更資料。請重新檢查。",
   },
   readiness: {
     demo_case: { en: "Create or open a real scan project before starting.", zhTW: "請先建立或開啟真正的掃描專案。" },
@@ -62,9 +99,29 @@ const copy = {
       en: "Click once and the app will download, verify, and start the scan tools for you. The scan itself will still wait for you to press Start.",
       zhTW: "按一次即可由程式自動下載、驗證並啟動掃描工具；掃描本身仍會等你按下「開始掃描」。",
     },
+    provider_source_required: {
+      en: "Choose and connect the exact cloud account you want to scan. No scan has started yet.",
+      zhTW: "請選擇並連接你要掃描的正確雲端帳號；掃描尚未開始。",
+    },
     provider_capability_unavailable: {
-      en: "This cloud account is part of the project, but its read-only connection is missing or expired. Reconnect the same account to continue.",
-      zhTW: "這個雲端帳號已在專案中，但唯讀連線尚未完成或已過期。請重新連接同一個帳號後繼續。",
+      en: "The saved read-only connection has expired or is no longer available. Reconnect the same account to continue.",
+      zhTW: "已保存的唯讀連線已失效或無法繼續使用。請重新連接同一個帳號。",
+    },
+    provider_source_ambiguous: {
+      en: "More than one saved cloud connection matches this target. Choose the exact connection before scanning.",
+      zhTW: "有多個已保存的雲端連線可能符合這個目標；請先選擇正確連線。",
+    },
+    provider_authorization_binding_mismatch: {
+      en: "The saved read-only access does not match this cloud connection. Review the connection before scanning.",
+      zhTW: "已保存的唯讀權限與這個雲端連線不一致；請先檢查連線。",
+    },
+    provider_target_binding_mismatch: {
+      en: "The connected cloud account does not match this scan target. Review the target before scanning.",
+      zhTW: "已連接的雲端帳號與這次掃描目標不一致；請先檢查目標。",
+    },
+    provider_preflight_unavailable: {
+      en: "The cloud readiness check could not finish. No scan started and no target was contacted. Check again.",
+      zhTW: "雲端準備狀態尚未檢查完成；掃描尚未開始，也沒有接觸任何目標。請重新檢查。",
     },
   },
   blockedTitle: { en: "Nothing was scanned", zhTW: "這次其實沒有開始掃描" },
@@ -221,6 +278,43 @@ const copy = {
   historySnapshot: { en: "Case snapshot {date}", zhTW: "案件快照 {date}" },
 } as const;
 
+const providerReadinessPresentation: Partial<Record<ScanReadinessBlocker, {
+  action: { en: string; zhTW: string };
+  title: { en: string; zhTW: string };
+  description: { en: string; zhTW: string };
+}>> = {
+  provider_source_required: {
+    action: copy.connectCloud,
+    title: copy.providerSourceTitle,
+    description: copy.providerSourceDescription,
+  },
+  provider_capability_unavailable: {
+    action: copy.reconnectCloud,
+    title: copy.providerCapabilityTitle,
+    description: copy.providerCapabilityDescription,
+  },
+  provider_source_ambiguous: {
+    action: copy.chooseConnection,
+    title: copy.providerAmbiguousTitle,
+    description: copy.providerAmbiguousDescription,
+  },
+  provider_authorization_binding_mismatch: {
+    action: copy.reviewConnection,
+    title: copy.providerAuthorizationTitle,
+    description: copy.providerAuthorizationDescription,
+  },
+  provider_target_binding_mismatch: {
+    action: copy.reviewTarget,
+    title: copy.providerTargetTitle,
+    description: copy.providerTargetDescription,
+  },
+  provider_preflight_unavailable: {
+    action: copy.checkAgain,
+    title: copy.providerCheckTitle,
+    description: copy.providerCheckDescription,
+  },
+};
+
 const engineStates: EngineRunStatus[] = [
   "pending",
   "running",
@@ -249,23 +343,23 @@ const engineIcon = (engine: EngineRun) => {
 export function ProgressPage({ runs, readiness, diagnosticContext, busy, onStart, onFixSetup, onPause, onResume, onCancel }: ProgressPageProps) {
   const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id);
-  const fixActionLabel = readiness?.blockerCode === "provider_capability_unavailable"
-    ? copy.connectCloud
-    : readiness?.nextStep === "scanner_setup"
-    ? copy.setupTools
-    : readiness?.nextStep === "cases"
-      ? copy.chooseProject
-      : copy.finishSetup;
-  const emptyTitle = readiness?.blockerCode === "runtime_unavailable"
-    ? copy.runtimeEmptyTitle
-    : readiness?.blockerCode === "provider_capability_unavailable"
-      ? copy.providerEmptyTitle
-      : copy.emptyTitle;
-  const emptyDescription = readiness?.blockerCode === "runtime_unavailable"
-    ? copy.runtimeEmptyDescription
-    : readiness?.blockerCode === "provider_capability_unavailable"
-      ? copy.providerEmptyDescription
-      : copy.emptyDescription;
+  const providerPresentation = readiness?.blockerCode
+    ? providerReadinessPresentation[readiness.blockerCode]
+    : undefined;
+  const fixActionLabel = providerPresentation?.action
+    ?? (readiness?.nextStep === "scanner_setup"
+      ? copy.setupTools
+      : readiness?.nextStep === "cases"
+        ? copy.chooseProject
+        : copy.finishSetup);
+  const emptyTitle = providerPresentation?.title
+    ?? (readiness?.blockerCode === "runtime_unavailable"
+      ? copy.runtimeEmptyTitle
+      : copy.emptyTitle);
+  const emptyDescription = providerPresentation?.description
+    ?? (readiness?.blockerCode === "runtime_unavailable"
+      ? copy.runtimeEmptyDescription
+      : copy.emptyDescription);
 
   useEffect(() => {
     if (!runs.some((run) => run.id === selectedRunId)) setSelectedRunId(runs[0]?.id);

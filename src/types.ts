@@ -611,7 +611,10 @@ export type ScanReadinessState =
   | "no_compatible_authorized_targets"
   | "no_runnable_authorized_targets"
   | "runtime_unavailable"
-  | "provider_capability_required";
+  | "provider_connection_required"
+  | "provider_capability_required"
+  | "provider_review_required"
+  | "provider_check_unavailable";
 
 export type ScanReadinessBlocker =
   | "demo_case"
@@ -622,9 +625,14 @@ export type ScanReadinessBlocker =
   | "no_compatible_authorized_targets"
   | "no_runnable_authorized_targets"
   | "runtime_unavailable"
-  | "provider_capability_unavailable";
+  | "provider_source_required"
+  | "provider_capability_unavailable"
+  | "provider_source_ambiguous"
+  | "provider_authorization_binding_mismatch"
+  | "provider_target_binding_mismatch"
+  | "provider_preflight_unavailable";
 
-export type ScanReadinessNextStep = "cases" | "coverage" | "progress" | "scanner_setup";
+export type ScanReadinessNextStep = "cases" | "coverage" | "progress" | "scanner_setup" | "retry";
 
 /** Authoritative, non-mutating backend preflight for the primary scan action. */
 export interface ScanReadiness {
