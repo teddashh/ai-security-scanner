@@ -4927,67 +4927,8 @@ mod tests {
     }
 
     fn ready_repository_state() -> (tempfile::TempDir, AppState, Id) {
-        let (directory, state) = test_state();
-        let case = create_test_case(&state, "Runtime preflight");
-        let service = state.case_service();
-        let source = service
-            .upsert_source(
-                &case.id,
-                SourceMutation {
-                    id: None,
-                    kind: SourceKind::UserDeclared,
-                    label: "Declared repository".into(),
-                    status: SourceConnectionStatus::Connected,
-                    read_only: true,
-                    metadata: BTreeMap::new(),
-                },
-            )
-            .unwrap();
-        service
-            .reconcile_discovery_batch(
-                &case.id,
-                &DiscoveryBatch {
-                    source_id: source.id,
-                    source_kind: SourceKind::UserDeclared,
-                    connector_id: "test".into(),
-                    connector_version: "1".into(),
-                    observed_at: Utc::now(),
-                    assets: vec![DiscoveredAsset {
-                        observation_key: "repository".into(),
-                        kind: AssetKind::Repository,
-                        name: "Repository".into(),
-                        provider: None,
-                        region: None,
-                        stable_identifier: AssetIdentifier {
-                            namespace: "repo:path".into(),
-                            value: "/tmp/example".into(),
-                        },
-                        additional_identifiers: vec![],
-                        internet_exposed: None,
-                        contains_sensitive_data: None,
-                        metadata: BTreeMap::new(),
-                    }],
-                    relations: vec![],
-                    notices: vec![],
-                },
-            )
-            .unwrap();
-        let asset_id = service.show_case(&case.id).unwrap().assets[0].id.clone();
-        service
-            .approve_scope(
-                &case.id,
-                ScopeApprovalRequest {
-                    asset_id,
-                    permissions: vec![ScanPermission::LocalArtifactRead],
-                    confirmed_by: "Owner".into(),
-                    expires_at: None,
-                    authorization_reference: None,
-                    notes: None,
-                    external_scope: None,
-                },
-            )
-            .unwrap();
-        (directory, state, case.id)
+        let (directory, state, case_id, _) = ready_repository_snapshot_state();
+        (directory, state, case_id)
     }
 
     fn ready_repository_snapshot_state() -> (tempfile::TempDir, AppState, Id, PathBuf) {
@@ -5011,6 +4952,7 @@ mod tests {
             .join(&case.id)
             .join("workspace-snapshots")
             .join(&snapshot.reference.storage_id)
+            .join("payload")
             .join("tree")
             .join("main.rs");
         let asset_id = snapshot.asset.id.clone();
@@ -5117,8 +5059,24 @@ mod tests {
 
     #[test]
     fn missing_workspace_is_rejected_before_a_scan_run_is_persisted() {
-        let (_directory, state, case_id) = ready_repository_state();
+        let (_directory, state, case_id, stored_file) = ready_repository_snapshot_state();
         let service = state.case_service();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                stored_file.parent().unwrap(),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let mut permissions = std::fs::metadata(&stored_file).unwrap().permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&stored_file, permissions).unwrap();
+        }
+        std::fs::remove_file(stored_file).unwrap();
 
         let error = service
             .plan_scan_for_execution_checked(
@@ -5372,98 +5330,18 @@ mod tests {
     fn interrupted_repository_state(
         checkpoint_stage: ExecutionStage,
     ) -> (tempfile::TempDir, AppState, Id, Id) {
-        let directory = tempfile::tempdir().unwrap();
-        let artifact_root = directory.path().join("artifacts");
-        std::fs::create_dir_all(&artifact_root).unwrap();
-        let state = AppState::new(
-            Storage::open(directory.path().join("casework.db")).unwrap(),
-            EngineRegistry::load_builtin().unwrap(),
-            crate::adapters::builtin_adapter_registry().unwrap(),
-            artifact_root,
-            directory.path().join("signing.key"),
-        );
+        let (directory, state, case_id, _) = ready_repository_snapshot_state();
         let service = state.case_service();
-        let case = service
-            .create_case(&CreateCaseRequest {
-                title: "Interrupted cleanup".into(),
-                organization_name: "Example Co".into(),
-                employee_range: "1-10".into(),
-                assessment_intent: None,
-                data_classes: vec![DataClass::General],
-                requested_activities: vec![],
-                source_kinds: vec![],
-                not_applicable_source_kinds: vec![],
-                declared_assets: vec![],
-                notes: None,
-            })
-            .unwrap();
-        let source = service
-            .upsert_source(
-                &case.id,
-                SourceMutation {
-                    id: None,
-                    kind: SourceKind::UserDeclared,
-                    label: "Declared repository".into(),
-                    status: SourceConnectionStatus::Connected,
-                    read_only: true,
-                    metadata: BTreeMap::new(),
-                },
-            )
-            .unwrap();
-        service
-            .reconcile_discovery_batch(
-                &case.id,
-                &DiscoveryBatch {
-                    source_id: source.id,
-                    source_kind: SourceKind::UserDeclared,
-                    connector_id: "test".into(),
-                    connector_version: "1".into(),
-                    observed_at: Utc::now(),
-                    assets: vec![DiscoveredAsset {
-                        observation_key: "repository".into(),
-                        kind: AssetKind::Repository,
-                        name: "Repository".into(),
-                        provider: None,
-                        region: None,
-                        stable_identifier: AssetIdentifier {
-                            namespace: "repo:path".into(),
-                            value: "/tmp/example".into(),
-                        },
-                        additional_identifiers: vec![],
-                        internet_exposed: None,
-                        contains_sensitive_data: None,
-                        metadata: BTreeMap::new(),
-                    }],
-                    relations: vec![],
-                    notices: vec![],
-                },
-            )
-            .unwrap();
-        let asset_id = service.show_case(&case.id).unwrap().assets[0].id.clone();
-        service
-            .approve_scope(
-                &case.id,
-                ScopeApprovalRequest {
-                    asset_id,
-                    permissions: vec![ScanPermission::LocalArtifactRead],
-                    confirmed_by: "Owner".into(),
-                    expires_at: None,
-                    authorization_reference: None,
-                    notes: None,
-                    external_scope: None,
-                },
-            )
-            .unwrap();
         let plan = service
             .plan_scan(
-                &case.id,
+                &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
                 },
             )
             .unwrap();
         if checkpoint_stage != ExecutionStage::Planned {
-            let mut stored = service.show_case(&case.id).unwrap();
+            let mut stored = service.show_case(&case_id).unwrap();
             let engine_run = &mut stored.scan_runs[0].engine_runs[0];
             let mut checkpoint =
                 ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
@@ -5476,7 +5354,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
-        (directory, state, case.id, plan.scan_run.id)
+        (directory, state, case_id, plan.scan_run.id)
     }
 
     #[test]
@@ -5704,6 +5582,15 @@ mod tests {
         assert!(!safe.contains("sentinel-proof-mismatch"));
 
         let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
+        let target_plan = state
+            .case_service()
+            .preview_scan_for_execution(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["steampipe".into()],
+                },
+            )
+            .unwrap();
         let mut stored = state.case_service().show_case(&case_id).unwrap();
         stored
             .data_sources
@@ -5714,15 +5601,6 @@ mod tests {
         state
             .storage
             .save_case(&mut stored, "test.provider_target_mismatch")
-            .unwrap();
-        let target_plan = state
-            .case_service()
-            .preview_scan_for_execution(
-                &case_id,
-                ScanPlanRequest {
-                    engine_ids: vec!["steampipe".into()],
-                },
-            )
             .unwrap();
         assert_eq!(
             validate_provider_execution_demands(&state, &target_plan, issued_at).unwrap_err(),
