@@ -5608,7 +5608,7 @@ mod tests {
         );
 
         let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 2);
-        let ambiguous_plan = state
+        let mut ambiguous_plan = state
             .case_service()
             .preview_scan_for_execution(
                 &case_id,
@@ -5633,6 +5633,9 @@ mod tests {
             .storage
             .save_case(&mut stored, "test.provider_source_ambiguous")
             .unwrap();
+        ambiguous_plan.executable[0].assets[0]
+            .discovered_from
+            .push("source-second-aws".into());
         assert_eq!(
             validate_provider_execution_demands(&state, &ambiguous_plan, issued_at).unwrap_err(),
             ProviderPreflightFailure::SourceAmbiguous
