@@ -109,7 +109,7 @@ jobs:
             --read-only --network none --cap-drop ALL \
             --security-opt no-new-privileges:true \
             --entrypoint /usr/local/bin/gitleaks \
-            "${IMAGE}@${DIGEST}" --version 2>&1 | grep -Fx '8.30.1'
+            "${IMAGE}@${DIGEST}" version 2>&1 | grep -Fx '8.30.1'
 
           output="$(mktemp -d)"
           docker run --platform linux/amd64 --rm \
