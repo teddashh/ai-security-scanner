@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { displaySafeTechnicalDetail } from "../technicalDetails";
 import type { ScannerSetupBlocker } from "../scanReadiness";
+import { resolveRuntimeSetupPresentation } from "../runtimeSetupPresentation";
 import type {
   AppMode,
   AppSnapshot,
@@ -105,6 +106,12 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     failedTitle: "Setup needs one more step",
     failedDescription: "Follow the single action below, then check again. Your scan projects are unchanged.",
     scannerIssues: {
+      no_runnable_authorized_targets: {
+        title: "Get the scan tools for this check",
+        description: "This target is ready, but this version has no working scan tool for it. Install the newest release; your local scan projects will stay on this device.",
+        action: "Get the latest installer",
+        releaseHref: PRODUCT_RELEASES,
+      },
       egress_gateway_unavailable: {
         title: "Restore one installed scan component",
         description: "The private connection component installed with this app could not be verified. Install the newest release again; your local scan projects will stay on this device.",
@@ -206,6 +213,12 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     failedTitle: "設定還差一個步驟",
     failedDescription: "照著下方唯一的操作完成後，再重新檢查；你的掃描專案不會受到影響。",
     scannerIssues: {
+      no_runnable_authorized_targets: {
+        title: "取得這項檢查需要的掃描工具",
+        description: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
+        action: "取得最新安裝程式",
+        releaseHref: PRODUCT_RELEASES,
+      },
       egress_gateway_unavailable: {
         title: "恢復一項安裝元件",
         description: "程式無法確認隨附的專用連線元件。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
@@ -300,12 +313,16 @@ export function RuntimeSetupAssistant({
 }: RuntimeSetupAssistantProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const text = copy[locale];
-  const active = status?.active === true;
-  const failed = status?.phase === "failed";
-  const scannerIssue = !active && !failed && scannerSetupBlocker
+  const presentation = resolveRuntimeSetupPresentation({
+    mode,
+    runtimeAvailable: runtime?.available === true,
+    status,
+    blocker: scannerSetupBlocker,
+  });
+  const scannerIssue = presentation.showPackagedComponentIssue && scannerSetupBlocker
     ? text.scannerIssues[scannerSetupBlocker]
     : undefined;
-  const ready = mode === "native" && runtime?.available === true && !scannerIssue;
+  const { ready, setupActive, setupFailed } = presentation;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
   const repairable = canRepairAutomatically(status?.nextAction);
   const technicalDetail = displaySafeTechnicalDetail(status?.detail);
@@ -351,28 +368,28 @@ export function RuntimeSetupAssistant({
     );
   }
 
-  const title = failed
+  const title = scannerIssue?.title ?? (setupFailed
     ? nextAction?.title ?? text.failedTitle
-    : active
+    : setupActive
       ? text.progressTitle
-      : scannerIssue?.title ?? text.title;
-  const description = failed && nextAction
+      : text.title);
+  const description = scannerIssue?.description ?? (setupFailed && nextAction
     ? nextAction.description
-    : failed
+    : setupFailed
       ? text.failedDescription
-      : active
+      : setupActive
         ? text.progressDescription
-        : scannerIssue?.description ?? text.description;
+        : text.description);
 
   return (
     <section
-      className={`runtime-assistant${failed ? " runtime-assistant--failed" : ""}`}
+      className={`runtime-assistant${setupFailed ? " runtime-assistant--failed" : ""}`}
       aria-labelledby="runtime-assistant-title"
       aria-live="polite"
     >
       <header className="runtime-assistant__header">
         <span className="runtime-assistant__icon">
-          <Icon name={failed ? "warning" : "settings"} size={23} />
+          <Icon name={setupFailed ? "warning" : "settings"} size={23} />
         </span>
         <div>
           <p className="eyebrow">{text.eyebrow}</p>
@@ -396,7 +413,7 @@ export function RuntimeSetupAssistant({
         </div>
       )}
 
-      {failed && nextAction && (
+      {setupFailed && nextAction && (
         <div className="runtime-assistant__recovery">
           {repairable ? (
             <p className="runtime-assistant__approval">
@@ -417,27 +434,7 @@ export function RuntimeSetupAssistant({
       )}
 
       <div className="runtime-assistant__actions">
-        {active ? (
-          <button
-            className="button button--danger-ghost"
-            type="button"
-            disabled={!status?.canCancel || status.cancelRequested}
-            onClick={onCancel}
-          >
-            <Icon name="close" size={16} />
-            {status?.cancelRequested ? text.cancelling : text.cancel}
-          </button>
-        ) : failed && repairable && status?.nextAction ? (
-          <button
-            className="button button--primary"
-            type="button"
-            disabled={busy}
-            onClick={onRepair}
-          >
-            <Icon name="settings" size={17} />
-            {repairing ? text.repairing : text.repair}
-          </button>
-        ) : scannerIssue ? (
+        {scannerIssue ? (
           <a
             className="button button--primary"
             href={scannerIssue.releaseHref}
@@ -447,15 +444,35 @@ export function RuntimeSetupAssistant({
             <Icon name="external" size={17} />
             {scannerIssue.action}
           </a>
+        ) : setupActive ? (
+          <button
+            className="button button--danger-ghost"
+            type="button"
+            disabled={!status?.canCancel || status.cancelRequested}
+            onClick={onCancel}
+          >
+            <Icon name="close" size={16} />
+            {status?.cancelRequested ? text.cancelling : text.cancel}
+          </button>
+        ) : setupFailed && repairable && status?.nextAction ? (
+          <button
+            className="button button--primary"
+            type="button"
+            disabled={busy}
+            onClick={onRepair}
+          >
+            <Icon name="settings" size={17} />
+            {repairing ? text.repairing : text.repair}
+          </button>
         ) : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
-            {failed ? text.retry : text.start}
+            {setupFailed ? text.retry : text.start}
           </button>
         )}
       </div>
 
-      {failed && repairable && nextAction && (
+      {setupFailed && repairable && nextAction && (
         <details className="runtime-assistant__manual">
           <summary>{text.moreOptions}</summary>
           <ol>
@@ -479,7 +496,7 @@ export function RuntimeSetupAssistant({
         </details>
       )}
 
-      {technicalDetail && failed && (
+      {technicalDetail && setupFailed && (
         <details className="runtime-assistant__technical">
           <summary>{text.technical}</summary>
           <code>{technicalDetail}</code>

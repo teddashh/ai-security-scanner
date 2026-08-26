@@ -99,4 +99,6 @@ test("the native app checks installed tools automatically before rendering its w
   assert.match(source, /snapshot !== undefined[\s\S]*shouldShowRuntimeFirstLaunch\([\s\S]*snapshot\.cases\.length > 0/u);
   assert.match(source, /showRuntimeFirstLaunch \? \([\s\S]*<RuntimeFirstLaunch/u);
   assert.match(source, /if \(!automatic && !result\.data\.accepted && !cancelled\)/u);
+  assert.match(source, /if \(!result\.data\.accepted && setupResult\.data\.phase === "idle"\) \{[\s\S]*setRuntimeAutomaticAttemptFailed\(true\)/u);
+  assert.doesNotMatch(source, /if \(automatic && !result\.data\.accepted && setupResult\.data\.phase === "idle"\)/u);
 });

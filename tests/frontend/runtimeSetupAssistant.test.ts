@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { resolveRuntimeSetupPresentation } from "../../src/runtimeSetupPresentation.ts";
+
 const source = readFileSync(
   new URL("../../src/components/RuntimeSetupAssistant.tsx", import.meta.url),
   "utf8",
@@ -31,6 +33,8 @@ test("manual commands remain available only under the secondary options", () => 
 
 test("packaged-component blockers remain visible without rerunning runtime setup", () => {
   for (const copy of [
+    "Get the scan tools for this check",
+    "取得這項檢查需要的掃描工具",
     "Restore one installed scan component",
     "恢復一項安裝元件",
     "Get the latest installer",
@@ -39,12 +43,39 @@ test("packaged-component blockers remain visible without rerunning runtime setup
   ]) assert.ok(source.includes(copy), copy);
 
   assert.match(source, /scannerSetupBlocker\?: ScannerSetupBlocker/u);
-  assert.match(source, /scannerIssue = !active && !failed && scannerSetupBlocker/u);
-  assert.match(source, /runtime\?\.available === true && !scannerIssue/u);
+  assert.match(source, /resolveRuntimeSetupPresentation\(\{/u);
+  assert.match(source, /presentation\.showPackagedComponentIssue && scannerSetupBlocker/u);
   assert.match(source, /scannerIssue \? \(/u);
   assert.match(source, /href=\{scannerIssue\.releaseHref\}/u);
   assert.match(source, /scannerIssue\.action/u);
   assert.doesNotMatch(source, /onClick=\{onSetup\}[^]*scannerIssue\.action/u);
   assert.doesNotMatch(source, /egress_gateway_unavailable[^}]*title:\s*"egress/u);
   assert.doesNotMatch(source, /engine_execution_contract_invalid[^}]*title:\s*"execution/u);
+});
+
+test("a current packaged-component blocker wins over stale ready, active, or failed setup status", () => {
+  for (const blocker of ["no_runnable_authorized_targets", "egress_gateway_unavailable"] as const) {
+    for (const status of [
+      { active: true, phase: "start" as const },
+      { active: false, phase: "failed" as const },
+    ]) {
+      const state = resolveRuntimeSetupPresentation({
+        mode: "native",
+        runtimeAvailable: true,
+        status,
+        blocker,
+      });
+
+      assert.equal(state.ready, false);
+      assert.equal(state.showPackagedComponentIssue, true);
+      assert.equal(state.setupActive, false);
+      assert.equal(state.setupFailed, false);
+    }
+  }
+
+  assert.equal(resolveRuntimeSetupPresentation({
+    mode: "native",
+    runtimeAvailable: true,
+    status: { active: false, phase: "failed" },
+  }).ready, true);
 });

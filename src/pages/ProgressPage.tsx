@@ -45,6 +45,13 @@ interface ProgressPageProps {
   onCancel: (runId: string) => Promise<void>;
 }
 
+const PRODUCT_RELEASES = "https://github.com/teddashh/ai-security-scanner/releases";
+const installerBlockers = new Set<ScanReadinessBlocker>([
+  "no_runnable_authorized_targets",
+  "egress_gateway_unavailable",
+  "engine_execution_contract_invalid",
+]);
+
 const copy = {
   eyebrow: { en: "LIVE SCAN", zhTW: "即時掃描" },
   title: { en: "Follow your scan", zhTW: "掌握掃描進度" },
@@ -74,8 +81,7 @@ const copy = {
   reviewTarget: { en: "Review target", zhTW: "檢查目標" },
   chooseLocalInputAgain: { en: "Choose local input again", zhTW: "重新選擇本機輸入" },
   reconnectReadOnlySource: { en: "Reconnect read-only source", zhTW: "重新連接唯讀來源" },
-  repairScanNetwork: { en: "Repair scan-tool connection", zhTW: "修復掃描工具連線" },
-  repairScanTool: { en: "Repair scan tool", zhTW: "修復掃描工具" },
+  getLatestInstaller: { en: "Get the latest installer", zhTW: "取得最新安裝程式" },
   checkAgain: { en: "Check again", zhTW: "重新檢查" },
   chooseProject: { en: "Choose a scan project", zhTW: "選擇掃描專案" },
   runtimeEmptyTitle: { en: "One quick setup, then scan", zhTW: "先完成一次設定，就可以開始掃描" },
@@ -118,15 +124,20 @@ const copy = {
     en: "The saved private copy is missing or changed. Choose the local project again before scanning.",
     zhTW: "掃描用的本機副本已遺失或有變更；請重新選擇本機專案後再掃描。",
   },
-  egressGatewayTitle: { en: "The scan-tool connection needs attention", zhTW: "掃描工具的專用連線需要處理" },
+  egressGatewayTitle: { en: "Restore one installed scan component", zhTW: "恢復一項安裝元件" },
   egressGatewayDescription: {
-    en: "Open setup and let the app repair the private connection used by the scan tools. No scan has started.",
-    zhTW: "請開啟設定，讓程式修復掃描工具使用的專用連線；掃描尚未開始。",
+    en: "The private connection component installed with this app could not be verified. Install the newest release again; your local scan projects will stay on this device.",
+    zhTW: "程式無法確認隨附的專用連線元件。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
   },
-  engineContractTitle: { en: "One scan tool needs repair", zhTW: "有一項掃描工具需要修復" },
+  engineContractTitle: { en: "Restore one installed scan component", zhTW: "恢復一項安裝元件" },
   engineContractDescription: {
-    en: "A required part of this check is missing or out of date. Open setup to repair it before scanning.",
-    zhTW: "這項檢查缺少必要元件，或元件已過期；請開啟設定修復後再掃描。",
+    en: "A required part of this check is missing or out of date. Install the newest release again; your local scan projects will stay on this device.",
+    zhTW: "這項檢查缺少必要元件，或元件已過期。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
+  },
+  unavailableToolsTitle: { en: "Get the scan tools for this check", zhTW: "取得這項檢查需要的掃描工具" },
+  unavailableToolsDescription: {
+    en: "This target is ready, but this version has no working scan tool for it. Install the newest release; your local scan projects will stay on this device.",
+    zhTW: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
   },
   passiveSourceTitle: { en: "Reconnect the saved data source", zhTW: "請重新連接已保存的資料來源" },
   passiveSourceDescription: {
@@ -150,7 +161,10 @@ const copy = {
     no_effective_scope_grants: { en: "Choose the exact target you want to check, then confirm it once.", zhTW: "請選擇這次要檢查的確切目標，並確認一次即可。" },
     no_ownership_confirmed_targets: { en: "The target has not been confirmed yet. Return to setup and confirm it.", zhTW: "目標尚未確認；請回到設定頁確認這次要掃描的目標。" },
     no_compatible_authorized_targets: { en: "The current input cannot be scanned yet. Finish the target step shown in setup.", zhTW: "目前的輸入還不能掃描；請完成設定頁顯示的目標步驟。" },
-    no_runnable_authorized_targets: { en: "Your target is ready, but its scan tools still need setup or repair.", zhTW: "目標已準備好，但對應的掃描工具仍需要設定或修復。" },
+    no_runnable_authorized_targets: {
+      en: "This target is ready, but this version has no working scan tool for it. Install the newest release; your local scan projects will stay on this device.",
+      zhTW: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
+    },
     runtime_unavailable: {
       en: "Click once and the app will download, verify, and start the scan tools for you. The scan itself will still wait for you to press Start.",
       zhTW: "按一次即可由程式自動下載、驗證並啟動掃描工具；掃描本身仍會等你按下「開始掃描」。",
@@ -184,12 +198,12 @@ const copy = {
       zhTW: "掃描用的本機副本已遺失或有變更；請重新選擇本機專案後再掃描。",
     },
     egress_gateway_unavailable: {
-      en: "The private connection used by the scan tools is not ready. Open scan-tool setup to repair it.",
-      zhTW: "掃描工具使用的專用連線尚未就緒；請開啟掃描工具設定進行修復。",
+      en: "An installed scan component is missing or changed. Install the newest release again; your local scan projects will stay on this device.",
+      zhTW: "一項隨附的掃描元件已遺失或變更。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
     },
     engine_execution_contract_invalid: {
-      en: "One scan tool is missing a required component. Open scan-tool setup to repair it.",
-      zhTW: "有一項掃描工具缺少必要元件；請開啟掃描工具設定進行修復。",
+      en: "A required installed scan component is missing or out of date. Install the newest release again; your local scan projects will stay on this device.",
+      zhTW: "一項必要的隨附掃描元件已遺失或過期。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
     },
     passive_source_unavailable: {
       en: "The saved read-only data source is missing or changed. Reconnect it before scanning.",
@@ -246,13 +260,11 @@ const copy = {
   },
   downloadTechnicalLog: { en: "Download redacted technical log", zhTW: "下載已遮蔽的技術紀錄" },
   activeScanTools: { en: "Current or next scan tool", zhTW: "目前或下一個掃描工具" },
-  noRunActivityTitle: { en: "This scan has not started", zhTW: "這次掃描尚未開始" },
+  noRunActivityTitle: { en: "Event log before the scan starts", zhTW: "掃描前事件紀錄" },
   noRunActivityDescription: {
-    en: "The app checked what is needed and stopped before contacting any target.",
-    zhTW: "程式已檢查所需條件，並在接觸任何目標前停止。",
+    en: "Readiness checks appear here before any target is contacted.",
+    zhTW: "在接觸任何目標前，準備狀態檢查會先記錄在這裡。",
   },
-  readyToStartTitle: { en: "Everything is ready", zhTW: "一切都已準備完成" },
-  readyToStartBody: { en: "The scan is waiting for you to press Start.", zhTW: "掃描正在等待你按下「開始掃描」。" },
   readinessChecked: { en: "Readiness checked", zhTW: "已檢查掃描準備狀態" },
   scanNotStartedEvent: { en: "Scan did not start", zhTW: "掃描沒有開始" },
   lastReadinessCheck: { en: "Last readiness check", zhTW: "最後一次準備狀態檢查" },
@@ -453,6 +465,11 @@ const readinessPresentation: Partial<Record<ScanReadinessBlocker, {
   title: { en: string; zhTW: string };
   description: { en: string; zhTW: string };
 }>> = {
+  no_runnable_authorized_targets: {
+    action: copy.getLatestInstaller,
+    title: copy.unavailableToolsTitle,
+    description: copy.unavailableToolsDescription,
+  },
   provider_source_required: {
     action: copy.connectCloud,
     title: copy.providerSourceTitle,
@@ -489,12 +506,12 @@ const readinessPresentation: Partial<Record<ScanReadinessBlocker, {
     description: copy.workspaceSnapshotDescription,
   },
   egress_gateway_unavailable: {
-    action: copy.repairScanNetwork,
+    action: copy.getLatestInstaller,
     title: copy.egressGatewayTitle,
     description: copy.egressGatewayDescription,
   },
   engine_execution_contract_invalid: {
-    action: copy.repairScanTool,
+    action: copy.getLatestInstaller,
     title: copy.engineContractTitle,
     description: copy.engineContractDescription,
   },
@@ -562,6 +579,11 @@ export function ProgressPage({
     ? copy.readiness[readiness.blockerCode] ?? copy.readinessUnavailableDescription
     : copy.readinessUnavailableDescription;
   const startFreshScan = !readinessCheckFailed && isCapturedEvidenceBlocker(readiness?.blockerCode);
+  const needsLatestInstaller = Boolean(
+    !readinessCheckFailed
+    && readiness?.blockerCode
+    && installerBlockers.has(readiness.blockerCode),
+  );
   const runReadinessAction = () => {
     if (startFreshScan) {
       void onStart();
@@ -688,6 +710,10 @@ export function ProgressPage({
             <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStart()}>
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
+          ) : needsLatestInstaller ? (
+            <a className="button button--primary" href={PRODUCT_RELEASES} target="_blank" rel="noreferrer">
+              <Icon name="external" size={17} />{text(copy.getLatestInstaller)}
+            </a>
           ) : readiness || readinessCheckFailed ? (
             <button
               className="button button--primary"
@@ -708,40 +734,14 @@ export function ProgressPage({
             <div>
               <p className="eyebrow">{text(copy.activityEyebrow)}</p>
               <h2 id="scan-preflight-activity-title">{text(copy.noRunActivityTitle)}</h2>
-              <p>{text(readinessCheckFailed
-                ? copy.readinessUnavailableDescription
-                : readiness?.ready
-                  ? copy.readyToStartBody
-                  : readiness
-                    ? copy.noRunActivityDescription
-                    : copy.checkingReady)}</p>
+              <p>{text(copy.noRunActivityDescription)}</p>
+              <small>{text(copy.lastReadinessCheck)} · {readiness?.checkedAt
+                ? showDateTime(readiness.checkedAt)
+                : text(copy.noReadinessTimestamp)}</small>
             </div>
             <button className="button button--secondary button--small" type="button" disabled={!readiness && !readinessCheckFailed} onClick={downloadPreflightDiagnostic}>
               <Icon name="download" size={15} />{text(copy.downloadTechnicalLog)}
             </button>
-          </div>
-          <div className="scan-activity__current" aria-live="polite">
-            <span className="scan-activity__icon"><Icon name={readiness?.ready ? "check" : "clock"} size={20} /></span>
-            <div>
-              <small>{text(copy.currentActivity)}</small>
-              <strong>{text(readinessCheckFailed
-                ? copy.readinessUnavailableTitle
-                : readiness?.ready
-                  ? copy.readyToStartTitle
-                  : readiness
-                    ? blockerTitle
-                    : copy.checkingReady)}</strong>
-              <p>{text(readinessCheckFailed
-                ? copy.readinessUnavailableDescription
-                : readiness?.ready
-                  ? copy.readyToStartBody
-                  : readiness
-                    ? blockerDescription
-                    : copy.emptyDescription)}</p>
-              <span>{text(copy.lastReadinessCheck)} · {readiness?.checkedAt
-                ? showDateTime(readiness.checkedAt)
-                : text(copy.noReadinessTimestamp)}</span>
-            </div>
           </div>
           <div className="scan-activity__log">
             <div>
@@ -773,16 +773,6 @@ export function ProgressPage({
           </details>
           <small className="scan-activity__privacy"><Icon name="lock" size={13} />{text(copy.diagnosticPrivacy)}</small>
         </section>
-        {readiness && !readiness.ready && readiness.blockerCode && (
-          <InlineNotice tone="warning" title={text(blockerTitle)}>
-            <p>{text(blockerDescription)}</p>
-          </InlineNotice>
-        )}
-        {readinessCheckFailed && (
-          <InlineNotice tone="warning" title={text(copy.readinessUnavailableTitle)}>
-            <p>{text(copy.readinessUnavailableDescription)}</p>
-          </InlineNotice>
-        )}
       </div>
     );
   }
@@ -866,9 +856,15 @@ export function ProgressPage({
       {readiness && !readiness.ready && readiness.blockerCode && (readiness.nextStep !== "progress" || startFreshScan) && (
         <InlineNotice tone="warning" title={text(blockerTitle)}>
           <p>{text(blockerDescription)}</p>
-          <button className="button button--primary button--small" type="button" disabled={busy} onClick={runReadinessAction}>
-            <Icon name="arrow" size={15} />{text(fixActionLabel)}
-          </button>
+          {needsLatestInstaller ? (
+            <a className="button button--primary button--small" href={PRODUCT_RELEASES} target="_blank" rel="noreferrer">
+              <Icon name="external" size={15} />{text(copy.getLatestInstaller)}
+            </a>
+          ) : (
+            <button className="button button--primary button--small" type="button" disabled={busy} onClick={runReadinessAction}>
+              <Icon name="arrow" size={15} />{text(fixActionLabel)}
+            </button>
+          )}
         </InlineNotice>
       )}
 
@@ -1013,9 +1009,15 @@ export function ProgressPage({
         <InlineNotice tone="warning" title={text(copy.blockedTitle)}>
           <p>{text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)}</p>
           <div className="button-group">
-            <button className="button button--primary button--small" type="button" onClick={runReadinessAction}>
-              <Icon name="arrow" size={15} />{text(fixActionLabel)}
-            </button>
+            {needsLatestInstaller ? (
+              <a className="button button--primary button--small" href={PRODUCT_RELEASES} target="_blank" rel="noreferrer">
+                <Icon name="external" size={15} />{text(copy.getLatestInstaller)}
+              </a>
+            ) : (
+              <button className="button button--primary button--small" type="button" onClick={runReadinessAction}>
+                <Icon name="arrow" size={15} />{text(fixActionLabel)}
+              </button>
+            )}
             <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
               <Icon name="file" size={15} />{text(copy.downloadLog)}
             </button>

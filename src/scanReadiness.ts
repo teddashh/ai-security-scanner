@@ -10,7 +10,13 @@ export type ProviderConfigurationBlocker =
 export type CoverageSetupFocus = "provider" | "workspace" | "source";
 
 export type ScannerSetupBlocker =
+  | "no_runnable_authorized_targets"
   | "runtime_unavailable"
+  | "egress_gateway_unavailable"
+  | "engine_execution_contract_invalid";
+
+export type PackagedComponentBlocker =
+  | "no_runnable_authorized_targets"
   | "egress_gateway_unavailable"
   | "engine_execution_contract_invalid";
 
@@ -29,7 +35,14 @@ const providerConfigurationBlockers: ReadonlySet<ScanReadinessBlocker> = new Set
 ]);
 
 const scannerSetupBlockers: ReadonlySet<ScanReadinessBlocker> = new Set([
+  "no_runnable_authorized_targets",
   "runtime_unavailable",
+  "egress_gateway_unavailable",
+  "engine_execution_contract_invalid",
+]);
+
+const packagedComponentBlockers: ReadonlySet<ScanReadinessBlocker> = new Set([
+  "no_runnable_authorized_targets",
   "egress_gateway_unavailable",
   "engine_execution_contract_invalid",
 ]);
@@ -56,11 +69,18 @@ export const coverageSetupFocusFor = (
   return undefined;
 };
 
-/** These blockers are repaired from the local scanner-setup assistant. */
+/** These blockers are explained on the local scanner-setup surface. */
 export const isScannerSetupBlocker = (
   blocker: ScanReadinessBlocker | undefined,
 ): blocker is ScannerSetupBlocker => Boolean(
   blocker && scannerSetupBlockers.has(blocker),
+);
+
+/** Packaged component failures need a fresh installer, not another runtime setup attempt. */
+export const isPackagedComponentBlocker = (
+  blocker: ScanReadinessBlocker | undefined,
+): blocker is PackagedComponentBlocker => Boolean(
+  blocker && packagedComponentBlockers.has(blocker),
 );
 
 /** A transient preflight failure should retry the check, not change setup. */

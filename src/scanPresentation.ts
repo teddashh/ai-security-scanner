@@ -127,8 +127,8 @@ const nextStepCopy = {
     zhTW: "這些檢查在目前版本無法使用；請先查看已完成的結果，更新程式後再試。",
   },
   mixedSkippedSetup: {
-    en: "The skipped checks need more than one fix. Finish target or cloud setup and update or repair the scan tools, then start a new scan.",
-    zhTW: "未執行的檢查需要處理不只一項問題；請完成目標或雲端設定，並更新或修復掃描工具，再開始新的掃描。",
+    en: "The skipped checks need more than one action. Finish the target or cloud step, follow the scan-tool action shown, then start a new scan.",
+    zhTW: "未執行的檢查還需要幾個步驟；請先完成目標或雲端設定，再照畫面處理掃描工具，然後開始新的掃描。",
   },
   skippedUnknown: {
     en: "Open the technical records for the skipped checks, finish the indicated setup, then start a new scan.",

@@ -16,6 +16,7 @@ import { StartPage } from "./pages/StartPage";
 import { VerificationPage } from "./pages/VerificationPage";
 import {
   coverageSetupFocusFor,
+  isPackagedComponentBlocker,
   isReadinessRetryBlocker,
   isScannerSetupBlocker,
 } from "./scanReadiness";
@@ -106,8 +107,8 @@ const scanStartIssueCopy = {
     zhTW: "目前的輸入還不能交給任何檢查使用；請完成掃描設定中的目標步驟。",
   },
   no_runnable_authorized_targets: {
-    en: "The target is ready, but its scan tools still need setup or repair.",
-    zhTW: "目標已準備好，但對應的掃描工具仍需要設定或修復。",
+    en: "This target is ready, but this version has no working scan tool for it. Get the latest installer; your local scan projects will stay on this device.",
+    zhTW: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
   },
   runtime_unavailable: {
     en: "The target is ready. Set up the private scan tools once, then start the scan.",
@@ -142,12 +143,12 @@ const scanStartIssueCopy = {
     zhTW: "掃描用的本機副本已遺失或有變更；請重新選擇本機專案後再掃描。",
   },
   egress_gateway_unavailable: {
-    en: "The private connection used by the scan tools is not ready. Open scan-tool setup to repair it.",
-    zhTW: "掃描工具使用的專用連線尚未就緒；請開啟掃描工具設定進行修復。",
+    en: "An installed scan component is missing or changed. Get the latest installer; your local scan projects will stay on this device.",
+    zhTW: "一項隨附的掃描元件已遺失或變更。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
   },
   engine_execution_contract_invalid: {
-    en: "One scan tool is missing a required component. Open scan-tool setup to repair it.",
-    zhTW: "有一項掃描工具缺少必要元件；請開啟掃描工具設定進行修復。",
+    en: "A required installed scan component is missing or out of date. Get the latest installer; your local scan projects will stay on this device.",
+    zhTW: "一項必要的隨附掃描元件已遺失或過期。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
   },
   passive_source_unavailable: {
     en: "The saved read-only data source is missing or changed. Reconnect it before scanning.",
@@ -341,7 +342,7 @@ export default function App() {
       applyServiceMeta(result);
       const setupResult = await scannerService.getManagedRuntimeSetupStatus();
       setRuntimeSetup(setupResult.data);
-      if (automatic && !result.data.accepted && setupResult.data.phase === "idle") {
+      if (!result.data.accepted && setupResult.data.phase === "idle") {
         setRuntimeAutomaticAttemptFailed(true);
       }
       await loadSnapshot(snapshot?.selectedCaseId, true);
@@ -378,7 +379,7 @@ export default function App() {
             }),
       });
     } catch (error) {
-      if (automatic) setRuntimeAutomaticAttemptFailed(true);
+      setRuntimeAutomaticAttemptFailed(true);
       recordTechnicalError("prepare managed runtime", error);
       pushToast({
         tone: "danger",
@@ -1044,6 +1045,11 @@ export default function App() {
             onFixSetup={() => {
               if (scanReadinessErrorCaseId === currentCaseId) {
                 void retryScanReadiness(currentCaseId);
+                return;
+              }
+              if (isPackagedComponentBlocker(scanReadiness?.blockerCode)) {
+                setRuntimeSetupFocusKey((key) => key + 1);
+                navigate("start");
                 return;
               }
               if (isScannerSetupBlocker(scanReadiness?.blockerCode) || scanReadiness?.nextStep === "scanner_setup") {

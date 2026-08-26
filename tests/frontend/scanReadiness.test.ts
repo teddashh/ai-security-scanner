@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   coverageSetupFocusFor,
   isCapturedEvidenceBlocker,
+  isPackagedComponentBlocker,
   isProviderConfigurationBlocker,
   isReadinessRetryBlocker,
   isScannerSetupBlocker,
@@ -36,8 +37,14 @@ test("execution readiness blockers open the exact safe recovery surface", () => 
 
   assert.equal(isScannerSetupBlocker("egress_gateway_unavailable"), true);
   assert.equal(isScannerSetupBlocker("engine_execution_contract_invalid"), true);
+  assert.equal(isScannerSetupBlocker("no_runnable_authorized_targets"), true);
   assert.equal(isScannerSetupBlocker("runtime_unavailable"), true);
   assert.equal(isScannerSetupBlocker("workspace_snapshot_unavailable"), false);
+
+  assert.equal(isPackagedComponentBlocker("egress_gateway_unavailable"), true);
+  assert.equal(isPackagedComponentBlocker("engine_execution_contract_invalid"), true);
+  assert.equal(isPackagedComponentBlocker("no_runnable_authorized_targets"), true);
+  assert.equal(isPackagedComponentBlocker("runtime_unavailable"), false);
 
   assert.equal(isReadinessRetryBlocker("execution_preflight_unavailable"), true);
   assert.equal(isReadinessRetryBlocker("provider_preflight_unavailable"), true);

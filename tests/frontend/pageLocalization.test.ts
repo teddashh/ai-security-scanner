@@ -50,7 +50,13 @@ test("scan readiness blocks empty runs and sends each fix to the useful screen",
   assert.match(progress, /Download diagnostic log/u);
   assert.match(progress, /下載診斷紀錄/u);
 
-  assert.match(app, /isScannerSetupBlocker\(scanReadiness\?\.blockerCode\) \|\| scanReadiness\?\.nextStep === "scanner_setup"[\s\S]*navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
+  const packagedBranchStart = app.indexOf("if (isPackagedComponentBlocker(scanReadiness?.blockerCode))");
+  const runtimeBranchStart = app.indexOf("if (isScannerSetupBlocker(scanReadiness?.blockerCode)", packagedBranchStart);
+  const retryBranchStart = app.indexOf("if (isReadinessRetryBlocker(scanReadiness?.blockerCode)", runtimeBranchStart);
+  assert.ok(packagedBranchStart >= 0 && runtimeBranchStart > packagedBranchStart && retryBranchStart > runtimeBranchStart);
+  assert.match(app.slice(packagedBranchStart, runtimeBranchStart), /navigate\("start"\);[\s\S]*return;/u);
+  assert.doesNotMatch(app.slice(packagedBranchStart, runtimeBranchStart), /setupManagedRuntime/u);
+  assert.match(app.slice(runtimeBranchStart, retryBranchStart), /navigate\("start"\);[\s\S]*setupManagedRuntime\(\)/u);
   assert.match(app, /isReadinessRetryBlocker\(scanReadiness\?\.blockerCode\) \|\| scanReadiness\?\.nextStep === "retry"[\s\S]*retryScanReadiness\(currentCaseId\)/u);
   assert.match(app, /coverageSetupFocusFor\(scanReadiness\?\.blockerCode\)[\s\S]*navigate\("coverage"\)/u);
   assert.match(app, /focusSetup=\{coverageSetupFocusFor\(scanReadiness\?\.blockerCode\)\}/u);
@@ -125,10 +131,11 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
   const presentations = progress.slice(presentationStart, presentationEnd);
 
   for (const [blocker, action] of [
+    ["no_runnable_authorized_targets", "copy.getLatestInstaller"],
     ["workspace_snapshot_unavailable", "copy.chooseLocalInputAgain"],
     ["passive_source_unavailable", "copy.reconnectReadOnlySource"],
-    ["egress_gateway_unavailable", "copy.repairScanNetwork"],
-    ["engine_execution_contract_invalid", "copy.repairScanTool"],
+    ["egress_gateway_unavailable", "copy.getLatestInstaller"],
+    ["engine_execution_contract_invalid", "copy.getLatestInstaller"],
     ["execution_preflight_unavailable", "copy.checkAgain"],
     ["captured_evidence_unavailable", "copy.startFreshScan"],
   ] as const) {
@@ -137,10 +144,10 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
   }
 
   for (const [english, traditionalChinese] of [
+    ["Get the scan tools for this check", "取得這項檢查需要的掃描工具"],
     ["Choose the local files again", "請重新選擇本機檔案"],
     ["Reconnect the saved data source", "請重新連接已保存的資料來源"],
-    ["The scan-tool connection needs attention", "掃描工具的專用連線需要處理"],
-    ["One scan tool needs repair", "有一項掃描工具需要修復"],
+    ["Restore one installed scan component", "恢復一項安裝元件"],
     ["The app could not finish checking the selected inputs and scan tools", "程式尚未完成所選輸入與掃描工具的準備檢查"],
     ["Review the results that are still available", "請查看目前仍可用的結果"],
   ] as const) {
@@ -149,9 +156,10 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
   }
 
   for (const [english, traditionalChinese] of [
+    ["This target is ready, but this version has no working scan tool for it", "目標已準備好，但這個版本沒有可執行這項檢查的工具"],
     ["The saved local copy is missing or changed", "掃描用的本機副本已遺失或有變更"],
-    ["The private connection used by the scan tools is not ready", "掃描工具使用的專用連線尚未就緒"],
-    ["One scan tool is missing a required component", "有一項掃描工具缺少必要元件"],
+    ["An installed scan component is missing or changed", "一項隨附的掃描元件已遺失或變更"],
+    ["A required installed scan component is missing or out of date", "一項必要的隨附掃描元件已遺失或過期"],
     ["The saved read-only data source is missing or changed", "已保存的唯讀資料來源已遺失或有變更"],
     ["The final readiness check could not finish", "最後的準備狀態檢查尚未完成"],
     ["The saved results needed to continue are missing or changed", "續跑所需的已保存結果已遺失或有變更"],
@@ -166,8 +174,8 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
   assert.match(progress, /copy\.readiness\[readiness\.blockerCode\] \?\? copy\.readinessUnavailableDescription/u);
   assert.equal(
     [...progress.matchAll(/readiness && !readiness\.ready && readiness\.blockerCode/g)].length,
-    2,
-    "the typed blocker should remain visible before the first scan and beside scan history",
+    1,
+    "scan history keeps one typed blocker notice while the no-run screen uses its focused empty state",
   );
   const actionStart = app.indexOf("const executeAction = async");
   const actionEnd = app.indexOf("const runAction = async", actionStart);
@@ -289,8 +297,8 @@ test("progress has a bilingual event log before and during every scan route", as
     "現在正在做什麼",
     "Last progress update",
     "最後一次進度更新",
-    "This scan has not started",
-    "這次掃描尚未開始",
+    "Event log before the scan starts",
+    "掃描前事件紀錄",
     "Download redacted technical log",
     "下載已遮蔽的技術紀錄",
   ]) assert.ok(progress.includes(copy), copy);
@@ -302,6 +310,7 @@ test("progress has a bilingual event log before and during every scan route", as
   assert.match(progress, /buildReadinessDiagnostic/u);
   assert.match(noRun, /readiness\?\.blockerCode/u);
   assert.match(noRun, /scan-activity__log/u);
+  assert.doesNotMatch(noRun, /blockerTitle|blockerDescription|readinessUnavailableDescription|readyToStartBody/u);
   assert.match(progress, /activity\.activeCheckNames/u);
   assert.match(diagnostics, /redacted-preflight-diagnostic\/v1/u);
   assert.match(adapter, /checked_at/u);

@@ -162,6 +162,6 @@ test("typed skipped reasons choose a specific bilingual next step without render
   }
 
   const mixed = skippedChecksNextStepFor(["no_compatible_authorized_assets", "runtime_image_unavailable"]);
-  assert.match(mixed.en, /more than one fix/u);
-  assert.match(mixed.zhTW, /不只一項問題/u);
+  assert.match(mixed.en, /more than one action/u);
+  assert.match(mixed.zhTW, /還需要幾個步驟/u);
 });
