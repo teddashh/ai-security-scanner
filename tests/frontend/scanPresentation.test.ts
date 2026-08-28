@@ -53,10 +53,14 @@ test("all 21 catalog engines have plain-language English and Traditional Chinese
   }
 });
 
-test("Gitleaks describes exposed secrets without implying a Git-history-only scan", () => {
+test("Gitleaks and Trivy describe their exact plain-language outcomes", () => {
   assert.deepEqual(engineOutcomeCopy.gitleaks, {
     en: "Exposed secrets in code",
     zhTW: "程式碼中暴露的秘密",
+  });
+  assert.deepEqual(engineOutcomeCopy.trivy, {
+    en: "Known package vulnerabilities",
+    zhTW: "套件中的已知弱點",
   });
 });
 

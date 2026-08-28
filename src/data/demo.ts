@@ -1,4 +1,5 @@
 import type {
+  AiGeneratedArtifactAnswer,
   AppSnapshot,
   AssessmentCase,
   CaseWorkspace,
@@ -130,6 +131,7 @@ const localizeBuiltInDemo = <T,>(value: T): T => {
 const sampleCase: AssessmentCase = {
   id: "case-demo-northstar",
   name: "Northstar 初步安全健檢",
+  aiGeneratedArtifact: "unknown",
   organizationName: "Northstar Labs（展示）",
   companySize: "small",
   dataClasses: ["pii", "credentials"],
@@ -150,6 +152,7 @@ const sampleCase: AssessmentCase = {
 const draftCase: AssessmentCase = {
   id: "case-demo-blank",
   name: "第二辦公室盤點",
+  aiGeneratedArtifact: "unknown",
   organizationName: "Northstar Labs（展示）",
   companySize: "small",
   dataClasses: ["none"],
@@ -1129,6 +1132,9 @@ export const getDemoSnapshot = (selectedCaseId = sampleCase.id): AppSnapshot => 
 
 const STORAGE_KEY = "ai-security-scanner.demo-cases.v1";
 
+const safeAiGeneratedArtifactAnswer = (value: unknown): AiGeneratedArtifactAnswer =>
+  value === "yes" || value === "no" || value === "unknown" ? value : "unknown";
+
 export const loadStoredDemoCases = (): AssessmentCase[] => {
   try {
     const value = window.localStorage.getItem(STORAGE_KEY);
@@ -1137,6 +1143,7 @@ export const loadStoredDemoCases = (): AssessmentCase[] => {
     return Array.isArray(parsed)
       ? (parsed as AssessmentCase[]).map((assessmentCase) => ({
           ...assessmentCase,
+          aiGeneratedArtifact: safeAiGeneratedArtifactAnswer(assessmentCase.aiGeneratedArtifact),
           requestedActivities: assessmentCase.requestedActivities ?? [],
         }))
       : [];

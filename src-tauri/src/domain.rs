@@ -250,6 +250,19 @@ pub enum AssessmentIntent {
     Kubernetes,
 }
 
+/// The explicit answer to the case-creation question about whether selected
+/// code was generated or materially changed by AI. `Unknown` is deliberately
+/// distinct from `No`: legacy cases and unanswered questions must fail closed
+/// instead of acquiring AI-generated-artifact control references.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiGeneratedArtifactAnswer {
+    Yes,
+    No,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeGrant {
     pub id: Id,
@@ -523,7 +536,7 @@ impl EngineManifest {
         let permissions = permissions.into_iter().collect::<Vec<_>>();
         self.required_permissions
             .iter()
-            .all(|required| permissions.iter().any(|permission| *permission == required))
+            .all(|required| permissions.contains(&required))
     }
 
     /// Empty means provider-agnostic. Provider-bound releases require an exact
@@ -687,6 +700,16 @@ pub struct ScanRun {
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub knowledge_cutoff: DateTime<Utc>,
+    /// Framework-classification context frozen when the run was planned. It
+    /// never grants scan permission or changes scanner execution. Legacy runs
+    /// fail closed to `false`.
+    #[serde(default)]
+    pub ai_system_applicable: bool,
+    /// Exact case-creation answer frozen with this run. Legacy runs and
+    /// unanswered cases deserialize as `Unknown`, which never enables an
+    /// AI-generated-artifact control reference.
+    #[serde(default)]
+    pub ai_generated_artifact: AiGeneratedArtifactAnswer,
     /// Durable verification intent. Older case files omit this field and are
     /// treated as ordinary scans rather than verification runs.
     #[serde(default)]
@@ -1014,6 +1037,8 @@ pub struct AssessmentCase {
     #[serde(default)]
     pub assessment_intent: Option<AssessmentIntent>,
     #[serde(default)]
+    pub ai_generated_artifact: AiGeneratedArtifactAnswer,
+    #[serde(default)]
     pub requested_activities: Vec<AssessmentActivity>,
     pub data_sources: Vec<DataSource>,
     pub assets: Vec<Asset>,
@@ -1048,6 +1073,7 @@ impl AssessmentCase {
             knowledge_cutoff: None,
             is_demo: false,
             assessment_intent: None,
+            ai_generated_artifact: AiGeneratedArtifactAnswer::Unknown,
             requested_activities: Vec::new(),
             data_sources: Vec::new(),
             assets: Vec::new(),
@@ -1111,6 +1137,8 @@ pub struct CaseSummary {
     pub requested_activities: Vec<AssessmentActivity>,
     #[serde(default)]
     pub assessment_intent: Option<AssessmentIntent>,
+    #[serde(default)]
+    pub ai_generated_artifact: AiGeneratedArtifactAnswer,
     pub source_kinds: Vec<SourceKind>,
     /// Source areas that are part of this case, excluding questionnaire-only
     /// `not_applicable` placeholders. Kept separate from `source_kinds` so
@@ -1149,6 +1177,7 @@ impl From<&AssessmentCase> for CaseSummary {
             data_classes: value.profile.data_classes.clone(),
             requested_activities: value.requested_activities.clone(),
             assessment_intent: value.assessment_intent.clone(),
+            ai_generated_artifact: value.ai_generated_artifact,
             source_kinds,
             applicable_source_kinds,
             notes: value.profile.notes.clone(),
@@ -1213,6 +1242,11 @@ pub struct CreateCaseRequest {
     /// recipes only; it never authorizes a target.
     #[serde(default)]
     pub assessment_intent: Option<AssessmentIntent>,
+    /// Plain-language answer used only to decide whether result references
+    /// specific to AI-generated artifacts are applicable. It never changes
+    /// scope, scanner selection, or permission.
+    #[serde(default)]
+    pub ai_generated_artifact: AiGeneratedArtifactAnswer,
     #[serde(default)]
     pub data_classes: Vec<DataClass>,
     /// Desired assessment activities from the questionnaire. This field is
@@ -1338,6 +1372,10 @@ mod tests {
         assert!(case.coverage.is_empty());
         assert!(case.findings.is_empty());
         assert!(!case.is_demo);
+        assert_eq!(
+            case.ai_generated_artifact,
+            AiGeneratedArtifactAnswer::Unknown
+        );
     }
 
     #[test]
@@ -1363,6 +1401,11 @@ mod tests {
         .unwrap();
 
         assert!(run.verification_baseline_run_id.is_none());
+        assert!(!run.ai_system_applicable);
+        assert_eq!(
+            run.ai_generated_artifact,
+            AiGeneratedArtifactAnswer::Unknown
+        );
     }
 
     #[test]
@@ -1428,6 +1471,8 @@ mod tests {
                 created_at: now,
                 completed_at: None,
                 knowledge_cutoff: now,
+                ai_system_applicable: false,
+                ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec![],
                 scope_grant_snapshots: vec![],

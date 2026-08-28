@@ -28,23 +28,26 @@ import (
 )
 
 const (
-	scopeMountPath         = "/run/ai-security-scanner/scope.json"
-	outputMountPath        = "/output"
-	templateRootPath       = "/opt/nuclei-templates"
-	templateRevision       = "24858b4bfabfa86f0bcfd36aea24fb535152b012"
-	templateRevisionMarker = "/opt/nuclei-templates/AI_SECURITY_SCANNER_REVISION"
-	maxScopeBytes          = 4 * 1024 * 1024
-	maxEvidenceBytes       = 512 * 1024 * 1024
-	maxEvidenceLineBytes   = 16 * 1024 * 1024
-	maxTemplateBytes       = 1024 * 1024
-	maxTemplateHeaderBytes = 128 * 1024
-	maxAssets              = 4096
-	maxIdentifiers         = 128
-	maxGrantsPerAsset      = 16
-	maxResolvedAddresses   = 4096
-	managedGatewayPort     = "1080"
-	naabuProxyRateDivisor  = 2
-	naabuProcessAllowance  = 5 * time.Second
+	scopeMountPath               = "/run/ai-security-scanner/scope.json"
+	outputMountPath              = "/output"
+	templateRootPath             = "/opt/nuclei-templates"
+	templateRevision             = "24858b4bfabfa86f0bcfd36aea24fb535152b012"
+	templateRevisionMarker       = "/opt/nuclei-templates/AI_SECURITY_SCANNER_REVISION"
+	maxScopeBytes                = 4 * 1024 * 1024
+	maxEvidenceBytes             = 512 * 1024 * 1024
+	maxEvidenceLineBytes         = 16 * 1024 * 1024
+	maxTemplateBytes             = 1024 * 1024
+	maxTemplateHeaderBytes       = 128 * 1024
+	maxAssets                    = 4096
+	maxIdentifiers               = 128
+	maxGrantsPerAsset            = 16
+	maxResolvedAddresses         = 4096
+	managedGatewayPort           = "1080"
+	naabuProxyRateDivisor        = 2
+	scannerProcessAllowance      = 5 * time.Second
+	naabuEngineCeiling           = 4 * time.Hour
+	httpEngineCeiling            = 2 * time.Hour
+	maxNucleiRequestsPerTemplate = 20
 )
 
 type scopeDocument struct {
@@ -123,7 +126,6 @@ type scanUnit struct {
 	AssetID           string
 	Grant             externalScope
 	Port              uint16
-	FrozenAddress     string
 	ResolvedAddresses []string
 }
 
@@ -244,7 +246,9 @@ func run(arguments []string, now time.Time) error {
 		var command invocation
 		switch *engineID {
 		case "naabu":
-			command = naabuInvocation(unit, naabuProxy, temporaryOutput, environment)
+			command, err = naabuInvocation(
+				unit, naabuProxy, temporaryOutput, environment, temporaryRoot, index,
+			)
 		case "httpx":
 			command, err = httpxInvocation(unit, proxy, temporaryOutput, environment)
 		case "nuclei":
@@ -347,13 +351,16 @@ func validateAndPlan(document *scopeDocument, engineID string, now time.Time) ([
 				return nil, errors.New("one execution cannot combine grants from different cases")
 			}
 			resolvedAddresses := append([]string(nil), grant.ResolvedAddresses...)
+			sort.Strings(resolvedAddresses)
 			if engineID == "naabu" {
-				for _, address := range resolvedAddresses {
-					units = append(units, scanUnit{
-						AssetID: asset.ID, Grant: external, FrozenAddress: address,
-						ResolvedAddresses: resolvedAddresses,
-					})
-				}
+				// Keep one bounded process per exact grant. Naabu accepts a
+				// newline-separated host set, so a normal /24 no longer pays process
+				// startup and teardown once for every frozen address. Evidence is
+				// still checked against this exact host-side resolution set below.
+				units = append(units, scanUnit{
+					AssetID: asset.ID, Grant: external,
+					ResolvedAddresses: resolvedAddresses,
+				})
 			} else {
 				for _, port := range external.Ports {
 					units = append(units, scanUnit{
@@ -374,7 +381,7 @@ func validateAndPlan(document *scopeDocument, engineID string, now time.Time) ([
 		if units[left].Port != units[right].Port {
 			return units[left].Port < units[right].Port
 		}
-		return units[left].FrozenAddress < units[right].FrozenAddress
+		return strings.Join(units[left].ResolvedAddresses, ",") < strings.Join(units[right].ResolvedAddresses, ",")
 	})
 	return units, nil
 }
@@ -428,7 +435,7 @@ func validateGrant(asset scopeAsset, grant scopeGrant, external externalScope, e
 func supportedAssetKind(engineID, kind string) bool {
 	switch engineID {
 	case "naabu":
-		return kind == "host" || kind == "ip_address"
+		return kind == "domain" || kind == "host" || kind == "ip_address"
 	case "httpx", "nuclei":
 		return kind == "domain" || kind == "ip_address" || kind == "web_service"
 	default:
@@ -593,16 +600,29 @@ func childEnvironment(proxy, temporaryRoot string) []string {
 	}
 }
 
-func naabuInvocation(unit scanUnit, proxy, output string, environment []string) invocation {
+func naabuInvocation(
+	unit scanUnit,
+	proxy, output string,
+	environment []string,
+	temporaryRoot string,
+	index int,
+) (invocation, error) {
 	ports := make([]string, 0, len(unit.Grant.Ports))
 	for _, port := range unit.Grant.Ports {
 		ports = append(ports, strconv.Itoa(int(port)))
+	}
+	targetsFile := filepath.Join(temporaryRoot, fmt.Sprintf("targets-%06d.txt", index))
+	if err := writeExclusiveLines(targetsFile, unit.ResolvedAddresses); err != nil {
+		return invocation{}, err
 	}
 	effectiveRate := naabuEffectiveProxyRate(unit.Grant.RatePolicy)
 	return invocation{
 		Program: "/usr/local/bin/naabu",
 		Args: []string{
-			"-host", unit.FrozenAddress,
+			// A private launcher-owned list keeps the exact host-side frozen set
+			// without a second DNS lookup and avoids the operating system's
+			// per-argument length limit for a bounded IPv6 range.
+			"-list", targetsFile,
 			"-port", strings.Join(ports, ","),
 			"-scan-type", "c",
 			"-proxy", proxy,
@@ -617,8 +637,12 @@ func naabuInvocation(unit scanUnit, proxy, output string, environment []string) 
 			"-no-stdin", "-disable-update-check", "-silent",
 		},
 		Env: environment, Expiry: unit.Grant.ExpiresAt,
-		Timeout: naabuInvocationTimeout(unit.Grant.RatePolicy, len(unit.Grant.Ports)),
-	}
+		Timeout: naabuInvocationTimeout(
+			unit.Grant.RatePolicy,
+			len(unit.Grant.Ports),
+			len(unit.ResolvedAddresses),
+		),
+	}, nil
 }
 
 // Pinned Naabu uses the post-proxy rate as both its connect worker bound and
@@ -634,13 +658,25 @@ func naabuEffectiveProxyRate(policy ratePolicy) uint16 {
 // timeout_seconds is a per-connect deadline in Naabu, not a total-process
 // deadline. Bound the child by the finite port workload, its effective proxy
 // rate, and a small fixed allowance for process setup and Naabu's final warmup.
-func naabuInvocationTimeout(policy ratePolicy, portCount int) time.Duration {
+func naabuInvocationTimeout(policy ratePolicy, portCount, addressCount int) time.Duration {
+	workItems := uint64(portCount) * uint64(addressCount)
+	return boundedInvocationTimeout(policy, workItems, naabuEngineCeiling)
+}
+
+// Scanner timeout flags are per request or connection, while runCommand needs
+// a total child-process deadline. Conservatively budget one timeout plus one
+// pacing second per effective-rate wave, add fixed startup/finalization time,
+// and saturate at the reviewed engine ceiling before converting to Duration.
+func boundedInvocationTimeout(policy ratePolicy, workItems uint64, ceiling time.Duration) time.Duration {
 	effectiveRate := uint64(naabuEffectiveProxyRate(policy))
-	workItems := uint64(portCount)
 	waves := (workItems + effectiveRate - 1) / effectiveRate
-	connectBudget := time.Duration(waves) * time.Duration(policy.TimeoutSeconds) * time.Second
-	pacingBudget := time.Duration(waves) * time.Second
-	return connectBudget + pacingBudget + naabuProcessAllowance
+	ceilingSeconds := uint64(ceiling / time.Second)
+	allowanceSeconds := uint64(scannerProcessAllowance / time.Second)
+	perWaveSeconds := uint64(policy.TimeoutSeconds) + 1
+	if waves > (ceilingSeconds-allowanceSeconds)/perWaveSeconds {
+		return ceiling
+	}
+	return time.Duration(waves*perWaveSeconds+allowanceSeconds) * time.Second
 }
 
 func httpxInvocation(unit scanUnit, proxy, output string, environment []string) (invocation, error) {
@@ -661,7 +697,8 @@ func httpxInvocation(unit scanUnit, proxy, output string, environment []string) 
 			"-status-code", "-omit-body", "-no-fallback-scheme",
 			"-no-stdin", "-disable-update-check", "-silent", "-no-color",
 		},
-		Env: environment, Expiry: unit.Grant.ExpiresAt, Timeout: time.Duration(unit.Grant.RatePolicy.TimeoutSeconds) * time.Second,
+		Env: environment, Expiry: unit.Grant.ExpiresAt,
+		Timeout: boundedInvocationTimeout(unit.Grant.RatePolicy, 1, httpEngineCeiling),
 	}, nil
 }
 
@@ -697,7 +734,15 @@ func nucleiInvocation(unit scanUnit, proxy, output string, environment []string,
 			"-no-stdin", "-disable-update-check",
 			"-omit-raw", "-omit-template", "-silent", "-no-color",
 		},
-		Env: environment, Expiry: unit.Grant.ExpiresAt, Timeout: time.Duration(unit.Grant.RatePolicy.TimeoutSeconds) * time.Second,
+		Env: environment, Expiry: unit.Grant.ExpiresAt,
+		// Every admitted template is independently verified to declare at most
+		// twenty read-only requests. Use that upper bound for the child deadline;
+		// the reviewed engine ceiling remains the final cap.
+		Timeout: boundedInvocationTimeout(
+			unit.Grant.RatePolicy,
+			uint64(len(templatePaths)*maxNucleiRequestsPerTemplate),
+			httpEngineCeiling,
+		),
 	}, nil
 }
 
@@ -842,7 +887,7 @@ func validateEvidenceObject(engineID string, object map[string]json.RawMessage, 
 		protocol, _ := json.Marshal("tcp")
 		object["protocol"] = protocol
 		observed, ok := firstJSONString(object, "host", "ip")
-		if !ok || !observedFrozenAddressMatches(unit.FrozenAddress, observed) {
+		if !ok || !observedFrozenAddressMatches(unit.ResolvedAddresses, observed) {
 			return errors.New("Naabu evidence target is outside its independent grant")
 		}
 	case "httpx":
@@ -885,9 +930,9 @@ func validateObservedURL(value string, unit scanUnit) error {
 	return nil
 }
 
-func observedFrozenAddressMatches(expected, observed string) bool {
+func observedFrozenAddressMatches(expected []string, observed string) bool {
 	parsed := net.ParseIP(observed)
-	return parsed != nil && parsed.String() == observed && observed == expected
+	return parsed != nil && parsed.String() == observed && containsString(expected, observed)
 }
 
 func observedTargetMatches(unit scanUnit, observed string) bool {

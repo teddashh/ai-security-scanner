@@ -38,7 +38,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner kube-bench engine" \
       org.opencontainers.image.description="Pinned-source kube-bench for explicit immutable node configuration snapshots" \
       org.opencontainers.image.source="https://github.com/aquasecurity/kube-bench" \
       org.opencontainers.image.revision="9f133cb7509ce1dbedfc860e94474588000e25ac" \
-      org.opencontainers.image.version="0.16.0-2" \
+      org.opencontainers.image.version="0.16.0-3" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN addgroup -g 65532 scanner \

@@ -30,6 +30,9 @@ export type AssessmentActivity =
   | "low_impact_external_checks"
   | "active_external_vulnerability_tests";
 
+/** The saved answer to whether selected code was generated or materially changed by AI. */
+export type AiGeneratedArtifactAnswer = "yes" | "no" | "unknown";
+
 export type CasePhase =
   | "draft"
   | "discovering"
@@ -48,6 +51,7 @@ export interface AssessmentCase {
   name: string;
   /** The plain-language route the user chose when creating this scan project. */
   assessmentIntent?: UseCaseId;
+  aiGeneratedArtifact: AiGeneratedArtifactAnswer;
   organizationName: string;
   companySize: CompanySize;
   dataClasses: DataClass[];
@@ -68,6 +72,7 @@ export interface AssessmentCase {
 export interface CreateCaseInput {
   name: string;
   assessmentIntent?: UseCaseId;
+  aiGeneratedArtifact: AiGeneratedArtifactAnswer;
   organizationName: string;
   companySize: CompanySize;
   dataClasses: DataClass[];
@@ -963,14 +968,16 @@ export type ManagedRuntimeSetupFailureReason =
   | "windows_wsl_optional_feature_disabled"
   | "windows_wsl_update_required"
   | "windows_restart_required"
-  | "windows_wsl_command_failed";
+  | "windows_wsl_command_failed"
+  | "windows_wsl_distribution_requires_manual_action";
 
 export type ManagedRuntimeSetupNextAction =
   | "install_wsl"
   | "enable_wsl_optional_features"
   | "update_wsl"
   | "restart_windows"
-  | "retry_wsl_check";
+  | "retry_wsl_check"
+  | "resolve_wsl_distribution_manually";
 
 export interface ManagedRuntimeSetupStatus {
   phase: ManagedRuntimeSetupPhase;

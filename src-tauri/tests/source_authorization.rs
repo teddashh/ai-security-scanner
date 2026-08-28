@@ -12,8 +12,8 @@ use ai_security_scanner_lib::discovery::{
     DiscoveredAsset, DiscoveredRelation, DiscoveryAssetRef, DiscoveryBatch, run_connector,
 };
 use ai_security_scanner_lib::domain::{
-    AssetIdentifier, AssetKind, CreateCaseRequest, DataClass, RelationKind, ScanPermission,
-    SourceConnectionStatus, SourceKind,
+    AiGeneratedArtifactAnswer, AssetIdentifier, AssetKind, CreateCaseRequest, DataClass,
+    RelationKind, ScanPermission, SourceConnectionStatus, SourceKind,
 };
 use ai_security_scanner_lib::orchestrator::{EngineExecutionRequest, ExecutionStage, Orchestrator};
 use ai_security_scanner_lib::registry::EngineRegistry;
@@ -669,6 +669,7 @@ fn empty_azure_resources_still_produce_an_exact_plannable_subscription() {
             organization_name: "Example organization".into(),
             employee_range: "1-10".into(),
             assessment_intent: None,
+            ai_generated_artifact: Default::default(),
             data_classes: vec![DataClass::General],
             requested_activities: vec![],
             source_kinds: vec![],
@@ -935,6 +936,7 @@ fn azure_and_gcp_ui_capability_checkout_reaches_narrow_prowler_dispatch() {
                 organization_name: "Example organization".into(),
                 employee_range: "1-10".into(),
                 assessment_intent: None,
+                ai_generated_artifact: Default::default(),
                 data_classes: vec![DataClass::General],
                 requested_activities: vec![],
                 source_kinds: vec![],
@@ -1226,6 +1228,8 @@ fn azure_and_gcp_ui_capability_checkout_reaches_narrow_prowler_dispatch() {
                     engine_run_id: &execution.engine_run_id,
                     manifest: &execution.manifest,
                     ai_system_applicable: execution.ai_system_applicable,
+                    ai_generated_artifact_applicable: execution.ai_generated_artifact
+                        == AiGeneratedArtifactAnswer::Yes,
                     assets: &execution.assets,
                     scope_grants: &execution.scope_grants,
                     frozen_destinations: None,
@@ -1634,6 +1638,7 @@ fn one_gcp_discovery_plus_nine_exact_projects_complete_the_bounded_lifecycle() {
             organization_name: "Example organization".into(),
             employee_range: "1-10".into(),
             assessment_intent: None,
+            ai_generated_artifact: Default::default(),
             data_classes: vec![DataClass::General],
             requested_activities: vec![],
             source_kinds: vec![],
@@ -1852,6 +1857,8 @@ fn one_gcp_discovery_plus_nine_exact_projects_complete_the_bounded_lifecycle() {
                     engine_run_id: &execution.engine_run_id,
                     manifest: &execution.manifest,
                     ai_system_applicable: execution.ai_system_applicable,
+                    ai_generated_artifact_applicable: execution.ai_generated_artifact
+                        == AiGeneratedArtifactAnswer::Yes,
                     assets: &execution.assets,
                     scope_grants: &execution.scope_grants,
                     frozen_destinations: None,

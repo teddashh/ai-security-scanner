@@ -30,6 +30,7 @@ import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scop
 import type { UseCaseId } from "../useCases";
 import {
   hasExactGuidedCloudConsent,
+  recommendedGuidedLowImpactRatePolicy,
   recommendedGuidedNetworkPreset,
   shouldPromptForFirstAsset,
   singleGuidedPendingAsset,
@@ -263,7 +264,7 @@ const localInputDefinitions: Record<LocalInputProfile, LocalInputDefinition> = {
 
 const localInputEngines: Record<LocalInputProfile, string> = {
   repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft",
-  iac_working_tree: "Checkov, KICS",
+  iac_working_tree: "Checkov, KICS, Trivy",
   container_image_oci_layout: "Trivy, Grype",
   kubernetes_manifests: "Kubescape",
   kubernetes_node_snapshot: "kube-bench",
@@ -513,8 +514,8 @@ const pageCopy = {
     "這次只會用保守的連線設定檢查 {target}；需要時可修改技術細節。",
   ),
   guidedNetworkTechnicalPreset: bilingual(
-    "Current preset: {protocol}; exact service ports: {count}; one connection at a time.",
-    "目前設定：{protocol}、{count} 個精確服務連接埠、一次一個連線。",
+    "Current preset: {protocol}; exact service ports: {count}; up to {concurrency} simultaneous connections.",
+    "目前設定：{protocol}、{count} 個精確服務連接埠、最多 {concurrency} 個並行連線。",
   ),
   noCommonTitle: bilingual("These items need different scan setups", "這些項目需要不同的掃描設定"),
   noCommonBody: bilingual("Set up websites and internal systems separately from cloud accounts and local projects.", "請把網站與內部系統，和雲端帳號與本機專案分開設定。"),
@@ -1000,6 +1001,22 @@ export function CoveragePage({
   useEffect(() => {
     setShowAdvancedExternalSettings(false);
   }, [externalActivity, selectedExternalAsset?.id]);
+
+  useEffect(() => {
+    if (!externalActivity || !limits) return;
+    if (guidedLowImpactNetwork) {
+      const policy = recommendedGuidedLowImpactRatePolicy();
+      setRequestsPerSecond(policy.requestsPerSecond);
+      setExternalConcurrency(policy.concurrency);
+      setExternalTimeout(policy.timeoutSeconds);
+      return;
+    }
+    // Switching from the quick low-impact preset to a stricter activity must
+    // never leave invalid values hidden inside the collapsed advanced panel.
+    setRequestsPerSecond((current) => Math.max(1, Math.min(current, limits.rate)));
+    setExternalConcurrency((current) => Math.max(1, Math.min(current, limits.concurrency)));
+    setExternalTimeout((current) => Math.max(1, Math.min(current, limits.timeout)));
+  }, [caseId, externalActivity, guidedLowImpactNetwork, limits, selectedExternalAsset?.id]);
 
   const resetScopeForm = () => {
     setSelectedAssets([]);
@@ -1790,6 +1807,7 @@ export function CoveragePage({
                     <p className="coverage-technical-preset-summary">{text(pageCopy.guidedNetworkTechnicalPreset, {
                       protocol: externalProtocol.toUpperCase(),
                       count: formatNumber(parsedPorts.length),
+                      concurrency: formatNumber(externalConcurrency),
                     })}</p>
                   )}
                   {selectedExternalAsset.declaredWebService && (

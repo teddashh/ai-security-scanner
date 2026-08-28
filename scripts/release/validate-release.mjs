@@ -746,7 +746,11 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "linux_short_runtime_is_domain_separated_private_and_socket_bounded",
     "linux_short_runtime_cleanup_is_exact_and_unsafe_entries_fail_closed",
     'OsString::from("--volume")',
-    "self.initialize_machine(&command, target, &image, &machine_name)?",
+    "self.initialize_machine_with_one_shot_wsl_intent(",
+    "WindowsWslOwnershipBasis::InitIntent",
+    "let proof_cleanup = self.remove_windows_wsl_ownership_proof_locked",
+    "managed Windows WSL initialization journal could not be consumed safely",
+    "managed_runtime_recovery:wsl_distribution_requires_manual_action",
     "ManagedOperatingSystem::Macos | ManagedOperatingSystem::Windows => Ok(None)",
     "machine_application_data_volume_is_linux_only",
     "Pinned Podman 5.8.2 GetMachineDirs uses os.MkdirAll",
@@ -760,6 +764,11 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
       `managed runtime execution contract is missing: ${required}`,
     );
   }
+  assert(
+    !managedRuntime.includes('OsString::from("--unregister")') &&
+      !managedRuntime.includes('.arg("--unregister")'),
+    "managed runtime must never directly unregister a Windows WSL distribution",
+  );
   for (const required of [
     'podman_userns: format!("keep-id:uid={uid},gid={gid}")',
     "if provider.uses_podman_dialect()",

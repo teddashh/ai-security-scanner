@@ -149,8 +149,20 @@ fn normalize_bytes_with_assets(
     assets: &[Asset],
 ) -> AdapterOutput {
     normalize_bytes_with_assets_and_context(
-        engine_id, media_type, bytes, filename, run_id, assets, false,
+        engine_id,
+        media_type,
+        bytes,
+        filename,
+        run_id,
+        assets,
+        FrameworkApplicability::default(),
     )
+}
+
+#[derive(Clone, Copy, Default)]
+struct FrameworkApplicability {
+    ai_system: bool,
+    ai_generated_artifact: bool,
 }
 
 fn normalize_bytes_with_assets_and_context(
@@ -160,7 +172,7 @@ fn normalize_bytes_with_assets_and_context(
     filename: &str,
     run_id: &str,
     assets: &[Asset],
-    ai_system_applicable: bool,
+    applicability: FrameworkApplicability,
 ) -> AdapterOutput {
     let temp = tempfile::tempdir().expect("temporary artifact root");
     std::fs::write(temp.path().join(filename), bytes).expect("write fixture artifact");
@@ -197,7 +209,8 @@ fn normalize_bytes_with_assets_and_context(
         scan_run_id: run_id,
         engine_run_id: &engine_run_id,
         manifest,
-        ai_system_applicable,
+        ai_system_applicable: applicability.ai_system,
+        ai_generated_artifact_applicable: applicability.ai_generated_artifact,
         asset_ids: &asset_ids,
         asset_identifier_map: &asset_identifier_map,
         artifact_root: temp.path(),
@@ -256,7 +269,33 @@ fn normalize_ai_system_fixture(engine_id: &str) -> AdapterOutput {
         vec![authorized_asset("asset-1", AssetKind::Other, None, &[])]
     };
     normalize_bytes_with_assets_and_context(
-        engine_id, media_type, bytes, filename, "run-ai-1", &assets, true,
+        engine_id,
+        media_type,
+        bytes,
+        filename,
+        "run-ai-1",
+        &assets,
+        FrameworkApplicability {
+            ai_system: true,
+            ai_generated_artifact: false,
+        },
+    )
+}
+
+fn normalize_ai_generated_fixture(engine_id: &str) -> AdapterOutput {
+    let (bytes, filename, media_type) = fixture(engine_id);
+    let assets = vec![authorized_asset("asset-1", AssetKind::Other, None, &[])];
+    normalize_bytes_with_assets_and_context(
+        engine_id,
+        media_type,
+        bytes,
+        filename,
+        "run-ai-generated-1",
+        &assets,
+        FrameworkApplicability {
+            ai_system: false,
+            ai_generated_artifact: true,
+        },
     )
 }
 
@@ -547,16 +586,8 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         "kubescape",
         "kube-bench",
     ];
-    let aidefend_related_engines = [
-        "semgrep",
-        "gitleaks",
-        "trufflehog",
-        "checkov",
-        "kics",
-        "trivy",
-        "grype",
-        "kubescape",
-    ];
+    let ai_system_related_engines = ["semgrep", "checkov", "kics", "trivy", "grype", "kubescape"];
+    let ai_generated_related_engines = ["semgrep", "gitleaks", "trufflehog"];
     for engine_id in mapped_engines {
         let output = normalize_fixture(engine_id);
         let references = output
@@ -570,7 +601,7 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         );
         assert!(references.iter().all(|reference| {
             reference.relationship == "related"
-                && reference.mapping_version == "2026-08-27.1"
+                && reference.mapping_version == "2026-08-28.1"
                 && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
         }));
         assert!(
@@ -589,8 +620,22 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
             ai_references
                 .iter()
                 .any(|reference| reference.framework == "AIDEFEND"),
-            aidefend_related_engines.contains(&engine_id),
+            ai_system_related_engines.contains(&engine_id),
             "explicit AI-system applicability for {engine_id} changed"
+        );
+
+        let generated_output = normalize_ai_generated_fixture(engine_id);
+        let generated_references = generated_output
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.control_references)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            generated_references
+                .iter()
+                .any(|reference| reference.control_id == "AID-H-031.002"),
+            ai_generated_related_engines.contains(&engine_id),
+            "explicit AI-generated-artifact applicability for {engine_id} changed"
         );
         let serialized = serde_json::to_string(&references)
             .expect("serialize versioned control references")
@@ -853,6 +898,7 @@ fn artifact_path_escape_is_rejected_without_reading_outside_root() {
         engine_run_id: "engine-run-run-1",
         manifest,
         ai_system_applicable: false,
+        ai_generated_artifact_applicable: false,
         asset_ids: &assets,
         asset_identifier_map: &asset_identifier_map,
         artifact_root: Path::new(temp.path()),

@@ -3,9 +3,13 @@
 //! The snapshot intentionally represents only working-tree contents. Every entry
 //! named `.git` is excluded without being opened or followed, so Git history,
 //! refs, hooks, credentials, and worktree pointers are never copied. Repository
-//! inputs also honor repository-local root and nested `.gitignore` files;
-//! external/global ignore configuration is deliberately not consulted. Explicit
-//! non-repository profiles retain their original unfiltered content semantics.
+//! inputs also honor repository-local root and nested `.gitignore` files, but a
+//! Git-backed tree never excludes a path that its bounded tracked-file inventory
+//! identifies as tracked. If that inventory cannot be proved, ignore filtering
+//! fails open for that repository boundary. Every actual exclusion and every
+//! ignore-rule source is recorded in the immutable manifest. External/global
+//! ignore configuration is deliberately not consulted. Explicit non-repository
+//! profiles retain their original unfiltered content semantics.
 //! The caller must obtain `selected_source_directory` through a trusted backend
 //! selection flow; no destination path is accepted from the frontend.
 
@@ -20,13 +24,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
-pub const WORKSPACE_SNAPSHOT_SCHEMA: &str = "ai-security-scanner.workspace-snapshot/v2";
+pub const WORKSPACE_SNAPSHOT_SCHEMA: &str = "ai-security-scanner.workspace-snapshot/v3";
 const LEGACY_WORKSPACE_SNAPSHOT_SCHEMA: &str = "ai-security-scanner.workspace-snapshot/v1";
+const LEGACY_GITIGNORE_WORKSPACE_SNAPSHOT_SCHEMA: &str =
+    "ai-security-scanner.workspace-snapshot/v2";
 pub const WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA: &str =
     "ai-security-scanner.workspace-snapshot-reference/v1";
 pub const WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY: &str =
@@ -46,6 +56,11 @@ const MAX_COMPONENT_BYTES: usize = 255;
 const MAX_RELATIVE_PATH_BYTES: usize = 4_096;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_GITIGNORE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_GIT_TRACKED_INVENTORY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_GIT_TRACKED_TOTAL_INVENTORY_BYTES: u64 = 129 * 1024 * 1024;
+const MAX_GIT_TRACKED_INVENTORY_PROBES: usize = 256;
+const GIT_TRACKED_TOTAL_INVENTORY_RUNTIME: Duration = Duration::from_secs(20);
+const MAX_WORKSPACE_SNAPSHOT_AUDIT_BYTES: u64 = 16 * 1024 * 1024;
 const HARD_MAX_FILES: usize = 200_000;
 const HARD_MAX_DIRECTORIES: usize = 100_000;
 const HARD_MAX_TOTAL_BYTES: u64 = 10 * 1024 * 1024 * 1024;
@@ -131,6 +146,43 @@ pub struct WorkspaceSnapshotFile {
 pub enum WorkspaceSnapshotExclusionPolicy {
     RepositoryGitignoreV1,
     GitMetadataOnlyV1,
+    RepositoryTrackedGitignoreV2,
+    GitMetadataOnlyV2,
+}
+
+/// Why one exact source entry was omitted from the copied tree.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSnapshotExclusionReason {
+    GitMetadata,
+    RepositoryGitignoreUntracked,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSnapshotExcludedEntryKind {
+    File,
+    Directory,
+    SymlinkOrSpecial,
+}
+
+/// Auditable record for every exact entry pruned before snapshot publication.
+/// A directory record covers its complete unvisited subtree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSnapshotExclusion {
+    pub relative_path: String,
+    pub reason: WorkspaceSnapshotExclusionReason,
+    pub entry_kind: WorkspaceSnapshotExcludedEntryKind,
+}
+
+/// Content proof for a repository-local ignore file used to exclude entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceSnapshotIgnoreRuleSource {
+    pub relative_path: String,
+    pub byte_length: u64,
+    pub sha256: String,
 }
 
 /// Canonical manifest bytes are compact JSON serialization of this structure.
@@ -146,6 +198,10 @@ pub struct WorkspaceSnapshotManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclusion_policy: Option<WorkspaceSnapshotExclusionPolicy>,
     pub excluded_entries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclusions: Vec<WorkspaceSnapshotExclusion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignore_rule_sources: Vec<WorkspaceSnapshotIgnoreRuleSource>,
     pub directories: Vec<String>,
     pub files: Vec<WorkspaceSnapshotFile>,
     pub directory_count: usize,
@@ -244,16 +300,23 @@ pub fn create_workspace_snapshot_with_profile(
 
     let mut copy_state = CopyState::default();
     let mut exclusion_state = CopyExclusionState::for_profile(input_profile);
+    if input_profile.is_repository() {
+        exclusion_state.register_repository_boundary(&selected_source, &[]);
+    }
+    let copy_context = CopyDirectoryContext {
+        source_root: &selected_source,
+        limits,
+    };
     copy_directory(
         &selected_source,
         &tree_path,
         &[],
         0,
-        &selected_source,
-        limits,
+        copy_context,
         &mut copy_state,
         &mut exclusion_state,
     )?;
+    exclusion_state.verify_tracking_proofs()?;
     validate_copied_input_files(&tree_path, &copy_state, input_profile)?;
     if !input_profile.is_repository() {
         write_input_profile_marker(&tree_path, input_profile, limits, &mut copy_state)?;
@@ -265,16 +328,20 @@ pub fn create_workspace_snapshot_with_profile(
             .as_bytes()
             .cmp(right.relative_path.as_bytes())
     });
+    copy_state.exclusions.sort();
+    copy_state.ignore_rule_sources.sort();
     let manifest = WorkspaceSnapshotManifest {
         schema_version: WORKSPACE_SNAPSHOT_SCHEMA.into(),
         content_semantics: WORKING_TREE_SEMANTICS.into(),
         input_profile,
         exclusion_policy: Some(if input_profile.is_repository() {
-            WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1
+            WorkspaceSnapshotExclusionPolicy::RepositoryTrackedGitignoreV2
         } else {
-            WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV1
+            WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV2
         }),
         excluded_entries: vec![".git".into()],
+        exclusions: copy_state.exclusions,
+        ignore_rule_sources: copy_state.ignore_rule_sources,
         directory_count: copy_state.directories.len(),
         file_count: copy_state.files.len(),
         total_bytes: copy_state.total_bytes,
@@ -439,6 +506,9 @@ struct CopyState {
     files: Vec<WorkspaceSnapshotFile>,
     total_bytes: u64,
     gitignore_bytes_read: u64,
+    exclusions: Vec<WorkspaceSnapshotExclusion>,
+    ignore_rule_sources: Vec<WorkspaceSnapshotIgnoreRuleSource>,
+    audit_bytes: u64,
 }
 
 #[derive(Default)]
@@ -450,7 +520,70 @@ struct VerificationState {
 
 enum CopyExclusionState {
     GitMetadataOnly,
-    RepositoryGitignore { matchers: Vec<Gitignore> },
+    RepositoryGitignore {
+        matchers: Vec<Gitignore>,
+        repositories: Vec<GitTrackedRepository>,
+        registered_roots: BTreeSet<String>,
+        fail_open_roots: BTreeSet<String>,
+        initial_probe_budget: GitInventoryProbeBudget,
+        verification_probe_budget: GitInventoryProbeBudget,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct GitTrackedRepository {
+    source_root: PathBuf,
+    relative_prefix: String,
+    tracked_paths: BTreeSet<String>,
+    tracked_match_paths: BTreeSet<String>,
+    tracked_match_directories: BTreeSet<String>,
+    case_insensitive: bool,
+}
+
+#[derive(Debug, Clone)]
+struct GitInventoryProbeBudget {
+    remaining_bytes: u64,
+    remaining_runtime: Duration,
+    remaining_probes: usize,
+}
+
+impl Default for GitInventoryProbeBudget {
+    fn default() -> Self {
+        Self {
+            // Initial discovery and final revalidation receive equal halves.
+            // Their sum is the single published total probe budget, while a
+            // successful discovery can never consume its own revalidation.
+            remaining_bytes: MAX_GIT_TRACKED_TOTAL_INVENTORY_BYTES / 2,
+            remaining_runtime: GIT_TRACKED_TOTAL_INVENTORY_RUNTIME / 2,
+            remaining_probes: MAX_GIT_TRACKED_INVENTORY_PROBES / 2,
+        }
+    }
+}
+
+impl GitInventoryProbeBudget {
+    fn reserve(&mut self) -> Option<(u64, Duration)> {
+        if self.remaining_probes == 0
+            || self.remaining_bytes == 0
+            || self.remaining_runtime.is_zero()
+        {
+            return None;
+        }
+        self.remaining_probes -= 1;
+        Some((
+            self.remaining_bytes.min(MAX_GIT_TRACKED_INVENTORY_BYTES),
+            self.remaining_runtime,
+        ))
+    }
+
+    fn consume(&mut self, elapsed: Duration, observed_bytes: Option<u64>) {
+        self.remaining_runtime = self.remaining_runtime.saturating_sub(elapsed);
+        match observed_bytes {
+            Some(bytes) => self.remaining_bytes = self.remaining_bytes.saturating_sub(bytes),
+            // A reader which did not finish may still own its complete bounded
+            // buffer through an inherited pipe. Do not start another probe.
+            None => self.remaining_bytes = 0,
+        }
+    }
 }
 
 impl CopyExclusionState {
@@ -458,16 +591,113 @@ impl CopyExclusionState {
         if input_profile.is_repository() {
             Self::RepositoryGitignore {
                 matchers: Vec::new(),
+                repositories: Vec::new(),
+                registered_roots: BTreeSet::new(),
+                fail_open_roots: BTreeSet::new(),
+                initial_probe_budget: GitInventoryProbeBudget::default(),
+                verification_probe_budget: GitInventoryProbeBudget::default(),
             }
         } else {
             Self::GitMetadataOnly
         }
     }
 
-    fn repository_path_is_ignored(&self, path: &Path, is_directory: bool) -> bool {
-        let Self::RepositoryGitignore { matchers } = self else {
+    fn register_repository_boundary(&mut self, source_root: &Path, relative_components: &[String]) {
+        let Self::RepositoryGitignore {
+            repositories,
+            registered_roots,
+            fail_open_roots,
+            initial_probe_budget,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let relative_prefix = relative_components.join("/");
+        if !registered_roots.insert(relative_prefix.clone()) {
+            return;
+        }
+        let git_metadata = source_root.join(".git");
+        // A `.git` indirection file can redirect inventory outside the selected
+        // tree. Without a separately packaged Git/worktree resolver, retain all
+        // files for that boundary instead of following it.
+        let boundary_is_safe = fs::symlink_metadata(&git_metadata)
+            .map(|metadata| !metadata.file_type().is_symlink() && metadata.is_dir())
+            .unwrap_or(false);
+        let Some(tracked_paths) = boundary_is_safe
+            .then(|| load_bounded_git_tracked_inventory(source_root, initial_probe_budget))
+            .flatten()
+        else {
+            fail_open_roots.insert(relative_prefix);
+            return;
+        };
+        let case_insensitive = git_tracked_paths_are_case_insensitive_on_platform();
+        let (tracked_match_paths, tracked_match_directories) =
+            tracked_match_sets(&tracked_paths, case_insensitive);
+        repositories.push(GitTrackedRepository {
+            source_root: source_root.to_path_buf(),
+            relative_prefix,
+            tracked_paths,
+            tracked_match_paths,
+            tracked_match_directories,
+            case_insensitive,
+        });
+    }
+
+    fn register_nested_repository_if_present(
+        &mut self,
+        directory: &Path,
+        relative_components: &[String],
+    ) {
+        let git_metadata = directory.join(".git");
+        match fs::symlink_metadata(&git_metadata) {
+            Ok(_) => self.register_repository_boundary(directory, relative_components),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => {
+                if let Self::RepositoryGitignore {
+                    fail_open_roots, ..
+                } = self
+                {
+                    fail_open_roots.insert(relative_components.join("/"));
+                }
+            }
+        }
+    }
+
+    fn repository_path_is_ignored(
+        &self,
+        path: &Path,
+        relative_path: &str,
+        is_directory: bool,
+    ) -> bool {
+        let Self::RepositoryGitignore {
+            matchers,
+            repositories,
+            fail_open_roots,
+            ..
+        } = self
+        else {
             return false;
         };
+        if fail_open_roots
+            .iter()
+            .any(|prefix| relative_path_is_within(relative_path, prefix))
+        {
+            return false;
+        }
+        for repository in repositories {
+            let Some(repository_path) =
+                strip_relative_prefix(relative_path, &repository.relative_prefix)
+            else {
+                continue;
+            };
+            let match_path = git_tracked_path_key(repository_path, repository.case_insensitive);
+            if repository.tracked_match_paths.contains(&match_path)
+                || (is_directory && repository.tracked_match_directories.contains(&match_path))
+            {
+                return false;
+            }
+        }
         for matcher in matchers.iter().rev() {
             let matched = matcher.matched(path, is_directory);
             if !matched.is_none() {
@@ -476,6 +706,217 @@ impl CopyExclusionState {
         }
         false
     }
+
+    fn verify_tracking_proofs(&mut self) -> AppResult<()> {
+        let Self::RepositoryGitignore {
+            repositories,
+            verification_probe_budget,
+            ..
+        } = self
+        else {
+            return Ok(());
+        };
+        for repository in repositories {
+            let current = load_bounded_git_tracked_inventory(
+                &repository.source_root,
+                verification_probe_budget,
+            )
+            .ok_or_else(|| {
+                    AppError::Runtime(
+                        "Git tracked-file inventory became unavailable while the snapshot was being copied"
+                            .into(),
+                    )
+                })?;
+            if current != repository.tracked_paths {
+                return Err(AppError::Runtime(
+                    "Git tracked-file inventory changed while the snapshot was being copied".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn relative_path_is_within(path: &str, prefix: &str) -> bool {
+    prefix.is_empty()
+        || path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn strip_relative_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    if prefix.is_empty() {
+        return Some(path);
+    }
+    if path == prefix {
+        return Some("");
+    }
+    path.strip_prefix(prefix)?.strip_prefix('/')
+}
+
+fn git_tracked_paths_are_case_insensitive_on_platform() -> bool {
+    cfg!(windows) || cfg!(target_os = "macos")
+}
+
+fn git_tracked_path_key(path: &str, case_insensitive: bool) -> String {
+    if case_insensitive {
+        path.to_lowercase()
+    } else {
+        path.to_owned()
+    }
+}
+
+fn tracked_match_sets(
+    tracked_paths: &BTreeSet<String>,
+    case_insensitive: bool,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut files = BTreeSet::new();
+    let mut directories = BTreeSet::new();
+    for path in tracked_paths {
+        files.insert(git_tracked_path_key(path, case_insensitive));
+        directories.insert(String::new());
+        let mut ancestor = path.as_str();
+        while let Some((parent, _)) = ancestor.rsplit_once('/') {
+            directories.insert(git_tracked_path_key(parent, case_insensitive));
+            ancestor = parent;
+        }
+    }
+    (files, directories)
+}
+
+#[cfg(unix)]
+fn trusted_git_binary() -> Option<PathBuf> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let binary = Path::new("/usr/bin/git");
+    for (path, expect_directory) in [
+        (Path::new("/usr"), true),
+        (Path::new("/usr/bin"), true),
+        (binary, false),
+    ] {
+        let metadata = fs::symlink_metadata(path).ok()?;
+        let type_matches = if expect_directory {
+            metadata.is_dir()
+        } else {
+            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+        };
+        if metadata.file_type().is_symlink()
+            || !type_matches
+            || metadata.uid() != 0
+            || metadata.permissions().mode() & 0o022 != 0
+        {
+            return None;
+        }
+    }
+    Some(binary.to_path_buf())
+}
+
+#[cfg(not(unix))]
+fn trusted_git_binary() -> Option<PathBuf> {
+    // The release does not package Git, and PATH resolution is not an
+    // acceptable integrity boundary. Retain all files on these platforms.
+    None
+}
+
+fn load_bounded_git_tracked_inventory(
+    repository_root: &Path,
+    budget: &mut GitInventoryProbeBudget,
+) -> Option<BTreeSet<String>> {
+    let binary = trusted_git_binary()?;
+    let (maximum_bytes, maximum_runtime) = budget.reserve()?;
+    let started = Instant::now();
+    let mut command = Command::new(binary);
+    command
+        .arg("--no-optional-locks")
+        .args(["-c", "core.fsmonitor=false"])
+        .args(["-c", "core.untrackedCache=false"])
+        .args(["-c", "core.preloadIndex=false"])
+        .arg("-C")
+        .arg(repository_root)
+        .args(["ls-files", "--cached", "-z", "--"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_clear()
+        .env("LC_ALL", "C")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_PAGER", "")
+        .env("GIT_LITERAL_PATHSPECS", "1");
+    let outcome = command
+        .spawn()
+        .ok()
+        .and_then(|child| collect_bounded_child_output(child, maximum_bytes, maximum_runtime));
+    budget.consume(
+        started.elapsed(),
+        outcome
+            .as_ref()
+            .map(|(_, bytes)| u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+    );
+    let (status, bytes) = outcome?;
+    if !status.success() || bytes.len() as u64 > maximum_bytes {
+        return None;
+    }
+    parse_git_tracked_inventory(&bytes)
+}
+
+fn collect_bounded_child_output(
+    mut child: std::process::Child,
+    maximum_bytes: u64,
+    timeout: Duration,
+) -> Option<(std::process::ExitStatus, Vec<u8>)> {
+    let mut stdout = child.stdout.take()?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout
+            .by_ref()
+            .take(maximum_bytes + 1)
+            .read_to_end(&mut bytes)
+            .ok()
+            .map(|_| bytes);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now().checked_add(timeout)?;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let bytes = receiver.recv_timeout(remaining).ok()??;
+    Some((status, bytes))
+}
+
+fn parse_git_tracked_inventory(bytes: &[u8]) -> Option<BTreeSet<String>> {
+    if bytes.is_empty() {
+        return Some(BTreeSet::new());
+    }
+    if !bytes.ends_with(&[0]) {
+        return None;
+    }
+    let mut paths = BTreeSet::new();
+    for raw_path in bytes[..bytes.len() - 1].split(|byte| *byte == 0) {
+        let path = std::str::from_utf8(raw_path).ok()?;
+        if validate_normalized_relative_path(path).is_err() || !paths.insert(path.to_owned()) {
+            return None;
+        }
+        if paths.len() > HARD_MAX_FILES {
+            return None;
+        }
+    }
+    Some(paths)
 }
 
 struct GitignoreSourceProof {
@@ -485,16 +926,25 @@ struct GitignoreSourceProof {
     sha256: String,
 }
 
+#[derive(Clone, Copy)]
+struct CopyDirectoryContext<'a> {
+    source_root: &'a Path,
+    limits: WorkspaceSnapshotLimits,
+}
+
 fn copy_directory(
     source_directory: &Path,
     destination_directory: &Path,
     relative_components: &[String],
     depth: usize,
-    source_root: &Path,
-    limits: WorkspaceSnapshotLimits,
+    context: CopyDirectoryContext<'_>,
     state: &mut CopyState,
     exclusion_state: &mut CopyExclusionState,
 ) -> AppResult<()> {
+    let CopyDirectoryContext {
+        source_root,
+        limits,
+    } = context;
     let before = inspect_real_directory(source_directory, source_root)?;
     let entries = sorted_directory_entries(
         source_directory,
@@ -508,7 +958,7 @@ fn copy_directory(
         .find(|(name, _)| name == ".gitignore")
         .map(|(_, path)| path.as_path());
     let gitignore_proof = match exclusion_state {
-        CopyExclusionState::RepositoryGitignore { matchers } => {
+        CopyExclusionState::RepositoryGitignore { matchers, .. } => {
             let (matcher, proof) = load_repository_gitignore(
                 source_directory,
                 gitignore_source,
@@ -535,19 +985,42 @@ fn copy_directory(
         CopyExclusionState::GitMetadataOnly => None,
     };
     for (name, source_path) in entries {
-        if name.eq_ignore_ascii_case(".git") {
-            continue;
-        }
-        let mut components = relative_components.to_vec();
-        components.push(name.clone());
-        let relative_path = normalized_relative_path(&components)?;
         let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
             AppError::Runtime(format!(
                 "selected working-tree entry could not be inspected: {error}"
             ))
         })?;
         let file_type = metadata.file_type();
-        if exclusion_state.repository_path_is_ignored(&source_path, file_type.is_dir()) {
+        let mut components = relative_components.to_vec();
+        components.push(name.clone());
+        let relative_path = normalized_relative_path(&components)?;
+        if name.eq_ignore_ascii_case(".git") {
+            record_snapshot_exclusion(
+                state,
+                limits,
+                relative_path,
+                WorkspaceSnapshotExclusionReason::GitMetadata,
+                excluded_entry_kind(&file_type),
+            )?;
+            continue;
+        }
+        if file_type.is_dir() {
+            exclusion_state.register_nested_repository_if_present(&source_path, &components);
+        }
+        if name != ".gitignore"
+            && exclusion_state.repository_path_is_ignored(
+                &source_path,
+                &relative_path,
+                file_type.is_dir(),
+            )
+        {
+            record_snapshot_exclusion(
+                state,
+                limits,
+                relative_path,
+                WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked,
+                excluded_entry_kind(&file_type),
+            )?;
             continue;
         }
         if file_type.is_symlink() {
@@ -574,8 +1047,7 @@ fn copy_directory(
                 &destination,
                 &components,
                 depth + 1,
-                source_root,
-                limits,
+                context,
                 state,
                 exclusion_state,
             )?;
@@ -608,8 +1080,9 @@ fn copy_directory(
     }
     if let Some(proof) = gitignore_proof {
         verify_gitignore_source(&proof)?;
+        record_snapshot_ignore_rule_source(state, limits, proof)?;
     }
-    if let CopyExclusionState::RepositoryGitignore { matchers } = exclusion_state {
+    if let CopyExclusionState::RepositoryGitignore { matchers, .. } = exclusion_state {
         matchers.pop().ok_or_else(|| {
             AppError::Internal("repository ignore matcher stack underflowed".into())
         })?;
@@ -620,6 +1093,87 @@ fn copy_directory(
             "selected working-tree directory changed while it was being copied".into(),
         ));
     }
+    Ok(())
+}
+
+fn excluded_entry_kind(file_type: &fs::FileType) -> WorkspaceSnapshotExcludedEntryKind {
+    if file_type.is_file() {
+        WorkspaceSnapshotExcludedEntryKind::File
+    } else if file_type.is_dir() {
+        WorkspaceSnapshotExcludedEntryKind::Directory
+    } else {
+        WorkspaceSnapshotExcludedEntryKind::SymlinkOrSpecial
+    }
+}
+
+fn record_snapshot_exclusion(
+    state: &mut CopyState,
+    limits: WorkspaceSnapshotLimits,
+    relative_path: String,
+    reason: WorkspaceSnapshotExclusionReason,
+    entry_kind: WorkspaceSnapshotExcludedEntryKind,
+) -> AppResult<()> {
+    charge_snapshot_audit(state, limits, relative_path.len())?;
+    state.exclusions.push(WorkspaceSnapshotExclusion {
+        relative_path,
+        reason,
+        entry_kind,
+    });
+    Ok(())
+}
+
+fn record_snapshot_ignore_rule_source(
+    state: &mut CopyState,
+    limits: WorkspaceSnapshotLimits,
+    proof: GitignoreSourceProof,
+) -> AppResult<()> {
+    charge_snapshot_audit(state, limits, proof.relative_path.len())?;
+    state
+        .ignore_rule_sources
+        .push(WorkspaceSnapshotIgnoreRuleSource {
+            relative_path: proof.relative_path,
+            byte_length: proof.byte_length,
+            sha256: proof.sha256,
+        });
+    Ok(())
+}
+
+fn charge_snapshot_audit(
+    state: &mut CopyState,
+    limits: WorkspaceSnapshotLimits,
+    relative_path_bytes: usize,
+) -> AppResult<()> {
+    let maximum_records = limits
+        .max_files
+        .saturating_add(limits.max_directories)
+        .saturating_add(1);
+    if state
+        .exclusions
+        .len()
+        .saturating_add(state.ignore_rule_sources.len())
+        >= maximum_records
+    {
+        return Err(AppError::InvalidRequest(
+            "workspace snapshot audit records exceed their safety bound".into(),
+        ));
+    }
+    // JSON escaping can expand a validated path; charge twice the UTF-8 path
+    // plus a fixed object/string envelope before retaining each record.
+    let charge = u64::try_from(relative_path_bytes)
+        .ok()
+        .and_then(|bytes| bytes.checked_mul(2))
+        .and_then(|bytes| bytes.checked_add(256))
+        .ok_or_else(|| AppError::Runtime("workspace snapshot audit size overflowed".into()))?;
+    let total = state
+        .audit_bytes
+        .checked_add(charge)
+        .ok_or_else(|| AppError::Runtime("workspace snapshot audit size overflowed".into()))?;
+    if total > MAX_WORKSPACE_SNAPSHOT_AUDIT_BYTES {
+        return Err(AppError::InvalidRequest(
+            "workspace snapshot exclusion audit exceeds its memory safety bound".into(),
+        ));
+    }
+    state.audit_bytes = total;
     Ok(())
 }
 
@@ -909,13 +1463,27 @@ fn validate_manifest(
         && manifest.file_count == reference.file_count
         && manifest.total_bytes == reference.total_bytes;
     let exclusion_policy_is_valid = match manifest.schema_version.as_str() {
-        LEGACY_WORKSPACE_SNAPSHOT_SCHEMA => manifest.exclusion_policy.is_none(),
-        WORKSPACE_SNAPSHOT_SCHEMA => {
+        LEGACY_WORKSPACE_SNAPSHOT_SCHEMA => {
+            manifest.exclusion_policy.is_none()
+                && manifest.exclusions.is_empty()
+                && manifest.ignore_rule_sources.is_empty()
+        }
+        LEGACY_GITIGNORE_WORKSPACE_SNAPSHOT_SCHEMA => {
             manifest.exclusion_policy
                 == Some(if manifest.input_profile.is_repository() {
                     WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1
                 } else {
                     WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV1
+                })
+                && manifest.exclusions.is_empty()
+                && manifest.ignore_rule_sources.is_empty()
+        }
+        WORKSPACE_SNAPSHOT_SCHEMA => {
+            manifest.exclusion_policy
+                == Some(if manifest.input_profile.is_repository() {
+                    WorkspaceSnapshotExclusionPolicy::RepositoryTrackedGitignoreV2
+                } else {
+                    WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV2
                 })
         }
         _ => false,
@@ -960,6 +1528,90 @@ fn validate_manifest(
     if total_bytes != manifest.total_bytes {
         return Err(AppError::Runtime(
             "workspace snapshot manifest aggregate byte count is invalid".into(),
+        ));
+    }
+    validate_manifest_exclusion_audit(manifest)?;
+    Ok(())
+}
+
+fn validate_manifest_exclusion_audit(manifest: &WorkspaceSnapshotManifest) -> AppResult<()> {
+    let is_current = manifest.schema_version == WORKSPACE_SNAPSHOT_SCHEMA;
+    let copied_files = manifest
+        .files
+        .iter()
+        .map(|file| (file.relative_path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let copied_directories = manifest
+        .directories
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+
+    let mut previous_exclusion: Option<&WorkspaceSnapshotExclusion> = None;
+    for exclusion in &manifest.exclusions {
+        validate_normalized_relative_path(&exclusion.relative_path)?;
+        if previous_exclusion.is_some_and(|previous| previous >= exclusion)
+            || copied_files.contains_key(exclusion.relative_path.as_str())
+            || copied_directories.contains(exclusion.relative_path.as_str())
+        {
+            return Err(AppError::Runtime(
+                "workspace snapshot exclusion audit is invalid or not uniquely sorted".into(),
+            ));
+        }
+        match exclusion.reason {
+            WorkspaceSnapshotExclusionReason::GitMetadata => {
+                if !exclusion
+                    .relative_path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+                {
+                    return Err(AppError::Runtime(
+                        "workspace snapshot Git-metadata exclusion audit is invalid".into(),
+                    ));
+                }
+            }
+            WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked => {
+                if !manifest.input_profile.is_repository()
+                    || manifest.ignore_rule_sources.is_empty()
+                {
+                    return Err(AppError::Runtime(
+                        "workspace snapshot ignore exclusion lacks an auditable rule source".into(),
+                    ));
+                }
+            }
+        }
+        previous_exclusion = Some(exclusion);
+    }
+
+    let mut previous_source: Option<&WorkspaceSnapshotIgnoreRuleSource> = None;
+    for source in &manifest.ignore_rule_sources {
+        validate_normalized_relative_path(&source.relative_path)?;
+        let copied = copied_files.get(source.relative_path.as_str());
+        if previous_source.is_some_and(|previous| previous >= source)
+            || !source
+                .relative_path
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name == ".gitignore")
+            || !valid_sha256(&source.sha256)
+            || copied.is_none_or(|file| {
+                file.byte_length != source.byte_length || file.sha256 != source.sha256
+            })
+        {
+            return Err(AppError::Runtime(
+                "workspace snapshot ignore-rule source audit is invalid or not uniquely sorted"
+                    .into(),
+            ));
+        }
+        previous_source = Some(source);
+    }
+    if is_current
+        && !manifest.input_profile.is_repository()
+        && !manifest.ignore_rule_sources.is_empty()
+    {
+        return Err(AppError::Runtime(
+            "non-repository workspace snapshot contains repository ignore-rule audit data".into(),
         ));
     }
     Ok(())
@@ -2121,4 +2773,102 @@ fn sync_directory(path: &Path) -> AppResult<()> {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> AppResult<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn case_insensitive_tracked_path_keys_protect_case_only_variants_and_ancestors() {
+        let tracked = BTreeSet::from(["Secrets/API.KEY".to_owned()]);
+        let (files, directories) = tracked_match_sets(&tracked, true);
+
+        assert!(files.contains(&git_tracked_path_key("secrets/api.key", true)));
+        assert!(directories.contains(&git_tracked_path_key("SECRETS", true)));
+        assert!(directories.contains(""));
+        let (case_sensitive_files, _) = tracked_match_sets(&tracked, false);
+        assert!(!case_sensitive_files.contains(&git_tracked_path_key("secrets/api.key", false,)));
+    }
+
+    #[test]
+    fn nested_git_inventory_probes_share_total_byte_runtime_and_count_budgets() {
+        let initial = GitInventoryProbeBudget::default();
+        let verification = GitInventoryProbeBudget::default();
+        assert_eq!(
+            initial.remaining_bytes + verification.remaining_bytes,
+            (MAX_GIT_TRACKED_TOTAL_INVENTORY_BYTES / 2) * 2
+        );
+        assert_eq!(
+            initial.remaining_runtime + verification.remaining_runtime,
+            GIT_TRACKED_TOTAL_INVENTORY_RUNTIME
+        );
+        assert_eq!(
+            initial.remaining_probes + verification.remaining_probes,
+            MAX_GIT_TRACKED_INVENTORY_PROBES
+        );
+        let mut budget = GitInventoryProbeBudget {
+            remaining_bytes: 10,
+            remaining_runtime: Duration::from_millis(10),
+            remaining_probes: 2,
+        };
+        assert_eq!(budget.reserve(), Some((10, Duration::from_millis(10))));
+        budget.consume(Duration::from_millis(4), Some(6));
+        assert_eq!(budget.reserve(), Some((4, Duration::from_millis(6))));
+        budget.consume(Duration::from_millis(6), Some(4));
+        assert_eq!(budget.reserve(), None);
+
+        let mut hung_reader = GitInventoryProbeBudget {
+            remaining_bytes: 10,
+            remaining_runtime: Duration::from_secs(1),
+            remaining_probes: 2,
+        };
+        let _ = hung_reader.reserve().unwrap();
+        hung_reader.consume(Duration::from_millis(1), None);
+        assert_eq!(hung_reader.reserve(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_stdout_pipe_cannot_outlive_the_probe_deadline() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "(/bin/sleep 2) & printf ok"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let child = command.spawn().expect("spawn inherited-pipe fixture");
+        let started = Instant::now();
+
+        assert!(collect_bounded_child_output(child, 64, Duration::from_millis(50)).is_none());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn product_git_inventory_never_uses_a_bare_path_lookup() {
+        if let Some(binary) = trusted_git_binary() {
+            assert!(binary.is_absolute());
+            assert_ne!(binary, Path::new("git"));
+        }
+    }
+
+    #[test]
+    fn audit_memory_is_charged_before_records_are_retained() {
+        let mut state = CopyState::default();
+        let limits = WorkspaceSnapshotLimits {
+            max_files: HARD_MAX_FILES,
+            max_directories: HARD_MAX_DIRECTORIES,
+            max_total_bytes: HARD_MAX_TOTAL_BYTES,
+            max_file_bytes: HARD_MAX_FILE_BYTES,
+            max_depth: HARD_MAX_DEPTH,
+        };
+        let mut charges = 0;
+        while charge_snapshot_audit(&mut state, limits, MAX_RELATIVE_PATH_BYTES).is_ok() {
+            charges += 1;
+        }
+        assert!(charges > 0);
+        assert!(state.audit_bytes <= MAX_WORKSPACE_SNAPSHOT_AUDIT_BYTES);
+        assert!(state.exclusions.is_empty());
+        assert!(state.ignore_rule_sources.is_empty());
+    }
 }

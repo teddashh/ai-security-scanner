@@ -86,18 +86,39 @@ const EXPECTED_RECORDS = Object.freeze([
 ]);
 
 const EXPECTED_MAPPING_PROJECTION = Object.freeze([
-  { engine_id: "checkov", match_kind: "exact", source_rule: "CKV_AWS_18", aidefend_applicability: "ai_system", controls: ["AID-H-003.005"] },
-  { engine_id: "gitleaks", match_kind: "exact", source_rule: "generic-api-key", aidefend_applicability: "ai_system", controls: ["AID-H-031.002"] },
-  { engine_id: "grype", match_kind: "prefix", source_rule: "CVE-", aidefend_applicability: "ai_system", controls: ["AID-H-003.001", "AID-H-003.010"] },
-  { engine_id: "kics", match_kind: "exact", source_rule: "e24efb0e", aidefend_applicability: "ai_system", controls: ["AID-H-003.005"] },
-  { engine_id: "kubescape", match_kind: "exact", source_rule: "C-0002", aidefend_applicability: "ai_system", controls: ["AID-I-001.001"] },
-  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.generic.private-key", aidefend_applicability: "ai_system", controls: ["AID-H-031.002"] },
-  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.javascript.child-process-exec", aidefend_applicability: "ai_system", controls: ["AID-H-025.001", "AID-H-031.002"] },
-  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.dynamic-code-execution", aidefend_applicability: "ai_system", controls: ["AID-H-025.001", "AID-H-031.002"] },
-  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.shell-true", aidefend_applicability: "ai_system", controls: ["AID-H-025.001", "AID-H-031.002"] },
-  { engine_id: "trivy", match_kind: "prefix", source_rule: "CVE-", aidefend_applicability: "ai_system", controls: ["AID-H-003.001", "AID-H-003.010"] },
-  { engine_id: "trufflehog", match_kind: "exact", source_rule: "trufflehog:ExampleCredential", aidefend_applicability: "ai_system", controls: ["AID-H-031.002"] },
+  { engine_id: "checkov", match_kind: "exact", source_rule: "CKV_AWS_18", controls: ["AID-H-003.005"] },
+  { engine_id: "gitleaks", match_kind: "exact", source_rule: "generic-api-key", controls: ["AID-H-031.002"] },
+  { engine_id: "grype", match_kind: "prefix", source_rule: "CVE-", controls: ["AID-H-003.001", "AID-H-003.010"] },
+  { engine_id: "kics", match_kind: "exact", source_rule: "e24efb0e", controls: ["AID-H-003.005"] },
+  { engine_id: "kubescape", match_kind: "exact", source_rule: "C-0002", controls: ["AID-I-001.001"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.generic.private-key", controls: ["AID-H-031.002"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.javascript.child-process-exec", controls: ["AID-H-025.001", "AID-H-031.002"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.dynamic-code-execution", controls: ["AID-H-025.001", "AID-H-031.002"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.shell-true", controls: ["AID-H-025.001", "AID-H-031.002"] },
+  { engine_id: "trivy", match_kind: "prefix", source_rule: "CVE-", controls: ["AID-H-003.001", "AID-H-003.010"] },
+  { engine_id: "trufflehog", match_kind: "exact", source_rule: "trufflehog:ExampleCredential", controls: ["AID-H-031.002"] },
 ]);
+
+const EXPECTED_CONTROL_APPLICABILITY = Object.freeze([
+  { id: "AID-H-003.001", name: "Software Dependency & Package Security", applicability: "ai_system" },
+  { id: "AID-H-003.005", name: "Infrastructure as Code (IaC) Security Scanning for AI Systems", applicability: "ai_system" },
+  { id: "AID-H-003.010", name: "Deployed AI Software Vulnerability Remediation Lifecycle", applicability: "ai_system" },
+  { id: "AID-H-025.001", name: "Pre-Execution Static Analysis & Dangerous Construct Blocking", applicability: "ai_system" },
+  { id: "AID-H-031.002", name: "Static Admission Gates for AI-Generated Artifacts", applicability: "ai_generated_artifact" },
+  { id: "AID-I-001.001", name: "Container-Based Isolation", applicability: "ai_system" },
+]);
+
+const EXPECTED_APPLICABILITY_SCHEMA = Object.freeze({
+  property: { enum: ["ai_system", "ai_generated_artifact"] },
+  conditional: [{
+    if: {
+      properties: { framework: { const: "AIDEFEND" } },
+      required: ["framework"],
+    },
+    then: { required: ["aidefend_applicability"] },
+    else: { not: { required: ["aidefend_applicability"] } },
+  }],
+});
 
 const SNAPSHOT_KEYS = [
   "framework",
@@ -161,13 +182,137 @@ function assertEqual(actual, expected, label) {
   assert(JSON.stringify(actual) === JSON.stringify(expected), `${label} differs from the pinned value`);
 }
 
+function assertNoDuplicateObjectKeys(source, label) {
+  let offset = 0;
+  const lineAt = (position) => 1 + (source.slice(0, position).match(/\n/gu)?.length ?? 0);
+  const syntaxError = (message) => fail(`${label} contains invalid JSON near line ${lineAt(offset)}: ${message}`);
+  const skipWhitespace = () => {
+    while (offset < source.length && /\s/u.test(source[offset])) offset += 1;
+  };
+  const parseString = () => {
+    if (source[offset] !== '"') syntaxError("expected a string");
+    const start = offset;
+    offset += 1;
+    let escaped = false;
+    while (offset < source.length) {
+      const character = source[offset];
+      offset += 1;
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        try {
+          return JSON.parse(source.slice(start, offset));
+        } catch (error) {
+          syntaxError(error.message);
+        }
+      } else if (character < " ") {
+        syntaxError("unescaped control character in string");
+      }
+    }
+    syntaxError("unterminated string");
+  };
+  const parseValue = (depth = 0) => {
+    if (depth > 256) syntaxError("nesting exceeds 256 levels");
+    skipWhitespace();
+    if (source[offset] === "{") {
+      offset += 1;
+      skipWhitespace();
+      const keys = new Set();
+      if (source[offset] === "}") {
+        offset += 1;
+        return;
+      }
+      while (offset < source.length) {
+        skipWhitespace();
+        const keyOffset = offset;
+        const key = parseString();
+        if (keys.has(key)) {
+          fail(`${label} contains duplicate JSON object key ${JSON.stringify(key)} at line ${lineAt(keyOffset)}`);
+        }
+        keys.add(key);
+        skipWhitespace();
+        if (source[offset] !== ":") syntaxError("expected ':' after object key");
+        offset += 1;
+        parseValue(depth + 1);
+        skipWhitespace();
+        if (source[offset] === "}") {
+          offset += 1;
+          return;
+        }
+        if (source[offset] !== ",") syntaxError("expected ',' or '}' in object");
+        offset += 1;
+      }
+      syntaxError("unterminated object");
+    }
+    if (source[offset] === "[") {
+      offset += 1;
+      skipWhitespace();
+      if (source[offset] === "]") {
+        offset += 1;
+        return;
+      }
+      while (offset < source.length) {
+        parseValue(depth + 1);
+        skipWhitespace();
+        if (source[offset] === "]") {
+          offset += 1;
+          return;
+        }
+        if (source[offset] !== ",") syntaxError("expected ',' or ']' in array");
+        offset += 1;
+      }
+      syntaxError("unterminated array");
+    }
+    if (source[offset] === '"') {
+      parseString();
+      return;
+    }
+    const start = offset;
+    while (offset < source.length && !/[\s,\]}]/u.test(source[offset])) offset += 1;
+    if (start === offset) syntaxError("expected a JSON value");
+    try {
+      JSON.parse(source.slice(start, offset));
+    } catch (error) {
+      syntaxError(error.message);
+    }
+  };
+
+  parseValue();
+  skipWhitespace();
+  if (offset !== source.length) syntaxError("unexpected trailing content");
+}
+
+function parseUniqueJson(source, label) {
+  assertNoDuplicateObjectKeys(source, label);
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    fail(`${label} is invalid JSON: ${error.message}`);
+  }
+}
+
+function validateDuplicateKeyDetector() {
+  assertNoDuplicateObjectKeys('{"left":{"value":1},"right":[{"value":2}]}', "duplicate-key detector self-test");
+  let duplicateRejected = false;
+  try {
+    assertNoDuplicateObjectKeys('{"controls":[],"\\u0063ontrols":[]}', "duplicate-key detector self-test");
+  } catch (error) {
+    duplicateRejected = error.message.includes('duplicate JSON object key "controls"');
+  }
+  assert(duplicateRejected, "duplicate-key detector must reject equivalent escaped object keys");
+}
+
 async function readJson(filename) {
   const pathname = path.join(snapshotDirectory, filename);
+  let source;
   try {
-    return JSON.parse(await readFile(pathname, "utf8"));
+    source = await readFile(pathname, "utf8");
   } catch (error) {
-    fail(`${filename} is unavailable or invalid JSON: ${error.message}`);
+    fail(`${filename} is unavailable: ${error.message}`);
   }
+  return parseUniqueJson(source, filename);
 }
 
 function parseSourceArgument(argv) {
@@ -226,12 +371,31 @@ async function validatePinnedSource(sourcePath) {
 }
 
 async function validateControlMappings() {
-  let mapping;
+  let mappingSource;
+  let schemaSource;
   try {
-    mapping = JSON.parse(await readFile(path.join(root, "mappings", "control-mappings.json"), "utf8"));
+    [mappingSource, schemaSource] = await Promise.all([
+      readFile(path.join(root, "mappings", "control-mappings.json"), "utf8"),
+      readFile(path.join(root, "mappings", "control-mappings.schema.json"), "utf8"),
+    ]);
   } catch (error) {
-    fail(`control-mappings.json is unavailable or invalid JSON: ${error.message}`);
+    fail(`control mapping catalog or schema is unavailable: ${error.message}`);
   }
+  const mapping = parseUniqueJson(mappingSource, "control-mappings.json");
+  const schema = parseUniqueJson(schemaSource, "control-mappings.schema.json");
+
+  const controlSchema = schema.properties?.controls?.items;
+  assert(controlSchema?.additionalProperties === false, "control mapping schema must reject unknown control fields");
+  assertEqual(
+    controlSchema?.properties?.aidefend_applicability,
+    EXPECTED_APPLICABILITY_SCHEMA.property,
+    "control mapping schema AIDEFEND applicability property",
+  );
+  assertEqual(
+    controlSchema?.allOf,
+    EXPECTED_APPLICABILITY_SCHEMA.conditional,
+    "control mapping schema AIDEFEND applicability condition",
+  );
 
   const source = (mapping.sources ?? []).filter((item) => item.framework === "AIDEFEND");
   assertEqual(source, [{
@@ -244,9 +408,19 @@ async function validateControlMappings() {
     .filter((control) => control.framework === "AIDEFEND")
     .sort((left, right) => left.control_id.localeCompare(right.control_id));
   assertEqual(
-    definitions.map((control) => ({ id: control.control_id, name: control.title })),
-    EXPECTED_RECORDS.map((record) => ({ id: record.id, name: record.name })),
-    "AIDEFEND mapping definitions",
+    definitions.map((control) => ({
+      id: control.control_id,
+      name: control.title,
+      applicability: control.aidefend_applicability,
+    })),
+    EXPECTED_CONTROL_APPLICABILITY,
+    "AIDEFEND mapping definitions and applicability",
+  );
+  assert(
+    (mapping.controls ?? []).every((control) => control.framework === "AIDEFEND"
+      ? Object.hasOwn(control, "aidefend_applicability")
+      : !Object.hasOwn(control, "aidefend_applicability")),
+    "only AIDEFEND controls may declare AIDEFEND applicability, and every AIDEFEND control must declare it",
   );
   const idByKey = new Map(definitions.map((control) => [control.key, control.control_id]));
   assert(idByKey.size === EXPECTED_RECORDS.length, "AIDEFEND mapping keys must be unique");
@@ -256,15 +430,19 @@ async function validateControlMappings() {
       engine_id: entry.engine_id,
       match_kind: entry.match_kind,
       source_rule: entry.source_rule,
-      aidefend_applicability: entry.aidefend_applicability,
       controls: (entry.controls ?? []).filter((key) => idByKey.has(key)).map((key) => idByKey.get(key)),
     }))
     .filter((entry) => entry.controls.length > 0)
     .sort((left, right) => `${left.engine_id}\0${left.source_rule}`.localeCompare(`${right.engine_id}\0${right.source_rule}`));
   assertEqual(projection, EXPECTED_MAPPING_PROJECTION, "reviewed AIDEFEND rule projection");
+  assert(
+    (mapping.entries ?? []).every((entry) => !Object.hasOwn(entry, "aidefend_applicability")),
+    "AIDEFEND applicability must be declared per control, not per mixed mapping entry",
+  );
 }
 
 async function main() {
+  validateDuplicateKeyDetector();
   const sourcePath = parseSourceArgument(process.argv.slice(2));
   const snapshot = await readJson("selected-controls.json");
   const provenance = await readJson("PROVENANCE.json");

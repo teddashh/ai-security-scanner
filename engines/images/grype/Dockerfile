@@ -52,7 +52,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Grype engine" \
       org.opencontainers.image.description="Pinned-source Grype with a checksum-verified offline vulnerability database" \
       org.opencontainers.image.source="https://github.com/anchore/grype" \
       org.opencontainers.image.revision="b5fa92bbcbef655497e3be840a2f718380e2cdd3" \
-      org.opencontainers.image.version="0.117.0-2" \
+      org.opencontainers.image.version="0.117.0-3" \
       org.opencontainers.image.licenses="Apache-2.0" \
       io.ai-security-scanner.database-archive="sha256:20a7315860b2d07231103a73bedec01de31e7a7f3d590aedfc61709dc9e117f9"
 

@@ -8,6 +8,7 @@ the checksum-pinned Trivy source revision
 `pkg/dependency/parser/java/jar/testdata/test.jar` (SHA-256
 `b9883ae1fd6b53762b285cfeb1e59bb52313855893fd3cd1ff1eafea26faa41e`).
 
-The JAR makes the boundary test meaningful: Trivy must finish without a Java
-database or network because the managed profile explicitly scans only OS
-packages, while Grype must retain its offline language-package cataloging path.
+The JAR makes the OCI boundary test meaningful: Trivy must finish without a
+Java database or network because its managed OCI-image profile explicitly scans
+only OS packages, while Grype must retain its offline language-package
+cataloging path.

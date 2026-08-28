@@ -107,6 +107,32 @@ test("case creation persists the chosen route and starts cloud setup with exactl
   assert.ok(casesPageSource.includes("setPlatforms([platform])"));
 });
 
+test("code onboarding asks one plain-language bilingual AI-origin question and saves all three answers", () => {
+  for (const phrase of [
+    "Did AI generate or substantially change any code in this project?",
+    "這個專案有程式碼是由 AI 產生，或經 AI 大幅修改嗎？",
+    "Yes, AI wrote or changed some of it",
+    "有，AI 寫過或大幅修改過",
+    "No, it was mostly written by people",
+    "沒有，主要是人寫的",
+    "I'm not sure",
+    "我不確定",
+  ]) assert.ok(casesPageSource.includes(phrase), phrase);
+
+  assert.ok(casesPageSource.includes("useState<AiGeneratedArtifactAnswer>"));
+  assert.ok(casesPageSource.includes('setAiGeneratedArtifact("unknown")'));
+  assert.ok(casesPageSource.includes("aiGeneratedArtifact,"));
+  assert.ok(casesPageSource.includes('name="ai-generated-artifact"'));
+  assert.match(casesPageSource, /\{primaryTarget\}[\s\S]+\{platforms\.includes\("code"\) && \(/u);
+  assert.ok(casesPageSource.includes(
+    'aiGeneratedArtifact: platforms.includes("code") ? aiGeneratedArtifact : "unknown"',
+  ));
+  assert.ok(casesPageSource.includes(
+    'platform === "code" && platforms.includes("code")',
+  ));
+  assert.doesNotMatch(casesPageSource, /aiGeneratedQuestionUseCaseIds/u);
+});
+
 test("guided local routes defer asset creation to the real local picker", () => {
   assert.ok(casesPageSource.includes("guidedLocalUseCase"));
   assert.ok(casesPageSource.includes("pageCopy.localPickerNextTitle"));

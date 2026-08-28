@@ -119,6 +119,8 @@ test("release-incompatible saved checks offer a static safe fresh-scan path", as
     "先前掃描的內容不會重新執行或變更",
     "Compatible saved checks can still continue.",
     "相容的已保存檢查仍可繼續",
+    "this project is not ready yet",
+    "這個專案尚未準備完成",
   ]) assert.ok(progress.includes(phrase), phrase);
 
   assert.match(
@@ -139,7 +141,8 @@ test("release-incompatible saved checks offer a static safe fresh-scan path", as
   const notice = progress.slice(noticeStart, noticeEnd);
   assert.ok(noticeStart >= 0 && noticeEnd > noticeStart);
   assert.match(notice, /<InlineNotice tone="warning" title=\{text\(copy\.releaseIncompatibleTitle\)\}>/u);
-  assert.match(notice, /!scanWorkActive && \([\s\S]*?onClick=\{requestStart\}[\s\S]*?copy\.startFreshScan/u);
+  assert.match(notice, /\{canStart && \([\s\S]*?onClick=\{requestStart\}[\s\S]*?copy\.startFreshScan/u);
+  assert.doesNotMatch(notice, /!scanWorkActive && \(/u);
   assert.doesNotMatch(notice, /engine\.message|error_message/u);
 
   assert.match(

@@ -106,6 +106,10 @@ const copy = {
     en: "These checks were created by a different app release and cannot be continued safely. Compatible saved checks can still continue. Nothing from the earlier scan will be rerun or changed; after this scan finishes or is cancelled, start a new scan to run these checks with this release.",
     zhTW: "這些檢查由不同版本的應用程式建立，無法安全續跑；相容的已保存檢查仍可繼續。先前掃描的內容不會重新執行或變更；請在這次掃描完成或取消後開始新的掃描，以目前版本執行這些檢查。",
   },
+  releaseIncompatibleNotReadyBody: {
+    en: "These saved checks need a new scan, but this project is not ready yet. Finish the readiness step below first. The earlier scan stays unchanged.",
+    zhTW: "這些已保存的檢查需要新的掃描，但這個專案尚未準備完成。請先完成下方的準備步驟；先前掃描仍會保持不變。",
+  },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
   readinessUnavailableTitle: { en: "We could not check what is ready", zhTW: "目前無法確認掃描準備狀態" },
   readinessUnavailableDescription: {
@@ -980,8 +984,10 @@ export function ProgressPage({
         <InlineNotice tone="warning" title={text(copy.releaseIncompatibleTitle)}>
           <p>{text(scanWorkActive
             ? copy.releaseIncompatibleActiveBody
-            : copy.releaseIncompatibleBody)}</p>
-          {!scanWorkActive && (
+            : canStart
+              ? copy.releaseIncompatibleBody
+              : copy.releaseIncompatibleNotReadyBody)}</p>
+          {canStart && (
             <button className="button button--primary button--small" type="button" disabled={busy || starting} onClick={requestStart}>
               <Icon name="play" size={15} />{text(copy.startFreshScan)}
             </button>

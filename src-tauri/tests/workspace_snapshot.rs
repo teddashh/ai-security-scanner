@@ -1,13 +1,15 @@
 use ai_security_scanner_lib::domain::AssetKind;
 use ai_security_scanner_lib::workspace_snapshot::{
     LOCAL_INPUT_PROFILE_FILENAME, WorkspaceInputProfile, WorkspaceSnapshotExclusionPolicy,
-    WorkspaceSnapshotLimits, WorkspaceSnapshotReference, create_workspace_snapshot,
-    create_workspace_snapshot_with_profile, inspect_workspace_snapshot, resolve_workspace_snapshot,
+    WorkspaceSnapshotExclusionReason, WorkspaceSnapshotLimits, WorkspaceSnapshotReference,
+    create_workspace_snapshot, create_workspace_snapshot_with_profile, inspect_workspace_snapshot,
+    resolve_workspace_snapshot,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[cfg(unix)]
 use std::ffi::OsString;
@@ -37,6 +39,26 @@ fn small_limits() -> WorkspaceSnapshotLimits {
         max_file_bytes: 1024 * 1024,
         max_depth: 8,
     }
+}
+
+fn initialize_git_repository(path: &Path) {
+    let status = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(path)
+        .status()
+        .expect("Git is required by the repository snapshot tests");
+    assert!(status.success(), "Git repository initialization failed");
+}
+
+fn git_add(path: &Path, entries: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["add", "--force", "--"])
+        .args(entries)
+        .status()
+        .expect("Git is required by the repository snapshot tests");
+    assert!(status.success(), "Git tracked-file staging failed");
 }
 
 fn snapshot_entries(artifact_root: &Path, case_id: &str) -> Vec<String> {
@@ -246,7 +268,13 @@ fn snapshot_is_deterministic_private_source_grounded_and_working_tree_only() {
     assert_eq!(first.manifest.excluded_entries, [".git"]);
     assert_eq!(
         first.manifest.exclusion_policy,
-        Some(WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1)
+        Some(WorkspaceSnapshotExclusionPolicy::RepositoryTrackedGitignoreV2)
+    );
+    assert_eq!(first.manifest.exclusions.len(), 1);
+    assert_eq!(first.manifest.exclusions[0].relative_path, ".git");
+    assert_eq!(
+        first.manifest.exclusions[0].reason,
+        WorkspaceSnapshotExclusionReason::GitMetadata
     );
     assert_eq!(first.manifest.directory_count, 2);
     assert_eq!(first.manifest.file_count, 2);
@@ -304,6 +332,7 @@ fn snapshot_is_deterministic_private_source_grounded_and_working_tree_only() {
 #[test]
 fn repository_snapshot_respects_nested_gitignore_negation_and_build_output_rules() {
     let (_temp, artifact_root, source) = roots();
+    initialize_git_repository(&source);
     fs::write(
         source.join(".gitignore"),
         b"node_modules/\ntarget/\n*.log\n!important.log\nscratch/*\n!scratch/keep.txt\n",
@@ -340,8 +369,8 @@ fn repository_snapshot_respects_nested_gitignore_negation_and_build_output_rules
     fs::write(source.join("src.rs"), b"fn main() {}\n").unwrap();
 
     let limits = WorkspaceSnapshotLimits {
-        max_files: 8,
-        max_directories: 8,
+        max_files: if cfg!(unix) { 8 } else { 100 },
+        max_directories: if cfg!(unix) { 8 } else { 20 },
         ..small_limits()
     };
     let snapshot = create_workspace_snapshot(
@@ -361,7 +390,7 @@ fn repository_snapshot_respects_nested_gitignore_negation_and_build_output_rules
 
     assert_eq!(
         snapshot.manifest.exclusion_policy,
-        Some(WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1)
+        Some(WorkspaceSnapshotExclusionPolicy::RepositoryTrackedGitignoreV2)
     );
     assert!(paths.contains(&".gitignore"));
     assert!(paths.contains(&"important.log"));
@@ -370,11 +399,164 @@ fn repository_snapshot_respects_nested_gitignore_negation_and_build_output_rules
     assert!(paths.contains(&"packages/app/keep.tmp"));
     assert!(paths.contains(&"packages/app/keep.log"));
     assert!(paths.contains(&"src.rs"));
-    assert!(!paths.iter().any(|path| path.starts_with("node_modules/")));
-    assert!(!paths.iter().any(|path| path.starts_with("target/")));
-    assert!(!paths.contains(&"ignored.log"));
-    assert!(!paths.contains(&"scratch/drop.txt"));
-    assert!(!paths.contains(&"packages/app/drop.tmp"));
+    #[cfg(unix)]
+    {
+        assert!(!paths.iter().any(|path| path.starts_with("node_modules/")));
+        assert!(!paths.iter().any(|path| path.starts_with("target/")));
+        assert!(!paths.contains(&"ignored.log"));
+        assert!(!paths.contains(&"scratch/drop.txt"));
+        assert!(!paths.contains(&"packages/app/drop.tmp"));
+    }
+    #[cfg(not(unix))]
+    {
+        assert!(paths.contains(&"node_modules/dependency/0.js"));
+        assert!(paths.contains(&"target/debug/incremental/0.o"));
+        assert!(paths.contains(&"ignored.log"));
+        assert!(paths.contains(&"scratch/drop.txt"));
+        assert!(paths.contains(&"packages/app/drop.tmp"));
+    }
+    assert_eq!(snapshot.manifest.ignore_rule_sources.len(), 2);
+    assert_eq!(
+        snapshot.manifest.exclusions.iter().any(|exclusion| {
+            exclusion.relative_path == "node_modules"
+                && exclusion.reason
+                    == WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked
+        }),
+        cfg!(unix)
+    );
+}
+
+#[test]
+fn repository_gitignore_never_omits_git_tracked_files() {
+    let (_temp, artifact_root, source) = roots();
+    initialize_git_repository(&source);
+    fs::write(source.join(".gitignore"), b".env\nignored/\n").unwrap();
+    fs::write(source.join(".env"), b"TRACKED_SECRET=must-be-scanned\n").unwrap();
+    fs::create_dir(source.join("ignored")).unwrap();
+    fs::write(source.join("ignored/generated.txt"), b"untracked output").unwrap();
+    git_add(&source, &[".gitignore", ".env"]);
+
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-tracked-ignore",
+        "source-tracked-ignore",
+        &source,
+        small_limits(),
+    )
+    .expect("tracked ignored files remain scanner inputs");
+    let paths = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(&".env"));
+    assert_eq!(
+        paths.iter().any(|path| path.starts_with("ignored/")),
+        !cfg!(unix)
+    );
+    assert_eq!(
+        snapshot.manifest.exclusions.iter().any(|exclusion| {
+            exclusion.relative_path == "ignored"
+                && exclusion.reason
+                    == WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked
+        }),
+        cfg!(unix)
+    );
+    assert_eq!(snapshot.manifest.ignore_rule_sources.len(), 1);
+    assert_eq!(
+        snapshot.manifest.ignore_rule_sources[0].relative_path,
+        ".gitignore"
+    );
+}
+
+#[test]
+fn unavailable_git_inventory_fails_open_instead_of_omitting_inputs() {
+    let (_temp, artifact_root, source) = roots();
+    fs::create_dir(source.join(".git")).unwrap();
+    fs::write(source.join(".gitignore"), b"hidden.txt\n").unwrap();
+    fs::write(source.join("hidden.txt"), b"must remain visible").unwrap();
+
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-git-fail-open",
+        "source-git-fail-open",
+        &source,
+        small_limits(),
+    )
+    .expect("an unprovable tracked inventory keeps all ordinary files");
+    assert!(
+        snapshot
+            .manifest
+            .files
+            .iter()
+            .any(|file| file.relative_path == "hidden.txt")
+    );
+    assert!(snapshot.manifest.exclusions.iter().all(|exclusion| {
+        exclusion.reason != WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked
+    }));
+}
+
+#[test]
+fn gitdir_indirection_is_not_followed_and_ignore_pruning_fails_open() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(source.join(".git"), b"gitdir: ../outside-repository/.git\n").unwrap();
+    fs::write(source.join(".gitignore"), b"hidden.txt\n").unwrap();
+    fs::write(source.join("hidden.txt"), b"must remain visible").unwrap();
+
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-gitdir-fail-open",
+        "source-gitdir-fail-open",
+        &source,
+        small_limits(),
+    )
+    .expect("Git indirection never redirects tracked-file inventory");
+
+    assert!(
+        snapshot
+            .manifest
+            .files
+            .iter()
+            .any(|file| file.relative_path == "hidden.txt")
+    );
+    assert!(snapshot.manifest.exclusions.iter().all(|exclusion| {
+        exclusion.reason != WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked
+    }));
+}
+
+#[test]
+fn tracked_nested_repository_is_not_pruned_by_parent_ignore_rule() {
+    let (_temp, artifact_root, source) = roots();
+    initialize_git_repository(&source);
+    fs::write(source.join(".gitignore"), b"vendor/\n").unwrap();
+    git_add(&source, &[".gitignore"]);
+    let nested = source.join("vendor");
+    fs::create_dir(&nested).unwrap();
+    initialize_git_repository(&nested);
+    fs::write(nested.join("tracked.rs"), b"fn nested() {}\n").unwrap();
+    git_add(&nested, &["tracked.rs"]);
+
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-nested-repository",
+        "source-nested-repository",
+        &source,
+        small_limits(),
+    )
+    .expect("a nested repository proves its tracked files independently");
+
+    assert!(
+        snapshot
+            .manifest
+            .files
+            .iter()
+            .any(|file| file.relative_path == "vendor/tracked.rs")
+    );
+    assert!(!snapshot.manifest.exclusions.iter().any(|exclusion| {
+        exclusion.relative_path == "vendor"
+            && exclusion.reason == WorkspaceSnapshotExclusionReason::RepositoryGitignoreUntracked
+    }));
 }
 
 #[test]
@@ -407,7 +589,7 @@ fn non_repository_profile_does_not_apply_gitignore_rules() {
 
     assert_eq!(
         snapshot.manifest.exclusion_policy,
-        Some(WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV1)
+        Some(WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV2)
     );
     assert!(paths.contains(&".gitignore"));
     assert!(paths.contains(&"main.tf"));
@@ -448,6 +630,7 @@ fn self_ignored_gitignore_cannot_bypass_total_byte_safety_limit() {
 #[test]
 fn ignored_directory_is_pruned_before_symlink_and_resource_limit_checks() {
     let (_temp, artifact_root, source) = roots();
+    initialize_git_repository(&source);
     fs::write(source.join(".gitignore"), b"ignored/\n").unwrap();
     fs::write(source.join("kept.rs"), b"fn kept() {}\n").unwrap();
     fs::create_dir(source.join("ignored")).unwrap();
@@ -522,6 +705,55 @@ fn legacy_v1_snapshot_manifest_without_policy_remains_verifiable() {
     let verified = resolve_workspace_snapshot(&artifact_root, "case-legacy-v1", &legacy_reference)
         .expect("legacy v1 snapshot remains verifiable");
     assert!(verified.manifest.exclusion_policy.is_none());
+}
+
+#[test]
+fn legacy_v2_gitignore_manifest_without_audit_fields_remains_verifiable() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(source.join("code.rs"), b"fn legacy_v2() {}\n").unwrap();
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-legacy-v2",
+        "source-legacy-v2",
+        &source,
+        small_limits(),
+    )
+    .unwrap();
+    let resolved =
+        resolve_workspace_snapshot(&artifact_root, "case-legacy-v2", &snapshot.reference).unwrap();
+    let manifest_path = resolved.manifest_path;
+    #[cfg(unix)]
+    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(not(unix))]
+    {
+        let mut permissions = fs::metadata(&manifest_path).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&manifest_path, permissions).unwrap();
+    }
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    legacy["schema_version"] =
+        serde_json::Value::String("ai-security-scanner.workspace-snapshot/v2".into());
+    legacy["exclusion_policy"] = serde_json::Value::String("repository_gitignore_v1".into());
+    legacy.as_object_mut().unwrap().remove("exclusions");
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("ignore_rule_sources");
+    let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+    fs::write(&manifest_path, &legacy_bytes).unwrap();
+    let mut legacy_reference = snapshot.reference;
+    legacy_reference.sha256 = digest(&legacy_bytes);
+    legacy_reference.snapshot_id = format!("workspace-snapshot-sha256-{}", legacy_reference.sha256);
+
+    let verified = resolve_workspace_snapshot(&artifact_root, "case-legacy-v2", &legacy_reference)
+        .expect("legacy v2 snapshot remains verifiable");
+    assert_eq!(
+        verified.manifest.exclusion_policy,
+        Some(WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1)
+    );
+    assert!(verified.manifest.exclusions.is_empty());
+    assert!(verified.manifest.ignore_rule_sources.is_empty());
 }
 
 #[test]

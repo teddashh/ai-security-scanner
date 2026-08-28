@@ -234,6 +234,9 @@ pub struct EngineExecutionRequest<'a> {
     /// Framework-classification context frozen by case planning. This never
     /// authorizes a target or changes the engine command.
     pub ai_system_applicable: bool,
+    /// Framework-classification context frozen by case planning. `false`
+    /// includes both an explicit no and an unknown answer.
+    pub ai_generated_artifact_applicable: bool,
     pub assets: &'a [Asset],
     pub scope_grants: &'a [ScopeGrant],
     /// Exact host-side DNS/address snapshot represented by the managed egress
@@ -413,7 +416,30 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             return Ok(report);
         }
 
+        // The runtime may have stopped, restarted, or changed its security
+        // configuration since the batch-level prepare proof above (and an
+        // image pull can be long-running). Reinspect the live daemon directly
+        // before this engine starts and persist that fresh proof. Never leave
+        // the earlier batch proof attached to an execution-preflight failure.
+        let execution_preflight = match self.runtime.execution_preflight() {
+            Ok(preflight) => preflight,
+            Err(error) => {
+                report.runtime_preflight = None;
+                report.checkpoint.cleanup_completed = true;
+                report.fail(error.to_string());
+                return Ok(report);
+            }
+        };
+        report.checkpoint.runtime_command_provenance =
+            Some(execution_preflight.command_provenance.clone());
+        report.checkpoint.runtime_provider = Some(execution_preflight.provider);
+        report.runtime_preflight = Some(execution_preflight);
+
+        // Create capture files only after the live daemon proof succeeds. A
+        // preflight failure has no scanner output and must not leave empty,
+        // untracked evidence files behind.
         let capture = self.artifacts.prepare_capture(&directories)?;
+
         report.checkpoint.stage = ExecutionStage::Running;
         observer(&report)?;
         let mut created_container = None;
@@ -617,6 +643,7 @@ fn adapt_captured_artifacts(
         engine_run_id: request.engine_run_id,
         manifest: request.manifest,
         ai_system_applicable: request.ai_system_applicable,
+        ai_generated_artifact_applicable: request.ai_generated_artifact_applicable,
         asset_ids: &asset_ids,
         asset_identifier_map: &asset_identifier_map,
         artifact_root: &report.artifact_root,
@@ -1391,6 +1418,13 @@ mod tests {
         std::fs::create_dir(&workspace).expect("workspace");
         let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
         let runtime = FakeContainerRuntime::default();
+        let execution_preflight = RuntimePreflight {
+            provider: crate::container_runtime::RuntimeProvider::Docker,
+            server_version: "fake-2.0-after-restart".into(),
+            security_options: "fake-updated-seccomp".into(),
+            command_provenance: crate::container_runtime::RuntimeCommandProvenance::Compatibility,
+        };
+        runtime.set_execution_preflight(execution_preflight.clone());
         runtime.set_behavior(FakeRunBehavior {
             exit_code: Some(0),
             stdout: b"scanner stdout".to_vec(),
@@ -1411,6 +1445,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1430,6 +1465,7 @@ mod tests {
             ExecutionStage::CapturedAwaitingAdapter
         );
         assert!(report.findings.is_empty());
+        assert_eq!(report.runtime_preflight, Some(execution_preflight));
         assert_eq!(report.raw_artifacts.len(), 3);
         assert_eq!(report.raw_artifacts[0].byte_length, 14);
         assert_eq!(
@@ -1441,8 +1477,80 @@ mod tests {
                     "registry.example/scanner@sha256:{}",
                     "a".repeat(64)
                 )),
+                RuntimeCall::ExecutionPreflight,
                 RuntimeCall::Run("ass-scanner-engine-run-1-a1".into()),
                 RuntimeCall::Cleanup("ass-scanner-engine-run-1-a1".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn stale_batch_preflight_is_not_reused_when_execution_preflight_fails() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_fail_execution_preflight(true);
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: None,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("failed execution report");
+
+        assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
+        assert!(report.checkpoint.cleanup_completed);
+        assert_eq!(report.runtime_preflight, None);
+        let raw_directory = temp
+            .path()
+            .join("artifacts/case-1/run-1/engine-run-1/attempt-1/raw");
+        assert_eq!(
+            std::fs::read_dir(raw_directory)
+                .expect("raw capture directory")
+                .count(),
+            0,
+            "execution preflight failure must not leave capture files",
+        );
+        assert!(
+            report
+                .checkpoint
+                .last_error
+                .as_deref()
+                .is_some_and(|message| message.contains("execution preflight failure"))
+        );
+        assert_eq!(
+            runtime.calls(),
+            vec![
+                RuntimeCall::Preflight,
+                RuntimeCall::VerifyNetwork("disabled".into()),
+                RuntimeCall::Pull(format!(
+                    "registry.example/scanner@sha256:{}",
+                    "a".repeat(64)
+                )),
+                RuntimeCall::ExecutionPreflight,
             ]
         );
     }
@@ -1473,6 +1581,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1528,6 +1637,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1586,6 +1696,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1655,6 +1766,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1708,6 +1820,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1751,6 +1864,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1815,6 +1929,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
@@ -1869,6 +1984,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,

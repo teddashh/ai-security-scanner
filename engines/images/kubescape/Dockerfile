@@ -51,7 +51,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Kubescape engine" \
       org.opencontainers.image.description="Pinned-source, offline NSA policy scan for explicit local Kubernetes manifests" \
       org.opencontainers.image.source="https://github.com/kubescape/kubescape" \
       org.opencontainers.image.revision="469969f6bebf46bef5e808b91a4bb46fb2bbf4ed" \
-      org.opencontainers.image.version="4.0.12-2" \
+      org.opencontainers.image.version="4.0.12-3" \
       org.opencontainers.image.licenses="Apache-2.0" \
       io.ai-security-scanner.regolibrary-revision="a12188c49147bb6ec379b42a4159d3d5852634b8"
 

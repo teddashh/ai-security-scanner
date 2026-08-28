@@ -21,7 +21,7 @@
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
     "engine_version": "2.0.31-aws9.2.0-file1.0.2",
     "rule_version": "804be3a90d6f15d3e6c662c0eb7afa88a9596180",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -83,10 +83,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:cloudquery",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -158,7 +158,7 @@
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
     "engine_version": "2.4.5",
     "rule_version": "6e79b2dece502bc198310b39bd54bc95d2842c99",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -217,10 +217,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:steampipe",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -293,7 +293,7 @@
     "source_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
     "engine_version": "5.39.1",
     "rule_version": "40ecbd035e5541bf099917c5033cceb8959c4737",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "cloud_account",
       "subscription",
@@ -390,10 +390,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:prowler",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -468,7 +468,7 @@
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
     "engine_version": "5.14.0",
     "rule_version": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -529,10 +529,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:scoutsuite",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -604,7 +604,7 @@
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
     "engine_version": "0.9.1",
     "rule_version": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -664,10 +664,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:cloudsplaining",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -738,7 +738,7 @@
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
     "engine_version": "1.8.0",
     "rule_version": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "tenant"
     ],
@@ -798,10 +798,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:scubagear",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -871,7 +871,7 @@
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "engine_version": "2.0.0",
     "rule_version": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "tenant"
     ],
@@ -932,10 +932,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:maester",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1003,7 +1003,7 @@
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
     "engine_version": "2.6.1",
     "rule_version": null,
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "ip_address",
       "host"
@@ -1077,10 +1077,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:naabu",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1148,7 +1148,7 @@
     "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
     "engine_version": "1.10.0",
     "rule_version": null,
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "domain",
       "ip_address",
@@ -1220,10 +1220,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:httpx",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1291,7 +1291,7 @@
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
     "engine_version": "3.11.1",
     "rule_version": "24858b4bfabfa86f0bcfd36aea24fb535152b012",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "domain",
       "ip_address",
@@ -1364,10 +1364,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:nuclei",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1435,7 +1435,7 @@
     "source_revision": "c3ae607ef632393b7919fb179d30b940d929f713",
     "engine_version": "23.50.21",
     "rule_version": "b26d7237d56b7cf85e6ace2b9351e7851461b3a8",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "ip_address",
       "host",
@@ -1509,10 +1509,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:greenbone",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1580,7 +1580,7 @@
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
     "engine_version": "source@a0c13f304151e531c7e7c00838076211a07a790c",
     "rule_version": "sha256:2081a62359682db1ddd15eda7eed1f3931975870cef8f8dab7120ba86fe2e5f3",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "repository"
     ],
@@ -1642,10 +1642,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:semgrep",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1711,7 +1711,7 @@
     "source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
     "engine_version": "8.30.1",
     "rule_version": "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "repository"
     ],
@@ -1770,10 +1770,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:gitleaks",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1839,7 +1839,7 @@
     "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "engine_version": "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "rule_version": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "repository"
     ],
@@ -1899,10 +1899,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:trufflehog",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -1968,7 +1968,7 @@
     "source_revision": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
     "engine_version": "3.3.13",
     "rule_version": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "repository",
       "iac_project"
@@ -2040,10 +2040,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:checkov",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -2109,7 +2109,7 @@
     "source_revision": "e1f23cad9640f55b963f22a116b04906b8c16ac6",
     "engine_version": "2.1.20",
     "rule_version": "e1f23cad9640f55b963f22a116b04906b8c16ac6",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "repository",
       "iac_project"
@@ -2180,10 +2180,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:kics",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -2249,7 +2249,7 @@
     "source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
     "engine_version": "0.74.0",
     "rule_version": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "repository",
       "iac_project",
@@ -2319,10 +2319,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:trivy",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -2388,7 +2388,7 @@
     "source_revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
     "engine_version": "0.117.0",
     "rule_version": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "container_image"
     ],
@@ -2452,10 +2452,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:grype",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -2521,7 +2521,7 @@
     "source_revision": "2293641e3bd628a01bb37639318d62c0ebe89b39",
     "engine_version": "1.51.0",
     "rule_version": "2293641e3bd628a01bb37639318d62c0ebe89b39",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "repository"
     ],
@@ -2582,10 +2582,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:syft",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -2651,7 +2651,7 @@
     "source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
     "engine_version": "4.0.12",
     "rule_version": "a12188c49147bb6ec379b42a4159d3d5852634b8",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "kubernetes_cluster"
     ],
@@ -2712,10 +2712,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:kubescape",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {
@@ -2781,7 +2781,7 @@
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
     "engine_version": "source@9f133cb7509ce1dbedfc860e94474588000e25ac",
     "rule_version": "9f133cb7509ce1dbedfc860e94474588000e25ac",
-    "adapter_version": "0.1.1",
+    "adapter_version": "0.1.2",
     "supported_asset_kinds": [
       "host"
     ],
@@ -2841,10 +2841,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:kube-bench",
-        "version": "0.1.1",
+        "version": "0.1.2",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "3b7036f93235de49b2c94aa079c4df6201508a54",
-        "release_state": "released"
+        "source_revision": null,
+        "release_state": "workspace_unreleased"
       }
     },
     "compatibility": {

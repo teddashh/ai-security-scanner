@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "mapping_version": "2026-08-27.1",
+  "mapping_version": "2026-08-28.1",
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
   "sources": [
@@ -145,42 +145,48 @@
       "framework": "AIDEFEND",
       "framework_version": "1.20260805",
       "control_id": "AID-H-003.001",
-      "title": "Software Dependency & Package Security"
+      "title": "Software Dependency & Package Security",
+      "aidefend_applicability": "ai_system"
     },
     {
       "key": "aidefend-h-003-005",
       "framework": "AIDEFEND",
       "framework_version": "1.20260805",
       "control_id": "AID-H-003.005",
-      "title": "Infrastructure as Code (IaC) Security Scanning for AI Systems"
+      "title": "Infrastructure as Code (IaC) Security Scanning for AI Systems",
+      "aidefend_applicability": "ai_system"
     },
     {
       "key": "aidefend-h-003-010",
       "framework": "AIDEFEND",
       "framework_version": "1.20260805",
       "control_id": "AID-H-003.010",
-      "title": "Deployed AI Software Vulnerability Remediation Lifecycle"
+      "title": "Deployed AI Software Vulnerability Remediation Lifecycle",
+      "aidefend_applicability": "ai_system"
     },
     {
       "key": "aidefend-h-025-001",
       "framework": "AIDEFEND",
       "framework_version": "1.20260805",
       "control_id": "AID-H-025.001",
-      "title": "Pre-Execution Static Analysis & Dangerous Construct Blocking"
+      "title": "Pre-Execution Static Analysis & Dangerous Construct Blocking",
+      "aidefend_applicability": "ai_system"
     },
     {
       "key": "aidefend-h-031-002",
       "framework": "AIDEFEND",
       "framework_version": "1.20260805",
       "control_id": "AID-H-031.002",
-      "title": "Static Admission Gates for AI-Generated Artifacts"
+      "title": "Static Admission Gates for AI-Generated Artifacts",
+      "aidefend_applicability": "ai_generated_artifact"
     },
     {
       "key": "aidefend-i-001-001",
       "framework": "AIDEFEND",
       "framework_version": "1.20260805",
       "control_id": "AID-I-001.001",
-      "title": "Container-Based Isolation"
+      "title": "Container-Based Isolation",
+      "aidefend_applicability": "ai_system"
     }
   ],
   "entries": [
@@ -237,7 +243,6 @@
       "engine_id": "semgrep",
       "match_kind": "exact",
       "source_rule": "ai-security-scanner.python.dynamic-code-execution",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-ps-06", "iso-8-28", "iso-8-29", "aidefend-h-025-001", "aidefend-h-031-002"],
       "rationale": "Static-analysis evidence of dynamic code execution is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI."
     },
@@ -245,7 +250,6 @@
       "engine_id": "semgrep",
       "match_kind": "exact",
       "source_rule": "ai-security-scanner.python.shell-true",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-ps-06", "iso-8-28", "iso-8-29", "aidefend-h-025-001", "aidefend-h-031-002"],
       "rationale": "Static-analysis evidence that Python code invokes an operating-system shell is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI."
     },
@@ -253,7 +257,6 @@
       "engine_id": "semgrep",
       "match_kind": "exact",
       "source_rule": "ai-security-scanner.javascript.child-process-exec",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-ps-06", "iso-8-28", "iso-8-29", "aidefend-h-025-001", "aidefend-h-031-002"],
       "rationale": "Static-analysis evidence that JavaScript or TypeScript code invokes a command through a shell is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI."
     },
@@ -261,7 +264,6 @@
       "engine_id": "semgrep",
       "match_kind": "exact",
       "source_rule": "ai-security-scanner.generic.private-key",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-aa-01", "iso-5-17", "aidefend-h-031-002"],
       "rationale": "Static-analysis evidence of private-key material in current project files is related to managing credentials and protecting authentication information. AIDEFEND's static-admission coordinate applies when the selected artifact was generated or materially changed by AI."
     },
@@ -269,7 +271,6 @@
       "engine_id": "gitleaks",
       "match_kind": "exact",
       "source_rule": "generic-api-key",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-aa-01", "iso-5-17", "aidefend-h-031-002"],
       "rationale": "Evidence of a credential embedded in current project files is related to managing credentials and protecting authentication information. AIDEFEND's static-admission coordinate applies when the selected artifact was generated or materially changed by AI."
     },
@@ -277,7 +278,6 @@
       "engine_id": "trufflehog",
       "match_kind": "exact",
       "source_rule": "trufflehog:ExampleCredential",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-aa-01", "iso-5-17", "aidefend-h-031-002"],
       "rationale": "Evidence of a credential in source material is related to managing credentials and protecting authentication information. AIDEFEND's static-admission coordinate applies when the selected artifact was generated or materially changed by AI."
     },
@@ -285,7 +285,6 @@
       "engine_id": "checkov",
       "match_kind": "exact",
       "source_rule": "CKV_AWS_18",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-ps-04", "iso-8-15", "aidefend-h-003-005"],
       "rationale": "Infrastructure-as-code evidence that access logging is disabled is related to security-relevant audit records. AIDEFEND's IaC-scanning coordinate applies when the selected configuration provisions an AI system."
     },
@@ -293,7 +292,6 @@
       "engine_id": "kics",
       "match_kind": "exact",
       "source_rule": "e24efb0e",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-ds-01", "iso-8-24", "aidefend-h-003-005"],
       "rationale": "Infrastructure-as-code evidence that server-side encryption is absent is related to protecting data at rest and using cryptographic safeguards. AIDEFEND's IaC-scanning coordinate applies when the selected configuration provisions an AI system."
     },
@@ -301,7 +299,6 @@
       "engine_id": "trivy",
       "match_kind": "prefix",
       "source_rule": "CVE-",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-id-ra-01", "iso-8-8", "aidefend-h-003-001", "aidefend-h-003-010"],
       "rationale": "Evidence that an installed component is affected by a CVE is related to vulnerability handling. For an AI system, AIDEFEND separates build or deployment admission from the deployed-software remediation lifecycle; this reference does not decide which lifecycle state applies."
     },
@@ -309,7 +306,6 @@
       "engine_id": "grype",
       "match_kind": "prefix",
       "source_rule": "CVE-",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-id-ra-01", "iso-8-8", "aidefend-h-003-001", "aidefend-h-003-010"],
       "rationale": "Evidence that an installed component is affected by a CVE is related to vulnerability handling. For an AI system, AIDEFEND separates build or deployment admission from the deployed-software remediation lifecycle; this reference does not decide which lifecycle state applies."
     },
@@ -317,7 +313,6 @@
       "engine_id": "kubescape",
       "match_kind": "exact",
       "source_rule": "C-0002",
-      "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-aa-05", "iso-8-2", "aidefend-i-001-001"],
       "rationale": "Evidence of a privileged container is related to least-privilege authorization and container isolation. AIDEFEND's container-isolation coordinate applies when the workload is part of an AI system."
     },

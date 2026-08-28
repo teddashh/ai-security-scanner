@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -66,6 +67,31 @@ func fixtureDocument(engineID string, now time.Time) *scopeDocument {
 
 func stringPointer(value string) *string { return &value }
 
+func testNaabuInvocation(t *testing.T, unit scanUnit, environment []string) invocation {
+	t.Helper()
+	plan, err := naabuInvocation(
+		unit,
+		"172.30.0.1:1080",
+		filepath.Join(t.TempDir(), "naabu.jsonl"),
+		environment,
+		t.TempDir(),
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	value, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
 func TestPlansEachGrantWithoutTargetPortCrossProduct(t *testing.T) {
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	httpUnits, err := validateAndPlan(fixtureDocument("httpx", now), "httpx", now)
@@ -85,7 +111,7 @@ func TestPlansEachGrantWithoutTargetPortCrossProduct(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(naabuUnits) != 2 || naabuUnits[0].FrozenAddress != "192.0.2.10" || !reflect.DeepEqual(naabuUnits[0].Grant.Ports, []uint16{443, 8443}) || naabuUnits[1].FrozenAddress != "192.0.2.20" || !reflect.DeepEqual(naabuUnits[1].Grant.Ports, []uint16{9443}) {
+	if len(naabuUnits) != 2 || !reflect.DeepEqual(naabuUnits[0].ResolvedAddresses, []string{"192.0.2.10"}) || !reflect.DeepEqual(naabuUnits[0].Grant.Ports, []uint16{443, 8443}) || !reflect.DeepEqual(naabuUnits[1].ResolvedAddresses, []string{"192.0.2.20"}) || !reflect.DeepEqual(naabuUnits[1].Grant.Ports, []uint16{9443}) {
 		t.Fatalf("Naabu grants were combined: %#v", naabuUnits)
 	}
 }
@@ -100,15 +126,33 @@ func TestNaabuPlansEveryHostSideFrozenAddressWithoutDNS(t *testing.T) {
 	}
 	got := make([]string, 0, len(units))
 	for _, unit := range units {
-		got = append(got, unit.Grant.Target.Value+"="+unit.FrozenAddress)
+		got = append(got, unit.Grant.Target.Value+"="+strings.Join(unit.ResolvedAddresses, ","))
 	}
 	want := []string{
-		"a.example.test=192.0.2.10",
-		"a.example.test=2001:db8::10",
+		"a.example.test=192.0.2.10,2001:db8::10",
 		"b.example.test=192.0.2.20",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Naabu did not preserve the exact frozen hostname mapping: got %v want %v", got, want)
+	}
+}
+
+func TestNaabuAcceptsDomainAssetsAndScansOnlyFrozenAddresses(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	document := fixtureDocument("naabu", now)
+	document.Assets[0].Kind = "domain"
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if units[0].Grant.Target.Kind != "hostname" || !reflect.DeepEqual(units[0].ResolvedAddresses, []string{"192.0.2.10"}) {
+		t.Fatalf("domain asset escaped its host-frozen target: %#v", units[0])
+	}
+	invocation := testNaabuInvocation(t, units[0], nil)
+	joined := " " + strings.Join(invocation.Args, " ") + " "
+	targetsPath, ok := argumentValue(invocation.Args, "-list")
+	if !ok || strings.TrimSpace(string(mustReadFile(t, targetsPath))) != "192.0.2.10" || strings.Contains(joined, "a.example.test") {
+		t.Fatalf("Naabu domain invocation performed a second DNS lookup: %s", joined)
 	}
 }
 
@@ -165,6 +209,9 @@ func TestStaticInvocationsCarryEveryFrozenLimit(t *testing.T) {
 			t.Fatalf("httpx invocation lacks %q: %s", exact, joined)
 		}
 	}
+	if httpx.Timeout != 36*time.Second {
+		t.Fatalf("HTTPx total deadline must include process allowance: %s", httpx.Timeout)
+	}
 
 	nucleiProxy := nucleiCompatibleProxy("socks5h://172.30.0.1:1080")
 	if nucleiProxy != "socks5://172.30.0.1:1080" {
@@ -196,16 +243,19 @@ func TestStaticInvocationsCarryEveryFrozenLimit(t *testing.T) {
 	if strings.Contains(strings.Join(nuclei.Env, "\n"), "socks5h://") {
 		t.Fatal("Nuclei child environment retained a proxy spelling its parser rejects")
 	}
+	if nuclei.Timeout != 315*time.Second {
+		t.Fatalf("Nuclei total deadline must cover its bounded template requests: %s", nuclei.Timeout)
+	}
 
 	naabuDocument := fixtureDocument("naabu", now)
 	naabuUnits, err := validateAndPlan(naabuDocument, "naabu", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	naabu := naabuInvocation(naabuUnits[0], "172.30.0.1:1080", "/tmp/out", environment)
+	naabu := testNaabuInvocation(t, naabuUnits[0], environment)
 	joined = " " + strings.Join(naabu.Args, " ") + " "
 	for _, exact := range []string{
-		" -host 192.0.2.10 ", " -port 443,8443 ", " -scan-type c ",
+		" -list ", " -port 443,8443 ", " -scan-type c ",
 		" -proxy 172.30.0.1:1080 ", " -rate 4 ", " -c 2 ", " -timeout 30s ",
 	} {
 		if !strings.Contains(joined, exact) {
@@ -214,6 +264,10 @@ func TestStaticInvocationsCarryEveryFrozenLimit(t *testing.T) {
 	}
 	if strings.Contains(joined, " -dns-order ") || strings.Contains(joined, "a.example.test") {
 		t.Fatalf("Naabu invocation retained a second DNS lookup path: %s", joined)
+	}
+	targetsPath, ok := argumentValue(naabu.Args, "-list")
+	if !ok || string(mustReadFile(t, targetsPath)) != "192.0.2.10\n" {
+		t.Fatalf("Naabu target list did not preserve the exact frozen address: %s", joined)
 	}
 }
 
@@ -230,8 +284,8 @@ func TestNaabuProxyRateNeverFallsToZeroOrExceedsGrant(t *testing.T) {
 		unit := scanUnit{Grant: externalScope{
 			Ports: []uint16{9001}, ExpiresAt: time.Now().UTC().Add(time.Hour),
 			RatePolicy: fixture.policy,
-		}}
-		plan := naabuInvocation(unit, "172.30.0.1:1080", "/tmp/out", nil)
+		}, ResolvedAddresses: []string{"192.0.2.10"}}
+		plan := testNaabuInvocation(t, unit, nil)
 		configured, ok := argumentValue(plan.Args, "-rate")
 		if !ok || configured != strconv.Itoa(fixture.configured) {
 			t.Fatalf("unexpected Naabu proxy rate: got %q want %d", configured, fixture.configured)
@@ -249,9 +303,9 @@ func TestNaabuTotalDeadlineCoversTheBoundedPortWorkload(t *testing.T) {
 	ports := []uint16{21, 22, 25, 53, 80, 110, 139, 143, 443, 445, 465, 587, 993, 995, 3389, 8080, 8443}
 	unit := scanUnit{Grant: externalScope{
 		Ports: ports, ExpiresAt: time.Now().UTC().Add(time.Hour), RatePolicy: policy,
-	}}
-	plan := naabuInvocation(unit, "172.30.0.1:1080", "/tmp/out", nil)
-	want := 17*60*time.Second + 17*time.Second + naabuProcessAllowance
+	}, ResolvedAddresses: []string{"192.0.2.10"}}
+	plan := testNaabuInvocation(t, unit, nil)
+	want := 17*60*time.Second + 17*time.Second + scannerProcessAllowance
 	if plan.Timeout != want {
 		t.Fatalf("Naabu total deadline does not cover every frozen port attempt: got %s want %s", plan.Timeout, want)
 	}
@@ -260,14 +314,67 @@ func TestNaabuTotalDeadlineCoversTheBoundedPortWorkload(t *testing.T) {
 	}
 }
 
+func TestNaabuBatchesOneGrantWithoutWeakeningItsAggregateDeadline(t *testing.T) {
+	policy := ratePolicy{RequestsPerSecond: 25, Concurrency: 10, TimeoutSeconds: 3}
+	unit := scanUnit{
+		Grant: externalScope{
+			Ports: []uint16{80, 443}, ExpiresAt: time.Now().UTC().Add(time.Hour),
+			RatePolicy: policy,
+		},
+		ResolvedAddresses: []string{"192.0.2.10", "192.0.2.11", "192.0.2.12"},
+	}
+	plan := testNaabuInvocation(t, unit, nil)
+	joined := " " + strings.Join(plan.Args, " ") + " "
+	targetsPath, ok := argumentValue(plan.Args, "-list")
+	if !ok || string(mustReadFile(t, targetsPath)) != "192.0.2.10\n192.0.2.11\n192.0.2.12\n" {
+		t.Fatalf("Naabu grant was not batched over its frozen addresses: %s", joined)
+	}
+	// Six probes at effective rate ten are one timeout/pacing wave.
+	if plan.Timeout != 9*time.Second {
+		t.Fatalf("batched deadline does not cover its aggregate workload: %s", plan.Timeout)
+	}
+}
+
 func TestNaabuSinglePortEndpointKeepsASeparateTotalDeadline(t *testing.T) {
 	policy := ratePolicy{RequestsPerSecond: 1, Concurrency: 1, TimeoutSeconds: 60}
 	unit := scanUnit{Grant: externalScope{
 		Ports: []uint16{9001}, ExpiresAt: time.Now().UTC().Add(time.Hour), RatePolicy: policy,
-	}}
-	plan := naabuInvocation(unit, "172.30.0.1:1080", "/tmp/out", nil)
+	}, ResolvedAddresses: []string{"192.0.2.10"}}
+	plan := testNaabuInvocation(t, unit, nil)
 	if plan.Timeout != 66*time.Second {
 		t.Fatalf("single-port endpoint total deadline lost its fixed process allowance: %s", plan.Timeout)
+	}
+}
+
+func TestNaabuDeadlineSaturatesBeforeDurationArithmeticCanOverflow(t *testing.T) {
+	policy := ratePolicy{RequestsPerSecond: 1, Concurrency: 1, TimeoutSeconds: 1800}
+	if got := naabuInvocationTimeout(policy, 65_535, maxResolvedAddresses); got != naabuEngineCeiling {
+		t.Fatalf("oversized bounded workload escaped the reviewed engine ceiling: %s", got)
+	}
+}
+
+func TestNaabuLargeIPv6SetUsesAPrivateListInsteadOfOneOversizedArgument(t *testing.T) {
+	addresses := make([]string, 0, maxResolvedAddresses)
+	for index := 0; index < maxResolvedAddresses; index++ {
+		addresses = append(addresses, fmt.Sprintf("2001:db8::%x", index))
+	}
+	unit := scanUnit{
+		Grant: externalScope{
+			Ports: []uint16{443}, ExpiresAt: time.Now().UTC().Add(time.Hour),
+			RatePolicy: ratePolicy{RequestsPerSecond: 25, Concurrency: 10, TimeoutSeconds: 3},
+		},
+		ResolvedAddresses: addresses,
+	}
+	plan := testNaabuInvocation(t, unit, nil)
+	targetsPath, ok := argumentValue(plan.Args, "-list")
+	if !ok {
+		t.Fatal("Naabu invocation has no private target list")
+	}
+	if got := strings.Count(string(mustReadFile(t, targetsPath)), "\n"); got != maxResolvedAddresses {
+		t.Fatalf("private target list lost addresses: got %d want %d", got, maxResolvedAddresses)
+	}
+	if len(strings.Join(plan.Args, "\x00")) >= 128*1024 {
+		t.Fatal("Naabu invocation still risks the operating system per-argument limit")
 	}
 }
 
@@ -404,8 +511,7 @@ func TestEvidenceIPMustBelongToTheHostSideFrozenSet(t *testing.T) {
 			ID: "grant-a", Target: canonicalTarget{Kind: "hostname", Value: "a.example.test"},
 			Ports: []uint16{443}, Protocol: "https",
 		},
-		Port: 443, FrozenAddress: "192.0.2.10",
-		ResolvedAddresses: []string{"192.0.2.10", "2001:db8::10"},
+		Port: 443, ResolvedAddresses: []string{"192.0.2.10", "2001:db8::10"},
 	}
 	for _, observed := range []string{
 		"https://a.example.test:443/",

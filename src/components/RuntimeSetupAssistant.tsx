@@ -53,6 +53,7 @@ interface RuntimeAssistantCopy {
   cancel: string;
   cancelling: string;
   docs: string;
+  distributionDocs: string;
   technical: string;
   downloaded: string;
   resumed: string;
@@ -69,6 +70,7 @@ interface RuntimeAssistantCopy {
 }
 
 const MICROSOFT_WSL_HELP = "https://learn.microsoft.com/windows/wsl/install";
+const MICROSOFT_WSL_DISTRIBUTION_HELP = "https://learn.microsoft.com/windows/wsl/basic-commands#export-a-distribution";
 const PRODUCT_RELEASES = "https://github.com/teddashh/ai-security-scanner/releases";
 
 const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
@@ -93,6 +95,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     cancel: "Stop setup and keep the download",
     cancelling: "Stopping…",
     docs: "Open Microsoft’s WSL setup",
+    distributionDocs: "Open Microsoft’s WSL backup and management guide",
     technical: "Technical details",
     downloaded: "downloaded",
     resumed: "Existing download reused",
@@ -172,6 +175,16 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         description: "No scan tool changes were made. Retry the check; if it still fails, use Microsoft's WSL troubleshooting instructions.",
         steps: ["Close any Windows update or WSL setup window that is still running.", "Return here and check again."],
       },
+      resolve_wsl_distribution_manually: {
+        title: "An old scan-tool workspace needs your decision",
+        description: "Windows still has a WSL workspace from an earlier setup. ai-security-scanner left it untouched because it may contain data. Review that one workspace in Windows, then check again.",
+        steps: [
+          "Open Technical details below and note the exact distribution name.",
+          "Open Windows Terminal and run `wsl.exe --list --verbose` to confirm that exact name.",
+          "If you need its data, export it first. Then rename or remove only that exact distribution with Windows’ WSL tools.",
+          "Return here and check again.",
+        ],
+      },
     },
   },
   "zh-TW": {
@@ -195,6 +208,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     cancel: "停止設定並保留下載進度",
     cancelling: "正在停止…",
     docs: "開啟 Microsoft 的 WSL 設定",
+    distributionDocs: "開啟 Microsoft 的 WSL 備份與管理說明",
     technical: "技術細節",
     downloaded: "已下載",
     resumed: "已沿用先前下載進度",
@@ -270,6 +284,16 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         description: "這次沒有改動掃描工具。請重新檢查；如果仍失敗，再依 Microsoft 的 WSL 說明排除問題。",
         steps: ["關閉仍在執行的 Windows Update 或 WSL 設定視窗。", "回到這裡重新檢查。"],
       },
+      resolve_wsl_distribution_manually: {
+        title: "請確認一個舊的掃描工具工作區",
+        description: "Windows 還留著先前設定建立的 WSL 工作區。ai-security-scanner 不會直接刪除，避免誤刪可能仍有資料的環境。請在 Windows 確認這一個工作區，再重新檢查。",
+        steps: [
+          "展開下方「技術細節」，記下完整的發行版名稱。",
+          "開啟 Windows 終端機，執行 `wsl.exe --list --verbose`，確認完全相同的名稱。",
+          "如需保留資料，請先匯出備份；再只針對這個發行版重新命名或移除。",
+          "回到這裡重新檢查。",
+        ],
+      },
     },
   },
 };
@@ -314,6 +338,11 @@ export function RuntimeSetupAssistant({
   } = presentation;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
   const showMicrosoftSetup = needsMicrosoftWslSetup(status?.nextAction);
+  const recoveryHelp = status?.nextAction === "resolve_wsl_distribution_manually"
+    ? { href: MICROSOFT_WSL_DISTRIBUTION_HELP, label: text.distributionDocs }
+    : status?.nextAction !== "restart_windows"
+      ? { href: MICROSOFT_WSL_HELP, label: text.docs }
+      : undefined;
   const technicalDetail = displaySafeTechnicalDetail(status?.detail);
   const progress = useMemo(() => {
     if (!status?.totalBytes || status.totalBytes <= 0) return undefined;
@@ -404,9 +433,9 @@ export function RuntimeSetupAssistant({
           <ol>
             {nextAction.steps.map((step) => <li key={step}>{step}</li>)}
           </ol>
-          {status?.nextAction !== "restart_windows" && (
-            <a href={MICROSOFT_WSL_HELP} target="_blank" rel="noreferrer">
-              {text.docs} <Icon name="external" size={14} />
+          {recoveryHelp && (
+            <a href={recoveryHelp.href} target="_blank" rel="noreferrer">
+              {recoveryHelp.label} <Icon name="external" size={14} />
             </a>
           )}
         </div>

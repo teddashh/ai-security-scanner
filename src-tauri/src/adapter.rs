@@ -96,6 +96,10 @@ pub struct AdapterInput<'a> {
     /// application journey. It controls AI-framework references; it never
     /// changes scan scope, permissions, or scanner execution.
     pub ai_system_applicable: bool,
+    /// True only when the user explicitly answered that selected code was
+    /// generated or materially changed by AI. Unknown and legacy cases remain
+    /// false; this changes references only, never scanner execution.
+    pub ai_generated_artifact_applicable: bool,
     pub asset_ids: &'a [String],
     pub asset_identifier_map: &'a AdapterAssetIdentifierMap,
     pub artifact_root: &'a Path,
@@ -443,6 +447,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             asset_ids: &assets,
             asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),
@@ -477,6 +482,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             asset_ids: &assets,
             asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),
@@ -510,6 +516,7 @@ mod tests {
             engine_run_id: "engine-run-1",
             manifest: &manifest,
             ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
             asset_ids: &assets,
             asset_identifier_map: &asset_identifier_map,
             artifact_root: Path::new("/tmp"),

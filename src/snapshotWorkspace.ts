@@ -1,4 +1,4 @@
-import type { AppSnapshot, CaseWorkspace } from "./types";
+import type { AppSnapshot, AssessmentCase, CaseWorkspace } from "./types";
 
 interface ComparableTimestamp {
   epochMilliseconds: number;
@@ -53,6 +53,30 @@ const compareTimestamps = (left: ComparableTimestamp, right: ComparableTimestamp
   }
   if (left.subMillisecondNanoseconds === right.subMillisecondNanoseconds) return 0;
   return left.subMillisecondNanoseconds < right.subMillisecondNanoseconds ? -1 : 1;
+};
+
+const compareCaseRevisions = (
+  left: AssessmentCase,
+  right: AssessmentCase,
+): number | undefined => {
+  const leftTimestamp = comparableTimestamp(left.updatedAt);
+  const rightTimestamp = comparableTimestamp(right.updatedAt);
+  if (!leftTimestamp || !rightTimestamp) return undefined;
+  return compareTimestamps(leftTimestamp, rightTimestamp);
+};
+
+/**
+ * Keep the already-observed payload unless another workspace can prove that
+ * it has a newer native case revision. This is also used by App's bounded
+ * per-case event journal, so reordered progress/finished channels cannot make
+ * a stale event the protected revision for an in-flight snapshot request.
+ */
+export const selectNewerWorkspaceByRevision = (
+  current: CaseWorkspace | undefined,
+  incoming: CaseWorkspace,
+): CaseWorkspace => {
+  if (!current || compareCaseRevisions(incoming.case, current.case) === 1) return incoming;
+  return current;
 };
 
 /**
@@ -141,4 +165,49 @@ export const mergeWorkspaceIntoSnapshot = (
 
   if (!casesChanged && nextWorkspace === snapshot.workspace) return snapshot;
   return { ...snapshot, cases, workspace: nextWorkspace };
+};
+
+/**
+ * Refresh app-level state from an authoritative snapshot without rolling back
+ * a newer case revision already delivered by the native event bus. Only cases
+ * that still exist in the authoritative list are inherited from `current`;
+ * workspaces observed after this request began are applied separately so a
+ * genuinely deleted case is not resurrected by ordinary stale UI state.
+ */
+export const reconcileAuthoritativeSnapshot = (
+  current: AppSnapshot | undefined,
+  authoritative: AppSnapshot,
+  workspacesObservedAfterRequest: readonly CaseWorkspace[] = [],
+): AppSnapshot => {
+  const currentCases = new Map(current?.cases.map((item) => [item.id, item]) ?? []);
+  const cases = authoritative.cases.map((incoming) => {
+    const existing = currentCases.get(incoming.id);
+    if (!existing) return incoming;
+    const order = compareCaseRevisions(existing, incoming);
+    return order !== undefined && order >= 0 ? existing : incoming;
+  });
+
+  let workspace = authoritative.workspace;
+  const currentWorkspace =
+    current?.selectedCaseId === authoritative.selectedCaseId
+    && current?.workspace?.case.id === authoritative.selectedCaseId
+      ? current?.workspace
+      : undefined;
+  if (currentWorkspace && workspace?.case.id === currentWorkspace.case.id) {
+    const order = compareCaseRevisions(currentWorkspace.case, workspace.case);
+    if (order !== undefined && order >= 0) workspace = currentWorkspace;
+  }
+
+  if (workspace) {
+    const caseIndex = cases.findIndex((item) => item.id === workspace.case.id);
+    if (caseIndex >= 0 && compareCaseRevisions(workspace.case, cases[caseIndex]!) === 1) {
+      cases[caseIndex] = workspace.case;
+    }
+  }
+
+  let reconciled: AppSnapshot = { ...authoritative, cases, workspace };
+  for (const observed of workspacesObservedAfterRequest) {
+    reconciled = mergeWorkspaceIntoSnapshot(reconciled, observed) ?? reconciled;
+  }
+  return reconciled;
 };

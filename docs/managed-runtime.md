@@ -103,21 +103,23 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   Cleanup is not recursive: another root basename, an additional child, a nonempty or hard-linked
   `known_hosts`, a link, foreign ownership, a wrong mode or type, or an unsafe directory replacement
   aborts cleanup before the unsafe object is removed.
-- On Windows, Podman can report `machine rm` success after an underlying WSL unregister failure.
-  Before deleting the release-private provider home, installation, or requested image cache, the
-  app therefore obtains the Windows root from the bounded operating-system directory API, never an
-  inherited `SystemRoot`, and runs its absolute canonical `SystemRoot\System32\wsl.exe` with a
-  cleared minimal environment, fixed provider working directory, bounded deadline/output, and
-  `--list --quiet`.
+- On Windows, Podman can report `machine rm` success while its underlying WSL distribution still
+  exists. Before deleting the release-private provider home, installation, or requested image
+  cache, the app therefore obtains the Windows root from the bounded operating-system directory
+  API, never an inherited `SystemRoot`, and runs its absolute canonical
+  `SystemRoot\System32\wsl.exe` with a cleared minimal environment, fixed provider working
+  directory, bounded deadline/output, and `--list --quiet`.
   It strictly accepts only bounded UTF-8 or UTF-16LE distribution names. If the deterministic exact
-  `podman-assm1-win-x64-<12-hex-image-id>` distribution remains, the app unregisters only that
-  exact owned name and inventories again. Only after the final inventory proves that exact name
-  absent, deletion of its verified provider home retries Win32 sharing violations every 100 ms for
-  at most 10 seconds so a released `ext4.vhdx` can be removed; every other deletion error fails
-  immediately. Execution, decoding, unregister, final-absence proof, or delete-timeout failure
-  retains the remaining provider, installation, and requested image-cache state for a safe retry.
-  No prefix or wildcard WSL removal is permitted, and cleanup never uses the global
-  `wsl --shutdown` operation.
+  `podman-assm1-win-x64-<12-hex-image-id>` distribution remains after the verified
+  `podman machine rm --force`, the app leaves it untouched, stops cleanup, and gives the user a
+  stable manual recovery path to confirm, export, rename, or remove that exact distribution in
+  Windows. The app never runs `wsl --unregister`; an initialization journal is one-shot recovery
+  context and is never deletion authority. Only after read-only inventory proves the exact name
+  absent does deletion of the verified provider home retry Win32 sharing violations every 100 ms
+  for at most 10 seconds so a released `ext4.vhdx` can be removed; every other deletion error fails
+  immediately. Execution, decoding, final-absence proof, or delete-timeout failure retains the
+  remaining provider, installation, and requested image-cache state for a safe retry. Cleanup also
+  never uses the global `wsl --shutdown` operation.
 - Before first initialization, the app generates Podman 5.8.2's exact private-XDG
   `data/containers/podman/machine/machine{,.pub}` identity itself as an unencrypted OpenSSH Ed25519
   pair. It uses operating-system randomness and RustCrypto parsing/encoding, not a host

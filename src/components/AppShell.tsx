@@ -77,6 +77,7 @@ const runtimeRecoveryKeys = {
   update_wsl: "runtime.recovery.updateWsl",
   restart_windows: "runtime.recovery.restartWindows",
   retry_wsl_check: "runtime.recovery.retryWsl",
+  resolve_wsl_distribution_manually: "runtime.recovery.resolveWslDistribution",
 } as const satisfies Record<ManagedRuntimeSetupNextAction, TranslationKey>;
 
 const casePhaseLabelKeys = {
@@ -109,6 +110,7 @@ interface AppShellProps {
   runtime?: AppSnapshot["runtime"];
   runtimeSetup?: ManagedRuntimeSetupStatus;
   runtimeBusy?: boolean;
+  onOpenRuntimeSetup: () => void;
   onSetupRuntime: () => void;
   onCancelRuntime: () => void;
 }
@@ -128,6 +130,7 @@ export function AppShell({
   runtime,
   runtimeSetup,
   runtimeBusy,
+  onOpenRuntimeSetup,
   onSetupRuntime,
   onCancelRuntime,
 }: AppShellProps) {
@@ -162,10 +165,13 @@ export function AppShell({
       ? "runtime.phase.failed.generic.detail"
       : runtimeSetupDetailKeys[displayedRuntimeSetupPhase]
     : undefined;
+  const needsManualWslRecovery = runtimeSetup?.nextAction === "resolve_wsl_distribution_manually";
   const runtimeSetupAction: TranslationKey = runtimeSetup?.phase === "failed"
-    ? runtimeSetup.nextAction
-      ? "runtime.setup.recheck"
-      : "runtime.setup.retry"
+    ? needsManualWslRecovery
+      ? "runtime.setup.reviewManualRecovery"
+      : runtimeSetup.nextAction
+        ? "runtime.setup.recheck"
+        : "runtime.setup.retry"
     : runtimeSetup?.phase === "cancelled"
       ? "runtime.setup.continue"
       : "runtime.setup.action";
@@ -321,8 +327,13 @@ export function AppShell({
                   {t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase ?? "install"])}
                 </button>
               ) : (
-                <button className="button button--small" type="button" disabled={runtimeBusy} onClick={onSetupRuntime}>
-                  <Icon name="progress" size={15} />
+                <button
+                  className="button button--small"
+                  type="button"
+                  disabled={runtimeBusy}
+                  onClick={needsManualWslRecovery ? onOpenRuntimeSetup : onSetupRuntime}
+                >
+                  <Icon name={needsManualWslRecovery ? "arrow" : "progress"} size={15} />
                   {t(runtimeSetupAction)}
                 </button>
               )}

@@ -3392,6 +3392,8 @@ fn execute_planned_engine(
         engine_run_id: &execution.engine_run_id,
         manifest: &execution.manifest,
         ai_system_applicable: execution.ai_system_applicable,
+        ai_generated_artifact_applicable: execution.ai_generated_artifact
+            == crate::domain::AiGeneratedArtifactAnswer::Yes,
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations,
@@ -3541,6 +3543,8 @@ fn resume_captured_execution(
         engine_run_id: &execution.engine_run_id,
         manifest: &execution.manifest,
         ai_system_applicable: execution.ai_system_applicable,
+        ai_generated_artifact_applicable: execution.ai_generated_artifact
+            == crate::domain::AiGeneratedArtifactAnswer::Yes,
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations: None,
@@ -5166,6 +5170,7 @@ mod tests {
                 organization_name: "Example Co".into(),
                 employee_range: "1-10".into(),
                 assessment_intent: None,
+                ai_generated_artifact: Default::default(),
                 data_classes: vec![DataClass::General],
                 requested_activities: vec![],
                 source_kinds: vec![],

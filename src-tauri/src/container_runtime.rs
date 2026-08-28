@@ -36,6 +36,7 @@ const MAX_OUTPUT_ENTRIES: usize = 10_000;
 const MAX_OUTPUT_DEPTH: usize = 32;
 const MAX_RUNTIME_COMMAND_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_RUNTIME_SECURITY_OPTIONS_BYTES: usize = 8 * 1024;
+const MAX_RUNTIME_EXECUTION_INFO_BYTES: usize = 16 * 1024;
 const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 // A cold pull transfers and unpacks the release-pinned image inside the provider VM;
 // keep that data-plane deadline separate from short control-plane commands.
@@ -219,6 +220,67 @@ fn runtime_security_info_template(provider: RuntimeProvider) -> &'static str {
         RuntimeProvider::Docker => "{{json .SecurityOptions}}",
         RuntimeProvider::ManagedLocal | RuntimeProvider::Podman => "{{json .Host.Security}}",
     }
+}
+
+/// A single, bounded control-plane query used immediately before an engine
+/// starts. Keeping the server version and security options in one response
+/// avoids repeating the two-command prepare-time inspection for every engine
+/// while still proving that the current daemon is alive and describing the
+/// security boundary that will execute this engine.
+fn runtime_execution_info_template(provider: RuntimeProvider) -> &'static str {
+    match provider {
+        RuntimeProvider::Docker => {
+            r#"{"serverVersion":{{json .ServerVersion}},"securityOptions":{{json .SecurityOptions}}}"#
+        }
+        RuntimeProvider::ManagedLocal | RuntimeProvider::Podman => {
+            r#"{"serverVersion":{{json .Version.Version}},"securityOptions":{{json .Host.Security}}}"#
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RuntimeExecutionInfo {
+    server_version: String,
+    security_options: serde_json::Value,
+}
+
+fn runtime_preflight_from_execution_info(
+    provider: RuntimeProvider,
+    provenance: RuntimeCommandProvenance,
+    document: &[u8],
+) -> AppResult<RuntimePreflight> {
+    if document.is_empty() || document.len() > MAX_RUNTIME_EXECUTION_INFO_BYTES {
+        return Err(AppError::Runtime(
+            "container runtime execution information exceeded its bounded JSON contract".into(),
+        ));
+    }
+    let observed: RuntimeExecutionInfo = serde_json::from_slice(document).map_err(|error| {
+        AppError::Runtime(format!(
+            "container runtime returned malformed execution-preflight JSON: {error}"
+        ))
+    })?;
+    let server_version = observed.server_version.trim().to_owned();
+    if server_version.is_empty()
+        || server_version.len() > 1024
+        || server_version.chars().any(char::is_control)
+    {
+        return Err(AppError::Runtime(
+            "container runtime returned a malformed server version".into(),
+        ));
+    }
+    let security_document = serde_json::to_vec(&observed.security_options).map_err(|error| {
+        AppError::Runtime(format!(
+            "container runtime security information could not be encoded: {error}"
+        ))
+    })?;
+    let security_options = validate_runtime_security_options(provider, &security_document)?;
+    Ok(RuntimePreflight {
+        provider,
+        server_version,
+        security_options,
+        command_provenance: provenance,
+    })
 }
 
 fn validate_runtime_security_options(
@@ -1357,6 +1419,10 @@ impl fmt::Debug for CancellationToken {
 
 pub trait ContainerRuntime: Send + Sync {
     fn preflight(&self) -> AppResult<RuntimePreflight>;
+    /// Reinspect the live daemon immediately before a real engine execution.
+    /// Implementations may use a cheaper combined control-plane query than
+    /// the prepare-time preflight, but must not return a batch-cached proof.
+    fn execution_preflight(&self) -> AppResult<RuntimePreflight>;
     fn verify_network(&self, policy: &NetworkPolicy) -> AppResult<()>;
     fn pull(&self, image: &PinnedImage) -> AppResult<()>;
     fn run(
@@ -1379,9 +1445,10 @@ pub struct ProcessContainerRuntime {
     context: RuntimeCommandContext,
     // A runtime value is resolved immediately before a scan batch is
     // persisted, then that exact value is moved into the worker. Keep the
-    // successful control-plane proof attached to that immutable command
-    // context so every engine does not repeat the same version and security
-    // subprocesses. Failures are deliberately not cached.
+    // successful prepare-time proof attached to that immutable command
+    // context so clones share one initial two-command inspection. Every real
+    // engine still replaces it with a fresh, single-command execution proof.
+    // Failures are deliberately not cached.
     preflight_cache: Arc<RuntimePreflightCache>,
     #[cfg(test)]
     test_execution_timeout: Option<StdDuration>,
@@ -1406,6 +1473,27 @@ impl RuntimePreflightCache {
         let preflight = inspect()?;
         *observed = Some(preflight.clone());
         Ok(preflight)
+    }
+
+    fn refresh<F>(&self, inspect: F) -> AppResult<RuntimePreflight>
+    where
+        F: FnOnce() -> AppResult<RuntimePreflight>,
+    {
+        // Serialize refreshes with prepare-time inspection so an older probe
+        // cannot overwrite a newer execution proof. A failed live inspection
+        // invalidates the prepared proof: callers must never fall back to a
+        // daemon state observed earlier in the batch.
+        let mut observed = self.preflight_cache_lock()?;
+        match inspect() {
+            Ok(preflight) => {
+                *observed = Some(preflight.clone());
+                Ok(preflight)
+            }
+            Err(error) => {
+                *observed = None;
+                Err(error)
+            }
+        }
     }
 
     fn preflight_cache_lock(
@@ -1470,6 +1558,7 @@ impl ActiveExecutionBudget {
 enum DirectRuntimeOperation {
     RuntimeVersionPreflight,
     RuntimeSecurityPreflight,
+    RuntimeExecutionPreflight,
     ManagedNetworkPreflight,
     PinnedImagePull,
     ContainerPause,
@@ -1485,6 +1574,7 @@ impl DirectRuntimeOperation {
         match self {
             Self::RuntimeVersionPreflight => "runtime version preflight",
             Self::RuntimeSecurityPreflight => "runtime security preflight",
+            Self::RuntimeExecutionPreflight => "runtime execution preflight",
             Self::ManagedNetworkPreflight => "managed network preflight",
             Self::PinnedImagePull => "pinned image pull",
             Self::ContainerPause => "container pause",
@@ -1970,6 +2060,15 @@ impl Drop for CommandProcessTree {
     }
 }
 
+struct ContainerWaitContext<'a> {
+    plan: &'a ContainerRunPlan,
+    execution_started: std::time::Instant,
+    execution_timeout: StdDuration,
+    cancellation: &'a CancellationToken,
+    budget: &'a OutputBudget,
+    container_id_file: &'a ContainerIdFileGuard,
+}
+
 #[derive(Clone)]
 struct OutputBudget {
     maximum: u64,
@@ -2231,6 +2330,64 @@ impl ProcessContainerRuntime {
         self.context.provider
     }
 
+    fn inspect_preflight(&self) -> AppResult<RuntimePreflight> {
+        let version_operation = DirectRuntimeOperation::RuntimeVersionPreflight;
+        let version = self.direct_output(
+            version_operation,
+            ["version", "--format", "{{.Server.Version}}"],
+        )?;
+        if !version.status.success() {
+            return Err(process_failure(version_operation.label(), &version));
+        }
+        let server_version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
+        if server_version.is_empty() {
+            return Err(AppError::Runtime(
+                "container runtime returned an empty server version".into(),
+            ));
+        }
+
+        let security_operation = DirectRuntimeOperation::RuntimeSecurityPreflight;
+        let info = self.direct_output(
+            security_operation,
+            [
+                "info",
+                "--format",
+                runtime_security_info_template(self.context.provider),
+            ],
+        )?;
+        if !info.status.success() {
+            return Err(process_failure(security_operation.label(), &info));
+        }
+        let security_options =
+            validate_runtime_security_options(self.context.provider, &info.stdout)?;
+        Ok(RuntimePreflight {
+            provider: self.context.provider,
+            server_version,
+            security_options,
+            command_provenance: self.context.provenance.clone(),
+        })
+    }
+
+    fn inspect_execution_preflight(&self) -> AppResult<RuntimePreflight> {
+        let operation = DirectRuntimeOperation::RuntimeExecutionPreflight;
+        let info = self.direct_output(
+            operation,
+            [
+                "info",
+                "--format",
+                runtime_execution_info_template(self.context.provider),
+            ],
+        )?;
+        if !info.status.success() {
+            return Err(process_failure(operation.label(), &info));
+        }
+        runtime_preflight_from_execution_info(
+            self.context.provider,
+            self.context.provenance.clone(),
+            &info.stdout,
+        )
+    }
+
     /// Removes a crash-left container only after proving its immutable object
     /// ID, complete execution ownership labels, deterministic name, and pinned
     /// image. The final removal targets the inspected object ID so a name swap
@@ -2357,14 +2514,17 @@ impl ProcessContainerRuntime {
     fn wait_for_container(
         &self,
         child: &mut Child,
-        plan: &ContainerRunPlan,
-        execution_started: std::time::Instant,
-        execution_timeout: StdDuration,
-        cancellation: &CancellationToken,
-        budget: &OutputBudget,
-        container_id_file: &ContainerIdFileGuard,
+        context: ContainerWaitContext<'_>,
         created_container: &mut Option<CreatedContainer>,
     ) -> AppResult<RuntimeOutcome> {
+        let ContainerWaitContext {
+            plan,
+            execution_started,
+            execution_timeout,
+            cancellation,
+            budget,
+            container_id_file,
+        } = context;
         let mut execution_budget =
             ActiveExecutionBudget::started(execution_timeout, execution_started);
         let mut active_container = None;
@@ -2503,43 +2663,13 @@ fn runtime_object_is_absent(stderr: &[u8]) -> bool {
 
 impl ContainerRuntime for ProcessContainerRuntime {
     fn preflight(&self) -> AppResult<RuntimePreflight> {
-        self.preflight_cache.get_or_try_init(|| {
-            let version_operation = DirectRuntimeOperation::RuntimeVersionPreflight;
-            let version = self.direct_output(
-                version_operation,
-                ["version", "--format", "{{.Server.Version}}"],
-            )?;
-            if !version.status.success() {
-                return Err(process_failure(version_operation.label(), &version));
-            }
-            let server_version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
-            if server_version.is_empty() {
-                return Err(AppError::Runtime(
-                    "container runtime returned an empty server version".into(),
-                ));
-            }
+        self.preflight_cache
+            .get_or_try_init(|| self.inspect_preflight())
+    }
 
-            let security_operation = DirectRuntimeOperation::RuntimeSecurityPreflight;
-            let info = self.direct_output(
-                security_operation,
-                [
-                    "info",
-                    "--format",
-                    runtime_security_info_template(self.context.provider),
-                ],
-            )?;
-            if !info.status.success() {
-                return Err(process_failure(security_operation.label(), &info));
-            }
-            let security_options =
-                validate_runtime_security_options(self.context.provider, &info.stdout)?;
-            Ok(RuntimePreflight {
-                provider: self.context.provider,
-                server_version,
-                security_options,
-                command_provenance: self.context.provenance.clone(),
-            })
-        })
+    fn execution_preflight(&self) -> AppResult<RuntimePreflight> {
+        self.preflight_cache
+            .refresh(|| self.inspect_execution_preflight())
     }
 
     fn verify_network(&self, policy: &NetworkPolicy) -> AppResult<()> {
@@ -2638,16 +2768,15 @@ impl ContainerRuntime for ProcessContainerRuntime {
                     return Err(error);
                 }
             };
-            let outcome = self.wait_for_container(
-                &mut child,
+            let wait_context = ContainerWaitContext {
                 plan,
                 execution_started,
                 execution_timeout,
                 cancellation,
-                &budget,
-                &container_id_file,
-                created_container,
-            );
+                budget: &budget,
+                container_id_file: &container_id_file,
+            };
+            let outcome = self.wait_for_container(&mut child, wait_context, created_container);
             if outcome.as_ref().is_err() || outcome.as_ref().is_ok_and(|outcome| outcome.cancelled)
             {
                 process_tree.terminate_and_wait(&mut child);
@@ -2752,6 +2881,7 @@ impl ContainerRuntime for ProcessContainerRuntime {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeCall {
     Preflight,
+    ExecutionPreflight,
     VerifyNetwork(String),
     Pull(String),
     Run(String),
@@ -2781,7 +2911,9 @@ impl Default for FakeRunBehavior {
 pub struct FakeContainerRuntime {
     calls: Mutex<Vec<RuntimeCall>>,
     behavior: Mutex<FakeRunBehavior>,
+    execution_preflight_override: Mutex<Option<RuntimePreflight>>,
     fail_preflight: AtomicBool,
+    fail_execution_preflight: AtomicBool,
     fail_network: AtomicBool,
     fail_pull: AtomicBool,
     fail_cleanup: AtomicBool,
@@ -2795,6 +2927,17 @@ impl FakeContainerRuntime {
 
     pub fn set_fail_preflight(&self, fail: bool) {
         self.fail_preflight.store(fail, Ordering::SeqCst);
+    }
+
+    pub fn set_fail_execution_preflight(&self, fail: bool) {
+        self.fail_execution_preflight.store(fail, Ordering::SeqCst);
+    }
+
+    pub fn set_execution_preflight(&self, preflight: RuntimePreflight) {
+        *self
+            .execution_preflight_override
+            .lock()
+            .expect("fake execution preflight lock") = Some(preflight);
     }
 
     pub fn set_fail_network(&self, fail: bool) {
@@ -2833,6 +2976,27 @@ impl ContainerRuntime for FakeContainerRuntime {
             security_options: "fake-seccomp".into(),
             command_provenance: RuntimeCommandProvenance::Compatibility,
         })
+    }
+
+    fn execution_preflight(&self) -> AppResult<RuntimePreflight> {
+        self.calls
+            .lock()
+            .expect("fake calls lock")
+            .push(RuntimeCall::ExecutionPreflight);
+        if self.fail_execution_preflight.load(Ordering::SeqCst) {
+            return Err(AppError::Runtime("fake execution preflight failure".into()));
+        }
+        Ok(self
+            .execution_preflight_override
+            .lock()
+            .expect("fake execution preflight lock")
+            .clone()
+            .unwrap_or_else(|| RuntimePreflight {
+                provider: RuntimeProvider::Docker,
+                server_version: "fake-1.0".into(),
+                security_options: "fake-seccomp".into(),
+                command_provenance: RuntimeCommandProvenance::Compatibility,
+            }))
     }
 
     fn verify_network(&self, policy: &NetworkPolicy) -> AppResult<()> {
@@ -3556,6 +3720,7 @@ mod tests {
         for operation in [
             DirectRuntimeOperation::RuntimeVersionPreflight,
             DirectRuntimeOperation::RuntimeSecurityPreflight,
+            DirectRuntimeOperation::RuntimeExecutionPreflight,
             DirectRuntimeOperation::ManagedNetworkPreflight,
             DirectRuntimeOperation::ContainerPause,
             DirectRuntimeOperation::ContainerUnpause,
@@ -3604,6 +3769,23 @@ mod tests {
         assert_eq!(observed, expected);
         assert_eq!(reused, expected);
         assert_eq!(inspections.load(Ordering::SeqCst), 2);
+
+        let refresh = cache.refresh(|| {
+            inspections.fetch_add(1, Ordering::SeqCst);
+            Err(AppError::Runtime("daemon stopped before execution".into()))
+        });
+        assert!(refresh.is_err(), "a failed live refresh must fail closed");
+        let recovered = cache
+            .get_or_try_init(|| {
+                inspections.fetch_add(1, Ordering::SeqCst);
+                Ok(RuntimePreflight {
+                    server_version: "5.8.3".into(),
+                    ..expected.clone()
+                })
+            })
+            .expect("a later prepare must reinspect after refresh failure");
+        assert_eq!(recovered.server_version, "5.8.3");
+        assert_eq!(inspections.load(Ordering::SeqCst), 4);
     }
 
     #[cfg(unix)]
@@ -3643,10 +3825,18 @@ mod tests {
             runtime_security_info_template(RuntimeProvider::Docker),
             "{{json .SecurityOptions}}"
         );
+        assert_eq!(
+            runtime_execution_info_template(RuntimeProvider::Docker),
+            r#"{"serverVersion":{{json .ServerVersion}},"securityOptions":{{json .SecurityOptions}}}"#
+        );
         for provider in [RuntimeProvider::ManagedLocal, RuntimeProvider::Podman] {
             assert_eq!(
                 runtime_security_info_template(provider),
                 "{{json .Host.Security}}"
+            );
+            assert_eq!(
+                runtime_execution_info_template(provider),
+                r#"{"serverVersion":{{json .Version.Version}},"securityOptions":{{json .Host.Security}}}"#
             );
         }
 
@@ -3764,6 +3954,67 @@ esac
         assert_eq!(
             fs::read_to_string(log).expect("runtime command log"),
             "version --format {{.Server.Version}}\ninfo --format {{json .Host.Security}}\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_preflight_refreshes_daemon_version_and_security_with_one_query() {
+        let temp = tempfile::tempdir().expect("temporary runtime");
+        let binary = temp.path().join("podman-fixture");
+        let log = temp.path().join("commands.log");
+        let execution_response = temp.path().join("execution.json");
+        fs::write(
+            &execution_response,
+            r#"{"serverVersion":"5.9.0","securityOptions":{"apparmorEnabled":true,"capabilities":"CAP_CHOWN","rootless":true,"seccompEnabled":true,"seccompProfilePath":"/new-profile","selinuxEnabled":false}}"#,
+        )
+        .expect("write execution response");
+        fs::write(
+            &binary,
+            r#"#!/bin/sh
+set -eu
+script_root=${0%/*}
+printf '%s\n' "$*" >> "$script_root/commands.log"
+case "$1" in
+  version) printf '%s\n' '5.8.2' ;;
+  info)
+    case "$*" in
+      *serverVersion*) cat "$script_root/execution.json" ;;
+      *) printf '%s\n' '{"apparmorEnabled":false,"capabilities":"CAP_CHOWN","rootless":true,"seccompEnabled":true,"seccompProfilePath":"/old-profile","selinuxEnabled":false}' ;;
+    esac
+    ;;
+  *) exit 9 ;;
+esac
+"#,
+        )
+        .expect("write runtime fixture");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("make runtime fixture executable");
+
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary);
+        let prepared = runtime.preflight().expect("prepare-time preflight");
+        assert_eq!(prepared.server_version, "5.8.2");
+        assert!(prepared.security_options.contains("/old-profile"));
+
+        let execution = runtime
+            .execution_preflight()
+            .expect("fresh execution preflight");
+        assert_eq!(execution.server_version, "5.9.0");
+        assert!(execution.security_options.contains("/new-profile"));
+        assert_eq!(runtime.preflight().expect("refreshed cache"), execution);
+
+        let repeated = runtime
+            .execution_preflight()
+            .expect("every execution refreshes again");
+        assert_eq!(repeated, execution);
+        assert_eq!(
+            fs::read_to_string(log).expect("runtime command log"),
+            concat!(
+                "version --format {{.Server.Version}}\n",
+                "info --format {{json .Host.Security}}\n",
+                "info --format {\"serverVersion\":{{json .Version.Version}},\"securityOptions\":{{json .Host.Security}}}\n",
+                "info --format {\"serverVersion\":{{json .Version.Version}},\"securityOptions\":{{json .Host.Security}}}\n",
+            )
         );
     }
 

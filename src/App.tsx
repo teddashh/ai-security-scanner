@@ -33,8 +33,18 @@ import {
   installAppUpdate,
   type AppUpdateState,
 } from "./services/appUpdater";
-import { EVENTS, scannerService, type ActionResponse } from "./services/scanner";
-import { mergeWorkspaceIntoSnapshot } from "./snapshotWorkspace";
+import {
+  EVENTS,
+  scannerService,
+  type ActionResponse,
+  type CaseExportVerificationResult,
+} from "./services/scanner";
+import { subscribeAllThenReconcile } from "./services/bufferedEventSubscription";
+import {
+  mergeWorkspaceIntoSnapshot,
+  reconcileAuthoritativeSnapshot,
+  selectNewerWorkspaceByRevision,
+} from "./snapshotWorkspace";
 import { startPageCopy, type UseCaseDefinition } from "./useCases";
 import { displaySafeTechnicalDetail } from "./technicalDetails";
 import type {
@@ -92,6 +102,31 @@ const busyActionCopy = {
 } as const;
 
 const unknownBusyActionCopy = { en: "the current task", zhTW: "目前工作" } as const;
+
+const caseExportVerificationCopy = {
+  verified: {
+    tone: "success",
+    title: { en: "Integrity check complete", zhTW: "完整性檢查完成" },
+    detail: { en: "The case package matches its signed integrity record.", zhTW: "案件包與簽署的完整性紀錄一致。" },
+  },
+  native_failed: {
+    tone: "danger",
+    title: { en: "Integrity check failed", zhTW: "完整性檢查失敗" },
+    detail: {
+      en: "Do not trust or share this package. Choose it again, or ask the sender for a new case package.",
+      zhTW: "請勿信任或分享這份案件包；請重新選擇，或請寄件者提供新的案件包。",
+    },
+  },
+  demo_unavailable: {
+    tone: "info",
+    title: { en: "This demo file cannot be verified", zhTW: "這份展示檔無法驗證" },
+    detail: { en: "No real case package was changed.", zhTW: "沒有更動任何真實案件包。" },
+  },
+} as const satisfies Record<CaseExportVerificationResult["outcome"], {
+  tone: ToastMessage["tone"];
+  title: BilingualText;
+  detail: BilingualText;
+}>;
 
 interface NonExecutionActionToastCopy {
   acceptedTitle: BilingualText;
@@ -261,6 +296,11 @@ export default function App() {
   const scanReadinessRequestGeneration = useRef(0);
   const scanReadinessResponseGeneration = useRef(0);
   const selectedCaseIdRef = useRef<string | undefined>(undefined);
+  const scanWorkspaceEventGeneration = useRef(0);
+  const observedScanWorkspaces = useRef(new Map<string, {
+    generation: number;
+    workspace: CaseWorkspace;
+  }>());
   const automaticRuntimeSetupAttempted = useRef(false);
 
   const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
@@ -274,15 +314,32 @@ export default function App() {
     setNotice(result.notice);
   }, []);
 
+  const applyScanWorkspaceEvent = useCallback((workspace: CaseWorkspace) => {
+    const generation = ++scanWorkspaceEventGeneration.current;
+    const existing = observedScanWorkspaces.current.get(workspace.case.id);
+    const latest = selectNewerWorkspaceByRevision(existing?.workspace, workspace);
+    if (latest === workspace) {
+      observedScanWorkspaces.current.set(workspace.case.id, { generation, workspace });
+    }
+    setSnapshot((current) => mergeWorkspaceIntoSnapshot(current, workspace));
+  }, []);
+
   const loadSnapshot = useCallback(async (caseId?: string, quiet = false) => {
     const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
+    const workspaceEventGenerationAtRequest = scanWorkspaceEventGeneration.current;
     if (!quiet) setLoading(true);
     try {
       const result = await scannerService.getSnapshot(caseId);
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
       selectedCaseIdRef.current = result.data.selectedCaseId;
-      setSnapshot(result.data);
+      setSnapshot((current) => reconcileAuthoritativeSnapshot(
+        current,
+        result.data,
+        [...observedScanWorkspaces.current.values()]
+          .filter((observed) => observed.generation > workspaceEventGenerationAtRequest)
+          .map((observed) => observed.workspace),
+      ));
       const readinessCaseId = result.data.workspace?.case.id;
       const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
       if (readinessCaseId) {
@@ -544,20 +601,14 @@ export default function App() {
   useEffect(() => {
     if (!scannerService.isNative()) return undefined;
     let disposed = false;
-    const unlisteners: Array<() => void> = [];
+    let listenersReady = false;
     const refreshEventNames = [EVENTS.coverageChanged, EVENTS.exportProgress, EVENTS.bootstrapMessage];
 
-    const register = async (subscription: Promise<() => void>) => {
-      const unlisten = await subscription;
-      if (disposed) unlisten();
-      else unlisteners.push(unlisten);
-    };
-
-    void Promise.all([
-      register(
-        scannerService.subscribeScanWorkspace((workspace, eventName) => {
+    const subscriptions = subscribeAllThenReconcile({
+      subscriptions: [
+        () => scannerService.subscribeScanWorkspace((workspace, eventName) => {
           if (disposed) return;
-          setSnapshot((current) => mergeWorkspaceIntoSnapshot(current, workspace));
+          applyScanWorkspaceEvent(workspace);
           if (eventName === EVENTS.runFinished && workspace.case.id === selectedCaseIdRef.current) {
             const readinessRequestGeneration = scanReadinessRequestGeneration.current;
             const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
@@ -598,13 +649,20 @@ export default function App() {
             });
           }
         }),
-      ),
-      ...refreshEventNames.map((eventName) =>
-        register(scannerService.subscribe(eventName, () => {
-          if (!disposed) void loadSnapshot(selectedCaseIdRef.current, true);
+        ...refreshEventNames.map((eventName) => () => scannerService.subscribe(eventName, () => {
+          if (!disposed && listenersReady) void loadSnapshot(selectedCaseIdRef.current, true);
         })),
-      ),
-    ]).catch((error: unknown) => {
+      ],
+      reconcile: async () => {
+        // A transition emitted before its OS listener existed cannot be
+        // replayed. Once every listener is live, one authoritative read closes
+        // every startup window. Later events may request their own fresh read.
+        listenersReady = true;
+        await loadSnapshot(selectedCaseIdRef.current, true);
+      },
+    });
+
+    void subscriptions.ready.catch((error: unknown) => {
       if (!disposed) {
         recordTechnicalError("subscribe to desktop status", error);
         pushToast({
@@ -620,9 +678,9 @@ export default function App() {
 
     return () => {
       disposed = true;
-      unlisteners.forEach((unlisten) => unlisten());
+      subscriptions.close();
     };
-  }, [applyServiceMeta, loadSnapshot, pushToast, text]);
+  }, [applyScanWorkspaceEvent, applyServiceMeta, loadSnapshot, pushToast, text]);
 
   const navigate = (target: PageId) => {
     if (target !== "findings") setFocusedFindingId(undefined);
@@ -983,14 +1041,14 @@ export default function App() {
     try {
       const result = await scannerService.verifyCaseExport(path);
       applyServiceMeta(result);
+      const presentation = caseExportVerificationCopy[result.data.outcome];
+      if (result.data.outcome === "native_failed") {
+        recordTechnicalError("verify case export", result.data.message);
+      }
       pushToast({
-        tone: result.data.accepted ? "success" : "info",
-        title: result.data.accepted
-          ? text({ en: "Integrity check complete", zhTW: "完整性檢查完成" })
-          : text({ en: "This demo file cannot be verified", zhTW: "這份展示檔無法驗證" }),
-        detail: result.data.accepted
-          ? text({ en: "The case package matches its signed integrity record.", zhTW: "案件包與簽署的完整性紀錄一致。" })
-          : text({ en: "No real case package was changed.", zhTW: "沒有更動任何真實案件包。" }),
+        tone: presentation.tone,
+        title: text(presentation.title),
+        detail: text(presentation.detail),
       });
     } catch (error) {
       recordTechnicalError("verify case export", error);
@@ -1308,6 +1366,10 @@ export default function App() {
           runtimeBusy={busyAction === "runtime-setup"
             || runtimeSetup?.active
             || runtimeSetup?.prerequisiteRepairActive}
+          onOpenRuntimeSetup={() => {
+            setRuntimeSetupFocusKey((key) => key + 1);
+            navigate("start");
+          }}
           onSetupRuntime={() => void setupManagedRuntime()}
           onCancelRuntime={() => void cancelManagedRuntimeSetup()}
         >

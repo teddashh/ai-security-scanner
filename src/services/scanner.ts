@@ -45,6 +45,7 @@ import type {
   ScanReadiness,
 } from "../types";
 import { buildNativeExportCaseArguments } from "../exportRequest";
+import { subscribeBufferedEvents } from "./bufferedEventSubscription";
 import {
   adaptLocalNetworkCandidateInventory,
   adaptManagedRuntimeSetupStatus,
@@ -272,6 +273,11 @@ export interface ActionResponse {
   workspace?: CaseWorkspace;
 }
 
+export type CaseExportVerificationResult =
+  | { outcome: "verified"; message: string }
+  | { outcome: "native_failed"; message: string }
+  | { outcome: "demo_unavailable"; message: string };
+
 export interface ScopeApprovalInput {
   caseId: string;
   assetIds: string[];
@@ -344,6 +350,7 @@ export const scannerService = {
       request: {
         title: input.name,
         assessment_intent: input.assessmentIntent ?? null,
+        ai_generated_artifact: input.aiGeneratedArtifact,
         organization_name: input.organizationName,
         employee_range: employeeRanges[input.companySize],
         data_classes: input.dataClasses.map((dataClass) => nativeDataClasses[dataClass]),
@@ -916,19 +923,19 @@ export const scannerService = {
     return demoResult(exported);
   },
 
-  async verifyCaseExport(path: string): Promise<ServiceResult<ActionResponse>> {
+  async verifyCaseExport(path: string): Promise<ServiceResult<CaseExportVerificationResult>> {
     if (!hasTauriRuntime()) return demoResult({
-      accepted: false,
+      outcome: "demo_unavailable",
       message: serviceText(
         "A demo file has no real local signature and cannot produce an integrity result.",
         "展示檔沒有正式本機簽章，不能視為完整性驗證結果。",
       ),
     });
     try {
-      const response = await invoke<{ accepted?: boolean; message?: string } | boolean>(COMMANDS.verifyCaseExport, { path });
-      const accepted = typeof response === "boolean" ? response : response.accepted ?? true;
+      const response = await invoke<{ accepted: boolean; message?: string } | boolean>(COMMANDS.verifyCaseExport, { path });
+      const accepted = typeof response === "boolean" ? response : response.accepted === true;
       return nativeResult({
-        accepted,
+        outcome: accepted ? "verified" : "native_failed",
         message: typeof response === "boolean"
           ? response
             ? serviceText("Integrity verification passed.", "完整性驗證通過。")
@@ -936,7 +943,7 @@ export const scannerService = {
           : response.message ?? serviceText("Integrity verification finished.", "完整性驗證完成。"),
       });
     } catch (error) {
-      return nativeResult({ accepted: false, message: errorMessage(error) });
+      return nativeResult({ outcome: "native_failed", message: errorMessage(error) });
     }
   },
 
@@ -958,19 +965,17 @@ export const scannerService = {
     handler: (workspace: CaseWorkspace, eventName: ScannerEventName) => void,
   ): Promise<UnlistenFn> {
     if (!hasTauriRuntime()) return () => undefined;
-    const manifests = (await getNativeManifests()).map(adaptNativeManifest);
-    const unlisteners: UnlistenFn[] = [];
-    try {
-      for (const eventName of [EVENTS.runProgress, EVENTS.runFinished]) {
-        unlisteners.push(await listen<ScannerEventEnvelope<NativeAssessmentCase>>(eventName, (event) => {
-          handler(adaptNativeCase(event.payload.payload, manifests), eventName);
-        }));
-      }
-    } catch (error) {
-      unlisteners.forEach((unlisten) => unlisten());
-      throw error;
-    }
-    return () => unlisteners.forEach((unlisten) => unlisten());
+    return subscribeBufferedEvents({
+      eventNames: [EVENTS.runProgress, EVENTS.runFinished],
+      loadContext: async () => (await getNativeManifests()).map(adaptNativeManifest),
+      listen: (eventName, onEvent) =>
+        listen<ScannerEventEnvelope<NativeAssessmentCase>>(eventName, (event) => onEvent(event.payload)),
+      adapt: (
+        event: ScannerEventEnvelope<NativeAssessmentCase>,
+        manifests: EngineManifest[],
+      ) => adaptNativeCase(event.payload, manifests),
+      handle: handler,
+    });
   },
 
   async subscribe(

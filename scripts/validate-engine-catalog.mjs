@@ -41,14 +41,27 @@ const managedCloudIds = new Set([
   "scoutsuite",
   "steampipe",
 ]);
-const managedExternalIds = new Set(["naabu", "httpx", "nuclei"]);
+const managedExternalContracts = new Map([
+  ["naabu", { tag: "2.6.1-4" }],
+  ["httpx", { tag: "1.10.0-4" }],
+  ["nuclei", { tag: "3.11.1-4" }],
+]);
+const managedExternalIds = new Set(managedExternalContracts.keys());
 const managedM365Ids = new Set(["scubagear", "maester"]);
 const managedImageRepositoryPrefix = "ghcr.io/teddashh/ai-security-scanner-engine-";
 const managedLocalK8sIds = ["semgrep", "gitleaks", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"];
 const managedLocalK8sWorkflowIds = managedLocalK8sIds.filter((id) => id !== "gitleaks");
+const managedLocalSmokeOutputFiles = new Map([
+  ["semgrep", "semgrep.json"],
+  ["trufflehog", "trufflehog.jsonl"],
+  ["trivy", "trivy.json"],
+  ["grype", "grype.json"],
+  ["kubescape", "kubescape.json"],
+  ["kube-bench", "kube-bench.json"],
+]);
 const managedLocalK8sContracts = new Map([
   ["semgrep", {
-    tag: "1.174.0-2",
+    tag: "1.174.0-3",
     planKind: "managed_build",
     license: { disposition: "source_offer", sourceOfferPath: "engines/images/semgrep/SOURCE-OFFER.md" },
     immutableDockerfileInputs: [
@@ -111,7 +124,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["trufflehog", {
-    tag: "3.97.0-2",
+    tag: "3.97.0-3",
     planKind: "managed_build",
     license: { disposition: "source_offer", sourceOfferPath: "engines/images/trufflehog/SOURCE-OFFER.md" },
     immutableDockerfileInputs: [
@@ -121,7 +134,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["trivy", {
-    tag: "0.74.0-2",
+    tag: "0.74.0-3",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -133,7 +146,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["grype", {
-    tag: "0.117.0-2",
+    tag: "0.117.0-3",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -146,7 +159,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["kubescape", {
-    tag: "4.0.12-2",
+    tag: "4.0.12-3",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -160,7 +173,7 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["kube-bench", {
-    tag: "0.16.0-2",
+    tag: "0.16.0-3",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     immutableDockerfileInputs: [
@@ -197,6 +210,12 @@ const managedEvidenceWorkflows = new Map([
   [".github/workflows/engine-image-syft.yml", ["syft"]],
 ]);
 const managedEvidenceEngineIds = [...managedEvidenceWorkflows.values()].flat();
+const localK8sWorkflowRelative = ".github/workflows/engine-images-local-k8s.yml";
+const newlyPublishedEvidenceWorkflows = [
+  ".github/workflows/engine-images-external.yml",
+  localK8sWorkflowRelative,
+  ".github/workflows/managed-egress-gateway-image.yml",
+];
 const upstreamImageOnlyIds = new Set(["kics"]);
 const shellNames = new Set([
   "sh", "bash", "dash", "zsh", "fish", "cmd", "cmd.exe",
@@ -344,6 +363,86 @@ function validateManagedImageEvidence(catalogEntries) {
   }
   for (const id of upstreamImageOnlyIds) {
     if (expectedManagedIds.includes(id)) errors.push(`managed evidence contract must not count upstream-only engine ${id}`);
+  }
+
+  const localK8sWorkflowPath = resolve(root, localK8sWorkflowRelative);
+  const localK8sWorkflowText = existsSync(localK8sWorkflowPath)
+    ? readFileSync(localK8sWorkflowPath, "utf8")
+    : "";
+  const localK8sWorkflow = parseWorkflow(localK8sWorkflowRelative);
+  const localK8sMatrix = localK8sWorkflow?.jobs?.publish?.strategy?.matrix?.include;
+  const observedSmokeOutputs = new Map(
+    Array.isArray(localK8sMatrix)
+      ? localK8sMatrix.map((entry) => [entry?.engine, entry?.output_file])
+      : [],
+  );
+  if (observedSmokeOutputs.size !== managedLocalSmokeOutputFiles.size ||
+      [...managedLocalSmokeOutputFiles].some(([engine, outputFile]) =>
+        observedSmokeOutputs.get(engine) !== outputFile)) {
+    errors.push(`${localK8sWorkflowRelative}: managed smoke output basenames differ from the fixed six-engine evidence contract`);
+  }
+  const localPublishSteps = localK8sWorkflow?.jobs?.publish?.steps;
+  const localVerifyStep = Array.isArray(localPublishSteps)
+    ? localPublishSteps.find((step) => step?.id === "verify")
+    : undefined;
+  const localManifestStep = Array.isArray(localPublishSteps)
+    ? localPublishSteps.find((step) => step?.name === "Record the published index and platform digests")
+    : undefined;
+  if (typeof localVerifyStep?.run !== "string" ||
+      !localVerifyStep.run.includes('echo "evidence_sha256=${evidence_sha256}"') ||
+      localManifestStep?.env?.EVIDENCE_SHA256 !== "${{ steps.verify.outputs.evidence_sha256 }}" ||
+      typeof localManifestStep?.run !== "string" ||
+      !localManifestStep.run.includes('--arg evidenceSha256 "${EVIDENCE_SHA256}"') ||
+      !localManifestStep.run.includes("managedSmokeEvidenceSha256: $evidenceSha256")) {
+    errors.push(`${localK8sWorkflowRelative}: managed smoke receipt hash must flow unchanged from verification output into the root manifest`);
+  }
+  for (const required of [
+    'smoke_evidence="package-evidence/${ENGINE}-managed-smoke"',
+    'cp "${output}/${OUTPUT_FILE}" "${smoke_evidence}/${OUTPUT_FILE}"',
+    'sha256sum "${OUTPUT_FILE}" > SHA256SUMS.txt',
+    "sha256sum trivy-oci.json trivy-library.json > SHA256SUMS.txt",
+    'evidence_sha256="sha256:$(sha256sum "${smoke_evidence}/SHA256SUMS.txt"',
+    "EVIDENCE_SHA256: ${{ steps.verify.outputs.evidence_sha256 }}",
+    "managedSmokeEvidenceSha256: $evidenceSha256",
+  ]) {
+    if (!localK8sWorkflowText.includes(required)) {
+      errors.push(`${localK8sWorkflowRelative}: managed smoke outputs and their checksum receipt must remain downloadable`);
+    }
+  }
+  for (const relative of newlyPublishedEvidenceWorkflows) {
+    const workflowPath = resolve(root, relative);
+    const workflowText = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") : "";
+    for (const required of [
+      "Seal the downloadable evidence inventory",
+      "find . -type f ! -path './SHA256SUMS.txt' -print0",
+      "LC_ALL=C sort -z",
+      "xargs -0 sha256sum > SHA256SUMS.txt",
+      "sha256sum --check SHA256SUMS.txt",
+    ]) {
+      if (!workflowText.includes(required)) {
+        errors.push(`${relative}: downloadable publication evidence must have one reproducible top-level checksum inventory`);
+      }
+    }
+    const workflow = parseWorkflow(relative);
+    const publicationJobs = Object.entries(workflow?.jobs ?? {}).filter(([, job]) =>
+      Array.isArray(job?.steps) && job.steps.some((step) =>
+        typeof step?.uses === "string" &&
+        step.uses.startsWith("actions/upload-artifact@") &&
+        step?.with?.path === "package-evidence"));
+    if (publicationJobs.length === 0) {
+      errors.push(`${relative}: publication workflow has no package-evidence upload job`);
+    }
+    for (const [jobId, job] of publicationJobs) {
+      const uploadIndex = job.steps.findIndex((step) =>
+        typeof step?.uses === "string" &&
+        step.uses.startsWith("actions/upload-artifact@") &&
+        step?.with?.path === "package-evidence");
+      const sealIndex = job.steps.findIndex((step) =>
+        step?.name === "Seal the downloadable evidence inventory");
+      if (sealIndex < 0 || sealIndex >= uploadIndex) {
+        errors.push(`${relative}:jobs.${jobId}: evidence inventory must be sealed before package-evidence is uploaded`);
+      }
+    }
   }
 
   const coveredIds = [];
@@ -1646,6 +1745,16 @@ function validateManagedSourceImage(plan, planRelative, engine) {
 }
 
 function validateManagedExternalImage(plan, planRelative, engine) {
+  const contract = managedExternalContracts.get(engine.id);
+  const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+  if (!contract ||
+      engine.image?.repository !== expectedRepository ||
+      engine.image?.tag !== contract.tag ||
+      plan.final_artifact?.repository !== expectedRepository ||
+      plan.final_artifact?.tag !== contract.tag ||
+      plan.final_artifact?.digest !== engine.image?.digest) {
+    errors.push(`${planRelative}: managed external image must match the fixed ${engine.id} repository, tag, and digest contract`);
+  }
   if (plan.publish_state !== "published_managed_artifact") {
     errors.push(`${planRelative}: managed external image must be a published managed artifact`);
   }
@@ -1657,6 +1766,19 @@ function validateManagedExternalImage(plan, planRelative, engine) {
     return;
   }
   const dockerfileText = readFileSync(dockerfilePath, "utf8");
+  if (!dockerfileText.includes(`org.opencontainers.image.version="${contract?.tag}"`)) {
+    errors.push(`${planRelative}: managed external Dockerfile OCI version label must equal ${contract?.tag ?? "the fixed release tag"}`);
+  }
+  const externalWorkflowPath = resolve(root, ".github/workflows/engine-images-external.yml");
+  const externalWorkflowText = existsSync(externalWorkflowPath)
+    ? readFileSync(externalWorkflowPath, "utf8")
+    : "";
+  const workflowIdentity = new RegExp(
+    `- engine: ${engine.id}\\r?\\n\\s+tag: ${contract?.tag?.replaceAll(".", "\\.") ?? "__missing_tag__"}`,
+  );
+  if (!workflowIdentity.test(externalWorkflowText)) {
+    errors.push(`${planRelative}: external publication workflow tag does not match ${contract?.tag ?? "the fixed contract"}`);
+  }
   if (plan.dockerfile.sha256 !== sha256File(dockerfilePath)) {
     errors.push(`${planRelative}: managed external Dockerfile digest does not match`);
   }

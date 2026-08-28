@@ -902,6 +902,8 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             knowledge_cutoff: time,
+            ai_system_applicable: false,
+            ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec!["grant-a".into()],
             scope_grant_snapshots: vec![ScopeGrant {

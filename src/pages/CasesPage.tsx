@@ -13,6 +13,7 @@ import { useI18n, type BilingualText, type StaticTranslationKey } from "../i18n"
 import { phaseMeta, runStatusMeta } from "../lib";
 import { scannerService } from "../services/scanner";
 import type {
+  AiGeneratedArtifactAnswer,
   AssessmentActivity,
   AssessmentCase,
   CaseArtifactCleanupResult,
@@ -85,6 +86,23 @@ const pageCopy = {
   organizationName: { en: "Company or team name", zhTW: "公司或團隊名稱" },
   organizationPlaceholder: { en: "Who owns the systems being checked?", zhTW: "這些系統屬於哪個公司或團隊？" },
   selectedGoal: { en: "What are you checking?", zhTW: "這次要檢查什麼？" },
+  aiGeneratedQuestion: {
+    en: "Did AI generate or substantially change any code in this project?",
+    zhTW: "這個專案有程式碼是由 AI 產生，或經 AI 大幅修改嗎？",
+  },
+  aiGeneratedHelp: {
+    en: "This helps us show the right AI-code guidance. It does not change the scan.",
+    zhTW: "這能讓結果顯示合適的 AI 程式碼建議，不會改變掃描內容。",
+  },
+  aiGeneratedYes: {
+    en: "Yes, AI wrote or changed some of it",
+    zhTW: "有，AI 寫過或大幅修改過",
+  },
+  aiGeneratedNo: {
+    en: "No, it was mostly written by people",
+    zhTW: "沒有，主要是人寫的",
+  },
+  aiGeneratedUnknown: { en: "I'm not sure", zhTW: "我不確定" },
   targetCandidateHelp: {
     en: "We'll add this to your scan project. You can review everything before the scan starts.",
     zhTW: "我們會先把它加入掃描專案；開始掃描前，你仍可檢查與調整所有內容。",
@@ -405,6 +423,12 @@ const dataClassCopy: Record<DataClass, BilingualText> = {
   none: { en: "None of these, or not sure", zhTW: "以上皆無或不確定" },
 };
 
+const aiGeneratedAnswerCopy: Record<AiGeneratedArtifactAnswer, BilingualText> = {
+  yes: pageCopy.aiGeneratedYes,
+  no: pageCopy.aiGeneratedNo,
+  unknown: pageCopy.aiGeneratedUnknown,
+};
+
 const activityCopy: Record<AssessmentActivity, { label: BilingualText; detail: BilingualText }> = {
   configuration_assessment: {
     label: { en: "Review cloud and system settings", zhTW: "檢查雲端與系統設定" },
@@ -482,6 +506,8 @@ export function CasesPage({
   const [platforms, setPlatforms] = useState<CloudPlatform[]>(["aws"]);
   const [dataClasses, setDataClasses] = useState<DataClass[]>(["none"]);
   const [requestedActivities, setRequestedActivities] = useState<AssessmentActivity[]>(["configuration_assessment"]);
+  const [aiGeneratedArtifact, setAiGeneratedArtifact] =
+    useState<AiGeneratedArtifactAnswer>("unknown");
   const [description, setDescription] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [publicTargets, setPublicTargets] = useState("");
@@ -543,6 +569,7 @@ export function CasesPage({
       ? [selectedDefinition.suggestedPlatforms[0] ?? "aws"]
       : [...selectedDefinition.suggestedPlatforms]);
     setRequestedActivities([...selectedDefinition.suggestedActivities]);
+    setAiGeneratedArtifact("unknown");
     setWebsiteUrl("");
     setPublicTargets("");
     setInternalTargets("");
@@ -590,6 +617,9 @@ export function CasesPage({
   };
 
   const togglePlatform = (platform: CloudPlatform) => {
+    if (platform === "code" && platforms.includes("code")) {
+      setAiGeneratedArtifact("unknown");
+    }
     setPlatforms((current) => current.includes(platform)
       ? current.filter((item) => item !== platform)
       : [...current, platform]);
@@ -673,6 +703,7 @@ export function CasesPage({
     const created = await onCreate({
       name: name.trim(),
       assessmentIntent: selectedUseCase,
+      aiGeneratedArtifact: platforms.includes("code") ? aiGeneratedArtifact : "unknown",
       organizationName: organizationName.trim(),
       companySize,
       platforms,
@@ -691,6 +722,7 @@ export function CasesPage({
     setPlatforms(["aws"]);
     setDataClasses(["none"]);
     setRequestedActivities(["configuration_assessment"]);
+    setAiGeneratedArtifact("unknown");
     setDescription("");
     resetTargetInputs();
   };
@@ -934,6 +966,26 @@ export function CasesPage({
           </div>
 
           {primaryTarget}
+
+          {platforms.includes("code") && (
+            <fieldset className="choice-fieldset">
+              <legend>{text(pageCopy.aiGeneratedQuestion)}</legend>
+              <p>{text(pageCopy.aiGeneratedHelp)}</p>
+              <div className="choice-grid choice-grid--compact">
+                {(["yes", "no", "unknown"] as const).map((answer) => (
+                  <label className="check-card check-card--compact" key={answer}>
+                    <input
+                      type="radio"
+                      name="ai-generated-artifact"
+                      checked={aiGeneratedArtifact === answer}
+                      onChange={() => setAiGeneratedArtifact(answer)}
+                    />
+                    <span>{text(aiGeneratedAnswerCopy[answer])}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
 
           {assetDraftError?.kind === "conflicting_exposure" && (
             <InlineNotice tone="danger" title={text(pageCopy.formConflictTitle)}>

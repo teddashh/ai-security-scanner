@@ -833,13 +833,13 @@ async function main() {
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
       latest.version !== VERSION ||
-      !latest.notes.includes("Fixes the local scan connection") ||
-      !latest.notes.includes("gateway readiness honest") ||
-      !latest.notes.includes("both Windows installers") ||
-      !releaseNotes.includes("Local network scans no longer depend on a Windows process") ||
-      !releaseNotes.includes("Gateway readiness comes from the running gateway itself") ||
-      !releaseNotes.includes("Windows Setup executable and MSI") ||
-      !releaseNotes.includes("without making an upstream connection") ||
+      !latest.notes.includes("Windows setup and recovery") ||
+      !latest.notes.includes("prepared scans start") ||
+      !latest.notes.includes("preserves saved evidence") ||
+      !releaseNotes.includes("IP address or domain") ||
+      !releaseNotes.includes("preserve fast progress and failure events") ||
+      !releaseNotes.includes("files are retained rather than silently omitted") ||
+      !releaseNotes.includes("a stale journal is never permission to delete WSL state") ||
       latest.notes.includes("repair release") ||
       releaseNotes.includes("This patch release") ||
       !checksums.includes("ai-security-scanner-egress-gateway") ||

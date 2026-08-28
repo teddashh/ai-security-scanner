@@ -76,12 +76,14 @@ export function estimateNetworkScanMinimum(
   // can substantially understate the pacing floor.
   const effectiveRequestsPerSecond = Math.min(requestsPerSecond, concurrency);
   const probeCount = addressCount * portCount;
-  const wavesPerAddress = Math.ceil(portCount / effectiveRequestsPerSecond);
-  const conservativeSecondsPerAddress = (
-    wavesPerAddress * (timeoutSeconds + 1)
+  // The reviewed launcher batches all host-side frozen addresses for one
+  // grant into a single Naabu process. Bound the aggregate probe waves once;
+  // do not add process startup once per address as older releases did.
+  const aggregateWaves = Math.ceil(probeCount / effectiveRequestsPerSecond);
+  const conservativeUpperSeconds = (
+    aggregateWaves * (timeoutSeconds + 1)
     + NAABU_PROCESS_ALLOWANCE_SECONDS
   );
-  const conservativeUpperSeconds = addressCount * conservativeSecondsPerAddress;
   return {
     addressCount,
     probeCount,

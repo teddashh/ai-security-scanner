@@ -27,6 +27,38 @@ function assert(condition, message) {
 
 const RELEASE_COPY = new Map([
   [
+    "0.1.7",
+    {
+      updaterNotes:
+        "Improves Windows setup and recovery, makes prepared scans start where users expect, preserves saved evidence through safe retries, and makes repository and AI-project imports safer. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **Hands-on Windows testing pre-release.** This build carries the Candidate 11 product",
+        "> repairs produced by operating the real app end to end, then extends those repairs across",
+        "> the shared scan lifecycle.",
+        "",
+        "First launch recognizes prerequisites that are already available and prepares the private",
+        "scan tools before presenting a scan as ready. A scan starts from the action the user chose,",
+        "and startup listeners are attached early enough to preserve fast progress and failure events.",
+        "",
+        "Public and internal network checks accept an IP address or domain. Domain resolution is",
+        "frozen into the exact run, and the guided common-port inventory remains bounded. If a check",
+        "stops, the app preserves saved evidence, shows a useful next step, and offers a redacted",
+        "technical log without targets, paths, secrets, or raw scanner messages.",
+        "",
+        "When trusted ignore-rule evaluation is unavailable, files are retained rather than silently omitted.",
+        "Windows runtime recovery also treats initialization",
+        "proof as one-shot state; a stale journal is never permission to delete WSL state.",
+        "",
+        "AI app and agent checks reuse the existing code, secret, package, and deployment routes.",
+        "Applicable findings can carry AIDEFEND references beside NIST CSF and ISO 27001 references.",
+        "The managed Gitleaks path remains network-disabled and fully redacts detected secret values.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "",
+      ],
+    },
+  ],
+  [
     "0.1.6",
     {
       updaterNotes:

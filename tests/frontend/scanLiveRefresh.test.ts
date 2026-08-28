@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { mergeWorkspaceIntoSnapshot } from "../../src/snapshotWorkspace.ts";
+import {
+  mergeWorkspaceIntoSnapshot,
+  reconcileAuthoritativeSnapshot,
+} from "../../src/snapshotWorkspace.ts";
 import type { AppSnapshot, AssessmentCase, CaseWorkspace } from "../../src/types.ts";
 
 const initialUpdatedAt = "2026-08-27T12:00:00.000000001Z";
@@ -46,6 +49,57 @@ test("a background case event updates its summary without switching the visible 
   assert.equal(updated?.selectedCaseId, "case-a");
   assert.equal(updated?.workspace, visibleWorkspace);
   assert.equal(updated?.cases.find((item) => item.id === "case-b")?.name, "Live B");
+});
+
+test("an old authoritative fetch keeps newer selected and background events while refreshing app state", () => {
+  const selectedEvent = workspace(
+    "case-a",
+    "Selected event",
+    "2026-08-27T12:00:00.000000004Z",
+    "selected-event-run",
+  );
+  const backgroundEvent = workspace(
+    "case-c",
+    "Background event",
+    "2026-08-27T12:00:00.000000005Z",
+    "background-event-run",
+  );
+  const afterSelectedEvent = mergeWorkspaceIntoSnapshot(snapshot(), selectedEvent);
+  const current = mergeWorkspaceIntoSnapshot(afterSelectedEvent, backgroundEvent);
+  const fetched = snapshot();
+  fetched.generatedAt = "2026-08-27T12:00:01Z";
+  fetched.runtime = {
+    provider: "managed_local",
+    available: false,
+    phase: "repairing",
+    detail: "fresh authoritative runtime state",
+  };
+
+  const reconciled = reconcileAuthoritativeSnapshot(
+    current,
+    fetched,
+    [selectedEvent, backgroundEvent],
+  );
+
+  assert.equal(reconciled.workspace, selectedEvent);
+  assert.equal(reconciled.workspace?.runs[0]?.id, "selected-event-run");
+  assert.equal(reconciled.cases.find((item) => item.id === "case-a")?.name, "Selected event");
+  assert.equal(reconciled.cases.find((item) => item.id === "case-c")?.name, "Background event");
+  assert.equal(reconciled.runtime, fetched.runtime, "app-level runtime state comes from the fetch");
+  assert.equal(reconciled.generatedAt, fetched.generatedAt);
+});
+
+test("ordinary stale state cannot resurrect a case omitted by the authoritative snapshot", () => {
+  const current = snapshot();
+  current.cases.push(assessmentCase(
+    "case-deleted",
+    "Deleted case",
+    "2026-08-27T12:00:00.000000006Z",
+  ));
+
+  const reconciled = reconcileAuthoritativeSnapshot(current, snapshot());
+
+  assert.equal(reconciled.cases.some((item) => item.id === "case-deleted"), false);
 });
 
 test("a fast scan event cannot be overwritten by an older same-case command result", () => {
@@ -137,10 +191,20 @@ test("scan lifecycle actions and events carry the authoritative workspace into A
   const appSource = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
   assert.match(scannerSource, /workspace: returnWorkspace \? workspace : undefined/u);
-  assert.match(scannerSource, /\[EVENTS\.runProgress, EVENTS\.runFinished\]/u);
-  assert.match(scannerSource, /handler\(adaptNativeCase\(event\.payload\.payload, manifests\), eventName\)/u);
+  assert.match(scannerSource, /eventNames: \[EVENTS\.runProgress, EVENTS\.runFinished\]/u);
+  assert.match(scannerSource, /subscribeBufferedEvents/u);
+  assert.match(scannerSource, /adapt:[\s\S]*?adaptNativeCase\(event\.payload, manifests\)/u);
   assert.match(appSource, /scannerService\.subscribeScanWorkspace/u);
-  assert.match(appSource, /mergeWorkspaceIntoSnapshot\(current, workspace\)/u);
+  assert.match(appSource, /applyScanWorkspaceEvent\(workspace\)/u);
+  assert.match(appSource, /reconcileAuthoritativeSnapshot/u);
+  assert.match(appSource, /observed\.generation > workspaceEventGenerationAtRequest/u);
+  const registrationStart = appSource.indexOf("const subscriptions = subscribeAllThenReconcile");
+  const registrationEnd = appSource.indexOf("void subscriptions.ready.catch", registrationStart);
+  const registration = appSource.slice(registrationStart, registrationEnd);
+  assert.ok(registrationStart >= 0 && registrationEnd > registrationStart);
+  assert.match(registration, /subscriptions: \[[\s\S]*scannerService\.subscribeScanWorkspace/u);
+  assert.match(registration, /refreshEventNames\.map[\s\S]*scannerService\.subscribe/u);
+  assert.match(registration, /reconcile: async \(\) => \{[\s\S]*listenersReady = true;[\s\S]*await loadSnapshot\(selectedCaseIdRef\.current, true\)/u);
   const finishedRefreshStart = appSource.indexOf("if (eventName === EVENTS.runFinished");
   const finishedRefreshEnd = appSource.indexOf("\n          }", finishedRefreshStart);
   const finishedRefresh = appSource.slice(finishedRefreshStart, finishedRefreshEnd);

@@ -9,8 +9,8 @@ use ai_security_scanner_lib::container_runtime::{
     ScannerCredentialSet,
 };
 use ai_security_scanner_lib::domain::{
-    Asset, CaseStatus, CoverageStatus, CreateCaseRequest, DataClass, EngineRunStatus,
-    FindingDiffStatus, ScanPermission, ScopeGrant,
+    AiGeneratedArtifactAnswer, Asset, CaseStatus, CoverageStatus, CreateCaseRequest, DataClass,
+    EngineRunStatus, FindingDiffStatus, ScanPermission, ScopeGrant,
 };
 use ai_security_scanner_lib::export::ExportOptions;
 use ai_security_scanner_lib::orchestrator::{
@@ -91,6 +91,8 @@ fn execute_fixture(
         engine_run_id: &execution.engine_run_id,
         manifest: &execution.manifest,
         ai_system_applicable: execution.ai_system_applicable,
+        ai_generated_artifact_applicable: execution.ai_generated_artifact
+            == AiGeneratedArtifactAnswer::Yes,
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations: None,
@@ -293,6 +295,7 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
             organization_name: "Example organization".into(),
             employee_range: "1-10".into(),
             assessment_intent: None,
+            ai_generated_artifact: Default::default(),
             data_classes: vec![DataClass::CredentialsAndSecrets],
             requested_activities: vec![],
             source_kinds: vec![],
@@ -614,6 +617,7 @@ fn local_case_lifecycle_preserves_scope_evidence_and_comparison_truth() {
         engine_run_id: "json-only-engine-run",
         manifest: gitleaks,
         ai_system_applicable: false,
+        ai_generated_artifact_applicable: false,
         assets: &no_workspace_assets,
         scope_grants: &no_workspace_grants,
         frozen_destinations: None,
@@ -685,6 +689,7 @@ fn typed_container_and_kubernetes_inputs_complete_the_product_lifecycle() {
             organization_name: "Example organization".into(),
             employee_range: "1-10".into(),
             assessment_intent: None,
+            ai_generated_artifact: Default::default(),
             data_classes: vec![],
             requested_activities: vec![],
             source_kinds: vec![],

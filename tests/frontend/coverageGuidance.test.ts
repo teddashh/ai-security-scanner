@@ -4,10 +4,12 @@ import test from "node:test";
 import {
   hasExactGuidedCloudConsent,
   matchesGuidedCoverageRoute,
+  recommendedGuidedLowImpactRatePolicy,
   recommendedGuidedNetworkPreset,
   shouldPromptForFirstAsset,
   singleGuidedPendingAsset,
 } from "../../src/coverageGuidance.ts";
+import { estimateNetworkScanMinimum } from "../../src/networkScanEstimate.ts";
 import type { Asset } from "../../src/types.ts";
 
 const asset = (overrides: Partial<Asset>): Asset => ({
@@ -98,11 +100,49 @@ test("the choose-item prompt disappears as soon as a guided item is selected", (
   assert.equal(shouldPromptForFirstAsset(0, 0), false);
 });
 
-test("a guided public domain starts with one runnable HTTPS service", () => {
-  assert.deepEqual(
-    recommendedGuidedNetworkPreset("external_ip_or_domain", "domain", "scanner.example.test"),
-    { protocol: "https", ports: [443] },
+test("a public-exposure domain keeps a real TCP service inventory", () => {
+  const preset = recommendedGuidedNetworkPreset(
+    "external_ip_or_domain",
+    "domain",
+    "scanner.example.test",
   );
+  assert.equal(preset.protocol, "tcp");
+  assert.deepEqual(preset.ports.slice(0, 3), [80, 443, 22]);
+  assert.ok(preset.ports.length > 2);
+});
+
+test("guided low-impact scans use the full safe throughput without changing scope", () => {
+  assert.deepEqual(recommendedGuidedLowImpactRatePolicy(), {
+    requestsPerSecond: 25,
+    concurrency: 10,
+    timeoutSeconds: 3,
+  });
+});
+
+test("the guided home-network preset fits the engine ceiling without dropping ports", () => {
+  const preset = recommendedGuidedNetworkPreset(
+    "internal_it_environment",
+    "ip",
+    "192.168.1.0/24",
+  );
+  const policy = recommendedGuidedLowImpactRatePolicy();
+  const estimate = estimateNetworkScanMinimum(
+    "192.168.1.0/24",
+    preset.ports.length,
+    policy.requestsPerSecond,
+    policy.concurrency,
+    policy.timeoutSeconds,
+  );
+  assert.equal(preset.ports.length, 21);
+  assert.deepEqual(estimate, {
+    addressCount: 254,
+    probeCount: 5_334,
+    effectiveRequestsPerSecond: 10,
+    minimumSeconds: 534,
+    conservativeUpperSeconds: 2_141,
+    engineCeilingSeconds: 14_400,
+    mayExceedEngineCeiling: false,
+  });
 });
 
 test("guided IP and CIDR targets retain a bounded conservative TCP inventory", () => {

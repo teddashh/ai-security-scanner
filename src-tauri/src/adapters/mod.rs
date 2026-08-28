@@ -21,7 +21,7 @@ use std::io::{Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.1.1";
+pub const ADAPTER_VERSION: &str = "0.1.2";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -2113,6 +2113,7 @@ fn merge_finding(
                 adapter.id,
                 &rule_id,
                 input.ai_system_applicable,
+                input.ai_generated_artifact_applicable,
             ),
             recommendation: format!(
                 "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve a least-privilege configuration or code change.",

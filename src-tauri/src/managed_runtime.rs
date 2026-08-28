@@ -57,6 +57,8 @@ const MAX_SSH_PUBLIC_KEY_BYTES: u64 = 4 * 1024;
 const PODMAN_MACHINE_IDENTITY_NAME: &str = "machine";
 const PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY: &str = "wsldist";
 const MANAGED_SSH_KEY_COMMENT: &str = "ai-security-scanner-managed-runtime";
+const WINDOWS_WSL_OWNERSHIP_PROOF_SCHEMA: &str = "ai-security-scanner.managed-wsl-ownership/v1";
+const WINDOWS_WSL_OWNERSHIP_DIRECTORY: &str = "wsl-ownership";
 #[cfg(unix)]
 const LINUX_SHORT_RUNTIME_BASE: &str = "/tmp";
 #[cfg(unix)]
@@ -265,6 +267,29 @@ pub struct ManagedTarget {
     pub prerequisite: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum WindowsWslOwnershipBasis {
+    InitIntent,
+    ProvenMachine,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WindowsWslOwnershipProof {
+    schema_version: String,
+    bundle_id: String,
+    runtime_version: String,
+    manifest_sha256: String,
+    machine_name: String,
+    distribution_name: String,
+    machine_image_sha256: String,
+    operating_system: ManagedOperatingSystem,
+    architecture: ManagedArchitecture,
+    provider: ManagedMachineProvider,
+    ownership_basis: WindowsWslOwnershipBasis,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedMachineResources {
@@ -443,6 +468,8 @@ pub enum ManagedRuntimeSetupFailureReason {
     RestartRequired,
     #[serde(rename = "windows_wsl_command_failed")]
     WslCommandFailed,
+    #[serde(rename = "windows_wsl_distribution_requires_manual_action")]
+    WslDistributionRequiresManualAction,
 }
 
 /// Stable next actions paired with [`ManagedRuntimeSetupFailureReason`].
@@ -454,6 +481,7 @@ pub enum ManagedRuntimeSetupNextAction {
     UpdateWsl,
     RestartWindows,
     RetryWslCheck,
+    ResolveWslDistributionManually,
 }
 
 /// Terminal result of the deliberately narrow Windows prerequisite repair.
@@ -867,7 +895,6 @@ enum ManagedCommandOperation {
     MachineStop,
     MachineRemoval,
     WslDistributionInventory,
-    WslDistributionRemoval,
     ActiveContainerInventory,
     VersionPreflight,
 }
@@ -881,7 +908,6 @@ impl ManagedCommandOperation {
             Self::MachineStop => "managed runtime machine stop",
             Self::MachineRemoval => "managed runtime machine removal",
             Self::WslDistributionInventory => "managed Windows WSL distribution inventory",
-            Self::WslDistributionRemoval => "managed Windows WSL distribution removal",
             Self::ActiveContainerInventory => "managed runtime active-container inventory",
             Self::VersionPreflight => "managed runtime version preflight",
         }
@@ -2070,9 +2096,14 @@ impl ManagedRuntimeManager {
                 "installing and verifying the release-managed runtime payload",
             )?;
         }
-        self.install_locked()?;
         let target = self.loaded.target()?;
-        let mut command = self.runtime_command(target)?;
+        let machine_name = machine_name(target);
+        // Proof files are one-shot initialization journals, never deletion
+        // authority. Consume any interrupted prior attempt before this retry
+        // can inspect or mutate provider state.
+        self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
+        self.install_locked()?;
+        let command = self.runtime_command(target)?;
         if target.operating_system == ManagedOperatingSystem::Windows {
             if let Some(setup) = setup {
                 setup.set_phase(
@@ -2095,49 +2126,30 @@ impl ManagedRuntimeManager {
                 "initializing the private rootless managed runtime machine",
             )?;
         }
-        let machine_name = machine_name(target);
         let machines = self.list_machines(&command)?;
         if let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) {
             self.require_existing_machine_ssh_identity_locked()?;
             self.prove_machine(machine, target)?;
         } else {
-            // An interrupted WSL initialization can register Podman's exact
-            // hypervisor distribution before its release-private machine
-            // metadata is committed. In that split-brain state `machine list`
-            // is empty, while another `machine init` can only fail because the
-            // deterministic distribution name is already registered. Remove
-            // only that exact product-owned orphan, prove it absent, and reset
-            // only this release's provider home before retrying initialization.
-            // The verified machine-image cache lives outside the provider home
-            // and is intentionally retained.
-            if machines.is_empty()
-                && self.prove_windows_wsl_distribution_absent_locked(
-                    target,
-                    &command,
-                    &machine_name,
-                )?
-            {
-                let provider_home = self.provider_home();
-                if private_entry_exists(&provider_home)? {
-                    #[cfg(windows)]
-                    let (provider_delete_timeout, provider_delete_poll) = (
-                        WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
-                        WINDOWS_WSL_PROVIDER_DELETE_POLL,
-                    );
-                    #[cfg(not(windows))]
-                    let (provider_delete_timeout, provider_delete_poll) =
-                        (Duration::ZERO, Duration::ZERO);
-                    remove_provider_home_after_machine_removal(
-                        &provider_home,
-                        &self.state_root.join("provider-home"),
-                        provider_delete_timeout,
-                        provider_delete_poll,
-                    )?;
-                }
-                command = self.runtime_command(target)?;
+            if !machines.is_empty() {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime release-private provider reported an unexpected machine; refusing to initialize another one"
+                        .into(),
+                ));
             }
+            self.prove_windows_wsl_distribution_absent_locked(
+                target,
+                &command,
+                &machine_name,
+                setup,
+            )?;
             self.prepare_machine_ssh_identity_locked()?;
-            self.initialize_machine(&command, target, &image, &machine_name)?;
+            self.initialize_machine_with_one_shot_wsl_intent(
+                &command,
+                target,
+                &image,
+                &machine_name,
+            )?;
         }
         if let Some(setup) = setup {
             setup.check_cancelled()?;
@@ -2333,6 +2345,8 @@ impl ManagedRuntimeManager {
     ) -> AppResult<ManagedRuntimeStatus> {
         let _lock = self.lock()?;
         let target = self.loaded.target()?;
+        let machine_name = machine_name(target);
+        self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
         let install = self.install_directory();
         let provider_home = self.provider_home();
         if private_entry_exists(&install)? || private_entry_exists(&provider_home)? {
@@ -2342,7 +2356,6 @@ impl ManagedRuntimeManager {
             // interrupted older uninstall after its client was deleted.
             self.install_locked()?;
             let command = self.runtime_command(target)?;
-            let machine_name = machine_name(target);
             let machines = self.list_machines(&command)?;
             if machines.len() > 1 || machines.iter().any(|machine| machine.name != machine_name) {
                 return Err(AppError::NotAuthorized(
@@ -2377,7 +2390,12 @@ impl ManagedRuntimeManager {
                 )?;
                 require_success("managed runtime machine removal", &output)?;
             }
-            self.prove_windows_wsl_distribution_absent_locked(target, &command, &machine_name)?;
+            self.prove_windows_wsl_distribution_absent_locked(
+                target,
+                &command,
+                &machine_name,
+                None,
+            )?;
             self.remove_temporary_command_state_after_machine_removal_locked(target)?;
             if private_entry_exists(&provider_home)? {
                 remove_provider_home_after_machine_removal(
@@ -2749,9 +2767,10 @@ impl ManagedRuntimeManager {
         target: &ManagedTarget,
         managed_command: &ManagedRuntimeCommand,
         machine_name: &str,
-    ) -> AppResult<bool> {
+        setup: Option<&ManagedRuntimeSetupController>,
+    ) -> AppResult<()> {
         if target.operating_system != ManagedOperatingSystem::Windows {
-            return Ok(false);
+            return Ok(());
         }
         if target.provider != ManagedMachineProvider::Wsl {
             return Err(AppError::NotAuthorized(
@@ -2767,37 +2786,109 @@ impl ManagedRuntimeManager {
         )?;
         require_success("managed Windows WSL distribution inventory", &output)?;
         let expected = format!("podman-{machine_name}");
-        let mut distributions = parse_windows_wsl_distribution_inventory(&output.stdout)?;
-        let was_registered = distributions
-            .iter()
-            .any(|distribution| distribution.eq_ignore_ascii_case(&expected));
-        if was_registered {
-            let output = self.run_command(
-                ManagedCommandOperation::WslDistributionRemoval,
-                &command,
-                ["--unregister", expected.as_str()],
-                MACHINE_STOP_TIMEOUT,
-            )?;
-            require_success("managed Windows WSL distribution removal", &output)?;
-            let output = self.run_command(
-                ManagedCommandOperation::WslDistributionInventory,
-                &command,
-                ["--list", "--quiet"],
-                COMMAND_TIMEOUT,
-            )?;
-            require_success("managed Windows WSL distribution inventory", &output)?;
-            distributions = parse_windows_wsl_distribution_inventory(&output.stdout)?;
-        }
+        let distributions = parse_windows_wsl_distribution_inventory(&output.stdout)?;
         if distributions
             .iter()
             .any(|distribution| distribution.eq_ignore_ascii_case(&expected))
         {
-            return Err(AppError::Runtime(
-                "managed Windows WSL distribution remained registered after machine removal; retaining provider, installation, and image-cache state"
-                    .into(),
+            return fail_windows_wsl_distribution_requires_manual_action(setup, &expected);
+        }
+        Ok(())
+    }
+
+    fn windows_wsl_ownership_proof_path(
+        &self,
+        machine_name: &str,
+        ownership_basis: WindowsWslOwnershipBasis,
+    ) -> PathBuf {
+        let suffix = match ownership_basis {
+            WindowsWslOwnershipBasis::InitIntent => "init-intent",
+            WindowsWslOwnershipBasis::ProvenMachine => "proven-machine",
+        };
+        self.state_root
+            .join(WINDOWS_WSL_OWNERSHIP_DIRECTORY)
+            .join(format!("{machine_name}.{suffix}.json"))
+    }
+
+    fn expected_windows_wsl_ownership_proof(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        ownership_basis: WindowsWslOwnershipBasis,
+    ) -> WindowsWslOwnershipProof {
+        WindowsWslOwnershipProof {
+            schema_version: WINDOWS_WSL_OWNERSHIP_PROOF_SCHEMA.into(),
+            bundle_id: self.loaded.manifest.bundle_id.clone(),
+            runtime_version: self.loaded.manifest.runtime_version.clone(),
+            manifest_sha256: self.loaded.sha256.clone(),
+            machine_name: machine_name.into(),
+            distribution_name: format!("podman-{machine_name}"),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            operating_system: target.operating_system,
+            architecture: target.architecture,
+            provider: target.provider,
+            ownership_basis,
+        }
+    }
+
+    fn ensure_windows_wsl_ownership_proof_locked(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        ownership_basis: WindowsWslOwnershipBasis,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(());
+        }
+        if target.provider != ManagedMachineProvider::Wsl {
+            return Err(AppError::NotAuthorized(
+                "managed Windows runtime target did not use the WSL provider".into(),
             ));
         }
-        Ok(was_registered)
+        let proof =
+            self.expected_windows_wsl_ownership_proof(target, machine_name, ownership_basis);
+        let bytes = serde_json::to_vec(&proof).map_err(|error| {
+            AppError::Internal(format!(
+                "managed Windows WSL ownership proof could not be encoded: {error}"
+            ))
+        })?;
+        write_private_atomic(
+            &self.windows_wsl_ownership_proof_path(machine_name, ownership_basis),
+            &bytes,
+        )
+    }
+
+    fn remove_windows_wsl_ownership_proof_locked(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+    ) -> AppResult<()> {
+        if target.operating_system == ManagedOperatingSystem::Windows {
+            let parent = self.state_root.join(WINDOWS_WSL_OWNERSHIP_DIRECTORY);
+            let mut first_error = None;
+            for ownership_basis in [
+                WindowsWslOwnershipBasis::InitIntent,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            ] {
+                if let Err(error) = remove_regular_file(
+                    &self.windows_wsl_ownership_proof_path(machine_name, ownership_basis),
+                ) {
+                    first_error.get_or_insert(error);
+                }
+            }
+            let sync_result = if private_entry_exists(&parent)? {
+                sync_directory(&parent)
+            } else {
+                Ok(())
+            };
+            if let Err(error) = sync_result {
+                first_error.get_or_insert(error);
+            }
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     fn provider_home(&self) -> PathBuf {
@@ -3166,6 +3257,31 @@ impl ManagedRuntimeManager {
             MACHINE_INIT_TIMEOUT,
         )?;
         require_success("managed runtime machine initialization", &output)
+    }
+
+    fn initialize_machine_with_one_shot_wsl_intent(
+        &self,
+        command: &ManagedRuntimeCommand,
+        target: &ManagedTarget,
+        image: &Path,
+        machine_name: &str,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return self.initialize_machine(command, target, image, machine_name);
+        }
+        self.ensure_windows_wsl_ownership_proof_locked(
+            target,
+            machine_name,
+            WindowsWslOwnershipBasis::InitIntent,
+        )?;
+        let initialization = self.initialize_machine(command, target, image, machine_name);
+        let proof_cleanup = self.remove_windows_wsl_ownership_proof_locked(target, machine_name);
+        if let Err(error) = proof_cleanup {
+            return Err(AppError::Runtime(format!(
+                "managed Windows WSL initialization journal could not be consumed safely: {error}"
+            )));
+        }
+        initialization
     }
 
     fn list_machines(&self, command: &ManagedRuntimeCommand) -> AppResult<Vec<MachineListEntry>> {
@@ -5428,9 +5544,12 @@ fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppRe
         }
         ManagedRuntimeSetupNextAction::UpdateWsl => Ok("--update"),
         ManagedRuntimeSetupNextAction::RestartWindows
-        | ManagedRuntimeSetupNextAction::RetryWslCheck => Err(AppError::InvalidRequest(
-            "this managed runtime prerequisite cannot be changed automatically".into(),
-        )),
+        | ManagedRuntimeSetupNextAction::RetryWslCheck
+        | ManagedRuntimeSetupNextAction::ResolveWslDistributionManually => {
+            Err(AppError::InvalidRequest(
+                "this managed runtime prerequisite cannot be changed automatically".into(),
+            ))
+        }
     }
 }
 
@@ -5763,6 +5882,9 @@ impl WindowsWslPrerequisiteFailure {
             ManagedRuntimeSetupFailureReason::WslCommandFailed => format!(
                 "Windows could not confirm that WSL 2 is ready.{status} Open Windows Terminal, run `wsl.exe --status`, resolve the reported Windows issue, then retry. ai-security-scanner did not change Windows settings."
             ),
+            ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction => format!(
+                "Windows still reports an old scan-tool WSL distribution.{status} ai-security-scanner left it untouched. Back it up if needed, then resolve that exact distribution manually and retry."
+            ),
         }
     }
 }
@@ -5776,6 +5898,23 @@ fn fail_windows_wsl_prerequisite(
         setup.record_failure(failure.reason, failure.action, detail.clone())?;
     }
     Err(AppError::NotAvailable(detail))
+}
+
+fn fail_windows_wsl_distribution_requires_manual_action<T>(
+    setup: Option<&ManagedRuntimeSetupController>,
+    distribution_name: &str,
+) -> AppResult<T> {
+    let detail = format!(
+        "managed_runtime_recovery:wsl_distribution_requires_manual_action: Windows still reports WSL distribution {distribution_name}. ai-security-scanner left it untouched because only a verified `podman machine rm` may remove managed runtime state. Confirm the distribution, then export, rename, or remove it manually in Windows and retry."
+    );
+    if let Some(setup) = setup {
+        setup.record_failure(
+            ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction,
+            ManagedRuntimeSetupNextAction::ResolveWslDistributionManually,
+            detail.clone(),
+        )?;
+    }
+    Err(AppError::NotAuthorized(detail))
 }
 
 fn classify_windows_wsl_prerequisite_failure(
@@ -10845,9 +10984,52 @@ mod tests {
         for action in [
             ManagedRuntimeSetupNextAction::RestartWindows,
             ManagedRuntimeSetupNextAction::RetryWslCheck,
+            ManagedRuntimeSetupNextAction::ResolveWslDistributionManually,
         ] {
             assert!(windows_wsl_repair_parameters(action).is_err());
         }
+    }
+
+    #[test]
+    fn surviving_wsl_distribution_has_a_typed_manual_recovery_that_cannot_be_repaired() {
+        let controller = ManagedRuntimeSetupController::default();
+        controller.begin().expect("begin setup");
+        let distribution = "podman-assm1-win-x64-0123456789ab";
+        let error = fail_windows_wsl_distribution_requires_manual_action::<()>(
+            Some(&controller),
+            distribution,
+        )
+        .expect_err("a surviving distribution requires manual review");
+        controller
+            .finish_failed(error.to_string())
+            .expect("finish failed setup");
+
+        let status = controller.status().expect("typed manual recovery status");
+        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
+        );
+        assert!(status.detail.contains(distribution));
+        assert!(status.detail.contains("export, rename, or remove"));
+        assert!(controller.begin_prerequisite_repair().is_err());
+        assert!(
+            windows_wsl_repair_parameters(
+                ManagedRuntimeSetupNextAction::ResolveWslDistributionManually
+            )
+            .is_err()
+        );
+
+        let encoded = serde_json::to_value(&status).expect("serialize manual recovery status");
+        assert_eq!(
+            encoded["failure_reason"],
+            "windows_wsl_distribution_requires_manual_action"
+        );
+        assert_eq!(encoded["next_action"], "resolve_wsl_distribution_manually");
     }
 
     #[test]
@@ -11661,7 +11843,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn uninstall_retains_all_state_when_exact_wsl_distribution_survives_remediation() {
+    fn uninstall_requires_manual_action_when_wsl_distribution_survives_machine_rm() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -11690,8 +11872,6 @@ mod tests {
         let mut first_inventory = success(listed.clone());
         first_inventory.stderr = b"WSL update notice".to_vec();
         fixture.commands.push(first_inventory);
-        fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(listed));
 
         let error = fixture
             .manager
@@ -11701,26 +11881,26 @@ mod tests {
             })
             .expect_err("a still-registered exact WSL distro must retain all private state");
 
-        assert!(error.to_string().contains("remained registered"));
+        assert!(
+            error
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
+        assert!(error.to_string().contains("export, rename, or remove"));
         assert!(fixture.manager.install_directory().exists());
         assert!(fixture.manager.provider_home().exists());
         assert!(identity.is_file());
         assert_eq!(fs::read(&image).unwrap(), fixture.image);
         let calls = fixture.commands.calls();
         assert_eq!(calls[2], ["--list", "--quiet"]);
-        assert_eq!(calls[3], ["--unregister", expected_distribution.as_str()]);
-        assert_eq!(calls[4], ["--list", "--quiet"]);
+        assert_eq!(calls.len(), 3);
         let commands = fixture.commands.commands();
-        for command in &commands[2..=4] {
-            assert_eq!(command.binary, commands[2].binary);
-            assert_eq!(command.environment, commands[2].environment);
-            assert_eq!(command.working_directory, commands[2].working_directory);
-        }
+        assert_eq!(commands[2].binary.file_name(), Some(OsStr::new("wsl.exe")));
     }
 
     #[cfg(windows)]
     #[test]
-    fn uninstall_unregisters_only_the_exact_orphaned_wsl_distribution_then_proves_absence() {
+    fn uninstall_uses_verified_machine_rm_then_proves_wsl_distribution_absent() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -11728,28 +11908,24 @@ mod tests {
             .manager
             .runtime_command(target)
             .expect("private provider home");
-        let expected_distribution = format!("podman-{}", machine_name(target));
         fixture
             .commands
             .push(success(machine_json(&fixture.manager, false)));
-        fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(utf16le(&format!(
-            "Ubuntu\r\n{expected_distribution}\r\n"
-        ))));
         fixture.commands.push(success(Vec::new()));
         fixture.commands.push(success(utf16le("Ubuntu\r\n")));
 
         let status = fixture
             .manager
             .uninstall(ManagedUninstallOptions::default())
-            .expect("exact orphan remediation and absence proof");
+            .expect("verified machine removal and read-only WSL absence proof");
 
         assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
         assert!(!fixture.manager.install_directory().exists());
         assert!(!fixture.manager.provider_home().exists());
         let calls = fixture.commands.calls();
-        assert_eq!(calls[3], ["--unregister", expected_distribution.as_str()]);
-        assert_eq!(calls[4], ["--list", "--quiet"]);
+        assert_eq!(calls[1][..3], ["machine", "rm", "--force"]);
+        assert_eq!(calls[2], ["--list", "--quiet"]);
+        assert_eq!(calls.len(), 3);
         assert!(
             calls
                 .iter()
@@ -12009,7 +12185,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn start_recovers_exact_orphaned_wsl_distribution_and_reuses_verified_image() {
+    fn start_never_removes_an_orphaned_wsl_distribution_even_with_stale_intent() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -12030,57 +12206,56 @@ mod tests {
         fs::write(&orphaned_vhd, b"orphaned fixture VHD").expect("write orphaned fixture VHD");
         let expected_machine = machine_name(target);
         let expected_distribution = format!("podman-{expected_machine}");
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                target,
+                &expected_machine,
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .expect("record prior product initialization intent");
 
         push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         fixture.commands.push(success(utf16le(&format!(
             "Ubuntu\r\n{expected_distribution}\r\n"
         ))));
-        fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(utf16le("Ubuntu\r\n")));
-        fixture.commands.push(success(Vec::new()));
-        fixture
-            .commands
-            .push(success(machine_json(&fixture.manager, false)));
-        fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(b"5.8.2\n".to_vec()));
-
-        let command = fixture
+        let error = fixture
             .manager
             .start()
-            .expect("recover exact WSL orphan and start");
+            .expect_err("orphan cleanup must require explicit manual action");
 
-        assert_eq!(command.runtime_version(), "5.8.2");
+        assert!(
+            error
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
         assert_eq!(*fixture.downloader.calls.lock().expect("download calls"), 1);
         assert_eq!(fs::read(&cached_image).unwrap(), fixture.image);
-        assert!(!private_entry_exists(&orphaned_vhd).unwrap());
+        assert!(private_entry_exists(&orphaned_vhd).unwrap());
         assert!(fixture.manager.provider_home().is_dir());
-        assert_eq!(
-            inspect_managed_ssh_identity(&fixture.manager.machine_ssh_identity_path()).unwrap(),
-            ManagedSshIdentityState::Valid
+        assert!(
+            !fixture
+                .manager
+                .windows_wsl_ownership_proof_path(
+                    &expected_machine,
+                    WindowsWslOwnershipBasis::InitIntent,
+                )
+                .exists()
         );
 
         let calls = fixture.commands.calls();
         assert_eq!(calls[2], ["machine", "list", "--format", "json"]);
         assert_eq!(calls[3], ["--list", "--quiet"]);
-        assert_eq!(calls[4], ["--unregister", expected_distribution.as_str()]);
-        assert_eq!(calls[5], ["--list", "--quiet"]);
-        assert_eq!(&calls[6][..2], ["machine", "init"]);
-        assert_eq!(calls[7], ["machine", "list", "--format", "json"]);
-        assert_eq!(&calls[8][..3], ["machine", "start", "--quiet"]);
-        assert_eq!(calls[9], ["version", "--format", "{{.Server.Version}}"]);
-        assert!(calls.iter().flatten().all(|argument| argument != "Ubuntu"));
-        assert!(
-            calls
-                .iter()
-                .flatten()
-                .all(|argument| !argument.contains("podman-*") && !argument.contains("assm1-*"))
-        );
+        assert_eq!(calls.len(), 4);
+        assert!(!calls.iter().any(|arguments| {
+            arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+        }));
     }
 
     #[cfg(windows)]
     #[test]
-    fn start_retains_orphaned_state_when_exact_wsl_unregister_fails() {
+    fn start_retry_consumes_stale_intent_and_repeats_only_read_only_orphan_check() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -12100,33 +12275,163 @@ mod tests {
             .expect("create orphaned WSL distribution root");
         fs::write(&orphaned_vhd, b"orphaned fixture VHD").expect("write orphaned fixture VHD");
         let expected_distribution = format!("podman-{}", machine_name(target));
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                target,
+                &machine_name(target),
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .expect("record prior product initialization intent");
 
         push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         fixture
             .commands
             .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
-        fixture
-            .commands
-            .push(failure(b"exact WSL unregister failed"));
-
-        let error = fixture
+        let first = fixture
             .manager
             .start()
-            .expect_err("failed exact unregister must stop recovery");
+            .expect_err("first orphan check requires manual action");
 
-        assert!(error.to_string().contains("exact WSL unregister failed"));
+        assert!(
+            first
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
+        assert!(
+            !fixture
+                .manager
+                .windows_wsl_ownership_proof_path(
+                    &machine_name(target),
+                    WindowsWslOwnershipBasis::InitIntent,
+                )
+                .exists()
+        );
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
+        let second = fixture
+            .manager
+            .start()
+            .expect_err("retry remains manual and read-only");
+
+        assert!(
+            second
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
         assert!(fixture.manager.install_directory().is_dir());
         assert!(fixture.manager.provider_home().is_dir());
         assert!(private_entry_exists(&orphaned_vhd).unwrap());
         assert_eq!(fs::read(&cached_image).unwrap(), fixture.image);
         assert_eq!(*fixture.downloader.calls.lock().expect("download calls"), 1);
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 5);
+        assert_eq!(calls.len(), 8);
         assert_eq!(calls[3], ["--list", "--quiet"]);
-        assert_eq!(calls[4], ["--unregister", expected_distribution.as_str()]);
+        assert_eq!(calls[7], ["--list", "--quiet"]);
         assert!(!calls.iter().any(|arguments| {
             arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+        }));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn start_never_unregisters_a_same_named_wsl_distribution_without_ownership_proof() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        fs::create_dir(vhd.parent().expect("VHD parent")).expect("distribution storage");
+        fs::write(&vhd, b"unproven same-named distribution").expect("fixture VHD");
+        let expected_distribution = format!("podman-{}", machine_name(target));
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
+        let setup = ManagedRuntimeSetupController::default();
+
+        let error = fixture
+            .manager
+            .setup(&setup)
+            .expect_err("name alone must never authorize WSL deletion");
+
+        assert!(
+            error
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
+        assert!(private_entry_exists(&vhd).unwrap());
+        assert!(fixture.commands.calls().iter().all(|arguments| {
+            !arguments
+                .iter()
+                .any(|argument| argument == &["--", "unregister"].concat())
+        }));
+        let status = setup.status().expect("typed manual recovery status");
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn init_intent_without_the_release_private_vhd_never_authorizes_unregister() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let expected_machine = machine_name(target);
+        let expected_distribution = format!("podman-{expected_machine}");
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                target,
+                &expected_machine,
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .expect("persist interrupted init intent");
+        let intent_path = fixture.manager.windows_wsl_ownership_proof_path(
+            &expected_machine,
+            WindowsWslOwnershipBasis::InitIntent,
+        );
+        assert!(intent_path.is_file());
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("intent without its exact VHD is not ownership proof");
+
+        assert!(
+            error
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
+        assert!(!intent_path.exists());
+        assert!(fixture.commands.calls().iter().all(|arguments| {
+            !arguments
+                .iter()
+                .any(|argument| argument == &["--", "unregister"].concat())
         }));
     }
 
@@ -12154,6 +12459,110 @@ mod tests {
                 .expect("Windows volume policy"),
             None
         );
+    }
+
+    #[test]
+    fn stale_wsl_journals_are_consumed_before_retry_and_cleanup_is_idempotent() {
+        let fixture = fixture();
+        let mut target = fixture.manager.loaded.target().expect("target").clone();
+        target.operating_system = ManagedOperatingSystem::Windows;
+        target.provider = ManagedMachineProvider::Wsl;
+        let expected_machine = machine_name(&target);
+
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                &target,
+                &expected_machine,
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .expect("persist interrupted initialization journal");
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                &target,
+                &expected_machine,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            )
+            .expect("persist legacy stronger journal");
+        for basis in [
+            WindowsWslOwnershipBasis::InitIntent,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        ] {
+            assert!(
+                fixture
+                    .manager
+                    .windows_wsl_ownership_proof_path(&expected_machine, basis)
+                    .is_file()
+            );
+        }
+
+        fixture
+            .manager
+            .remove_windows_wsl_ownership_proof_locked(&target, &expected_machine)
+            .expect("retry consumes all stale journals");
+        fixture
+            .manager
+            .remove_windows_wsl_ownership_proof_locked(&target, &expected_machine)
+            .expect("journal consumption is retry-safe and idempotent");
+        for basis in [
+            WindowsWslOwnershipBasis::InitIntent,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        ] {
+            assert!(
+                !fixture
+                    .manager
+                    .windows_wsl_ownership_proof_path(&expected_machine, basis)
+                    .exists()
+            );
+        }
+    }
+
+    #[test]
+    fn returned_machine_init_failure_consumes_one_shot_wsl_journal() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let current_target = fixture.manager.loaded.target().expect("target");
+        let command = fixture
+            .manager
+            .runtime_command(current_target)
+            .expect("private command");
+        let image = fixture
+            .manager
+            .acquire_machine_image_locked(current_target, None)
+            .expect("machine image");
+        let mut windows_target = current_target.clone();
+        windows_target.operating_system = ManagedOperatingSystem::Windows;
+        windows_target.provider = ManagedMachineProvider::Wsl;
+        let expected_machine = machine_name(&windows_target);
+        fixture.commands.push(failure(b"fixture init failed"));
+
+        let error = fixture
+            .manager
+            .initialize_machine_with_one_shot_wsl_intent(
+                &command,
+                &windows_target,
+                &image,
+                &expected_machine,
+            )
+            .expect_err("fixture initialization fails");
+
+        assert!(error.to_string().contains("fixture init failed"));
+        assert!(
+            !fixture
+                .manager
+                .windows_wsl_ownership_proof_path(
+                    &expected_machine,
+                    WindowsWslOwnershipBasis::InitIntent,
+                )
+                .exists()
+        );
+    }
+
+    #[test]
+    fn managed_runtime_source_contains_no_direct_wsl_unregister_command() {
+        let forbidden = ["--", "unregister"].concat();
+        assert!(!include_str!("managed_runtime.rs").contains(&forbidden));
     }
 
     #[test]
@@ -12873,7 +13282,6 @@ mod tests {
             ManagedCommandOperation::MachineStop,
             ManagedCommandOperation::MachineRemoval,
             ManagedCommandOperation::WslDistributionInventory,
-            ManagedCommandOperation::WslDistributionRemoval,
             ManagedCommandOperation::ActiveContainerInventory,
             ManagedCommandOperation::VersionPreflight,
         ];

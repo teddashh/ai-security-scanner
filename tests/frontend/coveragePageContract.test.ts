@@ -85,11 +85,15 @@ test("technical detail is progressive and a website service remains a preset, no
   assert.doesNotMatch(source.slice(advancedEnd, source.indexOf("</section>", advancedEnd)), /asset\.locator/);
 });
 
-test("guided domains use HTTPS while IP and internal routes retain the bounded TCP preset", () => {
+test("guided public and internal inventory routes retain the bounded TCP preset", () => {
   assert.ok(source.includes("recommendedGuidedNetworkPreset"));
+  assert.ok(source.includes("recommendedGuidedLowImpactRatePolicy"));
   assert.match(source, /assessmentIntent === "external_ip_or_domain" \|\| assessmentIntent === "internal_it_environment"/u);
   assert.match(source, /setExternalProtocol\(preset\.protocol\)/u);
   assert.match(source, /setExternalPorts\(preset\.ports\.join\(", "\)\)/u);
+  assert.match(source, /setRequestsPerSecond\(policy\.requestsPerSecond\)/u);
+  assert.match(source, /setExternalConcurrency\(policy\.concurrency\)/u);
+  assert.match(source, /setExternalTimeout\(policy\.timeoutSeconds\)/u);
   assert.ok(source.includes("pageCopy.guidedNetworkPreset"));
   assert.ok(source.includes("這次只會用保守的連線設定檢查 {target}"));
   assert.doesNotMatch(
@@ -97,7 +101,13 @@ test("guided domains use HTTPS while IP and internal routes retain the bounded T
     /\{protocol\}|\{count\}/u,
     "protocol and port counts must not appear in the first-layer preset",
   );
-  assert.match(source, /coverage-technical-preset-summary[\s\S]*guidedNetworkTechnicalPreset[\s\S]*protocol: externalProtocol[\s\S]*count: formatNumber\(parsedPorts\.length\)/u);
+  assert.match(source, /coverage-technical-preset-summary[\s\S]*guidedNetworkTechnicalPreset[\s\S]*protocol: externalProtocol[\s\S]*count: formatNumber\(parsedPorts\.length\)[\s\S]*concurrency: formatNumber\(externalConcurrency\)/u);
+  assert.ok(source.includes("up to {concurrency} simultaneous connections"));
+  assert.ok(source.includes("最多 {concurrency} 個並行連線"));
+  assert.doesNotMatch(source, /one connection at a time|一次一個連線/u);
+  assert.match(source, /Math\.min\(current, limits\.rate\)/u);
+  assert.match(source, /Math\.min\(current, limits\.concurrency\)/u);
+  assert.match(source, /Math\.min\(current, limits\.timeout\)/u);
 });
 
 test("every low-impact IPv4 CIDR setup gets an effective-rate and host-ceiling warning", () => {
@@ -281,6 +291,7 @@ test("repository technical details disclose every planned engine", () => {
   assert.ok(source.includes(
     'repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft"',
   ));
+  assert.ok(source.includes('iac_working_tree: "Checkov, KICS, Trivy"'));
 });
 
 test("a failed workspace copy stays visible and suggests a source-only folder", () => {

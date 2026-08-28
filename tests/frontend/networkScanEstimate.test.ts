@@ -24,7 +24,7 @@ test("network estimates expose the pacing floor without claiming an ETA", () => 
       probeCount: 8_670,
       effectiveRequestsPerSecond: 1,
       minimumSeconds: 8_670,
-      conservativeUpperSeconds: 531_420,
+      conservativeUpperSeconds: 528_875,
       engineCeilingSeconds: 14_400,
       mayExceedEngineCeiling: true,
     },

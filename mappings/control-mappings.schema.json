@@ -49,8 +49,21 @@
           "framework": { "type": "string", "minLength": 1, "maxLength": 80 },
           "framework_version": { "type": "string", "minLength": 1, "maxLength": 40 },
           "control_id": { "type": "string", "minLength": 1, "maxLength": 80 },
-          "title": { "type": "string", "minLength": 1, "maxLength": 160 }
-        }
+          "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "aidefend_applicability": {
+            "enum": ["ai_system", "ai_generated_artifact"]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "framework": { "const": "AIDEFEND" } },
+              "required": ["framework"]
+            },
+            "then": { "required": ["aidefend_applicability"] },
+            "else": { "not": { "required": ["aidefend_applicability"] } }
+          }
+        ]
       }
     },
     "entries": {

@@ -46,10 +46,10 @@ RUN echo '8cf3aaad2dde16ff1529445dab19c2e2a9adc457dbe8d2b02fdbce06b0f638dc  /tmp
 FROM scratch
 
 LABEL org.opencontainers.image.title="ai-security-scanner Trivy engine" \
-      org.opencontainers.image.description="Pinned-source Trivy OS-package profile with a checksum-verified offline vulnerability database" \
+      org.opencontainers.image.description="Pinned-source Trivy input-specific package profiles with a checksum-verified offline vulnerability database" \
       org.opencontainers.image.source="https://github.com/aquasecurity/trivy" \
       org.opencontainers.image.revision="e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994" \
-      org.opencontainers.image.version="0.74.0-2" \
+      org.opencontainers.image.version="0.74.0-3" \
       org.opencontainers.image.licenses="Apache-2.0" \
       io.ai-security-scanner.database-manifest="sha256:a61aa42edc534843230ca24ef72ef322a2da18d717c3de4b6277f4aac43926a1"
 

@@ -62,21 +62,34 @@ export interface GuidedNetworkPreset {
   ports: number[];
 }
 
+export interface GuidedNetworkRatePolicy {
+  requestsPerSecond: number;
+  concurrency: number;
+  timeoutSeconds: number;
+}
+
 /**
- * A public hostname has a directly runnable web default. Literal addresses,
- * networks, and every internal-system route retain the conservative TCP
- * service inventory used for infrastructure targets.
+ * A deployed website carries its declared HTTP(S) service separately. The
+ * public-exposure and internal-system journeys are service inventories, so a
+ * hostname must not silently collapse to HTTPS/443 simply because it can be
+ * used as a web address.
  */
 export const recommendedGuidedNetworkPreset = (
-  assessmentIntent: UseCaseId | undefined,
-  assetType: Asset["type"] | undefined,
+  _assessmentIntent: UseCaseId | undefined,
+  _assetType: Asset["type"] | undefined,
   target: string,
-): GuidedNetworkPreset => {
-  if (assessmentIntent === "external_ip_or_domain" && assetType === "domain") {
-    return { protocol: "https", ports: [443] };
-  }
-  return { protocol: "tcp", ports: recommendedTcpPorts(target) };
-};
+): GuidedNetworkPreset => ({ protocol: "tcp", ports: recommendedTcpPorts(target) });
+
+/**
+ * Use the complete low-impact allowance so a normal home network is not
+ * crawled one endpoint at a time. This changes pacing, not the selected
+ * addresses or ports, and remains inside the frozen low-impact boundary.
+ */
+export const recommendedGuidedLowImpactRatePolicy = (): GuidedNetworkRatePolicy => ({
+  requestsPerSecond: 25,
+  concurrency: 10,
+  timeoutSeconds: 3,
+});
 
 /**
  * Simplified cloud confirmation is safe only when the selected asset came from

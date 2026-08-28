@@ -22,14 +22,14 @@ use crate::discovery::{
     DiscoveredAsset, DiscoveryBatch, ReconciliationReport, reconcile_discovery,
 };
 use crate::domain::{
-    ArtifactCleanupObligation, AssessmentCase, AssessmentIntent, Asset, AssetIdentifier, AssetKind,
-    CaseExport, CaseStatus, CaseSummary, CoverageStatus, CreateCaseRequest, DataSource,
-    DeclaredAssetInput, DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput,
-    DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus, Finding,
-    FindingDiffStatus, FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation,
-    FindingStatus, FindingWorkflowEvent, Id, ManifestStatus, OrganizationProfile, RawArtifact,
-    ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind,
-    VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
+    AiGeneratedArtifactAnswer, ArtifactCleanupObligation, AssessmentCase, AssessmentIntent, Asset,
+    AssetIdentifier, AssetKind, CaseExport, CaseStatus, CaseSummary, CoverageStatus,
+    CreateCaseRequest, DataSource, DeclaredAssetInput, DeclaredAssetKind, DeclaredWebProtocol,
+    DeclaredWebServiceInput, DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun,
+    EngineRunStatus, Finding, FindingDiffStatus, FindingGroup, FindingGroupAction,
+    FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id, ManifestStatus,
+    OrganizationProfile, RawArtifact, ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus,
+    SourceKind, VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export::{
@@ -166,6 +166,11 @@ pub struct PlannedEngineExecution {
     /// This only controls AI-framework result coordinates.
     #[serde(default)]
     pub ai_system_applicable: bool,
+    /// Exact case-creation answer frozen with the scan run. Only `Yes` enables
+    /// AI-generated-artifact result coordinates; `No` and `Unknown` both fail
+    /// closed without changing scanner execution.
+    #[serde(default)]
+    pub ai_generated_artifact: AiGeneratedArtifactAnswer,
     pub assets: Vec<Asset>,
     pub scope_grants: Vec<ScopeGrant>,
     #[serde(default)]
@@ -490,6 +495,7 @@ impl<'a> CaseService<'a> {
             .assessment_intent
             .clone()
             .or_else(|| infer_assessment_intent(request));
+        case.ai_generated_artifact = request.ai_generated_artifact;
         let mut requested_activities = request.requested_activities.clone();
         requested_activities.sort_by_key(enum_key);
         requested_activities.dedup();
@@ -1584,6 +1590,8 @@ impl<'a> CaseService<'a> {
             ));
         }
         let scan_run_id = new_id();
+        let ai_system_applicable = case.assessment_intent == Some(AssessmentIntent::AiApplication);
+        let ai_generated_artifact = case.ai_generated_artifact;
         let sequence = case
             .scan_runs
             .iter()
@@ -1766,8 +1774,8 @@ impl<'a> CaseService<'a> {
                     engine_run_id: engine_run_id.clone(),
                     attempt: 1,
                     manifest: manifest.clone(),
-                    ai_system_applicable: case.assessment_intent
-                        == Some(AssessmentIntent::AiApplication),
+                    ai_system_applicable,
+                    ai_generated_artifact,
                     assets: assets.into_iter().cloned().collect(),
                     scope_grants: relevant_grants,
                     resume_checkpoint: None,
@@ -1788,6 +1796,8 @@ impl<'a> CaseService<'a> {
             created_at: now,
             completed_at,
             knowledge_cutoff: now,
+            ai_system_applicable,
+            ai_generated_artifact,
             verification_baseline_run_id: verification_baseline_run_id.map(str::to_owned),
             scope_grant_ids,
             scope_grant_snapshots: frozen_scope_grants(&effective),
@@ -2177,6 +2187,8 @@ impl<'a> CaseService<'a> {
         }
 
         let run_created_at = case.scan_runs[run_index].created_at;
+        let frozen_ai_system_applicable = case.scan_runs[run_index].ai_system_applicable;
+        let frozen_ai_generated_artifact = case.scan_runs[run_index].ai_generated_artifact;
         let frozen_grant_ids = case.scan_runs[run_index]
             .scope_grant_ids
             .iter()
@@ -2201,7 +2213,6 @@ impl<'a> CaseService<'a> {
         struct ResumeCandidate {
             engine_index: usize,
             execution: PlannedEngineExecution,
-            execution_timeout_seconds: u64,
             stale_warning: Option<String>,
             captured_compatibility_warning: Option<String>,
         }
@@ -2247,22 +2258,24 @@ impl<'a> CaseService<'a> {
             let current_execution_timeout_seconds = manifest.execution_timeout_seconds();
             let mapping_version_differs =
                 engine_run.mapping_version.as_deref() != Some(current_mapping_version);
-            let execution_timeout_differs = engine_run
-                .execution_timeout_seconds
-                .is_some_and(|frozen| frozen != current_execution_timeout_seconds);
+            // Releases before the enforced execution-deadline contract did
+            // not record a timeout and did not enforce the current limit. A
+            // missing value is therefore an incompatible execution identity,
+            // not an invitation to invent a historical default.
+            let execution_timeout_differs =
+                engine_run.execution_timeout_seconds != Some(current_execution_timeout_seconds);
             let release_identity_differs = mapping_version_differs || execution_timeout_differs;
-            let mut execution_timeout_seconds = None;
             let allow_captured_only_drift = if release_identity_differs {
                 // Prove mapping/timeout are the *only* release-identity drift
                 // before considering the zero-record exception.
-                execution_timeout_seconds = Some(validate_resume_manifest_identity(
+                validate_resume_manifest_identity(
                     engine_run,
                     manifest,
                     ResumeManifestDriftAllowance {
                         mapping_version: mapping_version_differs,
                         execution_timeout: execution_timeout_differs,
                     },
-                )?);
+                )?;
                 previous
                     .as_ref()
                     .is_some_and(captured_checkpoint_is_adapter_only)
@@ -2291,7 +2304,7 @@ impl<'a> CaseService<'a> {
                     engine_run
                         .execution_timeout_seconds
                         .map(|value| value.to_string())
-                        .unwrap_or_else(|| "unrecorded".into())
+                        .unwrap_or_else(|| "unrecorded (older release had no enforced deadline)".into())
                 ));
             }
             let release_differences = release_differences.join(" and ");
@@ -2313,14 +2326,13 @@ impl<'a> CaseService<'a> {
                 });
                 continue;
             }
-            let execution_timeout_seconds = match execution_timeout_seconds {
-                Some(timeout) => timeout,
-                None => validate_resume_manifest_identity(
+            if !release_identity_differs {
+                validate_resume_manifest_identity(
                     engine_run,
                     manifest,
                     ResumeManifestDriftAllowance::STRICT,
-                )?,
-            };
+                )?;
+            }
             let captured_compatibility_warning = allow_captured_only_drift.then(|| {
                 format!(
                     "The frozen release identity differs from the installed release ({release_differences}). Resume was allowed only because this engine's adapter input is verified zero-byte JSONL; its frozen values remain unchanged, no finding or control reference can be remapped, and no scanner or runtime will be re-executed for this engine."
@@ -2394,7 +2406,6 @@ impl<'a> CaseService<'a> {
             };
             candidates.push(ResumeCandidate {
                 engine_index,
-                execution_timeout_seconds,
                 stale_warning: stale_knowledge_warning(manifest, now),
                 captured_compatibility_warning,
                 execution: PlannedEngineExecution {
@@ -2403,8 +2414,8 @@ impl<'a> CaseService<'a> {
                     engine_run_id: engine_run.id.clone(),
                     attempt,
                     manifest: manifest.clone(),
-                    ai_system_applicable: case.assessment_intent
-                        == Some(AssessmentIntent::AiApplication),
+                    ai_system_applicable: frozen_ai_system_applicable,
+                    ai_generated_artifact: frozen_ai_generated_artifact,
                     assets,
                     scope_grants: relevant_grants,
                     resume_checkpoint: previous,
@@ -2455,7 +2466,6 @@ impl<'a> CaseService<'a> {
 
         for candidate in &candidates {
             let engine_run = &mut case.scan_runs[run_index].engine_runs[candidate.engine_index];
-            freeze_resume_execution_timeout(engine_run, candidate.execution_timeout_seconds);
             engine_run.status = EngineRunStatus::Queued;
             engine_run.phase = "queued_for_resume".into();
             engine_run.finished_at = None;
@@ -4880,14 +4890,13 @@ fn validate_resume_manifest_identity(
     engine_run: &EngineRun,
     manifest: &EngineManifest,
     allowance: ResumeManifestDriftAllowance,
-) -> AppResult<u64> {
+) -> AppResult<()> {
     let image = manifest.image.as_ref();
     let command_sha256 = sha256_bytes(&serde_json::to_vec(&manifest.command)?);
     let mapping_version = control_mapping_version()?;
     let execution_timeout_seconds = manifest.execution_timeout_seconds();
-    let execution_timeout_matches = engine_run
-        .execution_timeout_seconds
-        .is_none_or(|frozen| frozen == execution_timeout_seconds);
+    let execution_timeout_matches =
+        engine_run.execution_timeout_seconds == Some(execution_timeout_seconds);
     let identity_matches = engine_run.manifest_schema_version.as_deref()
         == Some(manifest.schema_version.as_str())
         && engine_run.engine_version == manifest.engine_version
@@ -4910,13 +4919,7 @@ fn validate_resume_manifest_identity(
             engine_run.engine_id
         )));
     }
-    Ok(execution_timeout_seconds)
-}
-
-fn freeze_resume_execution_timeout(engine_run: &mut EngineRun, timeout_seconds: u64) {
-    engine_run
-        .execution_timeout_seconds
-        .get_or_insert(timeout_seconds);
+    Ok(())
 }
 
 fn validate_report_identity(
@@ -5708,7 +5711,9 @@ fn validate_destination(destination: &Path) -> AppResult<()> {
 
 #[cfg(test)]
 mod export_destination_tests {
-    use super::{destination_has_forbidden_prefix, validate_destination, write_new_private_file};
+    #[cfg(windows)]
+    use super::destination_has_forbidden_prefix;
+    use super::{validate_destination, write_new_private_file};
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
@@ -6197,10 +6202,10 @@ mod tests {
     };
     use crate::discovery::{ConnectorDiscovery, DiscoveredAsset};
     use crate::domain::{
-        AssessmentActivity, AssetIdentifier, AssetKind, Confidence, CoverageStatus,
-        DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS, DataClass, EngineCategory, EngineCompatibility,
-        EngineExecutionContract, EngineExecutionResources, Evidence, EvidenceKind, FindingStatus,
-        ImageReference, ManifestStatus, ProviderExecutionContract, Severity,
+        AssessmentActivity, AssetIdentifier, AssetKind, Confidence, CoverageStatus, DataClass,
+        EngineCategory, EngineCompatibility, EngineExecutionContract, EngineExecutionResources,
+        Evidence, EvidenceKind, FindingStatus, ImageReference, ManifestStatus,
+        ProviderExecutionContract, Severity,
     };
     use crate::export::RedactionProfile;
     use chrono::Duration;
@@ -6244,12 +6249,21 @@ mod tests {
             &self,
             assessment_intent: Option<AssessmentIntent>,
         ) -> AssessmentCase {
+            self.create_with_ai_provenance(assessment_intent, AiGeneratedArtifactAnswer::Unknown)
+        }
+
+        fn create_with_ai_provenance(
+            &self,
+            assessment_intent: Option<AssessmentIntent>,
+            ai_generated_artifact: AiGeneratedArtifactAnswer,
+        ) -> AssessmentCase {
             self.service()
                 .create_case(&CreateCaseRequest {
                     title: "Assessment".into(),
                     organization_name: "Example Co".into(),
                     employee_range: "1-10".into(),
                     assessment_intent,
+                    ai_generated_artifact,
                     data_classes: vec![DataClass::General],
                     requested_activities: vec![],
                     source_kinds: vec![],
@@ -6621,7 +6635,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_resume_identity_is_migrated_once_to_the_current_execution_timeout() {
+    fn legacy_resume_identity_without_a_recorded_deadline_is_not_reexecution_compatible() {
         let mut manifest = comparison_scope_manifest();
         let engine_run = not_executed_run(
             "scan-1",
@@ -6637,31 +6651,33 @@ mod tests {
             .as_object_mut()
             .expect("engine run object")
             .remove("execution_timeout_seconds");
-        let mut legacy: EngineRun =
+        let legacy: EngineRun =
             serde_json::from_value(serialized).expect("legacy engine run remains readable");
         assert_eq!(legacy.execution_timeout_seconds, None);
 
         manifest.execution = Some(EngineExecutionContract {
             resources: EngineExecutionResources {
-                timeout_seconds: DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS + 1,
+                timeout_seconds: 3_600,
             },
         });
-        let migrated_timeout = validate_resume_manifest_identity(
+        let error = validate_resume_manifest_identity(
             &legacy,
             &manifest,
             ResumeManifestDriftAllowance::STRICT,
         )
-        .expect("legacy run adopts the current timeout once during resume planning");
-        freeze_resume_execution_timeout(&mut legacy, migrated_timeout);
+        .expect_err("an older unlimited run must never be reexecuted under an invented deadline");
+        assert!(error.to_string().contains("active execution deadline"));
 
-        manifest
-            .execution
-            .as_mut()
-            .expect("execution contract")
-            .resources
-            .timeout_seconds += 1;
-        validate_resume_manifest_identity(&legacy, &manifest, ResumeManifestDriftAllowance::STRICT)
-            .expect_err("the migrated legacy identity must reject later timeout drift");
+        validate_resume_manifest_identity(
+            &legacy,
+            &manifest,
+            ResumeManifestDriftAllowance {
+                mapping_version: false,
+                execution_timeout: true,
+            },
+        )
+        .expect("captured-only validation may explicitly ignore the missing runtime deadline");
+        assert_eq!(legacy.execution_timeout_seconds, None);
     }
 
     #[test]
@@ -6762,6 +6778,8 @@ mod tests {
             created_at: time,
             completed_at: Some(time),
             knowledge_cutoff: time,
+            ai_system_applicable: false,
+            ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
@@ -7182,6 +7200,40 @@ mod tests {
     }
 
     #[test]
+    fn tcp_hostname_scope_plans_naabu_for_a_domain_asset() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let asset_id = approve_direct_external_target(
+            &fixture,
+            &created.id,
+            AssetKind::Domain,
+            "scanner.example.test",
+            ScanPermission::LowImpactExternalConnection,
+            crate::external_scope::TransportProtocol::Tcp,
+            true,
+        );
+        let service = fixture.service();
+
+        let readiness = service.scan_readiness(&created.id).unwrap();
+        assert!(readiness.ready);
+        assert_eq!(readiness.compatible_engine_count, 1);
+        assert_eq!(readiness.runnable_engine_count, 1);
+
+        let plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["naabu".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "naabu");
+        assert_eq!(plan.executable[0].assets[0].id, asset_id);
+        assert!(plan.not_executed.is_empty());
+    }
+
+    #[test]
     fn tcp_address_scope_plans_greenbone_without_planning_nuclei() {
         let fixture = Fixture::new();
         let created = fixture.create();
@@ -7523,6 +7575,7 @@ mod tests {
                 organization_name: "Example Co".into(),
                 employee_range: "2-49".into(),
                 assessment_intent: None,
+                ai_generated_artifact: Default::default(),
                 data_classes: vec![DataClass::General],
                 requested_activities: vec![
                     AssessmentActivity::ConfigurationAssessment,
@@ -7610,6 +7663,7 @@ mod tests {
             organization_name: "Example Co".into(),
             employee_range: "2-49".into(),
             assessment_intent: None,
+            ai_generated_artifact: Default::default(),
             data_classes: vec![],
             requested_activities: vec![],
             source_kinds: vec![SourceKind::AwsOrganization],
@@ -7640,6 +7694,7 @@ mod tests {
                 organization_name: "Example Co".into(),
                 employee_range: "2-49".into(),
                 assessment_intent: None,
+                ai_generated_artifact: Default::default(),
                 data_classes: vec![],
                 requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
                 source_kinds: vec![],
@@ -7669,6 +7724,7 @@ mod tests {
                 organization_name: "Example Co".into(),
                 employee_range: "2-49".into(),
                 assessment_intent: None,
+                ai_generated_artifact: Default::default(),
                 data_classes: vec![],
                 requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
                 source_kinds: vec![],
@@ -7712,6 +7768,7 @@ mod tests {
                 organization_name: "Example Co".into(),
                 employee_range: "2-49".into(),
                 assessment_intent: Some(AssessmentIntent::DeployedWebsite),
+                ai_generated_artifact: Default::default(),
                 data_classes: vec![],
                 requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
                 source_kinds: vec![],
@@ -7793,6 +7850,7 @@ mod tests {
             organization_name: "Example Co".into(),
             employee_range: "2-49".into(),
             assessment_intent: None,
+            ai_generated_artifact: Default::default(),
             data_classes: vec![],
             requested_activities: vec![],
             source_kinds: vec![],
@@ -7841,6 +7899,8 @@ mod tests {
             created_at: now,
             completed_at: Some(now),
             knowledge_cutoff: now,
+            ai_system_applicable: false,
+            ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
@@ -8092,6 +8152,7 @@ mod tests {
                     organization_name: "Example".into(),
                     employee_range: "1-10".into(),
                     assessment_intent: None,
+                    ai_generated_artifact: Default::default(),
                     data_classes: vec![],
                     requested_activities: vec![],
                     source_kinds: vec![],
@@ -8455,6 +8516,8 @@ mod tests {
                 created_at: now,
                 completed_at: None,
                 knowledge_cutoff: now,
+                ai_system_applicable: false,
+                ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec![],
                 scope_grant_snapshots: vec![],
@@ -8780,6 +8843,74 @@ mod tests {
             .unwrap();
         assert_eq!(plan.executable.len(), 1);
         assert!(plan.executable[0].ai_system_applicable);
+        assert_eq!(
+            plan.executable[0].ai_generated_artifact,
+            AiGeneratedArtifactAnswer::Unknown
+        );
+        assert!(plan.scan_run.ai_system_applicable);
+        assert_eq!(
+            plan.scan_run.ai_generated_artifact,
+            AiGeneratedArtifactAnswer::Unknown
+        );
+    }
+
+    #[test]
+    fn explicit_ai_generated_answer_persists_and_resume_uses_the_frozen_run_value() {
+        let fixture = Fixture::new();
+        let case = fixture.create_with_ai_provenance(
+            Some(AssessmentIntent::AiApplication),
+            AiGeneratedArtifactAnswer::Yes,
+        );
+        let summary = CaseSummary::from(&case);
+        assert_eq!(
+            summary.ai_generated_artifact,
+            AiGeneratedArtifactAnswer::Yes
+        );
+
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let planned = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            planned.executable[0].ai_generated_artifact,
+            AiGeneratedArtifactAnswer::Yes
+        );
+
+        let mut changed_case = service.show_case(&case.id).unwrap();
+        changed_case.assessment_intent = Some(AssessmentIntent::SourceCode);
+        changed_case.ai_generated_artifact = AiGeneratedArtifactAnswer::No;
+        fixture
+            .storage
+            .save_case(&mut changed_case, "test.mutable_case_context_changed")
+            .unwrap();
+
+        let resumed = service.plan_resume(&case.id, &planned.scan_run.id).unwrap();
+        assert!(resumed.executable[0].ai_system_applicable);
+        assert_eq!(
+            resumed.executable[0].ai_generated_artifact,
+            AiGeneratedArtifactAnswer::Yes,
+            "resume must use the run's exact frozen answer, not mutable case metadata"
+        );
     }
 
     #[test]
@@ -9146,6 +9277,7 @@ mod tests {
         engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
         engine_run.raw_artifact_ids = artifact_ids;
         engine_run.mapping_version = Some("2026-08-26.1".into());
+        engine_run.execution_timeout_seconds = None;
         let engine_run_id = engine_run.id.clone();
         run.completed_at = Some(Utc::now());
         stored.raw_artifacts.extend(artifacts);
@@ -9189,6 +9321,7 @@ mod tests {
             .find(|engine_run| engine_run.id == staged.engine_run_id)
             .unwrap();
         assert_eq!(engine_run.mapping_version.as_deref(), Some("2026-08-26.1"));
+        assert_eq!(engine_run.execution_timeout_seconds, None);
         assert!(engine_run.warnings.iter().any(|warning| {
             warning.contains("no finding or control reference can be remapped")
                 && warning.contains("no scanner or runtime will be re-executed")
@@ -10377,6 +10510,8 @@ mod tests {
             created_at: now,
             completed_at: None,
             knowledge_cutoff: now,
+            ai_system_applicable: false,
+            ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec!["grant-1".into()],
             scope_grant_snapshots: case.scope_grants.clone(),
@@ -10662,6 +10797,8 @@ mod tests {
                 created_at: now,
                 completed_at: Some(now),
                 knowledge_cutoff: now,
+                ai_system_applicable: false,
+                ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec!["grant-1".into()],
                 scope_grant_snapshots: case.scope_grants.clone(),
@@ -10685,6 +10822,8 @@ mod tests {
                 created_at: now,
                 completed_at,
                 knowledge_cutoff: now,
+                ai_system_applicable: false,
+                ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec!["grant-1".into()],
                 scope_grant_snapshots: case.scope_grants.clone(),

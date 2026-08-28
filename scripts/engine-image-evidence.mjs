@@ -1225,7 +1225,7 @@ async function selfTest() {
     const gatewayPrepared = await createPreparedEvidence({
       engine: GATEWAY_SCRATCH_SBOM.engine,
       image: GATEWAY_SCRATCH_SBOM.image,
-      tag: "0.1.6-1",
+      tag: "0.1.7-1",
       indexDigest,
       sourceRevision,
       outputRoot: gatewayRoot,
@@ -1286,7 +1286,7 @@ async function selfTest() {
         normalizeGatewayScratchCycloneDx({
           engine: GATEWAY_SCRATCH_SBOM.engine,
           image: GATEWAY_SCRATCH_SBOM.image,
-          tag: "0.1.6-1",
+          tag: "0.1.7-1",
           platformDigest: gatewayDigest,
           sourceRevision,
           spdxDocument: fixtures.spdx,

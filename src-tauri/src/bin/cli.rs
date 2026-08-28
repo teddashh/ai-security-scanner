@@ -887,6 +887,7 @@ fn execute_case(
                 organization_name: args.organization,
                 employee_range: args.employee_range,
                 assessment_intent: None,
+                ai_generated_artifact: Default::default(),
                 data_classes: args
                     .data_class
                     .iter()
@@ -3403,6 +3404,7 @@ mod tests {
                 organization_name: "Example".into(),
                 employee_range: "1-10".into(),
                 assessment_intent: None,
+                ai_generated_artifact: Default::default(),
                 data_classes: vec![],
                 requested_activities: vec![],
                 source_kinds: vec![],

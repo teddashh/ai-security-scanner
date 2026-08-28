@@ -63,6 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine_run_id: "engine-run-greenbone-managed-socks-smoke",
         manifest,
         ai_system_applicable: false,
+        ai_generated_artifact_applicable: false,
         asset_ids: &assets,
         artifact_root: &artifact_root,
         raw_artifacts: &artifacts,

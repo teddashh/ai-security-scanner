@@ -43,6 +43,8 @@ struct ControlDefinition {
     framework_version: String,
     control_id: String,
     title: String,
+    #[serde(default)]
+    aidefend_applicability: Option<AidefendApplicability>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,8 +53,6 @@ struct MappingEntry {
     engine_id: String,
     match_kind: MatchKind,
     source_rule: String,
-    #[serde(default)]
-    aidefend_applicability: Option<AidefendApplicability>,
     controls: Vec<String>,
     rationale: String,
 }
@@ -68,6 +68,7 @@ enum MatchKind {
 #[serde(rename_all = "snake_case")]
 enum AidefendApplicability {
     AiSystem,
+    AiGeneratedArtifact,
 }
 
 #[derive(Debug)]
@@ -103,6 +104,7 @@ pub(super) fn lookup(
     engine_id: &str,
     source_rule: &str,
     ai_system_applicable: bool,
+    ai_generated_artifact_applicable: bool,
 ) -> Vec<ControlReference> {
     let Ok(catalog) = catalog() else {
         // Registry construction validates this immutable embedded catalog. If a
@@ -123,11 +125,17 @@ pub(super) fn lookup(
             let Some(control) = catalog.controls.get(key) else {
                 continue;
             };
-            if control.framework == "AIDEFEND"
-                && (!ai_system_applicable
-                    || entry.aidefend_applicability != Some(AidefendApplicability::AiSystem))
-            {
-                continue;
+            if control.framework == "AIDEFEND" {
+                let applicable = match control.aidefend_applicability {
+                    Some(AidefendApplicability::AiSystem) => ai_system_applicable,
+                    Some(AidefendApplicability::AiGeneratedArtifact) => {
+                        ai_generated_artifact_applicable
+                    }
+                    None => false,
+                };
+                if !applicable {
+                    continue;
+                }
             }
             let identity = (
                 control.framework.clone(),
@@ -214,6 +222,18 @@ fn parse_and_validate() -> Result<ValidatedCatalog, String> {
         )?;
         validate_text("control id", &control.control_id, 1, 80)?;
         validate_text("control title", &control.title, 1, 160)?;
+        if control.framework == "AIDEFEND" && control.aidefend_applicability.is_none() {
+            return Err(format!(
+                "AIDEFEND control {} has no explicit applicability",
+                control.key
+            ));
+        }
+        if control.framework != "AIDEFEND" && control.aidefend_applicability.is_some() {
+            return Err(format!(
+                "non-AIDEFEND control {} declares AIDEFEND applicability",
+                control.key
+            ));
+        }
         if !sources.contains(&(control.framework.clone(), control.framework_version.clone())) {
             return Err(format!(
                 "control {} has no matching official framework source",
@@ -269,35 +289,19 @@ fn parse_and_validate() -> Result<ValidatedCatalog, String> {
             ));
         }
         let mut unique_controls = BTreeSet::new();
-        let mut has_aidefend_control = false;
         for key in &entry.controls {
-            let Some(control) = controls.get(key) else {
+            if !controls.contains_key(key) {
                 return Err(format!(
                     "mapping for {} references unknown control {key}",
                     entry.engine_id
                 ));
-            };
-            has_aidefend_control |= control.framework == "AIDEFEND";
+            }
             if !unique_controls.insert(key) {
                 return Err(format!(
                     "mapping for {} repeats control {key}",
                     entry.engine_id
                 ));
             }
-        }
-        if has_aidefend_control
-            && entry.aidefend_applicability != Some(AidefendApplicability::AiSystem)
-        {
-            return Err(format!(
-                "mapping for {} references AIDEFEND without explicit AI-system applicability",
-                entry.engine_id
-            ));
-        }
-        if !has_aidefend_control && entry.aidefend_applicability.is_some() {
-            return Err(format!(
-                "mapping for {} declares AIDEFEND applicability without an AIDEFEND control",
-                entry.engine_id
-            ));
         }
         validate_text("mapping rationale", &entry.rationale, 20, 512)?;
         let rationale = entry.rationale.to_ascii_lowercase();
@@ -420,15 +424,20 @@ mod tests {
 
     #[test]
     fn exact_and_standardized_prefix_rules_map_deterministically() {
-        let public_bucket = lookup("prowler", "s3_bucket_level_public_access_block", false);
+        let public_bucket = lookup(
+            "prowler",
+            "s3_bucket_level_public_access_block",
+            false,
+            false,
+        );
         assert_eq!(public_bucket.len(), 3);
         assert!(public_bucket.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-08-27.1"
+                && item.mapping_version == "2026-08-28.1"
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
 
-        let ordinary_cve = lookup("trivy", "CVE-2026-12345", false);
+        let ordinary_cve = lookup("trivy", "CVE-2026-12345", false, false);
         assert_eq!(ordinary_cve.len(), 2);
         assert!(
             ordinary_cve
@@ -437,7 +446,7 @@ mod tests {
         );
         assert!(ordinary_cve.iter().all(|item| item.framework != "AIDEFEND"));
 
-        let ai_system_cve = lookup("trivy", "CVE-2026-12345", true);
+        let ai_system_cve = lookup("trivy", "CVE-2026-12345", true, false);
         assert_eq!(ai_system_cve.len(), 4);
         assert!(
             ai_system_cve
@@ -445,44 +454,69 @@ mod tests {
                 .any(|item| item.control_id == "AID-H-003.001")
         );
 
-        let generated_code_secret = lookup("gitleaks", "generic-api-key", true);
+        let generated_code_secret = lookup("gitleaks", "generic-api-key", false, true);
         assert!(
             generated_code_secret
                 .iter()
                 .any(|item| item.control_id == "AID-H-031.002")
         );
         assert!(
-            lookup("gitleaks", "generic-api-key", false)
+            lookup("gitleaks", "generic-api-key", true, false)
                 .iter()
                 .all(|item| item.framework != "AIDEFEND")
         );
 
-        let shipped_semgrep_rules = [
+        let dangerous_construct_rules = [
             "ai-security-scanner.python.dynamic-code-execution",
             "ai-security-scanner.python.shell-true",
             "ai-security-scanner.javascript.child-process-exec",
-            "ai-security-scanner.generic.private-key",
         ];
-        for source_rule in shipped_semgrep_rules {
-            let ordinary = lookup("semgrep", source_rule, false);
+        for source_rule in dangerous_construct_rules {
+            let ordinary = lookup("semgrep", source_rule, false, false);
             assert!(
                 !ordinary.is_empty(),
                 "shipped Semgrep rule {source_rule} must have a reviewed mapping"
             );
             assert!(ordinary.iter().all(|item| item.framework != "AIDEFEND"));
 
-            let ai_system = lookup("semgrep", source_rule, true);
+            let ai_system = lookup("semgrep", source_rule, true, false);
             assert!(
-                ai_system.iter().any(|item| item.framework == "AIDEFEND"),
+                ai_system
+                    .iter()
+                    .any(|item| item.control_id == "AID-H-025.001"),
                 "shipped Semgrep rule {source_rule} must expose its reviewed AI-system coordinate"
             );
+            assert!(
+                ai_system
+                    .iter()
+                    .all(|item| item.control_id != "AID-H-031.002"),
+                "AI-system applicability alone must not imply AI-generated code"
+            );
+
+            let both = lookup("semgrep", source_rule, true, true);
+            assert!(
+                both.iter().any(|item| item.control_id == "AID-H-031.002"),
+                "an explicit AI-generated-artifact answer enables the reviewed coordinate"
+            );
         }
+
+        let generated_private_key = lookup(
+            "semgrep",
+            "ai-security-scanner.generic.private-key",
+            false,
+            true,
+        );
+        assert!(
+            generated_private_key
+                .iter()
+                .any(|item| item.control_id == "AID-H-031.002")
+        );
     }
 
     #[test]
     fn unknown_or_observation_rules_are_not_guessed() {
-        assert!(lookup("prowler", "new-unknown-check", false).is_empty());
-        assert!(lookup("httpx", "http-service-observed", false).is_empty());
-        assert!(lookup("naabu", "open-tcp-port", false).is_empty());
+        assert!(lookup("prowler", "new-unknown-check", false, false).is_empty());
+        assert!(lookup("httpx", "http-service-observed", false, false).is_empty());
+        assert!(lookup("naabu", "open-tcp-port", false, false).is_empty());
     }
 }

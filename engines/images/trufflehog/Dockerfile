@@ -40,7 +40,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner TruffleHog engine" \
       org.opencontainers.image.description="Pinned-source, filesystem-only secret discovery without credential verification" \
       org.opencontainers.image.source="https://github.com/trufflesecurity/trufflehog" \
       org.opencontainers.image.revision="3ab759fef4bb5935d4fe9ac68b503d05346b8364" \
-      org.opencontainers.image.version="3.97.0-2" \
+      org.opencontainers.image.version="3.97.0-3" \
       org.opencontainers.image.licenses="AGPL-3.0"
 
 ENV HOME="/tmp/ai-security-scanner-home" XDG_CACHE_HOME="/tmp/ai-security-scanner-cache"

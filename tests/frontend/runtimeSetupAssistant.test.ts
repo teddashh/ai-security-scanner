@@ -12,6 +12,10 @@ const shellSource = readFileSync(
   new URL("../../src/components/AppShell.tsx", import.meta.url),
   "utf8",
 );
+const appSource = readFileSync(
+  new URL("../../src/App.tsx", import.meta.url),
+  "utf8",
+);
 const scannerSource = readFileSync(
   new URL("../../src/services/scanner.ts", import.meta.url),
   "utf8",
@@ -34,6 +38,27 @@ test("missing WSL gets one bilingual Microsoft setup path and one safe recheck",
   assert.match(source, /href=\{MICROSOFT_WSL_HELP\}/u);
   assert.match(source, /setupFailed && showMicrosoftSetup/u);
   assert.match(source, /onClick=\{onSetup\}/u);
+});
+
+test("a surviving WSL distribution gets visible bilingual manual recovery instead of a repair loop", () => {
+  for (const phrase of [
+    "An old scan-tool workspace needs your decision",
+    "Open Technical details below and note the exact distribution name.",
+    "export it first",
+    "rename or remove only that exact distribution",
+    "請確認一個舊的掃描工具工作區",
+    "記下完整的發行版名稱",
+    "請先匯出備份",
+    "再只針對這個發行版重新命名或移除",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.match(source, /resolve_wsl_distribution_manually/u);
+  assert.match(source, /MICROSOFT_WSL_DISTRIBUTION_HELP/u);
+  assert.match(source, /basic-commands#export-a-distribution/u);
+  assert.match(shellSource, /resolve_wsl_distribution_manually:\s*"runtime\.recovery\.resolveWslDistribution"/u);
+  assert.match(shellSource, /needsManualWslRecovery[\s\S]*onOpenRuntimeSetup/u);
+  assert.match(shellSource, /"runtime\.setup\.reviewManualRecovery"/u);
+  assert.match(appSource, /onOpenRuntimeSetup=\{\(\) => \{[\s\S]*setRuntimeSetupFocusKey[\s\S]*navigate\("start"\)/u);
 });
 
 test("a generic setup failure offers a retry without inventing an external action", () => {

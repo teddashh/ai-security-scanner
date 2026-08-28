@@ -113,6 +113,20 @@ test("managed runtime setup adapter preserves the exact failed recovery contract
   });
 });
 
+test("managed runtime setup adapter preserves the typed manual WSL distribution recovery", () => {
+  const adapted = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
+    failure_reason: "windows_wsl_distribution_requires_manual_action",
+    next_action: "resolve_wsl_distribution_manually",
+    detail: "Windows still reports WSL distribution podman-assm1-win-x64-0123456789ab",
+  }));
+
+  assert.equal(
+    adapted.failureReason,
+    "windows_wsl_distribution_requires_manual_action",
+  );
+  assert.equal(adapted.nextAction, "resolve_wsl_distribution_manually");
+});
+
 test("managed runtime setup adapter hides recovery fields outside failed or when mismatched", () => {
   const unwinding = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
     phase: "prerequisite",
@@ -126,6 +140,13 @@ test("managed runtime setup adapter hides recovery fields outside failed or when
   }));
   assert.equal(mismatched.failureReason, undefined);
   assert.equal(mismatched.nextAction, undefined);
+
+  const mismatchedManualRecovery = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
+    failure_reason: "windows_wsl_distribution_requires_manual_action",
+    next_action: "retry_wsl_check",
+  }));
+  assert.equal(mismatchedManualRecovery.failureReason, undefined);
+  assert.equal(mismatchedManualRecovery.nextAction, undefined);
 });
 
 test("managed runtime prerequisite repair adapter accepts only bounded terminal results", () => {
@@ -175,16 +196,19 @@ test("declared website metadata rejects malformed or query-bearing values", () =
   }), undefined);
 });
 
-test("native case summaries, workspaces, and case creation preserve assessment intent", () => {
+test("native case summaries, workspaces, and case creation preserve AI applicability provenance", () => {
   assert.ok(adapterSource.includes("assessment_intent?: string | null"));
+  assert.ok(adapterSource.includes("ai_generated_artifact?: string | null"));
   assert.equal((adapterSource.match(/const assessmentIntent = mapAssessmentIntent/g) ?? []).length, 2);
   assert.ok(scannerSource.includes("assessment_intent: input.assessmentIntent ?? null"));
+  assert.ok(scannerSource.includes("ai_generated_artifact: input.aiGeneratedArtifact"));
 });
 
 const summaryFixture = (overrides: Record<string, unknown> = {}) => ({
   id: "case-summary-1",
   title: "Summary case",
   assessment_intent: "source_code",
+  ai_generated_artifact: "yes",
   organization_name: "Example",
   employee_range: "small",
   data_classes: [],
@@ -232,6 +256,16 @@ test("case summaries display only applicable source platforms and preserve real 
   const snapshot = adaptNativeSnapshot(snapshotFixture([summaryFixture()]), []);
 
   assert.deepEqual(snapshot.cases[0]?.platforms, ["code", "container", "kubernetes"]);
+  assert.equal(snapshot.cases[0]?.aiGeneratedArtifact, "yes");
+});
+
+test("missing or malformed AI-generated answers fail closed to unknown", () => {
+  for (const ai_generated_artifact of [undefined, null, "maybe", true]) {
+    const snapshot = adaptNativeSnapshot(snapshotFixture([summaryFixture({
+      ai_generated_artifact,
+    })]), []);
+    assert.equal(snapshot.cases[0]?.aiGeneratedArtifact, "unknown");
+  }
 });
 
 test("draft summaries with no assets or applicable sources fall back to the selected assessment route", () => {

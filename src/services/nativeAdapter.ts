@@ -2,6 +2,7 @@ import type {
   AppSnapshot,
   AssessmentCase,
   AssessmentActivity,
+  AiGeneratedArtifactAnswer,
   Asset,
   AssetType,
   CaseExport,
@@ -63,6 +64,7 @@ export interface NativeCaseSummary {
   id: string;
   title: string;
   assessment_intent?: string | null;
+  ai_generated_artifact?: string | null;
   organization_name: string;
   employee_range: string;
   data_classes: string[];
@@ -365,6 +367,7 @@ export interface NativeAssessmentCase {
   id: string;
   title: string;
   assessment_intent?: string | null;
+  ai_generated_artifact?: string | null;
   profile: {
     organization_name: string;
     employee_range: string;
@@ -484,6 +487,7 @@ const managedRuntimeRecoveryActions = {
   windows_wsl_update_required: "update_wsl",
   windows_restart_required: "restart_windows",
   windows_wsl_command_failed: "retry_wsl_check",
+  windows_wsl_distribution_requires_manual_action: "resolve_wsl_distribution_manually",
 } as const satisfies Record<ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupNextAction>;
 
 /**
@@ -616,6 +620,11 @@ const assessmentIntents: readonly UseCaseId[] = [
 
 const mapAssessmentIntent = (value: string | null | undefined): UseCaseId | undefined =>
   assessmentIntents.includes(value as UseCaseId) ? value as UseCaseId : undefined;
+
+const mapAiGeneratedArtifact = (
+  value: string | null | undefined,
+): AiGeneratedArtifactAnswer =>
+  value === "yes" || value === "no" ? value : "unknown";
 
 const suggestedPlatformsForIntent = (intent: UseCaseId | undefined): CloudPlatform[] =>
   intent ? [...useCaseById(intent).suggestedPlatforms] : [];
@@ -1062,6 +1071,7 @@ const adaptSummary = (summary: NativeCaseSummary): AssessmentCase => {
     id: summary.id,
     name: summary.title,
     assessmentIntent,
+    aiGeneratedArtifact: mapAiGeneratedArtifact(summary.ai_generated_artifact),
     organizationName: summary.organization_name,
     companySize: mapCompanySize(summary.employee_range),
     dataClasses: mapDataClasses(summary.data_classes),
@@ -1444,6 +1454,7 @@ export const adaptNativeCase = (
     id: nativeCase.id,
     name: nativeCase.title,
     assessmentIntent,
+    aiGeneratedArtifact: mapAiGeneratedArtifact(nativeCase.ai_generated_artifact),
     organizationName: nativeCase.profile.organization_name,
     companySize: mapCompanySize(nativeCase.profile.employee_range),
     dataClasses: mapDataClasses(nativeCase.profile.data_classes),
