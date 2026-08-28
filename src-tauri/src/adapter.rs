@@ -341,6 +341,7 @@ mod tests {
             status: ManifestStatus::Experimental,
             notices: vec![],
             compatibility: EngineCompatibility::default(),
+            execution: None,
         }
     }
 

@@ -135,7 +135,7 @@ export function AppShell({
   const { locale, setLocale, t, formatNumber } = useI18n();
 
   const exactBytes = (value: number): string =>
-    t("common.bytes", { value: formatNumber(value) });
+    t(value === 1 ? "common.byte" : "common.bytes", { value: formatNumber(value) });
   const runtimeIssue = runtimeIssueKeys[
     runtimeSetup?.failureReason
       ? "wsl"
@@ -144,6 +144,31 @@ export function AppShell({
   const runtimeGuidance = runtimeSetup?.nextAction
     ? runtimeRecoveryKeys[runtimeSetup.nextAction]
     : runtimeIssue;
+  const runtimeSetupStarting = runtimeBusy
+    && runtimeSetup?.active !== true
+    && runtimeSetup?.prerequisiteRepairActive !== true;
+  const runtimeSetupWorking = runtimeBusy
+    || runtimeSetup?.active === true
+    || runtimeSetup?.prerequisiteRepairActive === true;
+  const displayedRuntimeSetupPhase = runtimeSetupStarting ? "install" : runtimeSetup?.phase;
+  const genericSetupFailure = !runtimeSetupWorking
+    && runtimeSetup?.phase === "failed"
+    && !runtimeSetup.nextAction;
+  const runtimeGuidanceTitle: TranslationKey = genericSetupFailure
+    ? "runtime.phase.failed.generic.label"
+    : "runtime.nextStep";
+  const runtimeSetupDetail: TranslationKey | undefined = displayedRuntimeSetupPhase
+    ? genericSetupFailure
+      ? "runtime.phase.failed.generic.detail"
+      : runtimeSetupDetailKeys[displayedRuntimeSetupPhase]
+    : undefined;
+  const runtimeSetupAction: TranslationKey = runtimeSetup?.phase === "failed"
+    ? runtimeSetup.nextAction
+      ? "runtime.setup.recheck"
+      : "runtime.setup.retry"
+    : runtimeSetup?.phase === "cancelled"
+      ? "runtime.setup.continue"
+      : "runtime.setup.action";
 
   useEffect(() => setMobileOpen(false), [page]);
 
@@ -250,17 +275,17 @@ export function AppShell({
           </span>
           {mode === "native" && runtime && !runtime.available && (
             <div className="runtime-setup" aria-live="polite">
-              {!runtimeSetup?.active && (
+              {!runtimeSetupWorking && (
                 <div className="runtime-setup__guidance">
-                  <strong>{t("runtime.nextStep")}</strong>
+                  <strong>{t(runtimeGuidanceTitle)}</strong>
                   <small>{t(runtimeGuidance)}</small>
                 </div>
               )}
-              {runtimeSetup && runtimeSetup.phase !== "idle" && (
+              {displayedRuntimeSetupPhase && displayedRuntimeSetupPhase !== "idle" && (
                 <div className="runtime-setup__progress" role="status">
-                  <strong>{t(runtimeSetupLabelKeys[runtimeSetup.phase])}</strong>
-                  <small>{t(runtimeSetupDetailKeys[runtimeSetup.phase])}</small>
-                  {runtimeSetup.totalBytes !== undefined && (
+                  <strong>{t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase])}</strong>
+                  {runtimeSetupDetail && <small>{t(runtimeSetupDetail)}</small>}
+                  {!runtimeSetupStarting && runtimeSetup?.totalBytes !== undefined && (
                     <>
                       <progress
                         max={runtimeSetup.totalBytes}
@@ -290,12 +315,15 @@ export function AppShell({
                   <Icon name="close" size={15} />
                   {runtimeSetup.cancelRequested ? t("runtime.cancel.pending") : t("runtime.cancel.action")}
                 </button>
+              ) : runtimeSetupWorking ? (
+                <button className="button button--small" type="button" disabled aria-busy="true">
+                  <Icon name="progress" size={15} />
+                  {t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase ?? "install"])}
+                </button>
               ) : (
                 <button className="button button--small" type="button" disabled={runtimeBusy} onClick={onSetupRuntime}>
                   <Icon name="progress" size={15} />
-                  {runtimeSetup?.canRetry && ["failed", "cancelled"].includes(runtimeSetup.phase)
-                    ? t("runtime.setup.retry")
-                    : t("runtime.setup.action")}
+                  {t(runtimeSetupAction)}
                 </button>
               )}
             </div>

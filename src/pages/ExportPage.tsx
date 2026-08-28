@@ -3,6 +3,12 @@ import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
+import {
+  exportFormatIsAvailable,
+  isFindingOnlyExportFormat,
+  resetUnavailableExportFormat,
+  runSupportsFindingOnlyExport,
+} from "../exportFormatEligibility";
 import { useI18n } from "../i18n";
 import type { CaseExport, CaseWorkspace, ExportFormat, ExportPreview } from "../types";
 import "./page-technical-details.css";
@@ -37,6 +43,18 @@ const copy = {
   preparing: { en: "Preparing…", zhTW: "準備中…" },
   exportDemo: { en: "Download clearly marked demo file", zhTW: "下載明確標示的展示檔" },
   createExport: { en: "Save selected file", zhTW: "儲存選定檔案" },
+  createInterimExport: { en: "Save interim file", zhTW: "儲存暫時檔案" },
+  createIncompleteExport: { en: "Save incomplete file", zhTW: "儲存不完整檔案" },
+  activeTitle: { en: "This would be an interim report", zhTW: "這會是一份暫時報告" },
+  activeBody: {
+    en: "A scan is still running. A file saved now may omit later findings and will record unfinished checks. Wait for every check to finish unless you specifically need a progress snapshot.",
+    zhTW: "掃描仍在執行。現在儲存的檔案可能缺少之後才出現的問題，並會記錄尚未完成的檢查。除非你確實需要進度快照，否則請等每項檢查結束後再儲存。",
+  },
+  incompleteTitle: { en: "This report is incomplete", zhTW: "這份報告尚不完整" },
+  incompleteBody: {
+    en: "Some checks stopped without a final result. The saved file will record those unfinished checks, but it may omit problems they did not get to report.",
+    zhTW: "有些檢查尚未產生最終結果就停止了。儲存的檔案會記錄這些未完成檢查，但可能缺少它們尚未回報的問題。",
+  },
   demoTitle: { en: "This downloads a sample report", zhTW: "這次會下載一份範例報告" },
   demoBody: {
     en: "Use it to explore the report format. It does not contain results from a real scan.",
@@ -90,6 +108,10 @@ const copy = {
     en: "Use these when the receiving tool asks for a specific industry format.",
     zhTW: "只有在接收工具指定產業格式時才需要選擇。",
   },
+  advancedFormatsIncomplete: {
+    en: "These findings-only formats become available after every check in the selected scan finishes successfully.",
+    zhTW: "這些只包含問題的格式，會在選定掃描的每項檢查都成功完成後開放。",
+  },
   includeRaw: { en: "Include source files for specialist review", zhTW: "附上來源檔案，供專家核對" },
   includeRawBundle: {
     en: "The file will be larger, but a security specialist can check the source material. Passwords and access keys are not included.",
@@ -130,7 +152,7 @@ const copy = {
   historyEyebrow: { en: "EXPORT HISTORY", zhTW: "匯出紀錄" },
   historyTitle: { en: "Files created on this device", zhTW: "這台電腦上的匯出紀錄" },
   historyDescription: { en: "Find every report saved on this device, or verify a package someone sent you.", zhTW: "查看這台電腦儲存過的報告，也能驗證別人傳來的案件包。" },
-  fileCount: { en: "{count} files", zhTW: "{count} 份" },
+  fileCount: { en: "Files: {count}", zhTW: "{count} 份" },
   verifyReceived: { en: "Check a file someone sent you", zhTW: "檢查別人傳來的檔案" },
   noExportsTitle: { en: "No reports saved yet", zhTW: "還沒有儲存任何報告" },
   noExportsDescription: { en: "When you save one, it goes only to the location you choose on this device.", zhTW: "儲存報告後，檔案只會放在你選擇的本機位置。" },
@@ -146,7 +168,7 @@ const copy = {
   localSignature: { en: "Local integrity signature", zhTW: "本機完整性簽章" },
   unsigned: { en: "Unsigned", zhTW: "未簽章" },
   legacyRawUnknown: { en: "Older record: original evidence unknown", zhTW: "舊版紀錄：原始證據未知" },
-  rawIncluded: { en: "Includes {count} original evidence files", zhTW: "包含 {count} 份原始證據" },
+  rawIncluded: { en: "Original evidence files included: {count}", zhTW: "包含 {count} 份原始證據" },
   some: { en: "some", zhTW: "部分" },
   indexOnly: { en: "Evidence index only", zhTW: "只含證據索引" },
   verifyHelp: { en: "Verify that the file has not changed", zhTW: "驗證檔案是否遭到修改" },
@@ -204,9 +226,31 @@ const formatCopy = {
 const formats = Object.keys(formatCopy) as ExportFormat[];
 const primaryFormats = formats.filter((id) => id !== "ocsf" && id !== "oscal");
 const advancedFormats = formats.filter((id) => id === "ocsf" || id === "oscal");
+const findingOnlyUnavailableCopy = {
+  ocsf: {
+    en: "Available after every check finishes successfully. OCSF carries findings but cannot show missing checks.",
+    zhTW: "每項檢查都成功完成後才可使用。這個 OCSF 檔只包含問題，無法呈現缺少的檢查。",
+  },
+  oscal: {
+    en: "Available after every check finishes successfully. This OSCAL findings export cannot show missing checks.",
+    zhTW: "每項檢查都成功完成後才可使用。這個 OSCAL 問題匯出檔無法呈現缺少的檢查。",
+  },
+} as const;
 
 export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onExport, onVerify, onVerifyReceived }: ExportPageProps) {
   const { text, formatDateTime, formatNumber } = useI18n();
+  const latestRun = workspace.runs[0];
+  const activeRun = latestRun && ["queued", "running", "paused"].includes(latestRun.status)
+    ? latestRun
+    : undefined;
+  const incompleteTerminalRun = latestRun
+    && !activeRun
+    && latestRun.status !== "completed"
+    ? latestRun
+    : undefined;
+  const workspaceExportRevision = `${workspace.findings.length}|${workspace.runs
+    .map((run) => `${run.id}:${run.status}:${run.progress}:${run.finishedAt ?? ""}`)
+    .join("|")}`;
   const [format, setFormat] = useState<ExportFormat>("case_bundle");
   const [includeRawEvidence, setIncludeRawEvidence] = useState(true);
   const [redactSensitiveValues, setRedactSensitiveValues] = useState(true);
@@ -214,12 +258,28 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
   const [previewError, setPreviewError] = useState<string>();
   const [previewPending, setPreviewPending] = useState(true);
   const [previewRequest, setPreviewRequest] = useState(0);
+  const findingOnlyFormatsAvailable = runSupportsFindingOnlyExport(latestRun);
+  const selectedFormatUnavailable = !exportFormatIsAvailable(format, latestRun);
+
+  useEffect(() => {
+    const availableFormat = resetUnavailableExportFormat(format, latestRun);
+    if (availableFormat !== format) {
+      setFormat(availableFormat);
+      setIncludeRawEvidence(true);
+    }
+  }, [findingOnlyFormatsAvailable, format, latestRun]);
 
   useEffect(() => {
     let active = true;
     setPreviewPending(true);
     setPreview(undefined);
     setPreviewError(undefined);
+    if (selectedFormatUnavailable) {
+      setPreviewPending(false);
+      return () => {
+        active = false;
+      };
+    }
     void onPreview({ format, includeRawEvidence, redactSensitiveValues })
       .then((result) => {
         if (!active) return;
@@ -250,7 +310,7 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
     return () => {
       active = false;
     };
-  }, [format, includeRawEvidence, onPreview, previewRequest, redactSensitiveValues, workspace.case.id]);
+  }, [format, includeRawEvidence, onPreview, previewRequest, redactSensitiveValues, selectedFormatUnavailable, workspace.case.id, workspaceExportRevision]);
 
   const unknownSourceCount = preview?.unknownSourceCount;
   const connectedNoAssetCount = preview?.connectedNoAssetCount;
@@ -260,20 +320,29 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
   const shownCount = (value: number | undefined): string => value === undefined ? "—" : formatNumber(value);
   const renderFormatCard = (id: ExportFormat) => {
     const item = formatCopy[id];
+    const unavailableBecauseIncomplete = isFindingOnlyExportFormat(id) && !findingOnlyFormatsAvailable;
     return (
-      <label key={id} className={format === id ? "format-card format-card--active" : "format-card"}>
+      <label
+        key={id}
+        className={`${format === id ? "format-card format-card--active" : "format-card"}${unavailableBecauseIncomplete ? " format-card--disabled" : ""}`}
+        aria-disabled={unavailableBecauseIncomplete || undefined}
+      >
         <input
           type="radio"
           name="export-format"
           value={id}
           checked={format === id}
+          disabled={unavailableBecauseIncomplete}
           onChange={() => {
             setFormat(id);
             if (id !== "case_bundle") setIncludeRawEvidence(false);
           }}
         />
         <span className="format-card__icon"><Icon name={id === "case_bundle" ? "cases" : "file"} size={20} /></span>
-        <span><strong>{text(item.title)}</strong><small>{text(item.detail)}</small></span>
+        <span>
+          <strong>{text(item.title)}</strong>
+          <small>{text(unavailableBecauseIncomplete ? findingOnlyUnavailableCopy[id] : item.detail)}</small>
+        </span>
       </label>
     );
   };
@@ -292,10 +361,30 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
             onClick={() => void onExport({ format, includeRawEvidence, redactSensitiveValues })}
           >
             <Icon name="download" size={18} />
-            {busy || previewPending ? text(copy.preparing) : demoMode ? text(copy.exportDemo) : text(copy.createExport)}
+            {busy || previewPending
+              ? text(copy.preparing)
+              : demoMode
+                ? text(copy.exportDemo)
+                : activeRun
+                  ? text(copy.createInterimExport)
+                  : incompleteTerminalRun
+                    ? text(copy.createIncompleteExport)
+                    : text(copy.createExport)}
           </button>
         )}
       />
+
+      {activeRun && !demoMode && (
+        <InlineNotice tone="warning" title={text(copy.activeTitle)}>
+          <p>{text(copy.activeBody)}</p>
+        </InlineNotice>
+      )}
+
+      {incompleteTerminalRun && !demoMode && (
+        <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
+          <p>{text(copy.incompleteBody)}</p>
+        </InlineNotice>
+      )}
 
       {demoMode && (
         <InlineNotice tone="warning" title={text(copy.demoTitle)}>
@@ -339,7 +428,9 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
 
           <details className="page-secondary-feature export-advanced-formats">
             <summary>{text(copy.advancedFormats)}</summary>
-            <p className="page-secondary-feature__intro">{text(copy.advancedFormatsHint)}</p>
+            <p className="page-secondary-feature__intro">
+              {text(findingOnlyFormatsAvailable ? copy.advancedFormatsHint : copy.advancedFormatsIncomplete)}
+            </p>
             <div className="format-grid">{advancedFormats.map(renderFormatCard)}</div>
           </details>
 

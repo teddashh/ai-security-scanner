@@ -43,8 +43,13 @@ interface RuntimeAssistantCopy {
   demoDescription: string;
   progressTitle: string;
   progressDescription: string;
+  cancelledTitle: string;
+  cancelledDescription: string;
   start: string;
+  continue: string;
+  recheck: string;
   retry: string;
+  starting: string;
   cancel: string;
   cancelling: string;
   docs: string;
@@ -78,16 +83,21 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     demoDescription: "Open the desktop app when you are ready to scan a real website, cloud account, network, or codebase.",
     progressTitle: "Getting your scan tools ready",
     progressDescription: "We are downloading and setting up everything automatically. First-time setup may take a few minutes.",
+    cancelledTitle: "Setup paused",
+    cancelledDescription: "The download was kept on this computer. Continue when you are ready; your scan projects are unchanged.",
     start: "Set up automatically",
-    retry: "I’m done — check again",
+    continue: "Continue setup",
+    recheck: "I’m done — check again",
+    retry: "Try setup again",
+    starting: "Starting setup…",
     cancel: "Stop setup and keep the download",
     cancelling: "Stopping…",
     docs: "Open Microsoft’s WSL setup",
     technical: "Technical details",
     downloaded: "downloaded",
     resumed: "Existing download reused",
-    failedTitle: "Setup needs one more step",
-    failedDescription: "Follow the single action below, then check again. Your scan projects are unchanged.",
+    failedTitle: "Scan-tool setup stopped",
+    failedDescription: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "Get the scan tools for this check",
@@ -175,16 +185,21 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     demoDescription: "準備掃描真實網站、雲端帳號、網路或程式碼時，再開啟桌面版即可。",
     progressTitle: "正在準備掃描工具",
     progressDescription: "系統會自動下載並完成設定；第一次可能需要幾分鐘。",
+    cancelledTitle: "設定已暫停",
+    cancelledDescription: "下載進度已保留在這台電腦上。準備好時可繼續；你的掃描專案沒有變更。",
     start: "自動完成設定",
-    retry: "我完成了，重新檢查",
+    continue: "繼續設定",
+    recheck: "我完成了，重新檢查",
+    retry: "再試一次設定",
+    starting: "正在開始設定…",
     cancel: "停止設定並保留下載進度",
     cancelling: "正在停止…",
     docs: "開啟 Microsoft 的 WSL 設定",
     technical: "技術細節",
     downloaded: "已下載",
     resumed: "已沿用先前下載進度",
-    failedTitle: "設定還差一個步驟",
-    failedDescription: "照著下方唯一的操作完成後，再重新檢查；你的掃描專案不會受到影響。",
+    failedTitle: "掃描工具設定已停止",
+    failedDescription: "掃描工具未能完成設定。你的掃描專案沒有變更；請再試一次。如果問題持續發生，可展開「技術細節」查看原因。",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "取得這項檢查需要的掃描工具",
@@ -260,7 +275,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
 };
 
 const byteCount = (value: number, locale: RuntimeSetupLocale): string =>
-  `${new Intl.NumberFormat(locale).format(value)} ${locale === "en" ? "bytes" : "位元組"}`;
+  `${new Intl.NumberFormat(locale).format(value)} ${locale === "en" ? (value === 1 ? "byte" : "bytes") : "位元組"}`;
 
 const needsMicrosoftWslSetup = (
   action: ManagedRuntimeSetupNextAction | undefined,
@@ -284,12 +299,19 @@ export function RuntimeSetupAssistant({
     mode,
     runtimeAvailable: runtime?.available === true,
     status,
+    requestPending: busy,
     blocker: scannerSetupBlocker,
   });
   const scannerIssue = presentation.showPackagedComponentIssue && scannerSetupBlocker
     ? text.scannerIssues[scannerSetupBlocker]
     : undefined;
-  const { ready, setupActive, setupFailed } = presentation;
+  const {
+    ready,
+    setupStarting,
+    setupActive,
+    setupFailed,
+    setupCancelled,
+  } = presentation;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
   const showMicrosoftSetup = needsMicrosoftWslSetup(status?.nextAction);
   const technicalDetail = displaySafeTechnicalDetail(status?.detail);
@@ -324,6 +346,8 @@ export function RuntimeSetupAssistant({
 
   const title = scannerIssue?.title ?? (setupFailed
     ? nextAction?.title ?? text.failedTitle
+    : setupCancelled
+      ? text.cancelledTitle
     : setupActive
       ? text.progressTitle
       : text.title);
@@ -331,6 +355,8 @@ export function RuntimeSetupAssistant({
     ? nextAction.description
     : setupFailed
       ? text.failedDescription
+      : setupCancelled
+        ? text.cancelledDescription
       : setupActive
         ? text.progressDescription
         : text.description);
@@ -352,7 +378,13 @@ export function RuntimeSetupAssistant({
         </div>
       </header>
 
-      {!scannerIssue && status && status.phase !== "idle" && (
+      {!scannerIssue && setupStarting && (
+        <div className="runtime-assistant__status" role="status">
+          <strong>{text.starting}</strong>
+        </div>
+      )}
+
+      {!scannerIssue && !setupStarting && status && status.phase !== "idle" && (
         <div className="runtime-assistant__status" role="status">
           <strong>{text.phases[status.phase as ManagedRuntimeSetupPhase]}</strong>
           {progress !== undefined && status.totalBytes !== undefined && (
@@ -391,6 +423,11 @@ export function RuntimeSetupAssistant({
             <Icon name="external" size={17} />
             {scannerIssue.action}
           </a>
+        ) : setupStarting ? (
+          <button className="button button--primary" type="button" disabled aria-busy="true">
+            <Icon name="progress" size={17} />
+            {text.starting}
+          </button>
         ) : setupActive ? (
           <button
             className="button button--danger-ghost"
@@ -414,13 +451,13 @@ export function RuntimeSetupAssistant({
             </a>
             <button className="button button--secondary" type="button" disabled={busy} onClick={onSetup}>
               <Icon name="refresh" size={17} />
-              {text.retry}
+              {text.recheck}
             </button>
           </>
         ) : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
-            {setupFailed ? text.retry : text.start}
+            {setupFailed ? (nextAction ? text.recheck : text.retry) : setupCancelled ? text.continue : text.start}
           </button>
         )}
       </div>

@@ -66,13 +66,17 @@ export const zhTW = {
   "runtime.phase.completed.detail": "現在可以開始掃描。",
   "runtime.phase.failed.label": "設定需要處理",
   "runtime.phase.failed.detail": "掃描工具沒有啟動成功。完成下方唯一的操作後，再試一次。",
+  "runtime.phase.failed.generic.label": "掃描工具設定已停止",
+  "runtime.phase.failed.generic.detail": "自動設定未能完成。你的掃描專案沒有變更；請再試一次設定。",
   "runtime.phase.cancelled.label": "設定已暫停",
   "runtime.phase.cancelled.detail": "已下載的進度有保留，下次可以從中斷處繼續。",
   "runtime.download.progress": "掃描工具下載進度",
   "runtime.download.resumed": "已接續先前下載的 {bytes}",
   "runtime.cancel.pending": "正在暫停設定…",
   "runtime.cancel.action": "暫停設定並保留下載進度",
-  "runtime.setup.retry": "我已完成，重新檢查",
+  "runtime.setup.recheck": "我已完成，重新檢查",
+  "runtime.setup.retry": "再試一次設定",
+  "runtime.setup.continue": "繼續設定",
   "runtime.setup.action": "自動準備掃描工具",
 
   "update.downloading": "正在下載更新…",
@@ -88,6 +92,7 @@ export const zhTW = {
   "update.currentHelp": "目前版本 {version}",
   "update.checkHelp": "檢查已簽章的應用程式更新",
 
+  "common.byte": "{value} 位元組",
   "common.bytes": "{value} 位元組",
   "common.unknownVersion": "—",
 

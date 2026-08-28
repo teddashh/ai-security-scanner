@@ -1,4 +1,7 @@
-use crate::domain::{AssetKind, EngineManifest, LocalInputProfile, ScanPermission};
+use crate::domain::{
+    AssetKind, EngineManifest, LocalInputProfile, MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS,
+    MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS, ScanPermission,
+};
 use crate::error::{AppError, AppResult};
 use chrono::NaiveDate;
 
@@ -79,6 +82,17 @@ fn validate_release_contract(manifest: &EngineManifest) -> AppResult<()> {
         |message: &str| AppError::EngineRegistry(format!("engine {}: {message}", manifest.id));
     if manifest.schema_version != "2.0.0" {
         return Err(fail("unsupported manifest schema version"));
+    }
+    let execution = manifest
+        .execution
+        .as_ref()
+        .ok_or_else(|| fail("reviewed execution resource contract is missing"))?;
+    if !(MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS..=MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS)
+        .contains(&execution.resources.timeout_seconds)
+    {
+        return Err(fail(
+            "execution timeout must be between 30 and 86400 seconds",
+        ));
     }
     let supported_providers = manifest
         .supported_providers
@@ -345,6 +359,100 @@ mod tests {
                 .unwrap()
                 .supported_providers
                 .is_empty()
+        );
+        assert_eq!(
+            registry
+                .get("cloudquery")
+                .unwrap()
+                .execution_timeout_seconds(),
+            3_600
+        );
+    }
+
+    #[test]
+    fn release_execution_timeout_is_required_and_bounded() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        let mut manifest = registry.get("cloudquery").unwrap().clone();
+
+        for valid in [30, 86_400] {
+            manifest
+                .execution
+                .as_mut()
+                .unwrap()
+                .resources
+                .timeout_seconds = valid;
+            validate_release_contract(&manifest).expect("inclusive timeout boundary");
+        }
+
+        manifest
+            .execution
+            .as_mut()
+            .unwrap()
+            .resources
+            .timeout_seconds = 29;
+        assert!(
+            validate_release_contract(&manifest)
+                .unwrap_err()
+                .to_string()
+                .contains("between 30 and 86400 seconds")
+        );
+
+        manifest
+            .execution
+            .as_mut()
+            .unwrap()
+            .resources
+            .timeout_seconds = 86_401;
+        assert!(
+            validate_release_contract(&manifest)
+                .unwrap_err()
+                .to_string()
+                .contains("between 30 and 86400 seconds")
+        );
+
+        manifest.execution = None;
+        assert!(
+            validate_release_contract(&manifest)
+                .unwrap_err()
+                .to_string()
+                .contains("resource contract is missing")
+        );
+    }
+
+    #[test]
+    fn naabu_timeout_covers_the_conservative_home_scope_pacing_floor() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        let timeout = registry
+            .get("naabu")
+            .expect("released Naabu manifest")
+            .execution_timeout_seconds();
+        let usable_ipv4_hosts_in_23 = 510_u64;
+        let approved_ports = 17_u64;
+        let requests_per_second = 1_u64;
+        let pacing_floor_seconds = usable_ipv4_hosts_in_23 * approved_ports / requests_per_second;
+
+        assert_eq!(pacing_floor_seconds, 8_670);
+        assert_eq!(timeout, 4 * 60 * 60);
+        assert!(timeout > pacing_floor_seconds);
+        assert!(timeout <= MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS);
+    }
+
+    #[test]
+    fn legacy_serialized_manifest_without_execution_contract_remains_readable() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        let mut document =
+            serde_json::to_value(registry.get("cloudquery").unwrap()).expect("manifest JSON");
+        document
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("execution");
+
+        let legacy: EngineManifest =
+            serde_json::from_value(document).expect("legacy manifest remains readable");
+        assert!(legacy.execution.is_none());
+        assert_eq!(
+            legacy.execution_timeout_seconds(),
+            crate::domain::DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS
         );
     }
 

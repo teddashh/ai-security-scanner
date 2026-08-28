@@ -941,6 +941,7 @@ mod tests {
             distribution_mode: Some(DistributionMode::PullPinnedImage),
             image_repository: Some("ghcr.io/example/engine".into()),
             command_sha256: Some("c".repeat(64)),
+            execution_timeout_seconds: None,
             knowledge_input: Some(EngineKnowledgeInput {
                 kind: KnowledgeInputKind::Embedded,
                 identifier: "embedded checks".into(),

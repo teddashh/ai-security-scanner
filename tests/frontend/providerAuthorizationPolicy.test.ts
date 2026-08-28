@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
 const bundled = await build({
-  entryPoints: [new URL("../../src/providerAuthorizationPolicy.ts", import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL("../../src/providerAuthorizationPolicy.ts", import.meta.url))],
   bundle: true,
   format: "esm",
   platform: "node",
@@ -115,18 +116,19 @@ test("provider sign-in leads with the setup-file journey and keeps manual entry 
   assert.doesNotMatch(panelSource, /IT \/ admin advanced setup/u);
   assert.doesNotMatch(panelSource, /product-owned OAuth|shared OAuth client/u);
 
-  const stepsStart = panelSource.indexOf('<ol className="provider-preparation-steps provider-connection-steps"');
-  const guideStart = panelSource.indexOf('<details className="provider-connection-guide">');
-  const manualStart = panelSource.indexOf('<details\n            className="provider-manual-details"', stepsStart);
-  const guideEnd = panelSource.indexOf("</section>", manualStart);
+  const normalizedPanelSource = panelSource.replaceAll("\r\n", "\n");
+  const stepsStart = normalizedPanelSource.indexOf('<ol className="provider-preparation-steps provider-connection-steps"');
+  const guideStart = normalizedPanelSource.indexOf('<details className="provider-connection-guide">');
+  const manualStart = normalizedPanelSource.indexOf('<details\n            className="provider-manual-details"', stepsStart);
+  const guideEnd = normalizedPanelSource.indexOf("</section>", manualStart);
   assert.notEqual(guideStart, -1);
   assert.notEqual(stepsStart, -1);
   assert.notEqual(manualStart, -1);
   assert.ok(guideStart < stepsStart && guideEnd > manualStart, "engineering setup should stay inside the progressive connection guide");
-  const firstLayer = panelSource.slice(panelSource.indexOf('<section className="provider-auth-details"'), guideStart);
+  const firstLayer = normalizedPanelSource.slice(normalizedPanelSource.indexOf('<section className="provider-auth-details"'), guideStart);
   assert.match(firstLayer, /copy\.connectionDetailsSummary[\s\S]*copy\.connectCtaBody/u);
   assert.doesNotMatch(firstLayer, /copy\.requestTitle|copy\.fields\.|setupTemplate/u);
-  const primaryJourney = panelSource.slice(stepsStart, manualStart);
+  const primaryJourney = normalizedPanelSource.slice(stepsStart, manualStart);
   assert.match(primaryJourney, /copy\.requestTitle/u);
   assert.match(primaryJourney, /copy\.importTitle/u);
   assert.match(primaryJourney, /copy\.continueTitlePreferred/u);

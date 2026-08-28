@@ -1497,7 +1497,43 @@ fn resolve_artifact_source(root: &Path, relative_path: &str) -> AppResult<PathBu
     Ok(canonical)
 }
 
+fn destination_has_forbidden_prefix(destination: &Path) -> bool {
+    destination.components().any(|component| match component {
+        Component::Prefix(prefix) => {
+            #[cfg(windows)]
+            {
+                !matches!(
+                    prefix.kind(),
+                    std::path::Prefix::Disk(_) | std::path::Prefix::UNC(_, _)
+                )
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = prefix;
+                true
+            }
+        }
+        _ => false,
+    })
+}
+
 fn validate_destination(destination: &Path) -> AppResult<()> {
+    let has_parent_traversal = destination
+        .components()
+        .any(|component| matches!(component, Component::ParentDir));
+    let has_drive_relative_prefix = !destination.is_absolute()
+        && destination
+            .components()
+            .any(|component| matches!(component, Component::Prefix(_)));
+    if destination.as_os_str().is_empty()
+        || has_parent_traversal
+        || has_drive_relative_prefix
+        || destination_has_forbidden_prefix(destination)
+    {
+        return Err(AppError::InvalidRequest(
+            "case export destination must be an explicit file path without parent traversal".into(),
+        ));
+    }
     let name = destination
         .file_name()
         .and_then(|name| name.to_str())
@@ -1916,6 +1952,7 @@ mod tests {
                 distribution_mode: None,
                 image_repository: None,
                 command_sha256: None,
+                execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
                 mapping_version: None,
@@ -1945,6 +1982,44 @@ mod tests {
             contains_sensitive_data: sensitive,
         });
         case
+    }
+
+    #[test]
+    fn case_bundle_destination_rejects_parent_traversal_and_wrong_extension() {
+        validate_destination(Path::new("exports/report.case.tar.gz"))
+            .expect("ordinary relative bundle path");
+        assert!(validate_destination(Path::new("../report.case.tar.gz")).is_err());
+        assert!(validate_destination(Path::new("exports/../report.case.tar.gz")).is_err());
+        assert!(validate_destination(Path::new("exports/report.tar.gz")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_case_bundle_destination_accepts_normal_disk_and_unc_only() {
+        for allowed in [
+            r"C:\Users\example\Downloads\report.case.tar.gz",
+            r"\\server\share\report.case.tar.gz",
+        ] {
+            validate_destination(Path::new(allowed)).unwrap_or_else(|error| {
+                panic!("normal Windows destination was rejected: {allowed}: {error}")
+            });
+        }
+
+        for forbidden in [
+            r"C:report.case.tar.gz",
+            r"C:\Users\example\..\report.case.tar.gz",
+            r"\\server\share\folder\..\report.case.tar.gz",
+            r"\\.\PhysicalDrive0\report.case.tar.gz",
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\report.case.tar.gz",
+            r"\\?\Volume{11111111-1111-1111-1111-111111111111}\report.case.tar.gz",
+            r"\\?\C:\Users\example\Downloads\report.case.tar.gz",
+            r"\\?\UNC\server\share\report.case.tar.gz",
+        ] {
+            assert!(
+                validate_destination(Path::new(forbidden)).is_err(),
+                "special, drive-relative, or traversing destination must be rejected: {forbidden}"
+            );
+        }
     }
 
     fn add_reversible_grouping(case: &mut AssessmentCase) {

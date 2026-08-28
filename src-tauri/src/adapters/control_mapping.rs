@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(public_bucket.len(), 3);
         assert!(public_bucket.iter().all(|item| {
             item.relationship == "related"
-                && item.mapping_version == "2026-08-26.1"
+                && item.mapping_version == "2026-08-27.1"
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
 
@@ -456,6 +456,27 @@ mod tests {
                 .iter()
                 .all(|item| item.framework != "AIDEFEND")
         );
+
+        let shipped_semgrep_rules = [
+            "ai-security-scanner.python.dynamic-code-execution",
+            "ai-security-scanner.python.shell-true",
+            "ai-security-scanner.javascript.child-process-exec",
+            "ai-security-scanner.generic.private-key",
+        ];
+        for source_rule in shipped_semgrep_rules {
+            let ordinary = lookup("semgrep", source_rule, false);
+            assert!(
+                !ordinary.is_empty(),
+                "shipped Semgrep rule {source_rule} must have a reviewed mapping"
+            );
+            assert!(ordinary.iter().all(|item| item.framework != "AIDEFEND"));
+
+            let ai_system = lookup("semgrep", source_rule, true);
+            assert!(
+                ai_system.iter().any(|item| item.framework == "AIDEFEND"),
+                "shipped Semgrep rule {source_rule} must expose its reviewed AI-system coordinate"
+            );
+        }
     }
 
     #[test]

@@ -18,7 +18,7 @@ import type {
   Severity,
 } from "../types";
 import { Icon } from "../components/Icon";
-import { EmptyState, MetricCard, PageHeader } from "../components/Shared";
+import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 
 import "./page-technical-details.css";
@@ -40,6 +40,7 @@ interface FindingsPageProps {
 }
 
 const severityOrder: Severity[] = ["critical", "high", "medium", "low", "info"];
+const activeRunStatuses = new Set<ScanRun["status"]>(["queued", "running", "paused"]);
 const workflowOrder = Object.keys(workflowMeta) as FindingWorkflowState[];
 const decisionStates = [
   "unreviewed",
@@ -68,6 +69,10 @@ const copy = {
     zhTW: "掃描結果與建議的下一步會顯示在這裡。",
   },
   emptyNoRunTitle: { en: "No scan results yet", zhTW: "尚未產生掃描結果" },
+  emptyActiveTitle: {
+    en: "The scan is still running; no problems have arrived yet",
+    zhTW: "掃描仍在執行，目前還沒有收到問題",
+  },
   emptyIncompleteTitle: {
     en: "This run produced no saved problems, but the scan did not finish",
     zhTW: "本輪沒有正式問題紀錄，但掃描未完整完成",
@@ -84,16 +89,30 @@ const copy = {
     en: "Add what you want to scan, then start the check from Scan progress.",
     zhTW: "先加入想掃描的目標，再到掃描進度開始檢查。",
   },
+  emptyActiveDescription: {
+    en: "This is an interim view, not a clean result. Keep Scan progress open until every check has a final outcome.",
+    zhTW: "這只是暫時畫面，不代表沒有問題。請查看「掃描進度」，直到每項檢查都有最終結果。",
+  },
+  activeTitle: { en: "These are interim results", zhTW: "這些是暫時結果" },
+  activeDescription: {
+    en: "A scan is still running. More problems may appear, and the current counts must not be treated as the final result.",
+    zhTW: "掃描仍在執行，之後可能還會出現更多問題；目前數量不能視為最終結果。",
+  },
+  incompleteTitle: { en: "These results are incomplete", zhTW: "這些結果尚不完整" },
+  incompleteDescription: {
+    en: "Some checks stopped before reaching a final result. The saved problems still need review, but other problems may be missing. Open Scan progress before treating these counts as final.",
+    zhTW: "有些檢查在產生最終結果前就停止了。已保存的問題仍需檢視，但也可能還有未顯示的問題；請先查看「掃描進度」，不要把目前數量視為最終結果。",
+  },
   emptyIncompleteDescription: {
     en: "Some checks did not finish, so there may be issues we could not see. Open Scan progress to see what needs attention.",
     zhTW: "有些檢查沒有完成，因此可能還有看不到的問題。打開掃描進度，就能知道哪裡需要處理。",
   },
   emptyUnknownDescription: {
-    en: "{count} sources have not shared usable information yet. Open Scan setup to connect or check them.",
+    en: "Sources still needing usable information: {count}. Open Scan setup to connect or check them.",
     zhTW: "還有 {count} 個來源沒有提供可用資訊。打開掃描設定即可連接或確認。",
   },
   emptyCompletedDescription: {
-    en: "Good news: the checks that finished found no issues. Open Scan setup to see what was included across {count} sources.",
+    en: "Good news: the checks that finished found no issues. Sources included: {count}. Open Scan setup to review them.",
     zhTW: "好消息：已完成的檢查沒有發現問題。打開掃描設定，即可查看這 {count} 個來源實際包含了什麼。",
   },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
@@ -106,14 +125,14 @@ const copy = {
   needsReview: { en: "Needs human review", zhTW: "待人工確認" },
   needsReviewDetail: { en: "Confirm these before your team acts", zhTW: "團隊採取行動前先確認" },
   affectedAssets: { en: "Affected assets", zhTW: "受影響資產" },
-  completeListCount: { en: "{count} problems in the complete list", zhTW: "完整清單共 {count} 項" },
+  completeListCount: { en: "Problems in the complete list: {count}", zhTW: "完整清單共 {count} 項" },
   reversibleLinks: { en: "TEAM HANDOFF", zhTW: "團隊交接" },
   groupsTitle: { en: "Organize related issues for the right team", zhTW: "把相關問題整理給同一個團隊" },
   groupsDescription: {
     en: "Bundle issues that should be reviewed together, so handoff is faster and easier to follow.",
     zhTW: "把適合一起處理的問題放在同一組，讓交接更快、更容易追蹤。",
   },
-  items: { en: "{count} items", zhTW: "{count} 項" },
+  items: { en: "Items: {count}", zhTW: "{count} 項" },
   createdBy: { en: "Created by {actor}", zhTW: "建立者：{actor}" },
   technicalGroupDetails: { en: "Technical group details", zhTW: "群組技術細節" },
   groupId: { en: "Group ID", zhTW: "群組 ID" },
@@ -164,7 +183,7 @@ const copy = {
   allExperts: { en: "All specialist types", zhTW: "所有專家類型" },
   controlFilter: { en: "Framework reference", zhTW: "相關控制項" },
   allControls: { en: "All framework references", zhTW: "所有控制項座標" },
-  clearFilterCount: { en: "Clear {count} filters", zhTW: "清除 {count} 個篩選條件" },
+  clearFilterCount: { en: "Clear filters ({count})", zhTW: "清除 {count} 個篩選條件" },
   noMatches: { en: "No problems match these filters", zhTW: "沒有符合的問題" },
   noMatchesDescription: {
     en: "Clear the search text, review status, specialist type, or framework filter.",
@@ -173,16 +192,16 @@ const copy = {
   clearFilters: { en: "Clear filters", zhTW: "清除篩選" },
   rankAria: { en: "Handoff priority {rank}", zhTW: "交接優先順序第 {rank} 位" },
   rank: { en: "#{rank}", zhTW: "第 {rank}" },
-  evidenceCount: { en: "{count} evidence records", zhTW: "{count} 份證據" },
+  evidenceCount: { en: "Evidence records: {count}", zhTW: "{count} 份證據" },
   asset: { en: "Asset", zhTW: "資產" },
   reviewStatus: { en: "Review status", zhTW: "處理狀態" },
   recommendedExpert: { en: "Specialist to consult", zhTW: "建議專家類型" },
   lastObserved: { en: "Last observed", zhTW: "最後觀察" },
   evidenceConfidence: { en: "Evidence confidence", zhTW: "證據信心" },
   relatedAssets: { en: "Related assets", zhTW: "關聯資產" },
-  assetCount: { en: "{count} assets", zhTW: "{count} 個" },
+  assetCount: { en: "Assets: {count}", zhTW: "{count} 個" },
   decisionHistory: { en: "Human review history", zhTW: "人工處理歷程" },
-  decisionCount: { en: "{count} decisions", zhTW: "{count} 筆決定" },
+  decisionCount: { en: "Decisions: {count}", zhTW: "{count} 筆決定" },
   decisionBoundary: {
     en: "This records a review status only. It does not change source evidence or perform a fix. ‘Verified resolved’ requires comparable verification evidence.",
     zhTW: "這裡只記錄處理狀態；不會修改原始證據，也不會執行修復。「已驗證解決」必須已有可比較的複驗證據。",
@@ -369,21 +388,33 @@ export function FindingsPage({
     setGroupFindingIds((current) => current.filter((findingId) => !groupedFindingIds.has(findingId)));
   }, [groupedFindingIds]);
 
+  const latestRun = runs[0];
+  const activeRun = latestRun && activeRunStatuses.has(latestRun.status) ? latestRun : undefined;
+  const incompleteTerminalRun = latestRun
+    && !activeRun
+    && latestRun.status !== "completed"
+    ? latestRun
+    : undefined;
+
   if (findings.length === 0) {
-    const latestRun = runs[0];
     const unknownSources = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
     const connectedWithoutAssets = coverage.filter((item) => item.state === "source_connected_none").length;
-    const incompleteRun = latestRun && latestRun.status !== "completed";
+    const latestRunIsActive = Boolean(latestRun && activeRunStatuses.has(latestRun.status));
+    const incompleteRun = latestRun && !latestRunIsActive && latestRun.status !== "completed";
     const title = !latestRun
       ? text(copy.emptyNoRunTitle)
-      : incompleteRun
+      : latestRunIsActive
+        ? text(copy.emptyActiveTitle)
+        : incompleteRun
         ? text(copy.emptyIncompleteTitle)
         : unknownSources > 0
           ? text(copy.emptyUnknownTitle)
           : text(copy.emptyCompletedTitle);
     const description = !latestRun
       ? text(copy.emptyNoRunDescription)
-      : incompleteRun
+      : latestRunIsActive
+        ? text(copy.emptyActiveDescription)
+        : incompleteRun
         ? text(copy.emptyIncompleteDescription)
         : unknownSources > 0
           ? text(copy.emptyUnknownDescription, { count: formatNumber(unknownSources) })
@@ -392,7 +423,7 @@ export function FindingsPage({
       <div className="page">
         <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} />
         <EmptyState
-          icon={incompleteRun || unknownSources > 0 ? "warning" : "findings"}
+          icon={latestRunIsActive || incompleteRun || unknownSources > 0 ? "warning" : "findings"}
           title={title}
           description={description}
           action={
@@ -462,6 +493,24 @@ export function FindingsPage({
         title={text(copy.title)}
         description={text(copy.description)}
       />
+
+      {activeRun && (
+        <InlineNotice tone="warning" title={text(copy.activeTitle)}>
+          <p>{text(copy.activeDescription)}</p>
+          <button className="button button--secondary button--small" type="button" onClick={onOpenProgress}>
+            <Icon name="progress" size={15} /> {text(copy.openProgress)}
+          </button>
+        </InlineNotice>
+      )}
+
+      {incompleteTerminalRun && (
+        <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
+          <p>{text(copy.incompleteDescription)}</p>
+          <button className="button button--secondary button--small" type="button" onClick={onOpenProgress}>
+            <Icon name="progress" size={15} /> {text(copy.openProgress)}
+          </button>
+        </InlineNotice>
+      )}
 
       <section className="metrics-grid metrics-grid--four" aria-label={text(copy.summaryAria)}>
         <MetricCard label={text(copy.critical)} value={criticalCount} detail={text(copy.criticalDetail)} icon="warning" tone={criticalCount ? "danger" : "default"} />

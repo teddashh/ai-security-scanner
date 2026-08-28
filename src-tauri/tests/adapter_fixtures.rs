@@ -316,6 +316,17 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
             assert!(!finding.plain_language_summary.is_empty());
             assert!(!finding.possible_impact.is_empty());
             assert!(!finding.recommendation.is_empty());
+            assert!(
+                finding
+                    .recommendation
+                    .starts_with("Have the recommended specialist (")
+            );
+            assert!(
+                finding
+                    .recommendation
+                    .contains(&format!("({})", finding.recommended_expert_type))
+            );
+            assert!(!finding.recommendation.contains("Have a Application"));
             assert!(!finding.verification_guidance.is_empty());
             assert!(finding.rollback_considerations.is_some());
             assert!(!finding.official_references.is_empty());
@@ -559,7 +570,7 @@ fn versioned_control_references_are_allowlisted_relationships_not_assurance_clai
         );
         assert!(references.iter().all(|reference| {
             reference.relationship == "related"
-                && reference.mapping_version == "2026-08-26.1"
+                && reference.mapping_version == "2026-08-27.1"
                 && matches!(reference.framework.as_str(), "NIST CSF" | "ISO/IEC 27001")
         }));
         assert!(
@@ -618,6 +629,42 @@ fn malformed_jsonl_is_contained_while_valid_records_survive() {
             .iter()
             .any(|warning| warning.contains("malformed JSONL line 2"))
     );
+}
+
+#[test]
+fn empty_released_jsonl_streams_are_complete_zero_finding_results() {
+    for engine_id in ["naabu", "httpx", "nuclei", "trufflehog"] {
+        for bytes in [b"".as_slice(), b"\r\n\t".as_slice()] {
+            let filename = format!("{engine_id}.jsonl");
+            let output = normalize_bytes(
+                engine_id,
+                bytes,
+                &filename,
+                "application/x-ndjson",
+                "run-empty",
+            );
+            assert!(
+                output.complete,
+                "{engine_id} warnings: {:?}",
+                output.warnings
+            );
+            assert!(output.findings.is_empty());
+            assert!(output.warnings.is_empty());
+        }
+    }
+}
+
+#[test]
+fn empty_json_document_for_other_adapters_remains_incomplete() {
+    let output = normalize_bytes(
+        "gitleaks",
+        b"",
+        "gitleaks.json",
+        "application/json",
+        "run-empty",
+    );
+    assert!(!output.complete);
+    assert!(output.findings.is_empty());
 }
 
 #[test]

@@ -43,6 +43,8 @@ const (
 	maxGrantsPerAsset      = 16
 	maxResolvedAddresses   = 4096
 	managedGatewayPort     = "1080"
+	naabuProxyRateDivisor  = 2
+	naabuProcessAllowance  = 5 * time.Second
 )
 
 type scopeDocument struct {
@@ -596,6 +598,7 @@ func naabuInvocation(unit scanUnit, proxy, output string, environment []string) 
 	for _, port := range unit.Grant.Ports {
 		ports = append(ports, strconv.Itoa(int(port)))
 	}
+	effectiveRate := naabuEffectiveProxyRate(unit.Grant.RatePolicy)
 	return invocation{
 		Program: "/usr/local/bin/naabu",
 		Args: []string{
@@ -603,15 +606,41 @@ func naabuInvocation(unit scanUnit, proxy, output string, environment []string) 
 			"-port", strings.Join(ports, ","),
 			"-scan-type", "c",
 			"-proxy", proxy,
-			"-rate", strconv.Itoa(int(unit.Grant.RatePolicy.RequestsPerSecond)),
+			// Pinned Naabu halves its configured rate whenever a proxy is present.
+			// Compensate for that fixed behavior so a conservative 1 req/s grant
+			// does not collapse into its degenerate zero-rate limiter behavior.
+			"-rate", strconv.Itoa(int(effectiveRate) * naabuProxyRateDivisor),
 			"-c", strconv.Itoa(int(unit.Grant.RatePolicy.Concurrency)),
 			"-timeout", (time.Duration(unit.Grant.RatePolicy.TimeoutSeconds) * time.Second).String(),
 			"-retries", "0",
 			"-json", "-output", output,
 			"-no-stdin", "-disable-update-check", "-silent",
 		},
-		Env: environment, Expiry: unit.Grant.ExpiresAt, Timeout: time.Duration(unit.Grant.RatePolicy.TimeoutSeconds) * time.Second,
+		Env: environment, Expiry: unit.Grant.ExpiresAt,
+		Timeout: naabuInvocationTimeout(unit.Grant.RatePolicy, len(unit.Grant.Ports)),
 	}
+}
+
+// Pinned Naabu uses the post-proxy rate as both its connect worker bound and
+// its requests-per-second limiter. Keeping the effective rate at or below both
+// grant limits preserves the stricter of the two controls.
+func naabuEffectiveProxyRate(policy ratePolicy) uint16 {
+	if policy.RequestsPerSecond < policy.Concurrency {
+		return policy.RequestsPerSecond
+	}
+	return policy.Concurrency
+}
+
+// timeout_seconds is a per-connect deadline in Naabu, not a total-process
+// deadline. Bound the child by the finite port workload, its effective proxy
+// rate, and a small fixed allowance for process setup and Naabu's final warmup.
+func naabuInvocationTimeout(policy ratePolicy, portCount int) time.Duration {
+	effectiveRate := uint64(naabuEffectiveProxyRate(policy))
+	workItems := uint64(portCount)
+	waves := (workItems + effectiveRate - 1) / effectiveRate
+	connectBudget := time.Duration(waves) * time.Duration(policy.TimeoutSeconds) * time.Second
+	pacingBudget := time.Duration(waves) * time.Second
+	return connectBudget + pacingBudget + naabuProcessAllowance
 }
 
 func httpxInvocation(unit scanUnit, proxy, output string, environment []string) (invocation, error) {

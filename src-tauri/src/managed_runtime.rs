@@ -1810,11 +1810,12 @@ fn write_download_body<R: Read>(
 
 pub struct ManagedRuntimeManager {
     state_root: PathBuf,
-    /// Keeps the verified state-root object open for the manager lifetime.
-    /// Windows namespace replacement through an ancestor's FILE_DELETE_CHILD
-    /// is prevented separately by validating the canonical ancestor ACL chain.
+    /// Keeps the verified state-root object and its canonical ancestor chain
+    /// open without delete sharing for the manager lifetime. The retained
+    /// ancestor handles let ordinary per-user LocalAppData capability ACLs be
+    /// accepted without making any verified namespace component replaceable.
     #[cfg(windows)]
-    _state_root_guard: File,
+    _state_root_guard: WindowsManagedDirectoryGuard,
     resource_root: PathBuf,
     loaded: LoadedManagedRuntimeManifest,
     commands: Arc<dyn ManagedCommandRunner>,
@@ -2071,7 +2072,7 @@ impl ManagedRuntimeManager {
         }
         self.install_locked()?;
         let target = self.loaded.target()?;
-        let command = self.runtime_command(target)?;
+        let mut command = self.runtime_command(target)?;
         if target.operating_system == ManagedOperatingSystem::Windows {
             if let Some(setup) = setup {
                 setup.set_phase(
@@ -2100,6 +2101,41 @@ impl ManagedRuntimeManager {
             self.require_existing_machine_ssh_identity_locked()?;
             self.prove_machine(machine, target)?;
         } else {
+            // An interrupted WSL initialization can register Podman's exact
+            // hypervisor distribution before its release-private machine
+            // metadata is committed. In that split-brain state `machine list`
+            // is empty, while another `machine init` can only fail because the
+            // deterministic distribution name is already registered. Remove
+            // only that exact product-owned orphan, prove it absent, and reset
+            // only this release's provider home before retrying initialization.
+            // The verified machine-image cache lives outside the provider home
+            // and is intentionally retained.
+            if machines.is_empty()
+                && self.prove_windows_wsl_distribution_absent_locked(
+                    target,
+                    &command,
+                    &machine_name,
+                )?
+            {
+                let provider_home = self.provider_home();
+                if private_entry_exists(&provider_home)? {
+                    #[cfg(windows)]
+                    let (provider_delete_timeout, provider_delete_poll) = (
+                        WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+                        WINDOWS_WSL_PROVIDER_DELETE_POLL,
+                    );
+                    #[cfg(not(windows))]
+                    let (provider_delete_timeout, provider_delete_poll) =
+                        (Duration::ZERO, Duration::ZERO);
+                    remove_provider_home_after_machine_removal(
+                        &provider_home,
+                        &self.state_root.join("provider-home"),
+                        provider_delete_timeout,
+                        provider_delete_poll,
+                    )?;
+                }
+                command = self.runtime_command(target)?;
+            }
             self.prepare_machine_ssh_identity_locked()?;
             self.initialize_machine(&command, target, &image, &machine_name)?;
         }
@@ -2713,9 +2749,9 @@ impl ManagedRuntimeManager {
         target: &ManagedTarget,
         managed_command: &ManagedRuntimeCommand,
         machine_name: &str,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
         if target.operating_system != ManagedOperatingSystem::Windows {
-            return Ok(());
+            return Ok(false);
         }
         if target.provider != ManagedMachineProvider::Wsl {
             return Err(AppError::NotAuthorized(
@@ -2732,10 +2768,10 @@ impl ManagedRuntimeManager {
         require_success("managed Windows WSL distribution inventory", &output)?;
         let expected = format!("podman-{machine_name}");
         let mut distributions = parse_windows_wsl_distribution_inventory(&output.stdout)?;
-        if distributions
+        let was_registered = distributions
             .iter()
-            .any(|distribution| distribution.eq_ignore_ascii_case(&expected))
-        {
+            .any(|distribution| distribution.eq_ignore_ascii_case(&expected));
+        if was_registered {
             let output = self.run_command(
                 ManagedCommandOperation::WslDistributionRemoval,
                 &command,
@@ -2761,7 +2797,7 @@ impl ManagedRuntimeManager {
                     .into(),
             ));
         }
-        Ok(())
+        Ok(was_registered)
     }
 
     fn provider_home(&self) -> PathBuf {
@@ -3944,6 +3980,38 @@ impl WindowsLocalSystemSid {
 enum WindowsManagedDirectoryAclPolicy {
     CurrentUserOnly,
     CurrentUserAndLocalSystem,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsManagedNamespaceAncestorAclPolicy {
+    Strict,
+    PinnedLocalAppDataCapability,
+}
+
+#[cfg(windows)]
+struct WindowsManagedDirectoryGuard {
+    directory: File,
+    // These handles deliberately omit FILE_SHARE_DELETE. Keeping the complete
+    // canonical chain alive prevents a principal with delete-child rights on
+    // an ordinary LocalAppData ancestor from replacing a verified component.
+    _ancestor_guards: Vec<File>,
+}
+
+#[cfg(windows)]
+impl std::ops::Deref for WindowsManagedDirectoryGuard {
+    type Target = File;
+
+    fn deref(&self) -> &Self::Target {
+        &self.directory
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsLocalAppDataAncestorIdentities {
+    local_app_data: WindowsFileIdentity,
+    app_data: WindowsFileIdentity,
 }
 
 #[cfg(windows)]
@@ -7484,6 +7552,143 @@ fn windows_sid_is_trusted_for_managed_namespace(
 }
 
 #[cfg(windows)]
+fn windows_sid_is_app_capability(sid: windows_sys::Win32::Security::PSID) -> bool {
+    use windows_sys::Win32::Security::{
+        GetSidIdentifierAuthority, GetSidSubAuthority, GetSidSubAuthorityCount, IsValidSid,
+    };
+
+    if sid.is_null() || unsafe { IsValidSid(sid) } == 0 {
+        return false;
+    }
+    // Capability SIDs use SECURITY_APP_PACKAGE_AUTHORITY (S-1-15) and the
+    // SECURITY_CAPABILITY_BASE_RID (3). Require a concrete capability RID or
+    // hash after the base RID; package identities (S-1-15-2-*) do not qualify.
+    // SAFETY: IsValidSid established readable authority/count/subauthority data.
+    let authority = unsafe { GetSidIdentifierAuthority(sid) };
+    let count = unsafe { GetSidSubAuthorityCount(sid) };
+    if authority.is_null() || count.is_null() || unsafe { *count } < 2 {
+        return false;
+    }
+    // SAFETY: the authority pointer and first subauthority are part of the
+    // valid SID, and the count above proves subauthority zero exists.
+    unsafe { (*authority).Value == [0, 0, 0, 0, 0, 15] && *GetSidSubAuthority(sid, 0) == 3 }
+}
+
+#[cfg(windows)]
+fn windows_local_app_data_directory() -> io::Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{
+        FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+    };
+
+    struct KnownFolderPath(*mut u16);
+
+    impl Drop for KnownFolderPath {
+        fn drop(&mut self) {
+            // SAFETY: SHGetKnownFolderPath allocates this buffer with the COM
+            // task allocator, and this guard owns the single corresponding free.
+            unsafe { CoTaskMemFree(self.0.cast()) };
+        }
+    }
+
+    let mut raw = std::ptr::null_mut();
+    let folder_id = FOLDERID_LocalAppData;
+    // SAFETY: FOLDERID_LocalAppData is a valid known-folder identifier, the
+    // current-user token is selected by a null token, and raw is writable.
+    let status = unsafe {
+        SHGetKnownFolderPath(
+            &raw const folder_id,
+            KF_FLAG_DEFAULT as u32,
+            std::ptr::null_mut(),
+            &raw mut raw,
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::other(format!(
+            "Windows could not resolve the current user's LocalAppData directory (HRESULT 0x{:08x})",
+            status as u32
+        )));
+    }
+    if raw.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned a null LocalAppData directory",
+        ));
+    }
+    let allocation = KnownFolderPath(raw);
+    const MAX_KNOWN_FOLDER_CODE_UNITS: usize = 32_768;
+    let mut length = 0_usize;
+    // SAFETY: SHGetKnownFolderPath returned a NUL-terminated task allocation.
+    while length < MAX_KNOWN_FOLDER_CODE_UNITS && unsafe { *allocation.0.add(length) } != 0 {
+        length += 1;
+    }
+    if length == 0 || length == MAX_KNOWN_FOLDER_CODE_UNITS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid LocalAppData directory",
+        ));
+    }
+    // SAFETY: the bounded scan above found the terminator, so these code units
+    // are readable within the live task allocation.
+    let encoded = unsafe { std::slice::from_raw_parts(allocation.0, length) };
+    Ok(PathBuf::from(OsString::from_wide(encoded)))
+}
+
+#[cfg(windows)]
+fn windows_current_local_app_data_ancestor_identities()
+-> io::Result<WindowsLocalAppDataAncestorIdentities> {
+    let local_app_data_path = windows_local_app_data_directory()?.canonicalize()?;
+    let app_data_path = local_app_data_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows LocalAppData directory has no AppData parent",
+        )
+    })?;
+    if app_data_path.parent().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows LocalAppData directory is anchored directly at a filesystem root",
+        ));
+    }
+    let local_app_data = open_windows_real_directory_security_handle(&local_app_data_path)?;
+    let app_data = open_windows_real_directory_security_handle(app_data_path)?;
+    Ok(WindowsLocalAppDataAncestorIdentities {
+        local_app_data: windows_file_information(&local_app_data)?.identity,
+        app_data: windows_file_information(&app_data)?.identity,
+    })
+}
+
+#[cfg(windows)]
+fn windows_local_app_data_ancestor_identities(
+    guards: &[File],
+) -> io::Result<Option<WindowsLocalAppDataAncestorIdentities>> {
+    let identities = windows_current_local_app_data_ancestor_identities()?;
+    let chain_contains_local_app_data = guards.iter().try_fold(false, |found, guard| {
+        Ok::<_, io::Error>(
+            found || windows_file_information(guard)?.identity == identities.local_app_data,
+        )
+    })?;
+    Ok(chain_contains_local_app_data.then_some(identities))
+}
+
+#[cfg(windows)]
+fn windows_managed_namespace_ancestor_acl_policy(
+    identity: WindowsFileIdentity,
+    local_app_data: Option<WindowsLocalAppDataAncestorIdentities>,
+) -> WindowsManagedNamespaceAncestorAclPolicy {
+    match local_app_data {
+        Some(identities)
+            if identity == identities.local_app_data || identity == identities.app_data =>
+        {
+            WindowsManagedNamespaceAncestorAclPolicy::PinnedLocalAppDataCapability
+        }
+        _ => WindowsManagedNamespaceAncestorAclPolicy::Strict,
+    }
+}
+
+#[cfg(windows)]
 fn windows_basic_ace_sid(
     raw_ace: *mut std::ffi::c_void,
     ace_size: usize,
@@ -7547,6 +7752,7 @@ fn windows_basic_ace_sid(
 fn verify_windows_managed_namespace_ancestor_handle(
     directory: &File,
     allow_trusted_installer_anchor: bool,
+    policy: WindowsManagedNamespaceAncestorAclPolicy,
 ) -> io::Result<()> {
     use std::ffi::c_void;
     use windows_sys::Win32::Security::{
@@ -7659,8 +7865,11 @@ fn verify_windows_managed_namespace_ancestor_handle(
                 let mut mask = unsafe { (*raw_ace.cast::<ACCESS_ALLOWED_ACE>()).Mask };
                 // SAFETY: mask and mapping are initialized writable/readable values.
                 unsafe { MapGenericMask(&raw mut mask, &raw const mapping) };
-                if mask & dangerous != 0
-                    && !windows_sid_is_trusted_for_managed_namespace(sid, &trusted)
+                let trusted_principal = windows_sid_is_trusted_for_managed_namespace(sid, &trusted);
+                let pinned_local_app_data_capability = policy
+                    == WindowsManagedNamespaceAncestorAclPolicy::PinnedLocalAppDataCapability
+                    && windows_sid_is_app_capability(sid);
+                if mask & dangerous != 0 && !trusted_principal && !pinned_local_app_data_capability
                 {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
@@ -7745,16 +7954,6 @@ fn open_windows_real_directory_security_handle(path: &Path) -> io::Result<File> 
 }
 
 #[cfg(windows)]
-fn open_windows_managed_namespace_ancestor(
-    path: &Path,
-    allow_trusted_installer_anchor: bool,
-) -> io::Result<File> {
-    let directory = open_windows_real_directory_security_handle(path)?;
-    verify_windows_managed_namespace_ancestor_handle(&directory, allow_trusted_installer_anchor)?;
-    Ok(directory)
-}
-
-#[cfg(windows)]
 fn verify_windows_managed_namespace_ancestor_chain(
     canonical_parent: &Path,
 ) -> io::Result<Vec<File>> {
@@ -7763,16 +7962,25 @@ fn verify_windows_managed_namespace_ancestor_chain(
         if ancestor.as_os_str().is_empty() {
             continue;
         }
-        guards.push(open_windows_managed_namespace_ancestor(
-            ancestor,
-            ancestor.parent().is_none(),
-        )?);
+        guards.push(open_windows_real_directory_security_handle(ancestor)?);
     }
     if guards.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Windows managed namespace has no canonical ancestor chain",
         ));
+    }
+    // Known-folder lookup is advisory only for the narrow capability-SID
+    // compatibility rule. If Windows cannot bind this chain to the current
+    // user's canonical LocalAppData directory, every ancestor remains strict.
+    let local_app_data = windows_local_app_data_ancestor_identities(&guards)
+        .ok()
+        .flatten();
+    for (index, guard) in guards.iter().enumerate() {
+        let information = windows_file_information(guard)?;
+        let policy =
+            windows_managed_namespace_ancestor_acl_policy(information.identity, local_app_data);
+        verify_windows_managed_namespace_ancestor_handle(guard, index + 1 == guards.len(), policy)?;
     }
     Ok(guards)
 }
@@ -7781,7 +7989,7 @@ fn verify_windows_managed_namespace_ancestor_chain(
 fn open_or_create_windows_managed_private_directory_guard(
     path: &Path,
     verify_ancestor_chain: bool,
-) -> io::Result<(PathBuf, File)> {
+) -> io::Result<(PathBuf, WindowsManagedDirectoryGuard)> {
     open_or_create_windows_managed_directory_guard(
         path,
         verify_ancestor_chain,
@@ -7792,7 +8000,7 @@ fn open_or_create_windows_managed_private_directory_guard(
 #[cfg(windows)]
 fn open_or_create_windows_managed_wsl_distribution_storage_guard(
     path: &Path,
-) -> io::Result<(PathBuf, File)> {
+) -> io::Result<(PathBuf, WindowsManagedDirectoryGuard)> {
     open_or_create_windows_managed_directory_guard(
         path,
         false,
@@ -7805,7 +8013,7 @@ fn open_or_create_windows_managed_directory_guard(
     path: &Path,
     verify_ancestor_chain: bool,
     policy: WindowsManagedDirectoryAclPolicy,
-) -> io::Result<(PathBuf, File)> {
+) -> io::Result<(PathBuf, WindowsManagedDirectoryGuard)> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE, TRUE};
@@ -7973,7 +8181,7 @@ fn open_or_create_windows_managed_directory_guard(
     // Validate every canonical ancestor through the volume/share root. A
     // protected child DACL alone cannot stop FILE_DELETE_CHILD granted by any
     // ancestor from redirecting the caller-supplied namespace path.
-    let _ancestor_guards = if verify_ancestor_chain {
+    let ancestor_guards = if verify_ancestor_chain {
         verify_windows_managed_namespace_ancestor_chain(&canonical_parent)?
     } else {
         Vec::new()
@@ -8035,7 +8243,13 @@ fn open_or_create_windows_managed_directory_guard(
             verify_windows_wsl_distribution_storage_dacl_with_ace_flags(&directory, inheritance)?;
         }
     }
-    Ok((exact_path, directory))
+    Ok((
+        exact_path,
+        WindowsManagedDirectoryGuard {
+            directory,
+            _ancestor_guards: ancestor_guards,
+        },
+    ))
 }
 
 #[cfg(windows)]
@@ -8866,39 +9080,49 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn set_windows_permissive_inheritable_dacl(path: &Path) {
+    fn set_windows_inheritable_allow_dacl(
+        path: &Path,
+        sid_kind: windows_sys::Win32::Security::WELL_KNOWN_SID_TYPE,
+        mask: u32,
+    ) {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::TRUE;
         use windows_sys::Win32::Security::{
             ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAceEx, CONTAINER_INHERIT_ACE,
-            CreateWellKnownSid, DACL_SECURITY_INFORMATION, InitializeAcl,
+            CreateWellKnownSid, DACL_SECURITY_INFORMATION, GetLengthSid, InitializeAcl,
             InitializeSecurityDescriptor, OBJECT_INHERIT_ACE, SECURITY_DESCRIPTOR,
-            SECURITY_MAX_SID_SIZE, SetFileSecurityW, SetSecurityDescriptorDacl, WinWorldSid,
+            SECURITY_MAX_SID_SIZE, SetFileSecurityW, SetSecurityDescriptorDacl,
         };
         use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
         use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
-        let mut everyone =
+        let user = windows_current_user_sid().expect("current-user SID");
+        let mut principal =
             vec![0_u32; (SECURITY_MAX_SID_SIZE as usize).div_ceil(std::mem::size_of::<u32>())];
-        let mut everyone_size = (everyone.len() * std::mem::size_of::<u32>()) as u32;
-        // SAFETY: everyone is an aligned writable buffer of everyone_size bytes;
-        // WinWorldSid does not require a domain SID.
+        let mut principal_size = (principal.len() * std::mem::size_of::<u32>()) as u32;
+        // SAFETY: principal is an aligned writable buffer of principal_size
+        // bytes; these well-known SID kinds do not require a domain SID.
         assert_ne!(
             unsafe {
                 CreateWellKnownSid(
-                    WinWorldSid,
+                    sid_kind,
                     std::ptr::null_mut(),
-                    everyone.as_mut_ptr().cast(),
-                    &raw mut everyone_size,
+                    principal.as_mut_ptr().cast(),
+                    &raw mut principal_size,
                 )
             },
             0,
-            "create Everyone SID: {}",
+            "create test principal SID: {}",
             io::Error::last_os_error()
         );
-        let acl_bytes = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
-            - std::mem::size_of::<u32>()
-            + everyone_size as usize;
+        // SAFETY: the current-user wrapper owns a valid live SID.
+        let user_size = unsafe { GetLengthSid(user.as_ptr()) } as usize;
+        let ace_prefix = std::mem::size_of::<ACCESS_ALLOWED_ACE>() - std::mem::size_of::<u32>();
+        let acl_bytes = std::mem::size_of::<ACL>()
+            + ace_prefix
+            + user_size
+            + ace_prefix
+            + principal_size as usize;
         let mut acl = vec![0_u32; acl_bytes.div_ceil(std::mem::size_of::<u32>())];
         // SAFETY: acl is DWORD-aligned and provides at least acl_bytes writable bytes.
         assert_ne!(
@@ -8907,7 +9131,8 @@ mod tests {
             "initialize permissive parent ACL: {}",
             io::Error::last_os_error()
         );
-        // SAFETY: acl is initialized and everyone contains a valid SID.
+        // Keep the fixture usable and removable by its owner while adding the
+        // exact untrusted grant under test.
         assert_ne!(
             unsafe {
                 AddAccessAllowedAceEx(
@@ -8915,7 +9140,22 @@ mod tests {
                     ACL_REVISION,
                     OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
                     FILE_ALL_ACCESS,
-                    everyone.as_mut_ptr().cast(),
+                    user.as_ptr(),
+                )
+            },
+            0,
+            "add current-user fixture ACE: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: acl is initialized and principal contains a valid SID.
+        assert_ne!(
+            unsafe {
+                AddAccessAllowedAceEx(
+                    acl.as_mut_ptr().cast(),
+                    ACL_REVISION,
+                    OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                    mask,
+                    principal.as_mut_ptr().cast(),
                 )
             },
             0,
@@ -8966,6 +9206,169 @@ mod tests {
             "set permissive parent DACL: {}",
             io::Error::last_os_error()
         );
+    }
+
+    #[cfg(windows)]
+    fn set_windows_permissive_inheritable_dacl(path: &Path) {
+        use windows_sys::Win32::Security::WinWorldSid;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+        set_windows_inheritable_allow_dacl(path, WinWorldSid, FILE_ALL_ACCESS);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_canonical_local_app_data_chain_allows_only_its_pinned_capability_layers() {
+        let local_app_data = windows_local_app_data_directory()
+            .expect("resolve LocalAppData through the Windows known-folder API")
+            .canonicalize()
+            .expect("canonical LocalAppData");
+        let guards = verify_windows_managed_namespace_ancestor_chain(&local_app_data)
+            .expect("the canonical LocalAppData chain must accept bounded capability ACLs");
+        let identities = windows_local_app_data_ancestor_identities(&guards)
+            .expect("inspect canonical LocalAppData identities")
+            .expect("chain contains canonical LocalAppData");
+
+        assert_eq!(
+            windows_managed_namespace_ancestor_acl_policy(
+                identities.local_app_data,
+                Some(identities)
+            ),
+            WindowsManagedNamespaceAncestorAclPolicy::PinnedLocalAppDataCapability
+        );
+        assert_eq!(
+            windows_managed_namespace_ancestor_acl_policy(identities.app_data, Some(identities)),
+            WindowsManagedNamespaceAncestorAclPolicy::PinnedLocalAppDataCapability
+        );
+        assert!(
+            guards.len() >= 2,
+            "the canonical chain must retain its ancestors"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pinned_local_app_data_policy_accepts_a_capability_replacement_ace() {
+        use windows_sys::Win32::Security::WinCapabilityInternetClientSid;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+        let temp = TempDir::new().expect("temporary root");
+        let ancestor = temp.path().join("pinned-local-app-data-ancestor");
+        fs::create_dir(&ancestor).expect("test ancestor");
+        let handle = open_windows_real_directory_security_handle(&ancestor)
+            .expect("open capability-protected ancestor before replacing its DACL");
+        set_windows_inheritable_allow_dacl(
+            &ancestor,
+            WinCapabilityInternetClientSid,
+            FILE_ALL_ACCESS,
+        );
+
+        verify_windows_managed_namespace_ancestor_handle(
+            &handle,
+            false,
+            WindowsManagedNamespaceAncestorAclPolicy::PinnedLocalAppDataCapability,
+        )
+        .expect("a pinned LocalAppData capability ACE is compatible");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_capability_replacement_ace_on_an_arbitrary_ancestor_is_rejected() {
+        use windows_sys::Win32::Security::WinCapabilityInternetClientSid;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+        let temp = TempDir::new().expect("temporary root");
+        let ancestor = temp.path().join("arbitrary-capability-ancestor");
+        fs::create_dir(&ancestor).expect("test ancestor");
+        let handle = open_windows_real_directory_security_handle(&ancestor)
+            .expect("open arbitrary capability ancestor before replacing its DACL");
+        set_windows_inheritable_allow_dacl(
+            &ancestor,
+            WinCapabilityInternetClientSid,
+            FILE_ALL_ACCESS,
+        );
+
+        let error = verify_windows_managed_namespace_ancestor_handle(
+            &handle,
+            false,
+            WindowsManagedNamespaceAncestorAclPolicy::Strict,
+        )
+        .expect_err("the same capability ACE outside canonical LocalAppData must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("replacement rights"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_read_execute_principal_is_not_a_namespace_replacement_grant() {
+        use windows_sys::Win32::Security::WinWorldSid;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
+
+        let temp = TempDir::new().expect("temporary root");
+        let ancestor = temp.path().join("read-only-ancestor");
+        fs::create_dir(&ancestor).expect("test ancestor");
+        set_windows_inheritable_allow_dacl(
+            &ancestor,
+            WinWorldSid,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        );
+        let handle = open_windows_real_directory_security_handle(&ancestor)
+            .expect("open read-only ancestor");
+
+        verify_windows_managed_namespace_ancestor_handle(
+            &handle,
+            false,
+            WindowsManagedNamespaceAncestorAclPolicy::Strict,
+        )
+        .expect("read/execute does not permit namespace replacement");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_writable_arbitrary_principal_remains_rejected() {
+        let temp = TempDir::new().expect("temporary root");
+        let ancestor = temp.path().join("writable-arbitrary-ancestor");
+        fs::create_dir(&ancestor).expect("test ancestor");
+        set_windows_permissive_inheritable_dacl(&ancestor);
+        let handle = open_windows_real_directory_security_handle(&ancestor)
+            .expect("open writable arbitrary ancestor");
+
+        let error = verify_windows_managed_namespace_ancestor_handle(
+            &handle,
+            false,
+            WindowsManagedNamespaceAncestorAclPolicy::Strict,
+        )
+        .expect_err("a writable arbitrary principal must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("replacement rights"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_local_app_data_capability_policy_does_not_extend_to_descendants() {
+        let temp = TempDir::new().expect("temporary root");
+        let product = temp.path().join("product");
+        let state = product.join("managed-runtime");
+        fs::create_dir_all(&state).expect("product state descendants");
+        let product_handle =
+            open_windows_real_directory_security_handle(&product).expect("open product root");
+        let state_handle =
+            open_windows_real_directory_security_handle(&state).expect("open state root");
+        let identities = windows_current_local_app_data_ancestor_identities()
+            .expect("resolve canonical LocalAppData identities");
+
+        for handle in [&product_handle, &state_handle] {
+            assert_eq!(
+                windows_managed_namespace_ancestor_acl_policy(
+                    windows_file_information(handle)
+                        .expect("descendant identity")
+                        .identity,
+                    Some(identities),
+                ),
+                WindowsManagedNamespaceAncestorAclPolicy::Strict,
+                "app-owned descendants must never receive the capability exception"
+            );
+        }
     }
 
     #[cfg(windows)]
@@ -11492,6 +11895,7 @@ mod tests {
         let fixture = fixture();
         push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(Vec::new()));
         fixture
             .commands
@@ -11511,7 +11915,11 @@ mod tests {
             calls[platform_probe_calls],
             ["machine", "list", "--format", "json"]
         );
-        let init = &calls[platform_probe_calls + 1];
+        let orphan_probe_calls = if cfg!(windows) { 1 } else { 0 };
+        if cfg!(windows) {
+            assert_eq!(calls[platform_probe_calls + 1], ["--list", "--quiet"]);
+        }
+        let init = &calls[platform_probe_calls + orphan_probe_calls + 1];
         assert_eq!(&init[..2], ["machine", "init"]);
         assert!(init.contains(&"--rootful=false".into()));
         assert!(init.contains(&"--image".into()));
@@ -11542,19 +11950,22 @@ mod tests {
                 .any(|argument| argument == "sudo" || argument == "sh")
         );
         assert_eq!(
-            calls[platform_probe_calls + 3][..3],
+            calls[platform_probe_calls + orphan_probe_calls + 3][..3],
             ["machine", "start", "--quiet"]
         );
         assert_eq!(
-            calls[platform_probe_calls + 4],
+            calls[platform_probe_calls + orphan_probe_calls + 4],
             ["version", "--format", "{{.Server.Version}}"]
         );
         let mut expected_timeouts = vec![];
         if cfg!(windows) {
             expected_timeouts.extend([COMMAND_TIMEOUT, COMMAND_TIMEOUT]);
         }
+        expected_timeouts.push(COMMAND_TIMEOUT);
+        if cfg!(windows) {
+            expected_timeouts.push(COMMAND_TIMEOUT);
+        }
         expected_timeouts.extend([
-            COMMAND_TIMEOUT,
             MACHINE_INIT_TIMEOUT,
             COMMAND_TIMEOUT,
             MACHINE_START_TIMEOUT,
@@ -11594,6 +12005,129 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn start_recovers_exact_orphaned_wsl_distribution_and_reuses_verified_image() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let cached_image = {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .acquire_machine_image_locked(target, None)
+                .expect("cache exact machine image")
+        };
+        let orphaned_vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        fs::create_dir(orphaned_vhd.parent().expect("orphaned VHD parent"))
+            .expect("create orphaned WSL distribution root");
+        fs::write(&orphaned_vhd, b"orphaned fixture VHD").expect("write orphaned fixture VHD");
+        let expected_machine = machine_name(target);
+        let expected_distribution = format!("podman-{expected_machine}");
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture.commands.push(success(utf16le(&format!(
+            "Ubuntu\r\n{expected_distribution}\r\n"
+        ))));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(utf16le("Ubuntu\r\n")));
+        fixture.commands.push(success(Vec::new()));
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+
+        let command = fixture
+            .manager
+            .start()
+            .expect("recover exact WSL orphan and start");
+
+        assert_eq!(command.runtime_version(), "5.8.2");
+        assert_eq!(*fixture.downloader.calls.lock().expect("download calls"), 1);
+        assert_eq!(fs::read(&cached_image).unwrap(), fixture.image);
+        assert!(!private_entry_exists(&orphaned_vhd).unwrap());
+        assert!(fixture.manager.provider_home().is_dir());
+        assert_eq!(
+            inspect_managed_ssh_identity(&fixture.manager.machine_ssh_identity_path()).unwrap(),
+            ManagedSshIdentityState::Valid
+        );
+
+        let calls = fixture.commands.calls();
+        assert_eq!(calls[2], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[3], ["--list", "--quiet"]);
+        assert_eq!(calls[4], ["--unregister", expected_distribution.as_str()]);
+        assert_eq!(calls[5], ["--list", "--quiet"]);
+        assert_eq!(&calls[6][..2], ["machine", "init"]);
+        assert_eq!(calls[7], ["machine", "list", "--format", "json"]);
+        assert_eq!(&calls[8][..3], ["machine", "start", "--quiet"]);
+        assert_eq!(calls[9], ["version", "--format", "{{.Server.Version}}"]);
+        assert!(calls.iter().flatten().all(|argument| argument != "Ubuntu"));
+        assert!(
+            calls
+                .iter()
+                .flatten()
+                .all(|argument| !argument.contains("podman-*") && !argument.contains("assm1-*"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn start_retains_orphaned_state_when_exact_wsl_unregister_fails() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let cached_image = {
+            let _lock = fixture.manager.lock().expect("lifecycle lock");
+            fixture
+                .manager
+                .acquire_machine_image_locked(target, None)
+                .expect("cache exact machine image")
+        };
+        let orphaned_vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        fs::create_dir(orphaned_vhd.parent().expect("orphaned VHD parent"))
+            .expect("create orphaned WSL distribution root");
+        fs::write(&orphaned_vhd, b"orphaned fixture VHD").expect("write orphaned fixture VHD");
+        let expected_distribution = format!("podman-{}", machine_name(target));
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
+        fixture
+            .commands
+            .push(failure(b"exact WSL unregister failed"));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("failed exact unregister must stop recovery");
+
+        assert!(error.to_string().contains("exact WSL unregister failed"));
+        assert!(fixture.manager.install_directory().is_dir());
+        assert!(fixture.manager.provider_home().is_dir());
+        assert!(private_entry_exists(&orphaned_vhd).unwrap());
+        assert_eq!(fs::read(&cached_image).unwrap(), fixture.image);
+        assert_eq!(*fixture.downloader.calls.lock().expect("download calls"), 1);
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 5);
+        assert_eq!(calls[3], ["--list", "--quiet"]);
+        assert_eq!(calls[4], ["--unregister", expected_distribution.as_str()]);
+        assert!(!calls.iter().any(|arguments| {
+            arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+        }));
     }
 
     #[test]
@@ -12045,6 +12579,7 @@ mod tests {
         let fixture = fixture();
         push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(Vec::new()));
         fixture
             .commands

@@ -34,6 +34,7 @@ import {
   type AppUpdateState,
 } from "./services/appUpdater";
 import { EVENTS, scannerService, type ActionResponse } from "./services/scanner";
+import { mergeWorkspaceIntoSnapshot } from "./snapshotWorkspace";
 import { startPageCopy, type UseCaseDefinition } from "./useCases";
 import { displaySafeTechnicalDetail } from "./technicalDetails";
 import type {
@@ -91,6 +92,64 @@ const busyActionCopy = {
 } as const;
 
 const unknownBusyActionCopy = { en: "the current task", zhTW: "目前工作" } as const;
+
+interface NonExecutionActionToastCopy {
+  acceptedTitle: BilingualText;
+  acceptedDetail: BilingualText;
+  failedTitle: BilingualText;
+  failedDetail: BilingualText;
+}
+
+const nonExecutionActionToastCopy = {
+  "attach-workspace": {
+    acceptedTitle: { en: "Project prepared locally", zhTW: "專案已在本機準備完成" },
+    acceptedDetail: { en: "Private copy verified; no scan started.", zhTW: "私密副本已驗證；尚未開始掃描。" },
+    failedTitle: { en: "Project was not prepared", zhTW: "專案尚未準備完成" },
+    failedDetail: { en: "The private copy could not be verified. No scan started.", zhTW: "無法驗證私密副本；尚未開始掃描。" },
+  },
+  scope: {
+    acceptedTitle: { en: "Scan access saved", zhTW: "掃描許可已儲存" },
+    acceptedDetail: { en: "The exact target and limits are saved; no scan started.", zhTW: "確切目標與限制已儲存；尚未開始掃描。" },
+    failedTitle: { en: "Scan access was not saved", zhTW: "掃描許可尚未儲存" },
+    failedDetail: { en: "No scan started. Review the selected target and permission, then try again.", zhTW: "尚未開始掃描；請檢查所選目標與許可後再試一次。" },
+  },
+  "archive-case": {
+    acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
+    acceptedDetail: { en: "The scan project was moved to the archive; no scan started.", zhTW: "掃描專案已移至封存區；尚未開始掃描。" },
+    failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
+    failedDetail: { en: "The scan project was not archived. Existing saved data was kept.", zhTW: "掃描專案尚未封存；原有已儲存資料仍保留。" },
+  },
+  "finding-workflow": {
+    acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
+    acceptedDetail: { en: "The problem's review status was updated; no scan started.", zhTW: "問題的審查狀態已更新；尚未開始掃描。" },
+    failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
+    failedDetail: { en: "The previous review status was kept.", zhTW: "先前的審查狀態仍保留。" },
+  },
+  "finding-group": {
+    acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
+    acceptedDetail: { en: "The related problems were grouped; no scan started.", zhTW: "相關問題已分組；尚未開始掃描。" },
+    failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
+    failedDetail: { en: "The previous problem grouping was kept.", zhTW: "先前的問題分組仍保留。" },
+  },
+  "finding-ungroup": {
+    acceptedTitle: { en: "Change saved", zhTW: "變更已儲存" },
+    acceptedDetail: { en: "The group was removed and the individual problems remain saved; no scan started.", zhTW: "群組已移除，各個問題仍有儲存；尚未開始掃描。" },
+    failedTitle: { en: "Change was not saved", zhTW: "變更尚未儲存" },
+    failedDetail: { en: "The previous problem grouping was kept.", zhTW: "先前的問題分組仍保留。" },
+  },
+  "connect-source": {
+    acceptedTitle: { en: "Source prepared", zhTW: "資料來源已準備完成" },
+    acceptedDetail: { en: "The read-only source is saved for review; no scan started.", zhTW: "唯讀資料來源已儲存供檢視；尚未開始掃描。" },
+    failedTitle: { en: "Source was not prepared", zhTW: "資料來源尚未準備完成" },
+    failedDetail: { en: "No scan started. Check the selected source and try again.", zhTW: "尚未開始掃描；請檢查所選資料來源後再試一次。" },
+  },
+  discovery: {
+    acceptedTitle: { en: "Asset list updated", zhTW: "資產清單已更新" },
+    acceptedDetail: { en: "Review the items found; no scan started.", zhTW: "請檢視找到的項目；尚未開始掃描。" },
+    failedTitle: { en: "Asset list was not updated", zhTW: "資產清單尚未更新" },
+    failedDetail: { en: "No scan started. Check the source setup and try again.", zhTW: "尚未開始掃描；請檢查資料來源設定後再試一次。" },
+  },
+} as const satisfies Partial<Record<keyof typeof busyActionCopy, NonExecutionActionToastCopy>>;
 
 const scanStartIssueCopy = {
   no_effective_scope_grants: {
@@ -157,11 +216,15 @@ const scanStartIssueCopy = {
     en: "The saved results needed to continue are missing or changed. Nothing was rerun. Review what remains, then start a new scan for fresh results.",
     zhTW: "續跑所需的已保存結果已遺失或有變更；這次沒有重新執行任何檢查。請查看目前仍可用的結果，再開始新的掃描取得新結果。",
   },
+  resume_release_incompatible: {
+    en: "This unfinished scan was created by a different app release and cannot be continued safely. Nothing was rerun. Start a new scan; saved evidence and findings remain unchanged.",
+    zhTW: "這個未完成的掃描由不同版本的應用程式建立，無法安全續跑。這次沒有重新執行任何檢查；請開始新的掃描，已保存的證據與問題不會變更。",
+  },
   execution_preflight_unavailable: {
     en: "The final readiness check could not finish. No scan started. Check again.",
     zhTW: "最後的準備狀態檢查尚未完成；掃描尚未開始。請重新檢查。",
   },
-} as const satisfies Partial<Record<ScanReadinessBlocker, BilingualText>>;
+} as const satisfies Partial<Record<ScanReadinessBlocker | "resume_release_incompatible", BilingualText>>;
 
 const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
@@ -174,6 +237,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | undefined>(scannerService.isNative() ? undefined : getDemoNotice());
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string>();
+  const [startingScanCaseId, setStartingScanCaseId] = useState<string>();
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [artifactCleanupPlan, setArtifactCleanupPlan] = useState<CaseArtifactDeletionPlan>();
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
@@ -195,6 +259,8 @@ export default function App() {
   const toastId = useRef(0);
   const snapshotLocale = useRef(locale);
   const scanReadinessRequestGeneration = useRef(0);
+  const scanReadinessResponseGeneration = useRef(0);
+  const selectedCaseIdRef = useRef<string | undefined>(undefined);
   const automaticRuntimeSetupAttempted = useRef(false);
 
   const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
@@ -215,22 +281,27 @@ export default function App() {
       const result = await scannerService.getSnapshot(caseId);
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
+      selectedCaseIdRef.current = result.data.selectedCaseId;
       setSnapshot(result.data);
       const readinessCaseId = result.data.workspace?.case.id;
+      const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
       if (readinessCaseId) {
         try {
           const readiness = await scannerService.getScanReadiness(readinessCaseId);
           if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
           if (!isCurrentScanReadinessResponse(
-            scanReadinessRequestGeneration.current,
-            readinessRequestGeneration,
+            scanReadinessResponseGeneration.current,
+            readinessResponseGeneration,
             readinessCaseId,
             readiness.data.caseId,
           )) throw new Error("scan readiness response did not match the requested case");
           setScanReadiness(readiness.data);
           setScanReadinessErrorCaseId(undefined);
         } catch (error) {
-          if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
+          if (
+            isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)
+            && isCurrentScanReadinessRequest(scanReadinessResponseGeneration.current, readinessResponseGeneration)
+          ) {
             setScanReadiness(undefined);
             setScanReadinessErrorCaseId(readinessCaseId);
             recordTechnicalError("check scan readiness", error);
@@ -268,6 +339,10 @@ export default function App() {
     snapshotLocale.current = locale;
     if (snapshot) void loadSnapshot(snapshot.selectedCaseId, true);
   }, [loadSnapshot, locale, snapshot?.selectedCaseId]);
+
+  useEffect(() => {
+    selectedCaseIdRef.current = snapshot?.selectedCaseId;
+  }, [snapshot?.selectedCaseId]);
 
   useEffect(() => {
     if (!scannerService.isNative()) return;
@@ -350,6 +425,8 @@ export default function App() {
       }
       await loadSnapshot(snapshot?.selectedCaseId, true);
       const cancelled = setupResult.data.phase === "cancelled";
+      const requiresExternalAction = setupResult.data.phase === "failed"
+        && setupResult.data.nextAction !== undefined;
       if (!automatic && !result.data.accepted && !cancelled) {
         window.location.hash = "start";
         setPage("start");
@@ -359,8 +436,10 @@ export default function App() {
         title: result.data.accepted
           ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
           : cancelled
-            ? text({ en: "Scan-engine setup was stopped", zhTW: "已停止掃描引擎設定" })
-            : text({ en: "One setup step still needs attention", zhTW: "設定還有一個步驟需要處理" }),
+            ? text({ en: "Scan-tool setup paused", zhTW: "掃描工具設定已暫停" })
+            : requiresExternalAction
+              ? text({ en: "One Windows setup step needs attention", zhTW: "還需要完成一個 Windows 設定步驟" })
+              : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
         detail: result.data.accepted
           ? automatic
             ? text({
@@ -371,25 +450,30 @@ export default function App() {
               en: "You can continue with your chosen check.",
               zhTW: "現在可以繼續設定你選擇的檢查。",
             })
-          : automatic
+          : cancelled
             ? text({
-              en: "Existing results remain available. Use the one setup action shown when you are ready.",
-              zhTW: "既有結果仍可查看；準備好時，再使用畫面顯示的唯一設定操作。",
+              en: "The completed part of the download was kept. Continue setup whenever you are ready.",
+              zhTW: "已完成的下載進度已保留；準備好時可繼續設定。",
             })
-            : text({
-              en: "Follow the step shown on the start page, then check again.",
-              zhTW: "請照首頁顯示的步驟處理，再重新檢查。",
-            }),
+            : requiresExternalAction
+              ? text({
+                en: "Complete the action shown on the setup card, then check again. Your existing results are unchanged.",
+                zhTW: "請完成設定卡片顯示的操作，再重新檢查；既有結果沒有變更。",
+              })
+              : text({
+                en: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
+                zhTW: "掃描工具未能完成設定。你的掃描專案沒有變更；請再試一次。如果問題持續發生，可查看「技術細節」。",
+              }),
       });
     } catch (error) {
       setRuntimeAutomaticAttemptFailed(true);
       recordTechnicalError("prepare managed runtime", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "Scan-engine setup could not start", zhTW: "掃描引擎設定無法開始" }),
+        title: text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
         detail: text({
-          en: "Nothing was changed. Return to the setup card and try again.",
-          zhTW: "這次沒有變更任何設定；請回到設定卡片再試一次。",
+          en: "Your scan projects were not changed. Return to the setup card and try setup again.",
+          zhTW: "你的掃描專案沒有變更；請回到設定卡片再試一次。",
         }),
       });
     } finally {
@@ -461,17 +545,66 @@ export default function App() {
     if (!scannerService.isNative()) return undefined;
     let disposed = false;
     const unlisteners: Array<() => void> = [];
-    const eventNames = Object.values(EVENTS);
+    const refreshEventNames = [EVENTS.coverageChanged, EVENTS.exportProgress, EVENTS.bootstrapMessage];
 
-    void Promise.all(
-      eventNames.map(async (eventName) => {
-        const unlisten = await scannerService.subscribe(eventName, () => {
-          if (!disposed) void loadSnapshot(snapshot?.selectedCaseId, true);
-        });
-        if (disposed) unlisten();
-        else unlisteners.push(unlisten);
-      }),
-    ).catch((error: unknown) => {
+    const register = async (subscription: Promise<() => void>) => {
+      const unlisten = await subscription;
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    };
+
+    void Promise.all([
+      register(
+        scannerService.subscribeScanWorkspace((workspace, eventName) => {
+          if (disposed) return;
+          setSnapshot((current) => mergeWorkspaceIntoSnapshot(current, workspace));
+          if (eventName === EVENTS.runFinished && workspace.case.id === selectedCaseIdRef.current) {
+            const readinessRequestGeneration = scanReadinessRequestGeneration.current;
+            const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
+            void scannerService.getScanReadiness(workspace.case.id).then((result) => {
+              if (
+                disposed
+                || selectedCaseIdRef.current !== workspace.case.id
+                || !isCurrentScanReadinessResponse(
+                  scanReadinessResponseGeneration.current,
+                  readinessResponseGeneration,
+                  workspace.case.id,
+                  result.data.caseId,
+                )
+                || !isCurrentScanReadinessRequest(
+                  scanReadinessRequestGeneration.current,
+                  readinessRequestGeneration,
+                )
+              ) return;
+              applyServiceMeta(result);
+              setScanReadiness(result.data);
+              setScanReadinessErrorCaseId(undefined);
+            }).catch((error: unknown) => {
+              if (
+                disposed
+                || selectedCaseIdRef.current !== workspace.case.id
+                || !isCurrentScanReadinessRequest(
+                  scanReadinessRequestGeneration.current,
+                  readinessRequestGeneration,
+                )
+                || !isCurrentScanReadinessRequest(
+                  scanReadinessResponseGeneration.current,
+                  readinessResponseGeneration,
+                )
+              ) return;
+              setScanReadiness(undefined);
+              setScanReadinessErrorCaseId(workspace.case.id);
+              recordTechnicalError("refresh scan readiness after completion", error);
+            });
+          }
+        }),
+      ),
+      ...refreshEventNames.map((eventName) =>
+        register(scannerService.subscribe(eventName, () => {
+          if (!disposed) void loadSnapshot(selectedCaseIdRef.current, true);
+        })),
+      ),
+    ]).catch((error: unknown) => {
       if (!disposed) {
         recordTechnicalError("subscribe to desktop status", error);
         pushToast({
@@ -489,7 +622,7 @@ export default function App() {
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [loadSnapshot, pushToast, snapshot?.selectedCaseId, text]);
+  }, [applyServiceMeta, loadSnapshot, pushToast, text]);
 
   const navigate = (target: PageId) => {
     if (target !== "findings") setFocusedFindingId(undefined);
@@ -505,20 +638,25 @@ export default function App() {
       const result = await scannerService.selectCase(caseId);
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
+      selectedCaseIdRef.current = caseId;
       setSnapshot((current) => current ? { ...current, selectedCaseId: caseId, workspace: result.data } : current);
+      const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
       try {
         const readiness = await scannerService.getScanReadiness(caseId);
         if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
         if (!isCurrentScanReadinessResponse(
-          scanReadinessRequestGeneration.current,
-          readinessRequestGeneration,
+          scanReadinessResponseGeneration.current,
+          readinessResponseGeneration,
           caseId,
           readiness.data.caseId,
         )) throw new Error("scan readiness response did not match the selected case");
         setScanReadiness(readiness.data);
         setScanReadinessErrorCaseId(undefined);
       } catch (error) {
-        if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
+        if (
+          isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)
+          && isCurrentScanReadinessRequest(scanReadinessResponseGeneration.current, readinessResponseGeneration)
+        ) {
           setScanReadiness(undefined);
           setScanReadinessErrorCaseId(caseId);
           recordTechnicalError("check selected case scan readiness", error);
@@ -542,13 +680,14 @@ export default function App() {
 
   const retryScanReadiness = async (caseId: string) => {
     const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
+    const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
     setBusyAction("scan-readiness");
     try {
       const result = await scannerService.getScanReadiness(caseId);
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       if (!isCurrentScanReadinessResponse(
-        scanReadinessRequestGeneration.current,
-        readinessRequestGeneration,
+        scanReadinessResponseGeneration.current,
+        readinessResponseGeneration,
         caseId,
         result.data.caseId,
       )) throw new Error("scan readiness response did not match the requested case");
@@ -556,7 +695,10 @@ export default function App() {
       setScanReadiness(result.data);
       setScanReadinessErrorCaseId(undefined);
     } catch (error) {
-      if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
+      if (
+        isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)
+        && isCurrentScanReadinessRequest(scanReadinessResponseGeneration.current, readinessResponseGeneration)
+      ) {
         setScanReadinessErrorCaseId(caseId);
         recordTechnicalError("retry scan readiness", error);
         pushToast({
@@ -608,6 +750,7 @@ export default function App() {
     action: () => Promise<ServiceResult<ActionResponse>>,
   ): Promise<boolean> => {
     setBusyAction(key);
+    const nonExecutionCopy = nonExecutionActionToastCopy[key as keyof typeof nonExecutionActionToastCopy];
     try {
       const result = await action();
       applyServiceMeta(result);
@@ -616,25 +759,32 @@ export default function App() {
       pushToast({
         tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
         title: result.data.accepted
-          ? text({ en: "Local work started", zhTW: "本機工作已開始" })
+          ? text(nonExecutionCopy?.acceptedTitle ?? { en: "Local work started", zhTW: "本機工作已開始" })
+          : nonExecutionCopy
+            ? text(nonExecutionCopy.failedTitle)
           : result.mode === "demo"
             ? text({ en: "Demo mode did not run a scan", zhTW: "展示模式沒有執行掃描" })
             : text({ en: "The work did not start", zhTW: "工作尚未開始" }),
         detail: result.data.accepted
-          ? text({ en: "Open Scan progress to follow each scanner.", zhTW: "可到「掃描進度」查看每個工具的狀態。" })
+          ? text(nonExecutionCopy?.acceptedDetail ?? { en: "Open Scan progress to follow each scanner.", zhTW: "可到「掃描進度」查看每個工具的狀態。" })
+          : nonExecutionCopy
+            ? text(nonExecutionCopy.failedDetail)
           : preflightCode
             ? text(scanStartIssueCopy[preflightCode])
           : text({ en: "No target was contacted. Check the current step and try again.", zhTW: "沒有接觸任何目標；請確認目前步驟後再試一次。" }),
       });
       if (result.data.snapshot) setSnapshot(result.data.snapshot);
-      else if (result.mode === "native") await loadSnapshot(snapshot?.selectedCaseId, true);
+      else if (result.data.workspace) {
+        const workspace = result.data.workspace;
+        setSnapshot((current) => mergeWorkspaceIntoSnapshot(current, workspace));
+      } else if (result.mode === "native") await loadSnapshot(snapshot?.selectedCaseId, true);
       return result.data.accepted;
     } catch (error) {
       recordTechnicalError(`run action ${key}`, error);
       pushToast({
         tone: "danger",
-        title: text({ en: "The local work could not finish", zhTW: "本機工作未能完成" }),
-        detail: text({ en: "Saved scan data was kept. Check the current step before trying again.", zhTW: "已保存的掃描資料仍保留；請確認目前步驟後再試一次。" }),
+        title: text(nonExecutionCopy?.failedTitle ?? { en: "The local work could not finish", zhTW: "本機工作未能完成" }),
+        detail: text(nonExecutionCopy?.failedDetail ?? { en: "Saved scan data was kept. Check the current step before trying again.", zhTW: "已保存的掃描資料仍保留；請確認目前步驟後再試一次。" }),
       });
       return false;
     } finally {
@@ -647,6 +797,15 @@ export default function App() {
     action: () => Promise<ServiceResult<ActionResponse>>,
   ): Promise<void> => {
     await executeAction(key, action);
+  };
+
+  const startScan = async (caseId: string): Promise<void> => {
+    setStartingScanCaseId(caseId);
+    try {
+      await runAction("start-scan", () => scannerService.startScan(caseId));
+    } finally {
+      setStartingScanCaseId((current) => current === caseId ? undefined : current);
+    }
   };
 
   const deleteCase = async (caseId: string, confirmation: string): Promise<boolean> => {
@@ -809,7 +968,10 @@ export default function App() {
       pushToast({
         tone: "danger",
         title: text({ en: "The case was not exported", zhTW: "案件沒有匯出成功" }),
-        detail: text({ en: "No output file was written. Choose a destination and try again.", zhTW: "沒有寫出檔案；請選擇目的地後再試一次。" }),
+        detail: text({
+          en: "No output file was written. Try another report type or location; open Technical details if it keeps happening.",
+          zhTW: "沒有寫出檔案；請改用另一種報告格式或儲存位置。如果問題持續發生，請查看「技術細節」。",
+        }),
       });
     } finally {
       setBusyAction(undefined);
@@ -979,7 +1141,7 @@ export default function App() {
             onChooseSnapshot={() => scannerService.chooseSourceSnapshot()}
             onConnectSourceSnapshot={(input) => runAction("connect-source", () => scannerService.connectSourceSnapshot(input))}
             onChooseWorkspace={() => scannerService.chooseWorkspaceDirectory()}
-            onAttachWorkspaceSnapshot={(input) => runAction("attach-workspace", () => scannerService.attachWorkspaceSnapshot(input))}
+            onAttachWorkspaceSnapshot={(input) => executeAction("attach-workspace", () => scannerService.attachWorkspaceSnapshot(input))}
             onStartDiscovery={() => runAction("discovery", () => scannerService.startDiscovery(currentCaseId))}
             onAuthorizationChanged={() => loadSnapshot(currentCaseId, true)}
             onApprovePending={(assetIds, modes, confirmation, externalScope) => executeAction("scope", () => scannerService.approveScope({
@@ -994,6 +1156,7 @@ export default function App() {
       case "progress":
         return (
           <ProgressPage
+            caseId={currentCaseId}
             runs={workspace.runs}
             readiness={scanReadiness?.caseId === currentCaseId ? scanReadiness : undefined}
             readinessCheckFailed={scanReadinessErrorCaseId === currentCaseId}
@@ -1002,7 +1165,8 @@ export default function App() {
               runtime: snapshot?.runtime,
             }}
             busy={Boolean(busyAction)}
-            onStart={() => runAction("start-scan", () => scannerService.startScan(currentCaseId))}
+            starting={Boolean(currentCaseId && busyAction === "start-scan" && startingScanCaseId === currentCaseId)}
+            onStart={() => currentCaseId ? startScan(currentCaseId) : Promise.resolve()}
             onFixSetup={() => {
               if (scanReadinessErrorCaseId === currentCaseId) {
                 void retryScanReadiness(currentCaseId);

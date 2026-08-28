@@ -91,7 +91,7 @@ func TestTypedContainerPlansUseOCIImageLayout(t *testing.T) {
 	}
 }
 
-func TestTrivyFilesystemProfilesAlsoKeepTheImmutableDatabaseReadOnly(t *testing.T) {
+func TestTrivyFilesystemProfilesUseLibraryPackagesAndKeepTheImmutableDatabaseReadOnly(t *testing.T) {
 	for _, profile := range []string{profileRepository, profileIaC} {
 		planned, err := planInvocation("trivy", profile)
 		if err != nil {
@@ -101,7 +101,7 @@ func TestTrivyFilesystemProfilesAlsoKeepTheImmutableDatabaseReadOnly(t *testing.
 			"filesystem", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
 			"--cache-backend", "memory",
 			"--skip-db-update", "--skip-java-db-update", "--offline-scan",
-			"--pkg-types", "os", "--skip-version-check", "--disable-telemetry",
+			"--pkg-types", "library", "--skip-version-check", "--disable-telemetry",
 			"--skip-vex-repo-update", "--scanners", "vuln",
 			"--format", "json", "--output", "/output/trivy.json", "/workspace",
 		}

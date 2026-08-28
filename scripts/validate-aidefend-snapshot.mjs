@@ -91,7 +91,10 @@ const EXPECTED_MAPPING_PROJECTION = Object.freeze([
   { engine_id: "grype", match_kind: "prefix", source_rule: "CVE-", aidefend_applicability: "ai_system", controls: ["AID-H-003.001", "AID-H-003.010"] },
   { engine_id: "kics", match_kind: "exact", source_rule: "e24efb0e", aidefend_applicability: "ai_system", controls: ["AID-H-003.005"] },
   { engine_id: "kubescape", match_kind: "exact", source_rule: "C-0002", aidefend_applicability: "ai_system", controls: ["AID-I-001.001"] },
-  { engine_id: "semgrep", match_kind: "exact", source_rule: "python.lang.security.audit.exec-detected", aidefend_applicability: "ai_system", controls: ["AID-H-025.001", "AID-H-031.002"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.generic.private-key", aidefend_applicability: "ai_system", controls: ["AID-H-031.002"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.javascript.child-process-exec", aidefend_applicability: "ai_system", controls: ["AID-H-025.001", "AID-H-031.002"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.dynamic-code-execution", aidefend_applicability: "ai_system", controls: ["AID-H-025.001", "AID-H-031.002"] },
+  { engine_id: "semgrep", match_kind: "exact", source_rule: "ai-security-scanner.python.shell-true", aidefend_applicability: "ai_system", controls: ["AID-H-025.001", "AID-H-031.002"] },
   { engine_id: "trivy", match_kind: "prefix", source_rule: "CVE-", aidefend_applicability: "ai_system", controls: ["AID-H-003.001", "AID-H-003.010"] },
   { engine_id: "trufflehog", match_kind: "exact", source_rule: "trufflehog:ExampleCredential", aidefend_applicability: "ai_system", controls: ["AID-H-031.002"] },
 ]);

@@ -64,13 +64,17 @@ export const en = {
   "runtime.phase.completed.detail": "You can start a scan now.",
   "runtime.phase.failed.label": "Setup needs attention",
   "runtime.phase.failed.detail": "The scan tools did not start. Follow the one action below, then try again.",
+  "runtime.phase.failed.generic.label": "Scan-tool setup stopped",
+  "runtime.phase.failed.generic.detail": "Automatic setup did not finish. Your scan project is unchanged; try setup again.",
   "runtime.phase.cancelled.label": "Setup paused",
   "runtime.phase.cancelled.detail": "Downloaded progress was kept, so the next attempt can continue where it stopped.",
   "runtime.download.progress": "Scan tool download progress",
   "runtime.download.resumed": "Continuing from {bytes} already downloaded",
   "runtime.cancel.pending": "Pausing setup…",
   "runtime.cancel.action": "Pause setup and keep download progress",
-  "runtime.setup.retry": "I've done this — check again",
+  "runtime.setup.recheck": "I've done this — check again",
+  "runtime.setup.retry": "Try setup again",
+  "runtime.setup.continue": "Continue setup",
   "runtime.setup.action": "Set up scan tools automatically",
 
   "update.downloading": "Downloading update…",
@@ -86,6 +90,7 @@ export const en = {
   "update.currentHelp": "Current version {version}",
   "update.checkHelp": "Check for a signed app update",
 
+  "common.byte": "{value} byte",
   "common.bytes": "{value} bytes",
   "common.unknownVersion": "—",
 

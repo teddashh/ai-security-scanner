@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 import type { EngineRun } from "../../src/types.ts";
 
 const bundled = await build({
-  entryPoints: [new URL("../../src/scanPresentation.ts", import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL("../../src/scanPresentation.ts", import.meta.url))],
   bundle: true,
   format: "esm",
   platform: "node",

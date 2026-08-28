@@ -48,6 +48,8 @@ import type {
   VerificationSummary,
 } from "../types";
 import { getActiveLocale } from "../i18n/core";
+import { explicitTargetRequiresSensitiveNetworkAllowance } from "../caseForm";
+import { useCaseById } from "../useCases";
 import type { UseCaseId } from "../useCases";
 
 const adapterText = (en: string, zhTW: string): string =>
@@ -66,6 +68,8 @@ export interface NativeCaseSummary {
   data_classes: string[];
   requested_activities: string[];
   source_kinds: string[];
+  /** Absent snapshots retain the legacy source list. */
+  applicable_source_kinds?: string[];
   notes: string | null;
   status: string;
   created_at: string;
@@ -148,6 +152,7 @@ interface NativeCoverageEntry {
   asset_id: string | null;
   status: string;
   explanation: string;
+  last_run_id?: string | null;
   observed_at: string | null;
 }
 
@@ -612,6 +617,19 @@ const assessmentIntents: readonly UseCaseId[] = [
 const mapAssessmentIntent = (value: string | null | undefined): UseCaseId | undefined =>
   assessmentIntents.includes(value as UseCaseId) ? value as UseCaseId : undefined;
 
+const suggestedPlatformsForIntent = (intent: UseCaseId | undefined): CloudPlatform[] =>
+  intent ? [...useCaseById(intent).suggestedPlatforms] : [];
+
+const withDraftIntentFallback = (
+  platforms: CloudPlatform[],
+  intent: UseCaseId | undefined,
+  status: string,
+  assetCount: number,
+): CloudPlatform[] =>
+  platforms.length === 0 && status === "draft" && assetCount === 0
+    ? suggestedPlatformsForIntent(intent)
+    : platforms;
+
 const phaseMap: Record<string, CasePhase> = {
   draft: "draft",
   discovering: "discovering",
@@ -925,7 +943,9 @@ const engineRecoveryAction = (
   status: EngineRunStatus,
   hasResumeToken: boolean,
   checkpoint: EngineCheckpoint | undefined,
+  errorCode: string | null | undefined,
 ): EngineRecoveryAction => {
+  if (errorCode === "resume_release_incompatible") return "none";
   if (!hasResumeToken || !checkpoint || !["paused", "failed", "partial", "cancelled"].includes(status)) {
     return "none";
   }
@@ -940,6 +960,7 @@ const runStatus = (runs: EngineRun[]): RunStatus => {
   if (runs.length === 0 || runs.every((run) => run.status === "pending")) return "queued";
   if (runs.some((run) => run.status === "running")) return "running";
   if (runs.some((run) => run.status === "paused")) return "paused";
+  if (runs.some((run) => run.status === "pending")) return "queued";
   if (runs.every((run) => run.status === "completed")) return "completed";
   if (runs.every((run) => run.status === "cancelled")) return "cancelled";
   if (runs.every((run) => run.status === "failed" || run.status === "not_executed")) return "failed";
@@ -1028,31 +1049,41 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
   };
 };
 
-const adaptSummary = (summary: NativeCaseSummary): AssessmentCase => ({
-  id: summary.id,
-  name: summary.title,
-  assessmentIntent: mapAssessmentIntent(summary.assessment_intent),
-  organizationName: summary.organization_name,
-  companySize: mapCompanySize(summary.employee_range),
-  dataClasses: mapDataClasses(summary.data_classes),
-  requestedActivities: summary.requested_activities.filter(
-    (activity): activity is AssessmentActivity => [
-      "configuration_assessment",
-      "local_artifact_analysis",
-      "low_impact_external_checks",
-      "active_external_vulnerability_tests",
-    ].includes(activity),
-  ),
-  platforms: unique(summary.source_kinds.map(platformFromSource)),
-  createdAt: summary.created_at,
-  updatedAt: summary.updated_at,
-  phase: mapPhase(summary.status),
-  isDemo: summary.is_demo,
-  description: summary.notes ?? undefined,
-  latestRunId: summary.latest_run_id ?? undefined,
-  assetCount: summary.asset_count,
-  findingCount: summary.finding_count,
-});
+const adaptSummary = (summary: NativeCaseSummary): AssessmentCase => {
+  const assessmentIntent = mapAssessmentIntent(summary.assessment_intent);
+  const sourceKinds = summary.applicable_source_kinds ?? summary.source_kinds;
+  const platforms = withDraftIntentFallback(
+    unique(sourceKinds.map(platformFromSource)),
+    assessmentIntent,
+    summary.status,
+    summary.asset_count,
+  );
+  return {
+    id: summary.id,
+    name: summary.title,
+    assessmentIntent,
+    organizationName: summary.organization_name,
+    companySize: mapCompanySize(summary.employee_range),
+    dataClasses: mapDataClasses(summary.data_classes),
+    requestedActivities: summary.requested_activities.filter(
+      (activity): activity is AssessmentActivity => [
+        "configuration_assessment",
+        "local_artifact_analysis",
+        "low_impact_external_checks",
+        "active_external_vulnerability_tests",
+      ].includes(activity),
+    ),
+    platforms,
+    createdAt: summary.created_at,
+    updatedAt: summary.updated_at,
+    phase: mapPhase(summary.status),
+    isDemo: summary.is_demo,
+    description: summary.notes ?? undefined,
+    latestRunId: summary.latest_run_id ?? undefined,
+    assetCount: summary.asset_count,
+    findingCount: summary.finding_count,
+  };
+};
 
 export const adaptNativeCase = (
   nativeCase: NativeAssessmentCase,
@@ -1067,15 +1098,22 @@ export const adaptNativeCase = (
     connectedAt: source.connected_at ?? undefined,
     lastDiscoveredAt: source.last_discovered_at ?? undefined,
   }));
+  const scanAttemptedAssetIds = new Set(
+    nativeCase.scan_runs.flatMap((run) => run.engine_runs.flatMap((engineRun) => engineRun.asset_ids)),
+  );
   const coverage: CoverageRecord[] = nativeCase.coverage.map((entry) => ({
     id: entry.id,
     label: entry.label,
     platform: platformFromSource(entry.source_kind),
     sourceKind: mapSourceKind(entry.source_kind),
     state: mapCoverageState(entry.status),
+    assetId: entry.asset_id ?? undefined,
     assetCount: entry.asset_id ? 1 : 0,
     detail: entry.explanation,
     lastCheckedAt: entry.observed_at ?? undefined,
+    scanAttempted: entry.asset_id
+      ? Boolean(entry.last_run_id) || scanAttemptedAssetIds.has(entry.asset_id)
+      : undefined,
   }));
   const coverageByAsset = new Map(nativeCase.coverage.filter((entry) => entry.asset_id).map((entry) => [entry.asset_id, entry]));
   const grantsByAsset = new Map<string, NativeScopeGrant[]>();
@@ -1093,6 +1131,9 @@ export const adaptNativeCase = (
       ? mapCoverageState(entry.status)
       : asset.candidate ? "discovered_not_authorized" : asset.owner_confirmed ? "authorized_incomplete" : "source_unavailable_unknown";
     const localInputProfile = localInputProfileFromAsset(asset);
+    const internetExposed = explicitTargetRequiresSensitiveNetworkAllowance(asset.name)
+      ? false
+      : asset.internet_exposed ?? undefined;
     return {
       id: asset.id,
       name: asset.name,
@@ -1102,13 +1143,14 @@ export const adaptNativeCase = (
       identifiers: asset.identifiers,
       discoveredFromSourceIds: [...asset.discovered_from],
       region: asset.region ?? undefined,
-      internetExposed: asset.internet_exposed ?? undefined,
+      internetExposed,
       containsSensitiveData: asset.contains_sensitive_data ?? undefined,
       coverageState,
       authorizationState: grants.length > 0 ? "authorized" : asset.candidate ? "pending" : "unknown",
       allowedModes: unique(grants.map((grant) => mapScopeMode(grant.permission))),
       findingCount: findingCount.get(asset.id) ?? 0,
       lastObservedAt: entry?.observed_at ?? undefined,
+      scanAttempted: Boolean(entry?.last_run_id) || scanAttemptedAssetIds.has(asset.id),
       questionnairePlaceholder: localQuestionnaireKinds.has(String(asset.metadata?.questionnaire_kind)) && !localInputProfile,
       localInputProfile,
       declaredWebService: adaptDeclaredWebServiceMetadata(asset.metadata),
@@ -1199,10 +1241,16 @@ export const adaptNativeCase = (
       const status = mapEngineStatus(engineRun.status);
       const checkpoint = parseCheckpoint(engineRun.resume_token, engineRun);
       const failureKind = engineFailureKind(engineRun, checkpoint);
-      const publicCheckpoint = failureKind === "gateway_preparation_failed" && checkpoint
+      const releaseIncompatible = engineRun.error_code === "resume_release_incompatible";
+      const publicCheckpoint = (failureKind === "gateway_preparation_failed" || releaseIncompatible) && checkpoint
         ? { ...checkpoint, lastError: undefined }
         : checkpoint;
-      const recoveryAction = engineRecoveryAction(status, Boolean(engineRun.resume_token), checkpoint);
+      const recoveryAction = engineRecoveryAction(
+        status,
+        Boolean(engineRun.resume_token),
+        checkpoint,
+        engineRun.error_code,
+      );
       const exactFindingCount = nativeCase.findings.filter((finding) =>
         finding.evidence.some((evidence) => evidence.engine_run_id === engineRun.id)
       ).length;
@@ -1243,7 +1291,7 @@ export const adaptNativeCase = (
         exitCode: engineRun.exit_code ?? undefined,
         cleanupRemoved: engineRun.cleanup_removed ?? undefined,
         cleanupDetail: engineRun.cleanup_detail ?? undefined,
-        warnings: engineRun.warnings ?? [],
+        warnings: releaseIncompatible ? [] : engineRun.warnings ?? [],
         status,
         progress: engineRun.progress_percent,
         phase: engineRun.phase,
@@ -1253,7 +1301,12 @@ export const adaptNativeCase = (
         rawArtifactCount: engineRun.raw_artifact_ids?.length ?? 0,
         findingCount: exactFindingCount,
         findingCountKnown: !hasLegacyUnattributedEvidence,
-        message: failureKind === "gateway_preparation_failed"
+        message: releaseIncompatible
+          ? adapterText(
+            "This saved check was created by a different app release and cannot be continued safely. Start a new scan; saved evidence and findings remain unchanged.",
+            "這項已保存的檢查由不同版本的應用程式建立，無法安全續跑。請開始新的掃描；已保存的證據與問題不會變更。",
+          )
+          : failureKind === "gateway_preparation_failed"
           ? adapterText(
             "The private scan connection could not be prepared.",
             "無法準備這次掃描使用的專用連線。",
@@ -1375,14 +1428,22 @@ export const adaptNativeCase = (
       }),
     };
   }
-  const platforms = unique([
-    ...assets.map((asset) => asset.platform),
-    ...nativeCase.data_sources.map((source) => platformFromSource(source.kind)),
-  ]);
+  const assessmentIntent = mapAssessmentIntent(nativeCase.assessment_intent);
+  const platforms = withDraftIntentFallback(
+    unique([
+      ...assets.map((asset) => asset.platform),
+      ...nativeCase.data_sources
+        .filter((source) => source.status !== "not_applicable")
+        .map((source) => platformFromSource(source.kind)),
+    ]),
+    assessmentIntent,
+    nativeCase.status,
+    nativeCase.assets.length,
+  );
   const assessmentCase: AssessmentCase = {
     id: nativeCase.id,
     name: nativeCase.title,
-    assessmentIntent: mapAssessmentIntent(nativeCase.assessment_intent),
+    assessmentIntent,
     organizationName: nativeCase.profile.organization_name,
     companySize: mapCompanySize(nativeCase.profile.employee_range),
     dataClasses: mapDataClasses(nativeCase.profile.data_classes),

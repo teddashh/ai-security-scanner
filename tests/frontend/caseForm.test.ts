@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildKnownAssets, lineValues } from "../../src/caseForm.ts";
+import {
+  buildKnownAssets,
+  explicitTargetRequiresSensitiveNetworkAllowance,
+  lineValues,
+} from "../../src/caseForm.ts";
 
 const emptyDraft = {
   selectedUseCase: undefined,
@@ -39,6 +43,34 @@ test("website preset stores only the hostname candidate and preserves public int
       },
     }],
   });
+});
+
+test("website preset classifies explicit private and loopback targets as internal", () => {
+  for (const [websiteUrl, target] of [
+    ["http://127.0.0.1:9001/", "127.0.0.1"],
+    ["https://10.20.30.40/", "10.20.30.40"],
+    ["http://[::1]:9001/", "::1"],
+    ["http://localhost:9001/", "localhost"],
+  ]) {
+    const result = buildKnownAssets({
+      ...emptyDraft,
+      selectedUseCase: "deployed_website",
+      websiteUrl,
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.knownAssets[0]?.value, target);
+    assert.equal(result.knownAssets[0]?.internetExposure, "internal");
+  }
+});
+
+test("explicit private IPv4 and IPv6 CIDRs require internal-network permission", () => {
+  for (const target of ["192.168.102.0/23", "127.0.0.0/8", "fd00::/8", "fe80::/10"]) {
+    assert.equal(explicitTargetRequiresSensitiveNetworkAllowance(target), true, target);
+  }
+  for (const target of ["203.0.113.0/24", "2001:db8::/32", "example.test"]) {
+    assert.equal(explicitTargetRequiresSensitiveNetworkAllowance(target), false, target);
+  }
 });
 
 test("public and internal target intent reaches separate known-asset records", () => {

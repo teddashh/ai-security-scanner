@@ -203,6 +203,29 @@ impl ExecutionReport {
     }
 }
 
+fn combined_cleanup_pending_error(
+    runtime_error: Option<&str>,
+    prior_error: Option<&str>,
+    cleanup_error: &str,
+) -> String {
+    let mut primary = Vec::<String>::new();
+    for candidate in [runtime_error, prior_error].into_iter().flatten() {
+        let candidate = candidate.trim();
+        if !candidate.is_empty() && !primary.iter().any(|message| message == candidate) {
+            primary.push(candidate.to_owned());
+        }
+    }
+    let cleanup_error = cleanup_error.trim();
+    if primary.is_empty() {
+        format!("container cleanup failed: {cleanup_error}")
+    } else {
+        format!(
+            "{}; container cleanup also failed: {cleanup_error}",
+            primary.join("; ")
+        )
+    }
+}
+
 pub struct EngineExecutionRequest<'a> {
     pub case_id: &'a str,
     pub scan_run_id: &'a str,
@@ -401,6 +424,9 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             &capture,
             &mut created_container,
         );
+        if let Ok(outcome) = runtime_result.as_ref() {
+            report.exit_code = outcome.exit_code;
+        }
 
         report.checkpoint.stage = ExecutionStage::CapturingArtifacts;
         let artifact_result = (|| -> AppResult<Vec<RawArtifact>> {
@@ -439,9 +465,24 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 report.cleanup = Some(cleanup);
             }
             Err(error) => {
+                let runtime_error = match runtime_result.as_ref() {
+                    Ok(outcome) if outcome.exit_code.is_some_and(|code| code != 0) => {
+                        Some(format!(
+                            "scanner container exited with status {:?}",
+                            outcome.exit_code
+                        ))
+                    }
+                    Ok(_) => None,
+                    Err(runtime_error) => Some(runtime_error.to_string()),
+                };
+                let combined = combined_cleanup_pending_error(
+                    runtime_error.as_deref(),
+                    report.checkpoint.last_error.as_deref(),
+                    &error.to_string(),
+                );
                 report.checkpoint.stage = ExecutionStage::CleanupPending;
                 report.checkpoint.cleanup_completed = false;
-                report.checkpoint.last_error = Some(error.to_string());
+                report.checkpoint.last_error = Some(combined);
                 return Ok(report);
             }
         }
@@ -480,24 +521,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         request: &EngineExecutionRequest<'_>,
         previous: &ExecutionReport,
     ) -> AppResult<ExecutionReport> {
-        if previous.checkpoint.resume_action() != ResumeAction::AdaptCapturedArtifacts {
-            return Err(AppError::InvalidRequest(format!(
-                "execution at stage {:?} cannot resume from captured artifacts",
-                previous.checkpoint.stage
-            )));
-        }
-        if previous.checkpoint.case_id != request.case_id
-            || previous.checkpoint.scan_run_id != request.scan_run_id
-            || previous.checkpoint.engine_run_id != request.engine_run_id
-            || previous.checkpoint.engine_id != request.manifest.id
-        {
-            return Err(AppError::InvalidRequest(
-                "resume request does not match the saved execution checkpoint".into(),
-            ));
-        }
-        let mut report = previous.clone();
-        self.adapt_captured(request, &mut report);
-        Ok(report)
+        resume_captured_artifacts(self.adapters, request, previous)
     }
 
     pub fn cleanup_checkpoint(
@@ -542,56 +566,92 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
     }
 
     fn adapt_captured(&self, request: &EngineExecutionRequest<'_>, report: &mut ExecutionReport) {
-        report.checkpoint.stage = ExecutionStage::AdaptingArtifacts;
-        let asset_ids: Vec<String> = request
-            .assets
-            .iter()
-            .map(|asset| asset.id.clone())
-            .collect();
-        let asset_identifier_map = AdapterAssetIdentifierMap::from_assets(request.assets);
-        let input = AdapterInput {
-            case_id: request.case_id,
-            scan_run_id: request.scan_run_id,
-            engine_run_id: request.engine_run_id,
-            manifest: request.manifest,
-            ai_system_applicable: request.ai_system_applicable,
-            asset_ids: &asset_ids,
-            asset_identifier_map: &asset_identifier_map,
-            artifact_root: &report.artifact_root,
-            raw_artifacts: &report.raw_artifacts,
-        };
-        match self.adapters.normalize(&input) {
-            Ok(Some(output)) => {
-                report.findings = output.findings;
-                report.warnings.extend(output.warnings);
-                if output.complete {
-                    report.checkpoint.stage = ExecutionStage::Completed;
-                    report.checkpoint.last_error = None;
-                } else {
-                    report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
-                    report.checkpoint.last_error = Some(
-                        "adapter normalization was incomplete; raw evidence was retained".into(),
-                    );
-                }
-            }
-            Ok(None) => {
-                report.findings.clear();
-                report.warnings.push(format!(
-                    "scanner output was captured, but no verified adapter is registered for {} version {}",
-                    request.manifest.id, request.manifest.adapter_version
-                ));
-                report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+        adapt_captured_artifacts(self.adapters, request, report);
+    }
+}
+
+/// Re-runs only the bounded adapter over already-hashed artifacts. Runtime
+/// cleanup and managed-network reconciliation remain the caller's obligation;
+/// when those are already durably complete, this function needs no container
+/// runtime and cannot contend with a newly starting scan.
+pub fn resume_captured_artifacts(
+    adapters: &AdapterRegistry,
+    request: &EngineExecutionRequest<'_>,
+    previous: &ExecutionReport,
+) -> AppResult<ExecutionReport> {
+    if previous.checkpoint.resume_action() != ResumeAction::AdaptCapturedArtifacts {
+        return Err(AppError::InvalidRequest(format!(
+            "execution at stage {:?} cannot resume from captured artifacts",
+            previous.checkpoint.stage
+        )));
+    }
+    if previous.checkpoint.case_id != request.case_id
+        || previous.checkpoint.scan_run_id != request.scan_run_id
+        || previous.checkpoint.engine_run_id != request.engine_run_id
+        || previous.checkpoint.engine_id != request.manifest.id
+    {
+        return Err(AppError::InvalidRequest(
+            "resume request does not match the saved execution checkpoint".into(),
+        ));
+    }
+    let mut report = previous.clone();
+    adapt_captured_artifacts(adapters, request, &mut report);
+    Ok(report)
+}
+
+fn adapt_captured_artifacts(
+    adapters: &AdapterRegistry,
+    request: &EngineExecutionRequest<'_>,
+    report: &mut ExecutionReport,
+) {
+    report.checkpoint.stage = ExecutionStage::AdaptingArtifacts;
+    let asset_ids: Vec<String> = request
+        .assets
+        .iter()
+        .map(|asset| asset.id.clone())
+        .collect();
+    let asset_identifier_map = AdapterAssetIdentifierMap::from_assets(request.assets);
+    let input = AdapterInput {
+        case_id: request.case_id,
+        scan_run_id: request.scan_run_id,
+        engine_run_id: request.engine_run_id,
+        manifest: request.manifest,
+        ai_system_applicable: request.ai_system_applicable,
+        asset_ids: &asset_ids,
+        asset_identifier_map: &asset_identifier_map,
+        artifact_root: &report.artifact_root,
+        raw_artifacts: &report.raw_artifacts,
+    };
+    match adapters.normalize(&input) {
+        Ok(Some(output)) => {
+            report.findings = output.findings;
+            report.warnings.extend(output.warnings);
+            if output.complete {
+                report.checkpoint.stage = ExecutionStage::Completed;
                 report.checkpoint.last_error = None;
-            }
-            Err(error) => {
-                report.findings.clear();
-                report.warnings.push(format!(
-                    "scanner output was captured, but adapter {} version {} failed validation",
-                    request.manifest.id, request.manifest.adapter_version
-                ));
+            } else {
                 report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
-                report.checkpoint.last_error = Some(error.to_string());
+                report.checkpoint.last_error =
+                    Some("adapter normalization was incomplete; raw evidence was retained".into());
             }
+        }
+        Ok(None) => {
+            report.findings.clear();
+            report.warnings.push(format!(
+                "scanner output was captured, but no verified adapter is registered for {} version {}",
+                request.manifest.id, request.manifest.adapter_version
+            ));
+            report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+            report.checkpoint.last_error = None;
+        }
+        Err(error) => {
+            report.findings.clear();
+            report.warnings.push(format!(
+                "scanner output was captured, but adapter {} version {} failed validation",
+                request.manifest.id, request.manifest.adapter_version
+            ));
+            report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+            report.checkpoint.last_error = Some(error.to_string());
         }
     }
 }
@@ -1058,6 +1118,7 @@ mod tests {
                 blocked_by: vec![],
                 ..EngineCompatibility::default()
             },
+            execution: None,
         }
     }
 
@@ -1718,6 +1779,127 @@ mod tests {
             report.checkpoint.runtime_provider,
             Some(crate::container_runtime::RuntimeProvider::Docker)
         );
+        assert_eq!(report.exit_code, Some(0));
+        assert!(
+            report
+                .checkpoint
+                .last_error
+                .as_deref()
+                .is_some_and(|message| message.contains("fake cleanup failure"))
+        );
+    }
+
+    #[test]
+    fn cleanup_pending_preserves_a_nonzero_scanner_exit_as_the_primary_failure() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(17),
+            ..FakeRunBehavior::default()
+        });
+        runtime.set_fail_cleanup(true);
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: None,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("cleanup-pending report");
+
+        assert_eq!(report.checkpoint.stage, ExecutionStage::CleanupPending);
+        assert_eq!(report.exit_code, Some(17));
+        let error = report.checkpoint.last_error.as_deref().unwrap();
+        assert_eq!(
+            error,
+            "scanner container exited with status Some(17); container cleanup also failed: runtime error: fake cleanup failure"
+        );
+        assert!(!report.checkpoint.cleanup_completed);
+        assert!(report.checkpoint.resume_token().is_ok());
+    }
+
+    #[test]
+    fn cleanup_pending_preserves_the_runtime_root_cause() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            stdout: vec![0_u8; 1_048_577],
+            ..FakeRunBehavior::default()
+        });
+        runtime.set_fail_cleanup(true);
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits {
+            output_bytes: 1_048_576,
+            ..ResourceLimits::default()
+        };
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: None,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("cleanup-pending report");
+
+        assert_eq!(report.checkpoint.stage, ExecutionStage::CleanupPending);
+        assert!(!report.checkpoint.cleanup_completed);
+        assert_eq!(report.exit_code, None);
+        let error = report.checkpoint.last_error.as_deref().unwrap();
+        assert!(error.contains("scan coverage is incomplete"));
+        assert!(error.contains("container cleanup also failed"));
+        assert!(error.contains("fake cleanup failure"));
+        assert!(report.checkpoint.resume_token().is_ok());
+
+        let deadline = combined_cleanup_pending_error(
+            Some("managed local engine launcher: engine exceeded its fixed runtime timeout"),
+            None,
+            "ownership-proven container removal exceeded its deadline",
+        );
+        assert!(deadline.contains("engine exceeded its fixed runtime timeout"));
+        assert!(deadline.contains("container cleanup also failed"));
+        assert!(deadline.contains("container removal exceeded its deadline"));
     }
 
     #[test]

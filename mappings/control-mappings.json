@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "mapping_version": "2026-08-26.1",
+  "mapping_version": "2026-08-27.1",
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
   "sources": [
@@ -236,10 +236,34 @@
     {
       "engine_id": "semgrep",
       "match_kind": "exact",
-      "source_rule": "python.lang.security.audit.exec-detected",
+      "source_rule": "ai-security-scanner.python.dynamic-code-execution",
       "aidefend_applicability": "ai_system",
       "controls": ["nist-pr-ps-06", "iso-8-28", "iso-8-29", "aidefend-h-025-001", "aidefend-h-031-002"],
       "rationale": "Static-analysis evidence of dynamic code execution is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI."
+    },
+    {
+      "engine_id": "semgrep",
+      "match_kind": "exact",
+      "source_rule": "ai-security-scanner.python.shell-true",
+      "aidefend_applicability": "ai_system",
+      "controls": ["nist-pr-ps-06", "iso-8-28", "iso-8-29", "aidefend-h-025-001", "aidefend-h-031-002"],
+      "rationale": "Static-analysis evidence that Python code invokes an operating-system shell is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI."
+    },
+    {
+      "engine_id": "semgrep",
+      "match_kind": "exact",
+      "source_rule": "ai-security-scanner.javascript.child-process-exec",
+      "aidefend_applicability": "ai_system",
+      "controls": ["nist-pr-ps-06", "iso-8-28", "iso-8-29", "aidefend-h-025-001", "aidefend-h-031-002"],
+      "rationale": "Static-analysis evidence that JavaScript or TypeScript code invokes a command through a shell is related to secure development and pre-execution dangerous-construct checks. AIDEFEND's AI-generated-artifact coordinate applies when the selected code was generated or materially changed by AI."
+    },
+    {
+      "engine_id": "semgrep",
+      "match_kind": "exact",
+      "source_rule": "ai-security-scanner.generic.private-key",
+      "aidefend_applicability": "ai_system",
+      "controls": ["nist-pr-aa-01", "iso-5-17", "aidefend-h-031-002"],
+      "rationale": "Static-analysis evidence of private-key material in current project files is related to managing credentials and protecting authentication information. AIDEFEND's static-admission coordinate applies when the selected artifact was generated or materially changed by AI."
     },
     {
       "engine_id": "gitleaks",

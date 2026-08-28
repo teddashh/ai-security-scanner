@@ -22,6 +22,46 @@ test("progress, export, and verification pages use page-local bilingual copy and
   }
 });
 
+test("non-scan actions use truthful saved-state toasts while scan execution keeps progress copy", async () => {
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+  const mapStart = app.indexOf("const nonExecutionActionToastCopy");
+  const mapEnd = app.indexOf("const scanStartIssueCopy", mapStart);
+  const copyMap = app.slice(mapStart, mapEnd);
+  assert.ok(mapStart >= 0 && mapEnd > mapStart);
+
+  for (const key of [
+    '"attach-workspace"',
+    "scope:",
+    '"archive-case"',
+    '"finding-workflow"',
+    '"finding-group"',
+    '"finding-ungroup"',
+    '"connect-source"',
+    "discovery:",
+  ]) assert.ok(copyMap.includes(key), key);
+
+  for (const [english, traditionalChinese] of [
+    ["Project prepared locally", "專案已在本機準備完成"],
+    ["Private copy verified; no scan started.", "私密副本已驗證；尚未開始掃描。"],
+    ["Project was not prepared", "專案尚未準備完成"],
+    ["Scan access saved", "掃描許可已儲存"],
+    ["The exact target and limits are saved; no scan started.", "確切目標與限制已儲存；尚未開始掃描。"],
+    ["Change saved", "變更已儲存"],
+  ] as const) {
+    assert.ok(copyMap.includes(english), english);
+    assert.ok(copyMap.includes(traditionalChinese), traditionalChinese);
+  }
+
+  assert.doesNotMatch(copyMap, /"start-scan"|\brescan:|"resume-scan"/u);
+  const actionStart = app.indexOf("const executeAction = async");
+  const actionEnd = app.indexOf("const runAction = async", actionStart);
+  const action = app.slice(actionStart, actionEnd);
+  assert.match(action, /nonExecutionActionToastCopy\[key as keyof typeof nonExecutionActionToastCopy\]/u);
+  assert.match(action, /nonExecutionCopy\?\.acceptedTitle \?\? \{ en: "Local work started"/u);
+  assert.match(action, /nonExecutionCopy\?\.acceptedDetail \?\? \{ en: "Open Scan progress to follow each scanner\."/u);
+  assert.match(action, /nonExecutionCopy\?\.failedTitle \?\? \{ en: "The local work could not finish"/u);
+});
+
 test("all progress controls remain wired while raw scanner status stays in details", async () => {
   const source = await readPage("ProgressPage.tsx");
   for (const callback of ["onStart", "onPause", "onResume", "onCancel"]) {
@@ -38,7 +78,7 @@ test("scan readiness blocks empty runs and sends each fix to the useful screen",
   const progress = await readPage("ProgressPage.tsx");
   const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
-  assert.match(progress, /action=\{readiness\?\.ready \?/u);
+  assert.match(progress, /action=\{starting \? \([\s\S]*\) : readiness\?\.ready \?/u);
   assert.match(progress, /readiness\?\.nextStep === "scanner_setup"[\s\S]*copy\.setupTools/u);
   assert.match(progress, /provider_capability_unavailable:[\s\S]*action: copy\.reconnectCloud/u);
   assert.match(progress, /One quick setup, then scan/u);
@@ -168,7 +208,10 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     assert.ok(app.includes(traditionalChinese), traditionalChinese);
   }
 
-  assert.match(app, /as const satisfies Partial<Record<ScanReadinessBlocker, BilingualText>>/u);
+  assert.match(
+    app,
+    /as const satisfies Partial<Record<ScanReadinessBlocker \| "resume_release_incompatible", BilingualText>>/u,
+  );
   assert.match(app, /scannerSetupBlocker=\{scanReadiness && scanReadiness\.caseId === currentCaseId && isScannerSetupBlocker/u);
   assert.match(progress, /satisfies Record<ScanReadinessBlocker, BilingualText>/u);
   assert.match(progress, /copy\.readiness\[readiness\.blockerCode\] \?\? copy\.readinessUnavailableDescription/u);
@@ -197,7 +240,7 @@ test("missing captured evidence never offers resume or setup and starts fresh on
   }
 
   assert.match(progress, /startFreshScan = !readinessCheckFailed && isCapturedEvidenceBlocker/u);
-  assert.match(progress, /if \(startFreshScan\) \{[\s\S]*void onStart\(\);[\s\S]*return;[\s\S]*\}[\s\S]*onFixSetup\(\)/u);
+  assert.match(progress, /if \(startFreshScan\) \{[\s\S]*requestStart\(\);[\s\S]*return;[\s\S]*\}[\s\S]*onFixSetup\(\)/u);
   assert.match(progress, /const canResume = !startFreshScan &&/u);
   assert.match(progress, /readiness\.nextStep !== "progress" \|\| startFreshScan/u);
   assert.match(progress, /readiness\?\.nextStep === "progress" && !startFreshScan/u);
@@ -213,6 +256,27 @@ test("missing captured evidence never offers resume or setup and starts fresh on
   assert.match(app, /onResume=\{\(runId\) => runAction\("resume-scan"/u);
   assert.match(app.slice(actionStart, actionEnd), /preflightCode[\s\S]*scanStartIssueCopy\[preflightCode\]/u);
   assert.doesNotMatch(app.slice(actionStart, actionEnd), /detail:\s*result\.data\.message/u);
+});
+
+test("release-incompatible resume explains the safe next step without exposing native error text", async () => {
+  const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
+
+  for (const copy of [
+    "This unfinished scan was created by a different app release and cannot be continued safely.",
+    "Nothing was rerun. Start a new scan; saved evidence and findings remain unchanged.",
+    "這個未完成的掃描由不同版本的應用程式建立，無法安全續跑。",
+    "這次沒有重新執行任何檢查；請開始新的掃描，已保存的證據與問題不會變更。",
+  ]) {
+    assert.ok(app.includes(copy), copy);
+  }
+
+  assert.match(app, /resume_release_incompatible:\s*\{/u);
+  const actionStart = app.indexOf("const executeAction = async");
+  const actionEnd = app.indexOf("const runAction = async", actionStart);
+  const action = app.slice(actionStart, actionEnd);
+  assert.match(action, /result\.data\.message\.includes\(`scan_preflight:\$\{code\}`\)/u);
+  assert.match(action, /scanStartIssueCopy\[preflightCode\]/u);
+  assert.doesNotMatch(action, /detail:\s*result\.data\.message/u);
 });
 
 test("progress keeps scanner implementation data below the first layer", async () => {
@@ -240,7 +304,7 @@ test("progress keeps scanner implementation data below the first layer", async (
 
 test("progress describes its asset coverage count as fully checked targets", async () => {
   const source = await readPage("ProgressPage.tsx");
-  assert.match(source, /Fully checked \{covered\} of \{total\} targets/u);
+  assert.match(source, /Targets fully checked: \{covered\} of \{total\}/u);
   assert.match(source, /已完整檢查 \{covered\}／\{total\} 個目標/u);
   assert.doesNotMatch(source, /\{covered\} of \{total\} checks have reported/u);
   assert.doesNotMatch(source, /\{covered\}／\{total\} 項檢查已有結果/u);
@@ -372,15 +436,94 @@ test("export preview, export, and both verification paths remain wired", async (
   assert.match(verification, /<details className="page-technical-details">[\s\S]*displayTechnicalDetail\(issue\.detail\)[\s\S]*<\/details>/u);
   assert.match(verification, /<details className="page-technical-details">[\s\S]*displayTechnicalDetail\(item\.explanation\)[\s\S]*<\/details>/u);
   assert.doesNotMatch(verification, /<p>\{item\.explanation\}<\/p>/u);
-  assert.match(verification, /stay under Could not verify and are not counted as fixed/u);
-  assert.match(verification, /會保留在「無法確認」，不會算成已修復/u);
+  assert.match(verification, /Affected findings stay under Could not verify and are not counted as fixed/u);
+  assert.match(verification, /受影響的問題會保留在「無法確認」，不會算成已修復/u);
+  assert.match(verification, /isOnlyMappingVersionDrift\(completenessIssues\)/u);
+  assert.match(verification, /The affected checks completed in both scans, but they used different control-mapping catalog versions/u);
+  assert.match(verification, /Affected scanner engines: \{count\}\. This is an engine count, not a security-finding count\./u);
+  assert.match(verification, /Technical scanner\/target comparison limitations recorded: \{count\}\. This is not a security-finding count\./u);
+  assert.doesNotMatch(verification, /\{count\} technical scanner\/target comparison limitations were recorded/u);
+  assert.match(verification, /mappingVersionDriftOnlyForFinding \? mappingDiffSummary/u);
+});
+
+test("active and incomplete scans never present findings or exports as final", async () => {
+  const findings = await readPage("FindingsPage.tsx");
+  for (const phrase of [
+    "These are interim results",
+    "這些是暫時結果",
+    "This is an interim view, not a clean result.",
+    "這只是暫時畫面，不代表沒有問題。",
+    "These results are incomplete",
+    "這些結果尚不完整",
+    "Some checks stopped before reaching a final result.",
+    "有些檢查在產生最終結果前就停止了。",
+  ]) assert.ok(findings.includes(phrase), phrase);
+  assert.match(findings, /activeRunStatuses\.has\(latestRun\.status\)/u);
+  assert.match(findings, /activeRun[\s\S]*onOpenProgress/u);
+  assert.match(findings, /incompleteTerminalRun[\s\S]*onOpenProgress/u);
+
+  const exportPage = await readPage("ExportPage.tsx");
+  for (const phrase of [
+    "This would be an interim report",
+    "這會是一份暫時報告",
+    "Save interim file",
+    "儲存暫時檔案",
+    "This report is incomplete",
+    "這份報告尚不完整",
+    "Save incomplete file",
+    "儲存不完整檔案",
+  ]) assert.ok(exportPage.includes(phrase), phrase);
+  assert.match(exportPage, /workspaceExportRevision/u);
+  assert.match(exportPage, /activeRun[\s\S]*createInterimExport/u);
+  assert.match(exportPage, /incompleteTerminalRun[\s\S]*createIncompleteExport/u);
+});
+
+test("count copy stays grammatical when exactly one item is shown", async () => {
+  const findings = await readPage("FindingsPage.tsx");
+  const progress = await readPage("ProgressPage.tsx");
+  const cases = await readPage("CasesPage.tsx");
+  const exports = await readPage("ExportPage.tsx");
+  const coverage = await readPage("CoveragePage.tsx");
+
+  for (const phrase of [
+    "Problems in the complete list: {count}",
+    "Evidence records: {count}",
+    "Assets: {count}",
+    "Decisions: {count}",
+  ]) assert.ok(findings.includes(phrase), phrase);
+  for (const phrase of ["Files: {count}", "Findings: {count}"]) {
+    assert.ok(progress.includes(phrase), phrase);
+  }
+  assert.ok(cases.includes("Assets: {assets} · Findings: {findings}"));
+  assert.ok(exports.includes("Original evidence files included: {count}"));
+  assert.ok(coverage.includes("Exact CIDR scope — usable addresses: {addresses}; ports: {ports}; connection checks: {probes}."));
+  assert.ok(coverage.includes("Pacing floor: {effectiveRate}/s; requested rate: {requestedRate}/s; concurrency: {concurrency}."));
+  assert.ok(coverage.includes("Allowed IDs: {count}"));
+  assert.ok(progress.includes("Final outcomes: {done} of {total}"));
+
+  const providerAuthorization = await readFile(new URL("../../src/components/ProviderAuthorizationPanel.tsx", import.meta.url), "utf8");
+  const appShell = await readFile(new URL("../../src/components/AppShell.tsx", import.meta.url), "utf8");
+  const runtimeSetup = await readFile(new URL("../../src/components/RuntimeSetupAssistant.tsx", import.meta.url), "utf8");
+  assert.ok(providerAuthorization.includes("Cleanup items finished: {completed} of {total}"));
+  assert.match(appShell, /value === 1 \? "common\.byte" : "common\.bytes"/u);
+  assert.match(runtimeSetup, /value === 1 \? "byte" : "bytes"/u);
+
+  const inspected = `${findings}\n${progress}\n${cases}\n${exports}\n${coverage}`;
+  for (const brokenTemplate of [
+    "{count} findings",
+    "{count} problems",
+    "{assets} assets · {findings} findings",
+    "{count} evidence records",
+    "{count} files",
+  ]) assert.ok(!inspected.includes(brokenTemplate), brokenTemplate);
 });
 
 test("export leads with recipient choices and keeps file standards and integrity data in details", async () => {
   const source = await readPage("ExportPage.tsx");
-  const cardRendererStart = source.indexOf("const renderFormatCard");
-  const cardRendererEnd = source.indexOf("\n  };\n\n  return (", cardRendererStart);
-  const cardRenderer = source.slice(cardRendererStart, cardRendererEnd);
+  const normalizedSource = source.replaceAll("\r\n", "\n");
+  const cardRendererStart = normalizedSource.indexOf("const renderFormatCard");
+  const cardRendererEnd = normalizedSource.indexOf("\n  };\n\n  return (", cardRendererStart);
+  const cardRenderer = normalizedSource.slice(cardRendererStart, cardRendererEnd);
   assert.ok(cardRendererStart >= 0 && cardRendererEnd > cardRendererStart);
   assert.doesNotMatch(cardRenderer, /item\.extension/u);
   assert.match(source, /\{primaryFormats\.map\(renderFormatCard\)\}/u);

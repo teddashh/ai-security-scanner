@@ -32,7 +32,7 @@ const status = (phase: ManagedRuntimeSetupStatus["phase"]): ManagedRuntimeSetupS
 });
 
 test("a release-managed runtime is prepared before the native workspace appears", () => {
-  for (const phase of ["not_installed", "installed", "stopped", "starting"]) {
+  for (const phase of ["not_installed", "installed", "stopped"]) {
     assert.equal(
       shouldAutomaticallyPrepareRuntime("native", runtime(phase), status("idle"), false, false),
       false,
@@ -104,6 +104,37 @@ test("first-launch copy promises automatic checking without an in-app elevation 
   assert.doesNotMatch(source, /status\.phase === "completed" && runtime\?\.available !== true/u);
 });
 
+test("a managed runtime that is already starting is never started again automatically", () => {
+  const starting = runtime("starting");
+
+  for (const setupStatus of [undefined, status("idle"), status("completed")]) {
+    assert.equal(
+      shouldAutomaticallyPrepareRuntime("native", starting, setupStatus, true, false),
+      false,
+    );
+  }
+});
+
+test("first launch stops saying installation is active after a terminal setup result", () => {
+  const source = readFileSync(
+    new URL("../../src/components/RuntimeFirstLaunch.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const phrase of [
+    "Scan-tool setup stopped",
+    "掃描工具設定已停止",
+    "Finish one Windows setup step",
+    "完成一個 Windows 設定步驟",
+    "Scan-tool setup paused",
+    "掃描工具設定已暫停",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.match(source, /setupStopped = status\?\.phase === "failed" && !status\.nextAction/u);
+  assert.match(source, /needsExternalAction = status\?\.phase === "failed" && status\.nextAction !== undefined/u);
+  assert.match(source, /const introTitle =[\s\S]*setupStopped[\s\S]*needsExternalAction[\s\S]*setupPaused/u);
+});
+
 test("the native app checks installed tools automatically before rendering its workspace", () => {
   const source = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
@@ -117,4 +148,15 @@ test("the native app checks installed tools automatically before rendering its w
   assert.match(source, /if \(!result\.data\.accepted && setupResult\.data\.phase === "idle"\) \{[\s\S]*setRuntimeAutomaticAttemptFailed\(true\)/u);
   assert.doesNotMatch(source, /if \(automatic && !result\.data\.accepted && setupResult\.data\.phase === "idle"\)/u);
   assert.doesNotMatch(source, /repairManagedRuntimePrerequisite|runtime-repair/u);
+});
+
+test("terminal setup toasts distinguish an external Windows action from a retry", () => {
+  const source = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /requiresExternalAction = setupResult\.data\.phase === "failed"[\s\S]*setupResult\.data\.nextAction !== undefined/u);
+  assert.ok(source.includes("One Windows setup step needs attention"));
+  assert.ok(source.includes("Scan-tool setup stopped"));
+  assert.ok(source.includes("Try setup again; open Technical details if it keeps happening."));
+  assert.doesNotMatch(source, /Use the one setup action shown/u);
+  assert.doesNotMatch(source, /使用畫面顯示的唯一設定操作/u);
 });

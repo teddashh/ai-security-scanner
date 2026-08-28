@@ -1,8 +1,8 @@
 use ai_security_scanner_lib::domain::AssetKind;
 use ai_security_scanner_lib::workspace_snapshot::{
-    LOCAL_INPUT_PROFILE_FILENAME, WorkspaceInputProfile, WorkspaceSnapshotLimits,
-    WorkspaceSnapshotReference, create_workspace_snapshot, create_workspace_snapshot_with_profile,
-    inspect_workspace_snapshot, resolve_workspace_snapshot,
+    LOCAL_INPUT_PROFILE_FILENAME, WorkspaceInputProfile, WorkspaceSnapshotExclusionPolicy,
+    WorkspaceSnapshotLimits, WorkspaceSnapshotReference, create_workspace_snapshot,
+    create_workspace_snapshot_with_profile, inspect_workspace_snapshot, resolve_workspace_snapshot,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -244,6 +244,10 @@ fn snapshot_is_deterministic_private_source_grounded_and_working_tree_only() {
         ["workspace_snapshot_id", "workspace_snapshot_sha256"]
     );
     assert_eq!(first.manifest.excluded_entries, [".git"]);
+    assert_eq!(
+        first.manifest.exclusion_policy,
+        Some(WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1)
+    );
     assert_eq!(first.manifest.directory_count, 2);
     assert_eq!(first.manifest.file_count, 2);
     assert!(
@@ -295,6 +299,229 @@ fn snapshot_is_deterministic_private_source_grounded_and_working_tree_only() {
             0o400
         );
     }
+}
+
+#[test]
+fn repository_snapshot_respects_nested_gitignore_negation_and_build_output_rules() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(
+        source.join(".gitignore"),
+        b"node_modules/\ntarget/\n*.log\n!important.log\nscratch/*\n!scratch/keep.txt\n",
+    )
+    .unwrap();
+    fs::create_dir_all(source.join("node_modules/dependency")).unwrap();
+    fs::create_dir_all(source.join("target/debug/incremental")).unwrap();
+    for index in 0..30 {
+        fs::write(
+            source.join(format!("node_modules/dependency/{index}.js")),
+            b"generated dependency",
+        )
+        .unwrap();
+        fs::write(
+            source.join(format!("target/debug/incremental/{index}.o")),
+            b"generated build output",
+        )
+        .unwrap();
+    }
+    fs::write(source.join("ignored.log"), b"ignored log").unwrap();
+    fs::write(source.join("important.log"), b"kept by root negation").unwrap();
+    fs::create_dir(source.join("scratch")).unwrap();
+    fs::write(source.join("scratch/drop.txt"), b"ignored scratch").unwrap();
+    fs::write(source.join("scratch/keep.txt"), b"kept scratch").unwrap();
+    fs::create_dir_all(source.join("packages/app")).unwrap();
+    fs::write(
+        source.join("packages/app/.gitignore"),
+        b"*.tmp\n!keep.tmp\n!keep.log\n",
+    )
+    .unwrap();
+    fs::write(source.join("packages/app/drop.tmp"), b"ignored temp").unwrap();
+    fs::write(source.join("packages/app/keep.tmp"), b"kept temp").unwrap();
+    fs::write(source.join("packages/app/keep.log"), b"nested override").unwrap();
+    fs::write(source.join("src.rs"), b"fn main() {}\n").unwrap();
+
+    let limits = WorkspaceSnapshotLimits {
+        max_files: 8,
+        max_directories: 8,
+        ..small_limits()
+    };
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-gitignore",
+        "source-gitignore",
+        &source,
+        limits,
+    )
+    .expect("ignored dependency and build trees do not consume snapshot bounds");
+    let paths = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        snapshot.manifest.exclusion_policy,
+        Some(WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1)
+    );
+    assert!(paths.contains(&".gitignore"));
+    assert!(paths.contains(&"important.log"));
+    assert!(paths.contains(&"scratch/keep.txt"));
+    assert!(paths.contains(&"packages/app/.gitignore"));
+    assert!(paths.contains(&"packages/app/keep.tmp"));
+    assert!(paths.contains(&"packages/app/keep.log"));
+    assert!(paths.contains(&"src.rs"));
+    assert!(!paths.iter().any(|path| path.starts_with("node_modules/")));
+    assert!(!paths.iter().any(|path| path.starts_with("target/")));
+    assert!(!paths.contains(&"ignored.log"));
+    assert!(!paths.contains(&"scratch/drop.txt"));
+    assert!(!paths.contains(&"packages/app/drop.tmp"));
+}
+
+#[test]
+fn non_repository_profile_does_not_apply_gitignore_rules() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(source.join(".gitignore"), b"target/\n*.tf\n").unwrap();
+    fs::write(
+        source.join("main.tf"),
+        b"resource \"null_resource\" \"test\" {}\n",
+    )
+    .unwrap();
+    fs::create_dir(source.join("target")).unwrap();
+    fs::write(source.join("target/generated.tf"), b"output \"kept\" {}\n").unwrap();
+
+    let snapshot = create_workspace_snapshot_with_profile(
+        &artifact_root,
+        "case-iac-no-ignore",
+        "source-iac-no-ignore",
+        &source,
+        WorkspaceInputProfile::IacWorkingTree,
+        small_limits(),
+    )
+    .expect("explicit non-repository input remains unfiltered");
+    let paths = snapshot
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        snapshot.manifest.exclusion_policy,
+        Some(WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV1)
+    );
+    assert!(paths.contains(&".gitignore"));
+    assert!(paths.contains(&"main.tf"));
+    assert!(paths.contains(&"target/generated.tf"));
+}
+
+#[test]
+fn self_ignored_gitignore_cannot_bypass_total_byte_safety_limit() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(
+        source.join(".gitignore"),
+        b".gitignore\n# deliberately larger than the total snapshot limit\n",
+    )
+    .unwrap();
+    fs::write(source.join("kept.rs"), b"x").unwrap();
+    let limits = WorkspaceSnapshotLimits {
+        max_files: 2,
+        max_directories: 1,
+        max_total_bytes: 16,
+        max_file_bytes: 1024,
+        max_depth: 1,
+    };
+
+    let error = create_workspace_snapshot(
+        &artifact_root,
+        "case-ignore-byte-limit",
+        "source-ignore-byte-limit",
+        &source,
+        limits,
+    )
+    .expect_err("ignore sources remain subject to bounded input processing");
+    assert!(error.to_string().contains("ignore rules"));
+    assert!(error.to_string().contains("total-byte safety limit"));
+    assert!(snapshot_entries(&artifact_root, "case-ignore-byte-limit").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn ignored_directory_is_pruned_before_symlink_and_resource_limit_checks() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(source.join(".gitignore"), b"ignored/\n").unwrap();
+    fs::write(source.join("kept.rs"), b"fn kept() {}\n").unwrap();
+    fs::create_dir(source.join("ignored")).unwrap();
+    let outside = source.parent().unwrap().join("outside-ignore-secret");
+    fs::write(&outside, b"must not be opened").unwrap();
+    symlink(&outside, source.join("ignored/linked-secret")).unwrap();
+    for index in 0..30 {
+        fs::write(
+            source.join(format!("ignored/generated-{index}.bin")),
+            b"ignored",
+        )
+        .unwrap();
+    }
+    let limits = WorkspaceSnapshotLimits {
+        max_files: 2,
+        max_directories: 1,
+        ..small_limits()
+    };
+
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-ignore-pruning",
+        "source-ignore-pruning",
+        &source,
+        limits,
+    )
+    .expect("ignored tree is neither opened nor charged to snapshot limits");
+    assert_eq!(snapshot.manifest.file_count, 2);
+    assert!(
+        snapshot
+            .manifest
+            .files
+            .iter()
+            .all(|file| !file.relative_path.starts_with("ignored/"))
+    );
+}
+
+#[test]
+fn legacy_v1_snapshot_manifest_without_policy_remains_verifiable() {
+    let (_temp, artifact_root, source) = roots();
+    fs::write(source.join("code.rs"), b"fn legacy() {}\n").unwrap();
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        "case-legacy-v1",
+        "source-legacy-v1",
+        &source,
+        small_limits(),
+    )
+    .unwrap();
+    let resolved =
+        resolve_workspace_snapshot(&artifact_root, "case-legacy-v1", &snapshot.reference).unwrap();
+    let manifest_path = resolved.manifest_path;
+    #[cfg(unix)]
+    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(not(unix))]
+    {
+        let mut permissions = fs::metadata(&manifest_path).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&manifest_path, permissions).unwrap();
+    }
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    legacy["schema_version"] =
+        serde_json::Value::String("ai-security-scanner.workspace-snapshot/v1".into());
+    legacy.as_object_mut().unwrap().remove("exclusion_policy");
+    let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+    fs::write(&manifest_path, &legacy_bytes).unwrap();
+    let mut legacy_reference = snapshot.reference;
+    legacy_reference.sha256 = digest(&legacy_bytes);
+    legacy_reference.snapshot_id = format!("workspace-snapshot-sha256-{}", legacy_reference.sha256);
+
+    let verified = resolve_workspace_snapshot(&artifact_root, "case-legacy-v1", &legacy_reference)
+        .expect("legacy v1 snapshot remains verifiable");
+    assert!(verified.manifest.exclusion_policy.is_none());
 }
 
 #[test]

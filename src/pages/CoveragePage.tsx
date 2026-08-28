@@ -30,10 +30,12 @@ import { isScopeEligible, permittedModes, suggestedModesForAsset } from "../scop
 import type { UseCaseId } from "../useCases";
 import {
   hasExactGuidedCloudConsent,
+  recommendedGuidedNetworkPreset,
   shouldPromptForFirstAsset,
   singleGuidedPendingAsset,
   type GuidedCoverageRoute,
 } from "../coverageGuidance";
+import { durationParts, estimateNetworkScanMinimum } from "../networkScanEstimate";
 
 import "../coverage-page.css";
 
@@ -52,7 +54,7 @@ interface CoveragePageProps {
   onChooseSnapshot: () => Promise<string | null>;
   onConnectSourceSnapshot: (input: ConnectSourceSnapshotInput) => Promise<void>;
   onChooseWorkspace: () => Promise<string | null>;
-  onAttachWorkspaceSnapshot: (input: AttachWorkspaceSnapshotInput) => Promise<void>;
+  onAttachWorkspaceSnapshot: (input: AttachWorkspaceSnapshotInput) => Promise<boolean>;
   onStartDiscovery: () => Promise<void>;
   onAuthorizationChanged: () => Promise<void>;
   onApprovePending: (assetIds: string[], modes: ScopeMode[], confirmation: string, externalScope?: ExternalScopeRequest) => Promise<boolean>;
@@ -260,7 +262,7 @@ const localInputDefinitions: Record<LocalInputProfile, LocalInputDefinition> = {
 };
 
 const localInputEngines: Record<LocalInputProfile, string> = {
-  repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Trivy, Syft",
+  repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft",
   iac_working_tree: "Checkov, KICS",
   container_image_oci_layout: "Trivy, Grype",
   kubernetes_manifests: "Kubescape",
@@ -324,6 +326,9 @@ const coverageStatePlainCopy: Record<CoverageState, { short: BilingualText; desc
     description: bilingual("This source is not included in the current scan.", "這個來源未納入目前的掃描。"),
   },
 };
+
+const isAwaitingFirstScan = (state: CoverageState, scanAttempted: boolean | undefined): boolean =>
+  state === "authorized_incomplete" && scanAttempted === false;
 
 const NUCLEI_TEMPLATE_REVISION = "nuclei-templates@24858b4bfabfa86f0bcfd36aea24fb535152b012";
 
@@ -421,11 +426,15 @@ const pageCopy = {
   localPathHelp: bilingual("Only the folder name is shown here. Its full location stays on this computer.", "這裡只會顯示資料夾名稱；完整位置會留在這台電腦上。"),
   workspaceAfterHelp: bilingual("This creates a private local copy. It does not start a scan.", "這只會建立私密的本機副本，不會開始掃描。"),
   attachWorkspace: bilingual("Prepare this project for scanning", "準備這份專案進行掃描"),
-  attachingWorkspace: bilingual("Creating the copy…", "正在建立副本…"),
+  attachingWorkspace: bilingual("Copying and verifying locally…", "正在本機複製並驗證…"),
   folderFallback: bilingual("Selected folder", "已選取資料夾"),
   workspaceErrorPicker: bilingual("The local folder picker could not open. Nothing was read or copied.", "無法開啟本機目錄選擇器；沒有讀取或複製任何目錄。"),
   workspaceErrorLabel: bilingual("Enter a name for this project.", "請輸入這份專案的名稱。"),
   workspaceErrorPath: bilingual("Choose one project folder first.", "請先選擇一個專案資料夾。"),
+  workspaceErrorCopy: bilingual(
+    "This folder could not be copied. Choose a source-only project folder without generated dependencies or build output, then try again.",
+    "無法複製這個資料夾。請選擇不含產生式相依套件或建置輸出的純原始碼專案資料夾，再試一次。",
+  ),
 
   seeEyebrow: bilingual("Step 2", "步驟 2"),
   seeTitle: bilingual("Review what we found", "查看整理結果"),
@@ -435,21 +444,25 @@ const pageCopy = {
   candidateDetail: bilingual("Websites, systems, and projects in this scan", "這次掃描中的網站、系統與專案"),
   scannedAssets: bilingual("Checks completed", "已完成檢查"),
   scannedDetail: bilingual("All selected checks for these items finished", "這些項目的所有已選檢查都已完成"),
+  readyToScan: bilingual("Ready to scan", "準備掃描"),
+  readyToScanDetail: bilingual("Permission is saved. No scan has started for this item yet.", "掃描許可已儲存，這個項目尚未開始掃描。"),
+  readyToScanNext: bilingual("Permission is saved. Start the scan from Scan progress.", "掃描許可已儲存；請到「掃描進度」開始掃描。"),
   incompleteAssets: bilingual("Needs attention", "需要處理"),
   incompleteDetail: bilingual("Some checks did not finish; you can continue them", "部分檢查尚未完成，可以繼續執行"),
   pendingAssets: bilingual("Not set up yet", "尚未設定"),
   pendingDetail: bilingual("Choose checks for these items in step 3", "在步驟 3 為這些項目選擇檢查方式"),
   metricsLabel: bilingual("What the product can currently see", "產品目前看得到的摘要"),
-  unknownTitle: bilingual("{count} sources still need data", "{count} 個來源還需要資料"),
+  unknownTitle: bilingual("Sources still needing data: {count}", "{count} 個來源還需要資料"),
   unknownBody: bilingual("Connect or import these sources to see what they contain.", "連接或匯入這些來源，就能查看其中內容。"),
-  noneTitle: bilingual("{count} connected sources found no items", "{count} 個已連接來源沒有找到項目"),
+  noneTitle: bilingual("Connected sources finding no items: {count}", "{count} 個已連接來源沒有找到項目"),
   noneBody: bilingual("The source connected successfully but had nothing to add to this list right now.", "來源已成功連接，只是目前沒有內容可加入這份清單。"),
   sourcesEyebrow: bilingual("Your sources", "你的資料來源"),
   sourcesTitle: bilingual("Everything connected to this scan", "這次掃描已連接的內容"),
   noSourcesTitle: bilingual("No input has been attached yet", "尚未附加任何輸入"),
   noSourcesBody: bilingual("Add an inventory file or local project in step 1, then refresh this list.", "請先在步驟 1 加入盤點檔或本機專案，再重新整理這份清單。"),
-  assetsCount: bilingual("{count} items", "{count} 個項目"),
+  assetsCount: bilingual("Items: {count}", "{count} 個項目"),
   lastChecked: bilingual("Checked {date}", "確認時間 {date}"),
+  notScannedYet: bilingual("Not scanned yet", "尚未開始掃描"),
   notConnected: bilingual("Not connected", "尚未連接"),
   sourceTechnical: bilingual("Technical source details", "來源技術細節"),
   rawSourceDetail: bilingual("Raw saved-source detail", "原始來源細節"),
@@ -488,7 +501,7 @@ const pageCopy = {
   exposureUnknown: bilingual("Unknown", "未知"),
   clearSelection: bilingual("Clear selected items", "清除已選項目"),
   grantEyebrow: bilingual("Scan choices", "掃描選項"),
-  grantTitle: bilingual("Set up checks for {count} selected items", "設定 {count} 個已選項目的檢查"),
+  grantTitle: bilingual("Set up checks for selected items: {count}", "設定 {count} 個已選項目的檢查"),
   grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then save.", "確認建議內容與你有權執行這些檢查，再儲存。"),
   guidedNetworkGrantDescription: bilingual("The exact target and recommended low-impact check are shown below.", "下方會顯示精確目標與建議的低影響檢查。"),
   guidedLocalGrantDescription: bilingual("Review the saved local copy and the recommended checks, then add it to this scan.", "確認已保存的本機副本與建議檢查，再加入這次掃描。"),
@@ -500,7 +513,7 @@ const pageCopy = {
     "這次只會用保守的連線設定檢查 {target}；需要時可修改技術細節。",
   ),
   guidedNetworkTechnicalPreset: bilingual(
-    "Current preset: {protocol}, {count} exact service ports, one connection at a time.",
+    "Current preset: {protocol}; exact service ports: {count}; one connection at a time.",
     "目前設定：{protocol}、{count} 個精確服務連接埠、一次一個連線。",
   ),
   noCommonTitle: bilingual("These items need different scan setups", "這些項目需要不同的掃描設定"),
@@ -533,7 +546,7 @@ const pageCopy = {
   protocolHelp: bilingual("The scanner cannot add another protocol while running.", "掃描工具不能在執行時自行擴充協定。"),
   ports: bilingual("Allowed ports", "允許的連接埠"),
   portsInvalid: bilingual("Use numbers from 1 to 65535, separated by commas or spaces.", "格式錯誤：只接受 1–65535 的數字，以逗號或空白分隔。"),
-  portsValid: bilingual("{count} exact ports; ranges and port 0 are not accepted.", "{count} 個固定連接埠；不支援範圍或連接埠 0。"),
+  portsValid: bilingual("Exact ports accepted: {count}; ranges and port 0 are not accepted.", "{count} 個固定連接埠；不支援範圍或連接埠 0。"),
   policyRevision: bilingual("Locked test-list revision", "鎖定的測試清單版本"),
   revisionValid: bilingual("Locked to the exact template commit bundled with this product.", "已鎖定到產品內嵌測試範本的精確版本。"),
   revisionInvalid: bilingual("The bundled template revision does not match the product's pinned value.", "內嵌測試範本版本不符合產品鎖定值。"),
@@ -541,16 +554,39 @@ const pageCopy = {
   rps: bilingual("Requests per second", "每秒請求"),
   concurrency: bilingual("Concurrent requests", "並行請求數"),
   timeout: bilingual("Timeout in seconds", "逾時秒數"),
+  durationWarningTitleHours: bilingual(
+    "Minimum scan time: {hours} hr {minutes} min",
+    "這次掃描至少需要 {hours} 小時 {minutes} 分鐘",
+  ),
+  durationWarningTitleMinutes: bilingual(
+    "Minimum scan time: {minutes} min",
+    "這次掃描至少需要 {minutes} 分鐘",
+  ),
+  durationWarningBody: bilingual(
+    "Exact CIDR scope — usable addresses: {addresses}; ports: {ports}; connection checks: {probes}. Pacing floor: {effectiveRate}/s; requested rate: {requestedRate}/s; concurrency: {concurrency}. Hosts that do not answer can take longer because each connection has its own timeout.",
+    "這個 CIDR 包含 {addresses} 個可用位址與 {ports} 個連接埠（共 {probes} 次連線檢查）。速率下限採用每秒 {effectiveRate} 次檢查，也就是每秒請求 {requestedRate} 次與 {concurrency} 個並行檢查中較低的數值。無回應的主機可能因每次連線各有逾時而花更久。",
+  ),
+  durationCeilingRiskBody: bilingual(
+    "The host scanner stops after a fixed {ceilingHours} hr. At the selected {timeout}-second connection timeout, the conservative bound is {upperHours} hr {upperMinutes} min, so this setup may stop incomplete before every address and port is checked. Keep the safe limits and narrow the CIDR, ports, or timeout before saving if complete coverage is required.",
+    "主機掃描器會在固定 {ceilingHours} 小時後停止。依目前每次連線 {timeout} 秒的逾時設定，保守上限為 {upperHours} 小時 {upperMinutes} 分鐘，因此可能在檢查完所有位址與連接埠前停止並留下不完整結果。若需要完整涵蓋，請保留安全限制，並在儲存前縮小 CIDR、連接埠或逾時時間。",
+  ),
+  durationCeilingWithinBody: bilingual(
+    "The host scanner still stops after a fixed {ceilingHours} hr. This setup's conservative {upperHours} hr {upperMinutes} min timeout bound fits within that ceiling, but it is not a completion guarantee.",
+    "主機掃描器仍會在固定 {ceilingHours} 小時後停止。這組設定的保守逾時上限為 {upperHours} 小時 {upperMinutes} 分鐘，落在此限制內，但不代表保證完成。",
+  ),
   maximum: bilingual("Maximum {value}", "最多 {value}"),
   templateIds: bilingual("Exact active-test IDs (required)", "精確主動測試 ID（必填）"),
   templatePlaceholder: bilingual("One exact template ID per line; * is not accepted", "每行一個精確 template ID；不接受 *"),
-  templateValid: bilingual("{count} exact IDs.", "{count} 個精確 ID。"),
+  templateValid: bilingual("Exact IDs accepted: {count}.", "{count} 個精確 ID。"),
   templateInvalid: bilingual("Wildcard * is not accepted.", "不可使用萬用字元 *。"),
   prohibitedIntro: bilingual("The following capabilities always remain off:", "以下能力固定保持關閉："),
   sensitiveTitle: bilingual("I confirm this scan may connect to the selected internal network", "我確認這次掃描可以連線到所選內部網路"),
   sensitiveBody: bilingual("Turn this on only when the system owner approved access from this computer. Most public websites leave it off.", "只有系統負責人已核准從這台電腦存取時才開啟；一般公開網站不需要。"),
   sensitiveTechnicalTitle: bilingual("Exact internal-network behavior", "內部網路的精確行為"),
   sensitiveTechnicalBody: bilingual("This permits only the selected target to resolve to approved private, loopback, or link-local networks. Metadata endpoints remain blocked, and no additional target is added.", "只允許所選目標解析到已核准的 private、loopback 或 link-local 網段；metadata endpoints 仍保持阻擋，也不會加入其他目標。"),
+  publicBoundaryTitle: bilingual("Exact public-target boundary", "公開目標的精確界線"),
+  publicBoundaryBody: bilingual("Only the selected target, protocol, and ports are allowed. Private, loopback, link-local, and metadata addresses remain blocked, and no additional target is added.", "只允許所選目標、協定與連接埠；private、loopback、link-local 與 metadata 位址仍保持阻擋，也不會加入其他目標。"),
+  internalAssetPlatform: bilingual("Internal system / LAN", "內部系統／區域網路"),
   ownershipTitle: bilingual("I confirm that I am allowed to scan every selected item", "我確認自己有權掃描每一個已選項目"),
   externalOwnershipTitle: bilingual("I confirm this is my website or a system I am allowed to scan", "我確認這是我的網站，或是我有權掃描的系統"),
   internalOwnershipTitle: bilingual("I confirm this is an internal system I am allowed to scan", "我確認這是我有權掃描的內部系統"),
@@ -586,9 +622,10 @@ const pageCopy = {
   grantsEyebrow: bilingual("Saved scan access", "已儲存的掃描許可"),
   grantsTitle: bilingual("Network checks already approved", "已確認的網路檢查"),
   grantsDescription: bilingual("These saved choices keep future runs consistent. Open a record when you need the exact technical limits.", "這些選擇會讓後續掃描維持一致；需要時可打開紀錄查看精確技術限制。"),
-  grantsCount: bilingual("{count} saved setups", "{count} 份已儲存設定"),
+  grantsCount: bilingual("Saved setups: {count}", "{count} 份已儲存設定"),
   grantTechnical: bilingual("View saved scan settings", "查看已儲存的掃描設定"),
   expires: bilingual("Expires {date}", "到期 {date}"),
+  lowImpactInternalActivity: bilingual("Low-impact internal checks", "低影響內部連線"),
   sensitiveAllowed: bilingual("Internal network access allowed", "已允許內部網路存取"),
   sensitiveBlocked: bilingual("Internal network access off", "未開啟內部網路存取"),
   targetTerm: bilingual("Target", "目標"),
@@ -596,6 +633,7 @@ const pageCopy = {
   noDirectPort: bilingual("No direct-connection port", "沒有直接連線連接埠"),
   rateTerm: bilingual("Request limits", "請求限制"),
   templatesTerm: bilingual("Test-list policy", "測試清單政策"),
+  allowedIdsCount: bilingual("Allowed IDs: {count}", "允許的 ID：{count}"),
   authorityTerm: bilingual("Permission reference", "授權參考"),
   approvalTerm: bilingual("Recorded by", "記錄者"),
   prohibitedAll: bilingual("Headless browser, out-of-band callback, fuzzing, file upload, denial of service, and credential attacks are all blocked.", "無頭瀏覽器、站外回呼、模糊測試、檔案上傳、阻斷服務與密碼攻擊全部禁止。"),
@@ -691,6 +729,9 @@ const prohibitedCapabilities = [
 ];
 
 const nextStepForAsset = (asset: Asset): BilingualText => {
+  if (isAwaitingFirstScan(asset.coverageState, asset.scanAttempted)) {
+    return pageCopy.readyToScanNext;
+  }
   if (asset.platform === "external" && asset.internetExposed === false) {
     return bilingual(
       "Confirm this is your internal system, then use the recommended low-impact settings.",
@@ -741,22 +782,6 @@ const parsePorts = (value: string): number[] | undefined => {
   const parts = value.split(/[\s,]+/).filter(Boolean).map(Number);
   if (parts.some((port) => !Number.isInteger(port) || port < 1 || port > 65_535)) return undefined;
   return [...new Set(parts)].sort((a, b) => a - b);
-};
-
-// Ordered by usefulness for a first low-impact inventory. A CIDR receives only
-// as many ports as keep the frozen address/port set comfortably below the
-// managed gateway's 10,000-endpoint ceiling.
-const commonTcpServicePorts = [80, 443, 22, 445, 3389, 8080, 8443, 21, 25, 53, 110, 139, 143, 465, 587, 993, 995, 3306, 5432, 6379, 9100] as const;
-
-const recommendedTcpPorts = (target: string): number[] => {
-  const match = /^(?:\d{1,3}\.){3}\d{1,3}\/(\d{1,2})$/u.exec(target.trim());
-  if (!match) return [...commonTcpServicePorts];
-  const prefix = Number(match[1]);
-  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return [80, 443];
-  const total = 2 ** (32 - prefix);
-  const addresses = prefix <= 30 ? Math.max(1, total - 2) : total;
-  const safePortCount = Math.max(1, Math.floor(9_000 / addresses));
-  return commonTcpServicePorts.slice(0, safePortCount);
 };
 
 const parseTemplateIds = (value: string): string[] =>
@@ -847,7 +872,9 @@ export function CoveragePage({
     [guidedCoverageRoute, scopeEligibleAssets],
   );
   const scannedAssets = assets.filter((asset) => asset.coverageState === "discovered_authorized_scanned").length;
-  const incompleteAssets = assets.filter((asset) => asset.coverageState === "authorized_incomplete").length;
+  const incompleteAssets = assets.filter((asset) =>
+    asset.coverageState === "authorized_incomplete" && asset.scanAttempted !== false
+  ).length;
   const unknownSourceCount = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
   const connectedNoAssetCount = coverage.filter((item) => item.state === "source_connected_none").length;
   const frozenExternalGrants = scopeGrants.filter((grant) => grant.externalScope);
@@ -894,6 +921,24 @@ export function CoveragePage({
     ].map((value) => value.trim()).filter((value) => Boolean(value) && !value.includes("*") && !/[\n\r\0]/.test(value)))];
   }, [selectedExternalAsset]);
   const parsedPorts = parsePorts(externalPorts);
+  const networkScanEstimate = externalActivity === "low_impact_external" && parsedPorts
+    ? estimateNetworkScanMinimum(
+      externalTarget,
+      parsedPorts.length,
+      requestsPerSecond,
+      externalConcurrency,
+      externalTimeout,
+    )
+    : undefined;
+  const networkScanDuration = networkScanEstimate
+    ? durationParts(networkScanEstimate.minimumSeconds)
+    : undefined;
+  const networkScanConservativeDuration = networkScanEstimate
+    ? durationParts(networkScanEstimate.conservativeUpperSeconds)
+    : undefined;
+  const networkScanCeilingDuration = networkScanEstimate
+    ? durationParts(networkScanEstimate.engineCeilingSeconds)
+    : undefined;
   const parsedTemplateIds = parseTemplateIds(allowedTemplateIds);
   const templateIdsValid = parsedTemplateIds.every((id) => id !== "*" && !/[\n\r\0]/.test(id));
   const templateRevisionPinned = /(?:^|@)(?:sha256:)?(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(templateRevision.trim());
@@ -932,8 +977,13 @@ export function CoveragePage({
       return;
     }
     if (assessmentIntent === "external_ip_or_domain" || assessmentIntent === "internal_it_environment") {
-      setExternalProtocol("tcp");
-      setExternalPorts(recommendedTcpPorts(externalTarget).join(", "));
+      const preset = recommendedGuidedNetworkPreset(
+        assessmentIntent,
+        selectedExternalAsset?.type,
+        externalTarget,
+      );
+      setExternalProtocol(preset.protocol);
+      setExternalPorts(preset.ports.join(", "));
       return;
     }
     setExternalProtocol("https");
@@ -942,6 +992,7 @@ export function CoveragePage({
     assessmentIntent,
     externalTarget,
     selectedExternalAsset?.id,
+    selectedExternalAsset?.type,
     selectedExternalAsset?.declaredWebService?.port,
     selectedExternalAsset?.declaredWebService?.protocol,
   ]);
@@ -1148,12 +1199,13 @@ export function CoveragePage({
       return;
     }
     setWorkspaceFormError(undefined);
-    await onAttachWorkspaceSnapshot({
+    const attached = await onAttachWorkspaceSnapshot({
       caseId,
       label: workspaceLabel.trim(),
       selectedPath: selectedWorkspacePath,
       inputProfile: workspaceInputProfile,
     });
+    if (!attached) setWorkspaceFormError(pageCopy.workspaceErrorCopy);
   };
 
   const providerInputCard = (
@@ -1564,20 +1616,24 @@ export function CoveragePage({
         ) : <div className="source-grid">
           {coverage.map((record) => {
             const meta = coverageMeta[record.state];
+            const readyForFirstScan = isAwaitingFirstScan(record.state, record.scanAttempted);
+            const presentationTone = readyForFirstScan ? "positive" : meta.tone;
             const connectedSource = sources.find((source) => source.kind === record.sourceKind && source.label === record.label)
               ?? sources.find((source) => source.kind === record.sourceKind);
             return (
-              <article key={record.id} className={`source-card source-card--${meta.tone}`}>
+              <article key={record.id} className={`source-card source-card--${presentationTone}`}>
                 <div className="source-card__top">
                   <span className="platform-avatar">{platformMeta[record.platform].abbreviation}</span>
-                  <StatusPill label={meta.shortLabel} tone={meta.tone} />
+                  <StatusPill label={readyForFirstScan ? text(pageCopy.readyToScan) : meta.shortLabel} tone={presentationTone} />
                 </div>
                 <h3>{record.label}</h3>
-                <p>{meta.description}</p>
+                <p>{readyForFirstScan ? text(pageCopy.readyToScanDetail) : meta.description}</p>
                 <div className="source-card__footer">
                   <span>{text(pageCopy.assetsCount, { count: formatNumber(record.assetCount) })}</span>
-                  <span>{record.lastCheckedAt
-                    ? text(pageCopy.lastChecked, { date: formatDateTime(record.lastCheckedAt) })
+                  <span>{readyForFirstScan
+                    ? text(pageCopy.notScannedYet)
+                    : record.lastCheckedAt
+                      ? text(pageCopy.lastChecked, { date: formatDateTime(record.lastCheckedAt) })
                     : text(pageCopy.notConnected)}</span>
                 </div>
                 <details className="source-card__technical">
@@ -1798,10 +1854,55 @@ export function CoveragePage({
                   <div className="prohibited-template-list" aria-label={text(pageCopy.prohibitedIntro)}>
                     {prohibitedCapabilities.map((item) => <span key={item.en}><Icon name="lock" size={13} />{text(item)}</span>)}
                   </div>
-                  <InlineNotice tone="info" title={text(pageCopy.sensitiveTechnicalTitle)}>
-                    <p>{text(pageCopy.sensitiveTechnicalBody)}</p>
+                  <InlineNotice
+                    tone="info"
+                    title={text(effectiveAllowSensitiveNetworks
+                      ? pageCopy.sensitiveTechnicalTitle
+                      : pageCopy.publicBoundaryTitle)}
+                  >
+                    <p>{text(effectiveAllowSensitiveNetworks
+                      ? pageCopy.sensitiveTechnicalBody
+                      : pageCopy.publicBoundaryBody)}</p>
                   </InlineNotice>
                 </details>
+
+                {networkScanEstimate
+                  && networkScanDuration
+                  && networkScanConservativeDuration
+                  && networkScanCeilingDuration && (
+                  <InlineNotice
+                    tone="warning"
+                    title={text(
+                      networkScanDuration.hours > 0
+                        ? pageCopy.durationWarningTitleHours
+                        : pageCopy.durationWarningTitleMinutes,
+                      {
+                        hours: formatNumber(networkScanDuration.hours),
+                        minutes: formatNumber(networkScanDuration.minutes),
+                      },
+                    )}
+                  >
+                    <p>{text(pageCopy.durationWarningBody, {
+                      addresses: formatNumber(networkScanEstimate.addressCount),
+                      ports: formatNumber(parsedPorts?.length ?? 0),
+                      probes: formatNumber(networkScanEstimate.probeCount),
+                      effectiveRate: formatNumber(networkScanEstimate.effectiveRequestsPerSecond),
+                      requestedRate: formatNumber(requestsPerSecond),
+                      concurrency: formatNumber(externalConcurrency),
+                    })}</p>
+                    <p>{text(
+                      networkScanEstimate.mayExceedEngineCeiling
+                        ? pageCopy.durationCeilingRiskBody
+                        : pageCopy.durationCeilingWithinBody,
+                      {
+                        ceilingHours: formatNumber(networkScanCeilingDuration.hours),
+                        timeout: formatNumber(externalTimeout),
+                        upperHours: formatNumber(networkScanConservativeDuration.hours),
+                        upperMinutes: formatNumber(networkScanConservativeDuration.minutes),
+                      },
+                    )}</p>
+                  </InlineNotice>
+                )}
 
                 {isDirectExternal && selectedExternalAsset.internetExposed === false && !guidedLowImpactNetwork && (
                   <label className="toggle-row toggle-row--danger">
@@ -1813,7 +1914,9 @@ export function CoveragePage({
             )}
 
             <div className="scope-confirmation-panel__assets">
-              {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small></span>)}
+              {selectedScopeAssets.map((asset) => <span key={asset.id}><b>{asset.name}</b><small>{asset.platform === "external" && asset.internetExposed === false
+                ? text(pageCopy.internalAssetPlatform)
+                : platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small></span>)}
             </div>
 
             {!simpleGuidedConsent && (
@@ -1874,6 +1977,7 @@ export function CoveragePage({
             {filteredAssets.map((asset) => {
               const scopeEligible = scopeEligibleAssets.some((item) => item.id === asset.id);
               const meta = coverageMeta[asset.coverageState];
+              const readyForFirstScan = isAwaitingFirstScan(asset.coverageState, asset.scanAttempted);
               const anotherAssetSelected = selectedAssets.length > 0 && !selectedAssets.includes(asset.id);
               const selectedIncludesExternal = selectedScopeAssets.some((item) => item.platform === "external");
               const incompatibleWithSelection = anotherAssetSelected
@@ -1896,11 +2000,16 @@ export function CoveragePage({
                     <span className="platform-avatar platform-avatar--small">{platformMeta[asset.platform].abbreviation}</span>
                     <span>
                       <strong>{asset.name}</strong>
-                      <small>{platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small>
+                      <small>{asset.platform === "external" && asset.internetExposed === false
+                        ? text(pageCopy.internalAssetPlatform)
+                        : platformMeta[asset.platform].label} · {text(assetTypeLabels[asset.type])}</small>
                     </span>
                   </label>
                   <div className="asset-review-card__status">
-                    <StatusPill label={meta.shortLabel} tone={meta.tone} />
+                    <StatusPill
+                      label={readyForFirstScan ? text(pageCopy.readyToScan) : meta.shortLabel}
+                      tone={readyForFirstScan ? "positive" : meta.tone}
+                    />
                     <small>{text(authorizationStateLabels[asset.authorizationState])}</small>
                   </div>
                   <div className="asset-review-card__next">
@@ -1949,7 +2058,9 @@ export function CoveragePage({
                 <article key={grant.id} className="external-grant-card">
                   <div className="external-grant-card__header">
                     <span><Icon name="lock" size={17} /></span>
-                    <div><strong>{asset?.name ?? grant.assetId}</strong><small>{text(activityLabels[scope.activity])} · {text(pageCopy.expires, { date: formatDateTime(scope.expiresAt) })}</small></div>
+                    <div><strong>{asset?.name ?? grant.assetId}</strong><small>{text(scope.activity === "low_impact_external" && scope.allowSensitiveNetworks
+                      ? pageCopy.lowImpactInternalActivity
+                      : activityLabels[scope.activity])} · {text(pageCopy.expires, { date: formatDateTime(scope.expiresAt) })}</small></div>
                     <StatusPill label={text(scope.allowSensitiveNetworks ? pageCopy.sensitiveAllowed : pageCopy.sensitiveBlocked)} tone={scope.allowSensitiveNetworks ? "warning" : "positive"} />
                   </div>
                   <details className="external-grant-card__technical">
@@ -1958,7 +2069,7 @@ export function CoveragePage({
                       <div><dt>{text(pageCopy.targetTerm)}</dt><dd><code>{scope.targetKind}:{scope.target}</code></dd></div>
                       <div><dt>{text(pageCopy.protocolPortsTerm)}</dt><dd>{scope.protocol.toUpperCase()} · {scope.ports.length ? scope.ports.join(", ") : text(pageCopy.noDirectPort)}</dd></div>
                       <div><dt>{text(pageCopy.rateTerm)}</dt><dd>{formatNumber(scope.ratePolicy.requestsPerSecond)} req/s · {formatNumber(scope.ratePolicy.concurrency)} concurrent · {formatNumber(scope.ratePolicy.timeoutSeconds)}s</dd></div>
-                      <div><dt>{text(pageCopy.templatesTerm)}</dt><dd><code>{scope.templatePolicy.revision}</code> · {formatNumber(scope.templatePolicy.allowedTemplateIds.length)} IDs</dd></div>
+                      <div><dt>{text(pageCopy.templatesTerm)}</dt><dd><code>{scope.templatePolicy.revision}</code> · {text(pageCopy.allowedIdsCount, { count: formatNumber(scope.templatePolicy.allowedTemplateIds.length) })}</dd></div>
                       <div><dt>{text(pageCopy.authorityTerm)}</dt><dd>{scope.assertedAuthority}</dd></div>
                       <div><dt>{text(pageCopy.approvalTerm)}</dt><dd>{scope.approvedBy} · {formatDateTime(scope.approvedAt)}</dd></div>
                     </dl>

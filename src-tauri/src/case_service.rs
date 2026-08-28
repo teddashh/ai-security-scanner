@@ -5,7 +5,10 @@
 //! to `orchestrator`; the resulting durable report is reconciled here.
 
 use crate::adapter::AdapterRegistry;
-use crate::adapters::{FINGERPRINT_SCHEMA_VERSION, control_mapping_version};
+use crate::adapters::{
+    FINGERPRINT_SCHEMA_VERSION, control_mapping_version, is_mapping_independent_empty_json_lines,
+    is_runtime_stream_capture_path,
+};
 use crate::artifact_store::inspect_raw_artifacts;
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
@@ -36,6 +39,7 @@ use crate::export::{
 use crate::exporters::{export_ocsf_finding_events_bytes, export_oscal_assessment_results_bytes};
 use crate::external_scope::{
     CanonicalTarget, ExternalActivity, ExternalScopeGrant, ExternalScopeRequest,
+    explicit_target_requires_sensitive_network_allowance,
 };
 use crate::orchestrator::{ExecutionCheckpoint, ExecutionReport, ExecutionStage};
 use crate::registry::EngineRegistry;
@@ -52,6 +56,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(windows)]
+use std::path::Prefix;
 use std::path::{Component, Path, PathBuf};
 
 const MAX_METADATA_BYTES: usize = 64 * 1024;
@@ -1399,6 +1405,13 @@ impl<'a> CaseService<'a> {
                 .iter_mut()
                 .find(|asset| asset.id == request.asset_id)
             {
+                if request.external_scope.as_ref().is_some_and(|scope| {
+                    CanonicalTarget::parse(&scope.target).is_ok_and(|target| {
+                        explicit_target_requires_sensitive_network_allowance(&target)
+                    })
+                }) {
+                    asset.internet_exposed = Some(false);
+                }
                 asset.owner_confirmed = true;
                 asset.candidate = false;
             }
@@ -1727,6 +1740,7 @@ impl<'a> CaseService<'a> {
                         .as_ref()
                         .map(|image| image.repository.clone()),
                     command_sha256: Some(sha256_bytes(&serde_json::to_vec(&manifest.command)?)),
+                    execution_timeout_seconds: Some(manifest.execution_timeout_seconds()),
                     knowledge_input: Some(dated_knowledge_input(manifest)),
                     scope_contract_sha256: Some(comparable_scope_contract_sha256(
                         manifest,
@@ -2187,21 +2201,36 @@ impl<'a> CaseService<'a> {
         struct ResumeCandidate {
             engine_index: usize,
             execution: PlannedEngineExecution,
+            execution_timeout_seconds: u64,
             stale_warning: Option<String>,
+            captured_compatibility_warning: Option<String>,
+        }
+        struct ResumeBlockedByRelease {
+            engine_index: usize,
+            explanation: String,
         }
         let mut candidates = Vec::<ResumeCandidate>::new();
+        let mut release_blocked = Vec::<ResumeBlockedByRelease>::new();
         let run = &case.scan_runs[run_index];
         for (engine_index, engine_run) in run.engine_runs.iter().enumerate() {
             let eligible = engine_run.status == EngineRunStatus::Paused
                 || (matches!(
                     engine_run.status,
-                    EngineRunStatus::Failed
+                    EngineRunStatus::Queued
+                        | EngineRunStatus::Preparing
+                        | EngineRunStatus::Running
+                        | EngineRunStatus::Failed
                         | EngineRunStatus::PartiallyCompleted
                         | EngineRunStatus::Cancelled
                 ) && engine_run.resume_token.is_some());
             if !eligible {
                 continue;
             }
+            let previous = engine_run
+                .resume_token
+                .as_deref()
+                .map(ExecutionCheckpoint::from_resume_token)
+                .transpose()?;
             let manifest = self.engines.get(&engine_run.engine_id).ok_or_else(|| {
                 AppError::NotAvailable(format!(
                     "engine {} is no longer present in the installed catalog",
@@ -2214,7 +2243,89 @@ impl<'a> CaseService<'a> {
                     engine_run.engine_id
                 )));
             }
-            validate_resume_manifest_identity(engine_run, manifest)?;
+            let current_mapping_version = control_mapping_version()?;
+            let current_execution_timeout_seconds = manifest.execution_timeout_seconds();
+            let mapping_version_differs =
+                engine_run.mapping_version.as_deref() != Some(current_mapping_version);
+            let execution_timeout_differs = engine_run
+                .execution_timeout_seconds
+                .is_some_and(|frozen| frozen != current_execution_timeout_seconds);
+            let release_identity_differs = mapping_version_differs || execution_timeout_differs;
+            let mut execution_timeout_seconds = None;
+            let allow_captured_only_drift = if release_identity_differs {
+                // Prove mapping/timeout are the *only* release-identity drift
+                // before considering the zero-record exception.
+                execution_timeout_seconds = Some(validate_resume_manifest_identity(
+                    engine_run,
+                    manifest,
+                    ResumeManifestDriftAllowance {
+                        mapping_version: mapping_version_differs,
+                        execution_timeout: execution_timeout_differs,
+                    },
+                )?);
+                previous
+                    .as_ref()
+                    .is_some_and(captured_checkpoint_is_adapter_only)
+                    && captured_empty_json_lines_make_release_drift_irrelevant(
+                        &case,
+                        engine_run,
+                        previous.as_ref(),
+                        &self.artifact_root,
+                    )?
+            } else {
+                false
+            };
+            let mut release_differences = Vec::new();
+            if mapping_version_differs {
+                release_differences.push(format!(
+                    "control mapping {} versus {current_mapping_version}",
+                    engine_run
+                        .mapping_version
+                        .as_deref()
+                        .unwrap_or("unrecorded")
+                ));
+            }
+            if execution_timeout_differs {
+                release_differences.push(format!(
+                    "execution deadline {} seconds versus {current_execution_timeout_seconds} seconds",
+                    engine_run
+                        .execution_timeout_seconds
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unrecorded".into())
+                ));
+            }
+            let release_differences = release_differences.join(" and ");
+            if release_identity_differs && !allow_captured_only_drift {
+                let reason = if previous
+                    .as_ref()
+                    .is_some_and(captured_checkpoint_is_adapter_only)
+                {
+                    "its captured adapter input is not verified zero-byte JSONL"
+                } else {
+                    "continuing it would execute a scanner or runtime under a different release identity"
+                };
+                release_blocked.push(ResumeBlockedByRelease {
+                    engine_index,
+                    explanation: format!(
+                        "Engine {} was not resumed: its frozen release identity differs from the installed release ({release_differences}), and {reason}. Start a new scan to use the installed release; the historical evidence and findings remain unchanged.",
+                        engine_run.engine_id
+                    ),
+                });
+                continue;
+            }
+            let execution_timeout_seconds = match execution_timeout_seconds {
+                Some(timeout) => timeout,
+                None => validate_resume_manifest_identity(
+                    engine_run,
+                    manifest,
+                    ResumeManifestDriftAllowance::STRICT,
+                )?,
+            };
+            let captured_compatibility_warning = allow_captured_only_drift.then(|| {
+                format!(
+                    "The frozen release identity differs from the installed release ({release_differences}). Resume was allowed only because this engine's adapter input is verified zero-byte JSONL; its frozen values remain unchanged, no finding or control reference can be remapped, and no scanner or runtime will be re-executed for this engine."
+                )
+            });
             let assets = engine_run
                 .asset_ids
                 .iter()
@@ -2266,16 +2377,14 @@ impl<'a> CaseService<'a> {
                     engine_run.engine_id
                 )));
             }
-            let previous = engine_run
-                .resume_token
-                .as_deref()
-                .map(ExecutionCheckpoint::from_resume_token)
-                .transpose()?;
-            let attempt = match previous.as_ref().map(ExecutionCheckpoint::resume_action) {
-                Some(crate::orchestrator::ResumeAction::AdaptCapturedArtifacts) => previous
-                    .as_ref()
-                    .map(|checkpoint| checkpoint.attempt)
-                    .unwrap_or(1),
+            let attempt = match previous.as_ref() {
+                Some(checkpoint)
+                    if checkpoint.stage == ExecutionStage::Planned
+                        || checkpoint.resume_action()
+                            == crate::orchestrator::ResumeAction::AdaptCapturedArtifacts =>
+                {
+                    checkpoint.attempt
+                }
                 _ => previous
                     .as_ref()
                     .map(|checkpoint| checkpoint.attempt)
@@ -2285,7 +2394,9 @@ impl<'a> CaseService<'a> {
             };
             candidates.push(ResumeCandidate {
                 engine_index,
+                execution_timeout_seconds,
                 stale_warning: stale_knowledge_warning(manifest, now),
+                captured_compatibility_warning,
                 execution: PlannedEngineExecution {
                     case_id: case.id.clone(),
                     scan_run_id: run.id.clone(),
@@ -2301,6 +2412,32 @@ impl<'a> CaseService<'a> {
             });
         }
         if candidates.is_empty() {
+            if let Some(blocked) = release_blocked.first() {
+                let error_message = format!(
+                    "scan_preflight:resume_release_incompatible: {} No scanner or runtime was started.",
+                    blocked.explanation
+                );
+                for blocked in &release_blocked {
+                    let engine_run =
+                        &mut case.scan_runs[run_index].engine_runs[blocked.engine_index];
+                    if !engine_status_terminal(&engine_run.status) {
+                        engine_run.status = EngineRunStatus::Failed;
+                    }
+                    engine_run.phase = "resume_release_incompatible".into();
+                    engine_run.finished_at.get_or_insert(now);
+                    engine_run.error_code = Some("resume_release_incompatible".into());
+                    engine_run.error_message = Some(blocked.explanation.clone());
+                    if !engine_run.warnings.contains(&blocked.explanation) {
+                        engine_run.warnings.push(blocked.explanation.clone());
+                    }
+                }
+                update_run_and_case_status(&mut case, run_index, now);
+                case.touch();
+                refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
+                self.storage
+                    .save_case(&mut case, "scan.resume_release_incompatible")?;
+                return Err(AppError::NotAvailable(error_message));
+            }
             return Err(AppError::InvalidRequest(
                 "scan has no interrupted or retryable engine runs".into(),
             ));
@@ -2318,17 +2455,32 @@ impl<'a> CaseService<'a> {
 
         for candidate in &candidates {
             let engine_run = &mut case.scan_runs[run_index].engine_runs[candidate.engine_index];
+            freeze_resume_execution_timeout(engine_run, candidate.execution_timeout_seconds);
             engine_run.status = EngineRunStatus::Queued;
             engine_run.phase = "queued_for_resume".into();
-            engine_run.progress_percent = 0;
-            engine_run.started_at = None;
             engine_run.finished_at = None;
-            engine_run.error_code = None;
-            engine_run.error_message = None;
             if let Some(warning) = candidate.stale_warning.as_ref()
                 && !engine_run.warnings.contains(warning)
             {
                 engine_run.warnings.push(warning.clone());
+            }
+            if let Some(warning) = candidate.captured_compatibility_warning.as_ref()
+                && !engine_run.warnings.contains(warning)
+            {
+                engine_run.warnings.push(warning.clone());
+            }
+        }
+        for blocked in &release_blocked {
+            let engine_run = &mut case.scan_runs[run_index].engine_runs[blocked.engine_index];
+            if !engine_status_terminal(&engine_run.status) {
+                engine_run.status = EngineRunStatus::Failed;
+            }
+            engine_run.phase = "resume_release_incompatible".into();
+            engine_run.finished_at.get_or_insert(now);
+            engine_run.error_code = Some("resume_release_incompatible".into());
+            engine_run.error_message = Some(blocked.explanation.clone());
+            if !engine_run.warnings.contains(&blocked.explanation) {
+                engine_run.warnings.push(blocked.explanation.clone());
             }
         }
         case.scan_runs[run_index].completed_at = None;
@@ -2452,6 +2604,11 @@ impl<'a> CaseService<'a> {
             engine_run.cleanup_removed = Some(cleanup.removed);
             engine_run.cleanup_detail = Some(cleanup.detail.clone());
         }
+        remove_superseded_adapter_parse_warnings(
+            &mut engine_run.warnings,
+            &report.checkpoint.stage,
+            &report.checkpoint.artifact_ids,
+        );
         for warning in &report.warnings {
             if !engine_run.warnings.contains(warning) {
                 engine_run.warnings.push(warning.clone());
@@ -2539,20 +2696,10 @@ impl<'a> CaseService<'a> {
                     engine_run.phase = "paused".into();
                     changed = true;
                 }
-                ScanTransition::Resume
-                    if engine_run.status == EngineRunStatus::Paused
-                        || (matches!(
-                            engine_run.status,
-                            EngineRunStatus::Failed
-                                | EngineRunStatus::PartiallyCompleted
-                                | EngineRunStatus::Cancelled
-                        ) && engine_run.resume_token.is_some()) =>
-                {
+                ScanTransition::Resume if engine_run.status == EngineRunStatus::Paused => {
                     engine_run.status = EngineRunStatus::Queued;
                     engine_run.phase = "queued_for_resume".into();
                     engine_run.finished_at = None;
-                    engine_run.error_code = None;
-                    engine_run.error_message = None;
                     changed = true;
                 }
                 ScanTransition::Cancel
@@ -2608,6 +2755,7 @@ impl<'a> CaseService<'a> {
                 "scan run does not belong to the selected case".into(),
             ));
         }
+        ensure_finding_only_export_run_is_complete(&format, selected_run)?;
 
         let selected_finding_ids = case
             .finding_observations
@@ -2692,11 +2840,7 @@ impl<'a> CaseService<'a> {
         } else {
             "Standard redaction is enabled. The export still contains security-sensitive findings and hashes; confirm the recipient and storage location.".into()
         };
-        let engine_runs = case
-            .scan_runs
-            .iter()
-            .flat_map(|run| &run.engine_runs)
-            .collect::<Vec<_>>();
+        let engine_runs = &selected_run.engine_runs;
 
         Ok(ExportPreview {
             case_id: case.id.clone(),
@@ -2721,12 +2865,8 @@ impl<'a> CaseService<'a> {
             incomplete_engine_run_count: engine_runs
                 .iter()
                 .filter(|engine_run| {
-                    matches!(
-                        engine_run.status,
-                        EngineRunStatus::PartiallyCompleted
-                            | EngineRunStatus::Failed
-                            | EngineRunStatus::Cancelled
-                    )
+                    engine_run.status != EngineRunStatus::Completed
+                        && engine_run.status != EngineRunStatus::NotExecuted
                 })
                 .count(),
             not_executed_engine_run_count: engine_runs
@@ -2831,6 +2971,7 @@ impl<'a> CaseService<'a> {
                 "scan run does not belong to the selected case".into(),
             ));
         }
+        ensure_finding_only_export_run_is_complete(&format, selected_run)?;
         let document_case = case_for_document_export(&case, &options);
         let bytes = match format {
             CaseExportFormat::CanonicalJson => canonical_json_bytes(&case, run_id, &options)?,
@@ -3272,7 +3413,8 @@ fn normalize_declared_assets(inputs: &[DeclaredAssetInput]) -> AppResult<Vec<Dis
         let (kind, namespace, value, internet_exposed) = match input.kind {
             DeclaredAssetKind::ExternalTarget => {
                 let target = CanonicalTarget::parse(&input.value)?;
-                let internet_exposed = input.internet_exposed.unwrap_or(true);
+                let internet_exposed = input.internet_exposed.unwrap_or(true)
+                    && !explicit_target_requires_sensitive_network_allowance(&target);
                 match target {
                     CanonicalTarget::Hostname(hostname) => (
                         AssetKind::Domain,
@@ -3795,22 +3937,31 @@ fn materialize_external_scope(
         ));
     }
     if expected_activity != ExternalActivity::PassivePublicDiscovery {
-        match asset.internet_exposed {
-            Some(true) => {
+        let explicitly_sensitive = explicit_target_requires_sensitive_network_allowance(&target);
+        match (asset.internet_exposed, explicitly_sensitive) {
+            (_, true) => {
+                if !external.allow_sensitive_networks {
+                    return Err(AppError::NotAuthorized(
+                        "an explicit local or sensitive target requires the private-network allowance"
+                            .into(),
+                    ));
+                }
+            }
+            (Some(true), false) => {
                 if external.allow_sensitive_networks {
                     return Err(AppError::InvalidRequest(
                         "a public target cannot request the private-network allowance".into(),
                     ));
                 }
             }
-            Some(false) => {
+            (Some(false), false) => {
                 if !external.allow_sensitive_networks {
                     return Err(AppError::NotAuthorized(
                         "an internal target requires the explicit private-network allowance".into(),
                     ));
                 }
             }
-            None => {
+            (None, false) => {
                 return Err(AppError::NotAuthorized(
                     "direct network activity requires a confirmed public or internal target type"
                         .into(),
@@ -4100,24 +4251,27 @@ fn compatible_authorized_assets<'a>(
                 .copied()
                 .filter(|grant| grant.asset_id == asset.id && grant_effective(grant, now))
                 .collect::<Vec<_>>();
-            manifest.required_permissions.iter().all(|required| {
-                grants.iter().any(|grant| {
-                    grant.permission == *required
-                        && (!is_external_permission(required)
+            manifest.required_permissions_satisfied_by(
+                grants
+                    .iter()
+                    .filter(|grant| {
+                        let permission = &grant.permission;
+                        !is_external_permission(permission)
                             || (grant.external_scope.is_some()
                                 && grant
                                     .authorization_reference
                                     .as_deref()
                                     .is_some_and(|value| !value.trim().is_empty())
-                                && (!is_direct_external_permission(required)
+                                && (!is_direct_external_permission(permission)
                                     || grant.external_scope.as_ref().is_some_and(|scope| {
                                         manifest
                                             .direct_network_contract
                                             .as_ref()
                                             .is_some_and(|contract| contract.supports(scope))
-                                    }))))
-                })
-            })
+                                    })))
+                    })
+                    .map(|grant| &grant.permission),
+            )
         })
         .collect()
 }
@@ -4424,6 +4578,7 @@ fn not_executed_run(
                 .ok()
                 .map(|bytes| sha256_bytes(&bytes))
         }),
+        execution_timeout_seconds: manifest.map(EngineManifest::execution_timeout_seconds),
         knowledge_input: manifest.map(dated_knowledge_input),
         scope_contract_sha256: None,
         mapping_version: manifest
@@ -4620,13 +4775,119 @@ fn stale_knowledge_warning(manifest: &EngineManifest, as_of: DateTime<Utc>) -> O
     })
 }
 
+fn captured_checkpoint_is_adapter_only(checkpoint: &ExecutionCheckpoint) -> bool {
+    checkpoint.resume_action() == crate::orchestrator::ResumeAction::AdaptCapturedArtifacts
+        && checkpoint.cleanup_completed
+}
+
+/// Mapping-catalog and execution-deadline drift are semantically irrelevant
+/// only when a resume cannot execute a scanner/runtime and every exact adapter
+/// input is a verified zero-byte JSONL stream. Backend-owned stdout/stderr
+/// captures remain hashed evidence but are not adapter inputs. This deliberately
+/// does not authorize nonempty, malformed, document-shaped, missing, duplicated,
+/// or tampered evidence; those require the exact historical release identity.
+fn captured_empty_json_lines_make_release_drift_irrelevant(
+    case: &AssessmentCase,
+    engine_run: &EngineRun,
+    checkpoint: Option<&ExecutionCheckpoint>,
+    artifact_root: &Path,
+) -> AppResult<bool> {
+    let Some(checkpoint) = checkpoint else {
+        return Ok(false);
+    };
+    if !captured_checkpoint_is_adapter_only(checkpoint) {
+        return Ok(false);
+    }
+
+    let durable_ids = engine_run
+        .raw_artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let checkpoint_ids = checkpoint
+        .artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if durable_ids.is_empty()
+        || durable_ids.len() != engine_run.raw_artifact_ids.len()
+        || checkpoint_ids.len() != checkpoint.artifact_ids.len()
+        || checkpoint_ids != durable_ids
+    {
+        return Err(AppError::NotAvailable(format!(
+            "engine {} cannot use release-compatible captured resume because its checkpoint does not exactly match unique durable evidence IDs",
+            engine_run.engine_id
+        )));
+    }
+
+    let mut artifacts = Vec::with_capacity(engine_run.raw_artifact_ids.len());
+    for artifact_id in &engine_run.raw_artifact_ids {
+        let mut matching = case
+            .raw_artifacts
+            .iter()
+            .filter(|artifact| artifact.id == *artifact_id);
+        let artifact = matching.next().ok_or_else(|| {
+            AppError::NotAvailable(format!(
+                "engine {} cannot use release-compatible captured resume because evidence {artifact_id} is missing",
+                engine_run.engine_id
+            ))
+        })?;
+        if matching.next().is_some() {
+            return Err(AppError::NotAvailable(format!(
+                "engine {} cannot use release-compatible captured resume because evidence {artifact_id} is duplicated",
+                engine_run.engine_id
+            )));
+        }
+        if artifact.case_id != case.id
+            || artifact.run_id != engine_run.scan_run_id
+            || artifact.engine_run_id != engine_run.id
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "captured evidence {artifact_id} does not belong to the exact historical execution"
+            )));
+        }
+        artifacts.push(artifact.clone());
+    }
+    inspect_raw_artifacts(artifact_root, &artifacts)?;
+
+    let mut adapter_input_count = 0_usize;
+    for artifact in &artifacts {
+        if is_runtime_stream_capture_path(&artifact.relative_path) {
+            continue;
+        }
+        adapter_input_count += 1;
+        if !is_mapping_independent_empty_json_lines(&engine_run.engine_id, artifact) {
+            return Ok(false);
+        }
+    }
+    Ok(adapter_input_count > 0)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResumeManifestDriftAllowance {
+    mapping_version: bool,
+    execution_timeout: bool,
+}
+
+impl ResumeManifestDriftAllowance {
+    const STRICT: Self = Self {
+        mapping_version: false,
+        execution_timeout: false,
+    };
+}
+
 fn validate_resume_manifest_identity(
     engine_run: &EngineRun,
     manifest: &EngineManifest,
-) -> AppResult<()> {
+    allowance: ResumeManifestDriftAllowance,
+) -> AppResult<u64> {
     let image = manifest.image.as_ref();
     let command_sha256 = sha256_bytes(&serde_json::to_vec(&manifest.command)?);
     let mapping_version = control_mapping_version()?;
+    let execution_timeout_seconds = manifest.execution_timeout_seconds();
+    let execution_timeout_matches = engine_run
+        .execution_timeout_seconds
+        .is_none_or(|frozen| frozen == execution_timeout_seconds);
     let identity_matches = engine_run.manifest_schema_version.as_deref()
         == Some(manifest.schema_version.as_str())
         && engine_run.engine_version == manifest.engine_version
@@ -4638,16 +4899,24 @@ fn validate_resume_manifest_identity(
         && engine_run.distribution_mode.as_ref() == Some(&manifest.distribution_mode)
         && engine_run.image_repository.as_deref() == image.map(|value| value.repository.as_str())
         && engine_run.command_sha256.as_deref() == Some(command_sha256.as_str())
+        && (execution_timeout_matches || allowance.execution_timeout)
         && engine_run.knowledge_input.as_ref() == Some(&dated_knowledge_input(manifest))
-        && engine_run.mapping_version.as_deref() == Some(mapping_version)
+        && (engine_run.mapping_version.as_deref() == Some(mapping_version)
+            || allowance.mapping_version)
         && engine_run.fingerprint_schema_version.as_deref() == Some(FINGERPRINT_SCHEMA_VERSION);
     if !identity_matches {
         return Err(AppError::NotAvailable(format!(
-            "engine {} cannot be resumed because its current release manifest differs from the exact version, image, command, adapter, mapping/fingerprint schema, or knowledge window frozen into this run",
+            "engine {} cannot be resumed because its current release manifest differs from the exact version, image, command, active execution deadline, adapter, mapping/fingerprint schema, or knowledge window frozen into this run",
             engine_run.engine_id
         )));
     }
-    Ok(())
+    Ok(execution_timeout_seconds)
+}
+
+fn freeze_resume_execution_timeout(engine_run: &mut EngineRun, timeout_seconds: u64) {
+    engine_run
+        .execution_timeout_seconds
+        .get_or_insert(timeout_seconds);
 }
 
 fn validate_report_identity(
@@ -4849,6 +5118,9 @@ fn validate_checkpoint_progress(
         return Ok(());
     };
     if existing_token == incoming_token {
+        if queued_captured_resume_reprojection(engine_run, incoming) {
+            return Ok(());
+        }
         // An exact token with a non-identical payload was not accepted by the
         // idempotency check. Treat the durable checkpoint as immutable.
         return Err(AppError::Runtime(
@@ -4907,6 +5179,15 @@ fn report_already_applied(
         return Ok(false);
     };
     if engine_run.resume_token.as_deref() != Some(checkpoint.as_str()) {
+        return Ok(false);
+    }
+    // Resume planning deliberately keeps the captured-evidence checkpoint but
+    // changes its durable projection to queued_for_resume. An adapter retry
+    // that reaches the same incomplete checkpoint must be applied again to
+    // restore the terminal partial projection; treating it as an idempotent
+    // replay would leave the run queued and make terminal reconciliation invent
+    // a generic worker-stopped failure.
+    if queued_captured_resume_reprojection(engine_run, &report.checkpoint) {
         return Ok(false);
     }
     if let Some(preflight) = &report.runtime_preflight {
@@ -4992,6 +5273,15 @@ fn report_already_applied(
         }
     }
     Ok(true)
+}
+
+fn queued_captured_resume_reprojection(
+    engine_run: &EngineRun,
+    checkpoint: &ExecutionCheckpoint,
+) -> bool {
+    engine_run.status == EngineRunStatus::Queued
+        && engine_run.phase == "queued_for_resume"
+        && checkpoint.resume_action() == crate::orchestrator::ResumeAction::AdaptCapturedArtifacts
 }
 
 fn insert_or_validate_artifact(case: &mut AssessmentCase, artifact: &RawArtifact) -> AppResult<()> {
@@ -5150,6 +5440,71 @@ fn progress_for_stage(stage: &ExecutionStage) -> u8 {
     }
 }
 
+/// A successful re-adaptation of the exact same hashed artifacts supersedes
+/// only the old parse warning that claimed those artifacts were invalid. The
+/// earlier case-event snapshot and raw evidence remain immutable audit history;
+/// unrelated runtime, cleanup, and scanner warnings stay on the current run.
+fn remove_superseded_adapter_parse_warnings(
+    warnings: &mut Vec<String>,
+    stage: &ExecutionStage,
+    artifact_ids: &[Id],
+) {
+    if *stage != ExecutionStage::Completed {
+        return;
+    }
+    warnings.retain(|warning| {
+        !artifact_ids.iter().any(|artifact_id| {
+            warning.starts_with(&format!(
+                "artifact {artifact_id} was neither valid bounded JSON nor JSONL:"
+            ))
+        })
+    });
+}
+
+#[cfg(test)]
+mod completed_adapter_warning_tests {
+    use super::{ExecutionStage, remove_superseded_adapter_parse_warnings};
+
+    #[test]
+    fn completed_readaptation_clears_only_the_exact_superseded_parse_warning() {
+        let mut warnings = vec![
+            "artifact empty-output was neither valid bounded JSON nor JSONL: EOF while parsing"
+                .into(),
+            "artifact other-output was neither valid bounded JSON nor JSONL: invalid value".into(),
+            "scanner cleanup required a retry".into(),
+        ];
+
+        remove_superseded_adapter_parse_warnings(
+            &mut warnings,
+            &ExecutionStage::Completed,
+            &["empty-output".into()],
+        );
+
+        assert_eq!(
+            warnings,
+            [
+                "artifact other-output was neither valid bounded JSON nor JSONL: invalid value",
+                "scanner cleanup required a retry",
+            ]
+        );
+    }
+
+    #[test]
+    fn incomplete_readaptation_preserves_the_parse_warning() {
+        let warning =
+            "artifact empty-output was neither valid bounded JSON nor JSONL: EOF while parsing";
+        let mut warnings = vec![warning.into()];
+
+        remove_superseded_adapter_parse_warnings(
+            &mut warnings,
+            &ExecutionStage::CapturedAwaitingAdapter,
+            &["empty-output".into()],
+        );
+
+        assert_eq!(warnings, [warning]);
+    }
+}
+
 fn effective_grants(case: &AssessmentCase, now: DateTime<Utc>) -> Vec<&ScopeGrant> {
     case.scope_grants
         .iter()
@@ -5201,6 +5556,29 @@ fn run_is_terminal(run: &ScanRun) -> bool {
             .engine_runs
             .iter()
             .all(|engine_run| engine_status_terminal(&engine_run.status))
+}
+
+fn ensure_finding_only_export_run_is_complete(
+    format: &CaseExportFormat,
+    run: &ScanRun,
+) -> AppResult<()> {
+    let format_name = match format {
+        CaseExportFormat::OcsfJson => "OCSF",
+        CaseExportFormat::OscalJson => "OSCAL",
+        _ => return Ok(()),
+    };
+    let fully_completed = run.completed_at.is_some()
+        && !run.engine_runs.is_empty()
+        && run
+            .engine_runs
+            .iter()
+            .all(|engine_run| engine_run.status == EngineRunStatus::Completed);
+    if fully_completed {
+        return Ok(());
+    }
+    Err(AppError::InvalidRequest(format!(
+        "{format_name} export requires a fully completed selected scan run; this findings-only format cannot represent unfinished or missing engine outcomes"
+    )))
 }
 
 fn canonical_evidence_hashes(finding: &Finding) -> Vec<String> {
@@ -5284,12 +5662,36 @@ fn safe_path_component<'a>(label: &str, value: &'a str) -> AppResult<&'a str> {
     Ok(value)
 }
 
+fn destination_has_forbidden_prefix(destination: &Path) -> bool {
+    destination.components().any(|component| match component {
+        Component::Prefix(prefix) => {
+            #[cfg(windows)]
+            {
+                !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::UNC(_, _))
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = prefix;
+                true
+            }
+        }
+        _ => false,
+    })
+}
+
 fn validate_destination(destination: &Path) -> AppResult<()> {
+    let has_parent_traversal = destination
+        .components()
+        .any(|component| matches!(component, Component::ParentDir));
+    let has_drive_relative_prefix = !destination.is_absolute()
+        && destination
+            .components()
+            .any(|component| matches!(component, Component::Prefix(_)));
     if destination.as_os_str().is_empty()
         || destination.file_name().is_none()
-        || destination
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+        || has_parent_traversal
+        || has_drive_relative_prefix
+        || destination_has_forbidden_prefix(destination)
     {
         return Err(AppError::InvalidRequest(
             "export destination must be an explicit file path without parent traversal".into(),
@@ -5302,6 +5704,60 @@ fn validate_destination(destination: &Path) -> AppResult<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod export_destination_tests {
+    use super::{destination_has_forbidden_prefix, validate_destination, write_new_private_file};
+    use std::fs;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    #[test]
+    fn relative_export_destination_without_traversal_is_valid() {
+        validate_destination(Path::new("report.html")).expect("relative export path");
+        assert!(validate_destination(Path::new("../report.html")).is_err());
+    }
+
+    #[test]
+    fn absolute_save_dialog_destinations_publish_html_and_json_without_overwrite() {
+        let directory = tempdir().expect("temporary export directory");
+        assert!(directory.path().is_absolute());
+
+        for (name, contents) in [
+            ("assessment-report.html", b"<html>report</html>".as_slice()),
+            ("assessment-report.json", br#"{"result":"ok"}"#.as_slice()),
+        ] {
+            let destination = directory.path().join(name);
+            let published = write_new_private_file(&destination, contents)
+                .expect("absolute save-dialog destination should publish");
+            assert_eq!(fs::read(&published).expect("published export"), contents);
+            assert!(write_new_private_file(&destination, b"replacement").is_err());
+            assert_eq!(fs::read(&published).expect("original export"), contents);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_export_destination_accepts_normal_disk_and_unc_but_rejects_special_namespaces() {
+        validate_destination(Path::new(r"C:\Users\example\Downloads\report.html"))
+            .expect("absolute Windows save-dialog path");
+        assert!(validate_destination(Path::new(r"C:report.html")).is_err());
+        assert!(!destination_has_forbidden_prefix(Path::new(
+            r"\\server\share\report.html"
+        )));
+        for forbidden in [
+            r"\\.\PhysicalDrive0\report.html",
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\report.html",
+            r"\\?\C:\Users\example\Downloads\report.html",
+            r"\\?\UNC\server\share\report.html",
+        ] {
+            assert!(
+                validate_destination(Path::new(forbidden)).is_err(),
+                "special namespace must be rejected: {forbidden}"
+            );
+        }
+    }
 }
 
 fn write_new_private_file(destination: &Path, bytes: &[u8]) -> AppResult<PathBuf> {
@@ -5741,9 +6197,10 @@ mod tests {
     };
     use crate::discovery::{ConnectorDiscovery, DiscoveredAsset};
     use crate::domain::{
-        AssessmentActivity, AssetIdentifier, AssetKind, Confidence, CoverageStatus, DataClass,
-        EngineCategory, EngineCompatibility, Evidence, EvidenceKind, FindingStatus, ImageReference,
-        ManifestStatus, ProviderExecutionContract, Severity,
+        AssessmentActivity, AssetIdentifier, AssetKind, Confidence, CoverageStatus,
+        DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS, DataClass, EngineCategory, EngineCompatibility,
+        EngineExecutionContract, EngineExecutionResources, Evidence, EvidenceKind, FindingStatus,
+        ImageReference, ManifestStatus, ProviderExecutionContract, Severity,
     };
     use crate::export::RedactionProfile;
     use chrono::Duration;
@@ -6085,6 +6542,7 @@ mod tests {
             status: ManifestStatus::Integrated,
             notices: vec![],
             compatibility: EngineCompatibility::default(),
+            execution: None,
         }
     }
 
@@ -6120,6 +6578,90 @@ mod tests {
             notes: None,
             external_scope: None,
         }
+    }
+
+    #[test]
+    fn resume_identity_rejects_a_changed_active_execution_timeout() {
+        let mut manifest = comparison_scope_manifest();
+        manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: 7_200,
+            },
+        });
+        let engine_run = not_executed_run(
+            "scan-1",
+            "engine-run-1",
+            &manifest.id,
+            Vec::new(),
+            ("fixture", "fixture"),
+            Some(&manifest),
+            Utc::now(),
+        );
+        assert_eq!(engine_run.execution_timeout_seconds, Some(7_200));
+        validate_resume_manifest_identity(
+            &engine_run,
+            &manifest,
+            ResumeManifestDriftAllowance::STRICT,
+        )
+        .expect("unchanged execution timeout remains resumable");
+
+        manifest
+            .execution
+            .as_mut()
+            .expect("execution contract")
+            .resources
+            .timeout_seconds = 7_201;
+        let error = validate_resume_manifest_identity(
+            &engine_run,
+            &manifest,
+            ResumeManifestDriftAllowance::STRICT,
+        )
+        .expect_err("catalog timeout drift must reject resume");
+        assert!(error.to_string().contains("active execution deadline"));
+    }
+
+    #[test]
+    fn legacy_resume_identity_is_migrated_once_to_the_current_execution_timeout() {
+        let mut manifest = comparison_scope_manifest();
+        let engine_run = not_executed_run(
+            "scan-1",
+            "engine-run-1",
+            &manifest.id,
+            Vec::new(),
+            ("fixture", "fixture"),
+            Some(&manifest),
+            Utc::now(),
+        );
+        let mut serialized = serde_json::to_value(&engine_run).expect("serialize engine run");
+        serialized
+            .as_object_mut()
+            .expect("engine run object")
+            .remove("execution_timeout_seconds");
+        let mut legacy: EngineRun =
+            serde_json::from_value(serialized).expect("legacy engine run remains readable");
+        assert_eq!(legacy.execution_timeout_seconds, None);
+
+        manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS + 1,
+            },
+        });
+        let migrated_timeout = validate_resume_manifest_identity(
+            &legacy,
+            &manifest,
+            ResumeManifestDriftAllowance::STRICT,
+        )
+        .expect("legacy run adopts the current timeout once during resume planning");
+        freeze_resume_execution_timeout(&mut legacy, migrated_timeout);
+
+        manifest
+            .execution
+            .as_mut()
+            .expect("execution contract")
+            .resources
+            .timeout_seconds += 1;
+        validate_resume_manifest_identity(&legacy, &manifest, ResumeManifestDriftAllowance::STRICT)
+            .expect_err("the migrated legacy identity must reject later timeout drift");
     }
 
     #[test]
@@ -7158,6 +7700,89 @@ mod tests {
             case.scope_grants.is_empty(),
             "a website preset must never authorize scanning"
         );
+    }
+
+    #[test]
+    fn loopback_website_is_internal_and_accepts_only_the_exact_low_impact_grant() {
+        let fixture = Fixture::new();
+        let service = fixture.service();
+        let case = service
+            .create_case(&CreateCaseRequest {
+                title: "Local website review".into(),
+                organization_name: "Example Co".into(),
+                employee_range: "2-49".into(),
+                assessment_intent: Some(AssessmentIntent::DeployedWebsite),
+                data_classes: vec![],
+                requested_activities: vec![AssessmentActivity::LowImpactExternalChecks],
+                source_kinds: vec![],
+                not_applicable_source_kinds: vec![],
+                declared_assets: vec![DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
+                    value: "127.0.0.1".into(),
+                    // Simulates the stale v0.1.6 frontend classification.
+                    internet_exposed: Some(true),
+                    web_service: Some(DeclaredWebServiceInput {
+                        protocol: DeclaredWebProtocol::Http,
+                        port: 9001,
+                        path: "/".into(),
+                    }),
+                }],
+                notes: None,
+            })
+            .unwrap();
+        assert_eq!(case.assets[0].internet_exposed, Some(false));
+
+        // Also prove approval repairs a case already persisted with the stale
+        // public flag, without changing the exact target or service port.
+        let mut stale = case.clone();
+        stale.assets[0].internet_exposed = Some(true);
+        fixture
+            .storage
+            .save_case(&mut stale, "test.stale_loopback_classification")
+            .unwrap();
+        let asset_id = stale.assets[0].id.clone();
+        let grants = service
+            .approve_scope(
+                &stale.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LowImpactExternalConnection],
+                    confirmed_by: "Endpoint owner".into(),
+                    expires_at: Some(Utc::now() + Duration::hours(1)),
+                    authorization_reference: Some("local-endpoint-confirmation".into()),
+                    notes: None,
+                    external_scope: Some(ExternalScopeRequest {
+                        target: "127.0.0.1".into(),
+                        ports: [9001].into_iter().collect(),
+                        protocol: crate::external_scope::TransportProtocol::Http,
+                        activity: ExternalActivity::LowImpactExternal,
+                        rate_policy: crate::external_scope::RatePolicy {
+                            requests_per_second: 1,
+                            concurrency: 1,
+                            timeout_seconds: 60,
+                        },
+                        template_policy: crate::external_scope::TemplatePolicy::conservative(
+                            "not_applicable",
+                            vec![],
+                        ),
+                        asserted_authority: "local-endpoint-confirmation".into(),
+                        allow_sensitive_networks: true,
+                    }),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(grants.len(), 1);
+        let stored = service.show_case(&stale.id).unwrap();
+        assert_eq!(stored.status, CaseStatus::Ready);
+        assert_eq!(stored.assets[0].internet_exposed, Some(false));
+        let scope = stored.scope_grants[0].external_scope.as_ref().unwrap();
+        assert_eq!(
+            scope.target,
+            CanonicalTarget::Address("127.0.0.1".parse().unwrap())
+        );
+        assert_eq!(scope.ports, [9001].into_iter().collect());
+        assert!(scope.allow_sensitive_networks);
     }
 
     #[test]
@@ -8291,6 +8916,821 @@ mod tests {
     }
 
     #[test]
+    fn live_resume_only_requeues_paused_workers_and_preserves_sibling_evidence() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let original = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["kics".into(), "semgrep".into()],
+                },
+            )
+            .unwrap();
+
+        let mut stored = service.show_case(&case.id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == original.scan_run.id)
+            .unwrap();
+        let now = Utc::now();
+        let paused = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine| engine.engine_id == "kics")
+            .unwrap();
+        paused.status = EngineRunStatus::Paused;
+        paused.phase = "paused".into();
+        paused.progress_percent = 45;
+        paused.started_at = Some(now);
+        paused.error_code = Some("pause_context".into());
+        paused.error_message = Some("worker retained its pre-pause context".into());
+
+        let failed = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine| engine.engine_id == "semgrep")
+            .unwrap();
+        let mut failed_checkpoint =
+            ExecutionCheckpoint::from_resume_token(failed.resume_token.as_deref().unwrap())
+                .unwrap();
+        failed_checkpoint.stage = ExecutionStage::Failed;
+        failed_checkpoint.cleanup_completed = true;
+        failed_checkpoint.last_error =
+            Some("managed local engine launcher: engine exceeded its fixed runtime timeout".into());
+        let failed_token = Some(failed_checkpoint.resume_token().unwrap());
+        failed.status = EngineRunStatus::Failed;
+        failed.phase = "execution_failed".into();
+        failed.progress_percent = 95;
+        failed.started_at = Some(now);
+        failed.finished_at = Some(now);
+        failed.error_code = Some("execution_failed".into());
+        failed.error_message =
+            Some("managed local engine launcher: engine exceeded its fixed runtime timeout".into());
+        failed.resume_token = failed_token.clone();
+        failed.cleanup_removed = Some(true);
+        failed.cleanup_detail = Some("owned container removed after the failed run".into());
+        failed.raw_artifact_ids = vec!["retained-artifact".into()];
+        stored.status = CaseStatus::NeedsAttention;
+        fixture
+            .storage
+            .save_case(&mut stored, "test.live_resume_mixed_state")
+            .unwrap();
+
+        let resumed = service
+            .resume_scan(&case.id, &original.scan_run.id)
+            .unwrap();
+        let run = resumed
+            .scan_runs
+            .iter()
+            .find(|run| run.id == original.scan_run.id)
+            .unwrap();
+        let paused = run
+            .engine_runs
+            .iter()
+            .find(|engine| engine.engine_id == "kics")
+            .unwrap();
+        assert_eq!(paused.status, EngineRunStatus::Queued);
+        assert_eq!(paused.phase, "queued_for_resume");
+        assert_eq!(paused.progress_percent, 45);
+        assert_eq!(paused.started_at, Some(now));
+        assert_eq!(paused.error_code.as_deref(), Some("pause_context"));
+        assert_eq!(
+            paused.error_message.as_deref(),
+            Some("worker retained its pre-pause context")
+        );
+
+        let failed = run
+            .engine_runs
+            .iter()
+            .find(|engine| engine.engine_id == "semgrep")
+            .unwrap();
+        assert_eq!(failed.status, EngineRunStatus::Failed);
+        assert_eq!(failed.phase, "execution_failed");
+        assert_eq!(failed.progress_percent, 95);
+        assert_eq!(failed.finished_at, Some(now));
+        assert_eq!(failed.resume_token, failed_token);
+        assert_eq!(failed.error_code.as_deref(), Some("execution_failed"));
+        assert_eq!(
+            failed.error_message.as_deref(),
+            Some("managed local engine launcher: engine exceeded its fixed runtime timeout")
+        );
+        assert_eq!(failed.cleanup_removed, Some(true));
+        assert_eq!(
+            failed.cleanup_detail.as_deref(),
+            Some("owned container removed after the failed run")
+        );
+        assert_eq!(failed.raw_artifact_ids, vec!["retained-artifact"]);
+    }
+
+    struct MappingDriftResumeFixture {
+        case_id: Id,
+        run_id: Id,
+        engine_run_id: Id,
+        output_path: PathBuf,
+    }
+
+    fn stage_mapping_drift_captured_resume(
+        fixture: &Fixture,
+        engine_ids: Vec<String>,
+        output_bytes: &[u8],
+    ) -> MappingDriftResumeFixture {
+        let case = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let plan = service
+            .plan_scan(&case.id, ScanPlanRequest { engine_ids })
+            .unwrap();
+        let mut stored = service.show_case(&case.id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.engine_id == "trufflehog")
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        let relative_directory = format!(
+            "{}/{}/{}/attempt-{}/",
+            case.id, run.id, engine_run.id, checkpoint.attempt
+        );
+        let artifact_specs = [
+            (
+                "trufflehog-output",
+                format!("{relative_directory}output/trufflehog.jsonl"),
+                "application/x-ndjson",
+                output_bytes,
+            ),
+            (
+                "trufflehog-stdout",
+                format!("{relative_directory}raw/stdout.log"),
+                "text/plain",
+                b"scanner diagnostic\n".as_slice(),
+            ),
+            (
+                "trufflehog-stderr",
+                format!("{relative_directory}raw/stderr.log"),
+                "text/plain",
+                b"".as_slice(),
+            ),
+        ];
+        let artifact_root = fixture.directory.path().join("artifacts");
+        let mut artifacts = Vec::new();
+        for (suffix, relative_path, media_type, bytes) in artifact_specs {
+            let path = artifact_root.join(&relative_path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, bytes).unwrap();
+            artifacts.push(RawArtifact {
+                id: format!("artifact-{suffix}"),
+                case_id: case.id.clone(),
+                run_id: run.id.clone(),
+                engine_run_id: engine_run.id.clone(),
+                relative_path,
+                media_type: media_type.into(),
+                sha256: sha256_bytes(bytes),
+                byte_length: bytes.len() as u64,
+                created_at: Utc::now(),
+                contains_sensitive_data: true,
+            });
+        }
+        let artifact_ids = artifacts
+            .iter()
+            .map(|artifact| artifact.id.clone())
+            .collect::<Vec<_>>();
+        let output_path = artifact_root.join(&artifacts[0].relative_path);
+        checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+        checkpoint.artifact_ids = artifact_ids.clone();
+        checkpoint.cleanup_completed = true;
+        checkpoint.last_error =
+            Some("adapter normalization was incomplete; raw evidence was retained".into());
+        engine_run.status = EngineRunStatus::PartiallyCompleted;
+        engine_run.phase = "captured_awaiting_adapter".into();
+        engine_run.progress_percent = 85;
+        engine_run.finished_at = Some(Utc::now());
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine_run.raw_artifact_ids = artifact_ids;
+        engine_run.mapping_version = Some("2026-08-26.1".into());
+        let engine_run_id = engine_run.id.clone();
+        run.completed_at = Some(Utc::now());
+        stored.raw_artifacts.extend(artifacts);
+        stored.status = CaseStatus::NeedsAttention;
+        fixture
+            .storage
+            .save_case(&mut stored, "test.mapping_drift_captured_resume")
+            .unwrap();
+
+        MappingDriftResumeFixture {
+            case_id: case.id,
+            run_id: plan.scan_run.id,
+            engine_run_id,
+            output_path,
+        }
+    }
+
+    #[test]
+    fn mapping_version_drift_allows_only_verified_empty_captured_jsonl_resume() {
+        let fixture = Fixture::new();
+        let staged = stage_mapping_drift_captured_resume(&fixture, vec!["trufflehog".into()], b"");
+
+        let resumed = fixture
+            .service()
+            .plan_resume(&staged.case_id, &staged.run_id)
+            .expect("verified empty captured JSONL is independent of mapping catalogs");
+        assert_eq!(resumed.executable.len(), 1);
+        assert_eq!(resumed.executable[0].attempt, 1);
+        assert_eq!(
+            resumed.executable[0]
+                .resume_checkpoint
+                .as_ref()
+                .unwrap()
+                .resume_action(),
+            crate::orchestrator::ResumeAction::AdaptCapturedArtifacts
+        );
+        let stored = fixture.service().show_case(&staged.case_id).unwrap();
+        let engine_run = stored.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == staged.engine_run_id)
+            .unwrap();
+        assert_eq!(engine_run.mapping_version.as_deref(), Some("2026-08-26.1"));
+        assert!(engine_run.warnings.iter().any(|warning| {
+            warning.contains("no finding or control reference can be remapped")
+                && warning.contains("no scanner or runtime will be re-executed")
+        }));
+    }
+
+    #[test]
+    fn mapping_version_drift_rejects_nonempty_or_tampered_captured_jsonl() {
+        let nonempty = Fixture::new();
+        let staged = stage_mapping_drift_captured_resume(
+            &nonempty,
+            vec!["trufflehog".into()],
+            br#"{"DetectorName":"finding"}"#,
+        );
+        let error = nonempty
+            .service()
+            .plan_resume(&staged.case_id, &staged.run_id)
+            .expect_err("nonempty JSONL could emit newly mapped control references");
+        assert!(
+            error
+                .to_string()
+                .contains("scan_preflight:resume_release_incompatible")
+        );
+        assert!(error.to_string().contains("not verified zero-byte JSONL"));
+        assert!(error.to_string().contains("Start a new scan"));
+
+        let tampered = Fixture::new();
+        let staged = stage_mapping_drift_captured_resume(&tampered, vec!["trufflehog".into()], b"");
+        fs::write(&staged.output_path, b"tampered").unwrap();
+        let error = tampered
+            .service()
+            .plan_resume(&staged.case_id, &staged.run_id)
+            .expect_err("changed evidence must fail its durable length/hash inspection");
+        assert!(error.to_string().contains("byte length differs"));
+    }
+
+    #[test]
+    fn mapping_drift_mixed_resume_runs_only_safe_adapter_subset() {
+        let mixed = Fixture::new();
+        let staged = stage_mapping_drift_captured_resume(
+            &mixed,
+            vec!["trufflehog".into(), "semgrep".into()],
+            b"",
+        );
+        let mut stored = mixed.service().show_case(&staged.case_id).unwrap();
+        let semgrep = stored.scan_runs[0]
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.engine_id == "semgrep")
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(semgrep.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.stage = ExecutionStage::Failed;
+        checkpoint.cleanup_completed = true;
+        checkpoint.last_error = Some("runtime deadline".into());
+        semgrep.status = EngineRunStatus::Failed;
+        semgrep.phase = "execution_failed".into();
+        semgrep.finished_at = Some(Utc::now());
+        semgrep.resume_token = Some(checkpoint.resume_token().unwrap());
+        semgrep.mapping_version = Some("2026-08-26.1".into());
+        let frozen_resume_token = semgrep.resume_token.clone();
+        let frozen_scope_contract_sha256 = semgrep.scope_contract_sha256.clone();
+        mixed
+            .storage
+            .save_case(&mut stored, "test.mapping_drift_mixed_resume")
+            .unwrap();
+
+        let resumed = mixed
+            .service()
+            .plan_resume(&staged.case_id, &staged.run_id)
+            .expect("the verified empty adapter subset remains resumable");
+        assert_eq!(resumed.executable.len(), 1);
+        assert_eq!(resumed.executable[0].manifest.id, "trufflehog");
+        assert_eq!(resumed.executable[0].attempt, 1);
+        let stored = mixed.service().show_case(&staged.case_id).unwrap();
+        let semgrep = stored.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.engine_id == "semgrep")
+            .unwrap();
+        assert_eq!(semgrep.status, EngineRunStatus::Failed);
+        assert_eq!(semgrep.phase, "resume_release_incompatible");
+        assert_eq!(
+            semgrep.error_code.as_deref(),
+            Some("resume_release_incompatible")
+        );
+        assert_eq!(semgrep.resume_token, frozen_resume_token);
+        assert_eq!(semgrep.scope_contract_sha256, frozen_scope_contract_sha256);
+        assert!(
+            semgrep
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("Start a new scan"))
+        );
+    }
+
+    #[test]
+    fn mapping_version_drift_is_rejected_for_reexecution_or_runtime_only_plans() {
+        for stage in [ExecutionStage::Failed, ExecutionStage::CleanupPending] {
+            let fixture = Fixture::new();
+            let staged =
+                stage_mapping_drift_captured_resume(&fixture, vec!["trufflehog".into()], b"");
+            let mut stored = fixture.service().show_case(&staged.case_id).unwrap();
+            let engine_run = &mut stored.scan_runs[0].engine_runs[0];
+            let mut checkpoint =
+                ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                    .unwrap();
+            checkpoint.stage = stage.clone();
+            checkpoint.last_error = Some("fixture retry".into());
+            if stage == ExecutionStage::CleanupPending {
+                checkpoint.cleanup_completed = false;
+                checkpoint.container_name = Some(
+                    crate::container_runtime::planned_container_name(
+                        &checkpoint.engine_id,
+                        &checkpoint.engine_run_id,
+                        checkpoint.attempt,
+                    )
+                    .unwrap(),
+                );
+                checkpoint.scope_sha256 = Some("a".repeat(64));
+                checkpoint.runtime_command_provenance =
+                    Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
+                checkpoint.runtime_provider =
+                    Some(crate::container_runtime::RuntimeProvider::Podman);
+                engine_run.status = EngineRunStatus::PartiallyCompleted;
+                engine_run.phase = "cleanup_pending".into();
+            } else {
+                checkpoint.cleanup_completed = true;
+                engine_run.status = EngineRunStatus::Failed;
+                engine_run.phase = "execution_failed".into();
+            }
+            engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+            let frozen_resume_token = engine_run.resume_token.clone();
+            let frozen_scope_contract_sha256 = engine_run.scope_contract_sha256.clone();
+            fixture
+                .storage
+                .save_case(&mut stored, "test.mapping_drift_runtime_resume")
+                .unwrap();
+
+            let pre_persist_called = std::cell::Cell::new(false);
+            let error = fixture
+                .service()
+                .plan_resume_checked(&staged.case_id, &staged.run_id, |_| {
+                    pre_persist_called.set(true);
+                    Ok(())
+                })
+                .expect_err("mapping drift must not authorize tool or runtime execution");
+            assert!(
+                error
+                    .to_string()
+                    .contains("scan_preflight:resume_release_incompatible")
+            );
+            assert!(error.to_string().contains("Start a new scan"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("No scanner or runtime was started")
+            );
+            assert!(!pre_persist_called.get());
+
+            let stored = fixture.service().show_case(&staged.case_id).unwrap();
+            let blocked = &stored.scan_runs[0].engine_runs[0];
+            assert!(engine_status_terminal(&blocked.status));
+            assert_eq!(blocked.phase, "resume_release_incompatible");
+            assert_eq!(
+                blocked.error_code.as_deref(),
+                Some("resume_release_incompatible")
+            );
+            assert_eq!(blocked.resume_token, frozen_resume_token);
+            assert_eq!(blocked.scope_contract_sha256, frozen_scope_contract_sha256);
+            assert!(stored.scan_runs[0].completed_at.is_some());
+            assert_eq!(stored.status, CaseStatus::NeedsAttention);
+        }
+    }
+
+    #[test]
+    fn mapping_and_timeout_drift_allow_live_shape_empty_naabu_adapter_resume() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        approve_direct_external_target(
+            &fixture,
+            &case.id,
+            AssetKind::IpAddress,
+            "198.51.100.10",
+            ScanPermission::LowImpactExternalConnection,
+            crate::external_scope::TransportProtocol::Tcp,
+            true,
+        );
+        let service = fixture.service();
+        let planned = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["naabu".into()],
+                },
+            )
+            .unwrap();
+        let current_timeout = fixture
+            .engines
+            .get("naabu")
+            .unwrap()
+            .execution_timeout_seconds();
+        assert_eq!(current_timeout, 14_400);
+
+        let mut stored = service.show_case(&case.id).unwrap();
+        let grant_id = stored.scope_grants[0].id.clone();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == planned.scan_run.id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.engine_id == "naabu")
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        let relative_directory = format!(
+            "{}/{}/{}/attempt-{}/",
+            case.id, run.id, engine_run.id, checkpoint.attempt
+        );
+        let artifact_root = fixture.directory.path().join("artifacts");
+        let artifact_specs = [
+            (
+                "naabu-stdout",
+                format!("{relative_directory}raw/stdout.log"),
+                "text/plain",
+            ),
+            (
+                "naabu-stderr",
+                format!("{relative_directory}raw/stderr.log"),
+                "text/plain",
+            ),
+            (
+                "naabu-output",
+                format!("{relative_directory}output/naabu.jsonl"),
+                "application/x-ndjson",
+            ),
+        ];
+        let mut artifacts = Vec::new();
+        for (suffix, relative_path, media_type) in artifact_specs {
+            let path = artifact_root.join(&relative_path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"").unwrap();
+            artifacts.push(RawArtifact {
+                id: format!("artifact-{suffix}"),
+                case_id: case.id.clone(),
+                run_id: run.id.clone(),
+                engine_run_id: engine_run.id.clone(),
+                relative_path,
+                media_type: media_type.into(),
+                sha256: sha256_bytes(b""),
+                byte_length: 0,
+                created_at: Utc::now(),
+                contains_sensitive_data: true,
+            });
+        }
+        let artifact_ids = artifacts
+            .iter()
+            .map(|artifact| artifact.id.clone())
+            .collect::<Vec<_>>();
+        let policy_unique = "a".repeat(32);
+        checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+        checkpoint.container_name = Some(
+            crate::container_runtime::planned_container_name(
+                &checkpoint.engine_id,
+                &checkpoint.engine_run_id,
+                checkpoint.attempt,
+            )
+            .unwrap(),
+        );
+        checkpoint.scope_sha256 = Some("b".repeat(64));
+        checkpoint.artifact_ids = artifact_ids.clone();
+        checkpoint.cleanup_completed = true;
+        checkpoint.last_error =
+            Some("adapter normalization was incomplete; raw evidence was retained".into());
+        checkpoint.runtime_command_provenance =
+            Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
+        checkpoint.runtime_provider = Some(crate::container_runtime::RuntimeProvider::Docker);
+        checkpoint.managed_network = Some(crate::managed_network::ManagedNetworkIdentity {
+            schema_version: "1.0.0".into(),
+            provider: crate::container_runtime::RuntimeProvider::Docker,
+            network_name: format!("ass-egress-{policy_unique}"),
+            network_id: "historical-network-id".into(),
+            uplink_network_name: None,
+            uplink_network_id: None,
+            gateway_container_name: None,
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: None,
+            gateway_image_digest: None,
+            policy_id: format!("egress-{policy_unique}"),
+            policy_sha256: "c".repeat(64),
+            expires_at: Utc::now(),
+            provenance: crate::managed_network::EgressGatewayProvenance::ExternalAssetGrants {
+                case_id: case.id.clone(),
+                grant_ids: vec![grant_id],
+                activities: vec![ExternalActivity::LowImpactExternal],
+            },
+        });
+        engine_run.status = EngineRunStatus::PartiallyCompleted;
+        engine_run.phase = "captured_awaiting_adapter".into();
+        engine_run.progress_percent = 85;
+        engine_run.finished_at = Some(Utc::now());
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine_run.raw_artifact_ids = artifact_ids;
+        engine_run.mapping_version = Some("2026-08-26.1".into());
+        engine_run.execution_timeout_seconds = Some(7_200);
+        let engine_run_id = engine_run.id.clone();
+        run.completed_at = Some(Utc::now());
+        stored.raw_artifacts.extend(artifacts);
+        stored.status = CaseStatus::NeedsAttention;
+        fixture
+            .storage
+            .save_case(&mut stored, "test.live_naabu_release_drift")
+            .unwrap();
+
+        let resumed = service
+            .plan_resume(&case.id, &planned.scan_run.id)
+            .expect("verified empty captured Naabu output needs no historical runtime");
+        assert_eq!(resumed.executable.len(), 1);
+        let execution = &resumed.executable[0];
+        assert_eq!(execution.manifest.id, "naabu");
+        assert_eq!(execution.attempt, 1);
+        let resumed_checkpoint = execution.resume_checkpoint.as_ref().unwrap();
+        assert_eq!(
+            resumed_checkpoint.resume_action(),
+            crate::orchestrator::ResumeAction::AdaptCapturedArtifacts
+        );
+        assert!(resumed_checkpoint.cleanup_completed);
+        assert!(resumed_checkpoint.managed_network.is_some());
+        assert!(captured_checkpoint_is_adapter_only(resumed_checkpoint));
+
+        let stored = service.show_case(&case.id).unwrap();
+        let engine_run = stored.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == engine_run_id)
+            .unwrap();
+        assert_eq!(engine_run.mapping_version.as_deref(), Some("2026-08-26.1"));
+        assert_eq!(engine_run.execution_timeout_seconds, Some(7_200));
+        assert!(engine_run.warnings.iter().any(|warning| {
+            warning.contains("control mapping 2026-08-26.1")
+                && warning.contains("execution deadline 7200 seconds versus 14400 seconds")
+                && warning.contains("frozen values remain unchanged")
+                && warning.contains("no scanner or runtime will be re-executed")
+        }));
+    }
+
+    #[test]
+    fn captured_resume_can_restore_an_unchanged_checkpoint_projection_once_queued() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["trufflehog".into()],
+                },
+            )
+            .unwrap();
+        let mut engine_run = plan.scan_run.engine_runs[0].clone();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+        checkpoint.artifact_ids = vec!["artifact-trufflehog-empty".into()];
+        checkpoint.cleanup_completed = true;
+        checkpoint.last_error =
+            Some("adapter normalization was incomplete; raw evidence was retained".into());
+        let token = checkpoint.resume_token().unwrap();
+        engine_run.resume_token = Some(token.clone());
+        engine_run.status = EngineRunStatus::Queued;
+        engine_run.phase = "queued_for_resume".into();
+
+        assert!(queued_captured_resume_reprojection(
+            &engine_run,
+            &checkpoint
+        ));
+        validate_checkpoint_progress(&engine_run, &checkpoint, &token).unwrap();
+
+        engine_run.phase = "running".into();
+        assert!(!queued_captured_resume_reprojection(
+            &engine_run,
+            &checkpoint
+        ));
+        assert!(validate_checkpoint_progress(&engine_run, &checkpoint, &token).is_err());
+    }
+
+    #[test]
+    fn resume_preserves_partial_failure_evidence_and_includes_unstarted_work() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let original = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["kics".into(), "semgrep".into()],
+                },
+            )
+            .unwrap();
+
+        let mut stored = service.show_case(&case.id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == original.scan_run.id)
+            .unwrap();
+        let partial = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine| engine.engine_id == "kics")
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(partial.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.stage = ExecutionStage::CleanupPending;
+        checkpoint.container_name = Some(
+            crate::container_runtime::planned_container_name(
+                &checkpoint.engine_id,
+                &checkpoint.engine_run_id,
+                checkpoint.attempt,
+            )
+            .unwrap(),
+        );
+        checkpoint.scope_sha256 = Some("a".repeat(64));
+        checkpoint.artifact_ids = vec!["partial-artifact".into()];
+        checkpoint.cleanup_completed = false;
+        checkpoint.last_error = Some("pinned image identity did not match".into());
+        checkpoint.runtime_command_provenance =
+            Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
+        checkpoint.runtime_provider = Some(crate::container_runtime::RuntimeProvider::Podman);
+        partial.status = EngineRunStatus::PartiallyCompleted;
+        partial.progress_percent = 95;
+        partial.phase = "cleanup_pending".into();
+        partial.started_at = Some(Utc::now());
+        partial.finished_at = Some(Utc::now());
+        partial.resume_token = Some(checkpoint.resume_token().unwrap());
+        partial.cleanup_removed = Some(false);
+        partial.cleanup_detail = Some("exact owned container still requires cleanup".into());
+        partial.raw_artifact_ids = vec!["partial-artifact".into()];
+        partial.error_code = Some("execution_failed".into());
+        partial.error_message = checkpoint.last_error.clone();
+        run.completed_at = Some(Utc::now());
+        stored.status = CaseStatus::NeedsAttention;
+        fixture
+            .storage
+            .save_case(&mut stored, "test.partial_before_resume")
+            .unwrap();
+
+        let resumed = service
+            .plan_resume(&case.id, &original.scan_run.id)
+            .unwrap();
+        assert_eq!(resumed.executable.len(), 2);
+        let cleanup = resumed
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == "kics")
+            .unwrap();
+        assert_eq!(cleanup.attempt, 2);
+        assert_eq!(
+            cleanup.resume_checkpoint.as_ref().unwrap().resume_action(),
+            crate::orchestrator::ResumeAction::CleanupContainer
+        );
+        let unstarted = resumed
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == "semgrep")
+            .unwrap();
+        assert_eq!(unstarted.attempt, 1);
+        assert_eq!(
+            unstarted.resume_checkpoint.as_ref().unwrap().stage,
+            ExecutionStage::Planned
+        );
+
+        let reopened = service.show_case(&case.id).unwrap();
+        let partial = reopened.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|engine| engine.engine_id == "kics")
+            .unwrap();
+        assert_eq!(partial.status, EngineRunStatus::Queued);
+        assert_eq!(partial.phase, "queued_for_resume");
+        assert_eq!(partial.progress_percent, 95);
+        assert!(partial.started_at.is_some());
+        assert!(partial.finished_at.is_none());
+        assert_eq!(
+            partial.error_message.as_deref(),
+            Some("pinned image identity did not match")
+        );
+        assert_eq!(partial.error_code.as_deref(), Some("execution_failed"));
+        assert_eq!(partial.cleanup_removed, Some(false));
+        assert_eq!(
+            partial.cleanup_detail.as_deref(),
+            Some("exact owned container still requires cleanup")
+        );
+        assert_eq!(partial.raw_artifact_ids, vec!["partial-artifact"]);
+        let retained =
+            ExecutionCheckpoint::from_resume_token(partial.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(retained.stage, ExecutionStage::CleanupPending);
+        assert!(!retained.cleanup_completed);
+        assert_eq!(retained.container_name, checkpoint.container_name);
+        assert_eq!(retained.last_error, checkpoint.last_error);
+    }
+
+    #[test]
     fn interrupted_cleanup_failure_remains_durable_until_exact_retry_succeeds() {
         let fixture = Fixture::new();
         let case = fixture.create();
@@ -8961,6 +10401,7 @@ mod tests {
                 distribution_mode: None,
                 image_repository: None,
                 command_sha256: None,
+                execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
                 mapping_version: None,
@@ -9189,6 +10630,7 @@ mod tests {
             distribution_mode: Some(DistributionMode::PullPinnedImage),
             image_repository: Some("ghcr.io/example/cloudquery".into()),
             command_sha256: Some("c".repeat(64)),
+            execution_timeout_seconds: None,
             knowledge_input: Some(EngineKnowledgeInput {
                 kind: crate::domain::KnowledgeInputKind::RuntimeLive,
                 identifier: "AWS inventory".into(),
@@ -9224,6 +10666,29 @@ mod tests {
                 scope_grant_ids: vec!["grant-1".into()],
                 scope_grant_snapshots: case.scope_grants.clone(),
                 engine_runs: vec![completed_engine(id)],
+            });
+        }
+        for (sequence, id, status, completed_at) in [
+            (3, "incomplete", EngineRunStatus::Failed, Some(now)),
+            (4, "active", EngineRunStatus::Running, None),
+        ] {
+            let mut engine_run = completed_engine(id);
+            engine_run.status = status;
+            engine_run.progress_percent = 50;
+            engine_run.phase = id.into();
+            engine_run.finished_at = completed_at;
+            engine_run.exit_code = None;
+            case.scan_runs.push(ScanRun {
+                id: id.into(),
+                case_id: case.id.clone(),
+                sequence,
+                created_at: now,
+                completed_at,
+                knowledge_cutoff: now,
+                verification_baseline_run_id: None,
+                scope_grant_ids: vec!["grant-1".into()],
+                scope_grant_snapshots: case.scope_grants.clone(),
+                engine_runs: vec![engine_run],
             });
         }
         case.findings.push(Finding {
@@ -9266,6 +10731,57 @@ mod tests {
         fixture.storage.save_case(&mut case, "test.runs").unwrap();
         let destination = fixture.directory.path().join("ocsf.json");
         let service = fixture.service();
+        for run_id in ["active", "incomplete"] {
+            for format in [CaseExportFormat::OcsfJson, CaseExportFormat::OscalJson] {
+                let preview_error = service
+                    .preview_export(&case.id, run_id, format.clone(), &ExportOptions::default())
+                    .unwrap_err();
+                assert!(matches!(
+                    preview_error,
+                    AppError::InvalidRequest(detail)
+                        if detail.contains("fully completed selected scan run")
+                            && detail.contains("cannot represent unfinished or missing engine outcomes")
+                ));
+                let blocked_destination = fixture
+                    .directory
+                    .path()
+                    .join(format!("blocked-{run_id}-{}.json", format.as_str()));
+                assert!(matches!(
+                    service.export_schema(
+                        &case.id,
+                        run_id,
+                        format,
+                        &blocked_destination,
+                    ),
+                    Err(AppError::InvalidRequest(detail))
+                        if detail.contains("fully completed selected scan run")
+                ));
+                assert!(!blocked_destination.exists());
+            }
+            let interim_preview = service
+                .preview_export(
+                    &case.id,
+                    run_id,
+                    CaseExportFormat::CanonicalJson,
+                    &ExportOptions::default(),
+                )
+                .unwrap();
+            assert_eq!(interim_preview.run_id, run_id);
+            assert_eq!(interim_preview.selected_run_finding_count, 0);
+            assert_eq!(interim_preview.selected_engine_run_count, 1);
+            assert_eq!(interim_preview.incomplete_engine_run_count, 1);
+        }
+        let complete_zero_finding_preview = service
+            .preview_export(
+                &case.id,
+                "current",
+                CaseExportFormat::OcsfJson,
+                &ExportOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(complete_zero_finding_preview.run_id, "current");
+        assert_eq!(complete_zero_finding_preview.selected_run_finding_count, 0);
+        assert_eq!(complete_zero_finding_preview.incomplete_engine_run_count, 0);
         let export = service
             .export_schema(
                 &case.id,

@@ -63,7 +63,7 @@ use crate::{
     },
     orchestrator::{
         EngineExecutionRequest, ExecutionCheckpoint, ExecutionReport, ExecutionStage, Orchestrator,
-        ResumeAction,
+        ResumeAction, resume_captured_artifacts,
     },
 };
 use chrono::{Duration, Utc};
@@ -1133,6 +1133,95 @@ where
         .map_err(ProviderPreflightFailure::into_error)
 }
 
+#[derive(Clone, Default)]
+struct PreparedRuntimeSet {
+    fresh: Option<ProcessContainerRuntime>,
+    recorded: Vec<PreparedRecordedRuntime>,
+}
+
+#[derive(Clone)]
+struct PreparedRecordedRuntime {
+    provider: RuntimeProvider,
+    provenance: RuntimeCommandProvenance,
+    runtime: ProcessContainerRuntime,
+}
+
+impl PreparedRuntimeSet {
+    fn with_fresh(runtime: ProcessContainerRuntime) -> Self {
+        Self {
+            fresh: Some(runtime),
+            recorded: Vec::new(),
+        }
+    }
+
+    fn runtime_for(&self, execution: &PlannedEngineExecution) -> Option<&ProcessContainerRuntime> {
+        match execution.resume_checkpoint.as_ref() {
+            Some(checkpoint) => match (
+                checkpoint.runtime_provider,
+                checkpoint.runtime_command_provenance.as_ref(),
+            ) {
+                (Some(provider), Some(provenance)) => self
+                    .recorded
+                    .iter()
+                    .find(|prepared| {
+                        prepared.provider == provider && &prepared.provenance == provenance
+                    })
+                    .map(|prepared| &prepared.runtime),
+                (None, None) if checkpoint.cleanup_completed => self.fresh.as_ref(),
+                _ => None,
+            },
+            None => self.fresh.as_ref(),
+        }
+    }
+
+    fn insert_for_execution(
+        &mut self,
+        execution: &PlannedEngineExecution,
+        runtime: ProcessContainerRuntime,
+    ) -> AppResult<()> {
+        match execution.resume_checkpoint.as_ref() {
+            Some(checkpoint) => match (
+                checkpoint.runtime_provider,
+                checkpoint.runtime_command_provenance.as_ref(),
+            ) {
+                (Some(provider), Some(provenance)) => {
+                    self.recorded.push(PreparedRecordedRuntime {
+                        provider,
+                        provenance: provenance.clone(),
+                        runtime,
+                    });
+                    Ok(())
+                }
+                (None, None) if checkpoint.cleanup_completed => {
+                    self.fresh = Some(runtime);
+                    Ok(())
+                }
+                _ => Err(AppError::NotAuthorized(
+                    "resumable execution has incomplete durable runtime provenance".into(),
+                )),
+            },
+            None => {
+                self.fresh = Some(runtime);
+                Ok(())
+            }
+        }
+    }
+}
+
+fn captured_resume_is_runtime_independent(execution: &PlannedEngineExecution) -> bool {
+    // A managed-network identity is retained as historical provenance even
+    // after its lease cleanup succeeds. `cleanup_completed` is the durable
+    // obligation boundary; a completed captured checkpoint needs only bounded
+    // artifact inspection and adapter normalization.
+    execution
+        .resume_checkpoint
+        .as_ref()
+        .is_some_and(|checkpoint| {
+            checkpoint.resume_action() == ResumeAction::AdaptCapturedArtifacts
+                && checkpoint.cleanup_completed
+        })
+}
+
 #[cfg(test)]
 fn prepare_desktop_execution_with_runtime<F>(
     state: &AppState,
@@ -1151,29 +1240,41 @@ where
 fn prepare_desktop_execution(
     state: &AppState,
     plan: &ScanPlan,
-) -> AppResult<Option<ProviderExecutionReservation>> {
-    prepare_desktop_execution_with_checks(
+) -> AppResult<(Option<ProviderExecutionReservation>, PreparedRuntimeSet)> {
+    let mut prepared_runtime = None;
+    let reservation = prepare_desktop_execution_with_checks(
         state,
         plan,
         || validate_execution_inputs_static(state, plan),
         || {
             let runtime = state.runtime_for_execution()?;
             runtime.preflight()?;
+            prepared_runtime = Some(runtime);
             Ok(())
         },
-    )
+    )?;
+    let runtime = prepared_runtime.ok_or_else(|| {
+        AppError::Internal("runtime preflight completed without a reusable command context".into())
+    })?;
+    Ok((reservation, PreparedRuntimeSet::with_fresh(runtime)))
 }
 
 fn prepare_desktop_resume(
     state: &AppState,
     plan: &ScanPlan,
-) -> AppResult<Option<ProviderExecutionReservation>> {
-    prepare_desktop_execution_with_checks(
+) -> AppResult<(Option<ProviderExecutionReservation>, PreparedRuntimeSet)> {
+    let mut prepared_runtimes = PreparedRuntimeSet::default();
+    let reservation = prepare_desktop_execution_with_checks(
         state,
         plan,
         || validate_execution_inputs_static(state, plan),
         || {
             for execution in &plan.executable {
+                if captured_resume_is_runtime_independent(execution)
+                    || prepared_runtimes.runtime_for(execution).is_some()
+                {
+                    continue;
+                }
                 let runtime = match execution.resume_checkpoint.as_ref() {
                     Some(checkpoint) => match (
                         checkpoint.runtime_provider,
@@ -1195,10 +1296,12 @@ fn prepare_desktop_resume(
                     None => state.runtime_for_execution()?,
                 };
                 runtime.preflight()?;
+                prepared_runtimes.insert_for_execution(execution, runtime)?;
             }
             Ok(())
         },
-    )
+    )?;
+    Ok((reservation, prepared_runtimes))
 }
 
 #[tauri::command]
@@ -2352,21 +2455,31 @@ pub fn ungroup_findings(
 pub async fn start_scan(case_id: String, app: AppHandle) -> AppResult<AssessmentCase> {
     let worker_app = app.clone();
     let worker_case_id = case_id.clone();
-    let (plan, reservation) = tauri::async_runtime::spawn_blocking(move || {
+    let (plan, reservation, prepared_runtimes) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
         let mut pending =
             PendingProviderExecutionReservation::new(&state, "scan persistence worker");
+        let mut prepared_runtimes = None;
         let planned = state.case_service().plan_scan_for_execution_checked(
             &worker_case_id,
             ScanPlanRequest::default(),
-            |plan| pending.set(prepare_desktop_execution(&state, plan)?),
+            |plan| {
+                let (reservation, runtimes) = prepare_desktop_execution(&state, plan)?;
+                pending.set(reservation)?;
+                prepared_runtimes = Some(runtimes);
+                Ok(())
+            },
         );
-        planned.map(|plan| (plan, pending.take()))
+        let plan = planned?;
+        let prepared_runtimes = prepared_runtimes.ok_or_else(|| {
+            AppError::Internal("scan persistence completed without a prepared runtime".into())
+        })?;
+        Ok::<_, AppError>((plan, pending.take(), prepared_runtimes))
     })
     .await
     .map_err(|_| AppError::Internal("scan preflight worker terminated unexpectedly".into()))??;
     let state = app.state::<AppState>();
-    dispatch_scan_plan(&app, &state, plan.clone(), reservation)?;
+    dispatch_scan_plan(&app, &state, plan.clone(), reservation, prepared_runtimes)?;
     let case = state.case_service().show_case(&case_id)?;
     Ok(case)
 }
@@ -2444,22 +2557,30 @@ pub async fn resume_scan(
     let worker_app = app.clone();
     let worker_case_id = case_id.clone();
     let worker_run_id = run_id.clone();
-    let (plan, reservation) = tauri::async_runtime::spawn_blocking(move || {
+    let (plan, reservation, prepared_runtimes) = tauri::async_runtime::spawn_blocking(move || {
         let state = worker_app.state::<AppState>();
         let mut pending =
             PendingProviderExecutionReservation::new(&state, "resume persistence worker");
+        let mut prepared_runtimes = None;
         let planned =
             state
                 .case_service()
                 .plan_resume_checked(&worker_case_id, &worker_run_id, |plan| {
-                    pending.set(prepare_desktop_resume(&state, plan)?)
+                    let (reservation, runtimes) = prepare_desktop_resume(&state, plan)?;
+                    pending.set(reservation)?;
+                    prepared_runtimes = Some(runtimes);
+                    Ok(())
                 });
-        planned.map(|plan| (plan, pending.take()))
+        let plan = planned?;
+        let prepared_runtimes = prepared_runtimes.ok_or_else(|| {
+            AppError::Internal("resume persistence completed without a prepared runtime set".into())
+        })?;
+        Ok::<_, AppError>((plan, pending.take(), prepared_runtimes))
     })
     .await
     .map_err(|_| AppError::Internal("resume preflight worker terminated unexpectedly".into()))??;
     let state = app.state::<AppState>();
-    dispatch_scan_plan(&app, &state, plan, reservation)?;
+    dispatch_scan_plan(&app, &state, plan, reservation, prepared_runtimes)?;
     state.case_service().show_case(&case_id)
 }
 
@@ -2513,22 +2634,41 @@ pub async fn start_rescan(
     let worker_app = app.clone();
     let worker_case_id = case_id.clone();
     let worker_baseline_run_id = baseline_run_id.clone();
-    let (rescan, reservation) = tauri::async_runtime::spawn_blocking(move || {
-        let state = worker_app.state::<AppState>();
-        let mut pending =
-            PendingProviderExecutionReservation::new(&state, "rescan persistence worker");
-        let planned = state.case_service().plan_rescan_for_execution_checked(
-            &worker_case_id,
-            &worker_baseline_run_id,
-            ScanPlanRequest::default(),
-            |plan| pending.set(prepare_desktop_execution(&state, plan)?),
-        );
-        planned.map(|rescan| (rescan, pending.take()))
-    })
-    .await
-    .map_err(|_| AppError::Internal("rescan preflight worker terminated unexpectedly".into()))??;
+    let (rescan, reservation, prepared_runtimes) =
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = worker_app.state::<AppState>();
+            let mut pending =
+                PendingProviderExecutionReservation::new(&state, "rescan persistence worker");
+            let mut prepared_runtimes = None;
+            let planned = state.case_service().plan_rescan_for_execution_checked(
+                &worker_case_id,
+                &worker_baseline_run_id,
+                ScanPlanRequest::default(),
+                |plan| {
+                    let (reservation, runtimes) = prepare_desktop_execution(&state, plan)?;
+                    pending.set(reservation)?;
+                    prepared_runtimes = Some(runtimes);
+                    Ok(())
+                },
+            );
+            let rescan = planned?;
+            let prepared_runtimes = prepared_runtimes.ok_or_else(|| {
+                AppError::Internal("rescan persistence completed without a prepared runtime".into())
+            })?;
+            Ok::<_, AppError>((rescan, pending.take(), prepared_runtimes))
+        })
+        .await
+        .map_err(|_| {
+            AppError::Internal("rescan preflight worker terminated unexpectedly".into())
+        })??;
     let state = app.state::<AppState>();
-    dispatch_scan_plan(&app, &state, rescan.plan.clone(), reservation)?;
+    dispatch_scan_plan(
+        &app,
+        &state,
+        rescan.plan.clone(),
+        reservation,
+        prepared_runtimes,
+    )?;
     let case = state.case_service().show_case(&case_id)?;
     Ok(case)
 }
@@ -2795,6 +2935,7 @@ fn run_activated_scan_worker(
     app: AppHandle,
     executions: Vec<PlannedEngineExecution>,
     mut pending: OwnedPendingProviderExecutionReservation,
+    prepared_runtimes: PreparedRuntimeSet,
     context: JobContext,
 ) -> JobCompletion {
     let activation = {
@@ -2803,7 +2944,7 @@ fn run_activated_scan_worker(
     };
     match activation {
         JobActivationOutcome::Activated(credentials) => {
-            run_scan_worker(app, executions, credentials, context)
+            run_scan_worker(app, executions, credentials, prepared_runtimes, context)
         }
         JobActivationOutcome::Cancelled => {
             pending.release_now();
@@ -2866,6 +3007,7 @@ fn dispatch_scan_plan(
     state: &State<'_, AppState>,
     plan: ScanPlan,
     reservation: Option<ProviderExecutionReservation>,
+    prepared_runtimes: PreparedRuntimeSet,
 ) -> AppResult<()> {
     let mut pending = owned_provider_execution_reservation(app, reservation);
     let key = match JobKey::new(plan.scan_run.case_id.clone(), plan.scan_run.id.clone()) {
@@ -2888,7 +3030,13 @@ fn dispatch_scan_plan(
         key.clone(),
         engine_run_ids,
         move |context| match activation_receiver.recv() {
-            Ok(pending) => run_activated_scan_worker(worker_app, plan.executable, pending, context),
+            Ok(pending) => run_activated_scan_worker(
+                worker_app,
+                plan.executable,
+                pending,
+                prepared_runtimes,
+                context,
+            ),
             Err(_) => abort_inactive_scan_worker(
                 &worker_app,
                 &plan.executable,
@@ -2960,6 +3108,7 @@ fn run_scan_worker(
     app: AppHandle,
     executions: Vec<PlannedEngineExecution>,
     mut reserved_provider: Option<ReservedProviderExecutionBundle>,
+    prepared_runtimes: PreparedRuntimeSet,
     context: JobContext,
 ) -> JobCompletion {
     let state = app.state::<AppState>();
@@ -2992,33 +3141,26 @@ fn run_scan_worker(
             continue;
         }
 
-        let runtime = match execution.resume_checkpoint.as_ref() {
-            Some(checkpoint) => match (
-                checkpoint.runtime_provider,
-                checkpoint.runtime_command_provenance.as_ref(),
-            ) {
-                (Some(provider), Some(provenance)) => {
-                    state.runtime_for_recorded_execution(provider, provenance)
-                }
-                (None, None) if checkpoint.cleanup_completed => state.runtime_for_execution(),
-                _ => Err(AppError::NotAuthorized(
-                    "resumable execution has incomplete durable runtime provenance".into(),
+        let outcome = match &artifacts {
+            Ok(artifacts) if captured_resume_is_runtime_independent(&execution) => {
+                resume_captured_execution(&state, artifacts, &execution)
+            }
+            Ok(artifacts) => match prepared_runtimes.runtime_for(&execution) {
+                Some(runtime) => execute_planned_engine(
+                    &app,
+                    &state,
+                    runtime,
+                    artifacts,
+                    &execution,
+                    reserved_provider.as_mut(),
+                    &control.cancellation_token(),
+                    &context,
+                ),
+                None => Err(AppError::Internal(
+                    "scan worker received no runtime matching its pre-persistence proof".into(),
                 )),
             },
-            None => state.runtime_for_execution(),
-        };
-        let outcome = match (&artifacts, &runtime) {
-            (Ok(artifacts), Ok(runtime)) => execute_planned_engine(
-                &app,
-                &state,
-                runtime,
-                artifacts,
-                &execution,
-                reserved_provider.as_mut(),
-                &control.cancellation_token(),
-                &context,
-            ),
-            (Err(error), _) | (_, Err(error)) => Err(AppError::Runtime(error.to_string())),
+            Err(error) => Err(AppError::Runtime(error.to_string())),
         };
 
         match outcome {
@@ -3174,8 +3316,7 @@ fn execute_planned_engine(
             merge_reconciled_managed_cleanup(&mut reconciled_cleanup, managed);
         }
         if checkpoint.resume_action() == ResumeAction::AdaptCapturedArtifacts {
-            let mut durable =
-                resume_captured_execution(state, runtime, artifacts, execution, checkpoint)?;
+            let mut durable = resume_captured_execution(state, artifacts, execution)?;
             if let Some(outcome) = reconciled_cleanup.as_ref() {
                 merge_managed_cleanup(&mut durable.cleanup, outcome);
             }
@@ -3307,16 +3448,12 @@ fn execute_planned_engine(
                 report.cleanup = durable_cleanup;
             }
             Err(error) => {
-                report.checkpoint.stage = ExecutionStage::CleanupPending;
-                report.checkpoint.cleanup_completed = false;
-                report.checkpoint.last_error = Some(bounded_text(&error.to_string(), 2_000));
-                report.cleanup = Some(CleanupOutcome {
-                    removed: false,
-                    detail: bounded_text(&error.to_string(), 2_000),
-                });
-                report.warnings.push(
-                    "The isolated external network or gateway did not confirm complete cleanup; no successful result is claimed."
-                        .into(),
+                record_managed_cleanup_failure(
+                    &mut report.checkpoint,
+                    &mut report.cleanup,
+                    &mut report.warnings,
+                    &error.to_string(),
+                    "The isolated external network or gateway did not confirm complete cleanup; no successful result is claimed.",
                 );
             }
         }
@@ -3360,11 +3497,12 @@ fn cleanup_resume_container(
 
 fn resume_captured_execution(
     state: &AppState,
-    runtime: &ProcessContainerRuntime,
     artifacts: &ArtifactStore,
     execution: &PlannedEngineExecution,
-    checkpoint: &ExecutionCheckpoint,
 ) -> AppResult<DurableExecutionReport> {
+    let checkpoint = execution.resume_checkpoint.as_ref().ok_or_else(|| {
+        AppError::InvalidRequest("captured-artifact resume has no durable checkpoint".into())
+    })?;
     let raw_artifacts = captured_execution_artifacts(state, execution, checkpoint)?;
     // Repeat the exact read-only check in the worker so a file changed after
     // the pre-persistence inspection cannot be normalized (TOCTOU defense).
@@ -3391,7 +3529,6 @@ fn resume_captured_execution(
         artifact_root: artifacts.root().to_path_buf(),
         output_directory: directories.output,
     };
-    let orchestrator = Orchestrator::new(runtime, artifacts, &state.adapters);
     let limits = ResourceLimits {
         memory_mb: execution.manifest.estimated_memory_mb.clamp(128, 262_144),
         ..ResourceLimits::default()
@@ -3413,7 +3550,7 @@ fn resume_captured_execution(
         credentials: &credentials,
         attempt: checkpoint.attempt,
     };
-    let report = orchestrator.resume_captured(&request, &previous)?;
+    let report = resume_captured_artifacts(&state.adapters, &request, &previous)?;
     Ok(DurableExecutionReport::from(&report))
 }
 
@@ -4575,6 +4712,50 @@ fn bounded_text(value: &str, maximum: usize) -> String {
     value.chars().take(maximum).collect()
 }
 
+fn managed_cleanup_pending_error(prior_error: Option<&str>, cleanup_error: &str) -> String {
+    const MAX_ERROR_CHARS: usize = 2_000;
+    const MAX_CLEANUP_CONTEXT_CHARS: usize = 512;
+
+    let cleanup_error = cleanup_error.trim();
+    let cleanup_error = if cleanup_error.is_empty() {
+        "managed egress cleanup failed without an error detail"
+    } else {
+        cleanup_error
+    };
+    match prior_error.map(str::trim).filter(|error| !error.is_empty()) {
+        Some(primary) => {
+            let prefix = "; managed egress cleanup also failed: ";
+            let detail_budget = MAX_CLEANUP_CONTEXT_CHARS.saturating_sub(prefix.chars().count());
+            let suffix = format!("{prefix}{}", bounded_text(cleanup_error, detail_budget));
+            let primary_budget = MAX_ERROR_CHARS.saturating_sub(suffix.chars().count());
+            format!("{}{}", bounded_text(primary, primary_budget), suffix)
+        }
+        None => bounded_text(
+            &format!("managed egress cleanup failed: {cleanup_error}"),
+            MAX_CLEANUP_CONTEXT_CHARS,
+        ),
+    }
+}
+
+fn record_managed_cleanup_failure(
+    checkpoint: &mut ExecutionCheckpoint,
+    cleanup: &mut Option<CleanupOutcome>,
+    warnings: &mut Vec<String>,
+    cleanup_error: &str,
+    warning: &str,
+) {
+    let retained_error =
+        managed_cleanup_pending_error(checkpoint.last_error.as_deref(), cleanup_error);
+    checkpoint.stage = ExecutionStage::CleanupPending;
+    checkpoint.cleanup_completed = false;
+    checkpoint.last_error = Some(retained_error);
+    *cleanup = Some(CleanupOutcome {
+        removed: false,
+        detail: bounded_text(cleanup_error, 2_000),
+    });
+    warnings.push(warning.into());
+}
+
 fn terminal_after_prestart_error(
     execution: &PlannedEngineExecution,
     error: &AppError,
@@ -4598,14 +4779,12 @@ fn terminal_after_prestart_error(
                 durable.checkpoint.cleanup_completed = true;
             }
             Err(cleanup_error) => {
-                durable.checkpoint.stage = ExecutionStage::CleanupPending;
-                durable.checkpoint.cleanup_completed = false;
-                durable.cleanup = Some(CleanupOutcome {
-                    removed: false,
-                    detail: bounded_text(&cleanup_error.to_string(), 2_000),
-                });
-                durable.warnings.push(
-                    "The scanner did not start, but managed egress cleanup remains pending.".into(),
+                record_managed_cleanup_failure(
+                    &mut durable.checkpoint,
+                    &mut durable.cleanup,
+                    &mut durable.warnings,
+                    &cleanup_error.to_string(),
+                    "The scanner did not start, but managed egress cleanup remains pending.",
                 );
             }
         }
@@ -4748,12 +4927,34 @@ fn persist_terminal_job_reconciliation(
             ExecutionStage::Failed
         };
         checkpoint.stage = stage;
+        let terminal_context = match snapshot.failure_kind {
+            Some(_) => "background scan worker stopped before a durable terminal report",
+            None => "scan worker ended before this engine reached a durable terminal state",
+        };
         checkpoint.last_error = Some(
-            match snapshot.failure_kind {
-                Some(_) => "background scan worker stopped before a durable terminal report",
-                None => "scan worker ended before this engine reached a durable terminal state",
-            }
-            .into(),
+            match checkpoint
+                .last_error
+                .as_deref()
+                .filter(|message| !message.trim().is_empty())
+                .or_else(|| {
+                    engine_run
+                        .error_message
+                        .as_deref()
+                        .filter(|message| !message.trim().is_empty())
+                }) {
+                Some(actionable) => {
+                    // Resume planning changes the presentation state to queued but
+                    // deliberately retains the prior checkpoint. If the new worker
+                    // stops before producing a newer report, keep that actionable
+                    // cause and add worker context instead of replacing it with a
+                    // generic handoff failure. Reserve space for the suffix so the
+                    // new token differs and can restore the checkpoint projection.
+                    let suffix = format!("; {terminal_context}");
+                    let retained = 2_000_usize.saturating_sub(suffix.chars().count());
+                    format!("{}{}", bounded_text(actionable, retained), suffix)
+                }
+                None => terminal_context.into(),
+            },
         );
         let raw_artifacts = checkpoint
             .artifact_ids
@@ -4841,6 +5042,75 @@ mod tests {
         assert_eq!(value["eventType"], RUN_PROGRESS_EVENT);
         assert_eq!(value["occurredAt"], "2026-08-24T12:00:00Z");
         assert_eq!(value["payload"]["case_id"], "case-1");
+    }
+
+    #[test]
+    fn managed_egress_cleanup_failure_preserves_existing_error_and_cleanup_identity() {
+        let identity = crate::managed_network::ManagedNetworkIdentity {
+            schema_version: "1.0.0".into(),
+            provider: RuntimeProvider::Docker,
+            network_name: "ass-egress-test".into(),
+            network_id: "network-id".into(),
+            uplink_network_name: None,
+            uplink_network_id: None,
+            gateway_container_name: None,
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: None,
+            gateway_image_digest: None,
+            policy_id: "egress-test".into(),
+            policy_sha256: "a".repeat(64),
+            expires_at: Utc::now(),
+            provenance: crate::managed_network::EgressGatewayProvenance::ReleaseQualification {
+                case_id: "case-1".into(),
+                qualification_id: "qualification-1".into(),
+            },
+        };
+        let mut checkpoint = ExecutionCheckpoint {
+            case_id: "case-1".into(),
+            scan_run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            engine_id: "scanner".into(),
+            attempt: 1,
+            stage: ExecutionStage::Failed,
+            container_name: Some("ass-scanner-engine-run-1-a1".into()),
+            scope_sha256: Some("b".repeat(64)),
+            artifact_ids: vec!["artifact-1".into()],
+            cleanup_completed: true,
+            last_error: Some("adapter rejected the captured result".into()),
+            runtime_command_provenance: Some(RuntimeCommandProvenance::Compatibility),
+            runtime_provider: Some(RuntimeProvider::Docker),
+            managed_network: Some(identity.clone()),
+        };
+        let mut cleanup = None;
+        let mut warnings = Vec::new();
+        let cleanup_error = format!("gateway cleanup marker: {}", "x".repeat(3_000));
+
+        record_managed_cleanup_failure(
+            &mut checkpoint,
+            &mut cleanup,
+            &mut warnings,
+            &cleanup_error,
+            "managed cleanup remains pending",
+        );
+
+        assert_eq!(checkpoint.stage, ExecutionStage::CleanupPending);
+        assert!(!checkpoint.cleanup_completed);
+        assert_eq!(checkpoint.managed_network, Some(identity));
+        assert_eq!(
+            checkpoint.container_name.as_deref(),
+            Some("ass-scanner-engine-run-1-a1")
+        );
+        let retained = checkpoint.last_error.as_deref().unwrap();
+        assert!(retained.starts_with("adapter rejected the captured result"));
+        assert!(retained.contains("managed egress cleanup also failed"));
+        assert!(retained.contains("gateway cleanup marker"));
+        assert!(retained.chars().count() <= 2_000);
+        let cleanup = cleanup.expect("cleanup outcome");
+        assert!(!cleanup.removed);
+        assert!(cleanup.detail.starts_with("gateway cleanup marker"));
+        assert_eq!(cleanup.detail.chars().count(), 2_000);
+        assert_eq!(warnings, vec!["managed cleanup remains pending".to_owned()]);
     }
 
     #[test]
@@ -5732,6 +6002,35 @@ mod tests {
     }
 
     #[test]
+    fn prepared_fresh_runtime_is_reused_for_every_engine_in_the_scan_plan() {
+        let (_directory, state, case_id) = ready_repository_state();
+        let plan = state
+            .case_service()
+            .plan_scan(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into(), "semgrep".into()],
+                },
+            )
+            .unwrap();
+        let prepared = PreparedRuntimeSet::with_fresh(ProcessContainerRuntime::new(
+            RuntimeProvider::Docker,
+            "prepared-runtime",
+        ));
+
+        assert_eq!(plan.executable.len(), 2);
+        for execution in &plan.executable {
+            let runtime = prepared
+                .runtime_for(execution)
+                .expect("fresh execution reuses its preflighted runtime");
+            assert_eq!(
+                runtime.command_context().binary(),
+                Path::new("prepared-runtime")
+            );
+        }
+    }
+
+    #[test]
     fn pause_then_cancel_before_activation_never_commits_provider_capacity() {
         let issued_at = Utc::now();
         let (_directory, state, case_id, _source_id) = ready_aws_state(issued_at, 1);
@@ -5883,6 +6182,118 @@ mod tests {
     }
 
     #[test]
+    fn failed_resume_reconciliation_preserves_cleanup_identity_and_actionable_error() {
+        let (_directory, state, case_id) = ready_repository_state();
+        let service = state.case_service();
+        let plan = service
+            .plan_scan_for_execution_checked(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        let execution = plan.executable.first().unwrap();
+        let mut stored = service.show_case(&case_id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        let container_name = crate::container_runtime::planned_container_name(
+            &checkpoint.engine_id,
+            &checkpoint.engine_run_id,
+            checkpoint.attempt,
+        )
+        .unwrap();
+        checkpoint.stage = ExecutionStage::CleanupPending;
+        checkpoint.container_name = Some(container_name.clone());
+        checkpoint.scope_sha256 = Some("a".repeat(64));
+        checkpoint.cleanup_completed = false;
+        checkpoint.last_error = Some(
+            "operation is not authorized: container image does not match the persisted pinned image"
+                .into(),
+        );
+        checkpoint.runtime_command_provenance = Some(RuntimeCommandProvenance::Compatibility);
+        checkpoint.runtime_provider = Some(RuntimeProvider::Podman);
+        engine_run.status = EngineRunStatus::PartiallyCompleted;
+        engine_run.phase = "cleanup_pending".into();
+        engine_run.progress_percent = 95;
+        engine_run.finished_at = Some(Utc::now());
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine_run.cleanup_removed = Some(false);
+        engine_run.cleanup_detail = Some("exact container cleanup is still required".into());
+        engine_run.error_code = Some("execution_failed".into());
+        engine_run.error_message = checkpoint.last_error.clone();
+        run.completed_at = Some(Utc::now());
+        stored.status = CaseStatus::NeedsAttention;
+        state
+            .storage
+            .save_case(&mut stored, "test.cleanup_pending_before_resume")
+            .unwrap();
+
+        let resumed = service.plan_resume(&case_id, &plan.scan_run.id).unwrap();
+        let resumed_execution = resumed.executable.first().unwrap();
+        assert_eq!(resumed_execution.attempt, 2);
+        let key = JobKey::new(&case_id, &plan.scan_run.id).unwrap();
+        let snapshot = JobSnapshot {
+            key: key.clone(),
+            status: crate::job_manager::JobStatus::Failed,
+            engines: vec![crate::job_manager::EngineJobSnapshot {
+                engine_id: execution.engine_run_id.clone(),
+                status: EngineJobStatus::Failed,
+            }],
+            failure_kind: Some(crate::job_manager::JobFailureKind::WorkerPanicked),
+        };
+
+        let reconciled = persist_terminal_job_reconciliation(&state, &key, &snapshot).unwrap();
+        let run = reconciled
+            .scan_runs
+            .iter()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap();
+        assert_eq!(engine_run.status, EngineRunStatus::PartiallyCompleted);
+        assert_eq!(engine_run.phase, "cleanup_pending");
+        assert_eq!(engine_run.progress_percent, 95);
+        assert_eq!(engine_run.cleanup_removed, Some(false));
+        assert_eq!(
+            engine_run.cleanup_detail.as_deref(),
+            Some("exact container cleanup is still required")
+        );
+        let message = engine_run.error_message.as_deref().unwrap();
+        assert!(message.contains("container image does not match the persisted pinned image"));
+        assert!(message.contains("background scan worker stopped"));
+        assert_ne!(
+            message,
+            "background scan worker stopped before a durable terminal report"
+        );
+        let retained =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(retained.stage, ExecutionStage::CleanupPending);
+        assert_eq!(
+            retained.container_name.as_deref(),
+            Some(container_name.as_str())
+        );
+        assert!(!retained.cleanup_completed);
+        assert!(run.completed_at.is_some());
+    }
+
+    #[test]
     fn captured_cloud_resume_skips_provider_demand_but_reexecution_does_not() {
         let issued_at = Utc::now();
         let (_directory, state, case_id, source_id) = ready_aws_state(issued_at, 4);
@@ -6025,16 +6436,40 @@ mod tests {
             resumed_checkpoint.resume_action(),
             ResumeAction::AdaptCapturedArtifacts
         );
+        assert!(captured_resume_is_runtime_independent(resumed_execution));
+        let mut retained_network_execution = resumed_execution.clone();
+        let retained_checkpoint = retained_network_execution
+            .resume_checkpoint
+            .as_mut()
+            .unwrap();
+        let policy_unique = "d".repeat(32);
+        retained_checkpoint.managed_network =
+            Some(crate::managed_network::ManagedNetworkIdentity {
+                schema_version: "1.0.0".into(),
+                provider: RuntimeProvider::Docker,
+                network_name: format!("ass-egress-{policy_unique}"),
+                network_id: "historical-network-id".into(),
+                uplink_network_name: None,
+                uplink_network_id: None,
+                gateway_container_name: None,
+                gateway_container_id: None,
+                gateway_listener_ip: None,
+                gateway_image_repository: None,
+                gateway_image_digest: None,
+                policy_id: format!("egress-{policy_unique}"),
+                policy_sha256: "e".repeat(64),
+                expires_at: Utc::now(),
+                provenance: crate::managed_network::EgressGatewayProvenance::ReleaseQualification {
+                    case_id: case_id.clone(),
+                    qualification_id: "historical-cleanup-proof".into(),
+                },
+            });
+        retained_checkpoint.resume_token().unwrap();
+        assert!(captured_resume_is_runtime_independent(
+            &retained_network_execution
+        ));
 
-        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, "unused-runtime");
-        let report = resume_captured_execution(
-            &state,
-            &runtime,
-            &artifacts,
-            resumed_execution,
-            resumed_checkpoint,
-        )
-        .unwrap();
+        let report = resume_captured_execution(&state, &artifacts, resumed_execution).unwrap();
         assert!(matches!(
             report.checkpoint.stage,
             ExecutionStage::Completed | ExecutionStage::CapturedAwaitingAdapter

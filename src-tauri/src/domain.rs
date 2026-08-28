@@ -388,6 +388,23 @@ pub struct EngineWrapper {
     pub entrypoint: Option<String>,
 }
 
+pub const MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS: u64 = 30;
+pub const MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS: u64 = 86_400;
+pub const DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS: u64 = 3_600;
+
+/// The host-enforced portion of the reviewed engine execution contract.
+/// Older saved cases predate this field, so `EngineManifest::execution` is
+/// optional while the built-in release catalog is required to provide it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EngineExecutionContract {
+    pub resources: EngineExecutionResources,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EngineExecutionResources {
+    pub timeout_seconds: u64,
+}
+
 impl Default for EngineCompatibility {
     fn default() -> Self {
         Self {
@@ -461,6 +478,8 @@ pub struct EngineManifest {
     pub status: ManifestStatus,
     pub notices: Vec<String>,
     pub compatibility: EngineCompatibility,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<EngineExecutionContract>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -486,6 +505,27 @@ pub struct ProviderExecutionContract {
 }
 
 impl EngineManifest {
+    pub fn execution_timeout_seconds(&self) -> u64 {
+        self.execution
+            .as_ref()
+            .map(|execution| execution.resources.timeout_seconds)
+            .unwrap_or(DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS)
+    }
+
+    /// Whether the supplied grants contain every permission declared by this
+    /// release. `active_external` describes execution behavior; it does not
+    /// silently add `ActiveExternalTesting` to the manifest's explicit
+    /// permission contract.
+    pub fn required_permissions_satisfied_by<'a>(
+        &self,
+        permissions: impl IntoIterator<Item = &'a ScanPermission>,
+    ) -> bool {
+        let permissions = permissions.into_iter().collect::<Vec<_>>();
+        self.required_permissions
+            .iter()
+            .all(|required| permissions.iter().any(|permission| *permission == required))
+    }
+
     /// Empty means provider-agnostic. Provider-bound releases require an exact
     /// provider identity on the asset; missing or differently cased values are
     /// not inferred from asset kind, source kind, or upstream capabilities.
@@ -598,6 +638,11 @@ pub struct EngineRun {
     pub image_repository: Option<String>,
     #[serde(default)]
     pub command_sha256: Option<String>,
+    /// Exact host-side active execution deadline frozen when the run was
+    /// planned. Missing values identify legacy runs that used the historical
+    /// default deadline.
+    #[serde(default)]
+    pub execution_timeout_seconds: Option<u64>,
     #[serde(default)]
     pub knowledge_input: Option<EngineKnowledgeInput>,
     /// SHA-256 of the canonical, execution-relevant asset, target, permission,
@@ -1067,6 +1112,11 @@ pub struct CaseSummary {
     #[serde(default)]
     pub assessment_intent: Option<AssessmentIntent>,
     pub source_kinds: Vec<SourceKind>,
+    /// Source areas that are part of this case, excluding questionnaire-only
+    /// `not_applicable` placeholders. Kept separate from `source_kinds` so
+    /// existing API consumers retain the complete coverage-coordinate list.
+    #[serde(default)]
+    pub applicable_source_kinds: Vec<SourceKind>,
     pub notes: Option<String>,
     pub status: CaseStatus,
     pub created_at: DateTime<Utc>,
@@ -1080,9 +1130,15 @@ pub struct CaseSummary {
 impl From<&AssessmentCase> for CaseSummary {
     fn from(value: &AssessmentCase) -> Self {
         let mut source_kinds = Vec::new();
+        let mut applicable_source_kinds = Vec::new();
         for source in &value.data_sources {
             if !source_kinds.contains(&source.kind) {
                 source_kinds.push(source.kind.clone());
+            }
+            if source.status != SourceConnectionStatus::NotApplicable
+                && !applicable_source_kinds.contains(&source.kind)
+            {
+                applicable_source_kinds.push(source.kind.clone());
             }
         }
         Self {
@@ -1094,6 +1150,7 @@ impl From<&AssessmentCase> for CaseSummary {
             requested_activities: value.requested_activities.clone(),
             assessment_intent: value.assessment_intent.clone(),
             source_kinds,
+            applicable_source_kinds,
             notes: value.profile.notes.clone(),
             status: value.status.clone(),
             created_at: value.created_at,
@@ -1341,6 +1398,26 @@ mod tests {
                 read_only: true,
                 metadata: BTreeMap::new(),
             },
+            DataSource {
+                id: "source-3".into(),
+                kind: SourceKind::AwsOrganization,
+                label: "AWS not used".into(),
+                status: SourceConnectionStatus::NotApplicable,
+                connected_at: None,
+                last_discovered_at: None,
+                read_only: true,
+                metadata: BTreeMap::new(),
+            },
+            DataSource {
+                id: "source-4".into(),
+                kind: SourceKind::KubernetesCluster,
+                label: "Kubernetes snapshot".into(),
+                status: SourceConnectionStatus::Connected,
+                connected_at: Some(Utc::now()),
+                last_discovered_at: None,
+                read_only: true,
+                metadata: BTreeMap::new(),
+            },
         ];
         let now = Utc::now();
         for (id, sequence) in [("newer", 2), ("older-vector-tail", 1)] {
@@ -1365,7 +1442,18 @@ mod tests {
             summary.requested_activities,
             [AssessmentActivity::LocalArtifactAnalysis]
         );
-        assert_eq!(summary.source_kinds, [SourceKind::GitRepository]);
+        assert_eq!(
+            summary.source_kinds,
+            [
+                SourceKind::GitRepository,
+                SourceKind::AwsOrganization,
+                SourceKind::KubernetesCluster,
+            ]
+        );
+        assert_eq!(
+            summary.applicable_source_kinds,
+            [SourceKind::GitRepository, SourceKind::KubernetesCluster]
+        );
         assert_eq!(summary.notes.as_deref(), Some("Local note"));
         assert_eq!(summary.created_at, case.created_at);
         assert_eq!(summary.latest_run_id.as_deref(), Some("newer"));

@@ -1,6 +1,97 @@
 import type { KnownAssetInput } from "./types";
 import type { UseCaseId } from "./useCases";
 
+const parseIpv4 = (value: string): [number, number, number, number] | undefined => {
+  const parts = value.split(".");
+  if (parts.length !== 4) return undefined;
+  const octets = parts.map(Number);
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return undefined;
+  return octets as [number, number, number, number];
+};
+
+const sensitiveIpv4 = ([first, second]: [number, number, number, number]): boolean =>
+  first === 10
+  || first === 127
+  || (first === 169 && second === 254)
+  || (first === 172 && second >= 16 && second <= 31)
+  || (first === 192 && second === 168)
+  || (first === 100 && second >= 64 && second <= 127)
+  || (first === 198 && (second === 18 || second === 19))
+  || first === 0
+  || first >= 224;
+
+const parseIpv6 = (input: string): number[] | undefined => {
+  let value = input.toLocaleLowerCase("en-US");
+  if (value.startsWith("[") && value.endsWith("]")) value = value.slice(1, -1);
+  if (!value.includes(":") || value.includes("%")) return undefined;
+
+  if (value.includes(".")) {
+    const separator = value.lastIndexOf(":");
+    const ipv4 = parseIpv4(value.slice(separator + 1));
+    if (separator < 0 || !ipv4) return undefined;
+    value = `${value.slice(0, separator)}:${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
+  }
+
+  const halves = value.split("::");
+  if (halves.length > 2) return undefined;
+  const parseHalf = (half: string): number[] | undefined => {
+    if (!half) return [];
+    const segments = half.split(":");
+    if (segments.some((segment) => !/^[0-9a-f]{1,4}$/u.test(segment))) return undefined;
+    return segments.map((segment) => Number.parseInt(segment, 16));
+  };
+  const left = parseHalf(halves[0] ?? "");
+  const right = parseHalf(halves[1] ?? "");
+  if (!left || !right) return undefined;
+  if (halves.length === 1) return left.length === 8 ? left : undefined;
+  const omitted = 8 - left.length - right.length;
+  if (omitted < 1) return undefined;
+  return [...left, ...Array<number>(omitted).fill(0), ...right];
+};
+
+const sensitiveIpv6 = (segments: number[]): boolean => {
+  if (segments.length !== 8) return false;
+  const unspecified = segments.every((segment) => segment === 0);
+  const loopback = segments.slice(0, 7).every((segment) => segment === 0) && segments[7] === 1;
+  const first = segments[0] ?? 0;
+  const uniqueLocal = (first & 0xfe00) === 0xfc00;
+  const linkLocal = (first & 0xffc0) === 0xfe80;
+  const multicast = (first & 0xff00) === 0xff00;
+  const mappedIpv4 = segments.slice(0, 5).every((segment) => segment === 0)
+    && segments[5] === 0xffff
+    ? [
+        (segments[6] ?? 0) >> 8,
+        (segments[6] ?? 0) & 0xff,
+        (segments[7] ?? 0) >> 8,
+        (segments[7] ?? 0) & 0xff,
+      ] as [number, number, number, number]
+    : undefined;
+  return unspecified
+    || loopback
+    || uniqueLocal
+    || linkLocal
+    || multicast
+    || Boolean(mappedIpv4 && sensitiveIpv4(mappedIpv4));
+};
+
+/** Classifies only explicit coordinates whose sensitive nature is known without DNS. */
+export const explicitTargetRequiresSensitiveNetworkAllowance = (target: string): boolean => {
+  let value = target.trim().replace(/\.$/u, "").toLocaleLowerCase("en-US");
+  const cidrSeparator = value.lastIndexOf("/");
+  if (cidrSeparator >= 0) {
+    const address = value.slice(0, cidrSeparator);
+    const prefix = Number(value.slice(cidrSeparator + 1));
+    const maximumPrefix = address.includes(":") ? 128 : 32;
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > maximumPrefix) return false;
+    value = address;
+  }
+  if (value === "localhost" || value.endsWith(".localhost")) return true;
+  const ipv4 = parseIpv4(value);
+  if (ipv4) return sensitiveIpv4(ipv4);
+  const ipv6 = parseIpv6(value);
+  return Boolean(ipv6 && sensitiveIpv6(ipv6));
+};
+
 export type WebsiteInputError =
   | "empty"
   | "too_long"
@@ -129,7 +220,9 @@ export const buildKnownAssets = (draft: CaseAssetDraft): BuildKnownAssetsResult 
     knownAssets.push({
       kind: "external_target",
       value: prepared.value.target,
-      internetExposure: "public",
+      internetExposure: explicitTargetRequiresSensitiveNetworkAllowance(prepared.value.target)
+        ? "internal"
+        : "public",
       webService: {
         protocol: prepared.value.service.protocol,
         port: prepared.value.service.port,

@@ -206,7 +206,7 @@ func TestStaticInvocationsCarryEveryFrozenLimit(t *testing.T) {
 	joined = " " + strings.Join(naabu.Args, " ") + " "
 	for _, exact := range []string{
 		" -host 192.0.2.10 ", " -port 443,8443 ", " -scan-type c ",
-		" -proxy 172.30.0.1:1080 ", " -rate 2 ", " -c 2 ", " -timeout 30s ",
+		" -proxy 172.30.0.1:1080 ", " -rate 4 ", " -c 2 ", " -timeout 30s ",
 	} {
 		if !strings.Contains(joined, exact) {
 			t.Fatalf("Naabu invocation lacks %q: %s", exact, joined)
@@ -215,6 +215,69 @@ func TestStaticInvocationsCarryEveryFrozenLimit(t *testing.T) {
 	if strings.Contains(joined, " -dns-order ") || strings.Contains(joined, "a.example.test") {
 		t.Fatalf("Naabu invocation retained a second DNS lookup path: %s", joined)
 	}
+}
+
+func TestNaabuProxyRateNeverFallsToZeroOrExceedsGrant(t *testing.T) {
+	for _, fixture := range []struct {
+		policy     ratePolicy
+		configured int
+		effective  int
+	}{
+		{ratePolicy{RequestsPerSecond: 1, Concurrency: 1, TimeoutSeconds: 60}, 2, 1},
+		{ratePolicy{RequestsPerSecond: 25, Concurrency: 10, TimeoutSeconds: 60}, 20, 10},
+		{ratePolicy{RequestsPerSecond: 2, Concurrency: 1, TimeoutSeconds: 60}, 2, 1},
+	} {
+		unit := scanUnit{Grant: externalScope{
+			Ports: []uint16{9001}, ExpiresAt: time.Now().UTC().Add(time.Hour),
+			RatePolicy: fixture.policy,
+		}}
+		plan := naabuInvocation(unit, "172.30.0.1:1080", "/tmp/out", nil)
+		configured, ok := argumentValue(plan.Args, "-rate")
+		if !ok || configured != strconv.Itoa(fixture.configured) {
+			t.Fatalf("unexpected Naabu proxy rate: got %q want %d", configured, fixture.configured)
+		}
+		// Pinned Naabu applies RateLimitWithProxy(rate) == rate / 2.
+		effective := fixture.configured / naabuProxyRateDivisor
+		if effective != fixture.effective || effective < 1 || effective > int(fixture.policy.RequestsPerSecond) || effective > int(fixture.policy.Concurrency) {
+			t.Fatalf("effective proxy rate escaped its grant: %d for %#v", effective, fixture.policy)
+		}
+	}
+}
+
+func TestNaabuTotalDeadlineCoversTheBoundedPortWorkload(t *testing.T) {
+	policy := ratePolicy{RequestsPerSecond: 1, Concurrency: 1, TimeoutSeconds: 60}
+	ports := []uint16{21, 22, 25, 53, 80, 110, 139, 143, 443, 445, 465, 587, 993, 995, 3389, 8080, 8443}
+	unit := scanUnit{Grant: externalScope{
+		Ports: ports, ExpiresAt: time.Now().UTC().Add(time.Hour), RatePolicy: policy,
+	}}
+	plan := naabuInvocation(unit, "172.30.0.1:1080", "/tmp/out", nil)
+	want := 17*60*time.Second + 17*time.Second + naabuProcessAllowance
+	if plan.Timeout != want {
+		t.Fatalf("Naabu total deadline does not cover every frozen port attempt: got %s want %s", plan.Timeout, want)
+	}
+	if plan.Timeout <= time.Duration(policy.TimeoutSeconds)*time.Second {
+		t.Fatal("Naabu reused its per-connect timeout as the total child deadline")
+	}
+}
+
+func TestNaabuSinglePortEndpointKeepsASeparateTotalDeadline(t *testing.T) {
+	policy := ratePolicy{RequestsPerSecond: 1, Concurrency: 1, TimeoutSeconds: 60}
+	unit := scanUnit{Grant: externalScope{
+		Ports: []uint16{9001}, ExpiresAt: time.Now().UTC().Add(time.Hour), RatePolicy: policy,
+	}}
+	plan := naabuInvocation(unit, "172.30.0.1:1080", "/tmp/out", nil)
+	if plan.Timeout != 66*time.Second {
+		t.Fatalf("single-port endpoint total deadline lost its fixed process allowance: %s", plan.Timeout)
+	}
+}
+
+func argumentValue(arguments []string, flag string) (string, bool) {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == flag {
+			return arguments[index+1], true
+		}
+	}
+	return "", false
 }
 
 func TestManagedProxyRequiresExactBridgeSocksEndpoint(t *testing.T) {

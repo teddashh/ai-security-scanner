@@ -29,6 +29,12 @@ const copy = {
     restart: "If Microsoft’s WSL setup asks for a restart, reopen ai-security-scanner afterward and preparation will continue automatically.",
     openingTitle: "Opening ai-security-scanner",
     openingDescription: "Checking the scan tools already installed on this computer.",
+    externalActionTitle: "Finish one Windows setup step",
+    externalActionDescription: "The app found one Windows step that must be completed outside ai-security-scanner. Follow the action below, then check again.",
+    stoppedTitle: "Scan-tool setup stopped",
+    stoppedDescription: "Automatic setup could not finish. Try setup again below; your scan projects are unchanged.",
+    pausedTitle: "Scan-tool setup paused",
+    pausedDescription: "The completed part of the download was kept. Continue setup below whenever you are ready.",
     language: "Language",
     english: "English",
     chinese: "Traditional Chinese",
@@ -44,6 +50,12 @@ const copy = {
     restart: "如果 Microsoft 的 WSL 設定要求重新開機，再打開 ai-security-scanner 就會自動接著完成。",
     openingTitle: "正在開啟 ai-security-scanner",
     openingDescription: "正在確認這台電腦已安裝的掃描工具。",
+    externalActionTitle: "完成一個 Windows 設定步驟",
+    externalActionDescription: "程式找到一個必須在 ai-security-scanner 外完成的 Windows 步驟。請照下方操作完成，再重新檢查。",
+    stoppedTitle: "掃描工具設定已停止",
+    stoppedDescription: "自動設定未能完成。請在下方再試一次；你的掃描專案沒有變更。",
+    pausedTitle: "掃描工具設定已暫停",
+    pausedDescription: "已完成的下載進度已保留；準備好時可在下方繼續設定。",
     language: "語言",
     english: "英文",
     chinese: "繁體中文",
@@ -63,10 +75,31 @@ export function RuntimeFirstLaunch({
 }: RuntimeFirstLaunchProps) {
   const text = copy[locale];
   const checkingInstalledState = runtime === undefined;
+  const needsExternalAction = status?.phase === "failed" && status.nextAction !== undefined;
+  const setupStopped = status?.phase === "failed" && !status.nextAction;
+  const setupPaused = status?.phase === "cancelled";
   const waitingForAutomaticCheck = !statusLoaded
     || busy
     || status?.active === true
     || (!automaticAttemptFailed && (!status || status.phase === "idle"));
+  const introTitle = checkingInstalledState
+    ? text.openingTitle
+    : setupStopped
+      ? text.stoppedTitle
+      : needsExternalAction
+        ? text.externalActionTitle
+        : setupPaused
+          ? text.pausedTitle
+          : text.title;
+  const introDescription = checkingInstalledState
+    ? text.openingDescription
+    : setupStopped
+      ? text.stoppedDescription
+      : needsExternalAction
+        ? text.externalActionDescription
+        : setupPaused
+          ? text.pausedDescription
+          : text.description;
 
   return (
     <main className="runtime-first-launch">
@@ -97,9 +130,9 @@ export function RuntimeFirstLaunch({
         <section className="runtime-first-launch__intro" aria-labelledby="runtime-first-launch-title">
           {!checkingInstalledState && <p className="eyebrow">{text.eyebrow}</p>}
           <h1 id="runtime-first-launch-title">
-            {checkingInstalledState ? text.openingTitle : text.title}
+            {introTitle}
           </h1>
-          <p>{checkingInstalledState ? text.openingDescription : text.description}</p>
+          <p>{introDescription}</p>
         </section>
 
         {waitingForAutomaticCheck ? (

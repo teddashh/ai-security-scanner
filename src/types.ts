@@ -375,9 +375,13 @@ export interface CoverageRecord {
   platform: CloudPlatform;
   sourceKind: SourceKind;
   state: CoverageState;
+  /** Present for asset-level coverage rows. */
+  assetId?: string;
   assetCount: number;
   detail: string;
   lastCheckedAt?: string;
+  /** False means permission is saved but no scan plan has included this asset yet. */
+  scanAttempted?: boolean;
 }
 
 export interface ConnectedSource {
@@ -438,6 +442,8 @@ export interface Asset {
   allowedModes: ScopeMode[];
   findingCount: number;
   lastObservedAt?: string;
+  /** False means permission is saved but no scan plan has included this asset yet. */
+  scanAttempted?: boolean;
   tags?: string[];
   /** True only for a local item named in the questionnaire but not attached yet. */
   questionnairePlaceholder?: boolean;

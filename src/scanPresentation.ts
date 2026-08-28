@@ -130,6 +130,10 @@ const nextStepCopy = {
     en: "These checks are not available in this version. Review completed results and update the app before trying again.",
     zhTW: "這些檢查在目前版本無法使用；請先查看已完成的結果，更新程式後再試。",
   },
+  releaseIncompatible: {
+    en: "Start a new scan to run this check with the installed release. The saved scan stays unchanged.",
+    zhTW: "請開始新的掃描，以目前安裝的版本執行這項檢查；已保存的掃描不會變更。",
+  },
   mixedSkippedSetup: {
     en: "The skipped checks need more than one action. Finish the target or cloud step, follow the scan-tool action shown, then start a new scan.",
     zhTW: "未執行的檢查還需要幾個步驟；請先完成目標或雲端設定，再照畫面處理掃描工具，然後開始新的掃描。",
@@ -213,6 +217,7 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
   }
   if (engine.failureKind === "gateway_preparation_failed") return nextStepCopy.gatewayPreparation;
   if (engine.errorCode === "provider_rate_limited") return nextStepCopy.providerBusy;
+  if (engine.errorCode === "resume_release_incompatible") return nextStepCopy.releaseIncompatible;
   if (engine.status === "partial") return nextStepCopy.partial;
   if (targetSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.targetSetup;
   if (providerSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.providerSetup;

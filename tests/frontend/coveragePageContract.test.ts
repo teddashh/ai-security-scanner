@@ -60,7 +60,7 @@ test("technical detail is progressive and a website service remains a preset, no
   assert.match(source, /internetExposed === false && effectiveAllowSensitiveNetworks/);
   assert.match(source, /internetExposed === undefined/);
 
-  const advancedStart = source.indexOf('<details\n                  className="coverage-form-technical coverage-scan-advanced"');
+  const advancedStart = source.search(/<details\r?\n\s+className="coverage-form-technical coverage-scan-advanced"/u);
   const advancedEnd = source.indexOf("</details>", advancedStart);
   assert.notEqual(advancedStart, -1);
   assert.notEqual(advancedEnd, -1);
@@ -85,12 +85,11 @@ test("technical detail is progressive and a website service remains a preset, no
   assert.doesNotMatch(source.slice(advancedEnd, source.indexOf("</section>", advancedEnd)), /asset\.locator/);
 });
 
-test("guided IP and internal scans use a useful bounded TCP service preset", () => {
-  assert.ok(source.includes("commonTcpServicePorts"));
-  assert.ok(source.includes("recommendedTcpPorts"));
+test("guided domains use HTTPS while IP and internal routes retain the bounded TCP preset", () => {
+  assert.ok(source.includes("recommendedGuidedNetworkPreset"));
   assert.match(source, /assessmentIntent === "external_ip_or_domain" \|\| assessmentIntent === "internal_it_environment"/u);
-  assert.match(source, /setExternalProtocol\("tcp"\)/u);
-  assert.match(source, /setExternalPorts\(recommendedTcpPorts\(externalTarget\)\.join\(", "\)\)/u);
+  assert.match(source, /setExternalProtocol\(preset\.protocol\)/u);
+  assert.match(source, /setExternalPorts\(preset\.ports\.join\(", "\)\)/u);
   assert.ok(source.includes("pageCopy.guidedNetworkPreset"));
   assert.ok(source.includes("這次只會用保守的連線設定檢查 {target}"));
   assert.doesNotMatch(
@@ -99,6 +98,49 @@ test("guided IP and internal scans use a useful bounded TCP service preset", () 
     "protocol and port counts must not appear in the first-layer preset",
   );
   assert.match(source, /coverage-technical-preset-summary[\s\S]*guidedNetworkTechnicalPreset[\s\S]*protocol: externalProtocol[\s\S]*count: formatNumber\(parsedPorts\.length\)/u);
+});
+
+test("every low-impact IPv4 CIDR setup gets an effective-rate and host-ceiling warning", () => {
+  assert.match(
+    source,
+    /networkScanEstimate = externalActivity === "low_impact_external" && parsedPorts[\s\S]*requestsPerSecond,[\s\S]*externalConcurrency,[\s\S]*externalTimeout/u,
+  );
+  assert.doesNotMatch(
+    source,
+    /networkScanEstimate = guidedLowImpactNetwork/u,
+  );
+  for (const phrase of [
+    "Pacing floor: {effectiveRate}/s; requested rate: {requestedRate}/s; concurrency: {concurrency}.",
+    "速率下限採用每秒 {effectiveRate} 次檢查，也就是每秒請求 {requestedRate} 次與 {concurrency} 個並行檢查中較低的數值。",
+    "The host scanner stops after a fixed {ceilingHours} hr.",
+    "主機掃描器會在固定 {ceilingHours} 小時後停止。",
+    "may stop incomplete before every address and port is checked",
+    "可能在檢查完所有位址與連接埠前停止並留下不完整結果",
+  ]) assert.ok(source.includes(phrase), phrase);
+  assert.match(source, /networkScanEstimate\.mayExceedEngineCeiling[\s\S]*durationCeilingRiskBody[\s\S]*durationCeilingWithinBody/u);
+});
+
+test("advanced target boundaries distinguish public and authorized internal scans in both locales", () => {
+  for (const phrase of [
+    "Exact public-target boundary",
+    "公開目標的精確界線",
+    "Private, loopback, link-local, and metadata addresses remain blocked",
+    "private、loopback、link-local 與 metadata 位址仍保持阻擋",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.match(
+    source,
+    /effectiveAllowSensitiveNetworks[\s\S]*pageCopy\.sensitiveTechnicalTitle[\s\S]*pageCopy\.publicBoundaryTitle/u,
+  );
+  assert.match(
+    source,
+    /effectiveAllowSensitiveNetworks[\s\S]*pageCopy\.sensitiveTechnicalBody[\s\S]*pageCopy\.publicBoundaryBody/u,
+  );
+});
+
+test("an internal network asset is not summarized as a public web platform", () => {
+  assert.ok(source.includes('internalAssetPlatform: bilingual("Internal system / LAN", "內部系統／區域網路")'));
+  assert.match(source, /asset\.platform === "external" && asset\.internetExposed === false[\s\S]*pageCopy\.internalAssetPlatform/u);
 });
 
 test("the saved assessment intent opens one guided route and moves unrelated inputs under advanced options", () => {
@@ -235,6 +277,21 @@ test("source-code setup says local, masked, and unchanged instead of asking user
   }
 });
 
+test("repository technical details disclose every planned engine", () => {
+  assert.ok(source.includes(
+    'repository_working_tree: "Semgrep, Gitleaks, TruffleHog, Checkov, KICS, Trivy, Syft"',
+  ));
+});
+
+test("a failed workspace copy stays visible and suggests a source-only folder", () => {
+  assert.match(source, /onAttachWorkspaceSnapshot: \(input: AttachWorkspaceSnapshotInput\) => Promise<boolean>/u);
+  assert.match(source, /const attached = await onAttachWorkspaceSnapshot/u);
+  assert.match(source, /if \(!attached\) setWorkspaceFormError\(pageCopy\.workspaceErrorCopy\)/u);
+  assert.match(source, /Copying and verifying locally/u);
+  assert.match(source, /source-only project folder without generated dependencies or build output/u);
+  assert.match(source, /正在本機複製並驗證/u);
+});
+
 test("each guided local route has plain-language first-layer copy in both locales", () => {
   for (const [english, traditionalChinese] of [
     ["Choose code you wrote or generated with AI", "選擇自己寫或 AI 生成的程式碼"],
@@ -252,9 +309,37 @@ test("each guided local route has plain-language first-layer copy in both locale
 });
 
 test("guided selection status is honest and does not keep prompting after auto-selection", () => {
-  assert.doesNotMatch(source, /bilingual\("Ready to scan"|bilingual\([^\n]+, "準備掃描"\)|Choose your first item/u);
+  const authorizationLabels = source.slice(
+    source.indexOf("const authorizationStateLabels"),
+    source.indexOf("const prohibitedCapabilities"),
+  );
+  assert.doesNotMatch(authorizationLabels, /Ready to scan|準備掃描|Choose your first item/u);
   assert.ok(source.includes('authorized: bilingual("Target confirmed", "目標已確認")'));
   assert.ok(source.includes("shouldPromptForFirstAsset(pendingAssets.length, selectedAssets.length)"));
+});
+
+test("saved permission without a scan attempt is shown as ready instead of failed", () => {
+  for (const phrase of [
+    "Permission is saved. No scan has started for this item yet.",
+    "掃描許可已儲存，這個項目尚未開始掃描。",
+    "Permission is saved. Start the scan from Scan progress.",
+    "掃描許可已儲存；請到「掃描進度」開始掃描。",
+    "Not scanned yet",
+    "尚未開始掃描",
+  ]) assert.ok(source.includes(phrase), phrase);
+  assert.match(source, /state === "authorized_incomplete" && scanAttempted === false/u);
+  assert.match(source, /asset\.coverageState === "authorized_incomplete" && asset\.scanAttempted !== false/u);
+  assert.match(source, /readyForFirstScan \? text\(pageCopy\.readyToScan\) : meta\.shortLabel/u);
+  assert.match(source, /readyForFirstScan[\s\S]*pageCopy\.notScannedYet[\s\S]*record\.lastCheckedAt/u);
+  assert.match(source, /isAwaitingFirstScan\(asset\.coverageState, asset\.scanAttempted\)/u);
+});
+
+test("saved sensitive-network access is labeled as internal, not external", () => {
+  assert.ok(source.includes('lowImpactInternalActivity: bilingual("Low-impact internal checks", "低影響內部連線")'));
+  assert.match(
+    source,
+    /scope\.activity === "low_impact_external" && scope\.allowSensitiveNetworks[\s\S]*pageCopy\.lowImpactInternalActivity/u,
+  );
 });
 
 test("every journey step is directly reachable and step 2 points to scan choices", () => {
@@ -269,7 +354,7 @@ test("every journey step is directly reachable and step 2 points to scan choices
 });
 
 test("the rendered Coverage tree has no hard-coded Traditional Chinese UI copy", () => {
-  const renderStart = source.indexOf('\n  return (\n    <div className="page page--coverage">');
+  const renderStart = source.search(/\r?\n  return \(\r?\n    <div className="page page--coverage">/u);
   assert.notEqual(renderStart, -1);
   const renderedTree = source.slice(renderStart);
   assert.doesNotMatch(renderedTree, /[\u3400-\u9fff]/u);

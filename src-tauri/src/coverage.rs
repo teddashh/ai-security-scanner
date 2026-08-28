@@ -417,19 +417,7 @@ fn effective_grant(grant: &ScopeGrant, as_of: DateTime<Utc>) -> bool {
 }
 
 fn permissions_cover_manifest(grants: &[&ScopeGrant], manifest: &EngineManifest) -> bool {
-    let permissions = grants
-        .iter()
-        .map(|grant| &grant.permission)
-        .collect::<Vec<_>>();
-    let required_permissions_present = manifest
-        .required_permissions
-        .iter()
-        .all(|required| permissions.contains(&required));
-    let active_external_authorized = !manifest.active_external
-        || permissions
-            .iter()
-            .any(|permission| **permission == ScanPermission::ActiveExternalTesting);
-    required_permissions_present && active_external_authorized
+    manifest.required_permissions_satisfied_by(grants.iter().map(|grant| &grant.permission))
 }
 
 fn manifest_index(manifests: &[EngineManifest]) -> BTreeMap<&str, Vec<&EngineManifest>> {

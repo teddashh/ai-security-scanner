@@ -44,6 +44,7 @@ import type {
   LocalNetworkCandidateInventory,
   ScanReadiness,
 } from "../types";
+import { buildNativeExportCaseArguments } from "../exportRequest";
 import {
   adaptLocalNetworkCandidateInventory,
   adaptManagedRuntimeSetupStatus,
@@ -197,15 +198,22 @@ const actionResult = async (
   args: Record<string, unknown>,
   nativeMessage: string,
   demoMessage: string,
+  returnWorkspace = false,
 ): Promise<ServiceResult<ActionResponse>> => {
   if (!hasTauriRuntime()) {
     return demoResult({ accepted: false, message: demoMessage });
   }
   try {
     const returnedCase = await invoke<NativeAssessmentCase>(command, args);
-    // Adapt the DTO here as a contract check; App refreshes the authoritative snapshot next.
-    adaptNativeCase(returnedCase);
-    return nativeResult({ accepted: true, message: nativeMessage });
+    const workspace = adaptNativeCase(
+      returnedCase,
+      returnWorkspace ? (await getNativeManifests()).map(adaptNativeManifest) : [],
+    );
+    return nativeResult({
+      accepted: true,
+      message: nativeMessage,
+      workspace: returnWorkspace ? workspace : undefined,
+    });
   } catch (error) {
     return nativeResult({ accepted: false, message: errorMessage(error) });
   }
@@ -261,6 +269,7 @@ export interface ActionResponse {
   accepted: boolean;
   message: string;
   snapshot?: AppSnapshot;
+  workspace?: CaseWorkspace;
 }
 
 export interface ScopeApprovalInput {
@@ -631,6 +640,7 @@ export const scannerService = {
         "Demo mode does not start a container or contact a target.",
         "展示模式不會啟動容器，也不會接觸任何目標。",
       ),
+      true,
     );
   },
 
@@ -706,6 +716,7 @@ export const scannerService = {
       { caseId, runId },
       serviceText("The selected scan was paused.", "選定的掃描已暫停。"),
       serviceText("Demo mode has no real scan to pause.", "展示模式沒有可暫停的真實掃描。"),
+      true,
     );
   },
 
@@ -715,6 +726,7 @@ export const scannerService = {
       { caseId, runId },
       serviceText("The selected scan was queued to continue.", "選定的掃描已排入佇列，準備繼續。"),
       serviceText("Demo mode has no real scan to resume.", "展示模式沒有可繼續的真實掃描。"),
+      true,
     );
   },
 
@@ -724,6 +736,7 @@ export const scannerService = {
       { caseId, runId },
       serviceText("The selected scan was cancelled and the case now needs attention.", "選定的掃描已取消，案件現在需要處理。"),
       serviceText("Demo mode has no real scan to cancel.", "展示模式沒有可取消的真實掃描。"),
+      true,
     );
   },
 
@@ -736,6 +749,7 @@ export const scannerService = {
         "Demo mode does not run a follow-up scan; every comparison shown is marked sample data.",
         "展示模式不會執行後續確認掃描；目前差異都已標成樣本資料。",
       ),
+      true,
     );
   },
 
@@ -890,9 +904,10 @@ export const scannerService = {
         filters: [{ name: fileType.label, extensions: fileType.extensions }],
       });
       if (!destination) return nativeResult(null);
-      const exported = await invoke<NativeCaseExport>(COMMANDS.exportCase, {
-        input: { ...input, destination },
-      });
+      const exported = await invoke<NativeCaseExport>(
+        COMMANDS.exportCase,
+        buildNativeExportCaseArguments(input, destination),
+      );
       return nativeResult(adaptNativeExport(exported));
     }
 
@@ -937,6 +952,25 @@ export const scannerService = {
       filters: [{ name: "Signed case bundle", extensions: ["gz"] }],
     });
     return typeof selected === "string" ? selected : null;
+  },
+
+  async subscribeScanWorkspace(
+    handler: (workspace: CaseWorkspace, eventName: ScannerEventName) => void,
+  ): Promise<UnlistenFn> {
+    if (!hasTauriRuntime()) return () => undefined;
+    const manifests = (await getNativeManifests()).map(adaptNativeManifest);
+    const unlisteners: UnlistenFn[] = [];
+    try {
+      for (const eventName of [EVENTS.runProgress, EVENTS.runFinished]) {
+        unlisteners.push(await listen<ScannerEventEnvelope<NativeAssessmentCase>>(eventName, (event) => {
+          handler(adaptNativeCase(event.payload.payload, manifests), eventName);
+        }));
+      }
+    } catch (error) {
+      unlisteners.forEach((unlisten) => unlisten());
+      throw error;
+    }
+    return () => unlisteners.forEach((unlisten) => unlisten());
   },
 
   async subscribe(

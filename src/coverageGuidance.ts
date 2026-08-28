@@ -1,4 +1,5 @@
 import type { Asset, LocalInputProfile } from "./types";
+import type { UseCaseId } from "./useCases";
 
 export type GuidedCoverageRoute =
   | { kind: "network" }
@@ -36,6 +37,46 @@ export const shouldPromptForFirstAsset = (
 
 export const isCloudAsset = (asset: Pick<Asset, "platform">): boolean =>
   cloudPlatforms.has(asset.platform);
+
+// Ordered by usefulness for a first low-impact inventory. A CIDR receives only
+// as many ports as keep the frozen address/port set comfortably below the
+// managed gateway's 10,000-endpoint ceiling.
+const commonTcpServicePorts = [80, 443, 22, 445, 3389, 8080, 8443, 21, 25, 53, 110, 139, 143, 465, 587, 993, 995, 3306, 5432, 6379, 9100] as const;
+
+const recommendedTcpPorts = (target: string): number[] => {
+  const value = target.trim();
+  const ipv4 = /^(?:\d{1,3}\.){3}\d{1,3}\/(\d{1,2})$/u.exec(value);
+  const ipv6 = value.includes(":") ? /\/(\d{1,3})$/u.exec(value) : null;
+  if (!ipv4 && !ipv6) return [...commonTcpServicePorts];
+  const prefix = Number((ipv4 ?? ipv6)?.[1]);
+  const maximumPrefix = ipv4 ? 32 : 128;
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > maximumPrefix) return [80, 443];
+  const total = 2 ** Math.min(53, maximumPrefix - prefix);
+  const addresses = ipv4 && prefix <= 30 ? Math.max(1, total - 2) : total;
+  const safePortCount = Math.max(1, Math.floor(9_000 / addresses));
+  return commonTcpServicePorts.slice(0, safePortCount);
+};
+
+export interface GuidedNetworkPreset {
+  protocol: "https" | "tcp";
+  ports: number[];
+}
+
+/**
+ * A public hostname has a directly runnable web default. Literal addresses,
+ * networks, and every internal-system route retain the conservative TCP
+ * service inventory used for infrastructure targets.
+ */
+export const recommendedGuidedNetworkPreset = (
+  assessmentIntent: UseCaseId | undefined,
+  assetType: Asset["type"] | undefined,
+  target: string,
+): GuidedNetworkPreset => {
+  if (assessmentIntent === "external_ip_or_domain" && assetType === "domain") {
+    return { protocol: "https", ports: [443] };
+  }
+  return { protocol: "tcp", ports: recommendedTcpPorts(target) };
+};
 
 /**
  * Simplified cloud confirmation is safe only when the selected asset came from

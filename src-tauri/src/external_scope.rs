@@ -98,6 +98,20 @@ impl CanonicalTarget {
     }
 }
 
+/// Classifies only exact targets whose sensitive/local nature is knowable
+/// without DNS. Ordinary hostnames keep their explicit case classification.
+pub(crate) fn explicit_target_requires_sensitive_network_allowance(
+    target: &CanonicalTarget,
+) -> bool {
+    match target {
+        CanonicalTarget::Hostname(hostname) => {
+            hostname == "localhost" || hostname.ends_with(".localhost")
+        }
+        CanonicalTarget::Address(address) => is_sensitive_address(*address),
+        CanonicalTarget::Network(network) => is_sensitive_address(network.network()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RatePolicy {
     pub requests_per_second: u16,
@@ -535,6 +549,9 @@ fn validate_resolved_address(grant: &ExternalScopeGrant, address: IpAddr) -> App
 }
 
 fn validate_hostname(hostname: &str) -> AppResult<()> {
+    if hostname == "localhost" {
+        return Ok(());
+    }
     if hostname.len() > 253 || !hostname.contains('.') {
         return Err(AppError::InvalidRequest(
             "target must be a fully qualified hostname".into(),
@@ -634,6 +651,22 @@ mod tests {
             CanonicalTarget::Hostname("xn--bcher-kva.example".into())
         );
         assert!(CanonicalTarget::parse("*.example.com").is_err());
+    }
+
+    #[test]
+    fn explicit_local_targets_require_sensitive_network_authorization() {
+        for target in ["127.0.0.1", "10.20.30.40", "::1", "localhost"] {
+            let target = CanonicalTarget::parse(target).expect("local target");
+            assert!(explicit_target_requires_sensitive_network_allowance(
+                &target
+            ));
+        }
+        assert!(!explicit_target_requires_sensitive_network_allowance(
+            &CanonicalTarget::parse("app.example.test").expect("public hostname")
+        ));
+        assert!(!explicit_target_requires_sensitive_network_allowance(
+            &CanonicalTarget::parse("203.0.113.8").expect("public address")
+        ));
     }
 
     #[test]

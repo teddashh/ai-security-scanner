@@ -36,6 +36,68 @@ test("missing WSL gets one bilingual Microsoft setup path and one safe recheck",
   assert.match(source, /onClick=\{onSetup\}/u);
 });
 
+test("a generic setup failure offers a retry without inventing an external action", () => {
+  for (const phrase of [
+    "Scan-tool setup stopped",
+    "掃描工具設定已停止",
+    "Try setup again",
+    "再試一次設定",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.doesNotMatch(source, /Follow the single action below/u);
+  assert.doesNotMatch(source, /照著下方唯一的操作/u);
+  assert.match(
+    source,
+    /setupFailed \? \(nextAction \? text\.recheck : text\.retry\) : setupCancelled \? text\.continue : text\.start/u,
+  );
+  assert.match(shellSource, /genericSetupFailure = !runtimeSetupWorking[\s\S]*runtimeSetup\?\.phase === "failed"[\s\S]*!runtimeSetup\.nextAction/u);
+  assert.match(shellSource, /runtimeSetup\.nextAction[\s\S]*"runtime\.setup\.recheck"[\s\S]*"runtime\.setup\.retry"/u);
+});
+
+test("cancelled setup offers an honest continuation", () => {
+  const state = resolveRuntimeSetupPresentation({
+    mode: "native",
+    runtimeAvailable: false,
+    status: { active: false, phase: "cancelled" },
+  });
+  assert.equal(state.setupCancelled, true);
+  assert.equal(state.setupFailed, false);
+  for (const phrase of [
+    "Setup paused",
+    "The download was kept on this computer",
+    "Continue setup",
+    "設定已暫停",
+    "下載進度已保留在這台電腦上",
+    "繼續設定",
+  ]) assert.ok(source.includes(phrase), phrase);
+  assert.match(source, /setupCancelled \? text\.continue : text\.start/u);
+});
+
+test("a retry immediately replaces a stale failure with a visible starting state", () => {
+  const state = resolveRuntimeSetupPresentation({
+    mode: "native",
+    runtimeAvailable: false,
+    status: {
+      active: false,
+      prerequisiteRepairActive: false,
+      phase: "failed",
+    },
+    requestPending: true,
+  });
+
+  assert.equal(state.setupStarting, true);
+  assert.equal(state.setupActive, true);
+  assert.equal(state.setupFailed, false);
+  assert.equal(state.setupCancelled, false);
+  assert.match(source, /requestPending: busy/u);
+  assert.match(source, /setupStarting \? \(/u);
+  assert.ok(source.includes("Starting setup…"));
+  assert.ok(source.includes("正在開始設定…"));
+  assert.match(source, /disabled aria-busy="true"/u);
+  assert.match(shellSource, /runtimeSetupStarting = runtimeBusy/u);
+  assert.match(shellSource, /displayedRuntimeSetupPhase = runtimeSetupStarting \? "install"/u);
+});
+
 test("the desktop UI cannot elevate or change Windows optional features", () => {
   for (const candidate of [source, shellSource, scannerSource]) {
     assert.doesNotMatch(candidate, /onRepair|repairManagedRuntimePrerequisite|administrator approval|系統管理員確認|wsl --install|wsl --update|UAC/u);

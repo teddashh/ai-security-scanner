@@ -1,5 +1,8 @@
 use crate::artifact_store::{CapturePaths, RunDirectories};
-use crate::domain::{EngineManifest, ScanPermission};
+use crate::domain::{
+    EngineManifest, MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS, MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS,
+    ScanPermission,
+};
 use crate::error::{AppError, AppResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -39,6 +42,8 @@ const RUNTIME_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 const PINNED_IMAGE_PULL_TIMEOUT: StdDuration = StdDuration::from_secs(10 * 60);
 const RUNTIME_PIPE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(2);
 const CONTAINER_CAPTURE_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+const CONTAINER_EXECUTION_TIMEOUT_ERROR: &str =
+    "scanner execution exceeded its configured host deadline";
 const MANAGED_NETWORK_LABEL_KEY: &str = "ai.security-scanner.managed";
 const NETWORK_POLICY_LABEL_KEY: &str = "ai.security-scanner.policy-id";
 const CONTAINER_MANAGED_LABEL_KEY: &str = "ai.security-scanner.managed";
@@ -400,6 +405,17 @@ impl ResourceLimits {
         }
         Ok(())
     }
+}
+
+fn validate_execution_timeout_seconds(timeout_seconds: u64) -> AppResult<()> {
+    if !(MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS..=MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS)
+        .contains(&timeout_seconds)
+    {
+        return Err(AppError::InvalidRequest(
+            "container execution timeout must be between 30 and 86400 seconds".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -914,6 +930,7 @@ pub struct ContainerRunPlan {
     credential_control_dir: PathBuf,
     network_policy: NetworkPolicy,
     output_bytes: u64,
+    execution_timeout_seconds: u64,
     ownership: OwnedContainerCleanupRequest,
 }
 
@@ -960,6 +977,10 @@ impl ContainerRunPlan {
 
     pub fn output_bytes(&self) -> u64 {
         self.output_bytes
+    }
+
+    pub fn execution_timeout_seconds(&self) -> u64 {
+        self.execution_timeout_seconds
     }
 
     pub fn ownership(&self) -> &OwnedContainerCleanupRequest {
@@ -1020,6 +1041,8 @@ impl<'a> ContainerPlanBuilder<'a> {
             )));
         }
         self.limits.validate()?;
+        let execution_timeout_seconds = self.manifest.execution_timeout_seconds();
+        validate_execution_timeout_seconds(execution_timeout_seconds)?;
         self.network_policy.validate()?;
         self.credential_set.validate_fresh()?;
         validate_container_owner_id(self.case_id, "case id")?;
@@ -1160,6 +1183,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             credential_control_dir,
             network_policy: self.network_policy.clone(),
             output_bytes: self.limits.output_bytes,
+            execution_timeout_seconds,
             ownership: OwnedContainerCleanupRequest {
                 case_id: self.case_id.to_owned(),
                 scan_run_id: self.scan_run_id.to_owned(),
@@ -1353,6 +1377,93 @@ pub trait ContainerRuntime: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct ProcessContainerRuntime {
     context: RuntimeCommandContext,
+    // A runtime value is resolved immediately before a scan batch is
+    // persisted, then that exact value is moved into the worker. Keep the
+    // successful control-plane proof attached to that immutable command
+    // context so every engine does not repeat the same version and security
+    // subprocesses. Failures are deliberately not cached.
+    preflight_cache: Arc<RuntimePreflightCache>,
+    #[cfg(test)]
+    test_execution_timeout: Option<StdDuration>,
+}
+
+#[derive(Debug, Default)]
+struct RuntimePreflightCache {
+    observed: Mutex<Option<RuntimePreflight>>,
+}
+
+impl RuntimePreflightCache {
+    fn get_or_try_init<F>(&self, inspect: F) -> AppResult<RuntimePreflight>
+    where
+        F: FnOnce() -> AppResult<RuntimePreflight>,
+    {
+        // Hold the lock while inspecting so clones of one prepared runtime
+        // cannot race and launch duplicate control-plane probes.
+        let mut observed = self.preflight_cache_lock()?;
+        if let Some(preflight) = observed.as_ref() {
+            return Ok(preflight.clone());
+        }
+        let preflight = inspect()?;
+        *observed = Some(preflight.clone());
+        Ok(preflight)
+    }
+
+    fn preflight_cache_lock(
+        &self,
+    ) -> AppResult<std::sync::MutexGuard<'_, Option<RuntimePreflight>>> {
+        self.observed
+            .lock()
+            .map_err(|_| AppError::Internal("runtime preflight cache lock was poisoned".into()))
+    }
+}
+
+/// Monotonic execution budget that advances only while scanner work is active.
+/// A pause takes effect only after the runtime has acknowledged the container
+/// control command, so time spent issuing `pause` remains charged while time
+/// between that acknowledgement and a successful `unpause` does not.
+#[derive(Debug)]
+struct ActiveExecutionBudget {
+    remaining: StdDuration,
+    observed_at: std::time::Instant,
+    paused: bool,
+}
+
+impl ActiveExecutionBudget {
+    fn started(timeout: StdDuration, started_at: std::time::Instant) -> Self {
+        Self {
+            remaining: timeout,
+            observed_at: started_at,
+            paused: false,
+        }
+    }
+
+    fn charge_until(&mut self, now: std::time::Instant) {
+        if !self.paused {
+            self.remaining = self
+                .remaining
+                .saturating_sub(now.saturating_duration_since(self.observed_at));
+        }
+        self.observed_at = now;
+    }
+
+    fn expired_at(&mut self, now: std::time::Instant) -> bool {
+        self.charge_until(now);
+        self.remaining.is_zero()
+    }
+
+    fn acknowledge_paused_at(&mut self, now: std::time::Instant) {
+        self.charge_until(now);
+        self.paused = true;
+    }
+
+    fn acknowledge_resumed_at(&mut self, now: std::time::Instant) {
+        self.observed_at = now;
+        self.paused = false;
+    }
+
+    fn is_paused(&self) -> bool {
+        self.paused
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1413,6 +1524,34 @@ struct OwnedContainerInspectConfig {
     labels: BTreeMap<String, String>,
 }
 
+fn canonical_container_repository(repository: &str) -> String {
+    // Docker and Podman qualify unqualified image names with Docker Hub in
+    // inspect output. Preserve every explicit registry byte-for-byte and
+    // normalize only that deterministic default-registry spelling.
+    let first_component = repository.split('/').next().unwrap_or_default();
+    if first_component.contains('.')
+        || first_component.contains(':')
+        || first_component == "localhost"
+    {
+        repository.to_owned()
+    } else if repository.contains('/') {
+        format!("docker.io/{repository}")
+    } else {
+        format!("docker.io/library/{repository}")
+    }
+}
+
+fn image_reference_matches_pinned(reference: &str, image: &PinnedImage) -> bool {
+    let digest_suffix = format!("@{}", image.digest());
+    let Some(repository) = reference.strip_suffix(&digest_suffix) else {
+        return false;
+    };
+    if repository.is_empty() || repository.contains('@') {
+        return false;
+    }
+    canonical_container_repository(repository) == canonical_container_repository(image.repository())
+}
+
 fn prove_owned_container(
     document: &[u8],
     request: &OwnedContainerCleanupRequest,
@@ -1455,9 +1594,15 @@ fn prove_owned_container(
             )));
         }
     }
-    let expected_image = request.image.reference();
-    let image_matches = inspected.config.image.as_deref() == Some(expected_image.as_str())
-        || inspected.image_name.as_deref() == Some(expected_image.as_str());
+    let image_matches = inspected
+        .config
+        .image
+        .as_deref()
+        .is_some_and(|reference| image_reference_matches_pinned(reference, &request.image))
+        || inspected
+            .image_name
+            .as_deref()
+            .is_some_and(|reference| image_reference_matches_pinned(reference, &request.image));
     if !image_matches {
         return Err(AppError::NotAuthorized(
             "container image does not match the persisted pinned image".into(),
@@ -1732,11 +1877,18 @@ impl CommandProcessTree {
         }
         #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt;
             use windows_sys::Win32::System::JobObjects::{
                 CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
                 SetInformationJobObject,
             };
+            use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+            // Runtime commands are background implementation details of the
+            // desktop app. Without this flag, Windows can open its configured
+            // terminal host for Podman and steal focus for every scanner.
+            command.creation_flags(CREATE_NO_WINDOW);
             let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
             if job.is_null() {
                 return Err(io::Error::last_os_error());
@@ -2041,17 +2193,34 @@ impl ProcessContainerRuntime {
     pub fn new(provider: RuntimeProvider, binary: impl Into<PathBuf>) -> Self {
         Self {
             context: RuntimeCommandContext::compatibility(provider, binary.into()),
+            preflight_cache: Arc::default(),
+            #[cfg(test)]
+            test_execution_timeout: None,
         }
     }
 
     pub fn from_managed(command: crate::managed_runtime::ManagedRuntimeCommand) -> AppResult<Self> {
         Ok(Self {
             context: RuntimeCommandContext::managed(command)?,
+            preflight_cache: Arc::default(),
+            #[cfg(test)]
+            test_execution_timeout: None,
         })
     }
 
     pub fn from_command_context(context: RuntimeCommandContext) -> Self {
-        Self { context }
+        Self {
+            context,
+            preflight_cache: Arc::default(),
+            #[cfg(test)]
+            test_execution_timeout: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_test_execution_timeout(mut self, timeout: StdDuration) -> Self {
+        self.test_execution_timeout = Some(timeout);
+        self
     }
 
     pub fn command_context(&self) -> RuntimeCommandContext {
@@ -2189,12 +2358,15 @@ impl ProcessContainerRuntime {
         &self,
         child: &mut Child,
         plan: &ContainerRunPlan,
+        execution_started: std::time::Instant,
+        execution_timeout: StdDuration,
         cancellation: &CancellationToken,
         budget: &OutputBudget,
         container_id_file: &ContainerIdFileGuard,
         created_container: &mut Option<CreatedContainer>,
     ) -> AppResult<RuntimeOutcome> {
-        let mut runtime_paused = false;
+        let mut execution_budget =
+            ActiveExecutionBudget::started(execution_timeout, execution_started);
         let mut active_container = None;
         loop {
             self.refresh_active_container(
@@ -2217,7 +2389,7 @@ impl ProcessContainerRuntime {
                 }));
             }
             if cancellation.is_cancelled() {
-                if runtime_paused {
+                if execution_budget.is_paused() {
                     let active = active_container.as_ref().ok_or_else(|| {
                         AppError::Internal(
                             "runtime pause acknowledgement lost its created container identity"
@@ -2237,6 +2409,7 @@ impl ProcessContainerRuntime {
                             None => format!("{unpause_error}; container was stopped fail-closed"),
                         }));
                     }
+                    execution_budget.acknowledge_resumed_at(std::time::Instant::now());
                     cancellation.acknowledge_resumed();
                 }
                 let stop_result = active_container
@@ -2261,8 +2434,24 @@ impl ProcessContainerRuntime {
                 });
             }
 
+            if execution_budget.expired_at(std::time::Instant::now()) {
+                if let Some(active) = active_container.as_ref() {
+                    // This ID was read from the invocation-only cidfile and
+                    // then matched against the complete ownership proof. A
+                    // deterministic container name is never enough to stop.
+                    if execution_budget.is_paused() {
+                        let _ = self.container_control("unpause", active.immutable_id());
+                    }
+                    let _ = self.stop_container(active.immutable_id());
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                cancellation.acknowledge_resumed();
+                return Err(AppError::Runtime(CONTAINER_EXECUTION_TIMEOUT_ERROR.into()));
+            }
+
             let pause_requested = cancellation.is_pause_requested();
-            if pause_requested && !runtime_paused {
+            if pause_requested && !execution_budget.is_paused() {
                 if let Some(active) = active_container.as_ref() {
                     if let Err(pause_error) = self.container_control("pause", active.immutable_id())
                     {
@@ -2276,10 +2465,10 @@ impl ProcessContainerRuntime {
                             None => format!("{pause_error}; container was stopped fail-closed"),
                         }));
                     }
-                    runtime_paused = true;
+                    execution_budget.acknowledge_paused_at(std::time::Instant::now());
                     cancellation.acknowledge_paused();
                 }
-            } else if !pause_requested && runtime_paused {
+            } else if !pause_requested && execution_budget.is_paused() {
                 let active = active_container.as_ref().ok_or_else(|| {
                     AppError::Internal(
                         "runtime pause acknowledgement lost its created container identity".into(),
@@ -2297,7 +2486,7 @@ impl ProcessContainerRuntime {
                         None => format!("{unpause_error}; container was stopped fail-closed"),
                     }));
                 }
-                runtime_paused = false;
+                execution_budget.acknowledge_resumed_at(std::time::Instant::now());
                 cancellation.acknowledge_resumed();
             }
             thread::sleep(StdDuration::from_millis(25));
@@ -2314,40 +2503,42 @@ fn runtime_object_is_absent(stderr: &[u8]) -> bool {
 
 impl ContainerRuntime for ProcessContainerRuntime {
     fn preflight(&self) -> AppResult<RuntimePreflight> {
-        let version_operation = DirectRuntimeOperation::RuntimeVersionPreflight;
-        let version = self.direct_output(
-            version_operation,
-            ["version", "--format", "{{.Server.Version}}"],
-        )?;
-        if !version.status.success() {
-            return Err(process_failure(version_operation.label(), &version));
-        }
-        let server_version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
-        if server_version.is_empty() {
-            return Err(AppError::Runtime(
-                "container runtime returned an empty server version".into(),
-            ));
-        }
+        self.preflight_cache.get_or_try_init(|| {
+            let version_operation = DirectRuntimeOperation::RuntimeVersionPreflight;
+            let version = self.direct_output(
+                version_operation,
+                ["version", "--format", "{{.Server.Version}}"],
+            )?;
+            if !version.status.success() {
+                return Err(process_failure(version_operation.label(), &version));
+            }
+            let server_version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
+            if server_version.is_empty() {
+                return Err(AppError::Runtime(
+                    "container runtime returned an empty server version".into(),
+                ));
+            }
 
-        let security_operation = DirectRuntimeOperation::RuntimeSecurityPreflight;
-        let info = self.direct_output(
-            security_operation,
-            [
-                "info",
-                "--format",
-                runtime_security_info_template(self.context.provider),
-            ],
-        )?;
-        if !info.status.success() {
-            return Err(process_failure(security_operation.label(), &info));
-        }
-        let security_options =
-            validate_runtime_security_options(self.context.provider, &info.stdout)?;
-        Ok(RuntimePreflight {
-            provider: self.context.provider,
-            server_version,
-            security_options,
-            command_provenance: self.context.provenance.clone(),
+            let security_operation = DirectRuntimeOperation::RuntimeSecurityPreflight;
+            let info = self.direct_output(
+                security_operation,
+                [
+                    "info",
+                    "--format",
+                    runtime_security_info_template(self.context.provider),
+                ],
+            )?;
+            if !info.status.success() {
+                return Err(process_failure(security_operation.label(), &info));
+            }
+            let security_options =
+                validate_runtime_security_options(self.context.provider, &info.stdout)?;
+            Ok(RuntimePreflight {
+                provider: self.context.provider,
+                server_version,
+                security_options,
+                command_provenance: self.context.provenance.clone(),
+            })
         })
     }
 
@@ -2414,6 +2605,10 @@ impl ContainerRuntime for ProcessContainerRuntime {
             Some(&container_id_file),
         )?;
         let execution = (|| -> AppResult<RuntimeOutcome> {
+            let execution_timeout = StdDuration::from_secs(plan.execution_timeout_seconds());
+            #[cfg(test)]
+            let execution_timeout = self.test_execution_timeout.unwrap_or(execution_timeout);
+            let execution_started = std::time::Instant::now();
             let mut command = Command::new(&self.context.binary);
             command.args(&runtime_args);
             self.context.apply(&mut command);
@@ -2446,6 +2641,8 @@ impl ContainerRuntime for ProcessContainerRuntime {
             let outcome = self.wait_for_container(
                 &mut child,
                 plan,
+                execution_started,
+                execution_timeout,
                 cancellation,
                 &budget,
                 &container_id_file,
@@ -2851,6 +3048,7 @@ fn canonical_mount_path(path: &Path, label: &str) -> AppResult<PathBuf> {
 }
 
 fn validate_run_plan_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
+    validate_execution_timeout_seconds(plan.execution_timeout_seconds)?;
     validate_mount_directory(&plan.workspace, "workspace")?;
     validate_mount_directory(&plan.output, "output")?;
     validate_mount_directory(&plan.credential_control_dir, "credential control")?;
@@ -3340,8 +3538,8 @@ mod tests {
     use super::*;
     use crate::artifact_store::{ArtifactContext, ArtifactStore};
     use crate::domain::{
-        AssetKind, DistributionMode, EngineCategory, EngineCompatibility, ImageReference,
-        ManifestStatus, ScanPermission,
+        AssetKind, DistributionMode, EngineCategory, EngineCompatibility, EngineExecutionContract,
+        EngineExecutionResources, ImageReference, ManifestStatus, ScanPermission,
     };
     use chrono::Duration;
     #[cfg(unix)]
@@ -3368,6 +3566,44 @@ mod tests {
         ] {
             assert_eq!(operation.timeout(), StdDuration::from_secs(30));
         }
+    }
+
+    #[test]
+    fn runtime_preflight_cache_retries_failures_and_reuses_only_a_successful_proof() {
+        let cache = RuntimePreflightCache::default();
+        let inspections = std::sync::atomic::AtomicUsize::new(0);
+        let first = cache.get_or_try_init(|| {
+            inspections.fetch_add(1, Ordering::SeqCst);
+            Err(AppError::Runtime("temporary runtime failure".into()))
+        });
+        assert!(first.is_err(), "a failed inspection must fail closed");
+        assert_eq!(inspections.load(Ordering::SeqCst), 1);
+
+        let expected = RuntimePreflight {
+            provider: RuntimeProvider::ManagedLocal,
+            server_version: "5.8.2".into(),
+            security_options: "verified-rootless-security".into(),
+            command_provenance: RuntimeCommandProvenance::ManagedLocal {
+                runtime_version: "1.0.0".into(),
+                manifest_sha256: "a".repeat(64),
+                machine_image_sha256: "b".repeat(64),
+            },
+        };
+        let observed = cache
+            .get_or_try_init(|| {
+                inspections.fetch_add(1, Ordering::SeqCst);
+                Ok(expected.clone())
+            })
+            .expect("retry obtains a valid proof");
+        let reused = cache
+            .get_or_try_init(|| -> AppResult<RuntimePreflight> {
+                panic!("a successful proof must prevent another inspection")
+            })
+            .expect("successful proof is reusable");
+
+        assert_eq!(observed, expected);
+        assert_eq!(reused, expected);
+        assert_eq!(inspections.load(Ordering::SeqCst), 2);
     }
 
     #[cfg(unix)]
@@ -3511,9 +3747,12 @@ esac
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("make runtime fixture executable");
 
-        let preflight = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary)
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Podman, &binary);
+        let preflight = runtime.preflight().expect("Podman preflight");
+        let reused = runtime
+            .clone()
             .preflight()
-            .expect("Podman preflight");
+            .expect("prepared runtime clone reuses the successful proof");
 
         assert_eq!(preflight.provider, RuntimeProvider::Podman);
         assert_eq!(preflight.server_version, "5.8.2");
@@ -3521,6 +3760,7 @@ esac
             preflight.security_options,
             r#"{"apparmorEnabled":false,"capabilities":"CAP_CHOWN","rootless":true,"seccompEnabled":true,"seccompProfilePath":"/profile","selinuxEnabled":false}"#
         );
+        assert_eq!(reused, preflight);
         assert_eq!(
             fs::read_to_string(log).expect("runtime command log"),
             "version --format {{.Server.Version}}\ninfo --format {{json .Host.Security}}\n"
@@ -3568,6 +3808,7 @@ esac
                 blocked_by: vec![],
                 ..EngineCompatibility::default()
             },
+            execution: None,
         }
     }
 
@@ -3815,6 +4056,78 @@ esac\n",
     }
 
     #[test]
+    fn reviewed_execution_timeout_is_validated_and_propagated_into_the_run_plan() {
+        let (_temp, _store, directories, scope, mut manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: 7_200,
+            },
+        });
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("reviewed timeout plan");
+        assert_eq!(plan.execution_timeout_seconds(), 7_200);
+
+        manifest.execution = None;
+        let legacy_plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("legacy manifest fallback plan");
+        assert_eq!(
+            legacy_plan.execution_timeout_seconds(),
+            crate::domain::DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS
+        );
+
+        for invalid in [29, 86_401] {
+            manifest.execution = Some(EngineExecutionContract {
+                resources: EngineExecutionResources {
+                    timeout_seconds: invalid,
+                },
+            });
+            let error = ContainerPlanBuilder::new(
+                &manifest,
+                &image,
+                &directories,
+                &scope,
+                &ResourceLimits::default(),
+                &NetworkPolicy::Disabled,
+                &ScannerCredentialSet::default(),
+                "case-1",
+                "run-1",
+                "engine-run-1",
+                1,
+            )
+            .build()
+            .expect_err("out-of-range execution timeout rejected");
+            assert!(error.to_string().contains("between 30 and 86400 seconds"));
+        }
+    }
+
+    #[test]
     fn interrupted_container_requires_complete_ownership_proof() {
         let (_temp, _store, _directories, scope, _manifest, image) =
             plan_fixture(vec!["scanner".into()]);
@@ -3847,6 +4160,73 @@ esac\n",
         )
         .expect_err("foreign container rejected");
         assert!(error.to_string().contains(CONTAINER_CASE_LABEL_KEY));
+    }
+
+    #[test]
+    fn owned_container_image_proof_accepts_default_registry_canonicalization() {
+        let (_temp, _store, _directories, scope, _manifest, _image) =
+            plan_fixture(vec!["scanner".into()]);
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let image = PinnedImage::new("checkmarx/kics", &digest).expect("KICS image");
+        let request = owned_cleanup_request(&scope, &image);
+        let labels = request
+            .expected_labels()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let document = serde_json::to_vec(&serde_json::json!([{
+            "Id": "c".repeat(64),
+            "Name": request.container_name().expect("name"),
+            "ImageName": format!("docker.io/checkmarx/kics@{digest}"),
+            "Config": {
+                "Image": format!("sha256:{}", "d".repeat(64)),
+                "Labels": labels,
+            }
+        }]))
+        .expect("inspect document");
+
+        assert_eq!(
+            prove_owned_container(&document, &request).expect("canonical image accepted"),
+            "c".repeat(64)
+        );
+    }
+
+    #[test]
+    fn owned_container_image_proof_rejects_tag_digest_and_repository_mismatches() {
+        let (_temp, _store, _directories, scope, _manifest, _image) =
+            plan_fixture(vec!["scanner".into()]);
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let image = PinnedImage::new("checkmarx/kics", &digest).expect("KICS image");
+        let request = owned_cleanup_request(&scope, &image);
+
+        for mismatched_reference in [
+            format!("docker.io/checkmarx/kics:v2.1.19@{digest}"),
+            format!("docker.io/checkmarx/kics@sha256:{}", "b".repeat(64)),
+            format!("docker.io/checkmarx/not-kics@{digest}"),
+            format!("ghcr.io/checkmarx/kics@{digest}"),
+        ] {
+            let labels = request
+                .expected_labels()
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+            let document = serde_json::to_vec(&serde_json::json!([{
+                "Id": "e".repeat(64),
+                "Name": request.container_name().expect("name"),
+                "ImageName": mismatched_reference,
+                "Config": {
+                    "Image": null,
+                    "Labels": labels,
+                }
+            }]))
+            .expect("inspect document");
+            let error = prove_owned_container(&document, &request)
+                .expect_err("mismatched image reference rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("container image does not match the persisted pinned image"),
+                "unexpected error for mismatched image reference: {error}"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -4699,6 +5079,161 @@ esac\n",
         assert!(
             fs::read_to_string(log)
                 .expect("runtime log")
+                .lines()
+                .any(|line| line == format!("stop --time 5 {immutable_id}"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_runtime_deadline_stops_only_the_ownership_proven_container() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("deadline plan");
+        let immutable_id = "c".repeat(64);
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log) = fake_runtime(&temp, &plan, false);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .with_test_execution_timeout(StdDuration::from_millis(200));
+        let mut created = None;
+
+        let started = Instant::now();
+        let error = runtime
+            .run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &CancellationToken::default(),
+                &capture,
+                &mut created,
+            )
+            .expect_err("slow scanner must reach its host deadline");
+        let message = error.to_string();
+        assert!(message.contains(CONTAINER_EXECUTION_TIMEOUT_ERROR));
+        assert!(!message.contains(plan.image().reference().as_str()));
+        assert!(
+            started.elapsed() < StdDuration::from_secs(5),
+            "timed-out scanner must terminate promptly"
+        );
+        assert_eq!(
+            created.as_ref().map(CreatedContainer::immutable_id),
+            Some(immutable_id.as_str())
+        );
+
+        let commands = fs::read_to_string(&log).expect("runtime log");
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("container inspect {immutable_id}"))
+        );
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("stop --time 5 {immutable_id}"))
+        );
+        runtime
+            .cleanup(plan.ownership(), created.as_ref())
+            .expect("normal ownership-proven cleanup remains available");
+        let commands = fs::read_to_string(log).expect("cleanup log");
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("rm --force {immutable_id}"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_runtime_pause_does_not_consume_the_execution_timeout() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("pause-aware deadline plan");
+        let immutable_id = "c".repeat(64);
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let (binary, log) = fake_runtime(&temp, &plan, false);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .with_test_execution_timeout(StdDuration::from_millis(750));
+        let cancellation = CancellationToken::default();
+        let worker_token = cancellation.clone();
+        let worker = thread::spawn(move || {
+            let mut created = None;
+            let outcome = runtime.run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &worker_token,
+                &capture,
+                &mut created,
+            );
+            (outcome, created)
+        });
+        wait_until(|| {
+            fs::read_to_string(&log)
+                .is_ok_and(|contents| contents.lines().any(|line| line.starts_with("run ")))
+        });
+
+        cancellation.request_pause();
+        wait_until(|| cancellation.is_paused());
+        thread::sleep(StdDuration::from_millis(1_000));
+        assert!(
+            !worker.is_finished(),
+            "time spent in an acknowledged pause must not exhaust the active execution budget"
+        );
+
+        cancellation.resume();
+        wait_until(|| !cancellation.is_paused());
+        wait_until(|| worker.is_finished());
+        let (outcome, created) = worker.join().expect("runtime thread");
+        let error = outcome.expect_err("active execution must exhaust its remaining timeout");
+        assert!(
+            error
+                .to_string()
+                .contains(CONTAINER_EXECUTION_TIMEOUT_ERROR)
+        );
+        assert_eq!(
+            created.as_ref().map(CreatedContainer::immutable_id),
+            Some(immutable_id.as_str())
+        );
+
+        let commands = fs::read_to_string(log).expect("runtime log");
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("pause {immutable_id}"))
+        );
+        assert!(
+            commands
+                .lines()
+                .any(|line| line == format!("unpause {immutable_id}"))
+        );
+        assert!(
+            commands
                 .lines()
                 .any(|line| line == format!("stop --time 5 {immutable_id}"))
         );

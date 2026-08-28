@@ -327,7 +327,7 @@ const copy = {
   cleanupListEyebrow: { en: "Temporary-access cleanup", zhTW: "暫時存取清理" },
   cleanupListTitle: { en: "Earlier setup work still has a cleanup record", zhTW: "先前的暫時設定仍有清理紀錄" },
   cleanupListBody: { en: "These records contain no credentials. Reconnecting lets the app remove only the exact resources already recorded.", zhTW: "這些紀錄不含憑證；重新授權後，程式只會移除已精確記錄的資源。" },
-  cleanupProgress: { en: "{completed} of {total} cleanup items finished", zhTW: "{total} 個清理項目已完成 {completed} 個" },
+  cleanupProgress: { en: "Cleanup items finished: {completed} of {total}", zhTW: "{total} 個清理項目已完成 {completed} 個" },
   cleanupResume: { en: "Reconnect and continue cleanup", zhTW: "重新授權並繼續清理" },
   cleanupSelectProvider: { en: "Select the {provider} source first", zhTW: "請先選擇 {provider} 來源" },
   cleanupTechnical: { en: "Cleanup tracking details", zhTW: "清理追蹤細節" },

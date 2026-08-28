@@ -6,7 +6,6 @@ const automaticallyRecoverablePhases = new Set([
   "not_installed",
   "installed",
   "stopped",
-  "starting",
 ]);
 
 const firstInstallationPhases = new Set(["not_installed", "installed"]);
@@ -35,7 +34,9 @@ export const shouldShowRuntimeFirstLaunch = (
  * Starts only a safe, product-owned lifecycle operation. The backend performs
  * the authoritative read-only host check first. It never elevates or changes
  * Windows optional features; when WSL is unavailable it stops with one typed
- * instruction that the UI can explain clearly.
+ * instruction that the UI can explain clearly. A `starting` runtime already
+ * has a live managed machine whose API probe is temporarily unavailable, so it
+ * must be allowed to settle instead of launching a second lifecycle operation.
  */
 export const shouldAutomaticallyPrepareRuntime = (
   mode: AppMode,

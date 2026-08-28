@@ -310,7 +310,7 @@ func planInvocation(engineID string, inputProfile string) (invocation, error) {
 				"filesystem", "--cache-dir", "/opt/ai-security-scanner/trivy-cache",
 				"--cache-backend", "memory",
 				"--skip-db-update", "--skip-java-db-update", "--offline-scan",
-				"--pkg-types", "os", "--skip-version-check", "--disable-telemetry",
+				"--pkg-types", "library", "--skip-version-check", "--disable-telemetry",
 				"--skip-vex-repo-update", "--scanners", "vuln",
 				"--format", "json", "--output", result.outputPath, "/workspace",
 			}

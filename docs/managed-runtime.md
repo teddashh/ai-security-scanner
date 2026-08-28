@@ -142,11 +142,14 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   imports and operates the distribution; no ancestor, identity, configuration, cache, or runtime
   directory receives the LocalSystem grant. The caller-selected data-directory root is never
   rewritten. Before creating or accepting that namespace, the app opens the canonical local
-  ancestor chain without following reparse points and rejects an untrusted owner,
-  malformed/unsupported ACL, or any untrusted grant of namespace-replacement rights. Each manager
-  then retains a no-delete-share handle that pins the exact verified, non-reparse state-root object
-  for its lifetime. An unsafe parent or pre-existing namespace is rejected rather than silently
-  repaired.
+  ancestor chain without following reparse points and rejects an untrusted owner or any
+  malformed/unsupported ACL. Untrusted namespace-replacement grants remain forbidden except for
+  capability SIDs on the exact `FOLDERID_LocalAppData` directory and its `AppData` parent. Those two
+  ordinary Windows profile layers are accepted only when the caller's canonical chain contains the
+  OS-resolved LocalAppData object. Each manager retains no-delete-share handles for that complete
+  verified chain and the non-reparse state-root object for its lifetime; the capability exception
+  never extends to the app data directory or a managed descendant. An unsafe parent or pre-existing
+  namespace is rejected rather than silently repaired.
 - Every private Windows file creation additionally pins and verifies its canonical immediate parent
   before `CREATE_NEW`. The parent must retain that exact protected current-user-only inheritable
   DACL; otherwise creation fails before any staging entry exists. The new child is then read back by

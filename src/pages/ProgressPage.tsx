@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Icon } from "../components/Icon";
 import { EmptyState, InlineNotice, MetricCard, PageHeader, ProgressBar } from "../components/Shared";
@@ -25,6 +25,11 @@ import {
   skippedChecksNextStepFor,
 } from "../scanPresentation";
 import { isCapturedEvidenceBlocker } from "../scanReadiness";
+import {
+  canStartPreparedScan,
+  findRunCreatedAfterStart,
+  hasActiveScanWork,
+} from "../freshScanSelection";
 import type {
   EngineRun,
   EngineRunStatus,
@@ -37,11 +42,13 @@ import "./page-technical-details.css";
 import { displayTechnicalDetail } from "./pageTechnicalDetails";
 
 interface ProgressPageProps {
+  caseId?: string;
   runs: ScanRun[];
   readiness?: ScanReadiness;
   readinessCheckFailed?: boolean;
   diagnosticContext?: ScanDiagnosticContext;
   busy?: boolean;
+  starting?: boolean;
   onStart: () => Promise<void>;
   onFixSetup: () => void;
   onOpenToolSetup: () => void;
@@ -69,8 +76,36 @@ const copy = {
     en: "When you are ready, start the scan and follow every check here as results arrive.",
     zhTW: "準備好後就開始掃描；每項檢查與新結果都會顯示在這裡。",
   },
+  startingTitle: { en: "Starting your scan…", zhTW: "正在開始掃描…" },
+  startingDescription: {
+    en: "Your request is in progress. The app is validating the saved target and permissions, then it will show the new scan here automatically.",
+    zhTW: "你的要求正在處理中。程式正在驗證已保存的目標與許可，完成後會自動在這裡顯示新的掃描。",
+  },
+  startingAction: { en: "Starting scan…", zhTW: "正在開始掃描…" },
+  startingActivityTitle: { en: "Preparing the new scan", zhTW: "正在準備新的掃描" },
+  startingActivityDescription: {
+    en: "The app is still creating the new scan entry, so per-tool progress is not available yet. This page will update automatically.",
+    zhTW: "程式仍在建立新的掃描紀錄，因此目前還沒有各工具進度可顯示；這個頁面會自動更新。",
+  },
+  startingNewTitle: { en: "Starting a new scan…", zhTW: "正在開始新的掃描…" },
+  startingNewDescription: {
+    en: "The previous scan remains visible while the app validates the saved target and creates the new scan. The page will switch when the new scan entry is available.",
+    zhTW: "程式驗證已保存的目標並建立新掃描時，先前的掃描仍會顯示；新的掃描紀錄可用後，頁面會自動切換。",
+  },
   start: { en: "Start scan", zhTW: "開始掃描" },
   startFreshScan: { en: "Start a new scan for fresh results", zhTW: "開始新的掃描取得新結果" },
+  releaseIncompatibleTitle: {
+    en: "Some saved checks need a new scan",
+    zhTW: "部分已保存的檢查需要新的掃描",
+  },
+  releaseIncompatibleBody: {
+    en: "These checks were created by a different app release and cannot be continued safely. Nothing from the earlier scan will be rerun or changed. Start a new scan to run them with this release.",
+    zhTW: "這些檢查由不同版本的應用程式建立，無法安全續跑。先前掃描的內容不會重新執行或變更；請開始新的掃描，以目前版本執行這些檢查。",
+  },
+  releaseIncompatibleActiveBody: {
+    en: "These checks were created by a different app release and cannot be continued safely. Compatible saved checks can still continue. Nothing from the earlier scan will be rerun or changed; after this scan finishes or is cancelled, start a new scan to run these checks with this release.",
+    zhTW: "這些檢查由不同版本的應用程式建立，無法安全續跑；相容的已保存檢查仍可繼續。先前掃描的內容不會重新執行或變更；請在這次掃描完成或取消後開始新的掃描，以目前版本執行這些檢查。",
+  },
   checkingReady: { en: "Checking what is ready…", zhTW: "正在確認可以執行的檢查…" },
   readinessUnavailableTitle: { en: "We could not check what is ready", zhTW: "目前無法確認掃描準備狀態" },
   readinessUnavailableDescription: {
@@ -233,15 +268,15 @@ const copy = {
     zhTW: "請開啟掃描設定，完成畫面上的步驟，再開始新的掃描。",
   },
   downloadLog: { en: "Download diagnostic log", zhTW: "下載診斷紀錄" },
-  skippedTechnical: { en: "Technical records from {count} skipped checks", zhTW: "{count} 項未執行檢查的技術紀錄" },
-  skippedGroupTitle: { en: "{count} planned checks did not start", zhTW: "{count} 項預定檢查沒有開始" },
+  skippedTechnical: { en: "Technical records — skipped checks: {count}", zhTW: "{count} 項未執行檢查的技術紀錄" },
+  skippedGroupTitle: { en: "Planned checks that did not start: {count}", zhTW: "{count} 項預定檢查沒有開始" },
   sharedFailureTitle: { en: "The private scan engine did not start", zhTW: "私有掃描引擎沒有啟動" },
   sharedFailureBody: {
-    en: "One scan-tool problem stopped {count} checks before they could inspect anything. Repair the scan tools, then retry the stopped checks.",
+    en: "One scan-tool problem stopped checks before they could inspect anything. Checks stopped: {count}. Repair the scan tools, then retry them.",
     zhTW: "同一個掃描工具問題讓 {count} 項檢查在讀取任何內容前就停止。請修復掃描工具，再重試已停止的檢查。",
   },
   openToolSetup: { en: "Open scan-tool setup", zhTW: "開啟掃描工具設定" },
-  aggregateTechnical: { en: "Technical records from {count} checks", zhTW: "{count} 項檢查的技術紀錄" },
+  aggregateTechnical: { en: "Technical records — checks: {count}", zhTW: "{count} 項檢查的技術紀錄" },
   diagnosticPrivacy: {
     en: "The diagnostic log excludes target names, asset IDs, raw evidence, paths, and scanner messages.",
     zhTW: "診斷紀錄不包含目標名稱、資產 ID、原始證據、檔案路徑或掃描工具訊息。",
@@ -255,8 +290,8 @@ const copy = {
   currentActivity: { en: "What is happening now", zhTW: "現在正在做什麼" },
   lastProgress: { en: "Last progress update", zhTW: "最後一次進度更新" },
   delayedProgress: {
-    en: "No newer progress has been saved for {count} minutes. The scan tool may still be working; the timeline below shows its last confirmed step.",
-    zhTW: "已有 {count} 分鐘沒有保存新的進度。掃描工具可能仍在執行；下方時間軸會顯示最後確認的步驟。",
+    en: "Minutes since newer progress was saved: {count}. The scan tool may still be working; every tool has a built-in stop limit, and the timeline below shows its last confirmed step.",
+    zhTW: "已有 {count} 分鐘沒有保存新的進度。掃描工具可能仍在執行；每個工具都有內建停止時限，下方時間軸會顯示最後確認的步驟。",
   },
   activityLog: { en: "Event log", zhTW: "事件紀錄" },
   activityLogDescription: {
@@ -364,20 +399,20 @@ const copy = {
     zhTW: "應用程式關閉時，掃描已暫停",
   },
   interruptedBody: {
-    en: "{count} checks are waiting. Continue where you left off, or cancel this scan and keep the results already saved.",
+    en: "Checks waiting: {count}. Continue where you left off, or cancel this scan and keep the results already saved.",
     zhTW: "有 {count} 項檢查正在等待。你可以從中斷處繼續，或取消這次掃描並保留已存下的結果。",
   },
   resumeOriginal: { en: "Continue the original scope", zhTW: "繼續原本的範圍" },
   cancelKeepRecord: { en: "Cancel and keep the record", zhTW: "取消並保留紀錄" },
   expiredTitle: { en: "Update needed before checking fixes again", zhTW: "再次確認修復前，需要先更新" },
   expiredBody: {
-    en: "{count} checks need newer security knowledge. Your existing results stay available; update the scan tools before running a new comparison.",
+    en: "Checks needing newer security knowledge: {count}. Your existing results stay available; update the scan tools before running a new comparison.",
     zhTW: "有 {count} 項檢查需要更新資安知識。現有結果仍可查看；執行新的前後比較前，請先更新掃描工具。",
   },
   runIdTitle: { en: "Local scan run ID", zhTW: "本機掃描輪次 ID" },
   processed: { en: "{percent}% processed", zhTW: "已處理 {percent}%" },
   runSummary: {
-    en: "Fully checked {covered} of {total} targets · Started {started}",
+    en: "Targets fully checked: {covered} of {total} · Started {started}",
     zhTW: "已完整檢查 {covered}／{total} 個目標 · 開始於 {started}",
   },
   finished: { en: " · Ended {finished}", zhTW: " · 結束於 {finished}" },
@@ -401,7 +436,7 @@ const copy = {
   notRunTechnical: { en: "A check that did not run is not a passed check.", zhTW: "未執行的檢查不能視為已通過。" },
   ledgerAria: { en: "Counts for every scanner state", zhTW: "所有掃描工具狀態數量" },
   scannerStates: { en: "Scanner states", zhTW: "掃描工具狀態" },
-  terminalCount: { en: "{done} of {total} have a clear final outcome", zhTW: "{done}／{total} 個已有明確最終結果" },
+  terminalCount: { en: "Final outcomes: {done} of {total}", zhTW: "{done}／{total} 個已有明確最終結果" },
   incompleteTitle: { en: "This run did not cover everything", zhTW: "這一輪沒有完整涵蓋" },
   incompleteBody: {
     en: "Some checks did not finish. You can still review the results that arrived, then open a check below to see what needs attention.",
@@ -434,7 +469,7 @@ const copy = {
   checkpoint: { en: "Saved restart point", zhTW: "已保存的接續點" },
   attempt: { en: "Attempt", zhTW: "嘗試次數" },
   evidence: { en: "Evidence", zhTW: "證據" },
-  evidenceCount: { en: "{count} files", zhTW: "{count} 份" },
+  evidenceCount: { en: "Files: {count}", zhTW: "{count} 份" },
   authorizationPlan: { en: "Target and permission plan", zhTW: "目標與權限計畫" },
   authorizationFrozen: { en: "Frozen for this run", zhTW: "已為這一輪固定" },
   authorizationUnknown: { en: "Not recorded in this older run", zhTW: "這個舊輪次未記錄" },
@@ -445,7 +480,7 @@ const copy = {
   cleanupDone: { en: "Done", zhTW: "完成" },
   cleanupPending: { en: "Still needed", zhTW: "仍待處理" },
   legacyFindingUnknown: { en: "Problem count unavailable", zhTW: "目前無法取得問題數量" },
-  findingCount: { en: "{count} findings", zhTW: "{count} 個問題" },
+  findingCount: { en: "Findings: {count}", zhTW: "{count} 個問題" },
   targets: { en: "Targets", zhTW: "目標數" },
   rawEvidenceFiles: { en: "Raw evidence files", zhTW: "原始證據檔案" },
   technicalDetails: { en: "Technical status and errors", zhTW: "技術狀態與錯誤" },
@@ -591,11 +626,13 @@ const engineIcon = (engine: EngineRun) => {
 };
 
 export function ProgressPage({
+  caseId,
   runs,
   readiness,
   readinessCheckFailed,
   diagnosticContext,
   busy,
+  starting,
   onStart,
   onFixSetup,
   onOpenToolSetup,
@@ -605,6 +642,9 @@ export function ProgressPage({
 }: ProgressPageProps) {
   const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
   const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id);
+  const startRunIds = useRef<{ caseId?: string; ids: Set<string> } | undefined>(undefined);
+  const scanWorkActive = hasActiveScanWork(runs);
+  const canStart = canStartPreparedScan(readiness, Boolean(readinessCheckFailed), runs);
   const blockerPresentation = readiness?.blockerCode
     ? readinessPresentation[readiness.blockerCode]
     : undefined;
@@ -617,9 +657,13 @@ export function ProgressPage({
     && readiness?.blockerCode
     && installerBlockers.has(readiness.blockerCode),
   );
+  const requestStart = () => {
+    startRunIds.current = { caseId, ids: new Set(runs.map((run) => run.id)) };
+    void onStart();
+  };
   const runReadinessAction = () => {
     if (startFreshScan) {
-      void onStart();
+      requestStart();
       return;
     }
     onFixSetup();
@@ -649,6 +693,18 @@ export function ProgressPage({
   useEffect(() => {
     if (!runs.some((run) => run.id === selectedRunId)) setSelectedRunId(runs[0]?.id);
   }, [runs, selectedRunId]);
+
+  useEffect(() => {
+    const baseline = startRunIds.current;
+    if (!baseline || baseline.caseId !== caseId) return;
+    const createdRunId = findRunCreatedAfterStart(runs, baseline.ids);
+    if (createdRunId) {
+      setSelectedRunId(createdRunId);
+      startRunIds.current = undefined;
+    } else if (!starting) {
+      startRunIds.current = undefined;
+    }
+  }, [caseId, runs, starting]);
 
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0];
   const [activityClock, setActivityClock] = useState(() => new Date());
@@ -743,10 +799,14 @@ export function ProgressPage({
         <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.title)} description={text(copy.description)} />
         <EmptyState
           icon="progress"
-          title={text(emptyTitle)}
-          description={text(emptyDescription)}
-          action={readiness?.ready ? (
-            <button className="button button--primary" type="button" disabled={busy} onClick={() => void onStart()}>
+          title={text(starting ? copy.startingTitle : emptyTitle)}
+          description={text(starting ? copy.startingDescription : emptyDescription)}
+          action={starting ? (
+            <button className="button button--primary" type="button" disabled aria-busy="true">
+              <Icon name="progress" size={17} />{text(copy.startingAction)}
+            </button>
+          ) : readiness?.ready ? (
+            <button className="button button--primary" type="button" disabled={busy} onClick={requestStart}>
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
           ) : needsLatestInstaller ? (
@@ -768,12 +828,12 @@ export function ProgressPage({
             </button>
           )}
         />
-        <section className={`scan-activity${readiness?.ready ? "" : " scan-activity--delayed"}`} aria-labelledby="scan-preflight-activity-title">
+        <section className={`scan-activity${readiness?.ready || starting ? "" : " scan-activity--delayed"}`} aria-labelledby="scan-preflight-activity-title">
           <div className="section-heading section-heading--row">
             <div>
               <p className="eyebrow">{text(copy.activityEyebrow)}</p>
-              <h2 id="scan-preflight-activity-title">{text(copy.noRunActivityTitle)}</h2>
-              <p>{text(copy.noRunActivityDescription)}</p>
+              <h2 id="scan-preflight-activity-title">{text(starting ? copy.startingActivityTitle : copy.noRunActivityTitle)}</h2>
+              <p>{text(starting ? copy.startingActivityDescription : copy.noRunActivityDescription)}</p>
               <small>{text(copy.lastReadinessCheck)} · {readiness?.checkedAt
                 ? showDateTime(readiness.checkedAt)
                 : text(copy.noReadinessTimestamp)}</small>
@@ -782,6 +842,16 @@ export function ProgressPage({
               <Icon name="download" size={15} />{text(copy.downloadTechnicalLog)}
             </button>
           </div>
+          {starting && (
+            <div className="scan-activity__current" role="status">
+              <span className="scan-activity__icon"><Icon name="progress" size={20} /></span>
+              <div>
+                <small>{text(copy.currentActivity)}</small>
+                <strong>{text(copy.startingTitle)}</strong>
+                <p>{text(copy.startingActivityDescription)}</p>
+              </div>
+            </div>
+          )}
           <div className="scan-activity__log">
             <div>
               <strong>{text(copy.activityLog)}</strong>
@@ -842,6 +912,9 @@ export function ProgressPage({
     || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine)
   );
   const canCancel = selectedRun.status === "running" || selectedRun.status === "paused" || selectedRun.status === "queued";
+  const hasReleaseIncompatibleWork = selectedRun.engineRuns.some(
+    (engine) => engine.errorCode === "resume_release_incompatible",
+  );
   const interruptedEngines = selectedRun.engineRuns.filter(
     (engine) => engine.phase === "interrupted_restart" || engine.errorCode === "desktop_process_restarted",
   );
@@ -873,6 +946,11 @@ export function ProgressPage({
         description={text(copy.description)}
         actions={(
           <div className="button-group">
+            {canStart && !hasReleaseIncompatibleWork && (
+              <button className="button button--primary" type="button" disabled={busy || starting} aria-busy={starting} onClick={requestStart}>
+                <Icon name={starting ? "progress" : "play"} size={17} />{text(starting ? copy.startingAction : copy.start)}
+              </button>
+            )}
             {canPause && (
               <button className="button button--secondary" type="button" disabled={busy} aria-label={text(copy.pauseAria, { id: selectedRun.id })} onClick={() => void onPause(selectedRun.id)}>
                 <Icon name="pause" size={17} />{text(copy.pause)}
@@ -891,6 +969,25 @@ export function ProgressPage({
           </div>
         )}
       />
+
+      {starting && (
+        <InlineNotice tone="info" title={text(copy.startingNewTitle)}>
+          <p role="status">{text(copy.startingNewDescription)}</p>
+        </InlineNotice>
+      )}
+
+      {hasReleaseIncompatibleWork && (
+        <InlineNotice tone="warning" title={text(copy.releaseIncompatibleTitle)}>
+          <p>{text(scanWorkActive
+            ? copy.releaseIncompatibleActiveBody
+            : copy.releaseIncompatibleBody)}</p>
+          {!scanWorkActive && (
+            <button className="button button--primary button--small" type="button" disabled={busy || starting} onClick={requestStart}>
+              <Icon name="play" size={15} />{text(copy.startFreshScan)}
+            </button>
+          )}
+        </InlineNotice>
+      )}
 
       {readinessCheckFailed && (
         <InlineNotice tone="warning" title={text(copy.readinessUnavailableTitle)}>

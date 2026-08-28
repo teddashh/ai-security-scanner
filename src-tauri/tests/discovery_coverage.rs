@@ -6,9 +6,13 @@ use ai_security_scanner_lib::discovery::{
     DiscoveryConnector, DiscoveryError, reconcile_discovery, run_connector,
 };
 use ai_security_scanner_lib::domain::*;
+use ai_security_scanner_lib::external_scope::{
+    CanonicalTarget, DirectNetworkTargetKind, ExternalActivity, ExternalScopeGrant, RatePolicy,
+    TemplatePolicy, TransportProtocol,
+};
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn timestamp(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
@@ -407,6 +411,7 @@ fn manifest() -> EngineManifest {
             blocked_by: vec![],
             ..EngineCompatibility::default()
         },
+        execution: None,
     }
 }
 
@@ -432,6 +437,7 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
         distribution_mode: None,
         image_repository: None,
         command_sha256: None,
+        execution_timeout_seconds: None,
         knowledge_input: None,
         scope_contract_sha256: None,
         mapping_version: None,
@@ -641,6 +647,87 @@ fn completed_provider_incompatible_run_never_becomes_green() {
         compatible.status,
         CoverageStatus::DiscoveredAuthorizedScanned
     );
+}
+
+#[test]
+fn active_low_impact_engine_uses_its_declared_permission_for_coverage() {
+    let as_of = timestamp("2026-01-10T00:00:00Z");
+    let mut case = empty_case();
+    let mut endpoint = asset("endpoint", "source", true);
+    endpoint.kind = AssetKind::IpAddress;
+    endpoint.provider = None;
+    endpoint.identifiers = vec![AssetIdentifier {
+        namespace: "ip_address".into(),
+        value: "127.0.0.1".into(),
+    }];
+    case.assets.push(endpoint);
+
+    let mut low_impact = grant("grant-endpoint", "endpoint");
+    low_impact.permission = ScanPermission::LowImpactExternalConnection;
+    low_impact.authorization_reference = Some("owner-confirmed endpoint QC".into());
+    low_impact.external_scope = Some(ExternalScopeGrant {
+        id: low_impact.id.clone(),
+        case_id: case.id.clone(),
+        asset_id: low_impact.asset_id.clone(),
+        target: CanonicalTarget::parse("127.0.0.1").unwrap(),
+        ports: BTreeSet::from([9001]),
+        protocol: TransportProtocol::Http,
+        activity: ExternalActivity::LowImpactExternal,
+        rate_policy: RatePolicy {
+            requests_per_second: 1,
+            concurrency: 1,
+            timeout_seconds: 60,
+        },
+        template_policy: TemplatePolicy::conservative("not_applicable", vec![]),
+        asserted_authority: "owner-confirmed endpoint QC".into(),
+        approved_by: "owner@example.test".into(),
+        approved_at: timestamp("2026-01-01T00:00:00Z"),
+        expires_at: timestamp("2026-01-31T00:00:00Z"),
+        allow_sensitive_networks: true,
+    });
+    low_impact.expires_at = Some(timestamp("2026-01-31T00:00:00Z"));
+    case.scope_grants.push(low_impact.clone());
+
+    let mut completed = engine_run("run", "endpoint", EngineRunStatus::Completed);
+    completed.engine_id = "httpx".into();
+    case.scan_runs.push(ScanRun {
+        id: "run".into(),
+        case_id: case.id.clone(),
+        sequence: 1,
+        created_at: timestamp("2026-01-04T00:00:00Z"),
+        completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+        knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
+        verification_baseline_run_id: None,
+        scope_grant_ids: vec![low_impact.id.clone()],
+        scope_grant_snapshots: vec![low_impact],
+        engine_runs: vec![completed],
+    });
+
+    let mut httpx = manifest();
+    httpx.id = "httpx".into();
+    httpx.category = EngineCategory::ExternalAttackSurface;
+    httpx.supported_asset_kinds = vec![AssetKind::IpAddress];
+    httpx.direct_network_contract = Some(DirectNetworkExecutionContract {
+        target_kinds: vec![DirectNetworkTargetKind::Address],
+        protocols: vec![TransportProtocol::Http],
+    });
+    httpx.required_permissions = vec![ScanPermission::LowImpactExternalConnection];
+    httpx.active_external = true;
+
+    let compatible = assess_asset_coverage(&case, &case.assets[0], &[httpx.clone()], as_of);
+    assert_eq!(
+        compatible.status,
+        CoverageStatus::DiscoveredAuthorizedScanned,
+        "active execution must not invent an ActiveExternalTesting requirement"
+    );
+
+    case.scan_runs[0].scope_grant_snapshots[0].permission = ScanPermission::ActiveExternalTesting;
+    let wrong_permission = assess_asset_coverage(&case, &case.assets[0], &[httpx], as_of);
+    assert_eq!(
+        wrong_permission.status,
+        CoverageStatus::AuthorizedScanIncomplete
+    );
+    assert!(wrong_permission.explanation.contains("scope_incompatible"));
 }
 
 #[test]

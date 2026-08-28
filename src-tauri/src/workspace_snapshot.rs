@@ -2,13 +2,17 @@
 //!
 //! The snapshot intentionally represents only working-tree contents. Every entry
 //! named `.git` is excluded without being opened or followed, so Git history,
-//! refs, hooks, credentials, and worktree pointers are never copied. The caller
-//! must obtain `selected_source_directory` through a trusted backend selection
-//! flow; no destination path is accepted from the frontend.
+//! refs, hooks, credentials, and worktree pointers are never copied. Repository
+//! inputs also honor repository-local root and nested `.gitignore` files;
+//! external/global ignore configuration is deliberately not consulted. Explicit
+//! non-repository profiles retain their original unfiltered content semantics.
+//! The caller must obtain `selected_source_directory` through a trusted backend
+//! selection flow; no destination path is accepted from the frontend.
 
 use crate::domain::{Asset, AssetIdentifier, LocalInputProfile};
 use crate::error::{AppError, AppResult};
 use flate2::read::MultiGzDecoder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -21,7 +25,8 @@ use uuid::Uuid;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
-pub const WORKSPACE_SNAPSHOT_SCHEMA: &str = "ai-security-scanner.workspace-snapshot/v1";
+pub const WORKSPACE_SNAPSHOT_SCHEMA: &str = "ai-security-scanner.workspace-snapshot/v2";
+const LEGACY_WORKSPACE_SNAPSHOT_SCHEMA: &str = "ai-security-scanner.workspace-snapshot/v1";
 pub const WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA: &str =
     "ai-security-scanner.workspace-snapshot-reference/v1";
 pub const WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY: &str =
@@ -40,6 +45,7 @@ const COPY_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_COMPONENT_BYTES: usize = 255;
 const MAX_RELATIVE_PATH_BYTES: usize = 4_096;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_GITIGNORE_BYTES: u64 = 8 * 1024 * 1024;
 const HARD_MAX_FILES: usize = 200_000;
 const HARD_MAX_DIRECTORIES: usize = 100_000;
 const HARD_MAX_TOTAL_BYTES: u64 = 10 * 1024 * 1024 * 1024;
@@ -114,6 +120,19 @@ pub struct WorkspaceSnapshotFile {
     pub sha256: String,
 }
 
+/// The source-side filtering applied before immutable snapshot publication.
+///
+/// Version 1 manifests predate this field and are still accepted as the
+/// legacy Git-metadata-only policy. New manifests always record a policy so a
+/// verifier can distinguish repository-local `.gitignore` filtering from the
+/// deliberately unfiltered non-repository input profiles.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceSnapshotExclusionPolicy {
+    RepositoryGitignoreV1,
+    GitMetadataOnlyV1,
+}
+
 /// Canonical manifest bytes are compact JSON serialization of this structure.
 /// No timestamp, host path, random identifier, or filesystem metadata enters
 /// the manifest, making its SHA-256 stable for identical working-tree content.
@@ -124,6 +143,8 @@ pub struct WorkspaceSnapshotManifest {
     pub content_semantics: String,
     #[serde(default, skip_serializing_if = "WorkspaceInputProfile::is_repository")]
     pub input_profile: WorkspaceInputProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclusion_policy: Option<WorkspaceSnapshotExclusionPolicy>,
     pub excluded_entries: Vec<String>,
     pub directories: Vec<String>,
     pub files: Vec<WorkspaceSnapshotFile>,
@@ -222,6 +243,7 @@ pub fn create_workspace_snapshot_with_profile(
     create_private_directory(&tree_path)?;
 
     let mut copy_state = CopyState::default();
+    let mut exclusion_state = CopyExclusionState::for_profile(input_profile);
     copy_directory(
         &selected_source,
         &tree_path,
@@ -230,6 +252,7 @@ pub fn create_workspace_snapshot_with_profile(
         &selected_source,
         limits,
         &mut copy_state,
+        &mut exclusion_state,
     )?;
     validate_copied_input_files(&tree_path, &copy_state, input_profile)?;
     if !input_profile.is_repository() {
@@ -246,6 +269,11 @@ pub fn create_workspace_snapshot_with_profile(
         schema_version: WORKSPACE_SNAPSHOT_SCHEMA.into(),
         content_semantics: WORKING_TREE_SEMANTICS.into(),
         input_profile,
+        exclusion_policy: Some(if input_profile.is_repository() {
+            WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1
+        } else {
+            WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV1
+        }),
         excluded_entries: vec![".git".into()],
         directory_count: copy_state.directories.len(),
         file_count: copy_state.files.len(),
@@ -410,6 +438,7 @@ struct CopyState {
     directories: Vec<String>,
     files: Vec<WorkspaceSnapshotFile>,
     total_bytes: u64,
+    gitignore_bytes_read: u64,
 }
 
 #[derive(Default)]
@@ -417,6 +446,43 @@ struct VerificationState {
     directories: Vec<String>,
     files: Vec<WorkspaceSnapshotFile>,
     total_bytes: u64,
+}
+
+enum CopyExclusionState {
+    GitMetadataOnly,
+    RepositoryGitignore { matchers: Vec<Gitignore> },
+}
+
+impl CopyExclusionState {
+    fn for_profile(input_profile: WorkspaceInputProfile) -> Self {
+        if input_profile.is_repository() {
+            Self::RepositoryGitignore {
+                matchers: Vec::new(),
+            }
+        } else {
+            Self::GitMetadataOnly
+        }
+    }
+
+    fn repository_path_is_ignored(&self, path: &Path, is_directory: bool) -> bool {
+        let Self::RepositoryGitignore { matchers } = self else {
+            return false;
+        };
+        for matcher in matchers.iter().rev() {
+            let matched = matcher.matched(path, is_directory);
+            if !matched.is_none() {
+                return matched.is_ignore();
+            }
+        }
+        false
+    }
+}
+
+struct GitignoreSourceProof {
+    source_path: PathBuf,
+    relative_path: String,
+    byte_length: u64,
+    sha256: String,
 }
 
 fn copy_directory(
@@ -427,6 +493,7 @@ fn copy_directory(
     source_root: &Path,
     limits: WorkspaceSnapshotLimits,
     state: &mut CopyState,
+    exclusion_state: &mut CopyExclusionState,
 ) -> AppResult<()> {
     let before = inspect_real_directory(source_directory, source_root)?;
     let entries = sorted_directory_entries(
@@ -436,6 +503,37 @@ fn copy_directory(
             .saturating_add(limits.max_directories)
             .saturating_add(1),
     )?;
+    let gitignore_source = entries
+        .iter()
+        .find(|(name, _)| name == ".gitignore")
+        .map(|(_, path)| path.as_path());
+    let gitignore_proof = match exclusion_state {
+        CopyExclusionState::RepositoryGitignore { matchers } => {
+            let (matcher, proof) = load_repository_gitignore(
+                source_directory,
+                gitignore_source,
+                relative_components,
+                limits,
+            )?;
+            if let Some(proof) = proof.as_ref() {
+                state.gitignore_bytes_read = state
+                    .gitignore_bytes_read
+                    .checked_add(proof.byte_length)
+                    .ok_or_else(|| {
+                        AppError::Runtime("repository ignore-rule byte count overflowed".into())
+                    })?;
+                if state.gitignore_bytes_read > limits.max_total_bytes {
+                    return Err(AppError::InvalidRequest(
+                        "repository ignore rules exceed the snapshot total-byte safety limit"
+                            .into(),
+                    ));
+                }
+            }
+            matchers.push(matcher);
+            proof
+        }
+        CopyExclusionState::GitMetadataOnly => None,
+    };
     for (name, source_path) in entries {
         if name.eq_ignore_ascii_case(".git") {
             continue;
@@ -449,6 +547,9 @@ fn copy_directory(
             ))
         })?;
         let file_type = metadata.file_type();
+        if exclusion_state.repository_path_is_ignored(&source_path, file_type.is_dir()) {
+            continue;
+        }
         if file_type.is_symlink() {
             return Err(AppError::InvalidRequest(format!(
                 "selected working tree contains a symlink at {relative_path}"
@@ -476,6 +577,7 @@ fn copy_directory(
                 source_root,
                 limits,
                 state,
+                exclusion_state,
             )?;
         } else if file_type.is_file() {
             if state.files.len() >= limits.max_files {
@@ -504,11 +606,99 @@ fn copy_directory(
             )));
         }
     }
+    if let Some(proof) = gitignore_proof {
+        verify_gitignore_source(&proof)?;
+    }
+    if let CopyExclusionState::RepositoryGitignore { matchers } = exclusion_state {
+        matchers.pop().ok_or_else(|| {
+            AppError::Internal("repository ignore matcher stack underflowed".into())
+        })?;
+    }
     let after = inspect_real_directory(source_directory, source_root)?;
     if before != after {
         return Err(AppError::Runtime(
             "selected working-tree directory changed while it was being copied".into(),
         ));
+    }
+    Ok(())
+}
+
+fn load_repository_gitignore(
+    source_directory: &Path,
+    gitignore_source: Option<&Path>,
+    relative_components: &[String],
+    limits: WorkspaceSnapshotLimits,
+) -> AppResult<(Gitignore, Option<GitignoreSourceProof>)> {
+    let Some(source_path) = gitignore_source else {
+        return Ok((Gitignore::empty(), None));
+    };
+    let metadata = fs::symlink_metadata(source_path).map_err(|error| {
+        AppError::Runtime(format!(
+            "repository .gitignore could not be inspected: {error}"
+        ))
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        // Git does not follow a symlink in place of a working-tree
+        // .gitignore. The ordinary entry path below will either exclude this
+        // entry through a parent rule or reject it under the snapshot's
+        // symlink/special-file policy.
+        return Ok((Gitignore::empty(), None));
+    }
+
+    let mut components = relative_components.to_vec();
+    components.push(".gitignore".into());
+    let relative_path = normalized_relative_path(&components)?;
+    let maximum_bytes = limits.max_file_bytes.min(MAX_GITIGNORE_BYTES);
+    let bytes = read_bounded_stable_file(source_path, maximum_bytes).map_err(|error| {
+        AppError::InvalidRequest(format!(
+            "repository ignore rules could not be read safely at {relative_path}: {error}"
+        ))
+    })?;
+    let contents = std::str::from_utf8(&bytes).map_err(|_| {
+        AppError::InvalidRequest(format!(
+            "repository ignore rules are not valid UTF-8 at {relative_path}"
+        ))
+    })?;
+    let mut builder = GitignoreBuilder::new(source_directory);
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = if line_index == 0 {
+            raw_line.trim_start_matches('\u{feff}')
+        } else {
+            raw_line
+        };
+        builder
+            .add_line(Some(source_path.to_path_buf()), line)
+            .map_err(|error| {
+                AppError::InvalidRequest(format!(
+                    "repository ignore rule is invalid at {relative_path}:{}: {error}",
+                    line_index + 1
+                ))
+            })?;
+    }
+    let matcher = builder.build().map_err(|error| {
+        AppError::InvalidRequest(format!(
+            "repository ignore rules could not be compiled at {relative_path}: {error}"
+        ))
+    })?;
+    let proof = GitignoreSourceProof {
+        source_path: source_path.to_path_buf(),
+        relative_path,
+        byte_length: bytes.len() as u64,
+        sha256: sha256_bytes(&bytes),
+    };
+    Ok((matcher, Some(proof)))
+}
+
+fn verify_gitignore_source(proof: &GitignoreSourceProof) -> AppResult<()> {
+    let verified = hash_bounded_stable_file(&proof.source_path, MAX_GITIGNORE_BYTES);
+    let (sha256, byte_length) = verified.map_err(|error| {
+        AppError::Runtime(format!(
+            "repository ignore rules changed while the snapshot was being copied at {}: {error}",
+            proof.relative_path
+        ))
+    })?;
+    if byte_length != proof.byte_length || sha256 != proof.sha256 {
+        return Err(changed_file_error(&proof.relative_path));
     }
     Ok(())
 }
@@ -718,7 +908,19 @@ fn validate_manifest(
         && manifest.directory_count == reference.directory_count
         && manifest.file_count == reference.file_count
         && manifest.total_bytes == reference.total_bytes;
-    if manifest.schema_version != WORKSPACE_SNAPSHOT_SCHEMA
+    let exclusion_policy_is_valid = match manifest.schema_version.as_str() {
+        LEGACY_WORKSPACE_SNAPSHOT_SCHEMA => manifest.exclusion_policy.is_none(),
+        WORKSPACE_SNAPSHOT_SCHEMA => {
+            manifest.exclusion_policy
+                == Some(if manifest.input_profile.is_repository() {
+                    WorkspaceSnapshotExclusionPolicy::RepositoryGitignoreV1
+                } else {
+                    WorkspaceSnapshotExclusionPolicy::GitMetadataOnlyV1
+                })
+        }
+        _ => false,
+    };
+    if !exclusion_policy_is_valid
         || manifest.content_semantics != WORKING_TREE_SEMANTICS
         || manifest.input_profile != reference.input_profile
         || manifest.excluded_entries != [".git"]

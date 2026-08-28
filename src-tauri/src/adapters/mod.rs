@@ -330,7 +330,11 @@ fn normalize_artifacts(
         processed_bytes += bytes.len() as u64;
 
         let warnings_before_parse = output.warnings.len();
-        let parsed = parse_artifact(&bytes, artifact, &mut output.warnings);
+        let parsed = if is_complete_empty_json_lines(adapter.profile, artifact, &bytes) {
+            Some(ParsedArtifact::JsonLines(Vec::new()))
+        } else {
+            parse_artifact(&bytes, artifact, &mut output.warnings)
+        };
         if output.warnings.len() > warnings_before_parse {
             output.complete = false;
         }
@@ -398,13 +402,61 @@ fn normalize_artifacts(
     Ok(output)
 }
 
+/// The released Naabu, HTTPx, Nuclei, and TruffleHog contracts are JSON streams
+/// containing one object per observation. A clean scan therefore produces a
+/// real, hashed output artifact with zero bytes (or only line-ending
+/// whitespace). Treat only those exact JSONL contracts as complete zero-record
+/// streams; document-shaped adapters keep their schema-specific empty checks.
+fn is_complete_empty_json_lines(profile: Profile, artifact: &RawArtifact, bytes: &[u8]) -> bool {
+    if !matches!(
+        profile,
+        Profile::Naabu | Profile::Httpx | Profile::Nuclei | Profile::Trufflehog
+    ) || bytes.iter().any(|byte| !byte.is_ascii_whitespace())
+    {
+        return false;
+    }
+    let extension_is_json_lines = Path::new(&artifact.relative_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(extension.to_ascii_lowercase().as_str(), "jsonl" | "ndjson")
+        });
+    extension_is_json_lines
+        || artifact
+            .media_type
+            .eq_ignore_ascii_case("application/x-ndjson")
+}
+
+/// Mapping catalogs cannot affect a released JSONL engine when its exact
+/// adapter input is a verified zero-byte stream: there are no source records
+/// from which a finding or control reference could be produced. This is kept
+/// deliberately narrower than normal adapter parsing (which also accepts
+/// whitespace-only streams) so cross-version resume planning can prove the
+/// exception from durable metadata plus the artifact hash alone.
+pub(crate) fn is_mapping_independent_empty_json_lines(
+    engine_id: &str,
+    artifact: &RawArtifact,
+) -> bool {
+    matches!(engine_id, "naabu" | "httpx" | "nuclei" | "trufflehog")
+        && artifact.byte_length == 0
+        && (Path::new(&artifact.relative_path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(extension.to_ascii_lowercase().as_str(), "jsonl" | "ndjson")
+            })
+            || artifact
+                .media_type
+                .eq_ignore_ascii_case("application/x-ndjson"))
+}
+
 /// Stdout and stderr are retained as raw evidence, but the released engine
 /// contract writes normalizer input below `/output`. Feeding the backend-owned
 /// stream captures to JSON/XML adapters would make every otherwise-valid run
 /// look malformed (including the normal empty-stream case). Match the complete
 /// private run layout so an engine-created `output/raw/stdout.log` remains
 /// ordinary untrusted output instead of being silently skipped.
-fn is_runtime_stream_capture_path(relative_path: &str) -> bool {
+pub(crate) fn is_runtime_stream_capture_path(relative_path: &str) -> bool {
     let mut components = Path::new(relative_path).components().rev();
     let Some(Component::Normal(file_name)) = components.next() else {
         return false;
@@ -2063,7 +2115,7 @@ fn merge_finding(
                 input.ai_system_applicable,
             ),
             recommendation: format!(
-                "Have a {} review the affected asset and the source rule's official guidance, then plan and approve a least-privilege configuration or code change.",
+                "Have the recommended specialist ({}) review the affected asset and the source rule's official guidance, then plan and approve a least-privilege configuration or code change.",
                 adapter.expert_type
             ),
             verification_guidance: format!(

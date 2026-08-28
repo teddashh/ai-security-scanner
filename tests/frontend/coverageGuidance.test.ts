@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   hasExactGuidedCloudConsent,
   matchesGuidedCoverageRoute,
+  recommendedGuidedNetworkPreset,
   shouldPromptForFirstAsset,
   singleGuidedPendingAsset,
 } from "../../src/coverageGuidance.ts";
@@ -95,4 +96,37 @@ test("the choose-item prompt disappears as soon as a guided item is selected", (
   assert.equal(shouldPromptForFirstAsset(1, 0), true);
   assert.equal(shouldPromptForFirstAsset(1, 1), false);
   assert.equal(shouldPromptForFirstAsset(0, 0), false);
+});
+
+test("a guided public domain starts with one runnable HTTPS service", () => {
+  assert.deepEqual(
+    recommendedGuidedNetworkPreset("external_ip_or_domain", "domain", "scanner.example.test"),
+    { protocol: "https", ports: [443] },
+  );
+});
+
+test("guided IP and CIDR targets retain a bounded conservative TCP inventory", () => {
+  const address = recommendedGuidedNetworkPreset("external_ip_or_domain", "ip", "203.0.113.10");
+  assert.equal(address.protocol, "tcp");
+  assert.deepEqual(address.ports.slice(0, 3), [80, 443, 22]);
+  assert.ok(address.ports.length > 2);
+
+  const network = recommendedGuidedNetworkPreset("external_ip_or_domain", "ip", "192.0.2.0/24");
+  assert.equal(network.protocol, "tcp");
+  assert.ok(network.ports.length > 0);
+  assert.ok(254 * network.ports.length < 10_000);
+
+  const ipv6Network = recommendedGuidedNetworkPreset("internal_it_environment", "ip", "fd00::/119");
+  assert.equal(ipv6Network.protocol, "tcp");
+  assert.ok(512 * ipv6Network.ports.length < 10_000);
+});
+
+test("an internal hostname keeps the infrastructure-oriented TCP preset", () => {
+  const preset = recommendedGuidedNetworkPreset(
+    "internal_it_environment",
+    "domain",
+    "printer.home.arpa",
+  );
+  assert.equal(preset.protocol, "tcp");
+  assert.deepEqual(preset.ports.slice(0, 3), [80, 443, 22]);
 });

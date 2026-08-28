@@ -6,6 +6,7 @@ import { StatusPill } from "../components/StatusPill";
 import { useI18n } from "../i18n";
 import { diffMeta, runStatusMeta, severityMeta } from "../lib";
 import type { DiffState, Finding, ScanRun, VerificationSummary } from "../types";
+import { affectedEngineCount, isOnlyMappingVersionDrift } from "../verificationPresentation";
 import "./page-technical-details.css";
 import { displayTechnicalDetail } from "./pageTechnicalDetails";
 
@@ -57,14 +58,14 @@ const copy = {
     zhTW: "{run} 仍在掃描中。請先到掃描進度完成或取消，再確認修復結果。",
   },
   noBaselineTitle: { en: "Run your first scan to create a starting point", zhTW: "先完成第一次掃描，建立比較起點" },
-  readyTitle: { en: "Ready to check the fix", zhTW: "已準備好確認修復" },
+  readyTitle: { en: "Ready to prepare the follow-up check", zhTW: "可以準備後續檢查" },
   noBaselineDescription: {
     en: "Complete at least one scan, then return here after making a change.",
     zhTW: "先完成至少一輪掃描；做完修復後，再回到這裡比較。",
   },
   selectedDescription: {
-    en: "We will compare the new check with {run} from {date}.",
-    zhTW: "新的檢查會和 {date} 的 {run} 比較。",
+    en: "We will first confirm the scanner tools, then compare the new check with {run} from {date}.",
+    zhTW: "我們會先確認掃描工具，再把新的檢查與 {date} 的 {run} 比較。",
   },
   handleActiveFirst: { en: "Handle the unfinished scan first", zhTW: "先處理未完成的掃描" },
   start: { en: "Check the fix again", zhTW: "重新檢查修復結果" },
@@ -78,7 +79,14 @@ const copy = {
   resolvedDetail: { en: "Not observed by the same check this time", zhTW: "相同檢查這次沒有再觀察到" },
   persistentDetail: { en: "The same problem is still observed", zhTW: "相同問題仍然存在" },
   newDetail: { en: "New scope or new evidence produced a finding", zhTW: "新範圍或新證據出現問題" },
-  unverifiableDetail: { en: "Permission, scope, or scanner state prevented comparison", zhTW: "權限、範圍或工具狀態使它無法比較" },
+  unverifiableDetail: {
+    en: "A comparison input changed or a scanner/target check was incomplete",
+    zhTW: "比較條件有變更，或某個掃描工具／目標檢查未完成",
+  },
+  mappingUnverifiableDetail: {
+    en: "Findings that could not be classified because control mappings changed",
+    zhTW: "因控制對照版本變更而無法分類的問題",
+  },
   resolvedCautionTitle: { en: "Not observed does not mean permanently safe", zhTW: "這次沒看到，不代表永久安全" },
   resolvedCautionBody: {
     en: "A clean recheck is encouraging, but it covers only the checks that ran this time. Review the evidence before closing the work.",
@@ -86,10 +94,22 @@ const copy = {
   },
   incompleteTitle: { en: "This verification could not compare everything", zhTW: "這次複驗沒有辦法比較所有項目" },
   incompleteBody: {
-    en: "Some checks did not finish or could not be matched. Those items stay under Could not verify and are not counted as fixed.",
-    zhTW: "有些檢查沒有完成或無法配對；這些項目會保留在「無法確認」，不會算成已修復。",
+    en: "Some scanner/target comparisons were incomplete or used different comparison inputs. Affected findings stay under Could not verify and are not counted as fixed.",
+    zhTW: "部分掃描工具／目標的比較未完成，或使用了不同的比較條件；受影響的問題會保留在「無法確認」，不會算成已修復。",
   },
-  issueCount: { en: "{count} comparison issues were recorded.", zhTW: "已記錄 {count} 個無法比較的原因。" },
+  issueCount: {
+    en: "Technical scanner/target comparison limitations recorded: {count}. This is not a security-finding count.",
+    zhTW: "已記錄 {count} 個掃描工具／目標的技術比較限制；這不是資安問題數量。",
+  },
+  mappingTitle: { en: "Scanner mappings changed between these scans", zhTW: "兩次掃描使用的對照映射版本不同" },
+  mappingBody: {
+    en: "The affected checks completed in both scans, but they used different control-mapping catalog versions. The app therefore cannot reliably classify affected findings as fixed, still present, or new.",
+    zhTW: "受影響的檢查在兩次掃描中都已完成，但使用了不同版本的控制對照目錄，因此系統無法可靠地把受影響的問題判定為已修復、仍存在或新出現。",
+  },
+  mappingEngineCount: {
+    en: "Affected scanner engines: {count}. This is an engine count, not a security-finding count.",
+    zhTW: "受影響的掃描引擎：{count}。這是引擎數量，不是資安問題數量。",
+  },
   technicalIssues: { en: "Technical comparison issues", zhTW: "無法比較的技術細節" },
   issueCode: { en: "Issue code", zhTW: "問題代碼" },
   scanner: { en: "Scanner", zhTW: "掃描工具" },
@@ -140,10 +160,15 @@ const stateSummaryCopy = {
     zhTW: "這個問題出現在新的掃描中；請先查看證據，再決定如何處理。",
   },
   unverifiable: {
-    en: "The app could not make a trustworthy comparison. Restore the missing scope, permission, or scanner work and try again.",
-    zhTW: "系統無法做出可信的比較；請補回缺少的範圍、權限或掃描工作後再試一次。",
+    en: "The app could not make a trustworthy comparison. Review the recorded comparison reason before deciding whether to run again.",
+    zhTW: "系統無法做出可信的比較；請先查看記錄的比較原因，再決定是否重新掃描。",
   },
 } as const satisfies Record<DiffState, { en: string; zhTW: string }>;
+
+const mappingDiffSummary = {
+  en: "This check completed in both scans, but the control-mapping catalog version changed. The app cannot reliably classify this finding as fixed, still present, or new.",
+  zhTW: "這項檢查在兩次掃描中都已完成，但控制對照目錄版本有變更，因此系統無法可靠地把這個問題判定為已修復、仍存在或新出現。",
+} as const;
 
 export function VerificationPage({ verification, runs, findings, baselineRunId, busy, onSelectBaseline, onStartRescan, onOpenFinding }: VerificationPageProps) {
   const { text, formatDateTime, formatNumber } = useI18n();
@@ -207,7 +232,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
             : text(copy.selectedDescription, { run: selectedBaselineRun.label, date: showRunDate(selectedBaselineRun) })}
           action={terminalRuns.length > 0 ? (
             <button className="button button--primary" type="button" disabled={busy || !canStart} onClick={() => selectedBaselineRun && void onStartRescan(selectedBaselineRun.id)}>
-              <Icon name="refresh" size={17} />{activeRun ? text(copy.handleActiveFirst) : text(copy.start)}
+              <Icon name="refresh" size={17} />{busy ? text(copy.preparing) : activeRun ? text(copy.handleActiveFirst) : text(copy.start)}
             </button>
           ) : undefined}
         />
@@ -223,6 +248,8 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
     || !comparisonRun
     || comparisonRun.status !== "completed";
   const completenessIssues = verification.completenessIssues ?? [];
+  const mappingVersionDriftOnly = isOnlyMappingVersionDrift(completenessIssues);
+  const mappingAffectedEngineCount = affectedEngineCount(completenessIssues);
   const canRescan = !activeRun && Boolean(selectedBaselineRun);
 
   return (
@@ -278,7 +305,12 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         <MetricCard label={diffMeta.resolved.label} value={formatNumber(counts.resolved)} detail={text(copy.resolvedDetail)} icon="check" tone="accent" />
         <MetricCard label={diffMeta.persistent.label} value={formatNumber(counts.persistent)} detail={text(copy.persistentDetail)} icon="warning" tone={counts.persistent ? "danger" : "default"} />
         <MetricCard label={diffMeta.new.label} value={formatNumber(counts.new)} detail={text(copy.newDetail)} icon="plus" tone={counts.new ? "warning" : "default"} />
-        <MetricCard label={diffMeta.unverifiable.label} value={formatNumber(counts.unverifiable)} detail={text(copy.unverifiableDetail)} icon="info" />
+        <MetricCard
+          label={diffMeta.unverifiable.label}
+          value={formatNumber(counts.unverifiable)}
+          detail={text(mappingVersionDriftOnly ? copy.mappingUnverifiableDetail : copy.unverifiableDetail)}
+          icon="info"
+        />
       </section>
 
       {counts.resolved > 0 && (
@@ -288,11 +320,14 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
       )}
 
       {comparisonIncomplete && (
-        <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
-          <p>{text(copy.incompleteBody)}</p>
+        <InlineNotice tone="warning" title={text(mappingVersionDriftOnly ? copy.mappingTitle : copy.incompleteTitle)}>
+          <p>{text(mappingVersionDriftOnly ? copy.mappingBody : copy.incompleteBody)}</p>
           {completenessIssues.length > 0 && (
             <>
-              <p>{text(copy.issueCount, { count: formatNumber(completenessIssues.length) })}</p>
+              <p>{text(
+                mappingVersionDriftOnly && mappingAffectedEngineCount > 0 ? copy.mappingEngineCount : copy.issueCount,
+                { count: formatNumber(mappingVersionDriftOnly && mappingAffectedEngineCount > 0 ? mappingAffectedEngineCount : completenessIssues.length) },
+              )}</p>
               <details className="page-technical-details">
                 <summary>{text(copy.technicalIssues)}</summary>
                 <dl>
@@ -341,6 +376,8 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
               const severity = item.afterSeverity ?? item.beforeSeverity;
               const findingId = item.findingId;
               const findingAvailable = Boolean(findingId && findings.some((finding) => finding.id === findingId));
+              const mappingVersionDriftOnlyForFinding = item.state === "unverifiable"
+                && isOnlyMappingVersionDrift(item.changeReasons ?? []);
               return (
                 <article key={item.id} className={`diff-row diff-row--${meta.tone}`}>
                   <span className="diff-row__icon">
@@ -353,7 +390,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
                       {item.evidenceChanged && <span className="evidence-changed">{text(copy.evidenceChanged)}</span>}
                     </div>
                     <h3>{item.title}</h3>
-                    <p>{text(stateSummaryCopy[item.state])}</p>
+                    <p>{text(mappingVersionDriftOnlyForFinding ? mappingDiffSummary : stateSummaryCopy[item.state])}</p>
                     <span>{item.assetName}</span>
                     {(item.beforeSeverity || item.afterSeverity) && (
                       <div className="diff-severity-change">
