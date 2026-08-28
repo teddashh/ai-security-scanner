@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trivy",
-    "tag": "0.74.0-2",
-    "digest": "sha256:5975b034216164f10d35049b214bbfb4d55c837adca5ae0e1cea73b1cd9901a2"
+    "tag": "0.74.0-3",
+    "digest": "sha256:6b19f88916d2066c1e6bf6f527ebcd40b44a76e3b11d99a3a53e30c74474dfe4"
   },
   "build_recipe": {
     "source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
@@ -57,23 +57,34 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/trivy/Dockerfile",
-    "sha256": "sha256:bb0b66441f3207f9d26aabbf23cc0a3ea35654a6aff3dba5af447020b6d5aadd",
+    "sha256": "sha256:52db7ce97d23401fa8db1a43986028be39ad71acbba8571192315985edd01b45",
     "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Invoke the pinned source build with a fixed OS-package-only vulnerability profile against the read-only workspace and its embedded checksum-verified standard database; the Java database and every update path remain disabled.",
+    "strategy": "Invoke the pinned source build with fixed library-package profiles for repository and IaC working trees and an OS-package profile for single-image OCI layouts; the checksum-verified standard database is embedded while the Java database and every update path remain disabled.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
+    "launcher_sha256": "sha256:8ae5ab14f6c147f166017e0826014c01323217adc278b0358305b880c9d43df6"
   },
   "analysis_profile": {
     "scanner": "vulnerability",
     "package_types": [
+      "library",
       "os"
     ],
-    "included": "Recognized operating-system packages in the backend-attested snapshot.",
+    "input_profiles": {
+      "repository_working_tree": "library",
+      "iac_working_tree": "library",
+      "container_image_oci_layout": "os"
+    },
+    "included": [
+      "Recognized language-package manifests in repository and IaC working trees, including supported Java manifests such as pom.xml",
+      "Recognized operating-system packages in validated single-image OCI layouts"
+    ],
     "excluded": [
-      "Language packages and JAR dependencies",
+      "Dependencies discoverable only from JAR archive contents",
+      "Operating-system packages in repository and IaC working trees",
+      "Language packages in single-image OCI layouts",
       "IaC misconfiguration",
       "Secrets",
       "Licenses"
@@ -114,18 +125,18 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
-    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902246",
+    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:c22542131460b5c2321141b3c184f9a01c5b7e451d5bc631518bd41a8bb76abb",
-      "linux/arm64": "sha256:124fe66db90319df4a9809fc6130609f2e0f8e79b2394704aa171f8316d9d4e1"
+      "linux/amd64": "sha256:cdeaa1dc53492b8ce5eeb5bb7625fd6a5e73328863d157f722408039927a3a37",
+      "linux/arm64": "sha256:17b9e36f4f0859de8506aea428423d61f2eb13efddd2c719769ad4e64135d647"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "trivy-image-evidence-32809314088-1",
-    "managed_smoke_evidence_sha256": "sha256:6924501470d6eade85d5b4ca52d895ebc1d08ad17539927cc1aec0876769b335"
+    "evidence_artifact": "trivy-image-evidence-33196902246-1",
+    "managed_smoke_evidence_sha256": "sha256:3af188e8860cf9d07a3485021efd59b4cc1690bd07a65dc6f08f30d908ecbd08"
   }
 }

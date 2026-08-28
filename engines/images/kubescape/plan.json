@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kubescape",
-    "tag": "4.0.12-2",
-    "digest": "sha256:91e120637e9af33bc15bb4e4d1394e2648d7a7bc399a4546da8e09c9a619ce20"
+    "tag": "4.0.12-3",
+    "digest": "sha256:87c8e5c29c938aa39e304355b1c037b09bda9f89e130b3ccde6df3eaf7ee537c"
   },
   "build_recipe": {
     "source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
@@ -57,14 +57,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/kubescape/Dockerfile",
-    "sha256": "sha256:a8f05c6cb4f54058e2d91a97b83fb3cba06578e92183e4b4432898ae3b5d5f7f",
+    "sha256": "sha256:5320f20b1c8bab0a1955a8b8ddc1dc94a8ba8ac83b93c69e44b41da04c6df55a",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Invoke the pinned source build through the project-owned launcher against explicit local manifests and embedded framework artifacts.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
+    "launcher_sha256": "sha256:8ae5ab14f6c147f166017e0826014c01323217adc278b0358305b880c9d43df6"
   },
   "command": [
     "--engine",
@@ -99,18 +99,18 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
-    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902246",
+    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:dcc2bb1a323dbd79f6ea130324c89f831d146009c2ab16b01c88997fe72ccc31",
-      "linux/arm64": "sha256:bff32a07dc5ba6d79031cdec07e5b19115630dd170b1ea22770b9d7a5d24642f"
+      "linux/amd64": "sha256:f8cfdb89a1bc7cb98171273f49653dd7326b476b4ac8fd301c7691a2f022d7a7",
+      "linux/arm64": "sha256:875f1912e2b7a3e3e7858d49f2a9c741adae39dfd348677f16c94c2517e9ec27"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "kubescape-image-evidence-32809314088-1",
-    "managed_smoke_evidence_sha256": "sha256:7fbcad0f4cc59dd0759b16c906885c9785c3cba653986e120319093cc3e73b7b"
+    "evidence_artifact": "kubescape-image-evidence-33196902246-1",
+    "managed_smoke_evidence_sha256": "sha256:ff82190265edee133b4c7c4c616937f1201fc983858b6f5c2fb0fc792e417196"
   }
 }

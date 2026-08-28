@@ -1,8 +1,8 @@
 # ai-security-scanner engine catalog
 
-Status: v0.2.0 catalog companion and research inventory; current engine artifacts with the workspace v0.1.2 adapter contract pending release provenance
+Status: v0.2.0 catalog companion and research inventory; current engine artifacts released with the v0.1.2 adapter contract
 
-Last updated: 2026-08-24
+Last updated: 2026-08-28
 
 This document explains the v0.2.0 required-engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. This prose never upgrades a non-runnable catalog entry or proves that an image or GitHub Release has been published.
 
@@ -71,18 +71,21 @@ Every Required entry is admitted through the same manifest, pinned-artifact, run
 | Secret scanning | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | AGPL-3.0 | Managed OCI image built from pinned source; filesystem mode only | Explicit source scope; verification, update, and engine network paths disabled | SOURCE_OFFER |
 | Infrastructure as code | [Checkov](https://github.com/bridgecrewio/checkov) | Apache-2.0 | Managed OCI image with read-only IaC mount | Explicit local/repository scope; external integrations disabled | ALLOW |
 | Infrastructure as code | [KICS](https://github.com/Checkmarx/kics) | Apache-2.0 | Exact verified upstream OCI image pulled by digest | Explicit local/repository scope | UPSTREAM_PINNED |
-| OS-package vulnerability | [Trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Managed OCI image with an immutable standard vulnerability database and fixed `--scanners vuln --pkg-types os` profile | Explicit backend-attested filesystem or OCI-layout scope; Java/language packages, JARs, IaC misconfiguration, secrets, and licenses excluded; all update paths disabled | ALLOW |
+| Dependency and OS-package vulnerability | [Trivy](https://github.com/aquasecurity/trivy) | Apache-2.0 | Managed OCI image with an immutable standard vulnerability database and fixed library (repository/IaC) or OS (OCI layout) profiles | Explicit backend-attested filesystem or OCI-layout scope; JAR-only discovery, OCI language packages, IaC misconfiguration, secrets, and licenses excluded; all update paths disabled | ALLOW |
 | Container package vulnerability | [Grype](https://github.com/anchore/grype) | Apache-2.0 | Managed OCI image with a checksum-pinned offline vulnerability database and OS/language package cataloging, including JARs | Exactly one backend-validated OCI image layout; automatic DB and application updates disabled | ALLOW |
 | SBOM | [Syft](https://github.com/anchore/syft) | Apache-2.0 | Managed OCI image producing a preserved SBOM artifact | Explicit artifact scope and read-only inputs | ALLOW |
 | Kubernetes posture | [Kubescape](https://github.com/kubescape/kubescape) | Apache-2.0 | Managed OCI image with checksum-pinned offline framework inputs | Explicit local manifest scope; submission and host scanning disabled | ALLOW |
 | Kubernetes CIS | [kube-bench](https://github.com/aquasecurity/kube-bench) | Apache-2.0 | Managed OCI image over an immutable, digest-verified node configuration snapshot | Explicit snapshot scope; no privileged live-host mounts | ALLOW |
 
 Coverage follows the fixed managed profile, not the broad upstream product
-name. A completed Trivy run establishes only OS-package vulnerability coverage
-for packages it recognized in that snapshot; it must not mark language-package,
-JAR, IaC-misconfiguration, secret, or license coverage as scanned. For a
-container image, Grype supplies the complementary offline OS/language-package
-and JAR vulnerability path.
+name. For repository and IaC working-tree snapshots, a completed Trivy run
+establishes vulnerability coverage for recognized language-package manifests,
+including supported Java manifests such as `pom.xml`. It does not establish
+coverage for dependencies discoverable only from JAR archive contents. For a
+validated single-image OCI layout, Trivy covers recognized OS packages; Grype
+supplies the complementary offline OS/language-package and JAR archive path.
+IaC-misconfiguration, secret, and license coverage are never inferred from a
+Trivy run.
 
 ### 2.1 Greenbone components
 

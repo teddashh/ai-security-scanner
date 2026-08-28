@@ -29,6 +29,7 @@ jobs:
       - run: npm run validate:engines
       - run: npm run release:validate
       - run: npm run release:self-test
+      - run: npm run test:release-evidence
       - run: npm run test:frontend
       - run: npm run typecheck
       - run: npm run build

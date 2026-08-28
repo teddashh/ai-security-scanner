@@ -15,22 +15,22 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
-    "tag": "2.6.1-3",
-    "digest": "sha256:da7620d495c2fcf9207a636e9be571a03d5a36e6bc99ec40c760573d54b63398"
+    "tag": "2.6.1-4",
+    "digest": "sha256:037b5ea961d6d61e9780db2f799886071b22856dfdb068a544a30cf8102216b4"
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32994002561",
-    "source_revision": "4f5703b490c66c387b1837b92bc09d23ad1dd90e",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902415",
+    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:52ca26e973bea59934cd1ccd8ae2f9e6bbc13b1388896876f327760b74386e62",
-      "linux/arm64": "sha256:8fa84130bd918979d3ab8357cb13a5bbedcfdd549600a4ec2c295e7386e3e4f9"
+      "linux/amd64": "sha256:e8e6884d03a75ca3e50bf2291711c2042abcc032fab60a2ad0b319797a27fb7f",
+      "linux/arm64": "sha256:4739ccd0f0c83c6e8c6c61f40e4ea396f00f15a8e0e36bd63f951367d1b35d9d"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "naabu-image-evidence-32994002561-1"
+    "evidence_artifact": "naabu-image-evidence-33196902415-1"
   },
   "build_recipe": {
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
@@ -63,13 +63,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/naabu/Dockerfile",
-    "sha256": "sha256:322bd45ad0dd04031793d08feacecc43a470bca71700fcbd053d459772deed54"
+    "sha256": "sha256:6f24058d7321620128935990c01f03cb012ff8251452d6cbb5ce299b2ac90fb8"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate each FrozenExternalScope grant and invoke one bounded TCP connect scan per grant without accepting arbitrary scanner arguments.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:7cce5a9bdb9e341d2e05497a01f14b62452afdfdf89038ae02a31159d4d343d1"
+    "launcher_sha256": "sha256:5279c20fefc1afcfad8ca7a61269596757432931446c8b6cc5b0a5602667470a"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",

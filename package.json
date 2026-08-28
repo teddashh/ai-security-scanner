@@ -25,6 +25,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
     "test:frontend": "node --experimental-strip-types --test tests/frontend/*.test.ts",
+    "test:release-evidence": "node --test tests/release/verifyPublicationArtifact.test.mjs",
     "test:usability-evidence": "node --test tests/usability/*.test.mjs",
     "validate:aidefend": "node scripts/validate-aidefend-snapshot.mjs",
     "validate:engine-line-endings": "node scripts/validate-engine-line-endings.mjs",

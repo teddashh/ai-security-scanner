@@ -7,7 +7,7 @@ const MANAGED_EGRESS_GATEWAY_MANIFEST: &str =
 const MANIFEST_SCHEMA_VERSION: &str = "1.0.0";
 const MANIFEST_MAX_BYTES: usize = 4 * 1024;
 const GATEWAY_IMAGE_REPOSITORY: &str = "ghcr.io/teddashh/ai-security-scanner-egress-gateway";
-const GATEWAY_PUBLICATION_TAG: &str = "0.1.6-1";
+const GATEWAY_PUBLICATION_TAG: &str = "0.1.7-1";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,7 +142,7 @@ mod tests {
         let wrong_repository =
             manifest("").replace(GATEWAY_IMAGE_REPOSITORY, "example.invalid/gateway");
         assert!(parse_managed_egress_gateway_manifest(wrong_repository.as_bytes()).is_err());
-        let wrong_tag = manifest("").replace(GATEWAY_PUBLICATION_TAG, "0.1.6-latest");
+        let wrong_tag = manifest("").replace(GATEWAY_PUBLICATION_TAG, "0.1.7-latest");
         assert!(parse_managed_egress_gateway_manifest(wrong_tag.as_bytes()).is_err());
         assert!(
             parse_managed_egress_gateway_manifest(&vec![b' '; MANIFEST_MAX_BYTES + 1]).is_err()

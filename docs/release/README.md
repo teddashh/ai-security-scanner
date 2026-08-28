@@ -207,6 +207,7 @@ First run the local metadata validator and normal implementation checks. Dispatc
 workflow from `main` before creating a tag:
 
 ```sh
+npm run test:release-evidence
 npm run release:validate -- --tag v0.1.7
 gh workflow run release.yml --ref main
 ```

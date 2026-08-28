@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-grype",
-    "tag": "0.117.0-2",
-    "digest": "sha256:a29ebddea3c0f79db4aad1aa854803d690749ee16fdb484d645a210036aef318"
+    "tag": "0.117.0-3",
+    "digest": "sha256:190276c0036949fde3f356ec663386c24d80bd3ea4ea53cdf73d2c6ce31c455f"
   },
   "build_recipe": {
     "source_revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
@@ -57,14 +57,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/grype/Dockerfile",
-    "sha256": "sha256:5fd730e57c2be0956c89918157b720a356334f0374e3f0a3c1d525db34e91b58",
+    "sha256": "sha256:569e39d3e1eaa177fe3529f330532ae05b0a95a8762bcccba8faafafb8f7aca5",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Invoke the pinned source build against the read-only workspace and its embedded checksum-verified vulnerability database.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
+    "launcher_sha256": "sha256:8ae5ab14f6c147f166017e0826014c01323217adc278b0358305b880c9d43df6"
   },
   "command": [
     "--engine",
@@ -99,18 +99,18 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
-    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902246",
+    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:fb26b56b23500e42d26787afc2ea2b4e2d0a93a0502ba7edea133686e5ed9f6b",
-      "linux/arm64": "sha256:6c4a61e7a6aff77880cab3cf2c64b0303efce7741f4c3a4b993bb5656ca47c51"
+      "linux/amd64": "sha256:cf9cad056a522987327a8610870dcf3e05ca5be9b081a9678285123d3741dfba",
+      "linux/arm64": "sha256:da01a068339fc72d75d08d62a063de918ee7a986110c2bad14ac7003f5966638"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "grype-image-evidence-32809314088-1",
-    "managed_smoke_evidence_sha256": "sha256:6b80ba4a4fcebb55f8c8e28b66f93328d380eaea256d0f06bc51a9f62952c6d6"
+    "evidence_artifact": "grype-image-evidence-33196902246-1",
+    "managed_smoke_evidence_sha256": "sha256:b4c4a7b33d83ac19d7bbd7bb5907bbf9fb8ceefe119ccc4e57e516228fb7f110"
   }
 }

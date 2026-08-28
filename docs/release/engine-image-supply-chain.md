@@ -118,6 +118,39 @@ provenance, relationship, source label, or platform digest:
 node scripts/engine-image-evidence.mjs self-test
 ```
 
+## Release evidence ingestion
+
+Before a published digest is copied into the engine catalog or a release plan, download that
+workflow's exact evidence artifact into its own directory and run the version-bound verifier. For
+example, the v0.1.7 Naabu publication is verified with:
+
+```sh
+evidence_dir="$(mktemp -d)"
+gh run download 33196902415 \
+  --name naabu-image-evidence-33196902415-1 \
+  --dir "${evidence_dir}"
+
+node scripts/release/verify-publication-artifact.mjs \
+  --engine naabu \
+  --artifact-dir "${evidence_dir}" \
+  --source-revision 2641850304aeade6ab8ee3b23eda80a7f66411d0 \
+  --run-id 33196902415 \
+  --attempt 1
+```
+
+The command rejects extra files, unsafe paths, symlinks, incomplete root or nested checksum
+inventories, mismatched smoke receipts, and incorrect platform or gateway records. It also invokes
+GitHub's attestation verifier for all five local Sigstore bundles and requires the exact public
+repository, GitHub-hosted signer workflow, source commit, `main` ref, run attempt, and
+transparency-log timestamp. A successful invocation writes one normalized JSON object to stdout;
+failure writes no partial result.
+
+The signed attestations cryptographically bind the image, source, provenance, and SBOMs. The
+managed-smoke receipt and artifact inventory are supplied by the exact GitHub Actions artifact,
+then protected by both checksum layers. Therefore use a fresh directory populated by the exact
+`gh run download` command above; do not treat an arbitrary pre-existing local directory as proof
+that the smoke files came from that workflow run.
+
 ## Consumer verification
 
 Use the immutable index digest printed by the publication workflow:

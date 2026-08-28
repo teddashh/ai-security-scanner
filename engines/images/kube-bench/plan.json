@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kube-bench",
-    "tag": "0.16.0-2",
-    "digest": "sha256:fc82c746e5eccaaca323157a78bc4710f41653d03953e011fef4299c48624a56"
+    "tag": "0.16.0-3",
+    "digest": "sha256:d748f98393ec11070bcac45cf53d9f27148b778b17a86445d2fb954d578cb563"
   },
   "build_recipe": {
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
@@ -68,14 +68,14 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/kube-bench/Dockerfile",
-    "sha256": "sha256:7b64d1ab3c96487dc1ca06ebbf13bb0f6fee87a34c7c5897798dfa4b4c86744e",
+    "sha256": "sha256:7f6eac59b9e795a100691d640096b8399fa0eb2593f49a54b93d1ac1f01d0cf2",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Accept only the reviewed immutable node-facts snapshot profile through the project-owned launcher.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:015458df6e6de996b765f85bf81a37828f3877360ff44bf1a78ccaa232496814"
+    "launcher_sha256": "sha256:8ae5ab14f6c147f166017e0826014c01323217adc278b0358305b880c9d43df6"
   },
   "command": [
     "--engine",
@@ -110,18 +110,18 @@
     "telemetry": false
   },
   "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32809314088",
-    "source_revision": "c58c4fa5265ef4c107094e518e28b44b9add5d9c",
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902246",
+    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:1df91cd3780ca8a46f3e3e4b0638efc40b30ed4c99280625e186890efcabeed0",
-      "linux/arm64": "sha256:0f098f342888e82a29243ea3138f60a312a82809f7b4b0bd68c7df0083454c4b"
+      "linux/amd64": "sha256:f77358aa621fb99e490399e66105132048b1bc21917087a300900a3407f2cdb5",
+      "linux/arm64": "sha256:b5d1ef1ee600d9f5a39c82b13214c34351c6bccfd343cac3b1be045b245dbb30"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "kube-bench-image-evidence-32809314088-1",
-    "managed_smoke_evidence_sha256": "sha256:20bb64e12bb9ca4e5d57b6d9a93db12f5751ee5ba2f52982fac8aaf3a6d14afb"
+    "evidence_artifact": "kube-bench-image-evidence-33196902246-1",
+    "managed_smoke_evidence_sha256": "sha256:121a16096d0fba70093b3e916e31a4351919ecdf39acd48477e6c346caba938a"
   }
 }

@@ -122,6 +122,9 @@ jobs:
       - name: Exercise release collection and finalization tooling
         run: npm run release:self-test
 
+      - name: Test publication evidence verification
+        run: npm run test:release-evidence
+
       - name: Test frontend security policy
         run: npm run test:frontend
 
