@@ -1076,13 +1076,193 @@ function Get-TrustedWslExecutable {
   return [ordered]@{ executable = $wsl; windows = $windows; system32 = $system32; proof = $proof }
 }
 
-function Unregister-ProvenExactWsl([object]$TrustedWsl, [string]$Name) {
+function Get-ProvenFailureCleanupWslBasePath(
+  [object]$Registration,
+  [string]$ExactDistributionName,
+  [string]$OldBasePath,
+  [string]$CandidateBasePath,
+  [string]$WorkspaceRoot
+) {
+  $name = [string]$Registration.Name
+  $registeredBasePath = Get-BoundedAbsoluteWindowsPath ([string]$Registration.BasePath) (
+    "Failure-path WSL registration BasePath"
+  )
+  $registeredComparable = Get-ComparableWindowsPath $registeredBasePath (
+    "Failure-path WSL registration BasePath"
+  )
+  $expectedBasePath = $null
+
+  if ([String]::Equals($name, $ExactDistributionName, [StringComparison]::Ordinal)) {
+    foreach ($allowedBasePath in @($OldBasePath, $CandidateBasePath)) {
+      $boundedAllowedBasePath = Get-BoundedAbsoluteWindowsPath $allowedBasePath (
+        "Fixed failure-path managed WSL BasePath"
+      )
+      $allowedComparable = Get-ComparableWindowsPath $boundedAllowedBasePath (
+        "Fixed failure-path managed WSL BasePath"
+      )
+      if ([String]::Equals($registeredComparable, $allowedComparable, [StringComparison]::OrdinalIgnoreCase)) {
+        $expectedBasePath = $boundedAllowedBasePath
+        break
+      }
+    }
+    if ($null -eq $expectedBasePath) {
+      throw "Failure-path exact WSL registration is outside its two fixed provider paths."
+    }
+  } elseif ($name -cmatch '^ai-security-scanner-recovery-[0-9a-f]{32}$') {
+    $recoveryId = $name.Substring("ai-security-scanner-recovery-".Length)
+    $boundedWorkspaceRoot = Get-BoundedAbsoluteWindowsPath $WorkspaceRoot (
+      "Fixed failure-path WSL recovery workspace root"
+    )
+    $expectedBasePath = Assert-ExactChildPath $boundedWorkspaceRoot (
+      Join-Path $boundedWorkspaceRoot $recoveryId
+    ) $recoveryId "Failure-path quarantine WSL workspace"
+  } else {
+    throw "Failure-path cleanup refused an unrelated WSL registration name."
+  }
+
+  Assert-SameWindowsPath $registeredBasePath $expectedBasePath (
+    "Failure-path WSL cleanup registration"
+  )
+  Assert-SameNoFollowDirectoryIdentity $registeredBasePath $expectedBasePath (
+    "Failure-path WSL cleanup registration"
+  )
+  return $expectedBasePath
+}
+
+function Assert-FailureCleanupWslBindingRegression([string]$Parent) {
+  $fixtureName = "failure-cleanup-wsl-binding-regression"
+  $fixtureRoot = Assert-ExactChildPath $Parent (Join-Path $Parent $fixtureName) $fixtureName (
+    "Failure-cleanup WSL binding regression fixture"
+  )
+  if (Test-Path -LiteralPath $fixtureRoot) {
+    throw "Failure-cleanup WSL binding regression fixture already exists."
+  }
+  New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
+  try {
+    $oldBasePath = Join-Path $fixtureRoot "old-provider"
+    $candidateBasePath = Join-Path $fixtureRoot "candidate-provider"
+    $differentBasePath = Join-Path $fixtureRoot "different-provider"
+    $workspaceRoot = Join-Path $fixtureRoot "workspaces"
+    $recoveryId = "0123456789abcdef0123456789abcdef"
+    $quarantineBasePath = Join-Path $workspaceRoot $recoveryId
+    foreach ($directory in @(
+      $oldBasePath,
+      $candidateBasePath,
+      $differentBasePath,
+      $workspaceRoot,
+      $quarantineBasePath
+    )) {
+      New-Item -ItemType Directory -Path $directory | Out-Null
+    }
+
+    $exactName = "podman-assm1-win-x64-regression"
+    $oldRegistration = [PSCustomObject]@{
+      Name = $exactName
+      BasePath = Get-VerbatimWindowsPath $oldBasePath "Extended-prefix old-provider regression path"
+    }
+    $provenOld = Get-ProvenFailureCleanupWslBasePath (
+      $oldRegistration
+    ) $exactName $oldBasePath $candidateBasePath $workspaceRoot
+    Assert-SameNoFollowDirectoryIdentity $provenOld $oldBasePath (
+      "Failure-cleanup old-provider regression result"
+    )
+
+    $candidateRegistration = [PSCustomObject]@{
+      Name = $exactName
+      BasePath = $candidateBasePath
+    }
+    $provenCandidate = Get-ProvenFailureCleanupWslBasePath (
+      $candidateRegistration
+    ) $exactName $oldBasePath $candidateBasePath $workspaceRoot
+    Assert-SameNoFollowDirectoryIdentity $provenCandidate $candidateBasePath (
+      "Failure-cleanup candidate-provider regression result"
+    )
+
+    $quarantineRegistration = [PSCustomObject]@{
+      Name = "ai-security-scanner-recovery-$recoveryId"
+      BasePath = Get-VerbatimWindowsPath $quarantineBasePath (
+        "Extended-prefix quarantine regression path"
+      )
+    }
+    $provenQuarantine = Get-ProvenFailureCleanupWslBasePath (
+      $quarantineRegistration
+    ) $exactName $oldBasePath $candidateBasePath $workspaceRoot
+    Assert-SameNoFollowDirectoryIdentity $provenQuarantine $quarantineBasePath (
+      "Failure-cleanup quarantine regression result"
+    )
+
+    $wrongExactRejected = $false
+    try {
+      Get-ProvenFailureCleanupWslBasePath ([PSCustomObject]@{
+        Name = $exactName
+        BasePath = $differentBasePath
+      }) $exactName $oldBasePath $candidateBasePath $workspaceRoot | Out-Null
+    } catch {
+      if ($_.Exception.Message -cne (
+          "Failure-path exact WSL registration is outside its two fixed provider paths."
+        )) { throw }
+      $wrongExactRejected = $true
+    }
+    if (-not $wrongExactRejected) {
+      throw "Failure-cleanup WSL binding accepted an exact name with an unrelated BasePath."
+    }
+
+    $wrongQuarantineRejected = $false
+    try {
+      Get-ProvenFailureCleanupWslBasePath ([PSCustomObject]@{
+        Name = "ai-security-scanner-recovery-$recoveryId"
+        BasePath = $differentBasePath
+      }) $exactName $oldBasePath $candidateBasePath $workspaceRoot | Out-Null
+    } catch {
+      if ($_.Exception.Message -cne (
+          "Failure-path WSL cleanup registration is not bound to its exact qualification path."
+        )) { throw }
+      $wrongQuarantineRejected = $true
+    }
+    if (-not $wrongQuarantineRejected) {
+      throw "Failure-cleanup WSL binding accepted a quarantine name outside its exact workspace."
+    }
+
+    $unrelatedNameRejected = $false
+    try {
+      Get-ProvenFailureCleanupWslBasePath ([PSCustomObject]@{
+        Name = "unrelated-distribution"
+        BasePath = $oldBasePath
+      }) $exactName $oldBasePath $candidateBasePath $workspaceRoot | Out-Null
+    } catch {
+      if ($_.Exception.Message -cne (
+          "Failure-path cleanup refused an unrelated WSL registration name."
+        )) { throw }
+      $unrelatedNameRejected = $true
+    }
+    if (-not $unrelatedNameRejected) {
+      throw "Failure-cleanup WSL binding accepted an unrelated distribution name."
+    }
+  } finally {
+    Remove-ExactTree $fixtureRoot $Parent $fixtureName (
+      "Failure-cleanup WSL binding regression fixture"
+    )
+  }
+}
+
+function Unregister-ProvenExactWsl(
+  [object]$TrustedWsl,
+  [string]$Name,
+  [string]$ExpectedBasePath
+) {
+  Get-ExactWslRegistration $Name $ExpectedBasePath | Out-Null
   $environment = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
   $environment["SystemRoot"] = $TrustedWsl.windows
   $environment["WINDIR"] = $TrustedWsl.windows
   $environment["PATH"] = $TrustedWsl.system32
   $environment["NoDefaultCurrentDirectoryInExePath"] = "1"
   Invoke-ExactProcess $TrustedWsl.executable @("--unregister", $Name) 90000 "Exact managed WSL cleanup" $true $environment -ExpectedSystemExecutableProof $TrustedWsl.proof | Out-Null
+  $remaining = @(Get-WslRegistrations | Where-Object {
+    [String]::Equals($_.Name, $Name, [StringComparison]::Ordinal)
+  })
+  if ($remaining.Count -ne 0) {
+    throw "Exact managed WSL cleanup left its proven registration behind."
+  }
 }
 
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
@@ -1093,14 +1273,18 @@ New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 Assert-RealDirectory $workRoot "Ghost qualification work directory" | Out-Null
 Assert-NoFollowDirectoryIdentityRegression $workRoot
 Assert-PreservedDataSnapshotHousekeepingRegression $workRoot
+Assert-FailureCleanupWslBindingRegression $workRoot
 $localApplicationData = [IO.Path]::GetFullPath([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))
 Assert-RealDirectory $localApplicationData "OS-resolved LocalApplicationData" | Out-Null
 $installDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "ai-security-scanner") "ai-security-scanner" "Default NSIS install directory"
 $dataDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "dev.teddashh.ai-security-scanner") "dev.teddashh.ai-security-scanner" "Default private data directory"
 $priorInstallerPath = Assert-ExactChildPath $workRoot (Join-Path $workRoot $priorInstallerName) $priorInstallerName "Pinned prior installer"
-$oldProviderHome = Join-Path $dataDirectory "managed-runtime\provider-home\$priorProviderNamespace"
-$oldVersionRoot = Join-Path $dataDirectory "managed-runtime\versions"
+$managedRuntimeRoot = Join-Path $dataDirectory "managed-runtime"
+$oldProviderHome = Join-Path $managedRuntimeRoot "provider-home\$priorProviderNamespace"
+$oldWslBasePath = Join-Path $oldProviderHome "data\containers\podman\machine\wsl\wsldist\$oldMachineName"
+$oldVersionRoot = Join-Path $managedRuntimeRoot "versions"
 $oldVersionDirectory = Join-Path $oldVersionRoot $oldVersionDirectoryName
+$workspaceRoot = Join-Path $managedRuntimeRoot "wsl-recovery-workspaces"
 
 foreach ($path in @($installDirectory, $dataDirectory, $priorInstallerPath)) {
   if (Test-Path -LiteralPath $path) { throw "Ghost qualification requires a fresh exact namespace: $path" }
@@ -1141,8 +1325,9 @@ if ($candidateRuntimeEvidence.schema_version -cne "3" -or
   throw "Candidate managed-runtime evidence has no exact Windows WSL identity."
 }
 $candidateMachineImageSha256 = [string]$candidateTargets[0].machine_image.sha256
-$candidateProviderHome = Join-Path $dataDirectory "managed-runtime\provider-home\$candidateProviderNamespace"
-$candidateVersionDirectory = Join-Path $dataDirectory "managed-runtime\versions\podman-machine-5.8.2-$candidateProviderNamespace"
+$candidateProviderHome = Join-Path $managedRuntimeRoot "provider-home\$candidateProviderNamespace"
+$candidateWslBasePath = Join-Path $candidateProviderHome "data\containers\podman\machine\wsl\wsldist\$oldMachineName"
+$candidateVersionDirectory = Join-Path $managedRuntimeRoot "versions\podman-machine-5.8.2-$candidateProviderNamespace"
 $trustedWsl = Get-TrustedWslExecutable
 
 $activeCli = $null
@@ -1225,7 +1410,6 @@ try {
   $oldIdentityRoot = Join-Path $oldProviderHome "data\containers\podman\machine"
   Assert-SingleLinkFile (Join-Path $oldIdentityRoot "machine") "v0.1.7 managed SSH private key" (16 * 1024) | Out-Null
   Assert-SingleLinkFile (Join-Path $oldIdentityRoot "machine.pub") "v0.1.7 managed SSH public key" (4 * 1024) | Out-Null
-  $oldWslBasePath = Join-Path $oldProviderHome "data\containers\podman\machine\wsl\wsldist\$oldMachineName"
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
 
   Assert-RealDirectory $oldVersionDirectory "v0.1.7 installed versions payload" | Out-Null
@@ -1403,12 +1587,10 @@ try {
   Assert-RealDirectory $candidateVersionDirectory "Candidate installed runtime version" | Out-Null
   Assert-RealDirectory $candidateProviderHome "Candidate provider home" | Out-Null
   if (Test-Path -LiteralPath $oldProviderHome) { throw "Automatic recovery retained the obsolete provider home." }
-  $candidateWslBasePath = Join-Path $candidateProviderHome "data\containers\podman\machine\wsl\wsldist\$oldMachineName"
   Get-ExactWslRegistration $oldDistributionName $candidateWslBasePath | Out-Null
 
   $pendingRecovery = Join-Path $dataDirectory "managed-runtime\wsl-recovery\pending-$oldMachineName.json"
   if (Test-Path -LiteralPath $pendingRecovery) { throw "Automatic recovery left its pending transaction." }
-  $workspaceRoot = Join-Path $dataDirectory "managed-runtime\wsl-recovery-workspaces"
   if ((Test-Path -LiteralPath $workspaceRoot) -and @(Get-ChildItem -LiteralPath $workspaceRoot -Force).Count -ne 0) {
     throw "Automatic recovery left a temporary WSL import workspace."
   }
@@ -1764,12 +1946,10 @@ try {
         $isExact = [String]::Equals($registration.Name, $oldDistributionName, [StringComparison]::Ordinal)
         $isQuarantine = $registration.Name -cmatch '^ai-security-scanner-recovery-[0-9a-f]{32}$'
         if (-not $isExact -and -not $isQuarantine) { continue }
-        $basePath = Resolve-RealDirectory $registration.BasePath "Failure-path WSL registration BasePath"
-        $managedRoot = [IO.Path]::GetFullPath((Join-Path $dataDirectory "managed-runtime")) + [IO.Path]::DirectorySeparatorChar
-        if (-not $basePath.StartsWith($managedRoot, [StringComparison]::OrdinalIgnoreCase)) {
-          throw "Refusing to unregister a WSL distribution outside the exact qualification data root."
-        }
-        Unregister-ProvenExactWsl $trustedWsl $registration.Name
+        $expectedBasePath = Get-ProvenFailureCleanupWslBasePath (
+          $registration
+        ) $oldDistributionName $oldWslBasePath $candidateWslBasePath $workspaceRoot
+        Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath
       }
     } catch { $cleanupFailures.Add($_.Exception.Message) }
     if ($null -ne $activeUninstaller -and (Test-Path -LiteralPath $activeUninstaller -PathType Leaf)) {

@@ -773,6 +773,9 @@ function validatePlatformQualificationSources(sources) {
     "Open-NoFollowRealDirectory",
     "Assert-SameNoFollowDirectoryIdentity",
     "Assert-NoFollowDirectoryIdentityRegression $workRoot",
+    "Get-ProvenFailureCleanupWslBasePath",
+    "Assert-FailureCleanupWslBindingRegression $workRoot",
+    "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath",
     "Same-directory extended-prefix regression",
     "Different-directory regression",
     "Get-AuthenticodeSignature -LiteralPath",
@@ -1055,6 +1058,149 @@ function validatePlatformQualificationSources(sources) {
   assert(
     (nsisGhost.match(/Assert-NoFollowDirectoryIdentityRegression/gu) ?? []).length === 2,
     "registered-WSL directory-identity regression must be defined once and run once",
+  );
+  const cleanupBindingStart = nsisGhost.indexOf(
+    "function Get-ProvenFailureCleanupWslBasePath(",
+  );
+  const cleanupRegressionStart = nsisGhost.indexOf(
+    "function Assert-FailureCleanupWslBindingRegression(",
+    cleanupBindingStart,
+  );
+  assert(
+    cleanupBindingStart >= 0 && cleanupRegressionStart > cleanupBindingStart,
+    "registered-WSL ghost qualification has no bounded failure-cleanup binding",
+  );
+  const cleanupBinding = nsisGhost.slice(cleanupBindingStart, cleanupRegressionStart);
+  for (const required of [
+    "Get-BoundedAbsoluteWindowsPath",
+    "Get-ComparableWindowsPath",
+    "@($OldBasePath, $CandidateBasePath)",
+    "^ai-security-scanner-recovery-[0-9a-f]{32}$",
+    "Assert-ExactChildPath $boundedWorkspaceRoot",
+    "Assert-SameWindowsPath $registeredBasePath $expectedBasePath",
+    "Assert-SameNoFollowDirectoryIdentity $registeredBasePath $expectedBasePath",
+  ]) {
+    assert(
+      cleanupBinding.includes(required),
+      `registered-WSL failure cleanup binding is missing: ${required}`,
+    );
+  }
+  assert(
+    !cleanupBinding.includes("Resolve-RealDirectory") &&
+      !cleanupBinding.includes("StartsWith($managedRoot"),
+    "registered-WSL failure cleanup must not use followed or prefix-only path ownership",
+  );
+  const cleanupUnregisterStart = nsisGhost.indexOf(
+    "function Unregister-ProvenExactWsl(",
+    cleanupRegressionStart,
+  );
+  const cleanupUnregisterEnd = nsisGhost.indexOf("$artifactRoot =", cleanupUnregisterStart);
+  assert(
+    cleanupUnregisterStart > cleanupRegressionStart && cleanupUnregisterEnd > cleanupUnregisterStart,
+    "registered-WSL ghost qualification has no exact failure-path unregister helper",
+  );
+  const cleanupUnregister = nsisGhost.slice(cleanupUnregisterStart, cleanupUnregisterEnd);
+  const cleanupPreflight = cleanupUnregister.indexOf(
+    "Get-ExactWslRegistration $Name $ExpectedBasePath",
+  );
+  const cleanupMutation = cleanupUnregister.indexOf(
+    'Invoke-ExactProcess $TrustedWsl.executable @("--unregister", $Name)',
+  );
+  const cleanupAbsenceProof = cleanupUnregister.indexOf("$remaining = @(Get-WslRegistrations");
+  assert(
+    cleanupPreflight >= 0 &&
+      cleanupMutation > cleanupPreflight &&
+      cleanupAbsenceProof > cleanupMutation &&
+      cleanupUnregister.includes("$remaining.Count -ne 0"),
+    "registered-WSL failure cleanup must re-prove exact name/path identity before unregister and prove absence after it",
+  );
+  const cleanupRegressionEnd = cleanupUnregisterStart;
+  const cleanupRegression = nsisGhost.slice(cleanupRegressionStart, cleanupRegressionEnd);
+  for (const required of [
+    "Get-VerbatimWindowsPath $oldBasePath",
+    "Get-VerbatimWindowsPath $quarantineBasePath",
+    "Failure-cleanup WSL binding accepted an exact name with an unrelated BasePath.",
+    "Failure-cleanup WSL binding accepted a quarantine name outside its exact workspace.",
+    "Failure-cleanup WSL binding accepted an unrelated distribution name.",
+    "Remove-ExactTree $fixtureRoot $Parent $fixtureName",
+  ]) {
+    assert(
+      cleanupRegression.includes(required),
+      `registered-WSL failure-cleanup regression is missing: ${required}`,
+    );
+  }
+  assert(
+    (nsisGhost.match(/Assert-FailureCleanupWslBindingRegression/gu) ?? []).length === 2 &&
+      !nsisGhost.includes("Resolve-RealDirectory $registration.BasePath") &&
+      !nsisGhost.includes(".StartsWith($managedRoot"),
+    "registered-WSL failure-cleanup regression must run once and prefix-only cleanup must stay absent",
+  );
+  const failurePrimaryGuard = nsisGhost.lastIndexOf("  if ($null -ne $primaryFailure) {");
+  const failureFinallyStart = nsisGhost.lastIndexOf("} finally {", failurePrimaryGuard);
+  const failureCleanupCallStart = nsisGhost.indexOf(
+    "    try {\n      $registrations = @(Get-WslRegistrations)",
+    failurePrimaryGuard,
+  );
+  const failureCleanupForeach = nsisGhost.indexOf(
+    "      foreach ($registration in $registrations) {",
+    failureCleanupCallStart,
+  );
+  const failureCleanupExactFilter = nsisGhost.indexOf(
+    "$isExact = [String]::Equals($registration.Name, $oldDistributionName, [StringComparison]::Ordinal)",
+    failureCleanupForeach,
+  );
+  const failureCleanupQuarantineFilter = nsisGhost.indexOf(
+    "$isQuarantine = $registration.Name -cmatch '^ai-security-scanner-recovery-[0-9a-f]{32}$'",
+    failureCleanupExactFilter,
+  );
+  const failureCleanupContinue = nsisGhost.indexOf(
+    "if (-not $isExact -and -not $isQuarantine) { continue }",
+    failureCleanupQuarantineFilter,
+  );
+  const failureCleanupCallCatch = nsisGhost.indexOf(
+    "    } catch { $cleanupFailures.Add($_.Exception.Message) }",
+    failureCleanupCallStart,
+  );
+  const failureCleanupCallEnd = nsisGhost.indexOf(
+    "    if ($null -ne $activeUninstaller",
+    failureCleanupCallCatch,
+  );
+  assert(
+    failureFinallyStart >= 0 &&
+      failurePrimaryGuard > failureFinallyStart &&
+      failureCleanupCallStart > failurePrimaryGuard &&
+      failureCleanupForeach > failureCleanupCallStart &&
+      failureCleanupExactFilter > failureCleanupForeach &&
+      failureCleanupQuarantineFilter > failureCleanupExactFilter &&
+      failureCleanupContinue > failureCleanupQuarantineFilter &&
+      failureCleanupCallCatch > failureCleanupContinue &&
+      failureCleanupCallEnd > failureCleanupCallCatch,
+    "registered-WSL ghost qualification has no primary-failure-scoped exact registration cleanup block",
+  );
+  const failureCleanupCall = nsisGhost.slice(failureCleanupCallStart, failureCleanupCallCatch);
+  const failureCleanupProof = failureCleanupCall.indexOf(
+    "$expectedBasePath = Get-ProvenFailureCleanupWslBasePath",
+  );
+  const failureCleanupMutation = failureCleanupCall.indexOf(
+    "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath",
+  );
+  const failureCleanupLoopClose = failureCleanupCall.indexOf("\n      }\n", failureCleanupMutation);
+  assert(
+    failureCleanupProof >= 0 &&
+      failureCleanupMutation > failureCleanupProof &&
+      failureCleanupLoopClose > failureCleanupMutation &&
+      failureCleanupCall.includes(
+        "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath\n      }",
+      ) &&
+      failureCleanupCall.split("$expectedBasePath = Get-ProvenFailureCleanupWslBasePath").length -
+        1 ===
+        1 &&
+      failureCleanupCall.split(
+        "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath",
+      ).length -
+        1 ===
+        1,
+    "registered-WSL failure cleanup must prove the exact expected BasePath before unregistering that same registration",
   );
   for (const required of [
     "windows_nsis_real_registered_wsl_n_minus_one_ghost_recovery",
@@ -1349,6 +1495,14 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     'containers.join("podman").join("machine").join(provider)',
     'join(provider)\n                    .join("cache")',
     "windows_runtime_command_precreates_the_exact_private_podman_machine_namespace",
+    "verify_windows_wsl_recovery_vhd_with_timing",
+    "windows_wsl_vhd_verification_waits_for_exact_handle_release",
+    "windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file",
+    "n_minus_one_vhd_release_reproof_rejects_a_rebound_distribution_before_export",
+    "n_minus_one_vhd_timeout_preserves_the_full_recovery_checkpoint",
+    "uncheckpointed_quarantine_without_a_vhd_is_exactly_unregistered",
+    "uninstall_waits_for_exact_windows_wsl_vhd_release",
+    "uninstall_provider_attribute_open_timeout_retains_install_and_image_cache",
   ]) {
     assert(
       managedRuntime.includes(required),
@@ -1382,6 +1536,98 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
       handoffRecovery.includes("verify_pending_windows_wsl_registration"),
     "Windows WSL handoff unregister is not bound to the verified backup transaction",
   );
+  const interruptedReplacementStart = handoffRecovery.indexOf(
+    "if interrupted_replacement_present {",
+  );
+  const interruptedReplacementEnd = handoffRecovery.indexOf(
+    "\n        if original_present {",
+    interruptedReplacementStart,
+  );
+  assert(
+    interruptedReplacementStart !== -1 && interruptedReplacementEnd > interruptedReplacementStart,
+    "Windows WSL handoff has no bounded interrupted-replacement branch",
+  );
+  const interruptedReplacement = handoffRecovery.slice(
+    interruptedReplacementStart,
+    interruptedReplacementEnd,
+  );
+  const interruptedTerminate = interruptedReplacement.indexOf(
+    "ManagedCommandOperation::WslDistributionTerminate",
+  );
+  const interruptedVhdReproof = interruptedReplacement.indexOf(
+    "self.verify_current_windows_wsl_machine_registration(machine_name)?",
+  );
+  const interruptedUnregister = interruptedReplacement.indexOf(
+    "ManagedCommandOperation::WslDistributionRemoval",
+  );
+  assert(
+    interruptedTerminate !== -1 &&
+      interruptedVhdReproof > interruptedTerminate &&
+      interruptedUnregister > interruptedVhdReproof,
+    "interrupted Windows replacement must re-prove the exact current registration and VHD after terminate and before unregister",
+  );
+  const originalReplacementStart = interruptedReplacementEnd + 1;
+  const originalReplacementEnd = handoffRecovery.indexOf(
+    "\n        let original_present = distributions",
+    originalReplacementStart,
+  );
+  assert(
+    originalReplacementEnd > originalReplacementStart,
+    "Windows WSL handoff has no bounded original-replacement branch",
+  );
+  const originalReplacement = handoffRecovery.slice(
+    originalReplacementStart,
+    originalReplacementEnd,
+  );
+  const originalTerminate = originalReplacement.indexOf(
+    "ManagedCommandOperation::WslDistributionTerminate",
+  );
+  const originalVhdReproof = originalReplacement.indexOf(
+    "self.verify_pending_windows_wsl_registration(&intent)?",
+  );
+  const originalUnregister = originalReplacement.indexOf(
+    "ManagedCommandOperation::WslDistributionRemoval",
+  );
+  assert(
+    originalTerminate !== -1 &&
+      originalVhdReproof > originalTerminate &&
+      originalUnregister > originalVhdReproof,
+    "original Windows workspace replacement must re-prove the exact pending registration and VHD after terminate and before unregister",
+  );
+  const firstHandoffTerminate = handoffRecovery.indexOf(
+    "ManagedCommandOperation::WslDistributionTerminate",
+  );
+  const firstHandoffVhdProof = handoffRecovery.indexOf(
+    "let source_vhd = self.verify_pending_windows_wsl_registration",
+  );
+  const firstHandoffFreeSpace = handoffRecovery.indexOf(
+    "require_windows_wsl_recovery_free_space",
+  );
+  const firstHandoffExport = handoffRecovery.indexOf(
+    "ManagedCommandOperation::WslDistributionExport",
+  );
+  assert(
+    firstHandoffTerminate !== -1 &&
+      firstHandoffTerminate < firstHandoffVhdProof &&
+      firstHandoffVhdProof < firstHandoffFreeSpace &&
+      firstHandoffFreeSpace < firstHandoffExport &&
+      handoffRecovery.includes("source_vhd.size") &&
+      !handoffRecovery.includes(
+        'fs::symlink_metadata(intent.registration_base_path.join("ext4.vhdx"))',
+      ),
+    "Windows WSL handoff must terminate, prove VHD release, check space, then export",
+  );
+  const recoveryFreeSpace = boundedRecoverySection(
+    "fn require_windows_wsl_recovery_free_space",
+    "fn require_windows_wsl_recovery_import_space",
+    "Windows WSL recovery free-space check",
+  );
+  assert(
+    recoveryFreeSpace.includes("source_vhd_size: u64") &&
+      !recoveryFreeSpace.includes("symlink_metadata") &&
+      !recoveryFreeSpace.includes("source_vhd: &Path"),
+    "Windows WSL free-space check must use the already verified VHD snapshot",
+  );
   const incompleteImportCleanup = boundedRecoverySection(
     "fn remove_uncheckpointed_windows_wsl_quarantine_locked",
     "fn verify_windows_wsl_quarantine_registration",
@@ -1391,6 +1637,21 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     unregisterCount(incompleteImportCleanup) === 1 &&
       incompleteImportCleanup.includes("verify_windows_wsl_quarantine_registration_path"),
     "incomplete Windows WSL import cleanup is not bound to its generated quarantine workspace",
+  );
+  const incompleteTerminate = incompleteImportCleanup.indexOf(
+    "ManagedCommandOperation::WslDistributionTerminate",
+  );
+  const incompleteReproof = incompleteImportCleanup.lastIndexOf(
+    "verify_windows_wsl_quarantine_registration_path(intent)?",
+  );
+  const incompleteUnregister = incompleteImportCleanup.indexOf(
+    "ManagedCommandOperation::WslDistributionRemoval",
+  );
+  assert(
+    incompleteTerminate !== -1 &&
+      incompleteReproof > incompleteTerminate &&
+      incompleteUnregister > incompleteReproof,
+    "incomplete Windows WSL import cleanup must re-prove its exact registration path after terminate and before unregister without requiring a completed VHD",
   );
   const completedRecoveryCleanup = boundedRecoverySection(
     "fn complete_windows_wsl_recovery_locked",
@@ -1403,6 +1664,317 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
       completedRecoveryCleanup.includes("verify_windows_wsl_quarantine_registration"),
     "completed Windows WSL recovery cleanup is not bound to the verified recovery copy",
   );
+  const completedQuarantineStart = completedRecoveryCleanup.indexOf(
+    "if quarantine_present {",
+  );
+  const completedQuarantineEnd = completedRecoveryCleanup.indexOf(
+    "            } else {",
+    completedQuarantineStart,
+  );
+  assert(
+    completedQuarantineStart !== -1 && completedQuarantineEnd > completedQuarantineStart,
+    "completed Windows WSL recovery has no bounded quarantine-cleanup branch",
+  );
+  const completedQuarantine = completedRecoveryCleanup.slice(
+    completedQuarantineStart,
+    completedQuarantineEnd,
+  );
+  const completedQuarantineTerminate = completedQuarantine.indexOf(
+    "ManagedCommandOperation::WslDistributionTerminate",
+  );
+  const completedQuarantineArchive = completedQuarantine.indexOf(
+    "self.verify_windows_wsl_recovery_archive(",
+    completedQuarantineTerminate,
+  );
+  const completedQuarantineVhd = completedQuarantine.indexOf(
+    "self.verify_windows_wsl_quarantine_registration(&intent)?",
+    completedQuarantineArchive,
+  );
+  const completedQuarantineUnregister = completedQuarantine.indexOf(
+    "ManagedCommandOperation::WslDistributionRemoval",
+  );
+  assert(
+    completedQuarantineTerminate !== -1 &&
+      completedQuarantineArchive > completedQuarantineTerminate &&
+      completedQuarantineVhd > completedQuarantineArchive &&
+      completedQuarantineUnregister > completedQuarantineVhd,
+    "completed quarantine cleanup must verify the archive and exact quarantine registration/VHD after terminate and before unregister",
+  );
+  const boundedVhdRelease = boundedRecoverySection(
+    "fn verify_windows_wsl_recovery_vhd_with_timing",
+    "#[cfg(not(windows))]\nfn verify_windows_wsl_recovery_vhd_with_timing",
+    "bounded Windows WSL VHD release proof",
+  );
+  assert(
+    boundedVhdRelease.includes("windows_error_is_sharing_violation") &&
+      boundedVhdRelease.includes("checked_add(timeout)") &&
+      boundedVhdRelease.includes("thread::sleep") &&
+      boundedVhdRelease.includes("open_windows_managed_ssh_identity_file") &&
+      boundedVhdRelease.includes("validate_windows_wsl_recovery_file_information") &&
+      boundedVhdRelease.includes("AppError::Runtime") &&
+      boundedVhdRelease.includes("retaining the exact registration and recovery checkpoint") &&
+      boundedVhdRelease.includes("last_sharing_error") &&
+      (boundedVhdRelease.match(/verify_registration_base_path\(\)\?/gu) ?? []).length === 2 &&
+      boundedVhdRelease.includes(
+        "let rebound_base_path = verify_registration_base_path()?",
+      ) &&
+      boundedVhdRelease.includes("windows_paths_refer_to_same_location") &&
+      boundedVhdRelease.includes("rebound_information != information"),
+    "Windows WSL VHD proof does not use one bounded sharing-violation-only wait with per-retry and post-open binding/identity reproof",
+  );
+  const vhdDeadline = boundedVhdRelease.indexOf("checked_add(timeout)");
+  const vhdLoop = boundedVhdRelease.indexOf("    loop {");
+  const vhdBaseProof = boundedVhdRelease.indexOf(
+    "let base_path = verify_registration_base_path()?",
+  );
+  const vhdFirstOpen = boundedVhdRelease.indexOf(
+    "open_windows_managed_ssh_identity_file(&path)",
+  );
+  const vhdSharingBranch = boundedVhdRelease.indexOf(
+    "Err(error) if windows_error_is_sharing_violation(&error)",
+  );
+  const vhdRememberSharing = boundedVhdRelease.indexOf(
+    "last_sharing_error = Some(error.to_string())",
+    vhdSharingBranch,
+  );
+  const vhdSleep = boundedVhdRelease.indexOf("thread::sleep", vhdRememberSharing);
+  const vhdContinue = boundedVhdRelease.indexOf("continue;", vhdSleep);
+  const vhdPostOpenProof = boundedVhdRelease.indexOf(
+    "let rebound_base_path = verify_registration_base_path()?",
+  );
+  const vhdReboundOpen = boundedVhdRelease.indexOf(
+    "open_windows_managed_ssh_identity_file(&rebound_path)",
+  );
+  const vhdIdentityComparison = boundedVhdRelease.indexOf(
+    "rebound_information != information",
+  );
+  const vhdReturn = boundedVhdRelease.indexOf("return Ok(snapshot)");
+  assert(
+    vhdDeadline !== -1 &&
+      vhdLoop > vhdDeadline &&
+      vhdBaseProof > vhdLoop &&
+      vhdFirstOpen > vhdBaseProof &&
+      vhdSharingBranch > vhdFirstOpen &&
+      vhdRememberSharing > vhdSharingBranch &&
+      vhdSleep > vhdRememberSharing &&
+      vhdContinue > vhdSleep &&
+      vhdPostOpenProof > vhdContinue &&
+      vhdReboundOpen > vhdPostOpenProof &&
+      vhdIdentityComparison > vhdReboundOpen &&
+      vhdReturn > vhdIdentityComparison,
+    "Windows WSL VHD release loop must bind before each open, retry only sharing violations under one deadline, then rebind and compare exact VHD identity before returning",
+  );
+  const pendingVhdProof = boundedRecoverySection(
+    "fn verify_pending_windows_wsl_registration(",
+    "fn verify_pending_windows_wsl_registration_binding(",
+    "pending Windows WSL registration VHD proof",
+  );
+  const currentVhdProof = boundedRecoverySection(
+    "fn verify_current_windows_wsl_machine_registration(",
+    "fn verify_current_windows_wsl_machine_registration_binding(",
+    "current Windows WSL registration VHD proof",
+  );
+  const quarantineVhdProof = boundedRecoverySection(
+    "fn verify_windows_wsl_quarantine_registration(",
+    "fn verify_windows_wsl_quarantine_registration_path(",
+    "quarantine Windows WSL registration VHD proof",
+  );
+  assert(
+    pendingVhdProof.includes("windows_wsl_vhd_release_timing") &&
+      pendingVhdProof.includes("verify_windows_wsl_recovery_vhd_with_timing(") &&
+      pendingVhdProof.includes("verify_pending_windows_wsl_registration_binding(intent)") &&
+      pendingVhdProof.includes(".map(|(base_path, _)| base_path)"),
+    "pending Windows WSL VHD proof does not re-run the exact pending ownership/receipt binding on every helper invocation",
+  );
+  assert(
+    currentVhdProof.includes("windows_wsl_vhd_release_timing") &&
+      currentVhdProof.includes("verify_windows_wsl_recovery_vhd_with_timing(") &&
+      currentVhdProof.includes(
+        "|| self.verify_current_windows_wsl_machine_registration_binding(machine_name)",
+      ),
+    "current Windows WSL VHD proof does not re-run the exact current product binding on every helper invocation",
+  );
+  assert(
+    quarantineVhdProof.includes("windows_wsl_vhd_release_timing") &&
+      quarantineVhdProof.includes("verify_windows_wsl_quarantine_storage(") &&
+      quarantineVhdProof.includes(
+        "|| self.verify_windows_wsl_quarantine_registration_path(intent)",
+      ),
+    "quarantine Windows WSL VHD proof does not re-run the exact quarantine binding on every helper invocation",
+  );
+  const quarantineStorage = boundedRecoverySection(
+    "fn verify_windows_wsl_quarantine_storage",
+    "#[cfg(windows)]\nfn verify_windows_wsl_recovery_vhd_with_timing",
+    "Windows WSL quarantine storage proof",
+  );
+  assert(
+    quarantineStorage.includes(
+      "verify_windows_wsl_recovery_vhd_with_timing(verify_registration_base_path, timeout, poll)",
+    ),
+    "Windows WSL quarantine storage does not share the bounded VHD release proof",
+  );
+  const providerMetadataRetry = boundedRecoverySection(
+    "fn windows_private_entry_metadata_with_policy",
+    "fn remove_windows_private_file",
+    "bounded Windows provider metadata release wait",
+  );
+  const providerFileDelete = boundedRecoverySection(
+    "fn remove_windows_private_file",
+    "fn set_windows_entry_readonly_nofollow",
+    "bounded Windows provider file deletion",
+  );
+  assert(
+    providerMetadataRetry.includes("wait_for_windows_private_file_release_if_allowed") &&
+      providerFileDelete.split("wait_for_windows_private_file_release_if_allowed").length - 1 ===
+        2,
+    "Windows provider metadata, attribute-open, and delete paths do not share one bounded deadline",
+  );
+  const windowsTestSection = (name) => {
+    const marker = `    #[cfg(windows)]\n    #[test]\n    fn ${name}()`;
+    const start = managedRuntime.indexOf(marker);
+    const end = managedRuntime.indexOf("\n    #[cfg(windows)]\n    #[test]", start + marker.length);
+    assert(start !== -1 && end > start, `managed runtime is missing the real Windows test ${name}`);
+    return managedRuntime.slice(start, end);
+  };
+  const vhdReleaseWaitTest = windowsTestSection(
+    "windows_wsl_vhd_verification_waits_for_exact_handle_release",
+  );
+  assertOrderedTokens(
+    vhdReleaseWaitTest,
+    [
+      "let versions_root = fixture.manager.versions_root();",
+      "ensure_private_directory(&versions_root).unwrap();",
+      'let base_path = versions_root.join("release-wait");',
+      "ensure_private_directory(&base_path).unwrap();",
+      'let vhd = base_path.join("ext4.vhdx");',
+      "let locked_vhd = open_without_windows_sharing(&vhd);",
+      "verify_windows_wsl_recovery_vhd_with_timing(",
+      "|| Ok(base_path.clone()),",
+      'expect("VHD proof resumes after the exact handle is released")',
+      'release.join().expect("release fixture VHD handle")',
+      "assert_eq!(snapshot.size, expected_size);",
+      "assert!(started.elapsed() >= Duration::from_millis(250));",
+    ],
+    "Windows exact-VHD release-wait test",
+  );
+  assert(
+    vhdReleaseWaitTest.includes("drop(locked_vhd);") &&
+      vhdReleaseWaitTest.includes("Duration::from_secs(5)") &&
+      vhdReleaseWaitTest.includes("Duration::from_millis(25)"),
+    "Windows exact-VHD release-wait test does not prove a bounded sharing-violation retry",
+  );
+  const vhdReleaseTimeoutTest = windowsTestSection(
+    "windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file",
+  );
+  assertOrderedTokens(
+    vhdReleaseTimeoutTest,
+    [
+      "let versions_root = fixture.manager.versions_root();",
+      "ensure_private_directory(&versions_root).unwrap();",
+      'let base_path = versions_root.join("release-timeout");',
+      "ensure_private_directory(&base_path).unwrap();",
+      'let vhd = base_path.join("ext4.vhdx");',
+      "let locked_vhd = open_without_windows_sharing(&vhd);",
+      "verify_windows_wsl_recovery_vhd_with_timing(",
+      "|| Ok(base_path.clone()),",
+      "Duration::from_millis(150)",
+      'expect_err("an unreleased VHD must hit the bounded deadline")',
+      "matches!(error, AppError::Runtime(_))",
+      'contains("remained in use")',
+      "assert!(vhd.is_file());",
+      "drop(locked_vhd);",
+      'expect("the retained VHD can be verified on retry")',
+    ],
+    "Windows exact-VHD release-timeout test",
+  );
+  assert(
+    vhdReleaseTimeoutTest.split("verify_windows_wsl_recovery_vhd_with_timing(").length - 1 === 2 &&
+      vhdReleaseTimeoutTest.split("|| Ok(base_path.clone()),").length - 1 === 2 &&
+      vhdReleaseTimeoutTest.includes("Duration::from_millis(25)"),
+    "Windows exact-VHD release-timeout test does not retain and retry the same BasePath checkpoint",
+  );
+  const unregisterContractStart = managedRuntime.indexOf(
+    "    #[test]\n    fn direct_wsl_unregister_is_whitelisted_only_for_verified_backup_recovery()",
+  );
+  const unregisterContractEnd = managedRuntime.indexOf(
+    "\n    #[test]\n    fn managed_ssh_identity_is_reused_and_partial_regular_pair_is_safely_repaired()",
+    unregisterContractStart,
+  );
+  assert(
+    unregisterContractStart !== -1 && unregisterContractEnd > unregisterContractStart,
+    "managed runtime is missing the scoped direct-unregister source-contract test",
+  );
+  const unregisterContractTest = managedRuntime.slice(
+    unregisterContractStart,
+    unregisterContractEnd,
+  );
+  assertOrderedTokens(
+    unregisterContractTest,
+    [
+      'let normalized_source = include_str!("managed_runtime.rs").replace("\\r\\n", "\\n");',
+      "let source = normalized_source.as_str();",
+      '.split("\\n#[cfg(test)]")',
+      '.find("#[cfg(not(windows))]\\nfn verify_windows_wsl_recovery_vhd_with_timing")',
+    ],
+    "direct-unregister CRLF-neutral source-contract test",
+  );
+  const reboundVhdTest = windowsTestSection(
+    "n_minus_one_vhd_release_reproof_rejects_a_rebound_distribution_before_export",
+  );
+  for (const required of [
+    "RebindingWindowsWslRegistrations",
+    "arm_on_read: 3",
+    "open_without_windows_sharing(&source_vhd)",
+    "Some((Duration::from_secs(5), Duration::from_millis(25)))",
+    "matches!(error, AppError::NotAuthorized(_))",
+    "fs::read(&pending_path).unwrap(), pending_before",
+    "fs::read(&durable_intent_path).unwrap(), intent_before",
+    ".install_transition",
+    'String::from("--terminate")',
+    '"a rebound registration must stop before export or unregister"',
+  ]) {
+    assert(reboundVhdTest.includes(required), `rebound VHD Windows test is missing: ${required}`);
+  }
+  const timeoutCheckpointTest = windowsTestSection(
+    "n_minus_one_vhd_timeout_preserves_the_full_recovery_checkpoint",
+  );
+  for (const required of [
+    "backup_path.clone()",
+    "import_path.clone()",
+    "intent.recovery_archive.clone()",
+    "open_without_windows_sharing(&source_vhd)",
+    "matches!(error, AppError::Runtime(_))",
+    'contains("remained in use")',
+    "windows_wsl_ghost_migration_consumed_path(&machine)",
+    'String::from("--terminate")',
+    '"timeout must stop before export or either unregister"',
+    "assert!(source_vhd.is_file())",
+    'assert!(\n            intent\n                .quarantine_install_directory\n                .join("ext4.vhdx")\n                .is_file()',
+  ]) {
+    assert(
+      timeoutCheckpointTest.includes(required),
+      `VHD-timeout checkpoint Windows test is missing: ${required}`,
+    );
+  }
+  const incompleteQuarantineTest = windowsTestSection(
+    "uncheckpointed_quarantine_without_a_vhd_is_exactly_unregistered",
+  );
+  for (const required of [
+    "!quarantine_vhd.exists()",
+    "SequencedWindowsWslRegistrations",
+    "remove_uncheckpointed_windows_wsl_quarantine_locked",
+    "distribution_root.join(\"ext4.vhdx\").is_file()",
+    "!intent.attempt_directory.join(\"import.json\").exists()",
+    'String::from("--terminate")',
+    'String::from("--unregister")',
+    'String::from("--list")',
+    'String::from("--quiet")',
+  ]) {
+    assert(
+      incompleteQuarantineTest.includes(required),
+      `incomplete-quarantine Windows test is missing: ${required}`,
+    );
+  }
   assert(
     !managedRuntimeProduction.includes("--import-in-place"),
     "managed runtime recovery depends on unsupported in-place Windows WSL import",
