@@ -10,6 +10,8 @@ import {
   sha256File,
   toPosix,
 } from "./lib.mjs";
+import { validateWindowsNsisUpgradeEvidenceFile } from "./windows-nsis-upgrade-evidence.mjs";
+import { validateWindowsNsisGhostRecoveryEvidenceFile } from "./windows-nsis-ghost-recovery-evidence.mjs";
 
 function assert(condition, message) {
   if (!condition) {
@@ -53,6 +55,7 @@ async function main() {
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
   const publicationMode = requireString(args, "publication-mode");
+  const testOnlyWindowsRuntimeManifestSha256 = args.get("test-only-windows-runtime-manifest-sha256");
   if (!isSemver(version) || tag !== `v${version}` || !/^[0-9a-f]{40}$/u.test(commit)) {
     throw new Error("release identity is malformed or inconsistent");
   }
@@ -140,8 +143,27 @@ async function main() {
     assert(checksums.get(relative) === record.sha256, `release index digest mismatch: ${relative}`);
   }
 
+  await validateWindowsNsisUpgradeEvidenceFile({
+    file: path.join(directory, "windows-nsis-upgrade-qualification.json"),
+    artifactDirectory: directory,
+    reportFile: path.join(directory, "master-framework-report.json"),
+    bundleFile: path.join(directory, "master-framework-report.case.tar.gz"),
+    priorBundleFile: path.join(directory, "n-minus-one-before-upgrade.case.tar.gz"),
+    version,
+    tag,
+    commit,
+  });
+  await validateWindowsNsisGhostRecoveryEvidenceFile({
+    file: path.join(directory, "windows-nsis-ghost-recovery-qualification.json"),
+    artifactDirectory: directory,
+    version,
+    tag,
+    commit,
+    testOnlyRuntimeManifestSha256: testOnlyWindowsRuntimeManifestSha256,
+  });
+
   process.stdout.write(
-    `Verified ${checksums.size} finalized files and ${indexEntries.size} indexed release inputs for ${tag}.\n`,
+    `Verified ${checksums.size} finalized files, ${indexEntries.size} indexed release inputs, the installed-artifact master framework/signing-identity qualification, and the real registered-WSL ghost-recovery qualification for ${tag}.\n`,
   );
 }
 

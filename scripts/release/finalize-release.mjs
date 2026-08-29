@@ -22,6 +22,9 @@ import { validateWindowsNsisUpgradeEvidenceFile } from "./windows-nsis-upgrade-e
 import { validateWindowsNsisGhostRecoveryEvidenceFile } from "./windows-nsis-ghost-recovery-evidence.mjs";
 
 const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
+const MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE = "master-framework-report.case.tar.gz";
+const N_MINUS_ONE_SIGNED_CASE_BUNDLE = "n-minus-one-before-upgrade.case.tar.gz";
+const MAX_MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE_BYTES = 64 * 1024 * 1024;
 
 function assert(condition, message) {
   if (!condition) {
@@ -50,6 +53,13 @@ const RELEASE_COPY = new Map([
         "",
         "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
         "The app still waits for an explicit Start action before contacting a scan target.",
+        "",
+        "The release evidence retains a report produced by the installed candidate for NIST CSF 2.0,",
+        "ISO/IEC 27001:2022, and AIDEFEND 1.20260805. It preserves unknown coverage and preliminary",
+        "relationships without turning them into a compliance score, pass, certification, or audit claim.",
+        "The same report bytes are bound to the candidate's verified signed case bundle.",
+        "Both bounded synthetic case bundles—from the real N-1 install and the candidate—are retained",
+        "beside the standalone report so the signing-key continuity can be independently revalidated.",
         "",
       ],
     },
@@ -688,9 +698,21 @@ async function main() {
     "ENGINE_NOTICES.md",
     "ENGINE_NOTICES.json",
     "LICENSE.txt",
+    "master-framework-report.json",
+    MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE,
+    N_MINUS_ONE_SIGNED_CASE_BUNDLE,
   ]) {
     const metadata_ = await lstat(path.join(directory, required));
-    assert(metadata_.isFile() && metadata_.size > 0, `required release evidence is empty: ${required}`);
+    assert(
+      metadata_.isFile() && !metadata_.isSymbolicLink() && metadata_.size > 0,
+      `required release evidence is not a non-empty regular file: ${required}`,
+    );
+    if (required === MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE || required === N_MINUS_ONE_SIGNED_CASE_BUNDLE) {
+      assert(
+        metadata_.size <= MAX_MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE_BYTES,
+        `retained signed case bundle exceeds ${MAX_MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE_BYTES} bytes: ${required}`,
+      );
+    }
   }
 
   const platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"];
@@ -748,6 +770,9 @@ async function main() {
   const windowsNsisUpgradeQualification = await validateWindowsNsisUpgradeEvidenceFile({
     file: path.join(directory, "windows-nsis-upgrade-qualification.json"),
     artifactDirectory: directory,
+    reportFile: path.join(directory, "master-framework-report.json"),
+    bundleFile: path.join(directory, MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE),
+    priorBundleFile: path.join(directory, N_MINUS_ONE_SIGNED_CASE_BUNDLE),
     version,
     tag,
     commit,
@@ -884,7 +909,7 @@ async function main() {
   }
   await writeTextAtomic(path.join(directory, "SHA256SUMS.txt"), `${checksums.join("\n")}\n`);
   process.stdout.write(
-    `Finalized ${installers.length} installers, ${updaters.length} signed updater payloads, ${sidecars.length} first-party companion executables, ${platformQualifications.length} hosted platform qualifications, two Windows NSIS migration qualifications (${windowsNsisUpgradeQualification.qualification}, ${windowsNsisGhostRecoveryQualification.qualification}), and ${finalFiles.length} evidence files for ${tag}.\n`,
+    `Finalized ${installers.length} installers, ${updaters.length} signed updater payloads, ${sidecars.length} first-party companion executables, ${platformQualifications.length} hosted platform qualifications, one installed-artifact master NIST/ISO/AIDEFEND report with retained N-1 and candidate signed synthetic case bundles, two Windows NSIS migration qualifications (${windowsNsisUpgradeQualification.qualification}, ${windowsNsisGhostRecoveryQualification.qualification}), and ${finalFiles.length} evidence files for ${tag}.\n`,
   );
 }
 
