@@ -1047,12 +1047,16 @@ fn open_signing_key_file(path: &Path) -> io::Result<File> {
 fn open_signing_key_file(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ, READ_CONTROL, WRITE_DAC,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
+        READ_CONTROL, WRITE_DAC,
     };
     let mut options = OpenOptions::new();
     options
         .read(true)
-        .access_mode(FILE_GENERIC_READ | READ_CONTROL | WRITE_DAC)
+        // FlushFileBuffers requires write access on Windows. Keep that access
+        // on this already owner-authorized handle so the legacy ACL change can
+        // be made durable without reopening the path after verification.
+        .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC)
         .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
