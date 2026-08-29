@@ -41,9 +41,9 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 ## Want the details?
 
-<!-- Release line: v0.1.7. -->
+<!-- Release line: v0.1.8. -->
 
-> **Project status:** `v0.1.7` is a Windows-first public pre-release shaped by a full hands-on app walkthrough. Setup is simpler, network scans accept an IP or domain, live progress is more dependable, and a stopped scan tells you what happened.
+> **Project status:** `v0.1.8` is a Windows-first public pre-release. It can now finish a product-owned setup left by an older version automatically, while showing clear progress instead of sending you to Windows Terminal.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 
@@ -235,7 +235,7 @@ docs/usability/              Real-person study protocol and evidence schema
 
 ### Release and evidence status
 
-`v0.1.7` is the Windows-first public testing preview for the planned `v0.2.0` release. It carries the Candidate 11 improvements produced through a hands-on Windows app walkthrough: first launch recognizes what is already installed, prepared scans start from the action the user chose, public and internal network checks accept an IP or domain, and live activity cannot lose the events emitted while a scan is starting. A stopped check keeps its saved evidence, shows a useful next step, and can export a redacted diagnostic. Project imports also fail open when ignore rules cannot be trusted, so files are retained rather than silently omitted. The app still waits for an explicit Start action before contacting a target.
+`v0.1.8` builds on the hands-on Windows improvements in `v0.1.7`. When first launch finds a scan-tool workspace left by this product, the app preserves a recovery copy, replaces the old workspace, and continues setup automatically. The screen shows this work as it happens. Manual Windows instructions appear only when the app cannot prove that the workspace belongs to ai-security-scanner. Existing local cases are unchanged, and the app still waits for an explicit Start action before contacting a scan target.
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 

@@ -833,13 +833,13 @@ async function main() {
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
       latest.version !== VERSION ||
-      !latest.notes.includes("Windows setup and recovery") ||
-      !latest.notes.includes("prepared scans start") ||
-      !latest.notes.includes("preserves saved evidence") ||
-      !releaseNotes.includes("IP address or domain") ||
-      !releaseNotes.includes("preserve fast progress and failure events") ||
-      !releaseNotes.includes("files are retained rather than silently omitted") ||
-      !releaseNotes.includes("a stale journal is never permission to delete WSL state") ||
+      !latest.notes.includes("Automatically recovers product-owned Windows scan-tool workspaces") ||
+      !latest.notes.includes("preserves a verified recovery copy") ||
+      !latest.notes.includes("clear bilingual progress") ||
+      !releaseNotes.includes("Automatic Windows setup recovery pre-release") ||
+      !releaseNotes.includes("a verified recovery archive") ||
+      !releaseNotes.includes("Interrupted handoffs resume from durable checkpoints") ||
+      !releaseNotes.includes("Manual Windows instructions appear only") ||
       latest.notes.includes("repair release") ||
       releaseNotes.includes("This patch release") ||
       !checksums.includes("ai-security-scanner-egress-gateway") ||

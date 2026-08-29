@@ -103,23 +103,33 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   Cleanup is not recursive: another root basename, an additional child, a nonempty or hard-linked
   `known_hosts`, a link, foreign ownership, a wrong mode or type, or an unsafe directory replacement
   aborts cleanup before the unsafe object is removed.
-- On Windows, Podman can report `machine rm` success while its underlying WSL distribution still
-  exists. Before deleting the release-private provider home, installation, or requested image
-  cache, the app therefore obtains the Windows root from the bounded operating-system directory
-  API, never an inherited `SystemRoot`, and runs its absolute canonical
+- On Windows, Podman can leave its underlying WSL distribution behind after an interrupted setup or
+  even after reporting `machine rm` success. The app obtains the Windows root from the bounded
+  operating-system directory API, never an inherited `SystemRoot`, and runs its absolute canonical
   `SystemRoot\System32\wsl.exe` with a cleared minimal environment, fixed provider working
-  directory, bounded deadline/output, and `--list --quiet`.
-  It strictly accepts only bounded UTF-8 or UTF-16LE distribution names. If the deterministic exact
-  `podman-assm1-win-x64-<12-hex-image-id>` distribution remains after the verified
-  `podman machine rm --force`, the app leaves it untouched, stops cleanup, and gives the user a
-  stable manual recovery path to confirm, export, rename, or remove that exact distribution in
-  Windows. The app never runs `wsl --unregister`; an initialization journal is one-shot recovery
-  context and is never deletion authority. Only after read-only inventory proves the exact name
-  absent does deletion of the verified provider home retry Win32 sharing violations every 100 ms
-  for at most 10 seconds so a released `ext4.vhdx` can be removed; every other deletion error fails
-  immediately. Execution, decoding, final-absence proof, or delete-timeout failure retains the
-  remaining provider, installation, and requested image-cache state for a safe retry. Cleanup also
-  never uses the global `wsl --shutdown` operation.
+  directory, bounded deadlines/output, and strictly decoded bounded UTF-8 or UTF-16LE inventory.
+  Ordinary uninstall never treats a surviving distribution or one-shot initialization journal as
+  deletion authority: it stops and retains the provider, installation, and requested cache state.
+- First-launch replacement has a separate durable recovery transaction. It begins only when the
+  deterministic WSL name has exactly one registry registration whose canonical storage is inside a
+  release-private provider home bound to the current or another fully verified installed manifest.
+  The app records an immutable intent, checks free space without opening the running VHD, terminates
+  that exact distribution, then proves the stopped `ext4.vhdx` is a real non-reparse, one-link,
+  nonempty file. It exports a tar archive, synchronizes and atomically publishes it, records bounded
+  size and SHA-256, imports it under a generated quarantine name and isolated private directory,
+  and proves the import through both inventory and the unique registry `BasePath`.
+- Immediately before unregistering the original, the app rehashes the archive, reproves the
+  quarantine registration and storage, terminates and reproves the unchanged original, and confirms
+  both exact names in a fresh inventory. Only that transaction may run `wsl --unregister`, and only
+  for the proven original or generated quarantine name. It then proves inventory and registry
+  absence before deleting an exact provider directory. The replacement runtime must start and its
+  server must become ready before the temporary bootable quarantine is removed. The opaque archive,
+  intent, backup proof, and import proof remain; interrupted export, import, replacement, and cleanup
+  resume idempotently from those records. An ownership ambiguity fails closed to Microsoft's manual
+  backup/removal guidance. Recovery and cleanup never use the global `wsl --shutdown` operation.
+- After absence is proven, deletion of a verified provider home retries Win32 sharing violations
+  every 100 ms for at most 10 seconds so a released `ext4.vhdx` can be removed; every other deletion
+  error fails immediately.
 - Before first initialization, the app generates Podman 5.8.2's exact private-XDG
   `data/containers/podman/machine/machine{,.pub}` identity itself as an unencrypted OpenSSH Ed25519
   pair. It uses operating-system randomness and RustCrypto parsing/encoding, not a host

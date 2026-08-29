@@ -4,7 +4,7 @@ The release workflow builds native Tauri installers from either a manual `main` 
 exact numeric SemVer tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`, receives
 no publication privileges, creates no tag or GitHub Release, and preserves the finalized candidate
 as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag such as
-`v0.1.7` must exactly match the versions in `package.json`, `package-lock.json`,
+`v0.1.8` must exactly match the versions in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
 
 `package.json` declares whether that exact build uses the `prerelease` or `stable` publication
@@ -166,7 +166,8 @@ Release-line details are recorded in the source tree. See the
 [`v0.1.4` actionable scan-flow notes](v0.1.4.md),
 [`v0.1.5` Windows launch and scan-activity notes](v0.1.5.md),
 [`v0.1.6` managed scan connection repair notes](v0.1.6.md),
-[`v0.1.7` hands-on Windows reliability notes](v0.1.7.md), the planned
+[`v0.1.7` hands-on Windows reliability notes](v0.1.7.md),
+[`v0.1.8` automatic Windows workspace recovery notes](v0.1.8.md), the planned
 [`v0.2.0` stable completion notes](v0.2.0.md), and the historical
 [`v0.1.1` security and consistency repair notes](v0.1.1.md).
 
@@ -208,7 +209,7 @@ workflow from `main` before creating a tag:
 
 ```sh
 npm run test:release-evidence
-npm run release:validate -- --tag v0.1.7
+npm run release:validate -- --tag v0.1.8
 gh workflow run release.yml --ref main
 ```
 
@@ -220,8 +221,8 @@ its immutable `headSha`, and retain or download its `release-finalized` artifact
 commit—not a later `main` tip:
 
 ```sh
-git tag -a v0.1.7 <preflight-head-sha> -m "ai-security-scanner v0.1.7"
-git push origin v0.1.7
+git tag -a v0.1.8 <preflight-head-sha> -m "ai-security-scanner v0.1.8"
+git push origin v0.1.8
 ```
 
 The tag run rebuilds from the same commit rather than reusing preflight binaries. The GitHub Release

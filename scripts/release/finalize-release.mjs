@@ -27,6 +27,30 @@ function assert(condition, message) {
 
 const RELEASE_COPY = new Map([
   [
+    "0.1.8",
+    {
+      updaterNotes:
+        "Automatically recovers product-owned Windows scan-tool workspaces left by an earlier setup, preserves a verified recovery copy, and shows clear bilingual progress. Existing local cases and historical provenance remain intact.",
+      releaseNotes: [
+        "> **Automatic Windows setup recovery pre-release.** This build removes the manual WSL",
+        "> cleanup step when ai-security-scanner can prove that the old workspace belongs to the product.",
+        "",
+        "On first launch, an interrupted or older product-owned scan-tool workspace is preserved as",
+        "a verified recovery archive, copied into an isolated recovery workspace, and replaced",
+        "automatically. The new workspace must start successfully before the temporary bootable copy",
+        "is removed. Interrupted handoffs resume from durable checkpoints instead of starting over.",
+        "",
+        "The English and Traditional Chinese setup screens show recovery progress in plain language.",
+        "Manual Windows instructions appear only when the app cannot prove that a workspace is its own;",
+        "in that case, nothing is removed automatically.",
+        "",
+        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
+        "The app still waits for an explicit Start action before contacting a scan target.",
+        "",
+      ],
+    },
+  ],
+  [
     "0.1.7",
     {
       updaterNotes:

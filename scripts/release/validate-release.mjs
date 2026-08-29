@@ -764,10 +764,57 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
       `managed runtime execution contract is missing: ${required}`,
     );
   }
+  const directWslUnregister = 'OsString::from("--unregister")';
+  const managedRuntimeProduction = managedRuntime.split("\n#[cfg(test)]")[0];
+  const boundedRecoverySection = (start, end, label) => {
+    const startIndex = managedRuntimeProduction.indexOf(start);
+    const endIndex = managedRuntimeProduction.indexOf(end, startIndex + start.length);
+    assert(startIndex !== -1 && endIndex > startIndex, `managed runtime is missing ${label}`);
+    return managedRuntimeProduction.slice(startIndex, endIndex);
+  };
+  const unregisterCount = (source) => source.split(directWslUnregister).length - 1;
   assert(
-    !managedRuntime.includes('OsString::from("--unregister")') &&
-      !managedRuntime.includes('.arg("--unregister")'),
-    "managed runtime must never directly unregister a Windows WSL distribution",
+    unregisterCount(managedRuntimeProduction) === 4 &&
+      !managedRuntimeProduction.includes('.arg("--unregister")') &&
+      managedRuntime.includes("direct_wsl_unregister_is_whitelisted_only_for_verified_backup_recovery"),
+    "managed runtime has an unreviewed direct Windows WSL unregister path",
+  );
+  const handoffRecovery = boundedRecoverySection(
+    "fn recover_windows_wsl_distribution_locked",
+    "fn prepare_windows_wsl_quarantine_import_directory",
+    "bounded Windows WSL handoff recovery",
+  );
+  assert(
+    unregisterCount(handoffRecovery) === 2 &&
+      handoffRecovery.split("verify_windows_wsl_recovery_archive").length - 1 >= 2 &&
+      handoffRecovery.includes("verify_windows_wsl_quarantine_registration") &&
+      handoffRecovery.includes("verify_pending_windows_wsl_registration"),
+    "Windows WSL handoff unregister is not bound to the verified backup transaction",
+  );
+  const incompleteImportCleanup = boundedRecoverySection(
+    "fn remove_uncheckpointed_windows_wsl_quarantine_locked",
+    "fn verify_windows_wsl_quarantine_registration",
+    "bounded incomplete Windows WSL import cleanup",
+  );
+  assert(
+    unregisterCount(incompleteImportCleanup) === 1 &&
+      incompleteImportCleanup.includes("verify_windows_wsl_quarantine_registration_path"),
+    "incomplete Windows WSL import cleanup is not bound to its generated quarantine workspace",
+  );
+  const completedRecoveryCleanup = boundedRecoverySection(
+    "fn complete_windows_wsl_recovery_locked",
+    "fn windows_wsl_ownership_proof_path",
+    "bounded completed Windows WSL recovery cleanup",
+  );
+  assert(
+    unregisterCount(completedRecoveryCleanup) === 1 &&
+      completedRecoveryCleanup.includes("verify_windows_wsl_recovery_archive") &&
+      completedRecoveryCleanup.includes("verify_windows_wsl_quarantine_registration"),
+    "completed Windows WSL recovery cleanup is not bound to the verified recovery copy",
+  );
+  assert(
+    !managedRuntimeProduction.includes("--import-in-place"),
+    "managed runtime recovery depends on unsupported in-place Windows WSL import",
   );
   for (const required of [
     'podman_userns: format!("keep-id:uid={uid},gid={gid}")',

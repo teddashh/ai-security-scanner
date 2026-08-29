@@ -35,7 +35,7 @@ const ENGINE_SPECS = Object.freeze({
   grype: { tag: "0.117.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["grype.json"] },
   kubescape: { tag: "4.0.12-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["kubescape.json"] },
   "kube-bench": { tag: "0.16.0-3", group: "local", workflow: ".github/workflows/engine-images-local-k8s.yml", smokeFiles: ["kube-bench.json"] },
-  "egress-gateway": { tag: "0.1.7-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
+  "egress-gateway": { tag: "0.1.8-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
 });
 
 const PLATFORMS = ["linux/amd64", "linux/arm64"];
