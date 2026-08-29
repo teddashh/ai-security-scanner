@@ -14470,7 +14470,12 @@ mod tests {
         fs::write(&quarantine_vhd, b"imported recovery workspace").expect("write quarantine VHD");
         let recovery_archive = attempt_directory.join("workspace-recovery.tar");
         fs::write(&recovery_archive, b"durable recovery archive").expect("write recovery archive");
-        File::open(&recovery_archive).unwrap().sync_all().unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&recovery_archive)
+            .expect("open recovery archive for durable fixture write")
+            .sync_all()
+            .expect("sync recovery archive fixture");
         let original_registration = WindowsWslRegistration {
             distribution_name: distribution.clone(),
             base_path: registration_base_path.clone(),
