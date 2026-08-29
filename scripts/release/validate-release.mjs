@@ -686,6 +686,8 @@ function validatePlatformQualificationSources(sources) {
     "Open-NoFollowSingleLinkFile",
     "Get-NoFollowFileSha256Proof",
     "ConvertFrom-Json -DateKind String",
+    "$writerOptions.Encoder = [Text.Encodings.Web.JavaScriptEncoder]::UnsafeRelaxedJsonEscaping",
+    "Assert-SerdeCompatibleJsonCompaction",
     "ExpectedExecutableProof",
     "HashData($executionGuard)",
     "executable is not the exact previously verified installer",
@@ -728,11 +730,20 @@ function validatePlatformQualificationSources(sources) {
     "wsl_distribution_requires_manual_action",
     "workspace-recovery.tar",
     "FILE_FLAG_OPEN_REPARSE_POINT",
+    "FILE_FLAG_BACKUP_SEMANTICS",
+    "Get-BoundedAbsoluteWindowsPath",
+    "$maximumWindowsPathUtf16CodeUnits = 32760",
+    "$maximumVerbatimWindowsPathUtf16CodeUnits = 32766",
     "Open-NoFollowSingleLinkFile",
     "$identity.links -ne 1",
     "Open-NoFollowWindowsSystemFile",
     "$identity.links -lt 1",
     "Get-NoFollowWindowsSystemExecutableProof",
+    "Open-NoFollowRealDirectory",
+    "Assert-SameNoFollowDirectoryIdentity",
+    "Assert-NoFollowDirectoryIdentityRegression $workRoot",
+    "Same-directory extended-prefix regression",
+    "Different-directory regression",
     "Get-AuthenticodeSignature -LiteralPath",
     "O=Microsoft Corporation",
     "windows_system32_microsoft_authenticode_v1",
@@ -767,9 +778,29 @@ function validatePlatformQualificationSources(sources) {
     "Assert-OwnerOnlyFullControlFile",
     "anchorIdentitySha256",
     "identityDocumentSha256",
+    "$writerOptions.Encoder = [Text.Encodings.Web.JavaScriptEncoder]::UnsafeRelaxedJsonEscaping",
+    "Assert-SerdeCompatibleJsonCompaction",
     "rotationIntentAbsent = $true",
     'registeredWslStateExercised = $true',
   ]) assert(nsisGhost.includes(required), `registered-WSL ghost qualification is missing: ${required}`);
+  const escapedSerdeCompactionFixture = "$fixture = '{\"public_key_base64\":\"A\\u002BB\\/==\"}'";
+  const literalSerdeCompactionExpected = "$expected = '{\"public_key_base64\":\"A+B/==\"}'";
+  for (const [label, source] of [
+    ["normal Windows N-1", nsisUpgrade],
+    ["registered-WSL ghost", nsisGhost],
+  ]) {
+    assert(
+      source.includes(escapedSerdeCompactionFixture) &&
+        source.includes(literalSerdeCompactionExpected) &&
+        (source.match(/Assert-SerdeCompatibleJsonCompaction/gu) ?? []).length === 2,
+      `${label} qualification must prove escaped JSON input compacts to the literal serde_json byte contract`,
+    );
+  }
+  assert(
+    (nsisGhost.match(/ConvertFrom-Json -DateKind String/gu) ?? []).length === 5 &&
+      !/ConvertFrom-Json(?! -DateKind String)/u.test(nsisGhost),
+    "registered-WSL ghost qualification must preserve every JSON date as an exact source string",
+  );
   assert(
     (nsisUpgrade.match(/-ExpectedExecutableProof/gu) ?? []).length === 3,
     "normal Windows N-1 qualification must bind all three installer launches to exact handle proofs",
@@ -807,6 +838,84 @@ function validatePlatformQualificationSources(sources) {
       systemHandleDispose > sameHandleRehash &&
       (systemProof.match(/\$stream\.Dispose\(\)/gu) ?? []).length === 1,
     "registered-WSL ghost qualification must hold and rehash the original restrictive system-file handle across Authenticode verification",
+  );
+  const directoryOpenStart = nsisGhost.indexOf("function Open-NoFollowRealDirectory(");
+  const directoryOpenEnd = nsisGhost.indexOf("function Assert-SameNoFollowDirectoryIdentity(", directoryOpenStart);
+  assert(directoryOpenStart >= 0 && directoryOpenEnd > directoryOpenStart, "registered-WSL ghost qualification has no bounded no-follow directory opener");
+  const directoryOpen = nsisGhost.slice(directoryOpenStart, directoryOpenEnd);
+  for (const required of [
+    "FILE_READ_ATTRIBUTES",
+    "FILE_SHARE_READ -bor [GhostQualificationNativeMethods]::FILE_SHARE_WRITE",
+    "FILE_FLAG_BACKUP_SEMANTICS -bor [GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT",
+    "[IO.FileAttributes]::Directory",
+    "[IO.FileAttributes]::ReparsePoint",
+    "Get-OpenDirectoryIdentity $handle",
+  ]) assert(directoryOpen.includes(required), `registered-WSL no-follow directory opener is missing: ${required}`);
+  assert(
+    !directoryOpen.includes("FILE_SHARE_DELETE"),
+    "registered-WSL no-follow directory proof must prevent path deletion or replacement while its handles are held",
+  );
+  const directoryProofStart = directoryOpenEnd;
+  const directoryProofEnd = nsisGhost.indexOf("function Assert-SingleLinkFile(", directoryProofStart);
+  assert(directoryProofEnd > directoryProofStart, "registered-WSL ghost qualification has no bounded directory-identity proof");
+  const directoryProof = nsisGhost.slice(directoryProofStart, directoryProofEnd);
+  const actualDirectoryOpen = directoryProof.indexOf("$actualHandle = Open-NoFollowRealDirectory");
+  const expectedDirectoryOpen = directoryProof.indexOf("$expectedHandle = Open-NoFollowRealDirectory");
+  const volumeIdentityCheck = directoryProof.indexOf("$actualBefore.volume -ne $expectedBefore.volume");
+  const fileIndexIdentityCheck = directoryProof.indexOf("$actualBefore.index -ne $expectedBefore.index");
+  const expectedDirectoryDispose = directoryProof.indexOf("$expectedHandle.Dispose()");
+  const actualDirectoryDispose = directoryProof.indexOf("$actualHandle.Dispose()");
+  assert(
+    actualDirectoryOpen >= 0 &&
+      expectedDirectoryOpen > actualDirectoryOpen &&
+      volumeIdentityCheck > expectedDirectoryOpen &&
+      fileIndexIdentityCheck > volumeIdentityCheck &&
+      expectedDirectoryDispose > fileIndexIdentityCheck &&
+      actualDirectoryDispose > expectedDirectoryDispose &&
+      (directoryProof.match(/Open-NoFollowRealDirectory/gu) ?? []).length === 2 &&
+      (directoryProof.match(/\.Dispose\(\)/gu) ?? []).length === 2,
+    "registered-WSL directory identity must compare volume and file index while both restrictive no-follow handles remain open",
+  );
+  const boundedPathStart = nsisGhost.indexOf("function Get-BoundedAbsoluteWindowsPath(");
+  const boundedPathEnd = nsisGhost.indexOf("function Get-VerbatimWindowsPath(", boundedPathStart);
+  assert(boundedPathStart >= 0 && boundedPathEnd > boundedPathStart, "registered-WSL ghost qualification has no bounded Windows path parser");
+  const boundedPath = nsisGhost.slice(boundedPathStart, boundedPathEnd);
+  for (const required of [
+    "$Path.IndexOf([char]0) -ge 0",
+    "$Path.Length -gt $maximumWindowsPathUtf16CodeUnits",
+    "[IO.Path]::IsPathFullyQualified($Path)",
+    "$full.IndexOf([char]0) -ge 0",
+    "$full.Length -gt $maximumWindowsPathUtf16CodeUnits",
+  ]) assert(boundedPath.includes(required), `registered-WSL bounded Windows path parser is missing: ${required}`);
+  const exactWslStart = nsisGhost.indexOf("function Get-ExactWslRegistration(");
+  const exactWslEnd = nsisGhost.indexOf("function Assert-NoFollowDirectoryIdentityRegression(", exactWslStart);
+  assert(exactWslStart >= 0 && exactWslEnd > exactWslStart, "registered-WSL ghost qualification has no exact registration binding function");
+  const exactWsl = nsisGhost.slice(exactWslStart, exactWslEnd);
+  assert(
+    exactWsl.includes("[String]::Equals($_.Name, $Name, [StringComparison]::Ordinal)") &&
+      exactWsl.includes("$matches.Count -ne 1") &&
+      exactWsl.includes("Get-BoundedAbsoluteWindowsPath $matches[0].BasePath") &&
+      exactWsl.includes("Get-BoundedAbsoluteWindowsPath $ExpectedBasePath") &&
+      exactWsl.includes("Assert-SameNoFollowDirectoryIdentity $registeredBasePath $boundedExpectedBasePath") &&
+      !exactWsl.includes("Resolve-RealDirectory") &&
+      !exactWsl.includes("[String]::Equals($actual, $expected"),
+    "registered-WSL binding must retain the exact distro identity and bind its registry BasePath by directory object, not path spelling",
+  );
+  const directoryRegressionStart = exactWslEnd;
+  const directoryRegressionEnd = nsisGhost.indexOf("function Get-PreservedDataSnapshot(", directoryRegressionStart);
+  assert(directoryRegressionEnd > directoryRegressionStart, "registered-WSL ghost qualification has no directory-identity regression fixture");
+  const directoryRegression = nsisGhost.slice(directoryRegressionStart, directoryRegressionEnd);
+  for (const required of [
+    "Get-VerbatimWindowsPath $sameDirectory",
+    "Directory identity regression did not exercise two Windows path spellings.",
+    "Assert-SameNoFollowDirectoryIdentity $sameDirectory $extendedSameDirectory",
+    "Assert-SameNoFollowDirectoryIdentity $sameDirectory $differentDirectory",
+    "Directory identity comparison accepted two different directory objects.",
+    "Remove-ExactTree $fixtureRoot $Parent $fixtureName",
+  ]) assert(directoryRegression.includes(required), `registered-WSL directory-identity regression is missing: ${required}`);
+  assert(
+    (nsisGhost.match(/Assert-NoFollowDirectoryIdentityRegression/gu) ?? []).length === 2,
+    "registered-WSL directory-identity regression must be defined once and run once",
   );
   for (const required of [
     "windows_nsis_real_registered_wsl_n_minus_one_ghost_recovery",
