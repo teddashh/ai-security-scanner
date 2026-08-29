@@ -43,6 +43,8 @@ const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 const WINDOWS_WSL_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+const WINDOWS_WSL_VHD_RELEASE_POLL: Duration = Duration::from_millis(100);
 const WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
 const WINDOWS_WSL_PROVIDER_DELETE_POLL: Duration = Duration::from_millis(100);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -2098,6 +2100,8 @@ pub struct ManagedRuntimeManager {
     downloader: Arc<dyn ManagedArtifactDownloader>,
     #[cfg(test)]
     bounded_ghost_fixture_manifest: bool,
+    #[cfg(all(test, windows))]
+    windows_wsl_vhd_release_timing: Option<(Duration, Duration)>,
 }
 
 impl std::fmt::Debug for ManagedRuntimeManager {
@@ -2149,6 +2153,8 @@ impl ManagedRuntimeManager {
             downloader,
             #[cfg(test)]
             bounded_ghost_fixture_manifest: false,
+            #[cfg(all(test, windows))]
+            windows_wsl_vhd_release_timing: None,
         };
         manager.verify_resource_bundle()?;
         Ok(manager)
@@ -2245,6 +2251,8 @@ impl ManagedRuntimeManager {
             downloader,
             #[cfg(test)]
             bounded_ghost_fixture_manifest: false,
+            #[cfg(all(test, windows))]
+            windows_wsl_vhd_release_timing: None,
         };
         manager.verify_installation()?;
         Ok(manager)
@@ -2276,6 +2284,8 @@ impl ManagedRuntimeManager {
             nsis_installation: Arc::new(DirectWindowsNsisInstallationReader),
             downloader,
             bounded_ghost_fixture_manifest: false,
+            #[cfg(windows)]
+            windows_wsl_vhd_release_timing: None,
         };
         manager.verify_resource_bundle()?;
         Ok(manager)
@@ -3630,10 +3640,6 @@ impl ManagedRuntimeManager {
             if private_entry_exists(&intent.recovery_archive)? {
                 remove_regular_file(&intent.recovery_archive)?;
             }
-            require_windows_wsl_recovery_free_space(
-                &intent.attempt_directory,
-                &intent.registration_base_path.join("ext4.vhdx"),
-            )?;
             let output = self.run_command_args(
                 ManagedCommandOperation::WslDistributionTerminate,
                 &command,
@@ -3644,7 +3650,8 @@ impl ManagedRuntimeManager {
                 MACHINE_STOP_TIMEOUT,
             )?;
             require_success("managed Windows WSL distribution stop", &output)?;
-            self.verify_pending_windows_wsl_registration(&intent)?;
+            let source_vhd = self.verify_pending_windows_wsl_registration(&intent)?;
+            require_windows_wsl_recovery_free_space(&intent.attempt_directory, source_vhd.size)?;
             let output = self.run_command_args(
                 ManagedCommandOperation::WslDistributionExport,
                 &command,
@@ -3674,11 +3681,9 @@ impl ManagedRuntimeManager {
                 &durable_archive,
             )?;
             sync_directory(&intent.attempt_directory)?;
-            let source_vhd_size =
-                fs::symlink_metadata(intent.registration_base_path.join("ext4.vhdx"))?.len();
             let max_bytes = windows_wsl_recovery_archive_max_bytes(
                 self.loaded.manifest.resources.disk_size_gb,
-                source_vhd_size,
+                source_vhd.size,
             )?;
             let mut report_progress = |processed, total| match setup {
                 Some(setup) => setup.report_recovery_progress(
@@ -4047,6 +4052,11 @@ impl ManagedRuntimeManager {
             ],
             MACHINE_STOP_TIMEOUT,
         )?;
+        // An interrupted import may have registered the exact private
+        // workspace before creating a complete ext4.vhdx. Re-prove its exact
+        // name/BasePath directory binding after terminate, but do not require
+        // an uncheckpointed VHD to be valid before cleaning that registration.
+        self.verify_windows_wsl_quarantine_registration_path(intent)?;
         let output = self.run_command_args(
             ManagedCommandOperation::WslDistributionRemoval,
             &command,
@@ -4098,8 +4108,12 @@ impl ManagedRuntimeManager {
         &self,
         intent: &WindowsWslRecoveryIntent,
     ) -> AppResult<()> {
-        let expected = self.verify_windows_wsl_quarantine_registration_path(intent)?;
-        verify_windows_wsl_quarantine_storage(&expected)
+        let (timeout, poll) = self.windows_wsl_vhd_release_timing();
+        verify_windows_wsl_quarantine_storage(
+            || self.verify_windows_wsl_quarantine_registration_path(intent),
+            timeout,
+            poll,
+        )
     }
 
     fn verify_windows_wsl_quarantine_registration_path(
@@ -4227,9 +4241,16 @@ impl ManagedRuntimeManager {
     fn verify_pending_windows_wsl_registration(
         &self,
         intent: &WindowsWslRecoveryIntent,
-    ) -> AppResult<()> {
-        let (base_path, _) = self.verify_pending_windows_wsl_registration_binding(intent)?;
-        verify_windows_wsl_recovery_vhd(&base_path.join("ext4.vhdx"))
+    ) -> AppResult<WindowsWslRecoveryFileSnapshot> {
+        let (timeout, poll) = self.windows_wsl_vhd_release_timing();
+        verify_windows_wsl_recovery_vhd_with_timing(
+            || {
+                self.verify_pending_windows_wsl_registration_binding(intent)
+                    .map(|(base_path, _)| base_path)
+            },
+            timeout,
+            poll,
+        )
     }
 
     fn verify_pending_windows_wsl_registration_binding(
@@ -4383,10 +4404,27 @@ impl ManagedRuntimeManager {
         })
     }
 
-    fn verify_current_windows_wsl_machine_registration(&self, machine_name: &str) -> AppResult<()> {
-        let actual_base =
-            self.verify_current_windows_wsl_machine_registration_binding(machine_name)?;
-        verify_windows_wsl_recovery_vhd(&actual_base.join("ext4.vhdx"))
+    fn verify_current_windows_wsl_machine_registration(
+        &self,
+        machine_name: &str,
+    ) -> AppResult<WindowsWslRecoveryFileSnapshot> {
+        let (timeout, poll) = self.windows_wsl_vhd_release_timing();
+        verify_windows_wsl_recovery_vhd_with_timing(
+            || self.verify_current_windows_wsl_machine_registration_binding(machine_name),
+            timeout,
+            poll,
+        )
+    }
+
+    fn windows_wsl_vhd_release_timing(&self) -> (Duration, Duration) {
+        #[cfg(all(test, windows))]
+        if let Some(timing) = self.windows_wsl_vhd_release_timing {
+            return timing;
+        }
+        (
+            WINDOWS_WSL_VHD_RELEASE_TIMEOUT,
+            WINDOWS_WSL_VHD_RELEASE_POLL,
+        )
     }
 
     fn verify_current_windows_wsl_machine_registration_binding(
@@ -6511,22 +6549,17 @@ fn windows_wsl_recovery_archive_max_bytes(
 #[cfg(windows)]
 fn require_windows_wsl_recovery_free_space(
     destination_directory: &Path,
-    source_vhd: &Path,
+    source_vhd_size: u64,
 ) -> AppResult<()> {
-    // The source distribution can still have its VHD open here.  Do not open
-    // that file until WSL has terminated the exact, ownership-proven
-    // distribution; Windows can otherwise reject even a read-only metadata
-    // handle with a sharing violation.  This check is only a conservative
-    // space estimate.  The full non-reparse, one-link file proof is repeated
-    // immediately after a successful terminate and before export.
-    let source_metadata = fs::symlink_metadata(source_vhd)?;
-    if !source_metadata.is_file() || source_metadata.len() == 0 {
+    // The caller first terminates the exact ownership-proven distribution and
+    // obtains this size from the bounded no-follow VHD handle proof. Do not
+    // reopen the VHD here: WSL may still be finishing its handle release.
+    if source_vhd_size == 0 {
         return Err(AppError::NotAuthorized(
             "managed Windows WSL recovery VHD must be one non-empty regular file".into(),
         ));
     }
-    let source_size = source_metadata.len();
-    let required = source_size
+    let required = source_vhd_size
         .checked_add(WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES)
         .ok_or_else(|| {
             AppError::Runtime("managed Windows WSL recovery space estimate overflowed".into())
@@ -6596,7 +6629,7 @@ fn windows_available_disk_space(destination_directory: &Path) -> AppResult<u64> 
 #[cfg(not(windows))]
 fn require_windows_wsl_recovery_free_space(
     _destination_directory: &Path,
-    _source_vhd: &Path,
+    _source_vhd_size: u64,
 ) -> AppResult<()> {
     Ok(())
 }
@@ -8880,20 +8913,145 @@ fn verify_windows_wsl_quarantine_directory(_install_directory: &Path) -> AppResu
     ))
 }
 
-fn verify_windows_wsl_quarantine_storage(install_directory: &Path) -> AppResult<()> {
-    verify_windows_wsl_quarantine_directory(install_directory)?;
-    #[cfg(windows)]
-    verify_windows_wsl_recovery_vhd(&install_directory.join("ext4.vhdx"))?;
-    #[cfg(not(windows))]
-    return Err(AppError::NotAvailable(
-        "Windows WSL recovery storage verification is unavailable on this host".into(),
-    ));
-    #[cfg(windows)]
-    Ok(())
+fn verify_windows_wsl_quarantine_storage<F>(
+    verify_registration_base_path: F,
+    timeout: Duration,
+    poll: Duration,
+) -> AppResult<()>
+where
+    F: FnMut() -> AppResult<PathBuf>,
+{
+    verify_windows_wsl_recovery_vhd_with_timing(verify_registration_base_path, timeout, poll)
+        .map(|_| ())
 }
 
-fn verify_windows_wsl_recovery_vhd(path: &Path) -> AppResult<()> {
-    verify_windows_wsl_recovery_file(path, "managed Windows WSL recovery VHD")
+#[cfg(windows)]
+fn verify_windows_wsl_recovery_vhd_with_timing<F>(
+    mut verify_registration_base_path: F,
+    timeout: Duration,
+    poll: Duration,
+) -> AppResult<WindowsWslRecoveryFileSnapshot>
+where
+    F: FnMut() -> AppResult<PathBuf>,
+{
+    if poll.is_zero() {
+        return Err(AppError::Internal(
+            "managed Windows WSL VHD release poll interval was zero".into(),
+        ));
+    }
+    let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
+        AppError::Internal("managed Windows WSL VHD release deadline overflowed".into())
+    })?;
+    let mut last_sharing_error = None::<String>;
+    loop {
+        if let Some(error) = last_sharing_error.as_deref() {
+            if Instant::now() >= deadline {
+                return Err(AppError::Runtime(format!(
+                    "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                )));
+            }
+        }
+        // Re-prove the exact name, ownership/receipt, and BasePath on every
+        // retry. A delayed handle release must never turn a stale path proof
+        // into authority for a later by-name WSL command.
+        let base_path = verify_registration_base_path()?;
+        if let Some(error) = last_sharing_error.as_deref() {
+            if Instant::now() >= deadline {
+                return Err(AppError::Runtime(format!(
+                    "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                )));
+            }
+        }
+        let path = base_path.join("ext4.vhdx");
+        let file = match open_windows_managed_ssh_identity_file(&path) {
+            Ok(file) => file,
+            Err(error) if windows_error_is_sharing_violation(&error) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(AppError::Runtime(format!(
+                        "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                    )));
+                }
+                last_sharing_error = Some(error.to_string());
+                thread::sleep(poll.min(deadline.saturating_duration_since(now)));
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(AppError::NotAvailable(format!(
+                    "managed Windows WSL recovery VHD is unavailable: {error}"
+                )));
+            }
+            Err(error) => {
+                return Err(AppError::NotAuthorized(format!(
+                    "managed Windows WSL recovery VHD could not be opened safely: {error}"
+                )));
+            }
+        };
+        let information = windows_file_information(&file)?;
+        validate_windows_wsl_recovery_file_information(
+            &information,
+            "managed Windows WSL recovery VHD",
+        )?;
+        // Keep the first no-follow VHD handle open while the registration is
+        // read and bound again. Reopen the path under that second binding and
+        // require the exact same Windows file object before returning to the
+        // caller's by-name export/unregister edge.
+        let rebound_base_path = verify_registration_base_path()?;
+        if !windows_paths_refer_to_same_location(&base_path, &rebound_base_path)? {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL registration changed during the bounded VHD release proof".into(),
+            ));
+        }
+        if let Some(error) = last_sharing_error.as_deref() {
+            if Instant::now() >= deadline {
+                return Err(AppError::Runtime(format!(
+                    "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                )));
+            }
+        }
+        let rebound_path = rebound_base_path.join("ext4.vhdx");
+        let rebound_file = open_windows_managed_ssh_identity_file(&rebound_path).map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "managed Windows WSL recovery VHD could not be rebound safely after its registration was rechecked: {error}"
+            ))
+        })?;
+        let rebound_information = windows_file_information(&rebound_file)?;
+        validate_windows_wsl_recovery_file_information(
+            &rebound_information,
+            "managed Windows WSL recovery VHD",
+        )?;
+        if rebound_information != information {
+            return Err(AppError::NotAuthorized(
+                "managed Windows WSL recovery VHD identity changed while its registration was rechecked"
+                    .into(),
+            ));
+        }
+        let snapshot = WindowsWslRecoveryFileSnapshot {
+            size: information.size,
+            identity: information.identity,
+            number_of_links: information.number_of_links,
+            attributes: information.attributes,
+        };
+        drop(rebound_file);
+        drop(file);
+        return Ok(snapshot);
+    }
+}
+
+#[cfg(not(windows))]
+fn verify_windows_wsl_recovery_vhd_with_timing<F>(
+    mut verify_registration_base_path: F,
+    _timeout: Duration,
+    _poll: Duration,
+) -> AppResult<WindowsWslRecoveryFileSnapshot>
+where
+    F: FnMut() -> AppResult<PathBuf>,
+{
+    let path = verify_registration_base_path()?.join("ext4.vhdx");
+    verify_windows_wsl_recovery_file(&path, "managed Windows WSL recovery VHD")?;
+    Ok(WindowsWslRecoveryFileSnapshot {
+        size: fs::symlink_metadata(&path)?.len(),
+    })
 }
 
 fn verify_windows_wsl_recovery_file(path: &Path, label: &str) -> AppResult<()> {
@@ -12363,7 +12521,9 @@ fn remove_windows_private_entry_tree(
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     };
 
-    let metadata = fs::symlink_metadata(path)?;
+    let Some(metadata) = windows_private_entry_metadata_with_policy(path, delete_policy)? else {
+        return Ok(());
+    };
     let attributes = metadata.file_attributes();
     let directory = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
     let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
@@ -12397,6 +12557,47 @@ fn windows_error_is_sharing_violation(error: &io::Error) -> bool {
 }
 
 #[cfg(windows)]
+fn wait_for_windows_private_file_release_if_allowed(
+    error: &io::Error,
+    delete_policy: WindowsPrivateFileDeletePolicy,
+) -> AppResult<bool> {
+    if !windows_error_is_sharing_violation(error) {
+        return Ok(false);
+    }
+    let WindowsPrivateFileDeletePolicy::RetrySharingViolation { deadline, poll } = delete_policy
+    else {
+        return Ok(false);
+    };
+    let now = Instant::now();
+    if now >= deadline {
+        return Err(AppError::Runtime(format!(
+            "managed Windows WSL provider storage remained in use after its bounded release wait; retaining remaining provider, installation, and image-cache state for a safe retry: {error}"
+        )));
+    }
+    thread::sleep(poll.min(deadline.saturating_duration_since(now)));
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn windows_private_entry_metadata_with_policy(
+    path: &Path,
+    delete_policy: WindowsPrivateFileDeletePolicy,
+) -> AppResult<Option<fs::Metadata>> {
+    loop {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => return Ok(Some(metadata)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                if wait_for_windows_private_file_release_if_allowed(&error, delete_policy)? {
+                    continue;
+                }
+                return Err(error.into());
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
 fn remove_windows_private_file(
     path: &Path,
     delete_policy: WindowsPrivateFileDeletePolicy,
@@ -12405,32 +12606,22 @@ fn remove_windows_private_file(
         match set_windows_entry_readonly_nofollow(path, false) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                if wait_for_windows_private_file_release_if_allowed(&error, delete_policy)? {
+                    continue;
+                }
+                return Err(error.into());
+            }
         }
         match fs::remove_file(path) {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error)
-                if windows_error_is_sharing_violation(&error)
-                    && matches!(
-                        delete_policy,
-                        WindowsPrivateFileDeletePolicy::RetrySharingViolation { .. }
-                    ) =>
-            {
-                let WindowsPrivateFileDeletePolicy::RetrySharingViolation { deadline, poll } =
-                    delete_policy
-                else {
-                    unreachable!("sharing-violation retry policy was matched above")
-                };
-                let now = Instant::now();
-                if now >= deadline {
-                    return Err(AppError::Runtime(format!(
-                        "managed Windows WSL provider storage remained in use after its bounded release wait; retaining remaining provider, installation, and image-cache state for a safe retry: {error}"
-                    )));
+            Err(error) => {
+                if wait_for_windows_private_file_release_if_allowed(&error, delete_policy)? {
+                    continue;
                 }
-                thread::sleep(poll.min(deadline.saturating_duration_since(now)));
+                return Err(error.into());
             }
-            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -13296,6 +13487,31 @@ mod tests {
     }
 
     #[cfg(windows)]
+    struct RebindingWindowsWslRegistrations {
+        before: Vec<WindowsWslRegistration>,
+        after: Vec<WindowsWslRegistration>,
+        arm_on_read: u64,
+        reads: AtomicU64,
+        armed: Arc<AtomicBool>,
+        rebound: Arc<AtomicBool>,
+    }
+
+    #[cfg(windows)]
+    impl WindowsWslRegistrationReader for RebindingWindowsWslRegistrations {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            let read = self.reads.fetch_add(1, Ordering::AcqRel) + 1;
+            if read == self.arm_on_read {
+                self.armed.store(true, Ordering::Release);
+            }
+            if self.rebound.load(Ordering::Acquire) {
+                Ok(self.after.clone())
+            } else {
+                Ok(self.before.clone())
+            }
+        }
+    }
+
+    #[cfg(windows)]
     struct FixedWindowsNsisInstallation {
         installation: Mutex<Option<WindowsNsisInstallation>>,
         local_app_data: PathBuf,
@@ -14024,6 +14240,29 @@ mod tests {
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .open(path)
             .expect("open fixture without delete sharing")
+    }
+
+    #[cfg(windows)]
+    fn open_without_windows_write_or_delete_sharing(path: &Path) -> File {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(path)
+            .expect("open fixture without write or delete sharing")
+    }
+
+    #[cfg(windows)]
+    fn open_without_windows_sharing(path: &Path) -> File {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(path)
+            .expect("open fixture without sharing")
     }
 
     #[test]
@@ -15769,6 +16008,65 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_wsl_vhd_verification_waits_for_exact_handle_release() {
+        let fixture = fixture();
+        let vhd = fixture.manager.versions_root().join("release-wait.vhdx");
+        ensure_private_directory(&fixture.manager.versions_root()).unwrap();
+        fs::write(&vhd, b"bounded VHD release fixture").unwrap();
+        let expected_size = fs::metadata(&vhd).unwrap().len();
+        let base_path = vhd.parent().unwrap().to_path_buf();
+        let locked_vhd = open_without_windows_sharing(&vhd);
+        let started = Instant::now();
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            drop(locked_vhd);
+        });
+
+        let snapshot = verify_windows_wsl_recovery_vhd_with_timing(
+            || Ok(base_path.clone()),
+            Duration::from_secs(5),
+            Duration::from_millis(25),
+        )
+        .expect("VHD proof resumes after the exact handle is released");
+        release.join().expect("release fixture VHD handle");
+
+        assert_eq!(snapshot.size, expected_size);
+        assert!(started.elapsed() >= Duration::from_millis(250));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file() {
+        let fixture = fixture();
+        let vhd = fixture.manager.versions_root().join("release-timeout.vhdx");
+        ensure_private_directory(&fixture.manager.versions_root()).unwrap();
+        fs::write(&vhd, b"bounded VHD timeout fixture").unwrap();
+        let base_path = vhd.parent().unwrap().to_path_buf();
+        let locked_vhd = open_without_windows_sharing(&vhd);
+        let started = Instant::now();
+
+        let error = verify_windows_wsl_recovery_vhd_with_timing(
+            || Ok(base_path.clone()),
+            Duration::from_millis(150),
+            Duration::from_millis(25),
+        )
+        .expect_err("an unreleased VHD must hit the bounded deadline");
+
+        assert!(matches!(error, AppError::Runtime(_)));
+        assert!(error.to_string().contains("remained in use"));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert!(vhd.is_file());
+        drop(locked_vhd);
+        verify_windows_wsl_recovery_vhd_with_timing(
+            || Ok(base_path.clone()),
+            Duration::from_secs(1),
+            Duration::from_millis(25),
+        )
+        .expect("the retained VHD can be verified on retry");
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn uninstall_waits_for_exact_windows_wsl_vhd_release() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
@@ -15780,7 +16078,11 @@ mod tests {
         let vhd = windows_fixture_vhd_path(&fixture.manager, target);
         fs::create_dir(vhd.parent().expect("VHD parent")).expect("create WSL distribution root");
         fs::write(&vhd, b"fixture VHD").expect("write fixture VHD");
-        let locked_vhd = open_without_windows_delete_sharing(&vhd);
+        // WSL can retain an ext4.vhdx handle that blocks both the no-follow
+        // FILE_WRITE_ATTRIBUTES open and the eventual delete. Both operations
+        // must use the same bounded release deadline.
+        let locked_vhd = open_without_windows_write_or_delete_sharing(&vhd);
+        let started = Instant::now();
         let release = thread::spawn(move || {
             thread::sleep(Duration::from_millis(250));
             drop(locked_vhd);
@@ -15795,6 +16097,7 @@ mod tests {
         let status = result.expect("uninstall after bounded VHD release wait");
 
         assert_eq!(status.phase, ManagedRuntimePhase::NotInstalled);
+        assert!(started.elapsed() >= Duration::from_millis(250));
         assert!(!private_entry_exists(&fixture.manager.provider_home()).unwrap());
         assert!(!private_entry_exists(&fixture.manager.install_directory()).unwrap());
     }
@@ -15833,6 +16136,51 @@ mod tests {
                 Duration::from_millis(25),
             )
             .expect_err("an unreleased VHD must stop provider deletion at its deadline");
+
+        assert!(error.to_string().contains("remained in use"));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert!(private_entry_exists(&provider_home).unwrap());
+        assert!(private_entry_exists(&vhd).unwrap());
+        assert!(private_entry_exists(&fixture.manager.install_directory()).unwrap());
+        assert_eq!(fs::read(image).unwrap(), fixture.image);
+        assert_eq!(fixture.commands.calls().len(), 2);
+        drop(locked_vhd);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_provider_attribute_open_timeout_retains_install_and_image_cache() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let image = fixture
+            .manager
+            .acquire_machine_image_locked(target, None)
+            .expect("cache exact machine image");
+        let provider_home = fixture.manager.provider_home();
+        let vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        fs::create_dir(vhd.parent().expect("VHD parent")).expect("create WSL distribution root");
+        fs::write(&vhd, b"fixture VHD").expect("write fixture VHD");
+        let locked_vhd = open_without_windows_write_or_delete_sharing(&vhd);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        let started = Instant::now();
+
+        let error = fixture
+            .manager
+            .uninstall_with_windows_provider_delete_timing(
+                ManagedUninstallOptions {
+                    stop_mode: ManagedStopMode::Force,
+                    remove_machine_image_cache: true,
+                },
+                Duration::from_millis(150),
+                Duration::from_millis(25),
+            )
+            .expect_err("an attribute-locked VHD must stop deletion at its deadline");
 
         assert!(error.to_string().contains("remained in use"));
         assert!(started.elapsed() >= Duration::from_millis(150));
@@ -17329,6 +17677,341 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn n_minus_one_vhd_release_reproof_rejects_a_rebound_distribution_before_export() {
+        let (mut fixture, target, distribution_root, _, intent) =
+            bounded_n_minus_one_pending_fixture();
+        let machine = machine_name(&target);
+        let distribution = format!("podman-{machine}");
+        fixture
+            .manager
+            .claim_bounded_windows_ghost_migration_receipt(&intent)
+            .expect("consume the exact installer receipt before WSL mutation");
+        let managed_command = fixture
+            .manager
+            .runtime_command(&target)
+            .expect("current managed command");
+        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
+        let durable_intent_path = intent.attempt_directory.join("intent.json");
+        let pending_before = fs::read(&pending_path).expect("pending recovery pointer");
+        let intent_before = fs::read(&durable_intent_path).expect("durable recovery intent");
+
+        let rebound_base_path = fixture._temp.path().join("rebound-wsl-registration");
+        fs::create_dir(&rebound_base_path).expect("rebound registration directory");
+        fs::write(
+            rebound_base_path.join("ext4.vhdx"),
+            b"unrelated rebound workspace",
+        )
+        .expect("rebound registration VHD");
+        let before = vec![WindowsWslRegistration {
+            distribution_name: distribution.clone(),
+            base_path: distribution_root.clone(),
+        }];
+        let after = vec![WindowsWslRegistration {
+            distribution_name: distribution.clone(),
+            base_path: rebound_base_path,
+        }];
+        let armed = Arc::new(AtomicBool::new(false));
+        let rebound = Arc::new(AtomicBool::new(false));
+        fixture.manager.wsl_registrations = Arc::new(RebindingWindowsWslRegistrations {
+            before,
+            after,
+            // Read #1 is the recovery precheck, #2 is the first binding-aware
+            // VHD attempt (which is still locked), and #3 proves that the
+            // retry re-reads registration state before another open.
+            arm_on_read: 3,
+            reads: AtomicU64::new(0),
+            armed: armed.clone(),
+            rebound: rebound.clone(),
+        });
+        fixture.manager.windows_wsl_vhd_release_timing =
+            Some((Duration::from_secs(5), Duration::from_millis(25)));
+        let source_vhd = distribution_root.join("ext4.vhdx");
+        let locked_vhd = open_without_windows_sharing(&source_vhd);
+        let rebind = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !armed.load(Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    drop(locked_vhd);
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            rebound.store(true, Ordering::Release);
+            drop(locked_vhd);
+            true
+        });
+        fixture.commands.push(success(Vec::new()));
+
+        let error = fixture
+            .manager
+            .recover_windows_wsl_distribution_locked(
+                &managed_command,
+                &machine,
+                vec![distribution.clone()],
+                Some(intent.clone()),
+                None,
+            )
+            .expect_err("a rebound same-name registration must stop recovery");
+
+        assert!(
+            rebind
+                .join()
+                .expect("rebind fixture thread was not panicked")
+        );
+        assert!(matches!(error, AppError::NotAuthorized(_)));
+        assert_eq!(fs::read(&pending_path).unwrap(), pending_before);
+        assert_eq!(fs::read(&durable_intent_path).unwrap(), intent_before);
+        assert_eq!(
+            fixture
+                .manager
+                .nsis_installation
+                .installation()
+                .unwrap()
+                .unwrap()
+                .install_transition,
+            None
+        );
+        assert!(source_vhd.is_file());
+        assert!(!intent.attempt_directory.join("backup.json").exists());
+        assert_eq!(
+            fixture.commands.calls(),
+            vec![vec![String::from("--terminate"), distribution]],
+            "a rebound registration must stop before export or unregister"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn n_minus_one_vhd_timeout_preserves_the_full_recovery_checkpoint() {
+        let (mut fixture, target, distribution_root, _, intent) =
+            bounded_n_minus_one_pending_fixture();
+        let machine = machine_name(&target);
+        let distribution = format!("podman-{machine}");
+        fixture
+            .manager
+            .claim_bounded_windows_ghost_migration_receipt(&intent)
+            .expect("consume the exact installer receipt before WSL mutation");
+        let managed_command = fixture
+            .manager
+            .runtime_command(&target)
+            .expect("current managed command");
+
+        let archive_bytes = b"durable recovery checkpoint archive";
+        fs::write(&intent.recovery_archive, archive_bytes).expect("recovery archive checkpoint");
+        sync_windows_wsl_recovery_file(&intent.recovery_archive, "recovery archive checkpoint")
+            .expect("durable recovery archive checkpoint");
+        let backup = WindowsWslRecoveryBackupProof {
+            schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
+            recovery_id: intent.recovery_id.clone(),
+            distribution_name: distribution.clone(),
+            quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
+            recovery_archive: intent.recovery_archive.clone(),
+            size_bytes: archive_bytes.len() as u64,
+            sha256: sha256_bytes(archive_bytes),
+        };
+        let backup_path = intent.attempt_directory.join("backup.json");
+        write_private_atomic(&backup_path, &serde_json::to_vec(&backup).unwrap())
+            .expect("backup checkpoint");
+        ensure_managed_wsl_distribution_storage_directory(
+            &fixture.manager.windows_wsl_recovery_workspace_root(),
+        )
+        .expect("recovery workspace root");
+        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)
+            .expect("quarantine workspace");
+        fs::write(
+            intent.quarantine_install_directory.join("ext4.vhdx"),
+            b"quarantine checkpoint VHD",
+        )
+        .expect("quarantine checkpoint VHD");
+        let imported = WindowsWslRecoveryImportProof {
+            schema_version: WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA.into(),
+            recovery_id: intent.recovery_id.clone(),
+            quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
+            quarantine_install_directory: intent.quarantine_install_directory.clone(),
+            recovery_archive: intent.recovery_archive.clone(),
+            archive_size_bytes: backup.size_bytes,
+            archive_sha256: backup.sha256.clone(),
+        };
+        let import_path = intent.attempt_directory.join("import.json");
+        write_private_atomic(&import_path, &serde_json::to_vec(&imported).unwrap())
+            .expect("import checkpoint");
+
+        let original_registration = WindowsWslRegistration {
+            distribution_name: distribution.clone(),
+            base_path: distribution_root.clone(),
+        };
+        let quarantine_registration = WindowsWslRegistration {
+            distribution_name: intent.quarantine_distribution_name.clone(),
+            base_path: intent.quarantine_install_directory.clone(),
+        };
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(vec![
+            original_registration,
+            quarantine_registration,
+        ]));
+        fixture.manager.windows_wsl_vhd_release_timing =
+            Some((Duration::from_millis(250), Duration::from_millis(25)));
+        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
+        let durable_intent_path = intent.attempt_directory.join("intent.json");
+        let preserved = [
+            pending_path.clone(),
+            durable_intent_path.clone(),
+            backup_path.clone(),
+            import_path.clone(),
+            intent.recovery_archive.clone(),
+        ]
+        .map(|path| (path.clone(), fs::read(path).expect("checkpoint bytes")));
+        let source_vhd = distribution_root.join("ext4.vhdx");
+        let locked_vhd = open_without_windows_sharing(&source_vhd);
+        fixture.commands.push(success(Vec::new()));
+
+        let error = fixture
+            .manager
+            .recover_windows_wsl_distribution_locked(
+                &managed_command,
+                &machine,
+                vec![
+                    distribution.clone(),
+                    intent.quarantine_distribution_name.clone(),
+                ],
+                Some(intent.clone()),
+                None,
+            )
+            .expect_err("an unreleased old VHD must retain the complete retry checkpoint");
+
+        assert!(matches!(error, AppError::Runtime(_)));
+        assert!(error.to_string().contains("remained in use"));
+        for (path, expected) in preserved {
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                expected,
+                "{} changed",
+                path.display()
+            );
+        }
+        assert_eq!(
+            fixture
+                .manager
+                .read_windows_wsl_recovery_intent_locked(&machine)
+                .unwrap(),
+            Some(intent.clone())
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .nsis_installation
+                .installation()
+                .unwrap()
+                .unwrap()
+                .install_transition,
+            None
+        );
+        assert!(
+            !fixture
+                .manager
+                .windows_wsl_ghost_migration_consumed_path(&machine)
+                .exists(),
+            "the permanent consumed tombstone is written only after the replacement commits"
+        );
+        assert_eq!(
+            fixture.commands.calls(),
+            vec![vec![String::from("--terminate"), distribution]],
+            "timeout must stop before export or either unregister"
+        );
+        assert!(source_vhd.is_file());
+        assert!(
+            intent
+                .quarantine_install_directory
+                .join("ext4.vhdx")
+                .is_file()
+        );
+        drop(locked_vhd);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uncheckpointed_quarantine_without_a_vhd_is_exactly_unregistered() {
+        let (mut fixture, target, distribution_root, intent, managed_command) =
+            current_verified_pending_fixture();
+        let machine = machine_name(&target);
+        ensure_managed_wsl_distribution_storage_directory(
+            &fixture.manager.windows_wsl_recovery_workspace_root(),
+        )
+        .expect("recovery workspace root");
+        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)
+            .expect("incomplete quarantine workspace");
+        let quarantine_vhd = intent.quarantine_install_directory.join("ext4.vhdx");
+        assert!(
+            !quarantine_vhd.exists(),
+            "the interrupted-import fixture deliberately has no VHD"
+        );
+        fs::write(
+            &intent.recovery_archive,
+            b"preserved recovery archive for incomplete import cleanup",
+        )
+        .expect("recovery archive");
+        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
+        let durable_intent_path = intent.attempt_directory.join("intent.json");
+        let preserved = [
+            pending_path.clone(),
+            durable_intent_path,
+            intent.recovery_archive.clone(),
+        ]
+        .map(|path| {
+            (
+                path.clone(),
+                fs::read(path).expect("preserved recovery bytes"),
+            )
+        });
+        let quarantine_registration = WindowsWslRegistration {
+            distribution_name: intent.quarantine_distribution_name.clone(),
+            base_path: intent.quarantine_install_directory.clone(),
+        };
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+            VecDeque::from(vec![
+                vec![quarantine_registration.clone()],
+                vec![quarantine_registration],
+                Vec::new(),
+            ]),
+        )));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(Vec::new()));
+        push_windows_wsl_absent(&fixture.commands);
+
+        let distributions = fixture
+            .manager
+            .remove_uncheckpointed_windows_wsl_quarantine_locked(&managed_command, &intent)
+            .expect("the exact incomplete registration remains safely removable without a VHD");
+
+        assert!(distributions.is_empty());
+        for (path, expected) in preserved {
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                expected,
+                "{} changed",
+                path.display()
+            );
+        }
+        assert!(distribution_root.join("ext4.vhdx").is_file());
+        assert!(!intent.attempt_directory.join("import.json").exists());
+        assert!(!intent.quarantine_install_directory.exists());
+        assert_eq!(
+            fixture.commands.calls(),
+            vec![
+                vec![
+                    String::from("--terminate"),
+                    intent.quarantine_distribution_name.clone(),
+                ],
+                vec![
+                    String::from("--unregister"),
+                    intent.quarantine_distribution_name.clone(),
+                ],
+                vec![String::from("--list"), String::from("--quiet")],
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn consumed_receipt_error_survives_manager_restart_without_name_only_reclaim() {
         let mut fixture = fixture();
         let (target, _, distribution_root, install_location) =
@@ -18055,9 +18738,14 @@ mod tests {
                 original_and_quarantine.clone(),
                 original_and_quarantine.clone(),
                 original_and_quarantine.clone(),
+                original_and_quarantine.clone(),
+                original_and_quarantine.clone(),
+                original_and_quarantine.clone(),
                 original_and_quarantine,
                 quarantine_only.clone(),
+                quarantine_only.clone(),
                 quarantine_only,
+                replacement_and_quarantine.clone(),
                 replacement_and_quarantine.clone(),
                 replacement_and_quarantine.clone(),
                 replacement_and_quarantine,
@@ -18403,6 +19091,22 @@ mod tests {
         );
         assert!(recovery.contains("verify_windows_wsl_quarantine_registration"));
         assert!(recovery.contains("verify_pending_windows_wsl_registration"));
+        let first_terminate = recovery
+            .find("ManagedCommandOperation::WslDistributionTerminate")
+            .expect("first exact WSL terminate");
+        let first_vhd_proof = recovery
+            .find("let source_vhd = self.verify_pending_windows_wsl_registration")
+            .expect("first bounded VHD proof");
+        let first_free_space = recovery
+            .find("require_windows_wsl_recovery_free_space")
+            .expect("first recovery free-space check");
+        let first_export = recovery
+            .find("ManagedCommandOperation::WslDistributionExport")
+            .expect("first exact WSL export");
+        assert!(first_terminate < first_vhd_proof);
+        assert!(first_vhd_proof < first_free_space);
+        assert!(first_free_space < first_export);
+        assert!(recovery.contains("source_vhd.size"));
         assert!(
             recovery
                 .find("claim_bounded_windows_ghost_migration_receipt")
@@ -18412,6 +19116,61 @@ mod tests {
                     .expect("first WSL mutation"),
             "the exact installer receipt must be consumed before any WSL mutation"
         );
+        let free_space = &source[source
+            .find("fn require_windows_wsl_recovery_free_space")
+            .expect("recovery free-space function")
+            ..source
+                .find("fn require_windows_wsl_recovery_import_space")
+                .expect("recovery free-space function end")];
+        assert!(free_space.contains("source_vhd_size: u64"));
+        assert!(!free_space.contains("symlink_metadata"));
+        let vhd_wait = &source[source
+            .find("fn verify_windows_wsl_recovery_vhd_with_timing")
+            .expect("bounded VHD release verifier")
+            ..source
+                .find("#[cfg(not(windows))]\nfn verify_windows_wsl_recovery_vhd_with_timing")
+                .expect("bounded VHD release verifier end")];
+        assert!(vhd_wait.contains("windows_error_is_sharing_violation"));
+        assert!(vhd_wait.contains("checked_add(timeout)"));
+        assert!(vhd_wait.contains("thread::sleep"));
+        assert!(vhd_wait.contains("open_windows_managed_ssh_identity_file"));
+        assert!(vhd_wait.contains("validate_windows_wsl_recovery_file_information"));
+        assert_eq!(
+            vhd_wait.matches("verify_registration_base_path()?").count(),
+            2
+        );
+        assert!(
+            vhd_wait
+                .find("let base_path = verify_registration_base_path()?")
+                .expect("registration proof before VHD open")
+                < vhd_wait
+                    .find("open_windows_managed_ssh_identity_file(&path)")
+                    .expect("first VHD open")
+        );
+        assert!(vhd_wait.contains("let rebound_base_path = verify_registration_base_path()?"));
+        assert!(vhd_wait.contains("windows_paths_refer_to_same_location"));
+        assert!(vhd_wait.contains("rebound_information != information"));
+        assert!(vhd_wait.contains("last_sharing_error"));
+        let provider_delete = &source[source
+            .find("fn remove_windows_private_file")
+            .expect("Windows provider file deletion")
+            ..source
+                .find("fn set_windows_entry_readonly_nofollow")
+                .expect("Windows provider file deletion end")];
+        assert_eq!(
+            provider_delete
+                .matches("wait_for_windows_private_file_release_if_allowed")
+                .count(),
+            2,
+            "attribute-open and file deletion must share one bounded deadline"
+        );
+        let provider_metadata = &source[source
+            .find("fn windows_private_entry_metadata_with_policy")
+            .expect("Windows provider metadata retry")
+            ..source
+                .find("fn remove_windows_private_file")
+                .expect("Windows provider metadata retry end")];
+        assert!(provider_metadata.contains("wait_for_windows_private_file_release_if_allowed"));
         let incomplete_import_cleanup = &production[production
             .find("fn remove_uncheckpointed_windows_wsl_quarantine_locked")
             .expect("incomplete import cleanup")
@@ -18422,6 +19181,17 @@ mod tests {
         assert!(
             incomplete_import_cleanup.contains("verify_windows_wsl_quarantine_registration_path")
         );
+        let incomplete_terminate = incomplete_import_cleanup
+            .find("ManagedCommandOperation::WslDistributionTerminate")
+            .expect("incomplete quarantine terminate");
+        let incomplete_reproof = incomplete_import_cleanup
+            .rfind("verify_windows_wsl_quarantine_registration_path(intent)?")
+            .expect("incomplete quarantine exact registration-path reproof");
+        let incomplete_unregister = incomplete_import_cleanup
+            .find("ManagedCommandOperation::WslDistributionRemoval")
+            .expect("incomplete quarantine unregister");
+        assert!(incomplete_terminate < incomplete_reproof);
+        assert!(incomplete_reproof < incomplete_unregister);
         let completion = &production[production
             .find("fn complete_windows_wsl_recovery_locked")
             .expect("recovery completion function")
