@@ -21,12 +21,12 @@ permissions:
   attestations: write
 
 concurrency:
-  group: managed-egress-gateway-image-0.1.7-1
+  group: managed-egress-gateway-image-0.1.8-1
   cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/teddashh/ai-security-scanner-egress-gateway
-  IMAGE_TAG: 0.1.7-1
+  IMAGE_TAG: 0.1.8-1
 
 jobs:
   publish:
