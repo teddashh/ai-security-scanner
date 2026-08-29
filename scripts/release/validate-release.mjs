@@ -1407,6 +1407,69 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     !managedRuntimeProduction.includes("--import-in-place"),
     "managed runtime recovery depends on unsupported in-place Windows WSL import",
   );
+  const registryRead = boundedRecoverySection(
+    "fn read_windows_registry_string_once",
+    "fn windows_registry_string(",
+    "bounded stable Windows registry read",
+  );
+  const registryDecoder = boundedRecoverySection(
+    "fn decode_windows_registry_string_read",
+    "fn decode_stable_windows_registry_string_reads",
+    "bounded Windows registry decoder",
+  );
+  const stableRegistryDecoder = boundedRecoverySection(
+    "fn decode_stable_windows_registry_string_reads",
+    "fn read_windows_registry_string_once",
+    "stable Windows registry read comparison",
+  );
+  const registryString = boundedRecoverySection(
+    "fn windows_registry_string(",
+    "fn windows_registry_optional_string",
+    "stable Windows registry string snapshot",
+  );
+  assert(
+    registryRead.includes("RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE") &&
+      registryRead.includes("vec![0xa5a5_u16;") &&
+      registryRead.includes("status == ERROR_MORE_DATA") &&
+      registryRead.includes("value_type != REG_SZ") &&
+      registryRead.includes("decode_windows_registry_string_read(&encoded, returned_bytes)?"),
+    "Windows registry data reads are not bounded, type-locked, and fail-closed",
+  );
+  assert(
+    registryDecoder.includes("2..=MAX_WINDOWS_REGISTRY_STRING_BYTES") &&
+      registryDecoder.includes("returned_bytes.is_multiple_of(2)") &&
+      registryDecoder.includes("returned_units > encoded.len()") &&
+      registryDecoder.includes("encoded[returned_units - 1] != 0") &&
+      registryDecoder.includes("encoded[..returned_units - 1].contains(&0)") &&
+      registryDecoder.includes("String::from_utf16(&encoded[..returned_units - 1])") &&
+      stableRegistryDecoder.includes("first_returned_bytes != second_returned_bytes") &&
+      stableRegistryDecoder.includes("first[..first_units] != second[..second_units]") &&
+      stableRegistryDecoder.includes("first_value != second_value"),
+    "Windows registry decoding no longer proves bounded, canonical, stable UTF-16 bytes",
+  );
+  assert(
+    registryString.includes("checked_add(2)") &&
+      registryString.includes("candidate <= MAX_WINDOWS_REGISTRY_STRING_BYTES") &&
+      registryString.split("read_windows_registry_string_once(").length - 1 === 2 &&
+      registryString.includes("decode_stable_windows_registry_string_reads(") &&
+      !registryString.includes("returned_bytes != size_bytes") &&
+      managedRuntime.includes(
+        "windows_registry_string_accepts_a_bounded_size_probe_overestimate_only_when_reads_stabilize",
+      ) &&
+      managedRuntime.includes("windows_registry_string_rejects_unbounded_or_malformed_reads"),
+    "Windows registry strings do not use two identical bounded reads after a non-exact size probe",
+  );
+  const optionalRegistryString = boundedRecoverySection(
+    "fn windows_registry_optional_string",
+    "fn windows_nsis_installation_from_key",
+    "optional Windows registry string probe",
+  );
+  assert(
+    optionalRegistryString.includes(
+      "RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE",
+    ) && optionalRegistryString.includes("windows_registry_string(key, value_name).map(Some)"),
+    "optional Windows registry probes are not bound to the literal stable string reader",
+  );
   for (const required of [
     'podman_userns: format!("keep-id:uid={uid},gid={gid}")',
     "if provider.uses_podman_dialect()",
