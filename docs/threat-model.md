@@ -64,16 +64,15 @@ It considers a single human user on one workstation. Shared-workstation authoriz
 
 All UI input is untrusted. Tauri commands validate identifiers, state transitions, paths, scope grants, and target syntax in Rust. A disabled button is not an authorization control.
 
-### Boundary A2: backend to Windows WSL setup
+### Boundary A2: backend to Windows WSL prerequisite checks
 
-The optional one-click Windows prerequisite repair is a host-setup action, not scanner remediation.
-Its Tauri command accepts no path, arguments, verb, or operation from the UI. The backend derives
-one allowlisted action from the exact current failed prerequisite pair, resolves the canonical
-Windows-owned `System32\wsl.exe`, rejects reparse points, and supplies only fixed
-`--install --no-distribution` or `--update` arguments to `ShellExecuteExW` with `runas`. It never
-uses a shell, inherited `PATH`, or an elevated project helper. Windows owns the UAC credential
-surface; the app never receives the administrator password. Cancellation is reported as no change,
-and restart-required results never cause an automatic restart or runtime-image download.
+The desktop resolves the Windows-owned `System32\wsl.exe`, rejects reparse points, and performs only
+bounded read-only status and inventory probes with fixed arguments and a cleared environment. The
+webview cannot supply an executable, arguments, verb, or servicing operation. The current product
+does not elevate itself, enable optional features, invoke Windows servicing, or expose the legacy
+repair backend as a Tauri command. A missing or outdated WSL installation leads to Microsoft's
+official setup outside the app; returning or reopening the app performs the same read-only check
+before any runtime-image download.
 
 ### Boundary B: backend to bootstrap broker
 
