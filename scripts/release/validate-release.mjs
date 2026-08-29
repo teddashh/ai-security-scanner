@@ -912,11 +912,14 @@ function validatePlatformQualificationSources(sources) {
     'if (@(Get-ProductRegistryEntries).Count -ne 0) { throw "Candidate uninstaller left the product registry entry." }',
     happyGhostUninstall,
   );
-  const clearedActiveUninstaller = nsisGhost.indexOf("$activeUninstaller = $null", happyGhostUninstall);
+  const clearedGhostActiveUninstaller = nsisGhost.indexOf(
+    "$activeUninstaller = $null",
+    happyGhostUninstall,
+  );
   assert(
     happyGhostUninstall >= 0 &&
       productRegistrationCheck > happyGhostUninstall &&
-      clearedActiveUninstaller > productRegistrationCheck,
+      clearedGhostActiveUninstaller > productRegistrationCheck,
     "registered-WSL ghost qualification must retain cleanup ownership until NSIS registry removal is proven",
   );
   const escapedSerdeCompactionFixture = "$fixture = '{\"public_key_base64\":\"A\\u002BB\\/==\"}'";
