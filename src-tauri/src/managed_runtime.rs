@@ -742,7 +742,7 @@ impl ManagedRuntimeSetupController {
         Ok(())
     }
 
-    #[cfg(any(feature = "desktop", test))]
+    #[cfg(test)]
     pub(crate) fn begin_prerequisite_repair(&self) -> AppResult<ManagedRuntimeSetupNextAction> {
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
@@ -784,7 +784,7 @@ impl ManagedRuntimeSetupController {
         Ok(action)
     }
 
-    #[cfg(any(feature = "desktop", test))]
+    #[cfg(test)]
     pub(crate) fn finish_prerequisite_repair(
         &self,
         result: Option<&ManagedRuntimePrerequisiteRepairResult>,
@@ -8004,7 +8004,7 @@ fn machine_name(target: &ManagedTarget) -> String {
     name
 }
 
-#[cfg(any(feature = "desktop", test))]
+#[cfg(test)]
 fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppResult<&'static str> {
     match action {
         ManagedRuntimeSetupNextAction::InstallWsl
@@ -8022,7 +8022,7 @@ fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppRe
     }
 }
 
-#[cfg(any(feature = "desktop", test))]
+#[cfg(test)]
 fn windows_wsl_repair_result_from_exit_code(
     exit_code: u32,
 ) -> ManagedRuntimePrerequisiteRepairResult {
@@ -8052,7 +8052,7 @@ fn windows_wsl_repair_result_from_exit_code(
 /// Runs exactly one product-defined WSL prerequisite action through Windows'
 /// standard UAC prompt. No executable, parameter, working-directory, secret,
 /// or environment input crosses the webview boundary.
-#[cfg(any(feature = "desktop", test))]
+#[cfg(test)]
 pub(crate) fn repair_windows_wsl_prerequisite(
     action: ManagedRuntimeSetupNextAction,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
@@ -8060,7 +8060,7 @@ pub(crate) fn repair_windows_wsl_prerequisite(
     repair_windows_wsl_prerequisite_platform(parameters)
 }
 
-#[cfg(all(windows, any(feature = "desktop", test)))]
+#[cfg(all(windows, test))]
 fn repair_windows_wsl_prerequisite_platform(
     parameters: &'static str,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
@@ -8245,7 +8245,7 @@ fn repair_windows_wsl_prerequisite_platform(
     Ok(windows_wsl_repair_result_from_exit_code(exit_code))
 }
 
-#[cfg(all(not(windows), any(feature = "desktop", test)))]
+#[cfg(all(not(windows), test))]
 fn repair_windows_wsl_prerequisite_platform(
     _parameters: &'static str,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {

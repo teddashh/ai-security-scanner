@@ -113,7 +113,7 @@ jobs:
           --out target/ci-managed-runtime-evidence
           --platform windows-x86_64
           --expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a
-      - name: Compile Windows desktop and UAC prerequisite repair
+      - name: Compile Windows desktop
         run: cargo check --locked --package ai-security-scanner --features desktop --lib
       - name: Compile the reviewed custom NSIS installer
         run: >-
