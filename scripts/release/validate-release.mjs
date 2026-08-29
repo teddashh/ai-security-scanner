@@ -729,6 +729,14 @@ function validatePlatformQualificationSources(sources) {
     "workspace-recovery.tar",
     "FILE_FLAG_OPEN_REPARSE_POINT",
     "Open-NoFollowSingleLinkFile",
+    "$identity.links -ne 1",
+    "Open-NoFollowWindowsSystemFile",
+    "$identity.links -lt 1",
+    "Get-NoFollowWindowsSystemExecutableProof",
+    "Get-AuthenticodeSignature -LiteralPath",
+    "O=Microsoft Corporation",
+    "windows_system32_microsoft_authenticode_v1",
+    "-ExpectedSystemExecutableProof $TrustedWsl.proof",
     "Get-NoFollowFileSha256Proof",
     "ExpectedExecutableProof",
     "HashData($executionGuard)",
@@ -769,6 +777,36 @@ function validatePlatformQualificationSources(sources) {
   assert(
     (nsisGhost.match(/-ExpectedExecutableProof/gu) ?? []).length === 3,
     "registered-WSL ghost qualification must bind all three installer launches to exact handle proofs",
+  );
+  assert(
+    (nsisGhost.match(/-ExpectedSystemExecutableProof/gu) ?? []).length === 1,
+    "registered-WSL ghost qualification must reserve its hard-link-aware proof for one OS-trusted WSL cleanup launch",
+  );
+  assert(
+    (nsisGhost.match(/Open-NoFollowWindowsSystemFile/gu) ?? []).length === 3 &&
+      (nsisGhost.match(/\$identity\.links -lt 1/gu) ?? []).length === 1 &&
+      (nsisGhost.match(/\$identity\.links -ne 1/gu) ?? []).length === 1,
+    "registered-WSL ghost qualification must isolate Windows system hard-link handling from the single-link product evidence policy",
+  );
+  assert(
+    (nsisGhost.match(/Get-NoFollowWindowsSystemExecutableProof/gu) ?? []).length === 2,
+    "registered-WSL ghost qualification must create its Windows system proof only through the fixed trusted-WSL resolver",
+  );
+  const systemProofStart = nsisGhost.indexOf("function Get-NoFollowWindowsSystemExecutableProof(");
+  const systemProofEnd = nsisGhost.indexOf("function Get-LowerSha256(", systemProofStart);
+  assert(systemProofStart >= 0 && systemProofEnd > systemProofStart, "registered-WSL ghost qualification has no bounded Windows system proof function");
+  const systemProof = nsisGhost.slice(systemProofStart, systemProofEnd);
+  const systemHandleOpen = systemProof.indexOf("$stream = Open-NoFollowWindowsSystemFile");
+  const authenticodeCheck = systemProof.indexOf("Get-AuthenticodeSignature -LiteralPath");
+  const sameHandleRehash = systemProof.indexOf("$afterSignatureDigest = [Security.Cryptography.SHA256]::HashData($stream)");
+  const systemHandleDispose = systemProof.indexOf("$stream.Dispose()");
+  assert(
+    systemHandleOpen >= 0 &&
+      authenticodeCheck > systemHandleOpen &&
+      sameHandleRehash > authenticodeCheck &&
+      systemHandleDispose > sameHandleRehash &&
+      (systemProof.match(/\$stream\.Dispose\(\)/gu) ?? []).length === 1,
+    "registered-WSL ghost qualification must hold and rehash the original restrictive system-file handle across Authenticode verification",
   );
   for (const required of [
     "windows_nsis_real_registered_wsl_n_minus_one_ghost_recovery",

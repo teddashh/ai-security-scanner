@@ -1048,15 +1048,17 @@ fn open_signing_key_file(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
-        READ_CONTROL, WRITE_DAC,
+        READ_CONTROL, WRITE_DAC, WRITE_OWNER,
     };
     let mut options = OpenOptions::new();
     options
         .read(true)
         // FlushFileBuffers requires write access on Windows. Keep that access
-        // on this already owner-authorized handle so the legacy ACL change can
-        // be made durable without reopening the path after verification.
-        .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC)
+        // on this already ACL-authorized handle so the exact legacy owner and
+        // DACL can be hardened without reopening the path after verification.
+        .access_mode(
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+        )
         .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
@@ -1499,6 +1501,75 @@ fn windows_current_user_sid() -> io::Result<WindowsSid> {
 }
 
 #[cfg(windows)]
+fn windows_current_default_owner_sid() -> io::Result<WindowsSid> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::Security::{
+        CopySid, GetLengthSid, GetTokenInformation, IsValidSid, TOKEN_OWNER, TOKEN_QUERY,
+        TokenOwner,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let mut raw_token = std::ptr::null_mut();
+    // SAFETY: output storage is valid and GetCurrentProcess returns a pseudo-handle.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut raw_token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: OpenProcessToken returned a uniquely owned handle.
+    let token = unsafe { OwnedHandle::from_raw_handle(raw_token) };
+    let mut required = 0_u32;
+    // SAFETY: null probe is the documented size query.
+    let probe = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenOwner,
+            std::ptr::null_mut(),
+            0,
+            &raw mut required,
+        )
+    };
+    let probe_error = io::Error::last_os_error();
+    if probe != 0
+        || required < std::mem::size_of::<TOKEN_OWNER>() as u32
+        || probe_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid default-owner token size",
+        ));
+    }
+    let mut information = vec![0_usize; (required as usize).div_ceil(std::mem::size_of::<usize>())];
+    // SAFETY: buffer is aligned and provides required writable bytes.
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenOwner,
+            information.as_mut_ptr().cast(),
+            required,
+            &raw mut required,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful TokenOwner query initialized TOKEN_OWNER.
+    let token_owner = unsafe { &*information.as_ptr().cast::<TOKEN_OWNER>() };
+    if token_owner.Owner.is_null() || unsafe { IsValidSid(token_owner.Owner) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid default-owner SID",
+        ));
+    }
+    // SAFETY: SID was validated.
+    let length = unsafe { GetLengthSid(token_owner.Owner) };
+    let mut storage = vec![0_u32; (length as usize).div_ceil(std::mem::size_of::<u32>())];
+    // SAFETY: destination is aligned and large enough; source SID remains live.
+    if unsafe { CopySid(length, storage.as_mut_ptr().cast(), token_owner.Owner) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(WindowsSid { storage })
+}
+
+#[cfg(windows)]
 fn windows_well_known_sid(
     kind: windows_sys::Win32::Security::WELL_KNOWN_SID_TYPE,
 ) -> io::Result<WindowsSid> {
@@ -1806,12 +1877,22 @@ fn verify_windows_current_user_only_descriptor(
         == 0
         || owner.is_null()
         || unsafe { IsValidSid(owner) } == 0
-        || unsafe { EqualSid(owner, user.as_ptr()) } == 0
-        || owner_defaulted != 0
     {
         return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "identity file has no valid Windows owner SID",
+        ));
+    }
+    if unsafe { EqualSid(owner, user.as_ptr()) } == 0 {
+        return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "identity file owner is not the explicit current Windows user",
+            "identity file owner SID is not the current Windows user",
+        ));
+    }
+    if owner_defaulted != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "identity file owner is the current Windows user but remains defaulted",
         ));
     }
     let mut control = 0_u16;
@@ -1840,13 +1921,18 @@ fn verify_windows_current_user_only_descriptor(
         )
     } == 0
         || present == 0
-        || defaulted != 0
         || dacl.is_null()
         || unsafe { IsValidAcl(dacl) } == 0
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "identity file has no explicit valid DACL",
+        ));
+    }
+    if defaulted != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "identity file DACL remains defaulted",
         ));
     }
     let mut information = ACL_SIZE_INFORMATION::default();
@@ -1910,6 +1996,32 @@ fn verify_windows_current_user_only_descriptor(
 }
 
 #[cfg(windows)]
+fn verify_exact_legacy_windows_owner_sid(
+    owner: *mut std::ffi::c_void,
+    user: &WindowsSid,
+    default_owner: &WindowsSid,
+    administrators: &WindowsSid,
+) -> io::Result<()> {
+    use windows_sys::Win32::Security::{EqualSid, IsValidSid};
+    if owner.is_null() || unsafe { IsValidSid(owner) } == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "legacy Windows identity file has no valid owner SID",
+        ));
+    }
+    let is_user = unsafe { EqualSid(owner, user.as_ptr()) } != 0;
+    let is_default_administrator = unsafe { EqualSid(owner, default_owner.as_ptr()) } != 0
+        && unsafe { EqualSid(owner, administrators.as_ptr()) } != 0;
+    if !is_user && !is_default_administrator {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "legacy Windows identity file owner is neither the current user nor the token-default Builtin Administrators predecessor owner",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn verify_exact_legacy_windows_private_file(file: &File) -> io::Result<()> {
     use std::ffi::c_void;
     use windows_sys::Win32::Security::{
@@ -1934,27 +2046,30 @@ fn verify_exact_legacy_windows_private_file(file: &File) -> io::Result<()> {
         ));
     }
     let user = windows_current_user_sid()?;
-    let system = windows_well_known_sid(WinLocalSystemSid)?;
+    let default_owner = windows_current_default_owner_sid()?;
     let administrators = windows_well_known_sid(WinBuiltinAdministratorsSid)?;
+    let system = windows_well_known_sid(WinLocalSystemSid)?;
     let mut descriptor = windows_security_descriptor(file)?;
     let descriptor = descriptor.as_mut_ptr().cast::<c_void>();
     let mut owner = std::ptr::null_mut();
-    let mut owner_defaulted = 0;
+    let mut _owner_defaulted = 0;
     // SAFETY: descriptor and output storage are valid.
-    if unsafe { GetSecurityDescriptorOwner(descriptor, &raw mut owner, &raw mut owner_defaulted) }
+    if unsafe { GetSecurityDescriptorOwner(descriptor, &raw mut owner, &raw mut _owner_defaulted) }
         == 0
-        || owner.is_null()
-        || unsafe { IsValidSid(owner) } == 0
-        || unsafe { EqualSid(owner, user.as_ptr()) } == 0
-        || owner_defaulted != 0
     {
         return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "legacy Windows identity file is not owned by the current user",
+            io::ErrorKind::InvalidData,
+            "legacy Windows identity file owner could not be inspected",
         ));
     }
+    verify_exact_legacy_windows_owner_sid(owner, &user, &default_owner, &administrators)?;
+    // v0.1.7 used ordinary CreateFile defaults. Windows may therefore mark
+    // the exact user/token owner and inherited DACL as defaulted. The concrete
+    // SIDs and every ACE below remain mandatory; the defaulted bits themselves
+    // do not introduce another principal. Adoption replaces both with the
+    // explicit current-user owner and protected owner-only DACL on this handle.
     let mut present = 0;
-    let mut defaulted = 0;
+    let mut _dacl_defaulted = 0;
     let mut dacl = std::ptr::null_mut::<ACL>();
     // SAFETY: descriptor and output storage are valid.
     if unsafe {
@@ -1962,11 +2077,10 @@ fn verify_exact_legacy_windows_private_file(file: &File) -> io::Result<()> {
             descriptor,
             &raw mut present,
             &raw mut dacl,
-            &raw mut defaulted,
+            &raw mut _dacl_defaulted,
         )
     } == 0
         || present == 0
-        || defaulted != 0
         || dacl.is_null()
         || unsafe { IsValidAcl(dacl) } == 0
     {
@@ -2069,18 +2183,21 @@ fn harden_legacy_windows_private_file(file: &File) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
     use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
     };
     verify_exact_legacy_windows_private_file(file)?;
     let user = windows_current_user_sid()?;
     let acl = windows_current_user_acl(&user)?;
-    // SAFETY: file handle is open with WRITE_DAC; ACL remains live for the call.
+    // SAFETY: the already verified handle has WRITE_OWNER and WRITE_DAC; the
+    // current-user SID and ACL remain live for the call.
     let status = unsafe {
         SetSecurityInfo(
             file.as_raw_handle(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.as_ptr(),
             std::ptr::null_mut(),
             acl.0,
             std::ptr::null_mut(),
@@ -2596,6 +2713,117 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_legacy_owner_policy_is_bounded_to_user_or_token_default_administrators() {
+        use windows_sys::Win32::Security::{WinBuiltinAdministratorsSid, WinWorldSid};
+        let user = windows_current_user_sid().unwrap();
+        let administrators = windows_well_known_sid(WinBuiltinAdministratorsSid).unwrap();
+        let world = windows_well_known_sid(WinWorldSid).unwrap();
+
+        verify_exact_legacy_windows_owner_sid(user.as_ptr(), &user, &world, &administrators)
+            .unwrap();
+        verify_exact_legacy_windows_owner_sid(
+            administrators.as_ptr(),
+            &user,
+            &administrators,
+            &administrators,
+        )
+        .unwrap();
+        assert!(
+            verify_exact_legacy_windows_owner_sid(
+                administrators.as_ptr(),
+                &user,
+                &user,
+                &administrators,
+            )
+            .is_err(),
+            "Builtin Administrators is not accepted unless it is this token's default owner"
+        );
+        assert!(
+            verify_exact_legacy_windows_owner_sid(world.as_ptr(), &user, &world, &administrators,)
+                .is_err(),
+            "an arbitrary token-default group must not become an accepted legacy owner"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_real_v017_default_created_key_is_hardened_to_explicit_user_owner() {
+        use std::io::Write as _;
+        use windows_sys::Win32::Security::Authorization::{
+            TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP,
+        };
+        use windows_sys::Win32::Security::{
+            EqualSid, GetSecurityDescriptorOwner, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        };
+        let temporary = tempfile::tempdir().unwrap();
+        let key_path = temporary.path().join("integrity-signing-key");
+        let original = [39_u8; 32];
+        let expected_key_id = key_id(&SigningKey::from_bytes(&original).verifying_key());
+        // v0.1.7 used a normal create-new file with the process token's
+        // default owner instead of an explicit security descriptor.
+        let mut legacy = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&key_path)
+            .unwrap();
+        legacy.write_all(&original).unwrap();
+        legacy.sync_all().unwrap();
+        drop(legacy);
+
+        let user = windows_current_user_sid().unwrap();
+        let system = windows_well_known_sid(WinLocalSystemSid).unwrap();
+        let administrators = windows_well_known_sid(WinBuiltinAdministratorsSid).unwrap();
+        windows_test_set_dacl(
+            &key_path,
+            &[
+                (&user, TRUSTEE_IS_USER),
+                (&system, TRUSTEE_IS_WELL_KNOWN_GROUP),
+                (&administrators, TRUSTEE_IS_WELL_KNOWN_GROUP),
+            ],
+        );
+
+        let default_owner = windows_current_default_owner_sid().unwrap();
+        let file = File::open(&key_path).unwrap();
+        let mut descriptor = windows_security_descriptor(&file).unwrap();
+        let mut owner = std::ptr::null_mut();
+        let mut _owner_defaulted = 0;
+        // SAFETY: descriptor and output storage remain valid for this inspection.
+        assert_ne!(
+            unsafe {
+                GetSecurityDescriptorOwner(
+                    descriptor.as_mut_ptr().cast(),
+                    &raw mut owner,
+                    &raw mut _owner_defaulted,
+                )
+            },
+            0
+        );
+        verify_exact_legacy_windows_owner_sid(owner, &user, &default_owner, &administrators)
+            .unwrap();
+        if unsafe { EqualSid(default_owner.as_ptr(), administrators.as_ptr()) } != 0
+            && unsafe { EqualSid(default_owner.as_ptr(), user.as_ptr()) } == 0
+        {
+            assert_ne!(
+                unsafe { EqualSid(owner, administrators.as_ptr()) },
+                0,
+                "an elevated v0.1.7 default-created file must exercise its token-default Administrators owner"
+            );
+        }
+
+        let identity = ensure_local_signing_identity(&key_path).unwrap();
+        assert_eq!(
+            identity.continuity_event,
+            SigningIdentityContinuityEvent::LegacyKeyAdopted
+        );
+        assert_eq!(identity.key_id, expected_key_id);
+        assert_eq!(fs::read(&key_path).unwrap(), original);
+        // This strict verifier requires owner=current user, owner-defaulted=false,
+        // a protected DACL, and exactly one current-user FILE_ALL_ACCESS ACE.
+        verify_windows_current_user_only_file(&File::open(&key_path).unwrap()).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_identity_replacement_uses_recoverable_same_directory_move() {
         let temporary = tempfile::tempdir().unwrap();
         let key_path = temporary.path().join("integrity-signing-key");
@@ -2683,6 +2911,29 @@ mod tests {
 
         let error = verify_windows_current_user_only_descriptor(descriptor, &user).unwrap_err();
         assert!(error.to_string().contains("owner"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_owner_defaulted_state_has_a_distinct_error() {
+        use windows_sys::Win32::Security::{SE_OWNER_DEFAULTED, SECURITY_DESCRIPTOR_RELATIVE};
+        let temporary = tempfile::tempdir().unwrap();
+        let key_path = temporary.path().join("integrity-signing-key");
+        write_private_new_file(&key_path, &[45_u8; 32]).unwrap();
+        let file = File::open(&key_path).unwrap();
+        let mut descriptor = windows_security_descriptor(&file).unwrap();
+        let user = windows_current_user_sid().unwrap();
+        // SAFETY: windows_security_descriptor returned an aligned, valid,
+        // self-relative descriptor and only its control bit is changed.
+        unsafe {
+            (*descriptor
+                .as_mut_ptr()
+                .cast::<SECURITY_DESCRIPTOR_RELATIVE>())
+            .Control |= SE_OWNER_DEFAULTED;
+        }
+
+        let error = verify_windows_current_user_only_descriptor(descriptor, &user).unwrap_err();
+        assert!(error.to_string().contains("remains defaulted"));
     }
 
     #[cfg(windows)]

@@ -316,6 +316,20 @@ enum WindowsWslOwnershipBasis {
     ProvenMachine,
 }
 
+#[derive(Debug)]
+enum MachineInitializationAttemptFailure {
+    Initialization(AppError),
+    OwnershipJournal(AppError),
+}
+
+impl std::fmt::Display for MachineInitializationAttemptFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Initialization(error) | Self::OwnershipJournal(error) => error.fmt(formatter),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct WindowsWslOwnershipProof {
@@ -2397,11 +2411,12 @@ impl ManagedRuntimeManager {
             }
             self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
             self.prepare_machine_ssh_identity_locked()?;
-            self.initialize_machine_with_one_shot_wsl_intent(
+            self.initialize_machine_with_one_bounded_windows_retry(
                 &command,
                 target,
                 &image,
                 &machine_name,
+                setup,
             )?;
         }
         if let Some(setup) = setup {
@@ -5384,23 +5399,137 @@ impl ManagedRuntimeManager {
         target: &ManagedTarget,
         image: &Path,
         machine_name: &str,
-    ) -> AppResult<()> {
+    ) -> Result<(), MachineInitializationAttemptFailure> {
         if target.operating_system != ManagedOperatingSystem::Windows {
-            return self.initialize_machine(command, target, image, machine_name);
+            return self
+                .initialize_machine(command, target, image, machine_name)
+                .map_err(MachineInitializationAttemptFailure::Initialization);
         }
         self.ensure_windows_wsl_ownership_proof_locked(
             target,
             machine_name,
             WindowsWslOwnershipBasis::InitIntent,
-        )?;
+        )
+        .map_err(MachineInitializationAttemptFailure::OwnershipJournal)?;
         let initialization = self.initialize_machine(command, target, image, machine_name);
         let proof_cleanup = self.remove_windows_wsl_ownership_proof_locked(target, machine_name);
         if let Err(error) = proof_cleanup {
-            return Err(AppError::Runtime(format!(
-                "managed Windows WSL initialization journal could not be consumed safely: {error}"
+            return Err(MachineInitializationAttemptFailure::OwnershipJournal(
+                AppError::Runtime(format!(
+                    "managed Windows WSL initialization journal could not be consumed safely: {error}"
+                )),
+            ));
+        }
+        initialization.map_err(MachineInitializationAttemptFailure::Initialization)
+    }
+
+    /// A fresh Windows WSL import can fail transiently even after both
+    /// prerequisite probes pass. Retry that exact initialization at most once,
+    /// and only after independently proving that the failed attempt did not
+    /// publish either the expected WSL registration or any provider machine
+    /// state. No cleanup or unregister is attempted here: ambiguous or partial
+    /// state remains untouched and fails closed for the user to inspect.
+    fn initialize_machine_with_one_bounded_windows_retry(
+        &self,
+        command: &ManagedRuntimeCommand,
+        target: &ManagedTarget,
+        image: &Path,
+        machine_name: &str,
+        setup: Option<&ManagedRuntimeSetupController>,
+    ) -> AppResult<()> {
+        let first_error = match self.initialize_machine_with_one_shot_wsl_intent(
+            command,
+            target,
+            image,
+            machine_name,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(MachineInitializationAttemptFailure::Initialization(error)) => error,
+            Err(MachineInitializationAttemptFailure::OwnershipJournal(error)) => {
+                return Err(error);
+            }
+        };
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Err(first_error);
+        }
+
+        if let Some(setup) = setup {
+            setup.set_phase(
+                ManagedRuntimeSetupPhase::Prerequisite,
+                "checking Windows after a failed scan-tool initialization before one automatic retry",
+            )?;
+        }
+        self.require_windows_wsl_prerequisite_locked(target, command, setup)?;
+
+        let expected_distribution = format!("podman-{machine_name}");
+        let distributions = self.windows_wsl_distribution_inventory(command)?;
+        if distributions
+            .iter()
+            .any(|distribution| distribution.eq_ignore_ascii_case(&expected_distribution))
+        {
+            return fail_windows_wsl_distribution_requires_manual_action(
+                setup,
+                &expected_distribution,
+            );
+        }
+        if self
+            .wsl_registrations
+            .registrations()?
+            .iter()
+            .any(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&expected_distribution)
+            })
+        {
+            return fail_windows_wsl_distribution_requires_manual_action(
+                setup,
+                &expected_distribution,
+            );
+        }
+
+        let machines = self.list_machines(command)?;
+        if !machines.is_empty() {
+            return Err(AppError::NotAuthorized(format!(
+                "managed Windows runtime initialization failed and left provider machine state; refusing an automatic retry: {first_error}"
             )));
         }
-        initialization
+        // Podman 5.8.2 creates only the fixed `wsldist` parent before calling
+        // `wsl --import`. The WSL client owns the per-machine child and removes
+        // a newly created child on import failure. A surviving child therefore
+        // means Windows did not complete that rollback; it is not safe to
+        // reinterpret or recursively clean as an absent distribution.
+        let distribution_storage = self
+            .provider_home()
+            .join("data")
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join(target.provider.argument())
+            .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
+            .join(machine_name);
+        if private_entry_exists(&distribution_storage)? {
+            return Err(AppError::NotAuthorized(format!(
+                "managed Windows runtime initialization failed and left unregistered provider storage; refusing an automatic retry: {first_error}"
+            )));
+        }
+
+        if let Some(setup) = setup {
+            setup.set_phase(
+                ManagedRuntimeSetupPhase::Init,
+                "retrying the private scan-tool initialization once after Windows confirmed no partial workspace",
+            )?;
+        }
+        match self.initialize_machine_with_one_shot_wsl_intent(command, target, image, machine_name)
+        {
+            Ok(()) => Ok(()),
+            Err(MachineInitializationAttemptFailure::OwnershipJournal(error)) => Err(error),
+            Err(MachineInitializationAttemptFailure::Initialization(retry_error)) => {
+                Err(AppError::Runtime(format!(
+                    "managed Windows runtime initialization failed again after one bounded automatic retry; first attempt: {first_error}; retry: {retry_error}"
+                )))
+            }
+        }
     }
 
     fn list_machines(&self, command: &ManagedRuntimeCommand) -> AppResult<Vec<MachineListEntry>> {
@@ -12959,6 +13088,7 @@ mod tests {
     #[cfg(windows)]
     enum FakeCommandSideEffect {
         CreateManagedWslVhd { path: PathBuf, bytes: Vec<u8> },
+        ReplaceFileWithDirectory { path: PathBuf },
     }
 
     struct FakeCommandResponse {
@@ -13048,6 +13178,10 @@ mod tests {
                         })?;
                         ensure_managed_wsl_distribution_storage_directory(parent)?;
                         fs::write(path, bytes)?;
+                    }
+                    FakeCommandSideEffect::ReplaceFileWithDirectory { path } => {
+                        fs::remove_file(&path)?;
+                        fs::create_dir(&path)?;
                     }
                 }
             }
@@ -16188,6 +16322,427 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_retries_once_after_reproving_complete_absence() {
+        let mut fixture = fixture();
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"transient WSL import failure"));
+
+        push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture.commands.push(success(Vec::new()));
+
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+
+        let command = fixture.manager.start().expect("bounded Windows retry");
+        assert_eq!(command.runtime_version(), "5.8.2");
+
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 13);
+        assert_eq!(calls[0], ["--status"]);
+        assert_eq!(calls[1], ["-l", "--quiet"]);
+        assert_eq!(calls[2], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[3], ["--list", "--quiet"]);
+        assert_eq!(calls[5], ["--status"]);
+        assert_eq!(calls[6], ["-l", "--quiet"]);
+        assert_eq!(calls[7], ["--list", "--quiet"]);
+        assert_eq!(calls[8], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[10], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[11][..3], ["machine", "start", "--quiet"]);
+        assert_eq!(calls[12], ["version", "--format", "{{.Server.Version}}"]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            2,
+            "one initial attempt and one bounded retry are allowed"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_never_retries_when_failed_import_published_distribution() {
+        let fixture = fixture();
+        let target = fixture.manager.loaded.target().expect("Windows target");
+        let expected_distribution = format!("podman-{}", machine_name(target));
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"partial WSL import failure"));
+        push_windows_wsl_ready(&fixture.commands);
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
+
+        let setup = ManagedRuntimeSetupController::default();
+        let error = fixture
+            .manager
+            .setup(&setup)
+            .expect_err("a published distribution must stop automatic retry");
+
+        assert!(
+            error
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
+        let status = setup.status().expect("typed setup failure");
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
+        );
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 8);
+        assert_eq!(calls[7], ["--list", "--quiet"]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_never_retries_when_fresh_inventory_is_unknown() {
+        let fixture = fixture();
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"transient WSL import failure"));
+        push_windows_wsl_ready(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"fresh WSL inventory unavailable"));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("unknown WSL inventory must stop automatic retry");
+
+        assert!(
+            error
+                .to_string()
+                .contains("fresh WSL inventory unavailable")
+        );
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 8);
+        assert_eq!(calls[7], ["--list", "--quiet"]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_never_retries_when_hidden_registration_exists() {
+        let mut fixture = fixture();
+        let target = fixture.manager.loaded.target().expect("Windows target");
+        let expected_distribution = format!("podman-{}", machine_name(target));
+        let hidden_registration = fixture.manager.provider_home().join("hidden-registration");
+        fixture.manager.wsl_registrations =
+            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                distribution_name: expected_distribution.clone(),
+                base_path: hidden_registration,
+            }]));
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"partial WSL import failure"));
+        push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
+
+        let setup = ManagedRuntimeSetupController::default();
+        let error = fixture
+            .manager
+            .setup(&setup)
+            .expect_err("a registry-only distribution must stop automatic retry");
+
+        assert!(
+            error
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
+        );
+        assert_eq!(
+            setup.status().expect("typed setup failure").failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+        );
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 8);
+        assert_eq!(calls[7], ["--list", "--quiet"]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_never_retries_when_provider_machine_state_exists() {
+        let mut fixture = fixture();
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"partial WSL import failure"));
+        push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("provider machine residue must stop automatic retry");
+
+        assert!(error.to_string().contains("left provider machine state"));
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 9);
+        assert_eq!(calls[8], ["machine", "list", "--format", "json"]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_never_retries_when_unregistered_storage_exists() {
+        let mut fixture = fixture();
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+        let target = fixture.manager.loaded.target().expect("Windows target");
+        let vhd = windows_fixture_vhd_path(&fixture.manager, target);
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push_with_side_effect(
+            failure(b"partial WSL import failure"),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: vhd.clone(),
+                bytes: b"partial WSL import".to_vec(),
+            },
+        );
+        push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("unregistered provider storage must stop automatic retry");
+
+        assert!(
+            error
+                .to_string()
+                .contains("left unregistered provider storage")
+        );
+        assert_eq!(
+            fs::read(&vhd).expect("preserved partial VHD").as_slice(),
+            b"partial WSL import"
+        );
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 9);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_never_retries_after_ownership_journal_cleanup_failure() {
+        let fixture = fixture();
+        let target = fixture.manager.loaded.target().expect("Windows target");
+        let intent = fixture.manager.windows_wsl_ownership_proof_path(
+            &machine_name(target),
+            WindowsWslOwnershipBasis::InitIntent,
+        );
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push_with_side_effect(
+            failure(b"transient WSL import failure"),
+            FakeCommandSideEffect::ReplaceFileWithDirectory {
+                path: intent.clone(),
+            },
+        );
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("ownership-journal cleanup failure must never retry");
+
+        assert!(
+            error
+                .to_string()
+                .contains("initialization journal could not be consumed safely")
+        );
+        assert!(intent.is_dir());
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 5);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_never_retries_when_prerequisite_recheck_fails() {
+        let fixture = fixture();
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"transient WSL import failure"));
+        fixture
+            .commands
+            .push(failure(utf16le("Error code: Wsl/Service/E_UNEXPECTED\r\n")));
+
+        let setup = ManagedRuntimeSetupController::default();
+        fixture
+            .manager
+            .setup(&setup)
+            .expect_err("failed WSL prerequisite recheck must stop automatic retry");
+
+        let status = setup.status().expect("typed prerequisite failure");
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslCommandFailed)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::RetryWslCheck)
+        );
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 6);
+        assert_eq!(calls[5], ["--status"]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_machine_init_retry_stays_bounded_when_second_import_fails() {
+        let mut fixture = fixture();
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        push_windows_wsl_absent(&fixture.commands);
+        fixture
+            .commands
+            .push(failure(b"first transient WSL import failure"));
+        push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture
+            .commands
+            .push(failure(b"second transient WSL import failure"));
+
+        let error = fixture
+            .manager
+            .start()
+            .expect_err("a second import failure must not trigger a third attempt");
+
+        let message = error.to_string();
+        assert!(message.contains("one bounded automatic retry"));
+        assert!(message.contains("first transient WSL import failure"));
+        assert!(message.contains("second transient WSL import failure"));
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 10);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+                })
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| {
+                    arguments.len() == 2 && arguments[0] == "--list" && arguments[1] == "--quiet"
+                })
+                .count(),
+            2,
+            "the retry requires a fresh parsed WSL inventory"
+        );
     }
 
     #[cfg(windows)]
