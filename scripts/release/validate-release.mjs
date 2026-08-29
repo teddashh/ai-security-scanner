@@ -764,6 +764,9 @@ function validatePlatformQualificationSources(sources) {
     "$maximumVerbatimWindowsPathUtf16CodeUnits = 32766",
     "Open-NoFollowSingleLinkFile",
     "$identity.links -ne 1",
+    '$processLeaseRelativePath = ".exclusive-process.lock"',
+    "Assert-ExactEmptyProcessLeaseFile",
+    "Assert-PreservedDataSnapshotHousekeepingRegression $workRoot",
     "Open-NoFollowWindowsSystemFile",
     "$identity.links -lt 1",
     "Get-NoFollowWindowsSystemExecutableProof",
@@ -811,6 +814,111 @@ function validatePlatformQualificationSources(sources) {
     "rotationIntentAbsent = $true",
     'registeredWslStateExercised = $true',
   ]) assert(nsisGhost.includes(required), `registered-WSL ghost qualification is missing: ${required}`);
+
+  const ordinaryFileOpenStart = nsisGhost.indexOf("function Open-NoFollowSingleLinkFile(");
+  const ordinaryFileOpenEnd = nsisGhost.indexOf("function Assert-ExactEmptyProcessLeaseFile(", ordinaryFileOpenStart);
+  assert(
+    ordinaryFileOpenStart >= 0 && ordinaryFileOpenEnd > ordinaryFileOpenStart,
+    "registered-WSL ghost qualification has no isolated non-empty product-file opener",
+  );
+  const ordinaryFileOpen = nsisGhost.slice(ordinaryFileOpenStart, ordinaryFileOpenEnd);
+  assert(
+    ordinaryFileOpen.includes("$identity.links -ne 1") &&
+      ordinaryFileOpen.includes("$identity.bytes -lt 1") &&
+      !ordinaryFileOpen.includes("processLease") &&
+      !ordinaryFileOpen.includes("MinimumBytes"),
+    "registered-WSL generic installer/key/archive proof must remain single-link and non-empty",
+  );
+
+  const processLeaseProofStart = ordinaryFileOpenEnd;
+  const processLeaseProofEnd = nsisGhost.indexOf("function Open-NoFollowWindowsSystemFile(", processLeaseProofStart);
+  assert(
+    processLeaseProofEnd > processLeaseProofStart,
+    "registered-WSL ghost qualification has no isolated root process-lease proof",
+  );
+  const processLeaseProof = nsisGhost.slice(processLeaseProofStart, processLeaseProofEnd);
+  for (const required of [
+    "[GhostQualificationNativeMethods]::CreateFileW",
+    "[GhostQualificationNativeMethods]::GENERIC_READ",
+    "[GhostQualificationNativeMethods]::FILE_SHARE_READ",
+    "[GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT",
+    "$before.links -ne 1",
+    "$before.bytes -ne 0",
+    "$before.volume -ne $after.volume",
+    "$before.index -ne $after.index",
+    "$stream.Dispose()",
+    "$handle.Dispose()",
+  ]) assert(processLeaseProof.includes(required), `registered-WSL root process-lease proof is missing: ${required}`);
+  assert(
+    !processLeaseProof.includes("Open-NoFollowSingleLinkFile") &&
+      !processLeaseProof.includes("FILE_SHARE_WRITE") &&
+      !processLeaseProof.includes("FILE_SHARE_DELETE"),
+    "registered-WSL empty process-lease exception must not weaken or share the generic file proof",
+  );
+
+  const preservedSnapshotStart = nsisGhost.indexOf("function Get-PreservedDataSnapshot(");
+  const preservedRegressionStart = nsisGhost.indexOf(
+    "function Assert-PreservedDataSnapshotHousekeepingRegression(",
+    preservedSnapshotStart,
+  );
+  assert(
+    preservedSnapshotStart >= 0 && preservedRegressionStart > preservedSnapshotStart,
+    "registered-WSL ghost qualification has no bounded preserved-data snapshot",
+  );
+  const preservedSnapshot = nsisGhost.slice(preservedSnapshotStart, preservedRegressionStart);
+  const exactLeaseExclusion = "if (-not $item.PSIsContainer -and $relative -ceq $processLeaseRelativePath)";
+  assert(
+    preservedSnapshot.includes(exactLeaseExclusion) &&
+      preservedSnapshot.includes('Assert-ExactEmptyProcessLeaseFile $item.FullName "Root process lease"') &&
+      preservedSnapshot.includes('if ($relative -eq "managed-runtime" -or $relative.StartsWith("managed-runtime/", [StringComparison]::Ordinal))') &&
+      preservedSnapshot.includes('Get-NoFollowFileSha256Proof $item.FullName "Preserved data file"') &&
+      (preservedSnapshot.match(/\$processLeaseRelativePath/gu) ?? []).length === 1,
+    "registered-WSL preserved-data snapshot must exclude only the proven exact root process lease",
+  );
+
+  const preservedRegressionEnd = nsisGhost.indexOf("function Read-BoundedUtf8File(", preservedRegressionStart);
+  assert(
+    preservedRegressionEnd > preservedRegressionStart,
+    "registered-WSL ghost qualification has no process-lease snapshot regression",
+  );
+  const preservedRegression = nsisGhost.slice(preservedRegressionStart, preservedRegressionEnd);
+  for (const required of [
+    '[IO.File]::WriteAllBytes((Join-Path $fixtureRoot $processLeaseRelativePath), [byte[]]::new(0))',
+    "$snapshot.fileCount -ne 1",
+    "$snapshot.totalBytes -ne $payloadBytes.Length",
+    "Join-Path $nestedDirectory $processLeaseRelativePath",
+    '"Preserved data file is not one bounded no-follow single-link regular file."',
+    "Preserved-data snapshot ignored a nested process-lease-shaped file.",
+    "Remove-ExactTree $fixtureRoot $Parent $fixtureName",
+  ]) assert(preservedRegression.includes(required), `registered-WSL process-lease snapshot regression is missing: ${required}`);
+  assert(
+    (nsisGhost.match(/Assert-PreservedDataSnapshotHousekeepingRegression/gu) ?? []).length === 2 &&
+      (nsisGhost.match(/Assert-ExactEmptyProcessLeaseFile/gu) ?? []).length === 2,
+    "registered-WSL process-lease exception must be defined once, exercised once, and used only by the snapshot",
+  );
+
+  const synchronousGhostUninstall = 'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall"';
+  const synchronousGhostFailureUninstall = 'Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path candidate uninstall"';
+  assert(
+    nsisGhost.includes(synchronousGhostUninstall) &&
+      nsisGhost.includes(synchronousGhostFailureUninstall) &&
+      (nsisGhost.match(/"_\?=\$installDirectory"/gu) ?? []).length === 2 &&
+      !nsisGhost.includes('Invoke-ExactProcess $candidateUninstaller @("/S")') &&
+      !nsisGhost.includes('Invoke-ExactProcess $activeUninstaller @("/S")'),
+    "registered-WSL ghost cleanup must synchronously wait for the exact NSIS uninstall directory",
+  );
+  const happyGhostUninstall = nsisGhost.indexOf(synchronousGhostUninstall);
+  const productRegistrationCheck = nsisGhost.indexOf(
+    'if (@(Get-ProductRegistryEntries).Count -ne 0) { throw "Candidate uninstaller left the product registry entry." }',
+    happyGhostUninstall,
+  );
+  const clearedActiveUninstaller = nsisGhost.indexOf("$activeUninstaller = $null", happyGhostUninstall);
+  assert(
+    happyGhostUninstall >= 0 &&
+      productRegistrationCheck > happyGhostUninstall &&
+      clearedActiveUninstaller > productRegistrationCheck,
+    "registered-WSL ghost qualification must retain cleanup ownership until NSIS registry removal is proven",
+  );
   const escapedSerdeCompactionFixture = "$fixture = '{\"public_key_base64\":\"A\\u002BB\\/==\"}'";
   const literalSerdeCompactionExpected = "$expected = '{\"public_key_base64\":\"A+B/==\"}'";
   for (const [label, source] of [

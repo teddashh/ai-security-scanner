@@ -22,6 +22,7 @@ $oldVersionDirectoryName = "podman-machine-5.8.2-$priorProviderNamespace"
 $maximumDownloadBytes = 64 * 1024 * 1024
 $maximumSnapshotFiles = 4096
 $maximumSnapshotBytes = 512 * 1024 * 1024
+$processLeaseRelativePath = ".exclusive-process.lock"
 $maximumWindowsPathUtf16CodeUnits = 32760
 $maximumVerbatimWindowsPathUtf16CodeUnits = 32766
 
@@ -195,6 +196,53 @@ function Open-NoFollowSingleLinkFile(
   } catch {
     $stream.Dispose()
     throw
+  }
+}
+
+function Assert-ExactEmptyProcessLeaseFile([string]$Path, [string]$Label) {
+  # This exception is intentionally separate from the generic evidence opener:
+  # only the product's exact root process lease may be empty. Installer, key,
+  # archive, receipt, and evidence proofs retain their >= 1-byte requirement.
+  $verbatimPath = Get-VerbatimWindowsPath $Path $Label
+  $handle = [GhostQualificationNativeMethods]::CreateFileW(
+    $verbatimPath,
+    [GhostQualificationNativeMethods]::GENERIC_READ,
+    [GhostQualificationNativeMethods]::FILE_SHARE_READ,
+    [IntPtr]::Zero,
+    [GhostQualificationNativeMethods]::OPEN_EXISTING,
+    [GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT,
+    [IntPtr]::Zero
+  )
+  if ($null -eq $handle -or $handle.IsInvalid) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($null -ne $handle) { $handle.Dispose() }
+    throw [ComponentModel.Win32Exception]::new(
+      $errorCode,
+      "$Label could not be opened without following reparse points"
+    )
+  }
+  try {
+    $stream = [IO.FileStream]::new($handle, [IO.FileAccess]::Read, 1, $false)
+  } catch {
+    $handle.Dispose()
+    throw
+  }
+  try {
+    $before = Get-OpenFileIdentity $stream
+    if (($before.attributes -band [uint32][IO.FileAttributes]::Directory) -ne 0 -or
+        ($before.attributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $before.links -ne 1 -or $before.bytes -ne 0) {
+      throw "$Label is not the exact empty no-follow single-link process lease."
+    }
+    $after = Get-OpenFileIdentity $stream
+    if ($before.attributes -ne $after.attributes -or $before.links -ne $after.links -or
+        $before.bytes -ne $after.bytes -or $before.volume -ne $after.volume -or
+        $before.index -ne $after.index) {
+      throw "$Label changed while its exact no-follow handle was held."
+    }
+  } finally {
+    $stream.Dispose()
+    $handle.Dispose()
   }
 }
 
@@ -801,6 +849,14 @@ function Get-PreservedDataSnapshot([string]$Root) {
       throw "Private application data contains a reparse-point entry."
     }
     $relative = [IO.Path]::GetRelativePath($rootPath, $item.FullName).Replace('\', '/')
+    # Runtime maintenance legitimately leaves this one empty, root-level
+    # process-coordination file behind. Prove its exact empty regular-file shape
+    # before excluding it; every other empty file remains fail-closed through
+    # Get-NoFollowFileSha256Proof below.
+    if (-not $item.PSIsContainer -and $relative -ceq $processLeaseRelativePath) {
+      Assert-ExactEmptyProcessLeaseFile $item.FullName "Root process lease"
+      continue
+    }
     if ($relative -eq "managed-runtime" -or $relative.StartsWith("managed-runtime/", [StringComparison]::Ordinal)) {
       continue
     }
@@ -821,6 +877,50 @@ function Get-PreservedDataSnapshot([string]$Root) {
     [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($encoded))
   ).ToLowerInvariant()
   return [ordered]@{ fileCount = $ordered.Count; totalBytes = $totalBytes; digest = $digest }
+}
+
+function Assert-PreservedDataSnapshotHousekeepingRegression([string]$Parent) {
+  $fixtureName = "preserved-data-housekeeping-regression"
+  $fixtureRoot = Assert-ExactChildPath $Parent (Join-Path $Parent $fixtureName) $fixtureName (
+    "Preserved-data housekeeping regression fixture"
+  )
+  if (Test-Path -LiteralPath $fixtureRoot) {
+    throw "Preserved-data housekeeping regression fixture already exists."
+  }
+  New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
+  try {
+    [byte[]]$payloadBytes = [Text.Encoding]::UTF8.GetBytes("preserved-user-data")
+    [IO.File]::WriteAllBytes((Join-Path $fixtureRoot "user-data.bin"), $payloadBytes)
+    [IO.File]::WriteAllBytes((Join-Path $fixtureRoot $processLeaseRelativePath), [byte[]]::new(0))
+
+    $snapshot = Get-PreservedDataSnapshot $fixtureRoot
+    if ($snapshot.fileCount -ne 1 -or $snapshot.totalBytes -ne $payloadBytes.Length) {
+      throw "Preserved-data snapshot did not exclude only the exact root process lease."
+    }
+
+    $nestedDirectory = Assert-ExactChildPath $fixtureRoot (
+      Join-Path $fixtureRoot "nested"
+    ) "nested" "Nested process-lease regression directory"
+    New-Item -ItemType Directory -Path $nestedDirectory | Out-Null
+    [IO.File]::WriteAllBytes(
+      (Join-Path $nestedDirectory $processLeaseRelativePath),
+      [byte[]]::new(0)
+    )
+    $nestedLeaseRejected = $false
+    try {
+      Get-PreservedDataSnapshot $fixtureRoot | Out-Null
+    } catch {
+      if ($_.Exception.Message -cne "Preserved data file is not one bounded no-follow single-link regular file.") {
+        throw
+      }
+      $nestedLeaseRejected = $true
+    }
+    if (-not $nestedLeaseRejected) {
+      throw "Preserved-data snapshot ignored a nested process-lease-shaped file."
+    }
+  } finally {
+    Remove-ExactTree $fixtureRoot $Parent $fixtureName "Preserved-data housekeeping regression fixture"
+  }
 }
 
 function Read-BoundedUtf8File(
@@ -992,6 +1092,7 @@ $workRoot = Assert-ExactChildPath $runnerTemp $WorkDirectory "ai-security-scanne
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 Assert-RealDirectory $workRoot "Ghost qualification work directory" | Out-Null
 Assert-NoFollowDirectoryIdentityRegression $workRoot
+Assert-PreservedDataSnapshotHousekeepingRegression $workRoot
 $localApplicationData = [IO.Path]::GetFullPath([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))
 Assert-RealDirectory $localApplicationData "OS-resolved LocalApplicationData" | Out-Null
 $installDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "ai-security-scanner") "ai-security-scanner" "Default NSIS install directory"
@@ -1486,8 +1587,7 @@ try {
   if ($remainingDistribution.Count -ne 0 -or $remainingQuarantine.Count -ne 0) {
     throw "Managed runtime cleanup retained an exact or quarantine WSL registration."
   }
-  Invoke-ExactProcess $candidateUninstaller @("/S") 180000 "Candidate NSIS cleanup uninstall" | Out-Null
-  $activeUninstaller = $null
+  Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall" | Out-Null
   $activeCli = $null
   $postUninstallConsumedProof = Assert-OwnerOnlyFullControlFile $consumedProofPath (
     "Consumed proof retained until explicit private-data cleanup"
@@ -1501,6 +1601,7 @@ try {
   }
   Remove-ExactTree $dataDirectory $localApplicationData "dev.teddashh.ai-security-scanner" "Default private data cleanup"
   if (@(Get-ProductRegistryEntries).Count -ne 0) { throw "Candidate uninstaller left the product registry entry." }
+  $activeUninstaller = $null
   $cleanupComplete = $true
 
   $observations = [ordered]@{
@@ -1672,7 +1773,7 @@ try {
       }
     } catch { $cleanupFailures.Add($_.Exception.Message) }
     if ($null -ne $activeUninstaller -and (Test-Path -LiteralPath $activeUninstaller -PathType Leaf)) {
-      try { Invoke-ExactProcess $activeUninstaller @("/S") 180000 "Failure-path candidate uninstall" | Out-Null }
+      try { Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path candidate uninstall" | Out-Null }
       catch { $cleanupFailures.Add($_.Exception.Message) }
     }
     foreach ($cleanup in @(
