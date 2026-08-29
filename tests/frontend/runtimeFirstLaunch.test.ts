@@ -104,6 +104,30 @@ test("first-launch copy promises automatic checking without an in-app elevation 
   assert.doesNotMatch(source, /status\.phase === "completed" && runtime\?\.available !== true/u);
 });
 
+test("active workspace recovery replaces the external Windows-step screen with automatic progress", () => {
+  const source = readFileSync(
+    new URL("../../src/components/RuntimeFirstLaunch.tsx", import.meta.url),
+    "utf8",
+  );
+  const recovering = status("recovery");
+
+  assert.equal(
+    shouldAutomaticallyPrepareRuntime("native", runtime("installed"), recovering, true, false),
+    false,
+  );
+  for (const phrase of [
+    "Finishing a previous setup",
+    "We found scan-tool files left by an earlier setup. ai-security-scanner is saving a recovery copy, replacing that workspace, and continuing automatically.",
+    "正在完成先前未完成的設定",
+    "程式找到上次設定留下的掃描工具工作區，會先保留一份復原備份，再換成乾淨的工作區並自動繼續。",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.match(source, /recoveringPreviousWorkspace = status\?\.phase === "recovery" && status\.active === true/u);
+  assert.match(source, /waitingForAutomaticCheck = !recoveringPreviousWorkspace/u);
+  assert.match(source, /recoveringPreviousWorkspace[\s\S]*text\.recoveryTitle/u);
+  assert.match(source, /recoveringPreviousWorkspace[\s\S]*text\.recoveryDescription/u);
+});
+
 test("a managed runtime that is already starting is never started again automatically", () => {
   const starting = runtime("starting");
 

@@ -490,6 +490,20 @@ const managedRuntimeRecoveryActions = {
   windows_wsl_distribution_requires_manual_action: "resolve_wsl_distribution_manually",
 } as const satisfies Record<ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupNextAction>;
 
+const managedRuntimeSetupPhases = new Set<ManagedRuntimeSetupPhase>([
+  "idle",
+  "install",
+  "prerequisite",
+  "download",
+  "recovery",
+  "init",
+  "start",
+  "verify",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
 /**
  * Adapts the snake-case Tauri DTO and enforces its terminal-failure contract.
  * A stale or partially mismatched recovery pair is deliberately hidden rather
@@ -498,11 +512,12 @@ const managedRuntimeRecoveryActions = {
 export const adaptManagedRuntimeSetupStatus = (
   status: NativeManagedRuntimeSetupStatus,
 ): ManagedRuntimeSetupStatus => {
-  const hasValidRecovery = status.phase === "failed"
+  const phase = managedRuntimeSetupPhases.has(status.phase) ? status.phase : "failed";
+  const hasValidRecovery = phase === "failed"
     && status.failure_reason !== null
     && managedRuntimeRecoveryActions[status.failure_reason] === status.next_action;
   return {
-    phase: status.phase,
+    phase,
     active: status.active,
     prerequisiteRepairActive: status.prerequisite_repair_active,
     cancelRequested: status.cancel_requested,

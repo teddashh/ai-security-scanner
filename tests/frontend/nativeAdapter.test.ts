@@ -127,6 +127,23 @@ test("managed runtime setup adapter preserves the typed manual WSL distribution 
   assert.equal(adapted.nextAction, "resolve_wsl_distribution_manually");
 });
 
+test("managed runtime setup adapter preserves active automatic workspace recovery", () => {
+  const adapted = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
+    phase: "recovery",
+    active: true,
+    can_cancel: true,
+    failure_reason: null,
+    next_action: null,
+    detail: "saving a bounded recovery copy",
+  }));
+
+  assert.equal(adapted.phase, "recovery");
+  assert.equal(adapted.active, true);
+  assert.equal(adapted.canCancel, true);
+  assert.equal(adapted.failureReason, undefined);
+  assert.equal(adapted.nextAction, undefined);
+});
+
 test("managed runtime setup adapter hides recovery fields outside failed or when mismatched", () => {
   const unwinding = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
     phase: "prerequisite",

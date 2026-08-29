@@ -29,6 +29,8 @@ const copy = {
     restart: "If Microsoft’s WSL setup asks for a restart, reopen ai-security-scanner afterward and preparation will continue automatically.",
     openingTitle: "Opening ai-security-scanner",
     openingDescription: "Checking the scan tools already installed on this computer.",
+    recoveryTitle: "Finishing a previous setup",
+    recoveryDescription: "We found scan-tool files left by an earlier setup. ai-security-scanner is saving a recovery copy, replacing that workspace, and continuing automatically.",
     externalActionTitle: "Finish one Windows setup step",
     externalActionDescription: "The app found one Windows step that must be completed outside ai-security-scanner. Follow the action below, then check again.",
     stoppedTitle: "Scan-tool setup stopped",
@@ -50,6 +52,8 @@ const copy = {
     restart: "如果 Microsoft 的 WSL 設定要求重新開機，再打開 ai-security-scanner 就會自動接著完成。",
     openingTitle: "正在開啟 ai-security-scanner",
     openingDescription: "正在確認這台電腦已安裝的掃描工具。",
+    recoveryTitle: "正在完成先前未完成的設定",
+    recoveryDescription: "程式找到上次設定留下的掃描工具工作區，會先保留一份復原備份，再換成乾淨的工作區並自動繼續。",
     externalActionTitle: "完成一個 Windows 設定步驟",
     externalActionDescription: "程式找到一個必須在 ai-security-scanner 外完成的 Windows 步驟。請照下方操作完成，再重新檢查。",
     stoppedTitle: "掃描工具設定已停止",
@@ -78,12 +82,15 @@ export function RuntimeFirstLaunch({
   const needsExternalAction = status?.phase === "failed" && status.nextAction !== undefined;
   const setupStopped = status?.phase === "failed" && !status.nextAction;
   const setupPaused = status?.phase === "cancelled";
-  const waitingForAutomaticCheck = !statusLoaded
+  const recoveringPreviousWorkspace = status?.phase === "recovery" && status.active === true;
+  const waitingForAutomaticCheck = !recoveringPreviousWorkspace && (!statusLoaded
     || busy
     || status?.active === true
-    || (!automaticAttemptFailed && (!status || status.phase === "idle"));
+    || (!automaticAttemptFailed && (!status || status.phase === "idle")));
   const introTitle = checkingInstalledState
     ? text.openingTitle
+    : recoveringPreviousWorkspace
+      ? text.recoveryTitle
     : setupStopped
       ? text.stoppedTitle
       : needsExternalAction
@@ -93,6 +100,8 @@ export function RuntimeFirstLaunch({
           : text.title;
   const introDescription = checkingInstalledState
     ? text.openingDescription
+    : recoveringPreviousWorkspace
+      ? text.recoveryDescription
     : setupStopped
       ? text.stoppedDescription
       : needsExternalAction

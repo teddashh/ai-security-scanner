@@ -956,6 +956,7 @@ export type ManagedRuntimeSetupPhase =
   | "install"
   | "prerequisite"
   | "download"
+  | "recovery"
   | "init"
   | "start"
   | "verify"

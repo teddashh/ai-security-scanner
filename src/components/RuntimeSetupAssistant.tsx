@@ -43,6 +43,8 @@ interface RuntimeAssistantCopy {
   demoDescription: string;
   progressTitle: string;
   progressDescription: string;
+  recoveryTitle: string;
+  recoveryDescription: string;
   cancelledTitle: string;
   cancelledDescription: string;
   start: string;
@@ -85,6 +87,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     demoDescription: "Open the desktop app when you are ready to scan a real website, cloud account, network, or codebase.",
     progressTitle: "Getting your scan tools ready",
     progressDescription: "We are downloading and setting up everything automatically. First-time setup may take a few minutes.",
+    recoveryTitle: "Finishing a previous setup",
+    recoveryDescription: "We found scan-tool files left by an earlier setup. ai-security-scanner is saving a recovery copy, replacing that workspace, and continuing automatically.",
     cancelledTitle: "Setup paused",
     cancelledDescription: "The download was kept on this computer. Continue when you are ready; your scan projects are unchanged.",
     start: "Set up automatically",
@@ -95,7 +99,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     cancel: "Stop setup and keep the download",
     cancelling: "Stopping…",
     docs: "Open Microsoft’s WSL setup",
-    distributionDocs: "Open Microsoft’s WSL backup and management guide",
+    distributionDocs: "Open Microsoft’s official WSL backup and removal guide",
     technical: "Technical details",
     downloaded: "downloaded",
     resumed: "Existing download reused",
@@ -126,6 +130,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       install: "Preparing the scan tools",
       prerequisite: "Checking this Windows computer",
       download: "Downloading the scan tools",
+      recovery: "Safely recovering the previous workspace",
       init: "Creating your local scan workspace",
       start: "Starting the scan tools",
       verify: "Running one final check",
@@ -177,11 +182,11 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       },
       resolve_wsl_distribution_manually: {
         title: "An old scan-tool workspace needs your decision",
-        description: "Windows still has a WSL workspace from an earlier setup. ai-security-scanner left it untouched because it may contain data. Review that one workspace in Windows, then check again.",
+        description: "Windows still has a WSL workspace from an earlier setup. ai-security-scanner could not verify that it owns this workspace, so nothing was removed. Follow Microsoft’s official backup and removal process, then check again.",
         steps: [
           "Open Technical details below and note the exact distribution name.",
           "Open Windows Terminal and run `wsl.exe --list --verbose` to confirm that exact name.",
-          "If you need its data, export it first. Then rename or remove only that exact distribution with Windows’ WSL tools.",
+          "Use Microsoft’s official guide to back up the exact distribution if needed, then remove only that distribution.",
           "Return here and check again.",
         ],
       },
@@ -198,6 +203,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     demoDescription: "準備掃描真實網站、雲端帳號、網路或程式碼時，再開啟桌面版即可。",
     progressTitle: "正在準備掃描工具",
     progressDescription: "系統會自動下載並完成設定；第一次可能需要幾分鐘。",
+    recoveryTitle: "正在完成先前未完成的設定",
+    recoveryDescription: "程式找到上次設定留下的掃描工具工作區，會先保留一份復原備份，再換成乾淨的工作區並自動繼續。",
     cancelledTitle: "設定已暫停",
     cancelledDescription: "下載進度已保留在這台電腦上。準備好時可繼續；你的掃描專案沒有變更。",
     start: "自動完成設定",
@@ -208,7 +215,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     cancel: "停止設定並保留下載進度",
     cancelling: "正在停止…",
     docs: "開啟 Microsoft 的 WSL 設定",
-    distributionDocs: "開啟 Microsoft 的 WSL 備份與管理說明",
+    distributionDocs: "開啟 Microsoft 官方 WSL 備份與移除說明",
     technical: "技術細節",
     downloaded: "已下載",
     resumed: "已沿用先前下載進度",
@@ -239,6 +246,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       install: "正在準備掃描工具",
       prerequisite: "檢查這台 Windows 電腦",
       download: "正在下載掃描工具",
+      recovery: "正在安全復原先前的工作區",
       init: "正在建立本機掃描工作區",
       start: "正在啟動掃描工具",
       verify: "正在做最後確認",
@@ -286,11 +294,11 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       },
       resolve_wsl_distribution_manually: {
         title: "請確認一個舊的掃描工具工作區",
-        description: "Windows 還留著先前設定建立的 WSL 工作區。ai-security-scanner 不會直接刪除，避免誤刪可能仍有資料的環境。請在 Windows 確認這一個工作區，再重新檢查。",
+        description: "Windows 還留著先前設定建立的 WSL 工作區。ai-security-scanner 無法確認這個工作區屬於本產品，因此沒有移除任何內容。請依 Microsoft 官方流程備份並移除，再重新檢查。",
         steps: [
           "展開下方「技術細節」，記下完整的發行版名稱。",
           "開啟 Windows 終端機，執行 `wsl.exe --list --verbose`，確認完全相同的名稱。",
-          "如需保留資料，請先匯出備份；再只針對這個發行版重新命名或移除。",
+          "如需保留資料，請依 Microsoft 官方說明備份；再只移除這個發行版。",
           "回到這裡重新檢查。",
         ],
       },
@@ -333,6 +341,7 @@ export function RuntimeSetupAssistant({
     ready,
     setupStarting,
     setupActive,
+    setupRecovering,
     setupFailed,
     setupCancelled,
   } = presentation;
@@ -377,6 +386,8 @@ export function RuntimeSetupAssistant({
     ? nextAction?.title ?? text.failedTitle
     : setupCancelled
       ? text.cancelledTitle
+    : setupRecovering
+      ? text.recoveryTitle
     : setupActive
       ? text.progressTitle
       : text.title);
@@ -386,6 +397,8 @@ export function RuntimeSetupAssistant({
       ? text.failedDescription
       : setupCancelled
         ? text.cancelledDescription
+      : setupRecovering
+        ? text.recoveryDescription
       : setupActive
         ? text.progressDescription
         : text.description);

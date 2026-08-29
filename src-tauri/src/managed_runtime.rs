@@ -10,7 +10,7 @@
 use crate::error::{AppError, AppResult};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, RANGE};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use ssh_key::{Algorithm, LineEnding, PrivateKey, PublicKey, rand_core::OsRng};
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,9 +40,8 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
-#[cfg(windows)]
+const WINDOWS_WSL_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(windows)]
 const WINDOWS_WSL_PROVIDER_DELETE_POLL: Duration = Duration::from_millis(100);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
@@ -59,6 +58,21 @@ const PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY: &str = "wsldist";
 const MANAGED_SSH_KEY_COMMENT: &str = "ai-security-scanner-managed-runtime";
 const WINDOWS_WSL_OWNERSHIP_PROOF_SCHEMA: &str = "ai-security-scanner.managed-wsl-ownership/v1";
 const WINDOWS_WSL_OWNERSHIP_DIRECTORY: &str = "wsl-ownership";
+const WINDOWS_WSL_RECOVERY_DIRECTORY: &str = "wsl-recovery";
+const WINDOWS_WSL_RECOVERY_WORKSPACE_DIRECTORY: &str = "wsl-recovery-workspaces";
+const WINDOWS_WSL_RECOVERY_INTENT_SCHEMA: &str =
+    "ai-security-scanner.managed-wsl-recovery-intent/v1";
+const WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA: &str =
+    "ai-security-scanner.managed-wsl-recovery-backup/v1";
+const WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA: &str =
+    "ai-security-scanner.managed-wsl-recovery-import/v1";
+#[cfg(windows)]
+const WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
+const WINDOWS_WSL_RECOVERY_ARCHIVE_MARGIN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const WINDOWS_WSL_RECOVERY_ARCHIVE_DISK_MULTIPLIER: u64 = 2;
+const WINDOWS_WSL_RECOVERY_ARCHIVE_ABSOLUTE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
+#[cfg(windows)]
+const MAX_WINDOWS_REGISTRY_STRING_BYTES: u32 = 64 * 1024;
 #[cfg(unix)]
 const LINUX_SHORT_RUNTIME_BASE: &str = "/tmp";
 #[cfg(unix)]
@@ -292,6 +306,54 @@ struct WindowsWslOwnershipProof {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+struct WindowsWslRecoveryIntent {
+    schema_version: String,
+    recovery_id: String,
+    manifest_sha256: String,
+    machine_image_sha256: String,
+    machine_name: String,
+    distribution_name: String,
+    quarantine_distribution_name: String,
+    registration_base_path: PathBuf,
+    provider_home: PathBuf,
+    attempt_directory: PathBuf,
+    quarantine_install_directory: PathBuf,
+    staging_archive: PathBuf,
+    recovery_archive: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WindowsWslRecoveryBackupProof {
+    schema_version: String,
+    recovery_id: String,
+    distribution_name: String,
+    quarantine_distribution_name: String,
+    recovery_archive: PathBuf,
+    size_bytes: u64,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WindowsWslRecoveryImportProof {
+    schema_version: String,
+    recovery_id: String,
+    quarantine_distribution_name: String,
+    quarantine_install_directory: PathBuf,
+    recovery_archive: PathBuf,
+    archive_size_bytes: u64,
+    archive_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsWslRegistration {
+    distribution_name: String,
+    base_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ManagedMachineResources {
     pub cpus: u8,
     pub memory_mb: u32,
@@ -443,6 +505,7 @@ pub enum ManagedRuntimeSetupPhase {
     Install,
     Prerequisite,
     Download,
+    Recovery,
     Init,
     Start,
     Verify,
@@ -672,15 +735,21 @@ impl ManagedRuntimeSetupController {
     }
 
     pub fn request_cancel(&self) -> AppResult<ManagedRuntimeSetupStatus> {
-        self.cancel_requested.store(true, Ordering::Release);
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
         })?;
-        if status.active {
+        if status.active && status.can_cancel {
+            self.cancel_requested.store(true, Ordering::Release);
             status.cancel_requested = true;
             status.detail =
                 "cancellation requested; downloaded partial bytes will be retained for resume"
                     .into();
+        } else if status.active {
+            // Export/import/unregister is a short transaction with a durable
+            // recovery copy. Interrupting it between those boundaries would
+            // make the next launch harder to explain, so finish the coherent
+            // recovery step before accepting cancellation again.
+            status.detail = "finishing the safe recovery copy before setup can be stopped".into();
         } else {
             // A stale cancel must never poison the next setup attempt.
             self.cancel_requested.store(false, Ordering::Release);
@@ -698,6 +767,7 @@ impl ManagedRuntimeSetupController {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
         })?;
         status.phase = phase;
+        status.can_cancel = phase != ManagedRuntimeSetupPhase::Recovery;
         status.detail = detail.into();
         drop(status);
         self.check_cancelled()
@@ -728,6 +798,26 @@ impl ManagedRuntimeSetupController {
         };
         drop(status);
         self.check_cancelled()
+    }
+
+    fn report_recovery_progress(&self, action: &str, processed: u64, total: u64) -> AppResult<()> {
+        if processed > total || total == 0 {
+            return Err(AppError::Runtime(
+                "managed Windows recovery progress is inconsistent".into(),
+            ));
+        }
+        let mut status = self.status.lock().map_err(|_| {
+            AppError::Internal("managed runtime setup status lock was poisoned".into())
+        })?;
+        status.phase = ManagedRuntimeSetupPhase::Recovery;
+        status.can_cancel = false;
+        status.received_bytes = processed;
+        status.total_bytes = Some(total);
+        let percent = processed as f64 * 100.0 / total as f64;
+        status.progress_percent = Some(percent);
+        status.resumed_from_bytes = 0;
+        status.detail = format!("{action}: {percent:.0}%");
+        Ok(())
     }
 
     fn check_cancelled(&self) -> AppResult<()> {
@@ -895,6 +985,10 @@ enum ManagedCommandOperation {
     MachineStop,
     MachineRemoval,
     WslDistributionInventory,
+    WslDistributionTerminate,
+    WslDistributionExport,
+    WslDistributionImport,
+    WslDistributionRemoval,
     ActiveContainerInventory,
     VersionPreflight,
 }
@@ -908,6 +1002,10 @@ impl ManagedCommandOperation {
             Self::MachineStop => "managed runtime machine stop",
             Self::MachineRemoval => "managed runtime machine removal",
             Self::WslDistributionInventory => "managed Windows WSL distribution inventory",
+            Self::WslDistributionTerminate => "managed Windows WSL distribution stop",
+            Self::WslDistributionExport => "managed Windows WSL recovery export",
+            Self::WslDistributionImport => "managed Windows WSL recovery import",
+            Self::WslDistributionRemoval => "managed Windows WSL distribution replacement",
             Self::ActiveContainerInventory => "managed runtime active-container inventory",
             Self::VersionPreflight => "managed runtime version preflight",
         }
@@ -921,6 +1019,19 @@ trait ManagedCommandRunner: Send + Sync {
         args: &[OsString],
         timeout: Duration,
     ) -> io::Result<ManagedCommandOutput>;
+}
+
+trait WindowsWslRegistrationReader: Send + Sync {
+    fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>>;
+}
+
+#[derive(Debug, Default)]
+struct DirectWindowsWslRegistrationReader;
+
+impl WindowsWslRegistrationReader for DirectWindowsWslRegistrationReader {
+    fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+        windows_wsl_registrations()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1845,6 +1956,7 @@ pub struct ManagedRuntimeManager {
     resource_root: PathBuf,
     loaded: LoadedManagedRuntimeManifest,
     commands: Arc<dyn ManagedCommandRunner>,
+    wsl_registrations: Arc<dyn WindowsWslRegistrationReader>,
     downloader: Arc<dyn ManagedArtifactDownloader>,
 }
 
@@ -1891,6 +2003,7 @@ impl ManagedRuntimeManager {
             resource_root,
             loaded,
             commands: Arc::new(DirectManagedCommandRunner),
+            wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
             downloader,
         };
         manager.verify_resource_bundle()?;
@@ -1983,6 +2096,7 @@ impl ManagedRuntimeManager {
             )?,
             loaded,
             commands: Arc::new(DirectManagedCommandRunner),
+            wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
             downloader,
         };
         manager.verify_installation()?;
@@ -2011,6 +2125,7 @@ impl ManagedRuntimeManager {
             resource_root,
             loaded,
             commands,
+            wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
             downloader,
         };
         manager.verify_resource_bundle()?;
@@ -2098,12 +2213,8 @@ impl ManagedRuntimeManager {
         }
         let target = self.loaded.target()?;
         let machine_name = machine_name(target);
-        // Proof files are one-shot initialization journals, never deletion
-        // authority. Consume any interrupted prior attempt before this retry
-        // can inspect or mutate provider state.
-        self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
         self.install_locked()?;
-        let command = self.runtime_command(target)?;
+        let mut command = self.runtime_command(target)?;
         if target.operating_system == ManagedOperatingSystem::Windows {
             if let Some(setup) = setup {
                 setup.set_phase(
@@ -2137,12 +2248,19 @@ impl ManagedRuntimeManager {
                         .into(),
                 ));
             }
-            self.prove_windows_wsl_distribution_absent_locked(
+            let recovered = self.prove_windows_wsl_distribution_absent_locked(
                 target,
                 &command,
                 &machine_name,
                 setup,
             )?;
+            if recovered {
+                // Recovery may remove the old release-private provider home.
+                // Rebuild and re-verify this release's command environment
+                // before initializing its replacement machine.
+                command = self.runtime_command(target)?;
+            }
+            self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
             self.prepare_machine_ssh_identity_locked()?;
             self.initialize_machine_with_one_shot_wsl_intent(
                 &command,
@@ -2187,6 +2305,7 @@ impl ManagedRuntimeManager {
             )?;
         }
         self.wait_for_server(&command, MACHINE_START_TIMEOUT, setup)?;
+        self.complete_windows_wsl_recovery_locked(target, &command, &machine_name, setup)?;
         Ok(command)
     }
 
@@ -2768,15 +2887,38 @@ impl ManagedRuntimeManager {
         managed_command: &ManagedRuntimeCommand,
         machine_name: &str,
         setup: Option<&ManagedRuntimeSetupController>,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
         if target.operating_system != ManagedOperatingSystem::Windows {
-            return Ok(());
+            return Ok(false);
         }
         if target.provider != ManagedMachineProvider::Wsl {
             return Err(AppError::NotAuthorized(
                 "managed Windows runtime target did not use the WSL provider".into(),
             ));
         }
+        let expected = format!("podman-{machine_name}");
+        let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+        let expected_present = distributions
+            .iter()
+            .any(|distribution| distribution.eq_ignore_ascii_case(&expected));
+        let pending = self.read_windows_wsl_recovery_intent_locked(machine_name)?;
+        if !expected_present && pending.is_none() {
+            return Ok(false);
+        }
+        self.recover_windows_wsl_distribution_locked(
+            managed_command,
+            machine_name,
+            distributions,
+            pending,
+            setup,
+        )?;
+        Ok(true)
+    }
+
+    fn windows_wsl_distribution_inventory(
+        &self,
+        managed_command: &ManagedRuntimeCommand,
+    ) -> AppResult<Vec<String>> {
         let command = windows_wsl_inventory_command(managed_command)?;
         let output = self.run_command(
             ManagedCommandOperation::WslDistributionInventory,
@@ -2785,13 +2927,1150 @@ impl ManagedRuntimeManager {
             COMMAND_TIMEOUT,
         )?;
         require_success("managed Windows WSL distribution inventory", &output)?;
-        let expected = format!("podman-{machine_name}");
-        let distributions = parse_windows_wsl_distribution_inventory(&output.stdout)?;
-        if distributions
-            .iter()
-            .any(|distribution| distribution.eq_ignore_ascii_case(&expected))
+        parse_windows_wsl_distribution_inventory(&output.stdout)
+    }
+
+    fn windows_wsl_recovery_root(&self) -> PathBuf {
+        self.state_root.join(WINDOWS_WSL_RECOVERY_DIRECTORY)
+    }
+
+    fn windows_wsl_recovery_workspace_root(&self) -> PathBuf {
+        self.state_root
+            .join(WINDOWS_WSL_RECOVERY_WORKSPACE_DIRECTORY)
+    }
+
+    fn windows_wsl_recovery_pending_path(&self, machine_name: &str) -> PathBuf {
+        self.windows_wsl_recovery_root()
+            .join(format!("pending-{machine_name}.json"))
+    }
+
+    fn read_windows_wsl_recovery_intent_locked(
+        &self,
+        machine_name: &str,
+    ) -> AppResult<Option<WindowsWslRecoveryIntent>> {
+        let path = self.windows_wsl_recovery_pending_path(machine_name);
+        if !private_entry_exists(&path)? {
+            return Ok(None);
+        }
+        let intent: WindowsWslRecoveryIntent =
+            read_bounded_private_json(&path, 64 * 1024, "managed Windows WSL recovery intent")?;
+        self.validate_windows_wsl_recovery_intent(machine_name, &intent)?;
+        Ok(Some(intent))
+    }
+
+    fn validate_windows_wsl_recovery_intent(
+        &self,
+        machine_name: &str,
+        intent: &WindowsWslRecoveryIntent,
+    ) -> AppResult<()> {
+        let recovery_id = Uuid::parse_str(&intent.recovery_id).map_err(|_| {
+            AppError::NotAuthorized("managed Windows WSL recovery ID is invalid".into())
+        })?;
+        let expected_distribution = format!("podman-{machine_name}");
+        let expected_quarantine = windows_wsl_recovery_distribution_name(recovery_id);
+        validate_sha256(
+            &intent.manifest_sha256,
+            "managed Windows WSL recovery manifest",
+        )?;
+        validate_sha256(
+            &intent.machine_image_sha256,
+            "managed Windows WSL recovery machine image",
+        )?;
+        if intent.schema_version != WINDOWS_WSL_RECOVERY_INTENT_SCHEMA
+            || intent.machine_name != machine_name
+            || !intent
+                .distribution_name
+                .eq_ignore_ascii_case(&expected_distribution)
+            || !intent
+                .quarantine_distribution_name
+                .eq_ignore_ascii_case(&expected_quarantine)
+            || !intent
+                .machine_image_sha256
+                .eq_ignore_ascii_case(&self.loaded.target()?.machine_image.sha256)
         {
-            return fail_windows_wsl_distribution_requires_manual_action(setup, &expected);
+            return Err(AppError::NotAuthorized(
+                "managed Windows WSL recovery intent does not match this scanner workspace".into(),
+            ));
+        }
+        let expected_attempt = self
+            .windows_wsl_recovery_root()
+            .join(recovery_id.simple().to_string());
+        let expected_quarantine_install_directory = self
+            .windows_wsl_recovery_workspace_root()
+            .join(recovery_id.simple().to_string());
+        if intent.attempt_directory != expected_attempt
+            || intent.quarantine_install_directory != expected_quarantine_install_directory
+            || intent.staging_archive != expected_attempt.join("workspace.exporting.tar")
+            || intent.recovery_archive != expected_attempt.join("workspace-recovery.tar")
+            || intent.provider_home.parent()
+                != Some(self.state_root.join("provider-home").as_path())
+        {
+            return Err(AppError::NotAuthorized(
+                "managed Windows WSL recovery paths escaped the private recovery area".into(),
+            ));
+        }
+        let derived_provider = windows_wsl_provider_home_from_registration_path(
+            &self.state_root,
+            &intent.registration_base_path,
+            machine_name,
+        )?;
+        if derived_provider != intent.provider_home {
+            return Err(AppError::NotAuthorized(
+                "managed Windows WSL recovery provider binding changed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn begin_windows_wsl_recovery_locked(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        distribution_name: &str,
+        distributions: &[String],
+    ) -> AppResult<WindowsWslRecoveryIntent> {
+        let registrations = self.wsl_registrations.registrations()?;
+        let matching = registrations
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(distribution_name)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(AppError::NotAuthorized(
+                "Windows did not expose one unambiguous registration for the old scan-tool workspace"
+                    .into(),
+            ));
+        }
+        let registration = matching.into_iter().next().expect("one registration");
+        let (registration_base_path, provider_home) = self
+            .verify_windows_wsl_registration_binding_is_product_owned(
+                machine_name,
+                &registration.base_path,
+            )?;
+        let recovery_id = (0..8)
+            .map(|_| Uuid::new_v4())
+            .find(|candidate| {
+                let name = windows_wsl_recovery_distribution_name(*candidate);
+                !distributions
+                    .iter()
+                    .any(|distribution| distribution.eq_ignore_ascii_case(&name))
+            })
+            .ok_or_else(|| {
+                AppError::Conflict(
+                    "could not reserve a unique Windows WSL recovery workspace name".into(),
+                )
+            })?;
+        let attempt_directory = self
+            .windows_wsl_recovery_root()
+            .join(recovery_id.simple().to_string());
+        let quarantine_install_directory = self
+            .windows_wsl_recovery_workspace_root()
+            .join(recovery_id.simple().to_string());
+        ensure_managed_private_directory(&self.windows_wsl_recovery_root())?;
+        ensure_managed_private_directory(&attempt_directory)?;
+        ensure_managed_wsl_distribution_storage_directory(
+            &self.windows_wsl_recovery_workspace_root(),
+        )?;
+        ensure_managed_wsl_distribution_storage_directory(&quarantine_install_directory)?;
+        let intent = WindowsWslRecoveryIntent {
+            schema_version: WINDOWS_WSL_RECOVERY_INTENT_SCHEMA.into(),
+            recovery_id: recovery_id.to_string(),
+            manifest_sha256: self.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            machine_name: machine_name.into(),
+            distribution_name: distribution_name.into(),
+            quarantine_distribution_name: windows_wsl_recovery_distribution_name(recovery_id),
+            registration_base_path,
+            provider_home,
+            attempt_directory: attempt_directory.clone(),
+            quarantine_install_directory,
+            staging_archive: attempt_directory.join("workspace.exporting.tar"),
+            recovery_archive: attempt_directory.join("workspace-recovery.tar"),
+        };
+        self.validate_windows_wsl_recovery_intent(machine_name, &intent)?;
+        let encoded = serde_json::to_vec(&intent).map_err(|error| {
+            AppError::Internal(format!(
+                "managed Windows WSL recovery intent could not be encoded: {error}"
+            ))
+        })?;
+        write_private_atomic(&attempt_directory.join("intent.json"), &encoded)?;
+        write_private_atomic(
+            &self.windows_wsl_recovery_pending_path(machine_name),
+            &encoded,
+        )?;
+        Ok(intent)
+    }
+
+    fn recover_windows_wsl_distribution_locked(
+        &self,
+        managed_command: &ManagedRuntimeCommand,
+        machine_name: &str,
+        mut distributions: Vec<String>,
+        pending: Option<WindowsWslRecoveryIntent>,
+        setup: Option<&ManagedRuntimeSetupController>,
+    ) -> AppResult<()> {
+        let target = self.loaded.target()?;
+        let distribution_name = format!("podman-{machine_name}");
+        if let Some(setup) = setup {
+            setup.set_phase(
+                ManagedRuntimeSetupPhase::Recovery,
+                "checking the previous scan-tool workspace before making a recovery copy",
+            )?;
+        }
+        let intent = match pending {
+            Some(intent) => intent,
+            None => match self.begin_windows_wsl_recovery_locked(
+                target,
+                machine_name,
+                &distribution_name,
+                &distributions,
+            ) {
+                Ok(intent) => intent,
+                Err(AppError::NotAuthorized(_)) => {
+                    return fail_windows_wsl_distribution_requires_manual_action(
+                        setup,
+                        &distribution_name,
+                    );
+                }
+                Err(error) => return Err(error),
+            },
+        };
+        let command = windows_wsl_inventory_command(managed_command)?;
+        let same_name_present = distributions
+            .iter()
+            .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
+        let interrupted_replacement_present = if same_name_present {
+            match self.verify_pending_windows_wsl_registration_binding(&intent) {
+                Ok(_) => false,
+                Err(original_error) => {
+                    if self
+                        .verify_current_windows_wsl_machine_registration_binding(machine_name)
+                        .is_ok()
+                    {
+                        true
+                    } else {
+                        return Err(original_error);
+                    }
+                }
+            }
+        } else {
+            false
+        };
+        let original_present = same_name_present && !interrupted_replacement_present;
+        let mut quarantine_present = distributions.iter().any(|distribution| {
+            distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+        });
+        let proof_path = intent.attempt_directory.join("backup.json");
+        let mut backup_proof = if private_entry_exists(&proof_path)? {
+            Some(self.read_windows_wsl_recovery_backup_proof(&intent, &proof_path)?)
+        } else {
+            None
+        };
+        let mut archive_hash_verified = false;
+        let import_proof_path = intent.attempt_directory.join("import.json");
+
+        if original_present && backup_proof.is_none() {
+            if let Some(setup) = setup {
+                setup.set_phase(
+                    ManagedRuntimeSetupPhase::Recovery,
+                    "saving a recovery copy of the previous scan-tool workspace",
+                )?;
+            }
+            if private_entry_exists(&intent.staging_archive)? {
+                remove_regular_file(&intent.staging_archive)?;
+            }
+            if !private_entry_exists(&intent.recovery_archive)? {
+                require_windows_wsl_recovery_free_space(
+                    &intent.attempt_directory,
+                    &intent.registration_base_path.join("ext4.vhdx"),
+                )?;
+                let output = self.run_command_args(
+                    ManagedCommandOperation::WslDistributionTerminate,
+                    &command,
+                    &[
+                        OsString::from("--terminate"),
+                        OsString::from(&intent.distribution_name),
+                    ],
+                    MACHINE_STOP_TIMEOUT,
+                )?;
+                require_success("managed Windows WSL distribution stop", &output)?;
+                self.verify_pending_windows_wsl_registration(&intent)?;
+                let output = self.run_command_args(
+                    ManagedCommandOperation::WslDistributionExport,
+                    &command,
+                    &[
+                        OsString::from("--export"),
+                        OsString::from(&intent.distribution_name),
+                        intent.staging_archive.as_os_str().to_owned(),
+                    ],
+                    WINDOWS_WSL_RECOVERY_TIMEOUT,
+                )?;
+                if let Err(error) = require_success("managed Windows WSL recovery export", &output)
+                {
+                    let _ = remove_regular_file(&intent.staging_archive);
+                    return Err(error);
+                }
+                verify_windows_wsl_recovery_file(
+                    &intent.staging_archive,
+                    "managed Windows WSL recovery archive",
+                )?;
+                File::open(&intent.staging_archive)?.sync_all()?;
+                fs::rename(&intent.staging_archive, &intent.recovery_archive)?;
+                sync_directory(&intent.attempt_directory)?;
+            }
+            let source_vhd_size =
+                fs::symlink_metadata(intent.registration_base_path.join("ext4.vhdx"))?.len();
+            let max_bytes = windows_wsl_recovery_archive_max_bytes(
+                self.loaded.manifest.resources.disk_size_gb,
+                source_vhd_size,
+            )?;
+            let mut report_progress = |processed, total| match setup {
+                Some(setup) => setup.report_recovery_progress(
+                    "Verifying the saved recovery copy",
+                    processed,
+                    total,
+                ),
+                None => Ok(()),
+            };
+            let (size_bytes, sha256) = hash_bounded_regular_file_with_progress(
+                &intent.recovery_archive,
+                max_bytes,
+                "managed Windows WSL recovery archive",
+                &mut report_progress,
+            )?;
+            let proof = WindowsWslRecoveryBackupProof {
+                schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
+                recovery_id: intent.recovery_id.clone(),
+                distribution_name: intent.distribution_name.clone(),
+                quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
+                recovery_archive: intent.recovery_archive.clone(),
+                size_bytes,
+                sha256,
+            };
+            let encoded = serde_json::to_vec(&proof).map_err(|error| {
+                AppError::Internal(format!(
+                    "managed Windows WSL recovery proof could not be encoded: {error}"
+                ))
+            })?;
+            write_private_atomic(&proof_path, &encoded)?;
+            backup_proof = Some(proof);
+            archive_hash_verified = true;
+        }
+
+        let proof = backup_proof.as_ref().ok_or_else(|| {
+            AppError::NotAuthorized(
+                "managed Windows WSL recovery has no verified backup record".into(),
+            )
+        })?;
+        if !archive_hash_verified {
+            self.verify_windows_wsl_recovery_archive(
+                &intent,
+                proof,
+                setup,
+                "Checking the recovery copy before continuing",
+            )?;
+        }
+
+        let mut import_proof = if private_entry_exists(&import_proof_path)? {
+            Some(self.read_windows_wsl_recovery_import_proof(&intent, proof, &import_proof_path)?)
+        } else {
+            None
+        };
+
+        if quarantine_present && import_proof.is_none() {
+            distributions =
+                self.remove_uncheckpointed_windows_wsl_quarantine_locked(managed_command, &intent)?;
+            quarantine_present = distributions.iter().any(|distribution| {
+                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            });
+            if quarantine_present {
+                return Err(AppError::Runtime(
+                    "Windows retained an incomplete recovery workspace after cleanup".into(),
+                ));
+            }
+        }
+
+        if !quarantine_present {
+            if private_entry_exists(&import_proof_path)? {
+                remove_regular_file(&import_proof_path)?;
+                sync_directory(&intent.attempt_directory)?;
+            }
+            require_windows_wsl_recovery_import_space(
+                &self.windows_wsl_recovery_workspace_root(),
+                proof.size_bytes,
+            )?;
+            if let Some(setup) = setup {
+                setup.set_phase(
+                    ManagedRuntimeSetupPhase::Recovery,
+                    "keeping the recovery copy available in Windows and replacing the old workspace",
+                )?;
+            }
+            self.prepare_windows_wsl_quarantine_import_directory(&intent)?;
+            let output = self.run_command_args(
+                ManagedCommandOperation::WslDistributionImport,
+                &command,
+                &[
+                    OsString::from("--import"),
+                    OsString::from(&intent.quarantine_distribution_name),
+                    intent.quarantine_install_directory.as_os_str().to_owned(),
+                    intent.recovery_archive.as_os_str().to_owned(),
+                    OsString::from("--version"),
+                    OsString::from("2"),
+                ],
+                WINDOWS_WSL_RECOVERY_TIMEOUT,
+            )?;
+            require_success("managed Windows WSL recovery import", &output)?;
+            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+            quarantine_present = distributions.iter().any(|distribution| {
+                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            });
+            if !quarantine_present {
+                return Err(AppError::Runtime(
+                    "Windows did not report the recovery workspace after importing it".into(),
+                ));
+            }
+            self.verify_windows_wsl_quarantine_registration(&intent)?;
+            let imported = WindowsWslRecoveryImportProof {
+                schema_version: WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA.into(),
+                recovery_id: intent.recovery_id.clone(),
+                quarantine_distribution_name: intent.quarantine_distribution_name.clone(),
+                quarantine_install_directory: intent.quarantine_install_directory.clone(),
+                recovery_archive: intent.recovery_archive.clone(),
+                archive_size_bytes: proof.size_bytes,
+                archive_sha256: proof.sha256.clone(),
+            };
+            let encoded = serde_json::to_vec(&imported).map_err(|error| {
+                AppError::Internal(format!(
+                    "managed Windows WSL recovery import proof could not be encoded: {error}"
+                ))
+            })?;
+            write_private_atomic(&import_proof_path, &encoded)?;
+            import_proof = Some(imported);
+        }
+
+        let _import_proof = import_proof.as_ref().ok_or_else(|| {
+            AppError::NotAuthorized(
+                "managed Windows WSL recovery workspace has no completed import record".into(),
+            )
+        })?;
+        self.verify_windows_wsl_quarantine_registration(&intent)?;
+
+        if interrupted_replacement_present {
+            self.verify_windows_wsl_recovery_archive(
+                &intent,
+                proof,
+                setup,
+                "Checking the recovery copy before restarting the interrupted replacement",
+            )?;
+            self.verify_windows_wsl_quarantine_registration(&intent)?;
+            let output = self.run_command_args(
+                ManagedCommandOperation::WslDistributionTerminate,
+                &command,
+                &[
+                    OsString::from("--terminate"),
+                    OsString::from(&intent.distribution_name),
+                ],
+                MACHINE_STOP_TIMEOUT,
+            )?;
+            require_success("interrupted managed Windows WSL replacement stop", &output)?;
+            self.verify_current_windows_wsl_machine_registration(machine_name)?;
+            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+            let replacement_still_present = distributions
+                .iter()
+                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
+            let quarantine_still_present = distributions.iter().any(|distribution| {
+                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            });
+            if !replacement_still_present || !quarantine_still_present {
+                return Err(AppError::Runtime(
+                    "Windows changed the interrupted replacement before recovery could restart it"
+                        .into(),
+                ));
+            }
+            let output = self.run_command_args(
+                ManagedCommandOperation::WslDistributionRemoval,
+                &command,
+                &[
+                    OsString::from("--unregister"),
+                    OsString::from(&intent.distribution_name),
+                ],
+                MACHINE_STOP_TIMEOUT,
+            )?;
+            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+            if distributions
+                .iter()
+                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name))
+            {
+                require_success(
+                    "interrupted managed Windows WSL replacement cleanup",
+                    &output,
+                )?;
+                return Err(AppError::Runtime(
+                    "Windows still reports the interrupted replacement workspace after cleanup"
+                        .into(),
+                ));
+            }
+            let registrations = self
+                .wsl_registrations
+                .registrations()?
+                .into_iter()
+                .filter(|registration| {
+                    registration
+                        .distribution_name
+                        .eq_ignore_ascii_case(&intent.distribution_name)
+                })
+                .count();
+            if registrations != 0 {
+                return Err(AppError::NotAuthorized(
+                    "Windows retained the interrupted replacement registration after cleanup"
+                        .into(),
+                ));
+            }
+            let current_provider_home = self.provider_home();
+            if private_entry_exists(&current_provider_home)? {
+                remove_provider_home_after_machine_removal(
+                    &current_provider_home,
+                    &self.state_root.join("provider-home"),
+                    WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+                    WINDOWS_WSL_PROVIDER_DELETE_POLL,
+                )?;
+            }
+        }
+
+        if original_present {
+            // The archive and both registrations are checked again at the
+            // destructive edge. A completed or half-completed import alone
+            // can never authorize deletion of the original workspace.
+            self.verify_windows_wsl_recovery_archive(
+                &intent,
+                proof,
+                setup,
+                "Checking the recovery copy before replacing the old workspace",
+            )?;
+            self.verify_windows_wsl_quarantine_registration(&intent)?;
+            let output = self.run_command_args(
+                ManagedCommandOperation::WslDistributionTerminate,
+                &command,
+                &[
+                    OsString::from("--terminate"),
+                    OsString::from(&intent.distribution_name),
+                ],
+                MACHINE_STOP_TIMEOUT,
+            )?;
+            require_success("managed Windows WSL distribution stop", &output)?;
+            self.verify_pending_windows_wsl_registration(&intent)?;
+            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+            let original_still_present = distributions
+                .iter()
+                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
+            let quarantine_still_present = distributions.iter().any(|distribution| {
+                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            });
+            if !original_still_present || !quarantine_still_present {
+                return Err(AppError::Runtime(
+                    "Windows changed the recovery workspaces before the safe handoff completed"
+                        .into(),
+                ));
+            }
+            let output = self.run_command_args(
+                ManagedCommandOperation::WslDistributionRemoval,
+                &command,
+                &[
+                    OsString::from("--unregister"),
+                    OsString::from(&intent.distribution_name),
+                ],
+                MACHINE_STOP_TIMEOUT,
+            )?;
+            distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+            if distributions
+                .iter()
+                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name))
+            {
+                require_success("managed Windows WSL distribution replacement", &output)?;
+                return Err(AppError::Runtime(
+                    "Windows still reports the previous scan-tool workspace after replacement"
+                        .into(),
+                ));
+            }
+        }
+
+        let original_present = distributions
+            .iter()
+            .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name));
+        quarantine_present = distributions.iter().any(|distribution| {
+            distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+        });
+        if original_present || !quarantine_present || backup_proof.is_none() {
+            return Err(AppError::Runtime(
+                "Windows did not confirm the safe handoff from the old workspace to its recovery copy"
+                .into(),
+            ));
+        }
+        let original_registrations = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&intent.distribution_name)
+            })
+            .count();
+        if original_registrations != 0 {
+            return Err(AppError::NotAuthorized(
+                "Windows retained a registration for the previous scan-tool workspace".into(),
+            ));
+        }
+        self.verify_windows_wsl_quarantine_registration(&intent)?;
+        if private_entry_exists(&intent.provider_home)? {
+            remove_provider_home_after_machine_removal(
+                &intent.provider_home,
+                &self.state_root.join("provider-home"),
+                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+                WINDOWS_WSL_PROVIDER_DELETE_POLL,
+            )?;
+        }
+        let current_provider_home = self.provider_home();
+        if private_entry_exists(&current_provider_home)? {
+            remove_provider_home_after_machine_removal(
+                &current_provider_home,
+                &self.state_root.join("provider-home"),
+                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+                WINDOWS_WSL_PROVIDER_DELETE_POLL,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn prepare_windows_wsl_quarantine_import_directory(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+    ) -> AppResult<()> {
+        let matching = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            })
+            .count();
+        if matching != 0 {
+            return Err(AppError::NotAuthorized(
+                "Windows has a recovery registration that was not present in its WSL inventory"
+                    .into(),
+            ));
+        }
+        let workspace_root = self.windows_wsl_recovery_workspace_root();
+        if private_entry_exists(&intent.quarantine_install_directory)? {
+            remove_provider_home_after_machine_removal(
+                &intent.quarantine_install_directory,
+                &workspace_root,
+                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+                WINDOWS_WSL_PROVIDER_DELETE_POLL,
+            )?;
+        }
+        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)?;
+        Ok(())
+    }
+
+    fn remove_uncheckpointed_windows_wsl_quarantine_locked(
+        &self,
+        managed_command: &ManagedRuntimeCommand,
+        intent: &WindowsWslRecoveryIntent,
+    ) -> AppResult<Vec<String>> {
+        self.verify_windows_wsl_quarantine_registration_path(intent)?;
+        let command = windows_wsl_inventory_command(managed_command)?;
+        let _stop_output = self.run_command_args(
+            ManagedCommandOperation::WslDistributionTerminate,
+            &command,
+            &[
+                OsString::from("--terminate"),
+                OsString::from(&intent.quarantine_distribution_name),
+            ],
+            MACHINE_STOP_TIMEOUT,
+        )?;
+        let output = self.run_command_args(
+            ManagedCommandOperation::WslDistributionRemoval,
+            &command,
+            &[
+                OsString::from("--unregister"),
+                OsString::from(&intent.quarantine_distribution_name),
+            ],
+            MACHINE_STOP_TIMEOUT,
+        )?;
+        let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+        if distributions.iter().any(|distribution| {
+            distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+        }) {
+            require_success(
+                "incomplete managed Windows WSL recovery workspace cleanup",
+                &output,
+            )?;
+            return Err(AppError::Runtime(
+                "Windows still reports the incomplete recovery workspace after cleanup".into(),
+            ));
+        }
+        let registrations = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            })
+            .count();
+        if registrations != 0 {
+            return Err(AppError::NotAuthorized(
+                "Windows retained a registration for the incomplete recovery workspace".into(),
+            ));
+        }
+        if private_entry_exists(&intent.quarantine_install_directory)? {
+            remove_provider_home_after_machine_removal(
+                &intent.quarantine_install_directory,
+                &self.windows_wsl_recovery_workspace_root(),
+                WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+                WINDOWS_WSL_PROVIDER_DELETE_POLL,
+            )?;
+        }
+        Ok(distributions)
+    }
+
+    fn verify_windows_wsl_quarantine_registration(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+    ) -> AppResult<()> {
+        let expected = self.verify_windows_wsl_quarantine_registration_path(intent)?;
+        verify_windows_wsl_quarantine_storage(&expected)
+    }
+
+    fn verify_windows_wsl_quarantine_registration_path(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+    ) -> AppResult<PathBuf> {
+        let matching = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(AppError::NotAuthorized(
+                "Windows did not expose one exact registration for the recovery workspace".into(),
+            ));
+        }
+        let actual = canonical_real_directory(
+            &matching[0].base_path,
+            "managed Windows WSL recovery registration",
+        )?;
+        let expected = canonical_real_directory(
+            &intent.quarantine_install_directory,
+            "managed Windows WSL recovery workspace",
+        )?;
+        if !windows_paths_refer_to_same_location(&actual, &expected)? {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL recovery registration no longer points to its isolated workspace"
+                    .into(),
+            ));
+        }
+        verify_windows_wsl_quarantine_directory(&expected)?;
+        Ok(expected)
+    }
+
+    fn read_windows_wsl_recovery_backup_proof(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+        path: &Path,
+    ) -> AppResult<WindowsWslRecoveryBackupProof> {
+        let proof: WindowsWslRecoveryBackupProof = read_bounded_private_json(
+            path,
+            64 * 1024,
+            "managed Windows WSL recovery backup proof",
+        )?;
+        validate_sha256(&proof.sha256, "managed Windows WSL recovery backup proof")?;
+        if proof.schema_version != WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA
+            || proof.recovery_id != intent.recovery_id
+            || !proof
+                .distribution_name
+                .eq_ignore_ascii_case(&intent.distribution_name)
+            || !proof
+                .quarantine_distribution_name
+                .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            || proof.recovery_archive != intent.recovery_archive
+            || proof.size_bytes == 0
+        {
+            return Err(AppError::NotAuthorized(
+                "managed Windows WSL recovery backup proof is inconsistent".into(),
+            ));
+        }
+        Ok(proof)
+    }
+
+    fn read_windows_wsl_recovery_import_proof(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+        backup: &WindowsWslRecoveryBackupProof,
+        path: &Path,
+    ) -> AppResult<WindowsWslRecoveryImportProof> {
+        let proof: WindowsWslRecoveryImportProof = read_bounded_private_json(
+            path,
+            64 * 1024,
+            "managed Windows WSL recovery import proof",
+        )?;
+        validate_sha256(
+            &proof.archive_sha256,
+            "managed Windows WSL recovery import proof",
+        )?;
+        if proof.schema_version != WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA
+            || proof.recovery_id != intent.recovery_id
+            || !proof
+                .quarantine_distribution_name
+                .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            || proof.quarantine_install_directory != intent.quarantine_install_directory
+            || proof.recovery_archive != intent.recovery_archive
+            || proof.archive_size_bytes != backup.size_bytes
+            || !proof.archive_sha256.eq_ignore_ascii_case(&backup.sha256)
+        {
+            return Err(AppError::NotAuthorized(
+                "managed Windows WSL recovery import proof is inconsistent".into(),
+            ));
+        }
+        Ok(proof)
+    }
+
+    fn verify_windows_wsl_recovery_archive(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+        proof: &WindowsWslRecoveryBackupProof,
+        setup: Option<&ManagedRuntimeSetupController>,
+        action: &str,
+    ) -> AppResult<()> {
+        verify_windows_wsl_recovery_file(
+            &intent.recovery_archive,
+            "managed Windows WSL recovery archive",
+        )?;
+        let mut report_progress = |processed, total| match setup {
+            Some(setup) => setup.report_recovery_progress(action, processed, total),
+            None => Ok(()),
+        };
+        verify_file_hash_size_with_progress(
+            &intent.recovery_archive,
+            proof.size_bytes,
+            &proof.sha256,
+            "managed Windows WSL recovery archive",
+            &mut report_progress,
+        )
+    }
+
+    fn verify_pending_windows_wsl_registration(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+    ) -> AppResult<()> {
+        let (base_path, _) = self.verify_pending_windows_wsl_registration_binding(intent)?;
+        verify_windows_wsl_recovery_vhd(&base_path.join("ext4.vhdx"))
+    }
+
+    fn verify_pending_windows_wsl_registration_binding(
+        &self,
+        intent: &WindowsWslRecoveryIntent,
+    ) -> AppResult<(PathBuf, PathBuf)> {
+        let registrations = self.wsl_registrations.registrations()?;
+        let matching = registrations
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&intent.distribution_name)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL registration changed while recovery was pending".into(),
+            ));
+        }
+        let (base_path, provider_home) = self
+            .verify_windows_wsl_registration_binding_is_product_owned(
+                &intent.machine_name,
+                &matching[0].base_path,
+            )?;
+        if !windows_paths_refer_to_same_location(&base_path, &intent.registration_base_path)?
+            || !windows_paths_refer_to_same_location(&provider_home, &intent.provider_home)?
+        {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL registration no longer matches the verified scan-tool workspace"
+                    .into(),
+            ));
+        }
+        Ok((base_path, provider_home))
+    }
+
+    fn verify_current_windows_wsl_machine_registration(&self, machine_name: &str) -> AppResult<()> {
+        let actual_base =
+            self.verify_current_windows_wsl_machine_registration_binding(machine_name)?;
+        verify_windows_wsl_recovery_vhd(&actual_base.join("ext4.vhdx"))
+    }
+
+    fn verify_current_windows_wsl_machine_registration_binding(
+        &self,
+        machine_name: &str,
+    ) -> AppResult<PathBuf> {
+        let distribution_name = format!("podman-{machine_name}");
+        let matching = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&distribution_name)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(AppError::NotAuthorized(
+                "Windows did not expose one exact registration for the replacement scan workspace"
+                    .into(),
+            ));
+        }
+        let (actual_base, actual_provider) = self
+            .verify_windows_wsl_registration_binding_is_product_owned(
+                machine_name,
+                &matching[0].base_path,
+            )?;
+        let expected_provider = canonical_real_directory(
+            &self.provider_home(),
+            "replacement managed runtime provider home",
+        )?;
+        let expected_base = canonical_real_directory(
+            &expected_provider
+                .join("data")
+                .join("containers")
+                .join("podman")
+                .join("machine")
+                .join("wsl")
+                .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
+                .join(machine_name),
+            "replacement managed Windows WSL workspace",
+        )?;
+        if !windows_paths_refer_to_same_location(&actual_provider, &expected_provider)?
+            || !windows_paths_refer_to_same_location(&actual_base, &expected_base)?
+        {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL replacement registration is not bound to this app release".into(),
+            ));
+        }
+        Ok(actual_base)
+    }
+
+    fn verify_windows_wsl_registration_binding_is_product_owned(
+        &self,
+        machine_name: &str,
+        base_path: &Path,
+    ) -> AppResult<(PathBuf, PathBuf)> {
+        let canonical_base =
+            canonical_real_directory(base_path, "managed Windows WSL registration")?;
+        let provider_home = windows_wsl_provider_home_from_registration_path(
+            &self.state_root,
+            &canonical_base,
+            machine_name,
+        )?;
+        if !self.provider_home_matches_verified_manifest(&provider_home)? {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL workspace is not bound to a verified ai-security-scanner release"
+                    .into(),
+            ));
+        }
+        verify_windows_wsl_product_storage_directory(&provider_home, &canonical_base)?;
+        Ok((canonical_base, provider_home))
+    }
+
+    fn provider_home_matches_verified_manifest(&self, provider_home: &Path) -> AppResult<bool> {
+        let Some(namespace) = provider_home.file_name().and_then(OsStr::to_str) else {
+            return Ok(false);
+        };
+        if namespace.eq_ignore_ascii_case(&self.loaded.sha256[..16]) {
+            return Ok(true);
+        }
+        let mut entries = fs::read_dir(self.versions_root())?.collect::<Result<Vec<_>, _>>()?;
+        if entries.len() > MAX_INSTALLED_VERSIONS {
+            return Err(AppError::NotAuthorized(format!(
+                "managed runtime has more than {MAX_INSTALLED_VERSIONS} installed payloads"
+            )));
+        }
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_symlink() {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime versions directory contains a symlink".into(),
+                ));
+            }
+            if !metadata.is_dir()
+                || entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".installing-")
+            {
+                continue;
+            }
+            let manifest_path = entry.path().join("manifest.json");
+            if !private_entry_exists(&manifest_path)? {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime installation has no release manifest".into(),
+                ));
+            }
+            let loaded = LoadedManagedRuntimeManifest::read(&manifest_path)?;
+            if entry.file_name() != OsStr::new(&installation_directory_name(&loaded)) {
+                return Err(AppError::NotAuthorized(
+                    "managed runtime installation directory does not match its manifest identity"
+                        .into(),
+                ));
+            }
+            let root =
+                canonical_real_directory(&entry.path(), "previous managed runtime installation")?;
+            verify_installed_permissions(&root, &loaded.manifest.files)?;
+            verify_bundle_files(&root, &loaded.manifest.files)?;
+            if namespace.eq_ignore_ascii_case(&loaded.sha256[..16]) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn complete_windows_wsl_recovery_locked(
+        &self,
+        target: &ManagedTarget,
+        managed_command: &ManagedRuntimeCommand,
+        machine_name: &str,
+        setup: Option<&ManagedRuntimeSetupController>,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(());
+        }
+        let pending = self.windows_wsl_recovery_pending_path(machine_name);
+        if private_entry_exists(&pending)? {
+            let intent = self
+                .read_windows_wsl_recovery_intent_locked(machine_name)?
+                .ok_or_else(|| {
+                    AppError::Internal(
+                        "managed Windows WSL recovery pointer disappeared during cleanup".into(),
+                    )
+                })?;
+            let proof_path = intent.attempt_directory.join("backup.json");
+            let proof = self.read_windows_wsl_recovery_backup_proof(&intent, &proof_path)?;
+            let _import_proof = self.read_windows_wsl_recovery_import_proof(
+                &intent,
+                &proof,
+                &intent.attempt_directory.join("import.json"),
+            )?;
+            let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+            if !distributions
+                .iter()
+                .any(|distribution| distribution.eq_ignore_ascii_case(&intent.distribution_name))
+            {
+                return Err(AppError::NotAuthorized(
+                    "Windows did not report the verified replacement scan workspace".into(),
+                ));
+            }
+            self.verify_current_windows_wsl_machine_registration_binding(machine_name)?;
+            let quarantine_present = distributions.iter().any(|distribution| {
+                distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+            });
+            if quarantine_present {
+                self.verify_windows_wsl_quarantine_registration_path(&intent)?;
+                let command = windows_wsl_inventory_command(managed_command)?;
+                let _stop_output = self.run_command_args(
+                    ManagedCommandOperation::WslDistributionTerminate,
+                    &command,
+                    &[
+                        OsString::from("--terminate"),
+                        OsString::from(&intent.quarantine_distribution_name),
+                    ],
+                    MACHINE_STOP_TIMEOUT,
+                )?;
+                self.verify_windows_wsl_recovery_archive(
+                    &intent,
+                    &proof,
+                    setup,
+                    "Checking the recovery copy before removing its temporary workspace",
+                )?;
+                self.verify_windows_wsl_quarantine_registration(&intent)?;
+                let output = self.run_command_args(
+                    ManagedCommandOperation::WslDistributionRemoval,
+                    &command,
+                    &[
+                        OsString::from("--unregister"),
+                        OsString::from(&intent.quarantine_distribution_name),
+                    ],
+                    MACHINE_STOP_TIMEOUT,
+                )?;
+                let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+                if distributions.iter().any(|distribution| {
+                    distribution.eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+                }) {
+                    require_success("managed Windows WSL recovery workspace cleanup", &output)?;
+                    return Err(AppError::Runtime(
+                        "Windows still reports the temporary recovery workspace after cleanup"
+                            .into(),
+                    ));
+                }
+            } else {
+                let registrations = self
+                    .wsl_registrations
+                    .registrations()?
+                    .into_iter()
+                    .filter(|registration| {
+                        registration
+                            .distribution_name
+                            .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+                    })
+                    .count();
+                if registrations != 0 {
+                    return Err(AppError::NotAuthorized(
+                        "Windows WSL inventory and registration disagree about the recovery workspace"
+                            .into(),
+                    ));
+                }
+                self.verify_windows_wsl_recovery_archive(
+                    &intent,
+                    &proof,
+                    setup,
+                    "Checking the saved recovery copy",
+                )?;
+            }
+            let quarantine_registrations = self
+                .wsl_registrations
+                .registrations()?
+                .into_iter()
+                .filter(|registration| {
+                    registration
+                        .distribution_name
+                        .eq_ignore_ascii_case(&intent.quarantine_distribution_name)
+                })
+                .count();
+            if quarantine_registrations != 0 {
+                return Err(AppError::NotAuthorized(
+                    "Windows retained a registration for the temporary recovery workspace".into(),
+                ));
+            }
+            if private_entry_exists(&intent.quarantine_install_directory)? {
+                remove_provider_home_after_machine_removal(
+                    &intent.quarantine_install_directory,
+                    &self.windows_wsl_recovery_workspace_root(),
+                    WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT,
+                    WINDOWS_WSL_PROVIDER_DELETE_POLL,
+                )?;
+            }
+            remove_regular_file(&pending)?;
+            sync_directory(&self.windows_wsl_recovery_root())?;
         }
         Ok(())
     }
@@ -3972,6 +5251,16 @@ fn copy_verified_file(
 }
 
 fn verify_file_hash_size(path: &Path, size: u64, digest: &str, label: &str) -> AppResult<()> {
+    verify_file_hash_size_with_progress(path, size, digest, label, &mut |_, _| Ok(()))
+}
+
+fn verify_file_hash_size_with_progress(
+    path: &Path,
+    size: u64,
+    digest: &str,
+    label: &str,
+    progress: &mut dyn FnMut(u64, u64) -> AppResult<()>,
+) -> AppResult<()> {
     verify_regular_file(path, label)?;
     let metadata = fs::symlink_metadata(path)?;
     if metadata.len() != size {
@@ -3988,7 +5277,9 @@ fn verify_file_hash_size(path: &Path, size: u64, digest: &str, label: &str) -> A
     }
     let mut hasher = Sha256::new();
     let mut copied = 0_u64;
+    let mut next_progress = 0_u64;
     let mut buffer = [0_u8; 128 * 1024];
+    progress(0, size)?;
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
@@ -4003,6 +5294,10 @@ fn verify_file_hash_size(path: &Path, size: u64, digest: &str, label: &str) -> A
             )));
         }
         hasher.update(&buffer[..read]);
+        if copied >= next_progress || copied == size {
+            progress(copied, size)?;
+            next_progress = copied.saturating_add(16 * 1024 * 1024);
+        }
     }
     let actual = hex::encode(hasher.finalize());
     if copied != size || !actual.eq_ignore_ascii_case(digest) {
@@ -4021,6 +5316,206 @@ fn verify_regular_file(path: &Path, label: &str) -> AppResult<()> {
             "{label} must be a real regular file"
         )));
     }
+    Ok(())
+}
+
+fn read_bounded_private_json<T: DeserializeOwned>(
+    path: &Path,
+    max_bytes: u64,
+    label: &str,
+) -> AppResult<T> {
+    verify_regular_file(path, label)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.len() == 0 || metadata.len() > max_bytes {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} has an invalid size"
+        )));
+    }
+    let mut encoded = Vec::with_capacity(metadata.len() as usize);
+    File::open(path)?
+        .take(max_bytes + 1)
+        .read_to_end(&mut encoded)?;
+    if encoded.len() as u64 != metadata.len() {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed while it was read"
+        )));
+    }
+    serde_json::from_slice(&encoded)
+        .map_err(|error| AppError::NotAuthorized(format!("{label} is malformed: {error}")))
+}
+
+#[cfg(test)]
+fn hash_bounded_regular_file(path: &Path, max_bytes: u64, label: &str) -> AppResult<(u64, String)> {
+    hash_bounded_regular_file_with_progress(path, max_bytes, label, &mut |_, _| Ok(()))
+}
+
+fn hash_bounded_regular_file_with_progress(
+    path: &Path,
+    max_bytes: u64,
+    label: &str,
+    progress: &mut dyn FnMut(u64, u64) -> AppResult<()>,
+) -> AppResult<(u64, String)> {
+    verify_windows_wsl_recovery_file(path, label)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.len() == 0 || metadata.len() > max_bytes {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} is empty or exceeds the managed workspace size"
+        )));
+    }
+    let expected_size = metadata.len();
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut size = 0_u64;
+    let mut next_progress = 0_u64;
+    let mut buffer = [0_u8; 128 * 1024];
+    progress(0, expected_size)?;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        size = size
+            .checked_add(read as u64)
+            .ok_or_else(|| AppError::Runtime(format!("{label} size overflowed while hashing")))?;
+        if size > max_bytes {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} exceeded the managed workspace size while hashing"
+            )));
+        }
+        hasher.update(&buffer[..read]);
+        if size >= next_progress || size == expected_size {
+            progress(size, expected_size)?;
+            next_progress = size.saturating_add(16 * 1024 * 1024);
+        }
+    }
+    if size != expected_size {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed while it was hashed"
+        )));
+    }
+    Ok((size, hex::encode(hasher.finalize())))
+}
+
+fn windows_wsl_recovery_archive_max_bytes(
+    disk_size_gb: u16,
+    source_vhd_size: u64,
+) -> AppResult<u64> {
+    let manifest_bound = u64::from(disk_size_gb)
+        .checked_mul(1024 * 1024 * 1024)
+        .and_then(|bytes| bytes.checked_mul(WINDOWS_WSL_RECOVERY_ARCHIVE_DISK_MULTIPLIER))
+        .and_then(|bytes| bytes.checked_add(WINDOWS_WSL_RECOVERY_ARCHIVE_MARGIN_BYTES))
+        .ok_or_else(|| {
+            AppError::Runtime("managed Windows WSL recovery size limit overflowed".into())
+        })?;
+    let existing_workspace_bound = source_vhd_size
+        .checked_mul(WINDOWS_WSL_RECOVERY_ARCHIVE_DISK_MULTIPLIER)
+        .and_then(|bytes| bytes.checked_add(WINDOWS_WSL_RECOVERY_ARCHIVE_MARGIN_BYTES))
+        .ok_or_else(|| {
+            AppError::Runtime("managed Windows WSL recovery workspace size overflowed".into())
+        })?;
+    Ok(manifest_bound
+        .max(existing_workspace_bound)
+        .min(WINDOWS_WSL_RECOVERY_ARCHIVE_ABSOLUTE_MAX_BYTES))
+}
+
+#[cfg(windows)]
+fn require_windows_wsl_recovery_free_space(
+    destination_directory: &Path,
+    source_vhd: &Path,
+) -> AppResult<()> {
+    // The source distribution can still have its VHD open here.  Do not open
+    // that file until WSL has terminated the exact, ownership-proven
+    // distribution; Windows can otherwise reject even a read-only metadata
+    // handle with a sharing violation.  This check is only a conservative
+    // space estimate.  The full non-reparse, one-link file proof is repeated
+    // immediately after a successful terminate and before export.
+    let source_metadata = fs::symlink_metadata(source_vhd)?;
+    if !source_metadata.is_file() || source_metadata.len() == 0 {
+        return Err(AppError::NotAuthorized(
+            "managed Windows WSL recovery VHD must be one non-empty regular file".into(),
+        ));
+    }
+    let source_size = source_metadata.len();
+    let required = source_size
+        .checked_add(WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES)
+        .ok_or_else(|| {
+            AppError::Runtime("managed Windows WSL recovery space estimate overflowed".into())
+        })?;
+    let available = windows_available_disk_space(destination_directory)?;
+    if available < required {
+        return Err(AppError::NotAvailable(
+            "Windows needs more free disk space to preserve the previous scan-tool workspace before replacing it"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn require_windows_wsl_recovery_import_space(
+    destination_directory: &Path,
+    archive_size: u64,
+) -> AppResult<()> {
+    let required = archive_size
+        .checked_add(WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES)
+        .ok_or_else(|| {
+            AppError::Runtime("managed Windows WSL recovery import estimate overflowed".into())
+        })?;
+    if windows_available_disk_space(destination_directory)? < required {
+        return Err(AppError::NotAvailable(
+            "Windows needs more free disk space to restore the protected recovery copy before replacing the old workspace"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_available_disk_space(destination_directory: &Path) -> AppResult<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let canonical = canonical_real_directory(
+        destination_directory,
+        "managed Windows WSL recovery destination",
+    )?;
+    let mut encoded = canonical.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(AppError::NotAuthorized(
+            "managed Windows WSL recovery destination contains a NUL code unit".into(),
+        ));
+    }
+    encoded.push(0);
+    let mut available = 0_u64;
+    // SAFETY: encoded is NUL-terminated and live for the call; available is a
+    // valid writable u64 while the optional totals are intentionally omitted.
+    if unsafe {
+        GetDiskFreeSpaceExW(
+            encoded.as_ptr(),
+            &raw mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(available)
+}
+
+#[cfg(not(windows))]
+fn require_windows_wsl_recovery_free_space(
+    _destination_directory: &Path,
+    _source_vhd: &Path,
+) -> AppResult<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn require_windows_wsl_recovery_import_space(
+    _destination_directory: &Path,
+    _archive_size: u64,
+) -> AppResult<()> {
     Ok(())
 }
 
@@ -5905,7 +7400,7 @@ fn fail_windows_wsl_distribution_requires_manual_action<T>(
     distribution_name: &str,
 ) -> AppResult<T> {
     let detail = format!(
-        "managed_runtime_recovery:wsl_distribution_requires_manual_action: Windows still reports WSL distribution {distribution_name}. ai-security-scanner left it untouched because only a verified `podman machine rm` may remove managed runtime state. Confirm the distribution, then export, rename, or remove it manually in Windows and retry."
+        "managed_runtime_recovery:wsl_distribution_requires_manual_action: Windows still reports WSL distribution {distribution_name}, but ai-security-scanner could not prove that its registered storage belongs to this product. Nothing was removed. Follow Microsoft's official backup and removal process for that exact distribution, then retry."
     );
     if let Some(setup) = setup {
         setup.record_failure(
@@ -6104,6 +7599,404 @@ fn windows_wsl_inventory_command_with_directories(
         manifest_sha256: managed_command.manifest_sha256.clone(),
         machine_image_sha256: managed_command.machine_image_sha256.clone(),
     })
+}
+
+fn windows_wsl_recovery_distribution_name(recovery_id: Uuid) -> String {
+    format!("ai-security-scanner-recovery-{}", recovery_id.simple())
+}
+
+fn windows_wsl_provider_home_from_registration_path(
+    state_root: &Path,
+    registration_base_path: &Path,
+    machine_name: &str,
+) -> AppResult<PathBuf> {
+    let provider_root = state_root.join("provider-home");
+    let relative = registration_base_path
+        .strip_prefix(&provider_root)
+        .map_err(|_| {
+            AppError::NotAuthorized(
+                "Windows WSL registration is outside ai-security-scanner's private runtime area"
+                    .into(),
+            )
+        })?;
+    let components = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => Ok(value.to_os_string()),
+            _ => Err(AppError::NotAuthorized(
+                "Windows WSL registration contains an unsafe path component".into(),
+            )),
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let fixed = [
+        "data",
+        "containers",
+        "podman",
+        "machine",
+        "wsl",
+        PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY,
+    ];
+    let namespace = components.first().and_then(|value| value.to_str());
+    let has_expected_shape = components.len() == 8
+        && namespace.is_some_and(|value| {
+            value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+        && components[1..7]
+            .iter()
+            .zip(fixed)
+            .all(|(actual, expected)| {
+                actual
+                    .to_str()
+                    .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+            })
+        && components[7]
+            .to_str()
+            .is_some_and(|actual| actual.eq_ignore_ascii_case(machine_name));
+    if !has_expected_shape {
+        return Err(AppError::NotAuthorized(
+            "Windows WSL registration does not match a private scan-tool workspace".into(),
+        ));
+    }
+    Ok(provider_root.join(&components[0]))
+}
+
+#[cfg(windows)]
+fn verify_windows_wsl_product_storage_directory(
+    provider_home: &Path,
+    registration_base_path: &Path,
+) -> AppResult<()> {
+    use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let wsldist = registration_base_path.parent().ok_or_else(|| {
+        AppError::NotAuthorized("Windows WSL registration has no storage parent".into())
+    })?;
+    let expected_wsldist = provider_home
+        .join("data")
+        .join("containers")
+        .join("podman")
+        .join("machine")
+        .join("wsl")
+        .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY);
+    if wsldist != expected_wsldist {
+        return Err(AppError::NotAuthorized(
+            "Windows WSL registration storage changed during verification".into(),
+        ));
+    }
+    let storage = open_windows_real_directory_security_handle(wsldist).map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "Windows WSL storage could not be verified safely: {error}"
+        ))
+    })?;
+    let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+        .expect("Windows inheritance flags fit in an ACE header");
+    verify_windows_wsl_distribution_storage_dacl_with_ace_flags(&storage, inheritance).map_err(
+        |error| {
+            AppError::NotAuthorized(format!(
+                "Windows WSL storage permissions do not match ai-security-scanner: {error}"
+            ))
+        },
+    )?;
+    let distribution = open_windows_real_directory_security_handle(registration_base_path)
+        .map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "Windows WSL workspace could not be verified safely: {error}"
+            ))
+        })?;
+    let information = windows_file_information(&distribution)?;
+    if information.attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || information.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(AppError::NotAuthorized(
+            "Windows WSL workspace is not a real directory".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn verify_windows_wsl_product_storage_directory(
+    _provider_home: &Path,
+    _registration_base_path: &Path,
+) -> AppResult<()> {
+    Err(AppError::NotAvailable(
+        "Windows WSL storage verification is unavailable on this host".into(),
+    ))
+}
+
+#[cfg(windows)]
+fn windows_paths_refer_to_same_location(first: &Path, second: &Path) -> AppResult<bool> {
+    let first = open_windows_real_directory_security_handle(first)?;
+    let second = open_windows_real_directory_security_handle(second)?;
+    Ok(windows_file_information(&first)?.identity == windows_file_information(&second)?.identity)
+}
+
+#[cfg(not(windows))]
+fn windows_paths_refer_to_same_location(first: &Path, second: &Path) -> AppResult<bool> {
+    Ok(first == second)
+}
+
+#[cfg(windows)]
+fn verify_windows_wsl_quarantine_directory(install_directory: &Path) -> AppResult<()> {
+    use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let directory =
+        open_windows_real_directory_security_handle(install_directory).map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "Windows WSL recovery workspace could not be verified safely: {error}"
+            ))
+        })?;
+    let information = windows_file_information(&directory)?;
+    if information.attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || information.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(AppError::NotAuthorized(
+            "Windows WSL recovery workspace is not a real directory".into(),
+        ));
+    }
+    let inheritance = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+        .expect("Windows inheritance flags fit in an ACE header");
+    verify_windows_wsl_distribution_storage_dacl_with_ace_flags(&directory, inheritance).map_err(
+        |error| {
+            AppError::NotAuthorized(format!(
+                "Windows WSL recovery workspace permissions changed: {error}"
+            ))
+        },
+    )
+}
+
+#[cfg(not(windows))]
+fn verify_windows_wsl_quarantine_directory(_install_directory: &Path) -> AppResult<()> {
+    Err(AppError::NotAvailable(
+        "Windows WSL recovery storage verification is unavailable on this host".into(),
+    ))
+}
+
+fn verify_windows_wsl_quarantine_storage(install_directory: &Path) -> AppResult<()> {
+    verify_windows_wsl_quarantine_directory(install_directory)?;
+    #[cfg(windows)]
+    verify_windows_wsl_recovery_vhd(&install_directory.join("ext4.vhdx"))?;
+    #[cfg(not(windows))]
+    return Err(AppError::NotAvailable(
+        "Windows WSL recovery storage verification is unavailable on this host".into(),
+    ));
+    #[cfg(windows)]
+    Ok(())
+}
+
+fn verify_windows_wsl_recovery_vhd(path: &Path) -> AppResult<()> {
+    verify_windows_wsl_recovery_file(path, "managed Windows WSL recovery VHD")
+}
+
+fn verify_windows_wsl_recovery_file(path: &Path, label: &str) -> AppResult<()> {
+    verify_regular_file(path, label)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.len() == 0 {
+        return Err(AppError::NotAuthorized(format!("{label} is empty")));
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        };
+        let file = open_windows_managed_ssh_identity_file(path)?;
+        let information = windows_file_information(&file)?;
+        if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+            || information.number_of_links != 1
+            || information.size == 0
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "{label} must be one real, non-empty file"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+struct WindowsRegistryKey(windows_sys::Win32::System::Registry::HKEY);
+
+#[cfg(windows)]
+impl Drop for WindowsRegistryKey {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::System::Registry::RegCloseKey(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_registry_wide(value: &str) -> AppResult<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut encoded = OsStr::new(value).encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(AppError::NotAuthorized(
+            "Windows registry name contains a NUL code unit".into(),
+        ));
+    }
+    encoded.push(0);
+    Ok(encoded)
+}
+
+#[cfg(windows)]
+fn windows_registry_string(key: &WindowsRegistryKey, value_name: &str) -> AppResult<String> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{REG_SZ, RRF_RT_REG_SZ, RegGetValueW};
+
+    let value_name = windows_registry_wide(value_name)?;
+    let mut value_type = 0;
+    let mut size_bytes = 0_u32;
+    let status = unsafe {
+        RegGetValueW(
+            key.0,
+            std::ptr::null(),
+            value_name.as_ptr(),
+            RRF_RT_REG_SZ,
+            &raw mut value_type,
+            std::ptr::null_mut(),
+            &raw mut size_bytes,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    if value_type != REG_SZ
+        || size_bytes < 2
+        || size_bytes > MAX_WINDOWS_REGISTRY_STRING_BYTES
+        || size_bytes % 2 != 0
+    {
+        return Err(AppError::NotAuthorized(
+            "Windows WSL registry string has an invalid type or size".into(),
+        ));
+    }
+    let mut encoded = vec![0_u16; size_bytes as usize / 2];
+    let mut returned_bytes = size_bytes;
+    let status = unsafe {
+        RegGetValueW(
+            key.0,
+            std::ptr::null(),
+            value_name.as_ptr(),
+            RRF_RT_REG_SZ,
+            &raw mut value_type,
+            encoded.as_mut_ptr().cast(),
+            &raw mut returned_bytes,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    let returned_units = returned_bytes as usize / 2;
+    if returned_bytes != size_bytes
+        || returned_units == 0
+        || encoded[returned_units - 1] != 0
+        || encoded[..returned_units - 1].contains(&0)
+    {
+        return Err(AppError::NotAuthorized(
+            "Windows WSL registry string changed or was malformed".into(),
+        ));
+    }
+    String::from_utf16(&encoded[..returned_units - 1]).map_err(|_| {
+        AppError::NotAuthorized("Windows WSL registry string is not valid UTF-16".into())
+    })
+}
+
+#[cfg(windows)]
+fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS,
+    };
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, KEY_READ, RegEnumKeyExW, RegOpenKeyExW,
+    };
+
+    let lxss_path = windows_registry_wide("Software\\Microsoft\\Windows\\CurrentVersion\\Lxss")?;
+    let mut raw_root = std::ptr::null_mut();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            lxss_path.as_ptr(),
+            0,
+            KEY_READ,
+            &raw mut raw_root,
+        )
+    };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(Vec::new());
+    }
+    if status != ERROR_SUCCESS || raw_root.is_null() {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    let root = WindowsRegistryKey(raw_root);
+    let mut registrations = Vec::new();
+    for index in 0..=MAX_WSL_DISTRIBUTIONS {
+        if index == MAX_WSL_DISTRIBUTIONS {
+            return Err(AppError::NotAuthorized(format!(
+                "Windows reported more than {MAX_WSL_DISTRIBUTIONS} WSL registrations"
+            )));
+        }
+        let mut name = vec![0_u16; 256];
+        let mut name_length = u32::try_from(name.len()).expect("registry buffer fits u32");
+        let status = unsafe {
+            RegEnumKeyExW(
+                root.0,
+                index as u32,
+                name.as_mut_ptr(),
+                &raw mut name_length,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if status == ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        if status == ERROR_MORE_DATA {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL registry key name is oversized".into(),
+            ));
+        }
+        if status != ERROR_SUCCESS || name_length == 0 || name_length as usize >= name.len() {
+            return Err(io::Error::from_raw_os_error(status as i32).into());
+        }
+        let subkey_name = String::from_utf16(&name[..name_length as usize]).map_err(|_| {
+            AppError::NotAuthorized("Windows WSL registry key is not valid UTF-16".into())
+        })?;
+        let subkey_name_wide = windows_registry_wide(&subkey_name)?;
+        let mut raw_subkey = std::ptr::null_mut();
+        let status = unsafe {
+            RegOpenKeyExW(
+                root.0,
+                subkey_name_wide.as_ptr(),
+                0,
+                KEY_READ,
+                &raw mut raw_subkey,
+            )
+        };
+        if status != ERROR_SUCCESS || raw_subkey.is_null() {
+            return Err(io::Error::from_raw_os_error(status as i32).into());
+        }
+        let subkey = WindowsRegistryKey(raw_subkey);
+        let distribution_name = windows_registry_string(&subkey, "DistributionName")?;
+        let base_path = PathBuf::from(windows_registry_string(&subkey, "BasePath")?);
+        registrations.push(WindowsWslRegistration {
+            distribution_name,
+            base_path,
+        });
+    }
+    Ok(registrations)
+}
+
+#[cfg(not(windows))]
+fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
+    Err(AppError::NotAvailable(
+        "Windows WSL registrations are unavailable on this host".into(),
+    ))
 }
 
 fn parse_windows_wsl_distribution_inventory(bytes: &[u8]) -> AppResult<Vec<String>> {
@@ -9760,17 +11653,50 @@ mod tests {
         assert!(capture.worker.is_none());
     }
 
+    #[cfg(windows)]
+    enum FakeCommandSideEffect {
+        CreateManagedWslVhd { path: PathBuf, bytes: Vec<u8> },
+    }
+
+    struct FakeCommandResponse {
+        output: ManagedCommandOutput,
+        #[cfg(windows)]
+        side_effect: Option<FakeCommandSideEffect>,
+    }
+
     #[derive(Default)]
     struct FakeCommands {
         calls: Mutex<Vec<Vec<String>>>,
         commands: Mutex<Vec<ManagedRuntimeCommand>>,
         timeouts: Mutex<Vec<Duration>>,
-        outputs: Mutex<VecDeque<ManagedCommandOutput>>,
+        outputs: Mutex<VecDeque<FakeCommandResponse>>,
     }
 
     impl FakeCommands {
         fn push(&self, output: ManagedCommandOutput) {
-            self.outputs.lock().expect("outputs").push_back(output);
+            self.outputs
+                .lock()
+                .expect("outputs")
+                .push_back(FakeCommandResponse {
+                    output,
+                    #[cfg(windows)]
+                    side_effect: None,
+                });
+        }
+
+        #[cfg(windows)]
+        fn push_with_side_effect(
+            &self,
+            output: ManagedCommandOutput,
+            side_effect: FakeCommandSideEffect,
+        ) {
+            self.outputs
+                .lock()
+                .expect("outputs")
+                .push_back(FakeCommandResponse {
+                    output,
+                    side_effect: Some(side_effect),
+                });
         }
 
         fn calls(&self) -> Vec<Vec<String>> {
@@ -9804,11 +11730,52 @@ mod tests {
                 .expect("commands")
                 .push(command.clone());
             self.timeouts.lock().expect("timeouts").push(timeout);
-            self.outputs
+            let response = self
+                .outputs
                 .lock()
                 .expect("outputs")
                 .pop_front()
-                .ok_or_else(|| io::Error::other("no fake output"))
+                .ok_or_else(|| io::Error::other("no fake output"))?;
+            #[cfg(windows)]
+            if let Some(effect) = response.side_effect {
+                match effect {
+                    FakeCommandSideEffect::CreateManagedWslVhd { path, bytes } => {
+                        let parent = path.parent().ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "fake VHD has no parent")
+                        })?;
+                        ensure_managed_wsl_distribution_storage_directory(parent)?;
+                        fs::write(path, bytes)?;
+                    }
+                }
+            }
+            Ok(response.output)
+        }
+    }
+
+    #[cfg(windows)]
+    struct FixedWindowsWslRegistrations(Vec<WindowsWslRegistration>);
+
+    #[cfg(windows)]
+    impl WindowsWslRegistrationReader for FixedWindowsWslRegistrations {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[cfg(windows)]
+    struct SequencedWindowsWslRegistrations(Mutex<VecDeque<Vec<WindowsWslRegistration>>>);
+
+    #[cfg(windows)]
+    impl WindowsWslRegistrationReader for SequencedWindowsWslRegistrations {
+        fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
+            let mut snapshots = self.0.lock().expect("WSL registration snapshots");
+            if snapshots.len() > 1 {
+                Ok(snapshots.pop_front().expect("one WSL snapshot"))
+            } else {
+                snapshots.front().cloned().ok_or_else(|| {
+                    AppError::Internal("no fake Windows WSL registration snapshot".into())
+                })
+            }
         }
     }
 
@@ -10881,6 +12848,73 @@ mod tests {
     }
 
     #[test]
+    fn windows_wsl_registration_path_requires_the_exact_product_private_shape() {
+        let root =
+            PathBuf::from("C:/Users/alice/AppData/Local/ai-security-scanner/managed-runtime");
+        let machine = "assm1-win-x64-0123456789ab";
+        let provider = root.join("provider-home").join("0123456789abcdef");
+        let exact = provider
+            .join("data/containers/podman/machine/wsl/wsldist")
+            .join(machine);
+        assert_eq!(
+            windows_wsl_provider_home_from_registration_path(&root, &exact, machine).unwrap(),
+            provider
+        );
+
+        for invalid in [
+            root.join("provider-home/not-a-digest/data/containers/podman/machine/wsl/wsldist")
+                .join(machine),
+            root.join("provider-home/0123456789abcdef/data/containers/podman/machine/wsl/wsldist")
+                .join("podman-user-owned"),
+            root.join("provider-home/0123456789abcdef/data/containers/podman/machine/wsl/wsldist")
+                .join(machine)
+                .join("nested"),
+            PathBuf::from("C:/Users/alice/unrelated").join(machine),
+        ] {
+            assert!(
+                windows_wsl_provider_home_from_registration_path(&root, &invalid, machine).is_err(),
+                "accepted unsafe registration path {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_phase_is_serialized_and_cannot_be_cancelled_mid_handoff() {
+        assert_eq!(
+            serde_json::to_string(&ManagedRuntimeSetupPhase::Recovery).unwrap(),
+            "\"recovery\""
+        );
+        let controller = ManagedRuntimeSetupController::default();
+        controller.begin().unwrap();
+        controller
+            .set_phase(ManagedRuntimeSetupPhase::Recovery, "saving a recovery copy")
+            .unwrap();
+        let status = controller.request_cancel().unwrap();
+        assert!(status.active);
+        assert!(!status.can_cancel);
+        assert!(!status.cancel_requested);
+        assert!(!controller.cancel_requested.load(Ordering::Acquire));
+        assert!(status.detail.contains("safe recovery copy"));
+    }
+
+    #[test]
+    fn recovery_backup_is_nonempty_bounded_and_content_addressed() {
+        let directory = TempDir::new().unwrap();
+        let backup = directory.path().join("workspace-recovery.vhdx");
+        fs::write(&backup, b"fixture recovery VHD").unwrap();
+        assert_eq!(
+            hash_bounded_regular_file(&backup, 1024, "fixture recovery").unwrap(),
+            (
+                b"fixture recovery VHD".len() as u64,
+                sha256_bytes(b"fixture recovery VHD")
+            )
+        );
+        assert!(hash_bounded_regular_file(&backup, 4, "fixture recovery").is_err());
+        fs::write(&backup, b"").unwrap();
+        assert!(hash_bounded_regular_file(&backup, 1024, "fixture recovery").is_err());
+    }
+
+    #[test]
     fn windows_console_diagnostics_decode_utf16le_and_reject_mixed_garbage() {
         let localized =
             "Windows 子系統尚未就緒。\r\nError code: Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED\r\n";
@@ -11015,7 +13049,11 @@ mod tests {
             Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
         );
         assert!(status.detail.contains(distribution));
-        assert!(status.detail.contains("export, rename, or remove"));
+        assert!(
+            status
+                .detail
+                .contains("official backup and removal process")
+        );
         assert!(controller.begin_prerequisite_repair().is_err());
         assert!(
             windows_wsl_repair_parameters(
@@ -11886,7 +13924,11 @@ mod tests {
                 .to_string()
                 .contains("wsl_distribution_requires_manual_action")
         );
-        assert!(error.to_string().contains("export, rename, or remove"));
+        assert!(
+            error
+                .to_string()
+                .contains("official backup and removal process")
+        );
         assert!(fixture.manager.install_directory().exists());
         assert!(fixture.manager.provider_home().exists());
         assert!(identity.is_file());
@@ -12185,7 +14227,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn start_never_removes_an_orphaned_wsl_distribution_even_with_stale_intent() {
+    fn unproven_orphan_preserves_the_distribution_and_durable_init_intent() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -12235,13 +14277,13 @@ mod tests {
         assert!(private_entry_exists(&orphaned_vhd).unwrap());
         assert!(fixture.manager.provider_home().is_dir());
         assert!(
-            !fixture
+            fixture
                 .manager
                 .windows_wsl_ownership_proof_path(
                     &expected_machine,
                     WindowsWslOwnershipBasis::InitIntent,
                 )
-                .exists()
+                .is_file()
         );
 
         let calls = fixture.commands.calls();
@@ -12255,7 +14297,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn start_retry_consumes_stale_intent_and_repeats_only_read_only_orphan_check() {
+    fn unproven_orphan_retry_keeps_the_durable_intent_and_remains_read_only() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -12300,13 +14342,13 @@ mod tests {
                 .contains("wsl_distribution_requires_manual_action")
         );
         assert!(
-            !fixture
+            fixture
                 .manager
                 .windows_wsl_ownership_proof_path(
                     &machine_name(target),
                     WindowsWslOwnershipBasis::InitIntent,
                 )
-                .exists()
+                .is_file()
         );
 
         push_windows_wsl_ready(&fixture.commands);
@@ -12388,6 +14430,217 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn verified_recovery_checkpoint_replaces_then_cleans_the_quarantine_workspace() {
+        let mut fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        fixture
+            .manager
+            .runtime_command(target)
+            .expect("private provider home");
+        let machine = machine_name(target);
+        let distribution = format!("podman-{machine}");
+        let source_vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        fs::create_dir(source_vhd.parent().expect("source VHD parent"))
+            .expect("create source distribution directory");
+        fs::write(&source_vhd, b"old scanner workspace").expect("write source VHD");
+        let registration_base_path = source_vhd
+            .parent()
+            .expect("source distribution directory")
+            .canonicalize()
+            .expect("canonical source distribution");
+        let recovery_id = Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap();
+        let quarantine = windows_wsl_recovery_distribution_name(recovery_id);
+        let attempt_directory = fixture
+            .manager
+            .windows_wsl_recovery_root()
+            .join(recovery_id.simple().to_string());
+        let quarantine_install_directory = fixture
+            .manager
+            .windows_wsl_recovery_workspace_root()
+            .join(recovery_id.simple().to_string());
+        ensure_managed_private_directory(&fixture.manager.windows_wsl_recovery_root()).unwrap();
+        ensure_managed_private_directory(&attempt_directory).unwrap();
+        ensure_managed_wsl_distribution_storage_directory(
+            &fixture.manager.windows_wsl_recovery_workspace_root(),
+        )
+        .unwrap();
+        ensure_managed_wsl_distribution_storage_directory(&quarantine_install_directory).unwrap();
+        let quarantine_vhd = quarantine_install_directory.join("ext4.vhdx");
+        fs::write(&quarantine_vhd, b"imported recovery workspace").expect("write quarantine VHD");
+        let recovery_archive = attempt_directory.join("workspace-recovery.tar");
+        fs::write(&recovery_archive, b"durable recovery archive").expect("write recovery archive");
+        File::open(&recovery_archive).unwrap().sync_all().unwrap();
+        let original_registration = WindowsWslRegistration {
+            distribution_name: distribution.clone(),
+            base_path: registration_base_path.clone(),
+        };
+        let quarantine_registration = WindowsWslRegistration {
+            distribution_name: quarantine.clone(),
+            base_path: quarantine_install_directory.clone(),
+        };
+        let original_and_quarantine = vec![
+            original_registration.clone(),
+            quarantine_registration.clone(),
+        ];
+        let quarantine_only = vec![quarantine_registration.clone()];
+        let replacement_and_quarantine = original_and_quarantine.clone();
+        let replacement_only = vec![original_registration];
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+            VecDeque::from(vec![
+                original_and_quarantine.clone(),
+                original_and_quarantine.clone(),
+                original_and_quarantine.clone(),
+                original_and_quarantine,
+                quarantine_only.clone(),
+                quarantine_only,
+                replacement_and_quarantine.clone(),
+                replacement_and_quarantine.clone(),
+                replacement_and_quarantine,
+                replacement_only,
+            ]),
+        )));
+        let intent = WindowsWslRecoveryIntent {
+            schema_version: WINDOWS_WSL_RECOVERY_INTENT_SCHEMA.into(),
+            recovery_id: recovery_id.to_string(),
+            manifest_sha256: fixture.manager.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            machine_name: machine.clone(),
+            distribution_name: distribution.clone(),
+            quarantine_distribution_name: quarantine.clone(),
+            registration_base_path,
+            provider_home: fixture.manager.provider_home(),
+            attempt_directory: attempt_directory.clone(),
+            quarantine_install_directory: quarantine_install_directory.clone(),
+            staging_archive: attempt_directory.join("workspace.exporting.tar"),
+            recovery_archive: recovery_archive.clone(),
+        };
+        fixture
+            .manager
+            .validate_windows_wsl_recovery_intent(&machine, &intent)
+            .expect("valid recovery intent");
+        let intent_bytes = serde_json::to_vec(&intent).unwrap();
+        write_private_atomic(&attempt_directory.join("intent.json"), &intent_bytes).unwrap();
+        write_private_atomic(
+            &fixture.manager.windows_wsl_recovery_pending_path(&machine),
+            &intent_bytes,
+        )
+        .unwrap();
+        let proof = WindowsWslRecoveryBackupProof {
+            schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
+            recovery_id: recovery_id.to_string(),
+            distribution_name: distribution.clone(),
+            quarantine_distribution_name: quarantine.clone(),
+            recovery_archive: recovery_archive.clone(),
+            size_bytes: b"durable recovery archive".len() as u64,
+            sha256: sha256_bytes(b"durable recovery archive"),
+        };
+        write_private_atomic(
+            &attempt_directory.join("backup.json"),
+            &serde_json::to_vec(&proof).unwrap(),
+        )
+        .unwrap();
+        let import_proof = WindowsWslRecoveryImportProof {
+            schema_version: WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA.into(),
+            recovery_id: recovery_id.to_string(),
+            quarantine_distribution_name: quarantine.clone(),
+            quarantine_install_directory: quarantine_install_directory.clone(),
+            recovery_archive: recovery_archive.clone(),
+            archive_size_bytes: proof.size_bytes,
+            archive_sha256: proof.sha256.clone(),
+        };
+        write_private_atomic(
+            &attempt_directory.join("import.json"),
+            &serde_json::to_vec(&import_proof).unwrap(),
+        )
+        .unwrap();
+
+        push_windows_wsl_ready(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture.commands.push(success(utf16le(&format!(
+            "Ubuntu\r\n{distribution}\r\n{quarantine}\r\n"
+        ))));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(utf16le(&format!(
+            "Ubuntu\r\n{distribution}\r\n{quarantine}\r\n"
+        ))));
+        fixture.commands.push(success(Vec::new()));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("Ubuntu\r\n{quarantine}\r\n"))));
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: source_vhd.clone(),
+                bytes: b"replacement scanner workspace".to_vec(),
+            },
+        );
+        fixture
+            .commands
+            .push(success(machine_json(&fixture.manager, false)));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2".to_vec()));
+        fixture.commands.push(success(utf16le(&format!(
+            "Ubuntu\r\n{distribution}\r\n{quarantine}\r\n"
+        ))));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(Vec::new()));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("Ubuntu\r\n{distribution}\r\n"))));
+        fixture.commands.push(success(b"5.8.2".to_vec()));
+
+        let setup = ManagedRuntimeSetupController::default();
+        let status = fixture.manager.setup(&setup).expect("recover and start");
+
+        assert!(status.available);
+        assert_eq!(
+            setup.status().unwrap().phase,
+            ManagedRuntimeSetupPhase::Completed
+        );
+        assert!(recovery_archive.is_file());
+        assert!(attempt_directory.join("intent.json").is_file());
+        assert!(attempt_directory.join("backup.json").is_file());
+        assert!(!quarantine_install_directory.exists());
+        assert!(
+            !fixture
+                .manager
+                .windows_wsl_recovery_pending_path(&machine)
+                .exists()
+        );
+        let calls = fixture.commands.calls();
+        let original_unregister = calls
+            .iter()
+            .position(|arguments| arguments == &["--unregister", distribution.as_str()])
+            .expect("one exact original unregister");
+        let quarantine_unregister = calls
+            .iter()
+            .position(|arguments| arguments == &["--unregister", quarantine.as_str()])
+            .expect("one exact quarantine unregister");
+        let server_ready = calls
+            .iter()
+            .position(|arguments| arguments == &["version", "--format", "{{.Server.Version}}"])
+            .expect("server verification");
+        assert!(original_unregister < server_ready);
+        assert!(server_ready < quarantine_unregister);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|arguments| arguments
+                    .first()
+                    .is_some_and(|value| value == "--unregister"))
+                .count(),
+            2
+        );
+        assert!(calls.iter().all(|arguments| {
+            arguments
+                .first()
+                .is_none_or(|argument| argument != "--export" && argument != "--import")
+        }));
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn init_intent_without_the_release_private_vhd_never_authorizes_unregister() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
@@ -12427,7 +14680,7 @@ mod tests {
                 .to_string()
                 .contains("wsl_distribution_requires_manual_action")
         );
-        assert!(!intent_path.exists());
+        assert!(intent_path.is_file());
         assert!(fixture.commands.calls().iter().all(|arguments| {
             !arguments
                 .iter()
@@ -12560,9 +14813,49 @@ mod tests {
     }
 
     #[test]
-    fn managed_runtime_source_contains_no_direct_wsl_unregister_command() {
+    fn direct_wsl_unregister_is_whitelisted_only_for_verified_backup_recovery() {
         let forbidden = ["--", "unregister"].concat();
-        assert!(!include_str!("managed_runtime.rs").contains(&forbidden));
+        let source = include_str!("managed_runtime.rs");
+        let production = source
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("production source");
+        assert_eq!(production.matches(&forbidden).count(), 4);
+        let recovery = &production[production
+            .find("fn recover_windows_wsl_distribution_locked")
+            .expect("recovery function")
+            ..production
+                .find("fn prepare_windows_wsl_quarantine_import_directory")
+                .expect("recovery function end")];
+        assert_eq!(recovery.matches(&forbidden).count(), 2);
+        assert!(
+            recovery
+                .matches("verify_windows_wsl_recovery_archive")
+                .count()
+                >= 2
+        );
+        assert!(recovery.contains("verify_windows_wsl_quarantine_registration"));
+        assert!(recovery.contains("verify_pending_windows_wsl_registration"));
+        let incomplete_import_cleanup = &production[production
+            .find("fn remove_uncheckpointed_windows_wsl_quarantine_locked")
+            .expect("incomplete import cleanup")
+            ..production
+                .find("fn verify_windows_wsl_quarantine_registration")
+                .expect("incomplete import cleanup end")];
+        assert_eq!(incomplete_import_cleanup.matches(&forbidden).count(), 1);
+        assert!(
+            incomplete_import_cleanup.contains("verify_windows_wsl_quarantine_registration_path")
+        );
+        let completion = &production[production
+            .find("fn complete_windows_wsl_recovery_locked")
+            .expect("recovery completion function")
+            ..production
+                .find("fn windows_wsl_ownership_proof_path")
+                .expect("recovery completion end")];
+        assert_eq!(completion.matches(&forbidden).count(), 1);
+        assert!(completion.contains("verify_windows_wsl_recovery_archive"));
+        assert!(completion.contains("verify_windows_wsl_quarantine_registration"));
+        assert!(!production.contains("--import-in-place"));
     }
 
     #[test]

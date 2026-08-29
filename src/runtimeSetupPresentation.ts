@@ -26,6 +26,7 @@ export const resolveRuntimeSetupPresentation = ({
     || requestPending;
   const failed = !active && status?.phase === "failed";
   const cancelled = !active && status?.phase === "cancelled";
+  const recovering = active && status?.phase === "recovery";
   const packagedComponentBlocker = blocker === "no_runnable_authorized_targets"
     || blocker === "egress_gateway_unavailable"
     || blocker === "engine_execution_contract_invalid";
@@ -37,6 +38,7 @@ export const resolveRuntimeSetupPresentation = ({
     showPackagedComponentIssue,
     setupStarting: setupStarting && !showPackagedComponentIssue,
     setupActive: active && !showPackagedComponentIssue,
+    setupRecovering: recovering && !showPackagedComponentIssue,
     setupFailed: failed && !showPackagedComponentIssue,
     setupCancelled: cancelled && !showPackagedComponentIssue,
   };

@@ -40,18 +40,21 @@ test("missing WSL gets one bilingual Microsoft setup path and one safe recheck",
   assert.match(source, /onClick=\{onSetup\}/u);
 });
 
-test("a surviving WSL distribution gets visible bilingual manual recovery instead of a repair loop", () => {
+test("an unproven WSL distribution keeps a bilingual official backup and removal fallback", () => {
   for (const phrase of [
     "An old scan-tool workspace needs your decision",
+    "could not verify that it owns this workspace",
     "Open Technical details below and note the exact distribution name.",
-    "export it first",
-    "rename or remove only that exact distribution",
+    "Microsoft’s official backup and removal process",
+    "remove only that distribution",
     "請確認一個舊的掃描工具工作區",
+    "無法確認這個工作區屬於本產品",
     "記下完整的發行版名稱",
-    "請先匯出備份",
-    "再只針對這個發行版重新命名或移除",
+    "Microsoft 官方流程備份並移除",
+    "再只移除這個發行版",
   ]) assert.ok(source.includes(phrase), phrase);
 
+  assert.doesNotMatch(source, /\brename\b|重新命名/iu);
   assert.match(source, /resolve_wsl_distribution_manually/u);
   assert.match(source, /MICROSOFT_WSL_DISTRIBUTION_HELP/u);
   assert.match(source, /basic-commands#export-a-distribution/u);
@@ -59,6 +62,30 @@ test("a surviving WSL distribution gets visible bilingual manual recovery instea
   assert.match(shellSource, /needsManualWslRecovery[\s\S]*onOpenRuntimeSetup/u);
   assert.match(shellSource, /"runtime\.setup\.reviewManualRecovery"/u);
   assert.match(appSource, /onOpenRuntimeSetup=\{\(\) => \{[\s\S]*setRuntimeSetupFocusKey[\s\S]*navigate\("start"\)/u);
+});
+
+test("active recovery explains automatic preservation without showing the manual Terminal fallback", () => {
+  const state = resolveRuntimeSetupPresentation({
+    mode: "native",
+    runtimeAvailable: false,
+    status: { active: true, phase: "recovery" },
+  });
+
+  assert.equal(state.setupActive, true);
+  assert.equal(state.setupRecovering, true);
+  assert.equal(state.setupFailed, false);
+  for (const phrase of [
+    "Finishing a previous setup",
+    "We found scan-tool files left by an earlier setup. ai-security-scanner is saving a recovery copy, replacing that workspace, and continuing automatically.",
+    "Safely recovering the previous workspace",
+    "正在完成先前未完成的設定",
+    "程式找到上次設定留下的掃描工具工作區，會先保留一份復原備份，再換成乾淨的工作區並自動繼續。",
+    "正在安全復原先前的工作區",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.match(source, /setupRecovering[\s\S]*text\.recoveryTitle/u);
+  assert.match(source, /setupRecovering[\s\S]*text\.recoveryDescription/u);
+  assert.match(source, /\{setupFailed && nextAction && \([\s\S]*runtime-assistant__recovery/u);
 });
 
 test("a generic setup failure offers a retry without inventing an external action", () => {
