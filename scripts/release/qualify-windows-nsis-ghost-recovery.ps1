@@ -22,6 +22,8 @@ $oldVersionDirectoryName = "podman-machine-5.8.2-$priorProviderNamespace"
 $maximumDownloadBytes = 64 * 1024 * 1024
 $maximumSnapshotFiles = 4096
 $maximumSnapshotBytes = 512 * 1024 * 1024
+$maximumWindowsPathUtf16CodeUnits = 32760
+$maximumVerbatimWindowsPathUtf16CodeUnits = 32766
 
 if ($CurrentVersion -cne "0.1.8") {
   throw "The bounded v0.1.7 ghost migration qualification applies only to candidate 0.1.8."
@@ -37,9 +39,12 @@ using Microsoft.Win32.SafeHandles;
 
 public static class GhostQualificationNativeMethods {
     public const uint GENERIC_READ = 0x80000000;
+    public const uint FILE_READ_ATTRIBUTES = 0x00000080;
     public const uint FILE_SHARE_READ = 0x00000001;
+    public const uint FILE_SHARE_WRITE = 0x00000002;
     public const uint OPEN_EXISTING = 3;
     public const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+    public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     public static extern uint GetSystemWindowsDirectoryW(StringBuilder buffer, uint size);
@@ -109,16 +114,48 @@ function Get-OpenFileIdentity([IO.FileStream]$Stream) {
   }
 }
 
-function Get-VerbatimWindowsPath([string]$Path, [string]$Label) {
-  if ([String]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathFullyQualified($Path)) {
-    throw "$Label is not an absolute Windows path."
+function Get-OpenDirectoryIdentity([Microsoft.Win32.SafeHandles.SafeFileHandle]$Handle) {
+  if ($null -eq $Handle -or $Handle.IsInvalid -or $Handle.IsClosed) {
+    throw "Qualification directory handle is not open."
+  }
+  $information = [GhostQualificationByHandleFileInformation]::new()
+  if (-not [GhostQualificationNativeMethods]::GetFileInformationByHandle($Handle, [ref]$information)) {
+    throw "Could not inspect the exact qualification directory handle."
+  }
+  return [ordered]@{
+    attributes = [uint32]$information.FileAttributes
+    volume = [uint32]$information.VolumeSerialNumber
+    index = (([uint64]$information.FileIndexHigh -shl 32) -bor [uint64]$information.FileIndexLow)
+  }
+}
+
+function Get-BoundedAbsoluteWindowsPath([string]$Path, [string]$Label) {
+  if ([String]::IsNullOrWhiteSpace($Path) -or $Path.IndexOf([char]0) -ge 0) {
+    throw "$Label is empty or contains a NUL code unit."
+  }
+  if ($Path.Length -gt $maximumWindowsPathUtf16CodeUnits -or
+      -not [IO.Path]::IsPathFullyQualified($Path)) {
+    throw "$Label is not one bounded absolute Windows path."
   }
   $full = [IO.Path]::GetFullPath($Path)
-  if ($full.StartsWith("\\?\", [StringComparison]::Ordinal)) { return $full }
-  if ($full.StartsWith("\\", [StringComparison]::Ordinal)) {
-    return "\\?\UNC\" + $full.Substring(2)
+  if ($full.IndexOf([char]0) -ge 0 -or $full.Length -gt $maximumWindowsPathUtf16CodeUnits) {
+    throw "$Label expanded beyond the Windows path bound."
   }
-  return "\\?\" + $full
+  return $full
+}
+
+function Get-VerbatimWindowsPath([string]$Path, [string]$Label) {
+  $full = Get-BoundedAbsoluteWindowsPath $Path $Label
+  if ($full.StartsWith("\\?\", [StringComparison]::Ordinal)) { return $full }
+  $verbatim = if ($full.StartsWith("\\", [StringComparison]::Ordinal)) {
+    "\\?\UNC\" + $full.Substring(2)
+  } else {
+    "\\?\" + $full
+  }
+  if ($verbatim.Length -gt $maximumVerbatimWindowsPathUtf16CodeUnits) {
+    throw "$Label exceeds the Windows verbatim path bound."
+  }
+  return $verbatim
 }
 
 function Open-NoFollowSingleLinkFile(
@@ -202,6 +239,70 @@ function Open-NoFollowWindowsSystemFile(
   } catch {
     $stream.Dispose()
     throw
+  }
+}
+
+function Open-NoFollowRealDirectory([string]$Path, [string]$Label) {
+  $verbatimPath = Get-VerbatimWindowsPath $Path $Label
+  $handle = [GhostQualificationNativeMethods]::CreateFileW(
+    $verbatimPath,
+    [GhostQualificationNativeMethods]::FILE_READ_ATTRIBUTES,
+    ([GhostQualificationNativeMethods]::FILE_SHARE_READ -bor [GhostQualificationNativeMethods]::FILE_SHARE_WRITE),
+    [IntPtr]::Zero,
+    [GhostQualificationNativeMethods]::OPEN_EXISTING,
+    ([GhostQualificationNativeMethods]::FILE_FLAG_BACKUP_SEMANTICS -bor [GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT),
+    [IntPtr]::Zero
+  )
+  if ($null -eq $handle -or $handle.IsInvalid) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($null -ne $handle) { $handle.Dispose() }
+    throw [ComponentModel.Win32Exception]::new($errorCode, "$Label could not be opened without following reparse points")
+  }
+  try {
+    $identity = Get-OpenDirectoryIdentity $handle
+    if (($identity.attributes -band [uint32][IO.FileAttributes]::Directory) -eq 0 -or
+        ($identity.attributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "$Label is not one no-follow real directory."
+    }
+    return ,$handle
+  } catch {
+    $handle.Dispose()
+    throw
+  }
+}
+
+function Assert-SameNoFollowDirectoryIdentity(
+  [string]$ActualPath,
+  [string]$ExpectedPath,
+  [string]$Label
+) {
+  $actualHandle = Open-NoFollowRealDirectory $ActualPath "$Label reported directory"
+  try {
+    $expectedHandle = Open-NoFollowRealDirectory $ExpectedPath "$Label expected directory"
+    try {
+      # Both restrictive no-follow handles stay open for the complete comparison.
+      # Path spelling (including Windows' \\?\ form) is never treated as ownership.
+      $actualBefore = Get-OpenDirectoryIdentity $actualHandle
+      $expectedBefore = Get-OpenDirectoryIdentity $expectedHandle
+      if ($actualBefore.volume -ne $expectedBefore.volume -or
+          $actualBefore.index -ne $expectedBefore.index) {
+        throw "$Label does not refer to the exact same directory object."
+      }
+      $actualAfter = Get-OpenDirectoryIdentity $actualHandle
+      $expectedAfter = Get-OpenDirectoryIdentity $expectedHandle
+      if ($actualBefore.attributes -ne $actualAfter.attributes -or
+          $actualBefore.volume -ne $actualAfter.volume -or
+          $actualBefore.index -ne $actualAfter.index -or
+          $expectedBefore.attributes -ne $expectedAfter.attributes -or
+          $expectedBefore.volume -ne $expectedAfter.volume -or
+          $expectedBefore.index -ne $expectedAfter.index) {
+        throw "$Label directory identity changed while both proof handles were held."
+      }
+    } finally {
+      $expectedHandle.Dispose()
+    }
+  } finally {
+    $actualHandle.Dispose()
   }
 }
 
@@ -486,7 +587,7 @@ function Invoke-ExactProcess(
 
 function Invoke-CliJson([string]$Cli, [string[]]$Arguments, [int]$TimeoutMilliseconds, [string]$Label) {
   $result = Invoke-ExactProcess $Cli $Arguments $TimeoutMilliseconds $Label $true
-  try { return $result.stdout | ConvertFrom-Json }
+  try { return $result.stdout | ConvertFrom-Json -DateKind String }
   catch { throw "$Label did not emit one valid JSON document." }
 }
 
@@ -628,15 +729,64 @@ function Get-ExactWslRegistration([string]$Name, [string]$ExpectedBasePath) {
     [String]::Equals($_.Name, $Name, [StringComparison]::Ordinal)
   })
   if ($matches.Count -ne 1) { throw "Expected one exact WSL registration for $Name, found $($matches.Count)." }
-  if (-not [IO.Path]::IsPathFullyQualified($matches[0].BasePath)) {
-    throw "Exact WSL registration has no absolute BasePath."
-  }
-  $actual = Resolve-RealDirectory $matches[0].BasePath "Registered WSL BasePath"
-  $expected = Resolve-RealDirectory $ExpectedBasePath "Expected managed WSL BasePath"
-  if (-not [String]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Exact WSL registration is not bound to the expected managed provider."
-  }
+  $registeredBasePath = Get-BoundedAbsoluteWindowsPath $matches[0].BasePath (
+    "Exact WSL registration BasePath"
+  )
+  $boundedExpectedBasePath = Get-BoundedAbsoluteWindowsPath $ExpectedBasePath (
+    "Expected managed WSL BasePath"
+  )
+  Assert-SameNoFollowDirectoryIdentity $registeredBasePath $boundedExpectedBasePath (
+    "Exact WSL registration for $Name"
+  )
   return $matches[0]
+}
+
+function Assert-NoFollowDirectoryIdentityRegression([string]$Parent) {
+  $fixtureName = "directory-identity-regression"
+  $fixtureRoot = Assert-ExactChildPath $Parent (Join-Path $Parent $fixtureName) $fixtureName (
+    "Directory identity regression fixture"
+  )
+  if (Test-Path -LiteralPath $fixtureRoot) {
+    throw "Directory identity regression fixture already exists."
+  }
+  New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
+  try {
+    $sameDirectory = Assert-ExactChildPath $fixtureRoot (
+      Join-Path $fixtureRoot "same"
+    ) "same" "Same-directory identity fixture"
+    $differentDirectory = Assert-ExactChildPath $fixtureRoot (
+      Join-Path $fixtureRoot "different"
+    ) "different" "Different-directory identity fixture"
+    New-Item -ItemType Directory -Path $sameDirectory | Out-Null
+    New-Item -ItemType Directory -Path $differentDirectory | Out-Null
+
+    $extendedSameDirectory = Get-VerbatimWindowsPath $sameDirectory (
+      "Extended-prefix same-directory identity fixture"
+    )
+    if ([String]::Equals($sameDirectory, $extendedSameDirectory, [StringComparison]::Ordinal)) {
+      throw "Directory identity regression did not exercise two Windows path spellings."
+    }
+    Assert-SameNoFollowDirectoryIdentity $sameDirectory $extendedSameDirectory (
+      "Same-directory extended-prefix regression"
+    )
+
+    $differentRejected = $false
+    try {
+      Assert-SameNoFollowDirectoryIdentity $sameDirectory $differentDirectory (
+        "Different-directory regression"
+      )
+    } catch {
+      if ($_.Exception.Message -cne (
+          "Different-directory regression does not refer to the exact same directory object."
+        )) { throw }
+      $differentRejected = $true
+    }
+    if (-not $differentRejected) {
+      throw "Directory identity comparison accepted two different directory objects."
+    }
+  } finally {
+    Remove-ExactTree $fixtureRoot $Parent $fixtureName "Directory identity regression fixture"
+  }
 }
 
 function Get-PreservedDataSnapshot([string]$Root) {
@@ -712,7 +862,7 @@ function Read-BoundedJsonFile(
 ) {
   $record = Read-BoundedUtf8File $Path $Label $MaximumBytes
   try {
-    return $record.Text | ConvertFrom-Json
+    return $record.Text | ConvertFrom-Json -DateKind String
   } catch {
     throw "$Label is not one stable bounded UTF-8 JSON document: $($_.Exception.Message)"
   }
@@ -724,7 +874,12 @@ function Convert-JsonTextToCompactUtf8Bytes(
 ) {
   $document = [Text.Json.JsonDocument]::Parse($Text)
   $memory = [IO.MemoryStream]::new()
-  $writer = [Text.Json.Utf8JsonWriter]::new($memory)
+  $writerOptions = [Text.Json.JsonWriterOptions]::new()
+  # This output is hashed, not embedded in HTML. Rust serde_json leaves the
+  # standard Base64 `+` byte literal, while the default .NET encoder rewrites
+  # it as `\u002B` and would therefore compute a different digest.
+  $writerOptions.Encoder = [Text.Encodings.Web.JavaScriptEncoder]::UnsafeRelaxedJsonEscaping
+  $writer = [Text.Json.Utf8JsonWriter]::new($memory, $writerOptions)
   try {
     $element = if ([String]::IsNullOrEmpty($PropertyName)) {
       $document.RootElement
@@ -741,6 +896,18 @@ function Convert-JsonTextToCompactUtf8Bytes(
   }
   return ,$bytes
 }
+
+function Assert-SerdeCompatibleJsonCompaction {
+  $fixture = '{"public_key_base64":"A\u002BB\/=="}'
+  $expected = '{"public_key_base64":"A+B/=="}'
+  [byte[]]$fixtureBytes = Convert-JsonTextToCompactUtf8Bytes $fixture
+  $observed = [Text.Encoding]::UTF8.GetString($fixtureBytes)
+  if ($observed -cne $expected) {
+    throw "JSON compaction is not byte-compatible with the Rust signing-identity digest contract."
+  }
+}
+
+Assert-SerdeCompatibleJsonCompaction
 
 function Get-LowerSha256Bytes([byte[]]$Bytes) {
   return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
@@ -824,6 +991,7 @@ Assert-RealDirectory $runnerTemp "RUNNER_TEMP" | Out-Null
 $workRoot = Assert-ExactChildPath $runnerTemp $WorkDirectory "ai-security-scanner-nsis-ghost-recovery-evidence" "Ghost qualification work directory"
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 Assert-RealDirectory $workRoot "Ghost qualification work directory" | Out-Null
+Assert-NoFollowDirectoryIdentityRegression $workRoot
 $localApplicationData = [IO.Path]::GetFullPath([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))
 Assert-RealDirectory $localApplicationData "OS-resolved LocalApplicationData" | Out-Null
 $installDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "ai-security-scanner") "ai-security-scanner" "Default NSIS install directory"
@@ -1063,8 +1231,8 @@ try {
   $identityDocumentRecord = Read-BoundedUtf8File $identityDocumentPath "Durable export identity document" (64 * 1024)
   $identityAnchorRecord = Read-BoundedUtf8File $identityAnchorPath "Durable export identity anchor" (64 * 1024)
   try {
-    $identityDocument = $identityDocumentRecord.Text | ConvertFrom-Json
-    $identityAnchor = $identityAnchorRecord.Text | ConvertFrom-Json
+    $identityDocument = $identityDocumentRecord.Text | ConvertFrom-Json -DateKind String
+    $identityAnchor = $identityAnchorRecord.Text | ConvertFrom-Json -DateKind String
   } catch {
     throw "Durable export identity document or anchor is invalid JSON."
   }
@@ -1119,7 +1287,7 @@ try {
   if (($recoveryProcess.stdout + $recoveryProcess.stderr).Contains("wsl_distribution_requires_manual_action", [StringComparison]::Ordinal)) {
     throw "Candidate fell back to the manual WSL action during the supported ghost migration."
   }
-  try { $recoveredStatus = $recoveryProcess.stdout | ConvertFrom-Json }
+  try { $recoveredStatus = $recoveryProcess.stdout | ConvertFrom-Json -DateKind String }
   catch { throw "Candidate automatic ghost recovery did not emit valid status JSON." }
   if ($recoveredStatus.phase -cne "running" -or $recoveredStatus.available -ne $true -or
       $recoveredStatus.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or

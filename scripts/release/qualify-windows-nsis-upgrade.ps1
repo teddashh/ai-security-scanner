@@ -286,7 +286,12 @@ function Convert-JsonTextToCompactUtf8Bytes(
 ) {
   $document = [Text.Json.JsonDocument]::Parse($Text)
   $memory = [IO.MemoryStream]::new()
-  $writer = [Text.Json.Utf8JsonWriter]::new($memory)
+  $writerOptions = [Text.Json.JsonWriterOptions]::new()
+  # This output is hashed, not embedded in HTML. Rust serde_json leaves the
+  # standard Base64 `+` byte literal, while the default .NET encoder rewrites
+  # it as `\u002B` and would therefore compute a different digest.
+  $writerOptions.Encoder = [Text.Encodings.Web.JavaScriptEncoder]::UnsafeRelaxedJsonEscaping
+  $writer = [Text.Json.Utf8JsonWriter]::new($memory, $writerOptions)
   try {
     $element = if ([String]::IsNullOrEmpty($PropertyName)) {
       $document.RootElement
@@ -303,6 +308,18 @@ function Convert-JsonTextToCompactUtf8Bytes(
   }
   return ,$bytes
 }
+
+function Assert-SerdeCompatibleJsonCompaction {
+  $fixture = '{"public_key_base64":"A\u002BB\/=="}'
+  $expected = '{"public_key_base64":"A+B/=="}'
+  [byte[]]$fixtureBytes = Convert-JsonTextToCompactUtf8Bytes $fixture
+  $observed = [Text.Encoding]::UTF8.GetString($fixtureBytes)
+  if ($observed -cne $expected) {
+    throw "JSON compaction is not byte-compatible with the Rust signing-identity digest contract."
+  }
+}
+
+Assert-SerdeCompatibleJsonCompaction
 
 function Get-LowerSha256Bytes([byte[]]$Bytes) {
   return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
