@@ -16228,7 +16228,7 @@ mod tests {
         );
         assert_eq!(
             fixture.commands.calls(),
-            vec![vec!["--list".into(), "--quiet".into()]]
+            vec![vec![String::from("--list"), String::from("--quiet")]]
         );
         assert!(distribution_root.join("ext4.vhdx").is_file());
         assert!(
@@ -16468,7 +16468,7 @@ mod tests {
         assert!(distribution_root.join("ext4.vhdx").is_file());
         assert_eq!(
             fixture.commands.calls(),
-            vec![vec!["--list".into(), "--quiet".into()]],
+            vec![vec![String::from("--list"), String::from("--quiet")]],
             "receipt consumption must fail before terminate/export/import/unregister"
         );
     }
@@ -16521,7 +16521,7 @@ mod tests {
         );
         assert_eq!(
             fixture.commands.calls(),
-            vec![vec!["--list".into(), "--quiet".into()]],
+            vec![vec![String::from("--list"), String::from("--quiet")]],
             "the injected post-consumption error must still precede every WSL mutation"
         );
 
