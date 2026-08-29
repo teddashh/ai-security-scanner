@@ -259,8 +259,11 @@ function validateReleaseWorkflow(workflow) {
   assert(
     typeof runtimeEvidence?.run === "string" &&
       runtimeEvidence.run.includes('[[ "${RELEASE_PLATFORM}" == "windows-x86_64" ]]') &&
-      runtimeEvidence.run.includes("--expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a"),
-    "Windows release build must verify the exact reviewed v0.1.8 managed-runtime identity",
+      runtimeEvidence.run.includes("runtime_evidence_args=(") &&
+      runtimeEvidence.run.includes('node scripts/release/generate-runtime-evidence.mjs "${runtime_evidence_args[@]}"') &&
+      runtimeEvidence.run.includes("--expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a") &&
+      !runtimeEvidence.run.includes("=()"),
+    "release builds must use Bash 3.2-safe arguments and verify the exact reviewed Windows v0.1.8 managed-runtime identity",
   );
   const debianSmoke = build.steps?.find(
     (step) => step.name === "Install the Debian package and prove the desktop starts",

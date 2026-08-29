@@ -517,15 +517,17 @@ jobs:
           RELEASE_PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
-          expected_identity=()
+          runtime_evidence_args=(
+            --manifest runtime/staged/managed-runtime/manifest.json
+            --out release-assets
+            --platform "${RELEASE_PLATFORM}"
+          )
           if [[ "${RELEASE_PLATFORM}" == "windows-x86_64" ]]; then
-            expected_identity=(--expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a)
+            runtime_evidence_args+=(
+              --expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a
+            )
           fi
-          node scripts/release/generate-runtime-evidence.mjs \
-            --manifest runtime/staged/managed-runtime/manifest.json \
-            --out release-assets \
-            --platform "${RELEASE_PLATFORM}" \
-            "${expected_identity[@]}"
+          node scripts/release/generate-runtime-evidence.mjs "${runtime_evidence_args[@]}"
 
       - name: Preserve platform installers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
