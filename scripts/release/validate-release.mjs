@@ -695,7 +695,35 @@ function validatePlatformQualificationSources(sources) {
     "-ExpectedExecutableProof $candidateInstallerItem",
     "[NsisUpgradeQualificationNativeMethods]::CreateFileW",
     "registeredWslStateExercised = $false",
+    'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS uninstall"',
+    'Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path NSIS uninstall"',
   ]) assert(nsisUpgrade.includes(required), `normal Windows N-1 upgrade qualification is missing: ${required}`);
+  assert(
+    (nsisUpgrade.match(/"_\?=\$installDirectory"/gu) ?? []).length === 2,
+    "normal Windows N-1 qualification must use the exact synchronous NSIS uninstall argument only for happy-path and bounded failure cleanup",
+  );
+  const synchronousCandidateUninstall = nsisUpgrade.indexOf(
+    'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS uninstall"',
+  );
+  const postUninstallRegistryCheck = nsisUpgrade.indexOf(
+    "if (@(Get-CurrentUserUninstallEntries).Count -ne 0)",
+    synchronousCandidateUninstall,
+  );
+  const successfulUninstallMarker = nsisUpgrade.indexOf(
+    "$happyPathUninstalled = $true",
+    synchronousCandidateUninstall,
+  );
+  const clearedActiveUninstaller = nsisUpgrade.indexOf(
+    "$activeUninstaller = $null",
+    synchronousCandidateUninstall,
+  );
+  assert(
+    synchronousCandidateUninstall >= 0 &&
+      postUninstallRegistryCheck > synchronousCandidateUninstall &&
+      successfulUninstallMarker > postUninstallRegistryCheck &&
+      clearedActiveUninstaller > successfulUninstallMarker,
+    "normal Windows N-1 qualification must prove registry removal before marking the synchronous NSIS uninstall complete",
+  );
   for (const required of [
     "windows_nsis_n_minus_one_upgrade_and_data_preservation",
     "managedRuntimeFilesystemSentinel",
@@ -736,6 +764,9 @@ function validatePlatformQualificationSources(sources) {
     "$maximumVerbatimWindowsPathUtf16CodeUnits = 32766",
     "Open-NoFollowSingleLinkFile",
     "$identity.links -ne 1",
+    '$processLeaseRelativePath = ".exclusive-process.lock"',
+    "Assert-ExactEmptyProcessLeaseFile",
+    "Assert-PreservedDataSnapshotHousekeepingRegression $workRoot",
     "Open-NoFollowWindowsSystemFile",
     "$identity.links -lt 1",
     "Get-NoFollowWindowsSystemExecutableProof",
@@ -783,6 +814,114 @@ function validatePlatformQualificationSources(sources) {
     "rotationIntentAbsent = $true",
     'registeredWslStateExercised = $true',
   ]) assert(nsisGhost.includes(required), `registered-WSL ghost qualification is missing: ${required}`);
+
+  const ordinaryFileOpenStart = nsisGhost.indexOf("function Open-NoFollowSingleLinkFile(");
+  const ordinaryFileOpenEnd = nsisGhost.indexOf("function Assert-ExactEmptyProcessLeaseFile(", ordinaryFileOpenStart);
+  assert(
+    ordinaryFileOpenStart >= 0 && ordinaryFileOpenEnd > ordinaryFileOpenStart,
+    "registered-WSL ghost qualification has no isolated non-empty product-file opener",
+  );
+  const ordinaryFileOpen = nsisGhost.slice(ordinaryFileOpenStart, ordinaryFileOpenEnd);
+  assert(
+    ordinaryFileOpen.includes("$identity.links -ne 1") &&
+      ordinaryFileOpen.includes("$identity.bytes -lt 1") &&
+      !ordinaryFileOpen.includes("processLease") &&
+      !ordinaryFileOpen.includes("MinimumBytes"),
+    "registered-WSL generic installer/key/archive proof must remain single-link and non-empty",
+  );
+
+  const processLeaseProofStart = ordinaryFileOpenEnd;
+  const processLeaseProofEnd = nsisGhost.indexOf("function Open-NoFollowWindowsSystemFile(", processLeaseProofStart);
+  assert(
+    processLeaseProofEnd > processLeaseProofStart,
+    "registered-WSL ghost qualification has no isolated root process-lease proof",
+  );
+  const processLeaseProof = nsisGhost.slice(processLeaseProofStart, processLeaseProofEnd);
+  for (const required of [
+    "[GhostQualificationNativeMethods]::CreateFileW",
+    "[GhostQualificationNativeMethods]::GENERIC_READ",
+    "[GhostQualificationNativeMethods]::FILE_SHARE_READ",
+    "[GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT",
+    "$before.links -ne 1",
+    "$before.bytes -ne 0",
+    "$before.volume -ne $after.volume",
+    "$before.index -ne $after.index",
+    "$stream.Dispose()",
+    "$handle.Dispose()",
+  ]) assert(processLeaseProof.includes(required), `registered-WSL root process-lease proof is missing: ${required}`);
+  assert(
+    !processLeaseProof.includes("Open-NoFollowSingleLinkFile") &&
+      !processLeaseProof.includes("FILE_SHARE_WRITE") &&
+      !processLeaseProof.includes("FILE_SHARE_DELETE"),
+    "registered-WSL empty process-lease exception must not weaken or share the generic file proof",
+  );
+
+  const preservedSnapshotStart = nsisGhost.indexOf("function Get-PreservedDataSnapshot(");
+  const preservedRegressionStart = nsisGhost.indexOf(
+    "function Assert-PreservedDataSnapshotHousekeepingRegression(",
+    preservedSnapshotStart,
+  );
+  assert(
+    preservedSnapshotStart >= 0 && preservedRegressionStart > preservedSnapshotStart,
+    "registered-WSL ghost qualification has no bounded preserved-data snapshot",
+  );
+  const preservedSnapshot = nsisGhost.slice(preservedSnapshotStart, preservedRegressionStart);
+  const exactLeaseExclusion = "if (-not $item.PSIsContainer -and $relative -ceq $processLeaseRelativePath)";
+  assert(
+    preservedSnapshot.includes(exactLeaseExclusion) &&
+      preservedSnapshot.includes('Assert-ExactEmptyProcessLeaseFile $item.FullName "Root process lease"') &&
+      preservedSnapshot.includes('if ($relative -eq "managed-runtime" -or $relative.StartsWith("managed-runtime/", [StringComparison]::Ordinal))') &&
+      preservedSnapshot.includes('Get-NoFollowFileSha256Proof $item.FullName "Preserved data file"') &&
+      (preservedSnapshot.match(/\$processLeaseRelativePath/gu) ?? []).length === 1,
+    "registered-WSL preserved-data snapshot must exclude only the proven exact root process lease",
+  );
+
+  const preservedRegressionEnd = nsisGhost.indexOf("function Read-BoundedUtf8File(", preservedRegressionStart);
+  assert(
+    preservedRegressionEnd > preservedRegressionStart,
+    "registered-WSL ghost qualification has no process-lease snapshot regression",
+  );
+  const preservedRegression = nsisGhost.slice(preservedRegressionStart, preservedRegressionEnd);
+  for (const required of [
+    '[IO.File]::WriteAllBytes((Join-Path $fixtureRoot $processLeaseRelativePath), [byte[]]::new(0))',
+    "$snapshot.fileCount -ne 1",
+    "$snapshot.totalBytes -ne $payloadBytes.Length",
+    "Join-Path $nestedDirectory $processLeaseRelativePath",
+    '"Preserved data file is not one bounded no-follow single-link regular file."',
+    "Preserved-data snapshot ignored a nested process-lease-shaped file.",
+    "Remove-ExactTree $fixtureRoot $Parent $fixtureName",
+  ]) assert(preservedRegression.includes(required), `registered-WSL process-lease snapshot regression is missing: ${required}`);
+  assert(
+    (nsisGhost.match(/Assert-PreservedDataSnapshotHousekeepingRegression/gu) ?? []).length === 2 &&
+      (nsisGhost.match(/Assert-ExactEmptyProcessLeaseFile/gu) ?? []).length === 2,
+    "registered-WSL process-lease exception must be defined once, exercised once, and used only by the snapshot",
+  );
+
+  const synchronousGhostUninstall = 'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall"';
+  const synchronousGhostFailureUninstall = 'Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path candidate uninstall"';
+  assert(
+    nsisGhost.includes(synchronousGhostUninstall) &&
+      nsisGhost.includes(synchronousGhostFailureUninstall) &&
+      (nsisGhost.match(/"_\?=\$installDirectory"/gu) ?? []).length === 2 &&
+      !nsisGhost.includes('Invoke-ExactProcess $candidateUninstaller @("/S")') &&
+      !nsisGhost.includes('Invoke-ExactProcess $activeUninstaller @("/S")'),
+    "registered-WSL ghost cleanup must synchronously wait for the exact NSIS uninstall directory",
+  );
+  const happyGhostUninstall = nsisGhost.indexOf(synchronousGhostUninstall);
+  const productRegistrationCheck = nsisGhost.indexOf(
+    'if (@(Get-ProductRegistryEntries).Count -ne 0) { throw "Candidate uninstaller left the product registry entry." }',
+    happyGhostUninstall,
+  );
+  const clearedGhostActiveUninstaller = nsisGhost.indexOf(
+    "$activeUninstaller = $null",
+    happyGhostUninstall,
+  );
+  assert(
+    happyGhostUninstall >= 0 &&
+      productRegistrationCheck > happyGhostUninstall &&
+      clearedGhostActiveUninstaller > productRegistrationCheck,
+    "registered-WSL ghost qualification must retain cleanup ownership until NSIS registry removal is proven",
+  );
   const escapedSerdeCompactionFixture = "$fixture = '{\"public_key_base64\":\"A\\u002BB\\/==\"}'";
   const literalSerdeCompactionExpected = "$expected = '{\"public_key_base64\":\"A+B/==\"}'";
   for (const [label, source] of [
@@ -1267,6 +1406,69 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
   assert(
     !managedRuntimeProduction.includes("--import-in-place"),
     "managed runtime recovery depends on unsupported in-place Windows WSL import",
+  );
+  const registryRead = boundedRecoverySection(
+    "fn read_windows_registry_string_once",
+    "fn windows_registry_string(",
+    "bounded stable Windows registry read",
+  );
+  const registryDecoder = boundedRecoverySection(
+    "fn decode_windows_registry_string_read",
+    "fn decode_stable_windows_registry_string_reads",
+    "bounded Windows registry decoder",
+  );
+  const stableRegistryDecoder = boundedRecoverySection(
+    "fn decode_stable_windows_registry_string_reads",
+    "fn read_windows_registry_string_once",
+    "stable Windows registry read comparison",
+  );
+  const registryString = boundedRecoverySection(
+    "fn windows_registry_string(",
+    "fn windows_registry_optional_string",
+    "stable Windows registry string snapshot",
+  );
+  assert(
+    registryRead.includes("RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE") &&
+      registryRead.includes("vec![0xa5a5_u16;") &&
+      registryRead.includes("status == ERROR_MORE_DATA") &&
+      registryRead.includes("value_type != REG_SZ") &&
+      registryRead.includes("decode_windows_registry_string_read(&encoded, returned_bytes)?"),
+    "Windows registry data reads are not bounded, type-locked, and fail-closed",
+  );
+  assert(
+    registryDecoder.includes("2..=MAX_WINDOWS_REGISTRY_STRING_BYTES") &&
+      registryDecoder.includes("returned_bytes.is_multiple_of(2)") &&
+      registryDecoder.includes("returned_units > encoded.len()") &&
+      registryDecoder.includes("encoded[returned_units - 1] != 0") &&
+      registryDecoder.includes("encoded[..returned_units - 1].contains(&0)") &&
+      registryDecoder.includes("String::from_utf16(&encoded[..returned_units - 1])") &&
+      stableRegistryDecoder.includes("first_returned_bytes != second_returned_bytes") &&
+      stableRegistryDecoder.includes("first[..first_units] != second[..second_units]") &&
+      stableRegistryDecoder.includes("first_value != second_value"),
+    "Windows registry decoding no longer proves bounded, canonical, stable UTF-16 bytes",
+  );
+  assert(
+    registryString.includes("checked_add(2)") &&
+      registryString.includes("candidate <= MAX_WINDOWS_REGISTRY_STRING_BYTES") &&
+      registryString.split("read_windows_registry_string_once(").length - 1 === 2 &&
+      registryString.includes("decode_stable_windows_registry_string_reads(") &&
+      !registryString.includes("returned_bytes != size_bytes") &&
+      managedRuntime.includes(
+        "windows_registry_string_accepts_a_bounded_size_probe_overestimate_only_when_reads_stabilize",
+      ) &&
+      managedRuntime.includes("windows_registry_string_rejects_unbounded_or_malformed_reads"),
+    "Windows registry strings do not use two identical bounded reads after a non-exact size probe",
+  );
+  const optionalRegistryString = boundedRecoverySection(
+    "fn windows_registry_optional_string",
+    "fn windows_nsis_installation_from_key",
+    "optional Windows registry string probe",
+  );
+  assert(
+    optionalRegistryString.includes(
+      "RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE",
+    ) && optionalRegistryString.includes("windows_registry_string(key, value_name).map(Some)"),
+    "optional Windows registry probes are not bound to the literal stable string reader",
   );
   for (const required of [
     'podman_userns: format!("keep-id:uid={uid},gid={gid}")',

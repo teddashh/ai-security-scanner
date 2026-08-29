@@ -99,7 +99,7 @@ const WINDOWS_WSL_RECOVERY_FREE_SPACE_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
 const WINDOWS_WSL_RECOVERY_ARCHIVE_MARGIN_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const WINDOWS_WSL_RECOVERY_ARCHIVE_DISK_MULTIPLIER: u64 = 2;
 const WINDOWS_WSL_RECOVERY_ARCHIVE_ABSOLUTE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const MAX_WINDOWS_REGISTRY_STRING_BYTES: u32 = 64 * 1024;
 #[cfg(unix)]
 const LINUX_SHORT_RUNTIME_BASE: &str = "/tmp";
@@ -9136,10 +9136,98 @@ fn windows_registry_wide(value: &str) -> AppResult<Vec<u16>> {
     Ok(encoded)
 }
 
+#[cfg(any(windows, test))]
+fn decode_windows_registry_string_read(encoded: &[u16], returned_bytes: u32) -> AppResult<String> {
+    if !(2..=MAX_WINDOWS_REGISTRY_STRING_BYTES).contains(&returned_bytes)
+        || !returned_bytes.is_multiple_of(2)
+    {
+        return Err(AppError::NotAuthorized(
+            "Windows registry string read returned an invalid size".into(),
+        ));
+    }
+    let returned_units = returned_bytes as usize / 2;
+    if returned_units > encoded.len()
+        || encoded[returned_units - 1] != 0
+        || encoded[..returned_units - 1].contains(&0)
+    {
+        return Err(AppError::NotAuthorized(
+            "Windows registry string read was malformed".into(),
+        ));
+    }
+    String::from_utf16(&encoded[..returned_units - 1])
+        .map_err(|_| AppError::NotAuthorized("Windows registry string is not valid UTF-16".into()))
+}
+
+#[cfg(any(windows, test))]
+fn decode_stable_windows_registry_string_reads(
+    first: &[u16],
+    first_returned_bytes: u32,
+    second: &[u16],
+    second_returned_bytes: u32,
+) -> AppResult<String> {
+    let first_value = decode_windows_registry_string_read(first, first_returned_bytes)?;
+    let second_value = decode_windows_registry_string_read(second, second_returned_bytes)?;
+    let first_units = first_returned_bytes as usize / 2;
+    let second_units = second_returned_bytes as usize / 2;
+    if first_returned_bytes != second_returned_bytes
+        || first[..first_units] != second[..second_units]
+        || first_value != second_value
+    {
+        return Err(AppError::NotAuthorized(
+            "Windows registry string changed while it was read".into(),
+        ));
+    }
+    Ok(second_value)
+}
+
+#[cfg(windows)]
+fn read_windows_registry_string_once(
+    key: &WindowsRegistryKey,
+    value_name: &[u16],
+    capacity_bytes: u32,
+) -> AppResult<(Vec<u16>, u32)> {
+    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        REG_SZ, RRF_NOEXPAND, RRF_RT_REG_SZ, RRF_ZEROONFAILURE, RegGetValueW,
+    };
+
+    let mut value_type = 0;
+    let mut encoded = vec![0xa5a5_u16; capacity_bytes as usize / 2];
+    let mut returned_bytes = capacity_bytes;
+    let status = unsafe {
+        RegGetValueW(
+            key.0,
+            std::ptr::null(),
+            value_name.as_ptr(),
+            RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE,
+            &raw mut value_type,
+            encoded.as_mut_ptr().cast(),
+            &raw mut returned_bytes,
+        )
+    };
+    if status == ERROR_MORE_DATA {
+        return Err(AppError::NotAuthorized(
+            "Windows registry string grew while it was read".into(),
+        ));
+    }
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32).into());
+    }
+    if value_type != REG_SZ {
+        return Err(AppError::NotAuthorized(
+            "Windows registry string type changed while it was read".into(),
+        ));
+    }
+    decode_windows_registry_string_read(&encoded, returned_bytes)?;
+    Ok((encoded, returned_bytes))
+}
+
 #[cfg(windows)]
 fn windows_registry_string(key: &WindowsRegistryKey, value_name: &str) -> AppResult<String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{REG_SZ, RRF_RT_REG_SZ, RegGetValueW};
+    use windows_sys::Win32::System::Registry::{
+        REG_SZ, RRF_NOEXPAND, RRF_RT_REG_SZ, RRF_ZEROONFAILURE, RegGetValueW,
+    };
 
     let value_name = windows_registry_wide(value_name)?;
     let mut value_type = 0;
@@ -9149,7 +9237,7 @@ fn windows_registry_string(key: &WindowsRegistryKey, value_name: &str) -> AppRes
             key.0,
             std::ptr::null(),
             value_name.as_ptr(),
-            RRF_RT_REG_SZ,
+            RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE,
             &raw mut value_type,
             std::ptr::null_mut(),
             &raw mut size_bytes,
@@ -9159,43 +9247,32 @@ fn windows_registry_string(key: &WindowsRegistryKey, value_name: &str) -> AppRes
         return Err(io::Error::from_raw_os_error(status as i32).into());
     }
     if value_type != REG_SZ
-        || size_bytes < 2
-        || size_bytes > MAX_WINDOWS_REGISTRY_STRING_BYTES
-        || size_bytes % 2 != 0
+        || !(2..=MAX_WINDOWS_REGISTRY_STRING_BYTES).contains(&size_bytes)
+        || !size_bytes.is_multiple_of(2)
     {
         return Err(AppError::NotAuthorized(
-            "Windows WSL registry string has an invalid type or size".into(),
+            "Windows registry string has an invalid type or size".into(),
         ));
     }
-    let mut encoded = vec![0_u16; size_bytes as usize / 2];
-    let mut returned_bytes = size_bytes;
-    let status = unsafe {
-        RegGetValueW(
-            key.0,
-            std::ptr::null(),
-            value_name.as_ptr(),
-            RRF_RT_REG_SZ,
-            &raw mut value_type,
-            encoded.as_mut_ptr().cast(),
-            &raw mut returned_bytes,
-        )
-    };
-    if status != ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(status as i32).into());
-    }
-    let returned_units = returned_bytes as usize / 2;
-    if returned_bytes != size_bytes
-        || returned_units == 0
-        || encoded[returned_units - 1] != 0
-        || encoded[..returned_units - 1].contains(&0)
-    {
-        return Err(AppError::NotAuthorized(
-            "Windows WSL registry string changed or was malformed".into(),
-        ));
-    }
-    String::from_utf16(&encoded[..returned_units - 1]).map_err(|_| {
-        AppError::NotAuthorized("Windows WSL registry string is not valid UTF-16".into())
-    })
+    // RegGetValueW's buffered success reports the bytes actually copied, and
+    // the probe plus later reads are separate, non-atomic calls. Keep one
+    // UTF-16 code unit of bounded slack for a missing stored terminator, then
+    // require two identical, well-formed reads instead of comparing either
+    // result with the probe byte count.
+    let capacity_bytes = size_bytes
+        .checked_add(2)
+        .filter(|candidate| *candidate <= MAX_WINDOWS_REGISTRY_STRING_BYTES)
+        .unwrap_or(size_bytes);
+    let (first, first_returned_bytes) =
+        read_windows_registry_string_once(key, &value_name, capacity_bytes)?;
+    let (second, second_returned_bytes) =
+        read_windows_registry_string_once(key, &value_name, capacity_bytes)?;
+    decode_stable_windows_registry_string_reads(
+        &first,
+        first_returned_bytes,
+        &second,
+        second_returned_bytes,
+    )
 }
 
 #[cfg(windows)]
@@ -9204,7 +9281,9 @@ fn windows_registry_optional_string(
     value_name: &str,
 ) -> AppResult<Option<String>> {
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-    use windows_sys::Win32::System::Registry::{RRF_RT_REG_SZ, RegGetValueW};
+    use windows_sys::Win32::System::Registry::{
+        RRF_NOEXPAND, RRF_RT_REG_SZ, RRF_ZEROONFAILURE, RegGetValueW,
+    };
 
     let value_name_wide = windows_registry_wide(value_name)?;
     let mut value_type = 0;
@@ -9214,7 +9293,7 @@ fn windows_registry_optional_string(
             key.0,
             std::ptr::null(),
             value_name_wide.as_ptr(),
-            RRF_RT_REG_SZ,
+            RRF_RT_REG_SZ | RRF_NOEXPAND | RRF_ZEROONFAILURE,
             &raw mut value_type,
             std::ptr::null_mut(),
             &raw mut size_bytes,
@@ -14858,6 +14937,61 @@ mod tests {
                     .mode()
                     & 0o777,
                 0o500
+            );
+        }
+    }
+
+    #[test]
+    fn windows_registry_string_accepts_a_bounded_size_probe_overestimate_only_when_reads_stabilize()
+    {
+        let mut first = "C:\\Users\\runner\\AppData\\Local\\Packages"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let returned_bytes = u32::try_from(first.len() * 2).unwrap();
+        first.extend([0x1111, 0x2222, 0x3333]);
+        let mut second = first.clone();
+        second[first.len() - 1] = 0x4444;
+
+        assert_eq!(
+            decode_stable_windows_registry_string_reads(
+                &first,
+                returned_bytes,
+                &second,
+                returned_bytes,
+            )
+            .unwrap(),
+            "C:\\Users\\runner\\AppData\\Local\\Packages"
+        );
+
+        second[0] = 'D' as u16;
+        assert!(
+            decode_stable_windows_registry_string_reads(
+                &first,
+                returned_bytes,
+                &second,
+                returned_bytes,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("changed while it was read")
+        );
+    }
+
+    #[test]
+    fn windows_registry_string_rejects_unbounded_or_malformed_reads() {
+        for (encoded, returned_bytes) in [
+            (vec![0], 0),
+            (vec!['A' as u16, 0], 3),
+            (vec!['A' as u16, 'B' as u16], 4),
+            (vec!['A' as u16, 0, 'B' as u16, 0], 8),
+            (vec![0xd800, 0], 4),
+            (vec!['A' as u16, 0], 6),
+            (vec![0], MAX_WINDOWS_REGISTRY_STRING_BYTES + 2),
+        ] {
+            assert!(
+                decode_windows_registry_string_read(&encoded, returned_bytes).is_err(),
+                "accepted malformed registry read {encoded:?} / {returned_bytes}"
             );
         }
     }

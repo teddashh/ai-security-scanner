@@ -1078,12 +1078,17 @@ try {
     noComplianceOutcomeClaims = $true
   }
 
-  Invoke-ExactProcess $candidateUninstaller @("/S") 180000 "Candidate NSIS uninstall" | Out-Null
-  $happyPathUninstalled = $true
-  $activeUninstaller = $null
+  # A normal NSIS uninstaller copies itself to a temporary directory and lets
+  # the original process exit before that copy finishes. `_?=` is NSIS's
+  # documented synchronous automation contract: it fixes $INSTDIR, prevents
+  # the temporary copy, and must remain the final argument. The exact install
+  # tree is removed below after the process handle has exited.
+  Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS uninstall" | Out-Null
   if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {
     throw "Candidate NSIS uninstall left its current-user product registration behind."
   }
+  $happyPathUninstalled = $true
+  $activeUninstaller = $null
   if (Test-Path -LiteralPath $installDirectory) {
     Remove-ExactTree $installDirectory $runnerTemp "ai-security-scanner-nsis-upgrade-installed"
   }
@@ -1193,7 +1198,7 @@ try {
     }
     if ($null -ne $activeUninstaller -and (Test-Path -LiteralPath $activeUninstaller -PathType Leaf)) {
       try {
-        Invoke-ExactProcess $activeUninstaller @("/S") 180000 "Failure-path NSIS uninstall" | Out-Null
+        Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path NSIS uninstall" | Out-Null
       } catch {
         $cleanupFailures.Add("NSIS uninstall: $($_.Exception.Message)")
       }
