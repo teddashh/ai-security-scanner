@@ -161,6 +161,50 @@ function Open-NoFollowSingleLinkFile(
   }
 }
 
+function Open-NoFollowWindowsSystemFile(
+  [string]$Path,
+  [string]$Label,
+  [uint64]$MaximumBytes = 512 * 1024 * 1024
+) {
+  $verbatimPath = Get-VerbatimWindowsPath $Path $Label
+  $handle = [GhostQualificationNativeMethods]::CreateFileW(
+    $verbatimPath,
+    [GhostQualificationNativeMethods]::GENERIC_READ,
+    [GhostQualificationNativeMethods]::FILE_SHARE_READ,
+    [IntPtr]::Zero,
+    [GhostQualificationNativeMethods]::OPEN_EXISTING,
+    [GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT,
+    [IntPtr]::Zero
+  )
+  if ($null -eq $handle -or $handle.IsInvalid) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($null -ne $handle) { $handle.Dispose() }
+    throw [ComponentModel.Win32Exception]::new($errorCode, "$Label could not be opened without following reparse points")
+  }
+  try {
+    $stream = [IO.FileStream]::new($handle, [IO.FileAccess]::Read, 4096, $false)
+  } catch {
+    $handle.Dispose()
+    throw
+  }
+  try {
+    $identity = Get-OpenFileIdentity $stream
+    # Windows servicing legitimately exposes component-store files in System32
+    # through hard links. This system-file-only opener therefore accepts one or
+    # more links, while every installer, key, fixture, archive, and retained
+    # evidence file continues to use Open-NoFollowSingleLinkFile above.
+    if (($identity.attributes -band [uint32][IO.FileAttributes]::Directory) -ne 0 -or
+        ($identity.attributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $identity.links -lt 1 -or $identity.bytes -lt 1 -or $identity.bytes -gt $MaximumBytes) {
+      throw "$Label is not one bounded no-follow Windows system regular file."
+    }
+    return ,$stream
+  } catch {
+    $stream.Dispose()
+    throw
+  }
+}
+
 function Assert-SingleLinkFile([string]$Path, [string]$Label, [uint64]$MaximumBytes = [uint64]::MaxValue) {
   $stream = Open-NoFollowSingleLinkFile $Path $Label $MaximumBytes
   try { $identity = Get-OpenFileIdentity $stream }
@@ -239,6 +283,68 @@ function Get-NoFollowFileSha256Proof(
   }
 }
 
+function Get-NoFollowWindowsSystemExecutableProof(
+  [string]$Path,
+  [string]$ExpectedDirectory,
+  [string]$ExpectedName,
+  [string]$Label
+) {
+  Assert-ExactChildPath $ExpectedDirectory $Path $ExpectedName $Label | Out-Null
+  $stream = Open-NoFollowWindowsSystemFile $Path $Label
+  try {
+    $before = Get-OpenFileIdentity $stream
+    $digest = [Security.Cryptography.SHA256]::HashData($stream)
+    $after = Get-OpenFileIdentity $stream
+    if ($before.attributes -ne $after.attributes -or $before.links -ne $after.links -or
+        $before.bytes -ne $after.bytes -or $before.volume -ne $after.volume -or
+        $before.index -ne $after.index) {
+      throw "$Label changed while its exact no-follow handle was hashed."
+    }
+    $sha256 = [Convert]::ToHexString($digest).ToLowerInvariant()
+
+    # Keep this original no-write/no-delete-sharing handle open throughout the
+    # path-based Authenticode/catalog lookup. The System32 name therefore cannot
+    # be swapped to a different signed file and restored between the two hashes.
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+    if ([string]$signature.Status -cne "Valid" -or $null -eq $signature.SignerCertificate) {
+      throw "$Label does not have a valid Windows Authenticode or catalog signature."
+    }
+    $signerSubject = [string]$signature.SignerCertificate.Subject
+    if ($signerSubject -cnotmatch '(?i)(?:^|,\s*)O=Microsoft Corporation(?:,|$)') {
+      throw "$Label is not signed by Microsoft Corporation."
+    }
+    $signerThumbprint = ([string]$signature.SignerCertificate.Thumbprint).ToLowerInvariant()
+    if ($signerThumbprint -cnotmatch '^[0-9a-f]{40,128}$') {
+      throw "$Label returned an invalid signer thumbprint."
+    }
+
+    $stream.Position = 0
+    $afterSignatureDigest = [Security.Cryptography.SHA256]::HashData($stream)
+    $afterSignature = Get-OpenFileIdentity $stream
+    if ($before.attributes -ne $afterSignature.attributes -or
+        $before.links -ne $afterSignature.links -or
+        $before.bytes -ne $afterSignature.bytes -or
+        $before.volume -ne $afterSignature.volume -or
+        $before.index -ne $afterSignature.index -or
+        $sha256 -cne [Convert]::ToHexString($afterSignatureDigest).ToLowerInvariant()) {
+      throw "$Label original Windows-system handle changed while its signature was verified."
+    }
+
+    return [PSCustomObject]@{
+      FullName = [IO.Path]::GetFullPath($Path)
+      Length = [int64]$before.bytes
+      Sha256 = $sha256
+      Volume = [uint32]$before.volume
+      FileIndex = [uint64]$before.index
+      Links = [uint32]$before.links
+      TrustPolicy = "windows_system32_microsoft_authenticode_v1"
+      SignerThumbprint = $signerThumbprint
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Get-LowerSha256([string]$Path, [uint64]$MaximumBytes = 8GB) {
   return (Get-NoFollowFileSha256Proof $Path "SHA-256 input" $MaximumBytes).Sha256
 }
@@ -250,7 +356,8 @@ function Invoke-ExactProcess(
   [string]$Label,
   [bool]$CaptureOutput = $false,
   [Collections.Generic.Dictionary[string,string]]$Environment = $null,
-  [object]$ExpectedExecutableProof = $null
+  [object]$ExpectedExecutableProof = $null,
+  [object]$ExpectedSystemExecutableProof = $null
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 1800000) {
     throw "$Label timeout is outside its fixed bound."
@@ -269,21 +376,42 @@ function Invoke-ExactProcess(
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $startInfo
   try {
-    $executionGuard = Open-NoFollowSingleLinkFile $FileName "$Label executable" (512 * 1024 * 1024)
+    if ($null -ne $ExpectedExecutableProof -and $null -ne $ExpectedSystemExecutableProof) {
+      throw "$Label cannot use both product-file and Windows-system executable proofs."
+    }
+    $isTrustedWindowsSystemExecutable = $null -ne $ExpectedSystemExecutableProof
+    $proof = if ($isTrustedWindowsSystemExecutable) { $ExpectedSystemExecutableProof } else { $ExpectedExecutableProof }
+    $executionGuard = if ($isTrustedWindowsSystemExecutable) {
+      Open-NoFollowWindowsSystemFile $FileName "$Label executable" (512 * 1024 * 1024)
+    } else {
+      Open-NoFollowSingleLinkFile $FileName "$Label executable" (512 * 1024 * 1024)
+    }
     try {
-      if ($null -ne $ExpectedExecutableProof) {
+      if ($null -ne $proof) {
         foreach ($requiredProofField in @("FullName", "Length", "Sha256", "Volume", "FileIndex")) {
-          if ($null -eq $ExpectedExecutableProof.PSObject.Properties[$requiredProofField]) {
+          if ($null -eq $proof.PSObject.Properties[$requiredProofField]) {
             throw "$Label has an incomplete expected executable proof."
           }
         }
         if (-not [String]::Equals(
             [IO.Path]::GetFullPath($FileName),
-            [string]$ExpectedExecutableProof.FullName,
+            [string]$proof.FullName,
             [StringComparison]::OrdinalIgnoreCase
-          ) -or [int64]$ExpectedExecutableProof.Length -lt 1 -or
-          [string]$ExpectedExecutableProof.Sha256 -cnotmatch '^[0-9a-f]{64}$') {
+          ) -or [int64]$proof.Length -lt 1 -or
+          [string]$proof.Sha256 -cnotmatch '^[0-9a-f]{64}$') {
           throw "$Label has a malformed expected executable proof."
+        }
+        if ($isTrustedWindowsSystemExecutable) {
+          foreach ($requiredSystemProofField in @("Links", "TrustPolicy", "SignerThumbprint")) {
+            if ($null -eq $proof.PSObject.Properties[$requiredSystemProofField]) {
+              throw "$Label has an incomplete Windows-system executable proof."
+            }
+          }
+          if ([uint32]$proof.Links -lt 1 -or
+              [string]$proof.TrustPolicy -cne "windows_system32_microsoft_authenticode_v1" -or
+              [string]$proof.SignerThumbprint -cnotmatch '^[0-9a-f]{40,128}$') {
+            throw "$Label has a malformed Windows-system executable proof."
+          }
         }
         $beforeExecution = Get-OpenFileIdentity $executionGuard
         $executionGuard.Position = 0
@@ -297,20 +425,22 @@ function Invoke-ExactProcess(
           throw "$Label executable changed while its launch proof was hashed."
         }
         $executionSha256 = [Convert]::ToHexString($executionDigest).ToLowerInvariant()
-        if ([uint64]$beforeExecution.bytes -ne [uint64]$ExpectedExecutableProof.Length -or
-            [uint32]$beforeExecution.volume -ne [uint32]$ExpectedExecutableProof.Volume -or
-            [uint64]$beforeExecution.index -ne [uint64]$ExpectedExecutableProof.FileIndex -or
-            $executionSha256 -cne [string]$ExpectedExecutableProof.Sha256) {
+        if ([uint64]$beforeExecution.bytes -ne [uint64]$proof.Length -or
+            [uint32]$beforeExecution.volume -ne [uint32]$proof.Volume -or
+            [uint64]$beforeExecution.index -ne [uint64]$proof.FileIndex -or
+            ($isTrustedWindowsSystemExecutable -and [uint32]$beforeExecution.links -ne [uint32]$proof.Links) -or
+            $executionSha256 -cne [string]$proof.Sha256) {
           throw "$Label executable is not the exact previously verified installer."
         }
         $executionGuard.Position = 0
       }
       $started = $process.Start()
-      if ($null -ne $ExpectedExecutableProof) {
+      if ($null -ne $proof) {
         $afterStart = Get-OpenFileIdentity $executionGuard
-        if ([uint64]$afterStart.bytes -ne [uint64]$ExpectedExecutableProof.Length -or
-            [uint32]$afterStart.volume -ne [uint32]$ExpectedExecutableProof.Volume -or
-            [uint64]$afterStart.index -ne [uint64]$ExpectedExecutableProof.FileIndex) {
+        if ([uint64]$afterStart.bytes -ne [uint64]$proof.Length -or
+            [uint32]$afterStart.volume -ne [uint32]$proof.Volume -or
+            [uint64]$afterStart.index -ne [uint64]$proof.FileIndex -or
+            ($isTrustedWindowsSystemExecutable -and [uint32]$afterStart.links -ne [uint32]$proof.Links)) {
           throw "$Label executable changed while the verified process was started."
         }
       }
@@ -675,8 +805,8 @@ function Get-TrustedWslExecutable {
   $windows = Resolve-RealDirectory $buffer.ToString() "OS-trusted Windows directory"
   $system32 = Resolve-RealDirectory (Join-Path $windows "System32") "OS-trusted System32"
   $wsl = Join-Path $system32 "wsl.exe"
-  Assert-SingleLinkFile $wsl "OS-trusted wsl.exe" | Out-Null
-  return [ordered]@{ executable = $wsl; windows = $windows; system32 = $system32 }
+  $proof = Get-NoFollowWindowsSystemExecutableProof $wsl $system32 "wsl.exe" "OS-trusted wsl.exe"
+  return [ordered]@{ executable = $wsl; windows = $windows; system32 = $system32; proof = $proof }
 }
 
 function Unregister-ProvenExactWsl([object]$TrustedWsl, [string]$Name) {
@@ -685,7 +815,7 @@ function Unregister-ProvenExactWsl([object]$TrustedWsl, [string]$Name) {
   $environment["WINDIR"] = $TrustedWsl.windows
   $environment["PATH"] = $TrustedWsl.system32
   $environment["NoDefaultCurrentDirectoryInExePath"] = "1"
-  Invoke-ExactProcess $TrustedWsl.executable @("--unregister", $Name) 90000 "Exact managed WSL cleanup" $true $environment | Out-Null
+  Invoke-ExactProcess $TrustedWsl.executable @("--unregister", $Name) 90000 "Exact managed WSL cleanup" $true $environment -ExpectedSystemExecutableProof $TrustedWsl.proof | Out-Null
 }
 
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
