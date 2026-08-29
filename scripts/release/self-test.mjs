@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { gzipSync, gunzipSync } from "node:zlib";
 import {
   copyFile,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -43,8 +45,164 @@ const TAG = `v${VERSION}`;
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TEST_KEY_PASSWORD = "release-self-test-only";
 const TAURI_CLI = path.join(PROJECT_ROOT, "node_modules", "@tauri-apps", "cli", "tauri.js");
-const LEGACY_PUBLIC_KEY_BASE64 = Buffer.alloc(32, 0x5a).toString("base64");
-const LEGACY_KEY_ID = createHash("sha256").update(Buffer.alloc(32, 0x5a)).digest("hex");
+function deterministicEd25519KeyPair(seedLabel) {
+  const seed = createHash("sha256").update(seedLabel, "utf8").digest();
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]),
+    format: "der",
+    type: "pkcs8",
+  });
+  return { privateKey, publicKey: createPublicKey(privateKey) };
+}
+
+const LEGACY_TEST_KEY_PAIR = deterministicEd25519KeyPair(
+  "ai-security-scanner release self-test retained signed bundle identity v1",
+);
+const WRONG_PRIOR_TEST_KEY_PAIR = deterministicEd25519KeyPair(
+  "ai-security-scanner release self-test wrong prior signer v1",
+);
+const LEGACY_TEST_PUBLIC_SPKI = LEGACY_TEST_KEY_PAIR.publicKey.export({ format: "der", type: "spki" });
+const LEGACY_TEST_PUBLIC_KEY = LEGACY_TEST_PUBLIC_SPKI.subarray(-32);
+const LEGACY_PUBLIC_KEY_BASE64 = LEGACY_TEST_PUBLIC_KEY.toString("base64");
+const LEGACY_KEY_ID = createHash("sha256").update(LEGACY_TEST_PUBLIC_KEY).digest("hex");
+const LOCAL_SIGNING_IDENTITY_NOTICE =
+  "This is a local export-integrity identity. It does not prove scanner correctness, completeness, authorship, organizational identity, audit status, or compliance.";
+const MASTER_FRAMEWORK_REPORT_NOTICE =
+  "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete.";
+const BUNDLE_INTEGRITY_ONLY_NOTICE =
+  "The Ed25519 signature establishes integrity of the signed manifest only. It does not prove scanner correctness, completeness, legal authorization, authorship, identity, audit status, or forensic validity.";
+
+function createLegacySigningIdentityFixture() {
+  const unsigned = {
+    schema_version: "1",
+    algorithm: "Ed25519",
+    key_id: LEGACY_KEY_ID,
+    public_key_base64: LEGACY_PUBLIC_KEY_BASE64,
+    established_at: "2026-08-29T12:00:00Z",
+    continuity_event: "legacy_key_adopted",
+    previous_identity: null,
+    notice: LOCAL_SIGNING_IDENTITY_NOTICE,
+  };
+  const selfSignature = sign(
+    null,
+    Buffer.from(JSON.stringify(unsigned), "utf8"),
+    LEGACY_TEST_KEY_PAIR.privateKey,
+  ).toString("base64");
+  const document = {
+    schema_version: unsigned.schema_version,
+    algorithm: unsigned.algorithm,
+    key_id: unsigned.key_id,
+    public_key_base64: unsigned.public_key_base64,
+    established_at: unsigned.established_at,
+    continuity_event: unsigned.continuity_event,
+    self_signature_base64: selfSignature,
+    notice: unsigned.notice,
+  };
+  const compact = Buffer.from(JSON.stringify(document), "utf8");
+  return {
+    document,
+    compactSha256: createHash("sha256").update(compact).digest("hex"),
+    bytes: compact.length,
+  };
+}
+
+function jsonFixtureBytes(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function writeTarText(header, offset, length, value) {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length > length) throw new Error(`release self-test tar field is too long: ${value}`);
+  bytes.copy(header, offset);
+}
+
+function writeTarOctal(header, offset, length, value) {
+  const encoded = `${value.toString(8).padStart(length - 1, "0")}\0`;
+  if (encoded.length !== length) throw new Error(`release self-test tar integer exceeds its field: ${value}`);
+  header.write(encoded, offset, length, "ascii");
+}
+
+function tarEntry(pathname, bytes) {
+  const header = Buffer.alloc(512);
+  writeTarText(header, 0, 100, pathname);
+  writeTarOctal(header, 100, 8, 0o600);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, bytes.length);
+  writeTarOctal(header, 136, 12, 0);
+  header.fill(0x20, 148, 156);
+  header[156] = 0x30;
+  writeTarText(header, 257, 6, "ustar");
+  writeTarText(header, 263, 2, "00");
+  const checksum = header.reduce((total, byte) => total + byte, 0);
+  header.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8, "ascii");
+  const padding = Buffer.alloc((512 - (bytes.length % 512)) % 512);
+  return Buffer.concat([header, bytes, padding]);
+}
+
+function createSignedCaseBundleFixture({
+  version,
+  caseId,
+  runId,
+  payloads,
+  keyPair = LEGACY_TEST_KEY_PAIR,
+  schemas = { bundle: "1" },
+  rawArtifactCount = 0,
+}) {
+  const publicSpki = keyPair.publicKey.export({ format: "der", type: "spki" });
+  const publicKey = publicSpki.subarray(-32);
+  const keyId = createHash("sha256").update(publicKey).digest("hex");
+  const publicKeyBase64 = publicKey.toString("base64");
+  const sortedPayloads = Object.entries(payloads)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const entries = sortedPayloads.map(([pathname, record]) => ({
+    path: pathname,
+    media_type: record.mediaType,
+    sha256: createHash("sha256").update(record.bytes).digest("hex"),
+    byte_length: record.bytes.length,
+    contains_sensitive_data: record.sensitive,
+  }));
+  const manifest = {
+    schema_version: "1",
+    product_name: "ai-security-scanner",
+    product_version: version,
+    created_at: "2026-08-29T12:30:00Z",
+    case_id: caseId,
+    run_id: runId,
+    redaction_profile: "standard",
+    demo_data: true,
+    schemas,
+    entries,
+    raw_artifact_count: rawArtifactCount,
+    raw_artifacts_included: 0,
+    signing: {
+      algorithm: "Ed25519",
+      key_id: keyId,
+      signed_file: "manifest.json",
+      integrity_only_notice: BUNDLE_INTEGRITY_ONLY_NOTICE,
+    },
+    notices: [
+      "This package contains preliminary scanner evidence, not an audit, certification, attestation, compliance determination, or forensic conclusion. Related control references are navigation coordinates only.",
+      BUNDLE_INTEGRITY_ONLY_NOTICE,
+      "SYNTHETIC DEMO DATA: this package must not be represented as a real scan or engine validation.",
+    ],
+  };
+  const manifestBytes = jsonFixtureBytes(manifest);
+  const envelope = {
+    algorithm: "Ed25519",
+    key_id: keyId,
+    public_key_base64: publicKeyBase64,
+    signature_base64: sign(null, manifestBytes, keyPair.privateKey).toString("base64"),
+    signed_file: "manifest.json",
+    integrity_only_notice: BUNDLE_INTEGRITY_ONLY_NOTICE,
+  };
+  return gzipSync(Buffer.concat([
+    ...sortedPayloads.map(([pathname, record]) => tarEntry(pathname, record.bytes)),
+    tarEntry("manifest.json", manifestBytes),
+    tarEntry("signature.json", jsonFixtureBytes(envelope)),
+    Buffer.alloc(1024),
+  ]), { level: 9, mtime: 0 });
+}
 
 function run(script, arguments_) {
   execFileSync(process.execPath, [path.join(PROJECT_ROOT, "scripts/release", script), ...arguments_], {
@@ -475,6 +633,310 @@ async function createQualificationFixture(output, platform, installerType) {
   await rm(qualificationRoot, { recursive: true, force: true });
 }
 
+function createMasterFrameworkSignedFixture(caseId, runId, identityDocument) {
+  const recordedAt = "2026-08-27T12:18:00Z";
+  const knowledgeDate = "2026-08-27T12:00:00Z";
+  const observedAt = "2026-08-27T12:10:00Z";
+  const engineRunId = "engine-run-gitleaks-001";
+  const artifactId = "raw-artifact-gitleaks-001";
+  const observationId = "observation-secret-001";
+  const findingId = "finding-secret-001";
+  const evidenceId = "evidence-secret-001";
+  const assetId = "asset-source-code-001";
+  const fingerprint = "release-self-test:gitleaks:synthetic-secret";
+  const artifactSha256 = createHash("sha256")
+    .update("synthetic redacted Gitleaks evidence for release self-test", "utf8")
+    .digest("hex");
+  const mappingVersion = "synthetic-fixture-1";
+  const findingTitle = "Synthetic credential-like value requires review";
+  const finding = {
+    observation_id: observationId,
+    finding_id: findingId,
+    fingerprint,
+    title: findingTitle,
+    severity: "high",
+    confidence: "high",
+    observed_at: observedAt,
+    snapshot_source: "run_snapshot",
+    evidence_hashes: [artifactSha256],
+    asset_ids: [assetId],
+    engine_ids: ["gitleaks"],
+  };
+  const binding = {
+    evidence_id: evidenceId,
+    artifact_id: artifactId,
+    artifact_sha256: artifactSha256,
+    engine_run_id: engineRunId,
+    engine_id: "gitleaks",
+    source_rule: null,
+    engine_mapping_version: null,
+    engine_mapping_provenance_state: "unavailable_legacy",
+    engine_mapping_provenance: null,
+    mapping_version_state: "unavailable",
+  };
+  const frameworkSource = (framework) => {
+    if (framework === "NIST CSF") {
+      return {
+        source_url: "https://doi.org/10.6028/NIST.CSWP.29",
+        attribution_notice: "NIST Cybersecurity Framework (CSF) 2.0, National Institute of Standards and Technology.",
+        license_notice: "Use of NIST source material remains subject to the source publication's notices.",
+        modifications_notice: "Framework relationships and rationales in this report are project-authored navigation metadata.",
+        non_endorsement_notice: "NIST has not reviewed or endorsed this report or integration.",
+      };
+    }
+    if (framework === "ISO/IEC 27001") {
+      return {
+        source_url: "https://www.iso.org/standard/27001",
+        attribution_notice: "ISO/IEC 27001:2022 control coordinates are referenced nominatively.",
+        license_notice: "ISO/IEC standard content remains subject to ISO's terms; this report is not a copy of the standard.",
+        modifications_notice: "Framework relationships and rationales in this report are project-authored navigation metadata.",
+        non_endorsement_notice: "ISO and IEC have not reviewed or endorsed this report or integration.",
+      };
+    }
+    return {
+      source_url: "https://github.com/edward-playground/aidefense-framework/blob/e10c1678ee49f03f8fb0c97d446ba3fbc3543655/data/data.json",
+      attribution_notice: "AIDEFEND AI Defense Framework, created by Edward Lee, https://aidefend.net, licensed under CC BY 4.0.",
+      license_notice: "Creative Commons Attribution 4.0 International: https://creativecommons.org/licenses/by/4.0/",
+      modifications_notice: "ai-security-scanner uses a modified, project-authored six-record metadata selection from AIDEFEND 1.20260805 at pinned commit e10c1678ee49f03f8fb0c97d446ba3fbc3543655.",
+      non_endorsement_notice: "This independent integration is not affiliated with, approved, certified, sponsored, or endorsed by AIDEFEND or its owner.",
+    };
+  };
+  const relatedFramework = ({ framework, expectedVersion, controlId, title, rationale }) => ({
+    framework,
+    expected_version: expectedVersion,
+    source: frameworkSource(framework),
+    observed_versions: [expectedVersion],
+    version_state: "expected_version_only",
+    observed_mapping_versions: [mappingVersion],
+    evidence_engine_mapping_versions: [],
+    mapping_version_state: "relationship_provenance_unavailable",
+    exact_match_relationship_count: 0,
+    mismatch_relationship_count: 0,
+    unavailable_relationship_count: 1,
+    state: "related_coordinates_observed",
+    relationship_count: 1,
+    control_count: 1,
+    finding_count: 1,
+    explanation: "One or more preliminary findings carry an evidence-bound relationship to this framework. The relationship is a navigation aid, not a control result.",
+    controls: [{
+      control_id: controlId,
+      title,
+      framework_version: expectedVersion,
+      relationships: [{
+        relationship: "related",
+        rationale,
+        mapping_version: mappingVersion,
+        mapping_provenance_state: "unavailable_legacy",
+        mapping_provenance: null,
+        mapping_version_state: "unavailable",
+        finding: { ...finding },
+        evidence_bindings: [{ ...binding }],
+      }],
+    }],
+  });
+  const nistReference = {
+    control_id: "PR.DS-01",
+    framework: "NIST CSF",
+    framework_version: "2.0",
+    mapping_provenance: null,
+    mapping_version: mappingVersion,
+    rationale: "Credential exposure evidence is related to protecting stored authentication data.",
+    relationship: "related",
+    title: "Data-at-rest protection",
+  };
+  const isoReference = {
+    control_id: "A.8.3",
+    framework: "ISO/IEC 27001",
+    framework_version: "2022",
+    mapping_provenance: null,
+    mapping_version: mappingVersion,
+    rationale: "Credential exposure evidence is related to restricting access to sensitive information.",
+    relationship: "related",
+    title: "Information access restriction",
+  };
+  const report = {
+    schema_version: "1.1.0",
+    product_name: "ai-security-scanner",
+    product_version: VERSION,
+    export_kind: "master_framework_relationship_report",
+    case_id: caseId,
+    selected_run_id: runId,
+    selected_run_sequence: 1,
+    selected_run_recorded_at: recordedAt,
+    knowledge_date: knowledgeDate,
+    notice: MASTER_FRAMEWORK_REPORT_NOTICE,
+    coverage: {
+      state: "incomplete_or_unknown",
+      coverage_ledger_basis: "current_case_coverage_as_of_export",
+      selected_run_checks_complete: true,
+      current_coverage_ledger_has_unknown_or_incomplete_entries: true,
+      historical_coverage_mismatch_count: 0,
+      planned_engine_count: 1,
+      completed_engine_count: 1,
+      unfinished_engine_count: 0,
+      not_executed_engine_count: 0,
+      coverage_entry_count: 1,
+      unknown_source_count: 1,
+      connected_no_asset_count: 0,
+      authorized_incomplete_count: 0,
+      discovered_not_authorized_count: 0,
+      selected_run_finding_count: 1,
+      selected_run_snapshot_count: 1,
+      selected_run_missing_snapshot_count: 0,
+      selected_run_observations_without_evidence_count: 0,
+      engine_states: { completed: 1 },
+      coverage_states: { source_not_connected_unknown: 1 },
+      limitations: [
+        "1 source area(s) had no visibility; this is unknown coverage, not zero assets.",
+        "No related finding or framework coordinate is interpreted as a passed control or a complete environment.",
+      ],
+    },
+    declared_ai_context: {
+      ai_system_applicability: "unknown",
+      ai_generated_artifact: "unknown",
+      aidefend_applicability: "unknown",
+      explanation: "At least one required AI-context answer is legacy or unanswered, and no answer explicitly establishes AI applicability. AIDEFEND applicability remains unknown.",
+    },
+    observation_provenance: [{
+      observation_id: observationId,
+      finding_id: findingId,
+      fingerprint,
+      snapshot_state: "run_snapshot",
+      evidence_reference_state: "validated_from_run_snapshot",
+      framework_mapping_state: "run_snapshot_relationships_used",
+    }],
+    frameworks: [
+      relatedFramework({
+        framework: "NIST CSF",
+        expectedVersion: "2.0",
+        controlId: nistReference.control_id,
+        title: nistReference.title,
+        rationale: nistReference.rationale,
+      }),
+      relatedFramework({
+        framework: "ISO/IEC 27001",
+        expectedVersion: "2022",
+        controlId: isoReference.control_id,
+        title: isoReference.title,
+        rationale: isoReference.rationale,
+      }),
+      {
+        framework: "AIDEFEND",
+        expected_version: "1.20260805",
+        source: frameworkSource("AIDEFEND"),
+        observed_versions: [],
+        version_state: "no_relationship_observed",
+        observed_mapping_versions: [],
+        evidence_engine_mapping_versions: [],
+        mapping_version_state: "no_relationship_observed",
+        exact_match_relationship_count: 0,
+        mismatch_relationship_count: 0,
+        unavailable_relationship_count: 0,
+        state: "unknown_due_to_unanswered_context",
+        relationship_count: 0,
+        control_count: 0,
+        finding_count: 0,
+        explanation: "No AIDEFEND coordinate was inferred because at least one required AI-context answer is legacy or unanswered. This remains unknown, not not-applicable.",
+        controls: [],
+      },
+    ],
+    unrecognized_relationships: [],
+  };
+  const rawArtifacts = {
+    raw_artifacts: [{
+      id: artifactId,
+      case_id: caseId,
+      run_id: runId,
+      engine_run_id: engineRunId,
+      sha256: artifactSha256,
+    }],
+  };
+  const scanRuns = {
+    scan_runs: [{
+      id: runId,
+      case_id: caseId,
+      sequence: 1,
+      created_at: knowledgeDate,
+      completed_at: recordedAt,
+      knowledge_cutoff: knowledgeDate,
+      ai_system_applicable: false,
+      ai_system_applicability: "unknown",
+      ai_generated_artifact: "unknown",
+      engine_runs: [{
+        id: engineRunId,
+        scan_run_id: runId,
+        engine_id: "gitleaks",
+        status: "completed",
+        mapping_version: null,
+        mapping_provenance: null,
+      }],
+    }],
+  };
+  const observations = {
+    finding_observations: [{
+      id: observationId,
+      finding_id: findingId,
+      fingerprint,
+      observed_at: observedAt,
+      run_id: runId,
+      severity: "high",
+      confidence: "high",
+      asset_ids: [assetId],
+      engine_ids: ["gitleaks"],
+      evidence_hashes: [artifactSha256],
+      finding_snapshot: {
+        id: findingId,
+        case_id: caseId,
+        fingerprint,
+        last_seen_run_id: runId,
+        severity: "high",
+        confidence: "high",
+        title: findingTitle,
+        asset_ids: [assetId],
+        evidence: [{
+          id: evidenceId,
+          artifact_id: artifactId,
+          artifact_sha256: artifactSha256,
+          engine_id: "gitleaks",
+          engine_run_id: engineRunId,
+          finding_id: findingId,
+          run_id: runId,
+          source_rule: null,
+        }],
+        control_references: [nistReference, isoReference],
+      },
+    }],
+  };
+  const coverage = {
+    coverage: [{
+      id: "coverage-source-unknown-001",
+      last_run_id: runId,
+      status: "source_not_connected_unknown",
+    }],
+  };
+  const reportBytes = jsonFixtureBytes(report);
+  const candidatePayloads = {
+    "coverage.json": { bytes: jsonFixtureBytes(coverage), mediaType: "application/json", sensitive: true },
+    "exports/master-framework-report.json": { bytes: reportBytes, mediaType: "application/json", sensitive: true },
+    "integrity/local-signing-identity.json": { bytes: jsonFixtureBytes(identityDocument), mediaType: "application/json", sensitive: false },
+    "observations.json": { bytes: jsonFixtureBytes(observations), mediaType: "application/json", sensitive: true },
+    "raw-artifacts.json": { bytes: jsonFixtureBytes(rawArtifacts), mediaType: "application/json", sensitive: true },
+    "scan-runs.json": { bytes: jsonFixtureBytes(scanRuns), mediaType: "application/json", sensitive: true },
+  };
+  return {
+    report,
+    reportBytes,
+    candidatePayloads,
+    priorPayloads: {
+      "case.json": {
+        bytes: jsonFixtureBytes({ case_id: caseId, selected_run_id: runId, fixture: "n-minus-one-before-upgrade" }),
+        mediaType: "application/json",
+        sensitive: true,
+      },
+    },
+  };
+}
+
 async function createWindowsNsisMigrationQualificationFixtures(output) {
   const installerManifest = await readJson(path.join(output, "installers-windows-x86_64.json"));
   const nsis = installerManifest.installers.find((installer) => installer.bundleType === "nsis");
@@ -495,6 +957,7 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
     runtimeManifestSha256: "8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f",
     machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
   };
+  const identityFixture = createLegacySigningIdentityFixture();
   const signing = {
     signingKeyIdBefore: LEGACY_KEY_ID,
     signingKeyIdAfter: LEGACY_KEY_ID,
@@ -503,14 +966,14 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
     privateSigningKeyProtected: true,
     publicIdentitySummaryExact: true,
     durableIdentityDocumentPresent: true,
-    identityDocumentBytes: 1024,
-    identityDocumentCompactSha256: "ab".repeat(32),
+    identityDocumentBytes: identityFixture.bytes,
+    identityDocumentCompactSha256: identityFixture.compactSha256,
     identityDocumentProtected: true,
     durableIdentityAnchorPresent: true,
     identityAnchorBytes: 2048,
     identityAnchorProtected: true,
     anchorSchemaVersion: "1",
-    anchorIdentityDocumentSha256: "ab".repeat(32),
+    anchorIdentityDocumentSha256: identityFixture.compactSha256,
     anchorDigestVerified: true,
     anchorMatchesIdentityDocument: true,
     identitySelfSignatureVerifiedByCandidate: true,
@@ -527,6 +990,47 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
     installerBytes: nsis.bytes,
     installerSha256: nsis.sha256,
   };
+  const reportCaseId = "00112233-4455-6677-8899-aabbccddeeff";
+  const reportRunId = "11223344-5566-7788-99aa-bbccddeeff00";
+  const signedFrameworkFixture = createMasterFrameworkSignedFixture(
+    reportCaseId,
+    reportRunId,
+    identityFixture.document,
+  );
+  const masterFrameworkReportFile = path.join(output, "master-framework-report.json");
+  await writeFile(masterFrameworkReportFile, signedFrameworkFixture.reportBytes);
+  const masterFrameworkReportBytes = (await lstat(masterFrameworkReportFile)).size;
+  const masterFrameworkReportSha256 = await sha256File(masterFrameworkReportFile);
+  const candidateBundleFile = path.join(output, "master-framework-report.case.tar.gz");
+  const priorBundleFile = path.join(output, "n-minus-one-before-upgrade.case.tar.gz");
+  const candidateBundleOptions = {
+    version: VERSION,
+    caseId: reportCaseId,
+    runId: reportRunId,
+    payloads: signedFrameworkFixture.candidatePayloads,
+    schemas: {
+      bundle: "1",
+      local_signing_identity: "1",
+      master_framework_report: "1.1.0",
+    },
+    rawArtifactCount: 1,
+  };
+  const priorBundleOptions = {
+    version: "0.1.7",
+    caseId: reportCaseId,
+    runId: reportRunId,
+    payloads: signedFrameworkFixture.priorPayloads,
+  };
+  const validCandidateBundle = createSignedCaseBundleFixture(candidateBundleOptions);
+  const validPriorBundle = createSignedCaseBundleFixture(priorBundleOptions);
+  if (
+    !validCandidateBundle.equals(createSignedCaseBundleFixture(candidateBundleOptions)) ||
+    !validPriorBundle.equals(createSignedCaseBundleFixture(priorBundleOptions))
+  ) {
+    throw new Error("release self-test signed case bundle fixtures are not byte-deterministic");
+  }
+  await writeFile(candidateBundleFile, validCandidateBundle);
+  await writeFile(priorBundleFile, validPriorBundle);
   const upgradeObservations = {
     schemaVersion: 1,
     scenario: "real_n_minus_one_nsis_upgrade",
@@ -553,10 +1057,28 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       preInstallerBytes: 8192,
       exactPreInstallerSnapshotPreserved: true,
       sentinelPreserved: true,
-      demoCaseId: "00112233-4455-6677-8899-aabbccddeeff",
+      demoCaseId: reportCaseId,
       demoCasePreserved: true,
       privateSigningMaterialBytePreserved: true,
       ...signing,
+      identityDocument: identityFixture.document,
+    },
+    masterFrameworkReport: {
+      reportFile: "master-framework-report.json",
+      reportBytes: masterFrameworkReportBytes,
+      reportSha256: masterFrameworkReportSha256,
+      bundleEntryPath: "exports/master-framework-report.json",
+      bundleEntryBytes: masterFrameworkReportBytes,
+      bundleEntrySha256: masterFrameworkReportSha256,
+      exactBundleEntryMatch: true,
+      schemaVersion: "1.1.0",
+      product: "ai-security-scanner",
+      productVersion: VERSION,
+      caseId: reportCaseId,
+      runId: reportRunId,
+      frameworkKeys: ["nist_csf", "iso_iec_27001", "aidefend"],
+      truthfulUnknownCoverage: true,
+      noComplianceOutcomeClaims: true,
     },
     managedRuntimeFilesystemSentinel: {
       priorProviderNamespace: "8b2257ace33ecb14",
@@ -578,12 +1100,67 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
   const upgradeEvidence = path.join(output, "windows-nsis-upgrade-qualification.json");
   run("windows-nsis-upgrade-evidence.mjs", [
     "create", "--artifact-dir", output, "--observations", upgradeObservationsFile,
+    "--report", masterFrameworkReportFile,
+    "--bundle", candidateBundleFile, "--prior-bundle", priorBundleFile,
     "--out", upgradeEvidence, "--version", VERSION, "--tag", TAG, "--commit", COMMIT,
   ]);
-  run("windows-nsis-upgrade-evidence.mjs", [
+  const validateUpgradeEvidence = () => run("windows-nsis-upgrade-evidence.mjs", [
     "validate", "--file", upgradeEvidence, "--artifact-dir", output,
+    "--report", masterFrameworkReportFile,
+    "--bundle", candidateBundleFile, "--prior-bundle", priorBundleFile,
     "--version", VERSION, "--tag", TAG, "--commit", COMMIT,
   ]);
+  validateUpgradeEvidence();
+
+  await writeFile(priorBundleFile, createSignedCaseBundleFixture({
+    ...priorBundleOptions,
+    keyPair: WRONG_PRIOR_TEST_KEY_PAIR,
+  }));
+  expectFailure(validateUpgradeEvidence, "N-1 signed case bundle with the wrong integrity signer");
+  await writeFile(priorBundleFile, validPriorBundle);
+
+  const candidateBundleWithJsonMutation = (entryPath, mutate) => {
+    const payloads = Object.fromEntries(Object.entries(signedFrameworkFixture.candidatePayloads)
+      .map(([pathname, record]) => [pathname, { ...record, bytes: Buffer.from(record.bytes) }]));
+    const document = JSON.parse(payloads[entryPath].bytes.toString("utf8"));
+    mutate(document);
+    payloads[entryPath].bytes = jsonFixtureBytes(document);
+    return createSignedCaseBundleFixture({ ...candidateBundleOptions, payloads });
+  };
+  const reportBindingPayloads = Object.fromEntries(
+    Object.entries(signedFrameworkFixture.candidatePayloads)
+      .map(([pathname, record]) => [pathname, { ...record, bytes: Buffer.from(record.bytes) }]),
+  );
+  reportBindingPayloads["exports/master-framework-report.json"].bytes = Buffer.concat([
+    signedFrameworkFixture.reportBytes,
+    Buffer.from(" \n", "utf8"),
+  ]);
+  await writeFile(candidateBundleFile, createSignedCaseBundleFixture({
+    ...candidateBundleOptions,
+    payloads: reportBindingPayloads,
+  }));
+  expectFailure(validateUpgradeEvidence, "signed case bundle whose report bytes do not bind to the retained report");
+  await writeFile(candidateBundleFile, validCandidateBundle);
+
+  const impossibleProvenanceBundle = candidateBundleWithJsonMutation("observations.json", (document) => {
+    document.finding_observations[0].finding_snapshot.evidence[0].artifact_sha256 = "ff".repeat(32);
+  });
+  if (
+    impossibleProvenanceBundle.equals(validCandidateBundle) ||
+    !gunzipSync(impossibleProvenanceBundle).includes(Buffer.from(`"artifact_sha256": "${"ff".repeat(32)}"`))
+  ) {
+    throw new Error("release self-test failed to construct its impossible signed provenance fixture");
+  }
+  await writeFile(candidateBundleFile, impossibleProvenanceBundle);
+  expectFailure(validateUpgradeEvidence, "signed case bundle with impossible observation provenance");
+  await writeFile(candidateBundleFile, validCandidateBundle);
+
+  await writeFile(candidateBundleFile, candidateBundleWithJsonMutation("scan-runs.json", (document) => {
+    document.scan_runs[0].ai_system_applicability = "not_applicable";
+    document.scan_runs[0].ai_generated_artifact = "no";
+  }));
+  expectFailure(validateUpgradeEvidence, "signed case bundle whose frozen AI answers contradict the report");
+  await writeFile(candidateBundleFile, validCandidateBundle);
 
   const ghostObservations = {
     schemaVersion: 1,
@@ -908,6 +1485,16 @@ async function main() {
       "--test-only-windows-runtime-manifest-sha256",
       selfTestRuntimeManifestSha256,
     ];
+    const candidateSignedBundle = path.join(release, "master-framework-report.case.tar.gz");
+    const hiddenCandidateSignedBundle = `${candidateSignedBundle}.missing`;
+    await rename(candidateSignedBundle, hiddenCandidateSignedBundle);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "missing candidate signed case bundle");
+    await rename(hiddenCandidateSignedBundle, candidateSignedBundle);
+    const priorSignedBundle = path.join(release, "n-minus-one-before-upgrade.case.tar.gz");
+    const hiddenPriorSignedBundle = `${priorSignedBundle}.missing`;
+    await rename(priorSignedBundle, hiddenPriorSignedBundle);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "missing N-1 signed case bundle");
+    await rename(hiddenPriorSignedBundle, priorSignedBundle);
     const upgradeQualification = path.join(release, "windows-nsis-upgrade-qualification.json");
     const hiddenUpgradeQualification = `${upgradeQualification}.missing`;
     await rename(upgradeQualification, hiddenUpgradeQualification);
@@ -929,6 +1516,61 @@ async function main() {
     await writeFile(upgradeQualification, `${JSON.stringify(mismatchedUpgradeAnchor, null, 2)}\n`);
     expectFailure(() => run("finalize-release.mjs", finalizeArguments), "upgrade evidence with mismatched signing identity anchor");
     await writeFile(upgradeQualification, validUpgradeQualification);
+    const invalidIdentitySignature = JSON.parse(validUpgradeQualification.toString("utf8"));
+    const identityDocument = invalidIdentitySignature.observations.dataPreservation.identityDocument;
+    const invalidSignatureBytes = Buffer.from(identityDocument.self_signature_base64, "base64");
+    invalidSignatureBytes[0] ^= 0x01;
+    identityDocument.self_signature_base64 = invalidSignatureBytes.toString("base64");
+    const invalidIdentityCompact = Buffer.from(JSON.stringify(identityDocument), "utf8");
+    const invalidIdentityDigest = createHash("sha256").update(invalidIdentityCompact).digest("hex");
+    invalidIdentitySignature.observations.dataPreservation.identityDocumentCompactSha256 = invalidIdentityDigest;
+    invalidIdentitySignature.observations.dataPreservation.anchorIdentityDocumentSha256 = invalidIdentityDigest;
+    await writeFile(upgradeQualification, `${JSON.stringify(invalidIdentitySignature, null, 2)}\n`);
+    expectFailure(
+      () => run("finalize-release.mjs", finalizeArguments),
+      "upgrade evidence with a forged public identity self-signature",
+    );
+    await writeFile(upgradeQualification, validUpgradeQualification);
+    const masterFrameworkReportPath = path.join(release, "master-framework-report.json");
+    const validMasterFrameworkReport = await readFile(masterFrameworkReportPath);
+    await writeFile(
+      masterFrameworkReportPath,
+      Buffer.concat([validMasterFrameworkReport, Buffer.from(" \n")]),
+    );
+    expectFailure(
+      () => run("finalize-release.mjs", finalizeArguments),
+      "retained master framework report whose bytes differ from its signed bundle entry",
+    );
+    await writeFile(masterFrameworkReportPath, validMasterFrameworkReport);
+    const expectSemanticallyInvalidBoundReport = async (mutate, label) => {
+      const report = JSON.parse(validMasterFrameworkReport.toString("utf8"));
+      mutate(report);
+      const reportBytes = Buffer.from(`${JSON.stringify(report, null, 2)}\n`, "utf8");
+      const reportSha256 = createHash("sha256").update(reportBytes).digest("hex");
+      const qualification = JSON.parse(validUpgradeQualification.toString("utf8"));
+      const binding = qualification.observations.masterFrameworkReport;
+      binding.reportBytes = reportBytes.length;
+      binding.reportSha256 = reportSha256;
+      binding.bundleEntryBytes = reportBytes.length;
+      binding.bundleEntrySha256 = reportSha256;
+      await writeFile(masterFrameworkReportPath, reportBytes);
+      await writeFile(upgradeQualification, `${JSON.stringify(qualification, null, 2)}\n`);
+      expectFailure(() => run("finalize-release.mjs", finalizeArguments), label);
+      await writeFile(masterFrameworkReportPath, validMasterFrameworkReport);
+      await writeFile(upgradeQualification, validUpgradeQualification);
+    };
+    await expectSemanticallyInvalidBoundReport(
+      (report) => { report.schema_version = "1.0.0"; },
+      "master framework report with an unsupported schema",
+    );
+    await expectSemanticallyInvalidBoundReport(
+      (report) => { [report.frameworks[0], report.frameworks[1]] = [report.frameworks[1], report.frameworks[0]]; },
+      "master framework report with reordered framework identities",
+    );
+    await expectSemanticallyInvalidBoundReport(
+      (report) => { report.compliance_score = 100; },
+      "master framework report with a forbidden compliance outcome",
+    );
     const validGhostQualification = await readFile(ghostQualification);
     const dishonestGhostQualification = JSON.parse(validGhostQualification.toString("utf8"));
     dishonestGhostQualification.observations.runtimeRecovery.intentProofValid = false;
@@ -1110,6 +1752,8 @@ async function main() {
       COMMIT,
       "--publication-mode",
       "commit-bound-qc",
+      "--test-only-windows-runtime-manifest-sha256",
+      selfTestRuntimeManifestSha256,
     ];
     const tamperedFinalizedFile = path.join(release, "LICENSE.txt");
     const originalFinalizedBytes = await readFile(tamperedFinalizedFile);
@@ -1126,11 +1770,15 @@ async function main() {
     const cyclonedx = await readJson(path.join(release, `ai-security-scanner-${VERSION}.cyclonedx.json`));
     const spdx = await readJson(path.join(release, `ai-security-scanner-${VERSION}.spdx.json`));
     const latest = await readJson(path.join(release, "latest.json"));
+    const releaseAssets = await readJson(path.join(release, "release-assets.json"));
     const releaseNotes = await readFile(path.join(release, "RELEASE_NOTES.md"), "utf8");
     const checksums = await readFile(path.join(release, "SHA256SUMS.txt"), "utf8");
+    const checksumLines = checksums.trimEnd().split("\n");
     if (
       cyclonedx.components.length !== 15 ||
       spdx.packages.length !== 15 ||
+      releaseAssets.files.length !== 58 ||
+      checksumLines.length !== 59 ||
       latest.version !== VERSION ||
       !latest.notes.includes("Automatically recovers product-owned Windows scan-tool workspaces") ||
       !latest.notes.includes("preserves a verified recovery copy") ||
@@ -1150,8 +1798,16 @@ async function main() {
       !checksums.includes("platform-qualification-windows-x86_64-nsis.json") ||
       !checksums.includes("windows-nsis-upgrade-qualification.json") ||
       !checksums.includes("windows-nsis-ghost-recovery-qualification.json") ||
+      !checksums.includes("master-framework-report.json") ||
+      !checksums.includes("master-framework-report.case.tar.gz") ||
+      !checksums.includes("n-minus-one-before-upgrade.case.tar.gz") ||
       !releaseNotes.includes("Linux and both Windows installers completed") ||
       !releaseNotes.includes("two separate v0.1.7 migration qualifications") ||
+      !releaseNotes.includes("NIST CSF 2.0") ||
+      !releaseNotes.includes("AIDEFEND 1.20260805") ||
+      !releaseNotes.includes("without turning them into a compliance score") ||
+      !releaseNotes.includes("same report bytes are bound to the candidate's verified signed case bundle") ||
+      !releaseNotes.includes("Both bounded synthetic case bundles—from the real N-1 install and the candidate—are retained") ||
       !releaseNotes.includes("automatic bounded recovery without the manual-action fallback") ||
       !releaseNotes.includes("fixed no-upstream managed egress gateway readiness") ||
       !releaseNotes.includes("managed-runtime, egress gateway, and container lifecycle is explicitly recorded as not observed") ||
@@ -1172,7 +1828,7 @@ async function main() {
       throw new Error("finalized release did not preserve updater and companion executable evidence");
     }
     process.stdout.write(
-      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact runtime-manifest evidence sets, four strict hosted installer qualifications, and two required Windows NSIS migration qualifications.\n",
+      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact runtime-manifest evidence sets, four strict hosted installer qualifications, one evidence-bound master framework report, two deterministic retained signed case bundles, and two required Windows NSIS migration qualifications.\n",
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });

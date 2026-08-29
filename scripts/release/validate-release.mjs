@@ -339,14 +339,58 @@ function validateReleaseWorkflow(workflow) {
     "--installer-type",
     "needs.validate.outputs.release_channel",
     "platform-qualification-${{ matrix.qualification_id }}.json",
-    "qualify-windows-nsis-upgrade.ps1",
-    "windows-nsis-upgrade-evidence.mjs create",
-    "windows-nsis-upgrade-qualification.json",
-    "qualify-windows-nsis-ghost-recovery.ps1",
-    "windows-nsis-ghost-recovery-evidence.mjs create",
-    "windows-nsis-ghost-recovery-qualification.json",
   ]) {
     assert(qualificationSource.includes(required), `platform qualification job is missing: ${required}`);
+  }
+  assert(
+    !qualificationSource.includes("qualify-windows-nsis-upgrade.ps1") &&
+      !qualificationSource.includes("qualify-windows-nsis-ghost-recovery.ps1"),
+    "generic installer qualification must not contaminate either migration qualification runner",
+  );
+
+  const isolatedWindowsQualifications = [
+    {
+      jobName: "windows-nsis-upgrade-qualification",
+      required: [
+        "qualify-windows-nsis-upgrade.ps1",
+        "windows-nsis-upgrade-evidence.mjs create",
+        "windows-nsis-upgrade-evidence.mjs validate",
+        "windows-nsis-upgrade-qualification.json",
+        "master-framework-report.json",
+        "master-framework-report.case.tar.gz",
+        "n-minus-one-before-upgrade.case.tar.gz",
+        "--report",
+        "--bundle",
+        "--prior-bundle",
+      ],
+    },
+    {
+      jobName: "windows-nsis-ghost-recovery-qualification",
+      required: [
+        "qualify-windows-nsis-ghost-recovery.ps1",
+        "windows-nsis-ghost-recovery-evidence.mjs create",
+        "windows-nsis-ghost-recovery-evidence.mjs validate",
+        "windows-nsis-ghost-recovery-qualification.json",
+      ],
+    },
+  ];
+  for (const { jobName, required } of isolatedWindowsQualifications) {
+    const job = workflow.jobs?.[jobName];
+    assert(job, `release workflow has no isolated ${jobName} job`);
+    assert(
+      JSON.stringify(job.needs) === JSON.stringify(["validate", "build"]),
+      `${jobName} must consume only the validated independently built Windows artifact`,
+    );
+    assert(job["runs-on"] === "windows-2025", `${jobName} must use a fresh hosted Windows runner`);
+    assert(job.permissions?.contents === "read", `${jobName} must remain read-only`);
+    assert(
+      Number.isInteger(job["timeout-minutes"]) && job["timeout-minutes"] >= 360,
+      `${jobName} timeout cannot truncate its real Windows migration proof`,
+    );
+    const source = JSON.stringify(job);
+    for (const token of required) {
+      assert(source.includes(token), `${jobName} is missing: ${token}`);
+    }
   }
 
   const supplyChainSource = JSON.stringify(workflow.jobs?.["supply-chain"]);
@@ -360,8 +404,15 @@ function validateReleaseWorkflow(workflow) {
   const assemble = workflow.jobs?.assemble;
   assert(assemble, "release workflow has no read-only assemble job");
   assert(
-    JSON.stringify(assemble.needs) === JSON.stringify(["validate", "supply-chain", "build", "qualification"]),
-    "assemble job must depend on validation, supply-chain evidence, every platform build, and all qualifications",
+    JSON.stringify(assemble.needs) === JSON.stringify([
+      "validate",
+      "supply-chain",
+      "build",
+      "qualification",
+      "windows-nsis-upgrade-qualification",
+      "windows-nsis-ghost-recovery-qualification",
+    ]),
+    "assemble job must depend on validation, supply-chain evidence, every platform build, and every isolated qualification",
   );
   assert(assemble.permissions?.contents === "read", "assemble job must remain read-only");
   assert(
@@ -627,9 +678,14 @@ function validatePlatformQualificationSources(sources) {
     "anchorIdentitySha256",
     "identityDocumentSha256",
     "rotationIntentAbsent = $true",
+    "master-framework-report.case.tar.gz",
+    "n-minus-one-before-upgrade.case.tar.gz",
+    "Retained signed candidate case bundle after cleanup",
+    "Retained signed N-1 case bundle after cleanup",
     "FILE_FLAG_OPEN_REPARSE_POINT",
     "Open-NoFollowSingleLinkFile",
     "Get-NoFollowFileSha256Proof",
+    "ConvertFrom-Json -DateKind String",
     "ExpectedExecutableProof",
     "HashData($executionGuard)",
     "executable is not the exact previously verified installer",
@@ -648,6 +704,18 @@ function validatePlatformQualificationSources(sources) {
     "anchorIdentityDocumentSha256",
     "anchorMatchesIdentityDocument",
     "rotationIntentAbsent",
+    "gunzipSync",
+    "parseBoundedTarGz",
+    "tar header checksum mismatch",
+    "nonzero or truncated tar padding",
+    "manifest entries are not deterministically sorted",
+    "verifySignedCaseBundle",
+    "master-framework-report.case.tar.gz",
+    "n-minus-one-before-upgrade.case.tar.gz",
+    "N-1 and candidate signed case bundles do not prove the same integrity-signing identity",
+    "retained master framework report bytes differ from the independently verified signed bundle entry",
+    "validateReportAgainstSignedBundle(reportRecord.report, candidate)",
+    "declared AI-context explanation differs from the fixed truthful contract",
     "validateWindowsNsisUpgradeEvidenceFile",
   ]) assert(nsisUpgradeEvidence.includes(required), `normal Windows N-1 evidence contract is missing: ${required}`);
   for (const required of [
@@ -731,6 +799,8 @@ function validatePlatformQualificationSources(sources) {
     "validateWindowsNsisGhostRecoveryEvidenceFile",
     "windows-nsis-upgrade-qualification.json",
     "windows-nsis-ghost-recovery-qualification.json",
+    "master-framework-report.case.tar.gz",
+    "n-minus-one-before-upgrade.case.tar.gz",
     "two separate v0.1.7 migration qualifications",
     'manifest.schema_version === "3"',
     'manifest.management_contract_revision === "2026-08-29.1"',
@@ -746,6 +816,10 @@ function validatePlatformQualificationSources(sources) {
     "missing registered-WSL ghost qualification",
     "upgrade evidence without legacy identity adoption",
     "upgrade evidence with mismatched signing identity anchor",
+    "N-1 signed case bundle with the wrong integrity signer",
+    "signed case bundle whose report bytes do not bind to the retained report",
+    "signed case bundle with impossible observation provenance",
+    "signed case bundle whose frozen AI answers contradict the report",
     "ghost evidence without a verified v2 recovery intent",
     "ghost evidence with a lost same-version transition receipt",
     "ghost evidence with an unconsumed registry receipt",

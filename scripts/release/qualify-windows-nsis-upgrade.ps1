@@ -16,6 +16,7 @@ $priorInstallerUrl = "https://github.com/teddashh/ai-security-scanner/releases/d
 $priorRuntimeManifestSha256 = "8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f"
 $priorMachineImageSha256 = "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968"
 $maximumPriorDownloadBytes = 64 * 1024 * 1024
+$maximumRetainedCaseBundleBytes = 64 * 1024 * 1024
 $maximumDataSnapshotBytes = 512 * 1024 * 1024
 $maximumDataSnapshotFiles = 4096
 
@@ -273,7 +274,7 @@ function Read-BoundedUtf8File([string]$Path, [string]$Label, [uint64]$MaximumByt
 function Read-BoundedJsonFile([string]$Path, [string]$Label, [uint64]$MaximumBytes = 64 * 1024) {
   $record = Read-BoundedUtf8File $Path $Label $MaximumBytes
   try {
-    return $record.Text | ConvertFrom-Json
+    return $record.Text | ConvertFrom-Json -DateKind String
   } catch {
     throw "$Label is not one stable bounded UTF-8 JSON document: $($_.Exception.Message)"
   }
@@ -426,7 +427,7 @@ function Invoke-ExactProcess(
 function Invoke-CliJson([string]$Cli, [string[]]$Arguments, [string]$Label) {
   $result = Invoke-ExactProcess $Cli $Arguments 120000 $Label $true
   try {
-    return $result.stdout | ConvertFrom-Json
+    return $result.stdout | ConvertFrom-Json -DateKind String
   } catch {
     throw "$Label did not emit one valid JSON document."
   }
@@ -657,8 +658,29 @@ Assert-RealDirectory $localApplicationData "OS-resolved LocalApplicationData" | 
 $dataDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "dev.teddashh.ai-security-scanner") "dev.teddashh.ai-security-scanner" "Default application data directory"
 $registrySentinelPath = "HKCU:\Software\dev.teddashh.ai-security-scanner\release-qualification\nsis-upgrade"
 $priorInstallerPath = Assert-ExactChildPath $workRoot (Join-Path $workRoot $priorInstallerName) $priorInstallerName "Pinned prior installer"
+$masterFrameworkReportPath = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "master-framework-report.json"
+) "master-framework-report.json" "Retained master framework report"
+$masterFrameworkBundlePath = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "master-framework-report.case.tar.gz"
+) "master-framework-report.case.tar.gz" "Retained signed candidate case bundle"
+$priorSignedCaseBundlePath = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "n-minus-one-before-upgrade.case.tar.gz"
+) "n-minus-one-before-upgrade.case.tar.gz" "Retained signed N-1 case bundle"
+$observationsPath = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "observations.json"
+) "observations.json" "Qualification observations"
 
-foreach ($freshPath in @($installDirectory, $dataDirectory, $priorInstallerPath, $registrySentinelPath)) {
+foreach ($freshPath in @(
+  $installDirectory,
+  $dataDirectory,
+  $priorInstallerPath,
+  $masterFrameworkReportPath,
+  $masterFrameworkBundlePath,
+  $priorSignedCaseBundlePath,
+  $observationsPath,
+  $registrySentinelPath
+)) {
   if (Test-Path -LiteralPath $freshPath) {
     throw "Windows NSIS upgrade qualification requires a fresh exact namespace: $freshPath"
   }
@@ -735,9 +757,7 @@ try {
   }
   $caseId = [string]$demoCase.id
   $runId = [string]$demoCase.scan_runs[0].id
-  $exportDirectory = Join-Path $dataDirectory "qualification-exports"
-  New-Item -ItemType Directory -Path $exportDirectory -Force | Out-Null
-  $beforeBundle = Join-Path $exportDirectory "before-upgrade.case.tar.gz"
+  $beforeBundle = $priorSignedCaseBundlePath
   Invoke-CliJson $priorCli @(
     "--json", "--data-dir", $dataDirectory,
     "export", "create", "--case-id", $caseId, "--run-id", $runId,
@@ -749,6 +769,9 @@ try {
   if ($beforeVerification.valid -ne $true) {
     throw "N-1 synthetic case bundle did not verify."
   }
+  $priorSignedCaseBundleProof = Get-NoFollowFileSha256Proof (
+    $priorSignedCaseBundlePath
+  ) "Retained signed N-1 case bundle" $maximumRetainedCaseBundleBytes
   $privateSigningKeyPath = Join-Path $dataDirectory "integrity-signing-key"
   Assert-RealFile $privateSigningKeyPath "Synthetic-case integrity signing key" (64 * 1024) | Out-Null
   $privateSigningKeySha256Before = Get-LowerSha256 $privateSigningKeyPath (64 * 1024)
@@ -862,8 +885,8 @@ try {
   $identityDocumentRecord = Read-BoundedUtf8File $identityDocumentPath "Durable export identity document" (64 * 1024)
   $identityAnchorRecord = Read-BoundedUtf8File $identityAnchorPath "Durable export identity anchor" (64 * 1024)
   try {
-    $identityDocument = $identityDocumentRecord.Text | ConvertFrom-Json
-    $identityAnchor = $identityAnchorRecord.Text | ConvertFrom-Json
+    $identityDocument = $identityDocumentRecord.Text | ConvertFrom-Json -DateKind String
+    $identityAnchor = $identityAnchorRecord.Text | ConvertFrom-Json -DateKind String
   } catch {
     throw "Durable export identity document or anchor is invalid JSON."
   }
@@ -882,6 +905,22 @@ try {
     "schema_version", "identity_document_sha256", "identity"
   ) "Durable export identity anchor"
   Assert-ExactJsonProperties $identityAnchor.identity $identityFields "Anchored export identity"
+  $identityJsonDocument = [Text.Json.JsonDocument]::Parse($identityDocumentRecord.Text)
+  try {
+    $identityJsonRoot = $identityJsonDocument.RootElement
+    $identityDocumentEvidence = [ordered]@{
+      schema_version = $identityJsonRoot.GetProperty("schema_version").GetString()
+      algorithm = $identityJsonRoot.GetProperty("algorithm").GetString()
+      key_id = $identityJsonRoot.GetProperty("key_id").GetString()
+      public_key_base64 = $identityJsonRoot.GetProperty("public_key_base64").GetString()
+      established_at = $identityJsonRoot.GetProperty("established_at").GetString()
+      continuity_event = $identityJsonRoot.GetProperty("continuity_event").GetString()
+      self_signature_base64 = $identityJsonRoot.GetProperty("self_signature_base64").GetString()
+      notice = $identityJsonRoot.GetProperty("notice").GetString()
+    }
+  } finally {
+    $identityJsonDocument.Dispose()
+  }
   $identityCompactBytes = Convert-JsonTextToCompactUtf8Bytes $identityDocumentRecord.Text
   $anchorIdentityCompactBytes = Convert-JsonTextToCompactUtf8Bytes $identityAnchorRecord.Text "identity"
   $identityCompactJson = [Text.Encoding]::UTF8.GetString($identityCompactBytes)
@@ -917,7 +956,7 @@ try {
   if (-not [String]::Equals([string]$candidateCase.id, $caseId, [StringComparison]::Ordinal)) {
     throw "Candidate CLI did not preserve the synthetic case identity."
   }
-  $afterBundle = Join-Path $exportDirectory "after-upgrade.case.tar.gz"
+  $afterBundle = $masterFrameworkBundlePath
   Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory,
     "export", "create", "--case-id", $caseId, "--run-id", $runId,
@@ -932,6 +971,94 @@ try {
       (Get-LowerSha256 $privateSigningKeyPath (64 * 1024)) -cne $privateSigningKeySha256Before -or
       (Test-Path -LiteralPath $rotationIntentPath)) {
     throw "Candidate export did not preserve and reuse the N-1 integrity signing identity."
+  }
+  $masterFrameworkBundleProof = Get-NoFollowFileSha256Proof (
+    $masterFrameworkBundlePath
+  ) "Retained signed candidate case bundle" $maximumRetainedCaseBundleBytes
+
+  Invoke-CliJson $candidateCli @(
+    "--json", "--data-dir", $dataDirectory,
+    "export", "create", "--case-id", $caseId, "--run-id", $runId,
+    "--format", "framework-report", "--destination", $masterFrameworkReportPath
+  ) "Candidate installed-artifact master framework report export" | Out-Null
+  $masterFrameworkReportProof = Get-NoFollowFileSha256Proof (
+    $masterFrameworkReportPath
+  ) "Installed-artifact master framework report" (4 * 1024 * 1024)
+  $masterFrameworkReport = Read-BoundedJsonFile (
+    $masterFrameworkReportPath
+  ) "Installed-artifact master framework report" (4 * 1024 * 1024)
+  Assert-ExactJsonProperties $masterFrameworkReport @(
+    "schema_version",
+    "product_name",
+    "product_version",
+    "export_kind",
+    "case_id",
+    "selected_run_id",
+    "selected_run_sequence",
+    "selected_run_recorded_at",
+    "knowledge_date",
+    "notice",
+    "coverage",
+    "declared_ai_context",
+    "observation_provenance",
+    "frameworks",
+    "unrecognized_relationships"
+  ) "Installed-artifact master framework report"
+  $expectedReportNotice = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete."
+  $frameworks = @($masterFrameworkReport.frameworks)
+  if ($masterFrameworkReport.schema_version -cne "1.1.0" -or
+      $masterFrameworkReport.product_name -cne "ai-security-scanner" -or
+      $masterFrameworkReport.product_version -cne $CurrentVersion -or
+      $masterFrameworkReport.export_kind -cne "master_framework_relationship_report" -or
+      $masterFrameworkReport.case_id -cne $caseId -or
+      $masterFrameworkReport.selected_run_id -cne $runId -or
+      $masterFrameworkReport.notice -cne $expectedReportNotice -or
+      $masterFrameworkReport.coverage.state -cne "incomplete_or_unknown" -or
+      $masterFrameworkReport.coverage.current_coverage_ledger_has_unknown_or_incomplete_entries -ne $true -or
+      @($masterFrameworkReport.coverage.limitations).Count -lt 1 -or
+      $masterFrameworkReport.declared_ai_context.aidefend_applicability -cne "unknown" -or
+      $frameworks.Count -ne 3 -or
+      $frameworks[0].framework -cne "NIST CSF" -or $frameworks[0].expected_version -cne "2.0" -or
+      [int]$frameworks[0].relationship_count -lt 1 -or
+      $frameworks[1].framework -cne "ISO/IEC 27001" -or $frameworks[1].expected_version -cne "2022" -or
+      [int]$frameworks[1].relationship_count -lt 1 -or
+      $frameworks[2].framework -cne "AIDEFEND" -or $frameworks[2].expected_version -cne "1.20260805" -or
+      $frameworks[2].state -cne "unknown_due_to_unanswered_context" -or
+      [int]$frameworks[2].relationship_count -ne 0) {
+    throw "Installed candidate did not emit the fixed truthful NIST, ISO 27001, and AIDEFEND master report contract."
+  }
+  $masterReportBundleEntries = @(
+    $afterVerification.manifest.entries |
+      Where-Object { [string]$_.path -ceq "exports/master-framework-report.json" }
+  )
+  if ($masterReportBundleEntries.Count -ne 1) {
+    throw "Verified candidate bundle does not contain exactly one master framework report entry."
+  }
+  $masterReportBundleEntry = $masterReportBundleEntries[0]
+  Assert-ExactJsonProperties $masterReportBundleEntry @(
+    "path", "media_type", "sha256", "byte_length", "contains_sensitive_data"
+  ) "Signed bundle master framework report entry"
+  if ([string]$masterReportBundleEntry.media_type -cne "application/json" -or
+      [string]$masterReportBundleEntry.sha256 -cne [string]$masterFrameworkReportProof.Sha256 -or
+      [int64]$masterReportBundleEntry.byte_length -ne [int64]$masterFrameworkReportProof.Length) {
+    throw "Standalone master framework report bytes do not exactly match the verified signed bundle entry."
+  }
+  $masterFrameworkReportObservation = [ordered]@{
+    reportFile = "master-framework-report.json"
+    reportBytes = [int64]$masterFrameworkReportProof.Length
+    reportSha256 = [string]$masterFrameworkReportProof.Sha256
+    bundleEntryPath = [string]$masterReportBundleEntry.path
+    bundleEntryBytes = [int64]$masterReportBundleEntry.byte_length
+    bundleEntrySha256 = [string]$masterReportBundleEntry.sha256
+    exactBundleEntryMatch = $true
+    schemaVersion = [string]$masterFrameworkReport.schema_version
+    product = [string]$masterFrameworkReport.product_name
+    productVersion = [string]$masterFrameworkReport.product_version
+    caseId = [string]$masterFrameworkReport.case_id
+    runId = [string]$masterFrameworkReport.selected_run_id
+    frameworkKeys = @("nist_csf", "iso_iec_27001", "aidefend")
+    truthfulUnknownCoverage = $true
+    noComplianceOutcomeClaims = $true
   }
 
   Invoke-ExactProcess $candidateUninstaller @("/S") 180000 "Candidate NSIS uninstall" | Out-Null
@@ -1010,6 +1137,7 @@ try {
       anchorDigestVerified = $true
       anchorMatchesIdentityDocument = $true
       identitySelfSignatureVerifiedByCandidate = $true
+      identityDocument = $identityDocumentEvidence
       rotationIntentAbsent = $true
       continuityEvent = [string]$candidateSigningIdentity.continuity_event
       identityKeyId = [string]$candidateSigningIdentity.key_id
@@ -1017,6 +1145,7 @@ try {
       firstBundleValid = $true
       secondBundleValid = $true
     }
+    masterFrameworkReport = $masterFrameworkReportObservation
     managedRuntimeFilesystemSentinel = [ordered]@{
       priorProviderNamespace = $providerNamespace
       priorVersionDirectory = $priorVersionDirectoryName
@@ -1081,6 +1210,19 @@ if ($null -ne $primaryFailure) {
 if (-not $happyPathUninstalled -or $null -eq $observations) {
   throw "Windows NSIS upgrade qualification did not reach its verified cleanup state."
 }
-$observationsPath = Join-Path $workRoot "observations.json"
+$retainedMasterFrameworkBundleProof = Get-NoFollowFileSha256Proof (
+  $masterFrameworkBundlePath
+) "Retained signed candidate case bundle after cleanup" $maximumRetainedCaseBundleBytes
+if ($retainedMasterFrameworkBundleProof.Length -ne $masterFrameworkBundleProof.Length -or
+    $retainedMasterFrameworkBundleProof.Sha256 -cne $masterFrameworkBundleProof.Sha256) {
+  throw "Retained signed candidate case bundle changed during qualification cleanup."
+}
+$retainedPriorSignedCaseBundleProof = Get-NoFollowFileSha256Proof (
+  $priorSignedCaseBundlePath
+) "Retained signed N-1 case bundle after cleanup" $maximumRetainedCaseBundleBytes
+if ($retainedPriorSignedCaseBundleProof.Length -ne $priorSignedCaseBundleProof.Length -or
+    $retainedPriorSignedCaseBundleProof.Sha256 -cne $priorSignedCaseBundleProof.Sha256) {
+  throw "Retained signed N-1 case bundle changed during qualification cleanup."
+}
 $observations | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $observationsPath -Encoding utf8NoBOM -NoNewline
 Add-Content -LiteralPath $observationsPath -Value "" -Encoding utf8NoBOM
