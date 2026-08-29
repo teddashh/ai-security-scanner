@@ -695,7 +695,35 @@ function validatePlatformQualificationSources(sources) {
     "-ExpectedExecutableProof $candidateInstallerItem",
     "[NsisUpgradeQualificationNativeMethods]::CreateFileW",
     "registeredWslStateExercised = $false",
+    'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS uninstall"',
+    'Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path NSIS uninstall"',
   ]) assert(nsisUpgrade.includes(required), `normal Windows N-1 upgrade qualification is missing: ${required}`);
+  assert(
+    (nsisUpgrade.match(/"_\?=\$installDirectory"/gu) ?? []).length === 2,
+    "normal Windows N-1 qualification must use the exact synchronous NSIS uninstall argument only for happy-path and bounded failure cleanup",
+  );
+  const synchronousCandidateUninstall = nsisUpgrade.indexOf(
+    'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS uninstall"',
+  );
+  const postUninstallRegistryCheck = nsisUpgrade.indexOf(
+    "if (@(Get-CurrentUserUninstallEntries).Count -ne 0)",
+    synchronousCandidateUninstall,
+  );
+  const successfulUninstallMarker = nsisUpgrade.indexOf(
+    "$happyPathUninstalled = $true",
+    synchronousCandidateUninstall,
+  );
+  const clearedActiveUninstaller = nsisUpgrade.indexOf(
+    "$activeUninstaller = $null",
+    synchronousCandidateUninstall,
+  );
+  assert(
+    synchronousCandidateUninstall >= 0 &&
+      postUninstallRegistryCheck > synchronousCandidateUninstall &&
+      successfulUninstallMarker > postUninstallRegistryCheck &&
+      clearedActiveUninstaller > successfulUninstallMarker,
+    "normal Windows N-1 qualification must prove registry removal before marking the synchronous NSIS uninstall complete",
+  );
   for (const required of [
     "windows_nsis_n_minus_one_upgrade_and_data_preservation",
     "managedRuntimeFilesystemSentinel",
