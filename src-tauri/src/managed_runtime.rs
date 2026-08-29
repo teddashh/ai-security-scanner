@@ -43,7 +43,7 @@ const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
 const WINDOWS_WSL_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = MACHINE_STOP_TIMEOUT;
 const WINDOWS_WSL_VHD_RELEASE_POLL: Duration = Duration::from_millis(100);
 const WINDOWS_WSL_PROVIDER_DELETE_TIMEOUT: Duration = Duration::from_secs(10);
 const WINDOWS_WSL_PROVIDER_DELETE_POLL: Duration = Duration::from_millis(100);
@@ -51,6 +51,7 @@ const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const DOWNLOAD_CHUNK_BYTES: usize = 128 * 1024;
 const MACHINE_PREFIX: &str = "assm1";
+const WINDOWS_MACHINE_PREFIX: &str = "assm2";
 const MAX_MACHINE_NAME_BYTES: usize = 30;
 const MACHINE_IMAGE_ID_HEX_CHARS: usize = 12;
 const MAX_WSL_DISTRIBUTIONS: usize = 1024;
@@ -74,6 +75,11 @@ const WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA: &str =
     "ai-security-scanner.managed-wsl-recovery-import/v1";
 const WINDOWS_WSL_GHOST_MIGRATION_CONSUMED_SCHEMA: &str =
     "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1";
+#[cfg(windows)]
+const WINDOWS_WSL_LEGACY_RETAINED_SCHEMA: &str =
+    "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1";
+#[cfg(windows)]
+const WINDOWS_WSL_LEGACY_RETAINED_DIRECTORY: &str = "wsl-legacy-retained";
 const WINDOWS_NSIS_PRODUCT_NAME: &str = "ai-security-scanner";
 const WINDOWS_NSIS_PUBLISHER: &str = "ai-security-scanner contributors";
 const WINDOWS_NSIS_MAIN_EXECUTABLE: &str = "ai-security-scanner.exe";
@@ -92,6 +98,8 @@ const WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256: &str =
 const WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256: &str =
     "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968";
 const WINDOWS_GHOST_MIGRATION_MACHINE_NAME: &str = "assm1-win-x64-e2b6cbcadd8b";
+#[cfg(any(windows, test))]
+const WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME: &str = "assm2-win-x64-e2b6cbcadd8b";
 const WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT: &str = "recovered-ghost-v0.1.7";
 const WINDOWS_GHOST_MIGRATION_UNINSTALLED_RECEIPT: &str = "uninstalled-0.1.7";
 const WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT: &str = "updated-0.1.7";
@@ -406,8 +414,56 @@ struct WindowsWslGhostMigrationConsumedProof {
     distribution_name: String,
 }
 
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum WindowsWslLegacyTransitionEvidenceSource {
+    NsisInstallTransition,
+    LegacyPendingRecoveryIntent,
+}
+
+/// Observation-only evidence that a proven N-1 workspace was deliberately
+/// left in place while the current Windows compatibility generation became
+/// usable. This record is never an ownership or deletion capability.
+#[cfg(windows)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WindowsWslLegacyWorkspaceRetainedProof {
+    schema_version: String,
+    authorizes_cleanup: bool,
+    transition_evidence_source: WindowsWslLegacyTransitionEvidenceSource,
+    install_transition_receipt: String,
+    previous_manifest_sha256: String,
+    current_manifest_sha256: String,
+    machine_image_sha256: String,
+    legacy_machine_name: String,
+    legacy_distribution_name: String,
+    current_machine_name: String,
+    current_distribution_name: String,
+    legacy_registration_id: String,
+    legacy_registration_base_path: PathBuf,
+    legacy_provider_home: PathBuf,
+    legacy_provider_namespace: String,
+    legacy_vhd_path: PathBuf,
+    legacy_vhd_size_bytes: u64,
+    legacy_vhd_volume_serial_number: u32,
+    legacy_vhd_file_index: u64,
+    legacy_vhd_number_of_links: u32,
+    legacy_vhd_attributes: u32,
+    legacy_provider_config_sha256: String,
+    legacy_ssh_public_key_sha256: String,
+    current_registration_id: String,
+    current_registration_base_path: PathBuf,
+    current_provider_home: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_recovery_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    legacy_recovery_intent_sha256: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WindowsWslRegistration {
+    registration_id: String,
     distribution_name: String,
     base_path: PathBuf,
 }
@@ -434,7 +490,7 @@ struct BoundedWindowsGhostMigrationProof {
     install_transition_receipt: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct WindowsNsisInstallation {
     display_name: String,
     display_version: String,
@@ -2466,6 +2522,12 @@ impl ManagedRuntimeManager {
         }
         self.wait_for_server(&command, MACHINE_START_TIMEOUT, setup)?;
         self.complete_windows_wsl_recovery_locked(target, &command, &machine_name, setup)?;
+        // v0.1.8's Windows compatibility generation is deliberately
+        // side-by-side. Once the new assm2 server is usable, make a bounded,
+        // observation-only record of an exact N-1 assm1 workspace when that
+        // can be proven. Failure to classify legacy state never blocks or
+        // mutates the new runtime.
+        self.retain_bounded_windows_legacy_workspace_nonblocking(target, &machine_name);
         Ok(command)
     }
 
@@ -3071,6 +3133,16 @@ impl ManagedRuntimeManager {
         if !expected_present && pending.is_none() {
             return Ok(false);
         }
+        // Every machine name produced by the current Windows compatibility
+        // generation is assm2. WSL exposes destructive management only by
+        // mutable distribution name, not by the registry GUID already proved
+        // by this process, so an assm2 collision or interrupted assm2 recovery
+        // must remain untouched and fail closed. The legacy recovery routine
+        // below remains only for deterministic transaction tests and older
+        // non-assm2 state; normal v0.1.8 startup never sends assm1 here.
+        if windows_machine_uses_current_compatibility_generation(machine_name) {
+            return fail_windows_wsl_distribution_requires_manual_action(setup, &expected);
+        }
         self.recover_windows_wsl_distribution_locked(
             managed_command,
             machine_name,
@@ -3113,6 +3185,109 @@ impl ManagedRuntimeManager {
     fn windows_wsl_ghost_migration_consumed_path(&self, machine_name: &str) -> PathBuf {
         self.windows_wsl_recovery_root()
             .join(format!("ghost-migration-consumed-{machine_name}.json"))
+    }
+
+    #[cfg(windows)]
+    fn windows_wsl_legacy_retained_path(&self, registration_id: &str) -> AppResult<PathBuf> {
+        let registration_id = Uuid::parse_str(registration_id).map_err(|_| {
+            AppError::NotAuthorized(
+                "retained Windows WSL registration identity is not one GUID".into(),
+            )
+        })?;
+        Ok(self
+            .state_root
+            .join(WINDOWS_WSL_LEGACY_RETAINED_DIRECTORY)
+            .join(format!("{}.json", registration_id.hyphenated())))
+    }
+
+    #[cfg(windows)]
+    fn exact_windows_wsl_registration(
+        &self,
+        registration_id: &str,
+        distribution_name: &str,
+        expected_base_path: &Path,
+    ) -> AppResult<WindowsWslRegistration> {
+        let matching = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .registration_id
+                    .eq_ignore_ascii_case(registration_id)
+                    && registration
+                        .distribution_name
+                        .eq_ignore_ascii_case(distribution_name)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL registration identity changed during legacy observation".into(),
+            ));
+        }
+        let registration = matching.into_iter().next().expect("one registration");
+        if !windows_paths_refer_to_same_location(&registration.base_path, expected_base_path)? {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL registration path changed during legacy observation".into(),
+            ));
+        }
+        Ok(registration)
+    }
+
+    #[cfg(windows)]
+    fn exact_bounded_windows_legacy_pending_evidence(
+        &self,
+    ) -> AppResult<Option<(WindowsWslRecoveryIntent, String)>> {
+        let path = self.windows_wsl_recovery_pending_path(WINDOWS_GHOST_MIGRATION_MACHINE_NAME);
+        if !private_entry_exists(&path)? {
+            return Ok(None);
+        }
+        let Some(intent) =
+            self.read_windows_wsl_recovery_intent_locked(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)?
+        else {
+            return Ok(None);
+        };
+        if intent.ownership_basis
+            != WindowsWslRecoveryOwnershipBasis::BoundedNMinusOneGhostMigration
+            || !intent
+                .source_provider_manifest_sha256
+                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
+            || !intent
+                .manifest_sha256
+                .eq_ignore_ascii_case(&self.loaded.sha256)
+            || !intent
+                .machine_image_sha256
+                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
+            || !intent
+                .machine_name
+                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)
+            || !intent
+                .install_transition_receipt
+                .as_deref()
+                .is_some_and(bounded_windows_install_transition_receipt_is_allowed)
+        {
+            return Err(AppError::NotAuthorized(
+                "legacy Windows recovery pointer escaped the one-release retained-workspace contract"
+                    .into(),
+            ));
+        }
+        // The pointer and transaction-local intent are intentionally duplicate
+        // durable records. Bind their exact bytes, not merely equivalent JSON,
+        // before using an already-consumed installer transition as historical
+        // observation evidence.
+        let pointer =
+            read_bounded_regular_bytes(&path, 64 * 1024, "legacy Windows WSL recovery pointer")?;
+        let durable = read_bounded_regular_bytes(
+            &intent.attempt_directory.join("intent.json"),
+            64 * 1024,
+            "legacy Windows WSL durable recovery intent",
+        )?;
+        if pointer != durable {
+            return Err(AppError::NotAuthorized(
+                "legacy Windows WSL recovery intent copies are not byte-identical".into(),
+            ));
+        }
+        Ok(Some((intent, sha256_bytes(&pointer))))
     }
 
     fn loaded_manifest_is_bounded_ghost_candidate(&self) -> bool {
@@ -4785,6 +4960,504 @@ impl ManagedRuntimeManager {
         Ok(Some(installation))
     }
 
+    /// Legacy observation is deliberately best effort. The assm2 runtime is
+    /// already live when this runs, and neither malformed nor unowned assm1
+    /// state is allowed to send the user back to manual WSL setup. The inner
+    /// routine has no WSL command edge and the resulting proof explicitly
+    /// grants no cleanup authority.
+    fn retain_bounded_windows_legacy_workspace_nonblocking(
+        &self,
+        target: &ManagedTarget,
+        current_machine_name: &str,
+    ) {
+        #[cfg(windows)]
+        if target.operating_system == ManagedOperatingSystem::Windows {
+            let _ =
+                self.record_bounded_windows_legacy_workspace_retained(target, current_machine_name);
+        }
+        #[cfg(not(windows))]
+        let _ = (target, current_machine_name);
+    }
+
+    #[cfg(windows)]
+    fn validate_windows_wsl_legacy_workspace_retained_proof(
+        &self,
+        target: &ManagedTarget,
+        current_machine_name: &str,
+        proof: &WindowsWslLegacyWorkspaceRetainedProof,
+    ) -> AppResult<()> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        };
+
+        let legacy_namespace = &WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16];
+        let legacy_distribution_name = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
+        let current_distribution_name = format!("podman-{current_machine_name}");
+        let expected_legacy_provider = self.state_root.join("provider-home").join(legacy_namespace);
+        if proof.schema_version != WINDOWS_WSL_LEGACY_RETAINED_SCHEMA
+            || proof.authorizes_cleanup
+            || !self.loaded_manifest_is_bounded_ghost_candidate()
+            || target.operating_system != ManagedOperatingSystem::Windows
+            || target.architecture != ManagedArchitecture::X86_64
+            || target.provider != ManagedMachineProvider::Wsl
+            || current_machine_name != WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
+            || !proof
+                .previous_manifest_sha256
+                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
+            || !proof
+                .current_manifest_sha256
+                .eq_ignore_ascii_case(&self.loaded.sha256)
+            || !proof
+                .machine_image_sha256
+                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
+            || !proof
+                .legacy_machine_name
+                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_NAME)
+            || !proof
+                .legacy_distribution_name
+                .eq_ignore_ascii_case(&legacy_distribution_name)
+            || !proof
+                .current_machine_name
+                .eq_ignore_ascii_case(current_machine_name)
+            || !proof
+                .current_distribution_name
+                .eq_ignore_ascii_case(&current_distribution_name)
+            || !proof
+                .legacy_provider_namespace
+                .eq_ignore_ascii_case(legacy_namespace)
+            || !bounded_windows_install_transition_receipt_is_allowed(
+                &proof.install_transition_receipt,
+            )
+            || proof.legacy_vhd_size_bytes == 0
+            || proof.legacy_vhd_number_of_links != 1
+            || proof.legacy_vhd_attributes
+                & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
+                != 0
+        {
+            return Err(AppError::NotAuthorized(
+                "retained Windows WSL legacy proof escaped its observation-only release contract"
+                    .into(),
+            ));
+        }
+        validate_sha256(
+            &proof.legacy_provider_config_sha256,
+            "retained legacy provider configuration",
+        )?;
+        validate_sha256(
+            &proof.legacy_ssh_public_key_sha256,
+            "retained legacy SSH public key",
+        )?;
+        let legacy_registration_id = Uuid::parse_str(&proof.legacy_registration_id)
+            .map_err(|_| {
+                AppError::NotAuthorized(
+                    "retained Windows WSL legacy registration identity is invalid".into(),
+                )
+            })?
+            .hyphenated()
+            .to_string();
+        let current_registration_id = Uuid::parse_str(&proof.current_registration_id)
+            .map_err(|_| {
+                AppError::NotAuthorized(
+                    "retained Windows WSL current registration identity is invalid".into(),
+                )
+            })?
+            .hyphenated()
+            .to_string();
+        if legacy_registration_id != proof.legacy_registration_id
+            || current_registration_id != proof.current_registration_id
+            || proof.legacy_vhd_path != proof.legacy_registration_base_path.join("ext4.vhdx")
+            || !windows_paths_refer_to_same_location(
+                &proof.legacy_provider_home,
+                &expected_legacy_provider,
+            )?
+            || !windows_paths_refer_to_same_location(
+                &proof.current_provider_home,
+                &self.provider_home(),
+            )?
+        {
+            return Err(AppError::NotAuthorized(
+                "retained Windows WSL legacy proof changed its GUID or provider binding".into(),
+            ));
+        }
+        match proof.transition_evidence_source {
+            WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition => {
+                if proof.legacy_recovery_id.is_some()
+                    || proof.legacy_recovery_intent_sha256.is_some()
+                {
+                    return Err(AppError::NotAuthorized(
+                        "retained Windows WSL installer proof carried unrelated recovery evidence"
+                            .into(),
+                    ));
+                }
+            }
+            WindowsWslLegacyTransitionEvidenceSource::LegacyPendingRecoveryIntent => {
+                let recovery_id = proof.legacy_recovery_id.as_deref().ok_or_else(|| {
+                    AppError::NotAuthorized(
+                        "retained Windows WSL pending proof has no recovery ID".into(),
+                    )
+                })?;
+                Uuid::parse_str(recovery_id).map_err(|_| {
+                    AppError::NotAuthorized(
+                        "retained Windows WSL pending recovery ID is invalid".into(),
+                    )
+                })?;
+                validate_sha256(
+                    proof
+                        .legacy_recovery_intent_sha256
+                        .as_deref()
+                        .ok_or_else(|| {
+                            AppError::NotAuthorized(
+                                "retained Windows WSL pending proof has no intent digest".into(),
+                            )
+                        })?,
+                    "retained Windows WSL recovery intent",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn record_bounded_windows_legacy_workspace_retained(
+        &self,
+        target: &ManagedTarget,
+        current_machine_name: &str,
+    ) -> AppResult<()> {
+        if env!("CARGO_PKG_VERSION") != WINDOWS_GHOST_MIGRATION_CURRENT_VERSION
+            || !self.loaded_manifest_is_bounded_ghost_candidate()
+            || target.operating_system != ManagedOperatingSystem::Windows
+            || target.architecture != ManagedArchitecture::X86_64
+            || target.provider != ManagedMachineProvider::Wsl
+            || !target
+                .machine_image
+                .sha256
+                .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256)
+            || current_machine_name != WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
+        {
+            return Ok(());
+        }
+
+        let legacy_distribution_name = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
+        let current_distribution_name = format!("podman-{current_machine_name}");
+        let legacy_registrations = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&legacy_distribution_name)
+            })
+            .collect::<Vec<_>>();
+        if legacy_registrations.len() != 1 {
+            return Ok(());
+        }
+        let legacy_registration = legacy_registrations
+            .into_iter()
+            .next()
+            .expect("one registration");
+        let retained_path =
+            self.windows_wsl_legacy_retained_path(&legacy_registration.registration_id)?;
+
+        let current_registrations = self
+            .wsl_registrations
+            .registrations()?
+            .into_iter()
+            .filter(|registration| {
+                registration
+                    .distribution_name
+                    .eq_ignore_ascii_case(&current_distribution_name)
+            })
+            .collect::<Vec<_>>();
+        if current_registrations.len() != 1 {
+            return Err(AppError::NotAuthorized(
+                "Windows did not expose one exact assm2 registration after server preflight".into(),
+            ));
+        }
+        let current_registration = current_registrations
+            .into_iter()
+            .next()
+            .expect("one registration");
+        let current_base =
+            self.verify_current_windows_wsl_machine_registration_binding(current_machine_name)?;
+        self.exact_windows_wsl_registration(
+            &current_registration.registration_id,
+            &current_distribution_name,
+            &current_base,
+        )?;
+
+        if private_entry_exists(&retained_path)? {
+            let proof: WindowsWslLegacyWorkspaceRetainedProof = read_bounded_private_json(
+                &retained_path,
+                64 * 1024,
+                "retained Windows WSL legacy workspace proof",
+            )?;
+            self.validate_windows_wsl_legacy_workspace_retained_proof(
+                target,
+                current_machine_name,
+                &proof,
+            )?;
+            self.exact_windows_wsl_registration(
+                &proof.legacy_registration_id,
+                &proof.legacy_distribution_name,
+                &proof.legacy_registration_base_path,
+            )?;
+            self.exact_windows_wsl_registration(
+                &proof.current_registration_id,
+                &proof.current_distribution_name,
+                &proof.current_registration_base_path,
+            )?;
+            if let Some(installation) =
+                self.windows_nsis_installation_matches_bounded_migration_identity()?
+            {
+                if installation.install_transition.as_deref()
+                    == Some(proof.install_transition_receipt.as_str())
+                {
+                    self.nsis_installation.consume_install_transition(
+                        &installation,
+                        &proof.install_transition_receipt,
+                    )?;
+                }
+            }
+            return Ok(());
+        }
+
+        let installation = self
+            .windows_nsis_installation_matches_bounded_migration_identity()?
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "retained Windows WSL observation is not backed by the installed candidate"
+                        .into(),
+                )
+            })?;
+        let (
+            transition_evidence_source,
+            install_transition_receipt,
+            pending_intent,
+            pending_intent_sha256,
+        ) = match installation.install_transition.as_deref() {
+            Some(receipt) if bounded_windows_install_transition_receipt_is_allowed(receipt) => (
+                WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition,
+                receipt.to_owned(),
+                None,
+                None,
+            ),
+            None => {
+                let (intent, digest) = self
+                    .exact_bounded_windows_legacy_pending_evidence()?
+                    .ok_or_else(|| {
+                        AppError::NotAuthorized(
+                            "retained Windows WSL observation has no exact transition evidence"
+                                .into(),
+                        )
+                    })?;
+                let receipt = intent
+                    .install_transition_receipt
+                    .clone()
+                    .expect("validated pending intent receipt");
+                (
+                    WindowsWslLegacyTransitionEvidenceSource::LegacyPendingRecoveryIntent,
+                    receipt,
+                    Some(intent),
+                    Some(digest),
+                )
+            }
+            Some(_) => {
+                return Err(AppError::NotAuthorized(
+                    "retained Windows WSL observation has an unsupported installer transition"
+                        .into(),
+                ));
+            }
+        };
+
+        let legacy_ownership = match pending_intent.as_ref() {
+            Some(intent) => self.verify_claimed_bounded_windows_ghost_registration(
+                intent,
+                &legacy_registration.base_path,
+            )?,
+            None => self.verify_windows_wsl_registration_ownership(
+                WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
+                &legacy_registration.base_path,
+            )?,
+        };
+        if !legacy_ownership
+            .source_provider_manifest_sha256
+            .eq_ignore_ascii_case(WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256)
+        {
+            return Err(AppError::NotAuthorized(
+                "retained Windows WSL observation did not prove the exact predecessor provider"
+                    .into(),
+            ));
+        }
+
+        // Pin the exact old directory and VHD with the minimum read category
+        // needed for Windows share-mode arbitration, without reading its bytes
+        // or denying WSL its existing read/write access. Omitting delete sharing
+        // prevents replacement while the GUID/BasePath, provider configuration,
+        // SSH identity, and retained proof are bound.
+        let legacy_base_guard = open_windows_real_directory_security_handle(
+            &legacy_ownership.base_path,
+        )
+        .map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "legacy Windows WSL workspace could not be pinned for observation: {error}"
+            ))
+        })?;
+        let legacy_vhd_path = legacy_ownership.base_path.join("ext4.vhdx");
+        let legacy_vhd_guard =
+            open_windows_wsl_vhd_observation_guard(&legacy_vhd_path).map_err(|error| {
+                AppError::NotAuthorized(format!(
+                    "legacy Windows WSL VHD could not be observed without interrupting it: {error}"
+                ))
+            })?;
+        let legacy_vhd_information = windows_file_information(&legacy_vhd_guard)?;
+        validate_windows_wsl_recovery_file_information(
+            &legacy_vhd_information,
+            "legacy Windows WSL VHD",
+        )?;
+        self.exact_windows_wsl_registration(
+            &legacy_registration.registration_id,
+            &legacy_distribution_name,
+            &legacy_ownership.base_path,
+        )?;
+
+        let legacy_config = legacy_ownership
+            .provider_home
+            .join("config")
+            .join("containers")
+            .join("containers.conf");
+        let (_, legacy_provider_config_sha256) = hash_bounded_regular_file(
+            &legacy_config,
+            16 * 1024,
+            "legacy managed runtime provider configuration",
+        )?;
+        let legacy_identity = legacy_ownership
+            .provider_home
+            .join("data")
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join(PODMAN_MACHINE_IDENTITY_NAME);
+        let (_, legacy_ssh_public_key_sha256) = hash_bounded_regular_file(
+            &managed_ssh_public_key_path(&legacy_identity),
+            MAX_SSH_PUBLIC_KEY_BYTES,
+            "legacy managed runtime SSH public key",
+        )?;
+
+        let rebound_ownership = match pending_intent.as_ref() {
+            Some(intent) => self.verify_claimed_bounded_windows_ghost_registration(
+                intent,
+                &legacy_registration.base_path,
+            )?,
+            None => self.verify_windows_wsl_registration_ownership(
+                WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
+                &legacy_registration.base_path,
+            )?,
+        };
+        if rebound_ownership != legacy_ownership {
+            return Err(AppError::NotAuthorized(
+                "legacy Windows WSL provider identity changed during retained observation".into(),
+            ));
+        }
+        self.exact_windows_wsl_registration(
+            &legacy_registration.registration_id,
+            &legacy_distribution_name,
+            &legacy_ownership.base_path,
+        )?;
+        self.exact_windows_wsl_registration(
+            &current_registration.registration_id,
+            &current_distribution_name,
+            &current_base,
+        )?;
+
+        let legacy_provider_home = canonical_real_directory(
+            &legacy_ownership.provider_home,
+            "retained legacy managed runtime provider home",
+        )?;
+        let current_provider_home = canonical_real_directory(
+            &self.provider_home(),
+            "retained current managed runtime provider home",
+        )?;
+        let legacy_namespace = WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16].to_owned();
+        let proof = WindowsWslLegacyWorkspaceRetainedProof {
+            schema_version: WINDOWS_WSL_LEGACY_RETAINED_SCHEMA.into(),
+            authorizes_cleanup: false,
+            transition_evidence_source,
+            install_transition_receipt: install_transition_receipt.clone(),
+            previous_manifest_sha256: WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256.into(),
+            current_manifest_sha256: self.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            legacy_machine_name: WINDOWS_GHOST_MIGRATION_MACHINE_NAME.into(),
+            legacy_distribution_name,
+            current_machine_name: current_machine_name.into(),
+            current_distribution_name,
+            legacy_registration_id: legacy_registration.registration_id.clone(),
+            legacy_registration_base_path: legacy_ownership.base_path.clone(),
+            legacy_provider_home,
+            legacy_provider_namespace: legacy_namespace,
+            legacy_vhd_path,
+            legacy_vhd_size_bytes: legacy_vhd_information.size,
+            legacy_vhd_volume_serial_number: legacy_vhd_information.identity.volume_serial_number,
+            legacy_vhd_file_index: legacy_vhd_information.identity.file_index,
+            legacy_vhd_number_of_links: legacy_vhd_information.number_of_links,
+            legacy_vhd_attributes: legacy_vhd_information.attributes,
+            legacy_provider_config_sha256,
+            legacy_ssh_public_key_sha256,
+            current_registration_id: current_registration.registration_id.clone(),
+            current_registration_base_path: current_base,
+            current_provider_home,
+            legacy_recovery_id: pending_intent
+                .as_ref()
+                .map(|intent| intent.recovery_id.clone()),
+            legacy_recovery_intent_sha256: pending_intent_sha256,
+        };
+        self.validate_windows_wsl_legacy_workspace_retained_proof(
+            target,
+            current_machine_name,
+            &proof,
+        )?;
+        let encoded = serde_json::to_vec(&proof).map_err(|error| {
+            AppError::Internal(format!(
+                "retained Windows WSL legacy proof could not be encoded: {error}"
+            ))
+        })?;
+        write_private_atomic(&retained_path, &encoded)?;
+        let persisted: WindowsWslLegacyWorkspaceRetainedProof = read_bounded_private_json(
+            &retained_path,
+            64 * 1024,
+            "retained Windows WSL legacy workspace proof",
+        )?;
+        if persisted != proof {
+            return Err(AppError::NotAuthorized(
+                "retained Windows WSL legacy proof changed during its durable commit".into(),
+            ));
+        }
+
+        // Only the durable, re-read observation record permits deleting the
+        // transient NSIS marker. It never permits any WSL or provider cleanup.
+        if transition_evidence_source
+            == WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition
+        {
+            self.nsis_installation
+                .consume_install_transition(&installation, &install_transition_receipt)?;
+            let claimed = self
+                .windows_nsis_installation_matches_bounded_migration_identity()?
+                .ok_or_else(|| {
+                    AppError::NotAuthorized(
+                        "installed candidate changed while retaining its legacy workspace".into(),
+                    )
+                })?;
+            if claimed.install_transition.is_some() {
+                return Err(AppError::NotAuthorized(
+                    "Windows NSIS transition remained after retained proof became durable".into(),
+                ));
+            }
+        }
+        drop(legacy_vhd_guard);
+        drop(legacy_base_guard);
+        Ok(())
+    }
+
     fn record_bounded_windows_ghost_migration_consumed(
         &self,
         intent: &WindowsWslRecoveryIntent,
@@ -4844,6 +5517,18 @@ impl ManagedRuntimeManager {
             return Ok(());
         }
         let pending = self.windows_wsl_recovery_pending_path(machine_name);
+        // The current assm2 generation is never recovered through WSL's
+        // mutable name-based management interface. This includes the path
+        // where Podman already reports a usable assm2 machine: an old pending
+        // pointer must fail closed before inventory, intent parsing, archive
+        // handling, terminate, export, import, unregister, or pointer removal.
+        if windows_machine_uses_current_compatibility_generation(machine_name) {
+            if private_entry_exists(&pending)? {
+                let expected = format!("podman-{machine_name}");
+                return fail_windows_wsl_distribution_requires_manual_action(setup, &expected);
+            }
+            return Ok(());
+        }
         if private_entry_exists(&pending)? {
             let intent = self
                 .read_windows_wsl_recovery_intent_locked(machine_name)?
@@ -6472,7 +7157,7 @@ fn read_bounded_regular_bytes(path: &Path, max_bytes: u64, label: &str) -> AppRe
     }
 }
 
-#[cfg(test)]
+#[cfg(any(windows, test))]
 fn hash_bounded_regular_file(path: &Path, max_bytes: u64, label: &str) -> AppResult<(u64, String)> {
     hash_bounded_regular_file_with_progress(path, max_bytes, label, &mut |_, _| Ok(()))
 }
@@ -7417,6 +8102,87 @@ fn open_windows_managed_ssh_identity_file(path: &Path) -> io::Result<File> {
 }
 
 #[cfg(windows)]
+fn open_windows_wsl_vhd_quiescence_guard(path: &Path) -> io::Result<File> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_DATA, FILE_SHARE_READ, OPEN_EXISTING,
+    };
+
+    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows WSL VHD path contains a NUL code unit",
+        ));
+    }
+    encoded.push(0);
+    // Nonzero read access is required for Windows' bidirectional share-mode
+    // arbitration. Sharing read (and only read) admits compatible readers,
+    // conflicts with every existing writer/deleter, and prevents a new
+    // writer, rename, or delete until the exact registration and file identity
+    // have been rebound below. The code never reads the VHD's bytes.
+    let raw = unsafe {
+        CreateFileW(
+            encoded.as_ptr(),
+            FILE_READ_DATA,
+            FILE_SHARE_READ,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned a uniquely owned handle.
+    Ok(unsafe { File::from_raw_handle(raw) })
+}
+
+#[cfg(windows)]
+fn open_windows_wsl_vhd_observation_guard(path: &Path) -> io::Result<File> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_DATA, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows WSL VHD path contains a NUL code unit",
+        ));
+    }
+    encoded.push(0);
+    // This is an observation pin, never a quiescence or cleanup proof. The
+    // minimum read category participates in Windows share-mode arbitration but
+    // the code never reads the VHD's bytes. Read/write sharing lets a running
+    // WSL distribution continue, and omitted delete sharing keeps this exact
+    // file object from being replaced while its retained record is committed.
+    let raw = unsafe {
+        CreateFileW(
+            encoded.as_ptr(),
+            FILE_READ_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned a uniquely owned handle.
+    Ok(unsafe { File::from_raw_handle(raw) })
+}
+
+#[cfg(windows)]
 fn open_windows_managed_ssh_cleanup_file(path: &Path, delete_access: bool) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -8155,9 +8921,21 @@ fn generate_managed_ssh_identity(private_key_path: &Path) -> AppResult<()> {
     result
 }
 
+fn windows_machine_uses_current_compatibility_generation(machine_name: &str) -> bool {
+    machine_name
+        .strip_prefix(WINDOWS_MACHINE_PREFIX)
+        .and_then(|suffix| suffix.strip_prefix('-'))
+        .is_some_and(|suffix| !suffix.is_empty())
+}
+
 fn machine_name(target: &ManagedTarget) -> String {
+    let prefix = if target.operating_system == ManagedOperatingSystem::Windows {
+        WINDOWS_MACHINE_PREFIX
+    } else {
+        MACHINE_PREFIX
+    };
     let name = format!(
-        "{MACHINE_PREFIX}-{}-{}-{}",
+        "{prefix}-{}-{}-{}",
         target.operating_system.machine_name_key(),
         target.architecture.machine_name_key(),
         &target.machine_image.sha256[..MACHINE_IMAGE_ID_HEX_CHARS]
@@ -8936,40 +9714,40 @@ where
 {
     if poll.is_zero() {
         return Err(AppError::Internal(
-            "managed Windows WSL VHD release poll interval was zero".into(),
+            "managed Windows WSL VHD quiescence poll interval was zero".into(),
         ));
     }
     let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
-        AppError::Internal("managed Windows WSL VHD release deadline overflowed".into())
+        AppError::Internal("managed Windows WSL VHD quiescence deadline overflowed".into())
     })?;
     let mut last_sharing_error = None::<String>;
     loop {
         if let Some(error) = last_sharing_error.as_deref() {
             if Instant::now() >= deadline {
                 return Err(AppError::Runtime(format!(
-                    "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                    "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
                 )));
             }
         }
         // Re-prove the exact name, ownership/receipt, and BasePath on every
-        // retry. A delayed handle release must never turn a stale path proof
+        // retry. A delayed conflicting-handle release must never turn a stale path proof
         // into authority for a later by-name WSL command.
         let base_path = verify_registration_base_path()?;
         if let Some(error) = last_sharing_error.as_deref() {
             if Instant::now() >= deadline {
                 return Err(AppError::Runtime(format!(
-                    "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                    "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
                 )));
             }
         }
         let path = base_path.join("ext4.vhdx");
-        let file = match open_windows_managed_ssh_identity_file(&path) {
+        let file = match open_windows_wsl_vhd_quiescence_guard(&path) {
             Ok(file) => file,
             Err(error) if windows_error_is_sharing_violation(&error) => {
                 let now = Instant::now();
                 if now >= deadline {
                     return Err(AppError::Runtime(format!(
-                        "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                        "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
                     )));
                 }
                 last_sharing_error = Some(error.to_string());
@@ -8999,22 +9777,23 @@ where
         let rebound_base_path = verify_registration_base_path()?;
         if !windows_paths_refer_to_same_location(&base_path, &rebound_base_path)? {
             return Err(AppError::NotAuthorized(
-                "Windows WSL registration changed during the bounded VHD release proof".into(),
+                "Windows WSL registration changed during the bounded VHD quiescence proof".into(),
             ));
         }
         if let Some(error) = last_sharing_error.as_deref() {
             if Instant::now() >= deadline {
                 return Err(AppError::Runtime(format!(
-                    "managed Windows WSL recovery VHD remained in use after its bounded release wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
+                    "managed Windows WSL recovery VHD remained writable or replaceable after its bounded quiescence wait; retaining the exact registration and recovery checkpoint for a safe retry: {error}"
                 )));
             }
         }
         let rebound_path = rebound_base_path.join("ext4.vhdx");
-        let rebound_file = open_windows_managed_ssh_identity_file(&rebound_path).map_err(|error| {
-            AppError::NotAuthorized(format!(
-                "managed Windows WSL recovery VHD could not be rebound safely after its registration was rechecked: {error}"
-            ))
-        })?;
+        let rebound_file =
+            open_windows_wsl_vhd_quiescence_guard(&rebound_path).map_err(|error| {
+                AppError::NotAuthorized(format!(
+                    "managed Windows WSL recovery VHD could not be rebound safely after its registration was rechecked: {error}"
+                ))
+            })?;
         let rebound_information = windows_file_information(&rebound_file)?;
         validate_windows_wsl_recovery_file_information(
             &rebound_information,
@@ -9636,6 +10415,12 @@ fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
         let subkey_name = String::from_utf16(&name[..name_length as usize]).map_err(|_| {
             AppError::NotAuthorized("Windows WSL registry key is not valid UTF-16".into())
         })?;
+        let registration_id = Uuid::parse_str(subkey_name.trim_matches(['{', '}']))
+            .map_err(|_| {
+                AppError::NotAuthorized("Windows WSL registry key is not one GUID".into())
+            })?
+            .hyphenated()
+            .to_string();
         let subkey_name_wide = windows_registry_wide(&subkey_name)?;
         let mut raw_subkey = std::ptr::null_mut();
         let status = unsafe {
@@ -9654,6 +10439,7 @@ fn windows_wsl_registrations() -> AppResult<Vec<WindowsWslRegistration>> {
         let distribution_name = windows_registry_string(&subkey, "DistributionName")?;
         let base_path = PathBuf::from(windows_registry_string(&subkey, "BasePath")?);
         registrations.push(WindowsWslRegistration {
+            registration_id,
             distribution_name,
             base_path,
         });
@@ -11613,7 +12399,7 @@ fn open_windows_real_directory_security_handle(path: &Path) -> io::Result<File> 
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, OPEN_EXISTING, READ_CONTROL,
     };
 
     let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
@@ -11624,12 +12410,14 @@ fn open_windows_real_directory_security_handle(path: &Path) -> io::Result<File> 
         ));
     }
     encoded.push(0);
-    // No FILE_SHARE_DELETE: keep this exact ancestor object pinned while the
+    // FILE_TRAVERSE is the minimum directory-specific read category that
+    // participates in Windows share-mode arbitration without listing entries.
+    // No FILE_SHARE_DELETE keeps this exact ancestor object pinned while the
     // remaining chain and managed child are opened and verified.
     let raw = unsafe {
         CreateFileW(
             encoded.as_ptr(),
-            FILE_READ_ATTRIBUTES | READ_CONTROL,
+            FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             std::ptr::null(),
             OPEN_EXISTING,
@@ -11727,7 +12515,8 @@ fn open_or_create_windows_managed_directory_guard(
     use windows_sys::Win32::Storage::FileSystem::{
         CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, OPEN_EXISTING,
+        READ_CONTROL,
     };
     use windows_sys::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
 
@@ -11906,13 +12695,15 @@ fn open_or_create_windows_managed_directory_guard(
         }
     }
 
-    // Open the exact final component without traversing a junction and without
-    // sharing delete while ownership, type, and DACL are verified by handle.
+    // Open the exact final component without traversing a junction. The
+    // directory-specific FILE_TRAVERSE bit participates in share arbitration
+    // without listing entries; omitted delete sharing pins this object while
+    // ownership, type, and DACL are verified by handle.
     // SAFETY: encoded remains NUL-terminated and live for this call.
     let raw = unsafe {
         CreateFileW(
             encoded.as_ptr(),
-            FILE_READ_ATTRIBUTES | READ_CONTROL,
+            FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             std::ptr::null(),
             OPEN_EXISTING,
@@ -12348,7 +13139,7 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
         file.sync_all()?;
         // Windows cannot rename a file while its FILE_SHARE_NONE writer is open.
         drop(file);
-        fs::rename(&temporary, path)?;
+        commit_private_atomic_rename(&temporary, path)?;
         sync_directory(parent)?;
         Ok(())
     })();
@@ -12356,6 +13147,45 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
         let _ = remove_regular_file(&temporary);
     }
     result
+}
+
+#[cfg(windows)]
+fn commit_private_atomic_rename(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+
+    let encode = |path: &Path| -> io::Result<Vec<u16>> {
+        let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        if encoded.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "managed runtime atomic path contains a NUL code unit",
+            ));
+        }
+        encoded.push(0);
+        Ok(encoded)
+    };
+    let source = encode(source)?;
+    let destination = encode(destination)?;
+    // The temporary file was already flushed. MOVEFILE_WRITE_THROUGH makes
+    // the same-volume namespace commit synchronous before an installer
+    // transition can be consumed from the registry.
+    if unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn commit_private_atomic_rename(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination)
 }
 
 fn remove_regular_file(path: &Path) -> AppResult<()> {
@@ -13141,6 +13971,48 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_directory_guards_block_replacement_until_release() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
+        };
+
+        let temp = TempDir::new().expect("temporary root");
+        let directory = temp.path().join("raw-directory-guard");
+        fs::create_dir(&directory).expect("raw guarded directory");
+        let renamed = temp.path().join("raw-directory-renamed");
+        let guard = open_windows_real_directory_security_handle(&directory)
+            .expect("open first real-directory guard");
+        let compatible_guard = open_windows_real_directory_security_handle(&directory)
+            .expect("a second read-category guard remains compatible");
+        let delete_error = OpenOptions::new()
+            .access_mode(FILE_TRAVERSE | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&directory)
+            .expect_err("the real-directory guard must reject delete access");
+        assert!(windows_error_is_sharing_violation(&delete_error));
+        assert!(fs::rename(&directory, &renamed).is_err());
+
+        drop(compatible_guard);
+        drop(guard);
+        fs::rename(&directory, &renamed).expect("rename after real-directory guard release");
+        fs::rename(&renamed, &directory).expect("restore raw guarded directory name");
+
+        let managed = temp.path().join("managed-directory-guard");
+        let managed_renamed = temp.path().join("managed-directory-renamed");
+        let (_, managed_guard) =
+            open_or_create_windows_managed_private_directory_guard(&managed, false)
+                .expect("create managed-directory guard");
+        assert!(fs::rename(&managed, &managed_renamed).is_err());
+        drop(managed_guard);
+        fs::rename(&managed, &managed_renamed)
+            .expect("rename after managed-directory guard release");
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_state_root_guard_pins_a_canonical_protected_directory() {
         use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE};
         use windows_sys::Win32::Storage::FileSystem::{
@@ -13827,7 +14699,10 @@ mod tests {
         )
         .expect("current fixture manifest");
         let target = fixture.manager.loaded.target().expect("target").clone();
-        assert_eq!(machine_name(&target), WINDOWS_GHOST_MIGRATION_MACHINE_NAME);
+        assert_eq!(
+            machine_name(&target),
+            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
+        );
         target
     }
 
@@ -13917,6 +14792,7 @@ mod tests {
         let distribution = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
         fixture.manager.wsl_registrations =
             Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000001".into(),
                 distribution_name: distribution,
                 base_path: distribution_root.clone(),
             }]));
@@ -13972,6 +14848,31 @@ mod tests {
     }
 
     #[cfg(windows)]
+    fn add_current_assm2_registration(
+        fixture: &mut Fixture,
+        target: &ManagedTarget,
+        legacy_distribution_root: &Path,
+    ) -> PathBuf {
+        let current_vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        ensure_managed_wsl_distribution_storage_directory(current_vhd.parent().unwrap())
+            .expect("current assm2 distribution storage");
+        fs::write(&current_vhd, b"current assm2 workspace fixture").expect("current assm2 VHD");
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(vec![
+            WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000001".into(),
+                distribution_name: format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}"),
+                base_path: legacy_distribution_root.canonicalize().unwrap(),
+            },
+            WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000002".into(),
+                distribution_name: format!("podman-{WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME}"),
+                base_path: current_vhd.parent().unwrap().canonicalize().unwrap(),
+            },
+        ]));
+        current_vhd
+    }
+
+    #[cfg(windows)]
     fn replace_windows_wsl_recovery_pending(
         manager: &ManagedRuntimeManager,
         machine_name: &str,
@@ -13998,6 +14899,7 @@ mod tests {
             distribution_root,
             &managed_command,
             true,
+            WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
         );
     }
 
@@ -14008,8 +14910,8 @@ mod tests {
         distribution_root: &Path,
         managed_command: &ManagedRuntimeCommand,
         pending_expected: bool,
+        machine: &str,
     ) {
-        let machine = machine_name(target);
         let distribution = format!("podman-{machine}");
         fixture
             .commands
@@ -14022,7 +14924,7 @@ mod tests {
             .prove_windows_wsl_distribution_absent_locked(
                 target,
                 managed_command,
-                &machine,
+                machine,
                 Some(&setup),
             )
             .expect_err("invalid pending recovery must require manual action");
@@ -14053,7 +14955,7 @@ mod tests {
         assert_eq!(
             fixture
                 .manager
-                .windows_wsl_recovery_pending_path(&machine)
+                .windows_wsl_recovery_pending_path(machine)
                 .is_file(),
             pending_expected
         );
@@ -14075,7 +14977,7 @@ mod tests {
             &install_location,
             Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
         );
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         let intent = test_fixture
             .manager
@@ -14101,19 +15003,30 @@ mod tests {
         target: &ManagedTarget,
         intent: &WindowsWslRecoveryIntent,
     ) {
-        let machine = machine_name(target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         fixture
             .manager
             .runtime_command(target)
             .expect("prepare current provider namespace");
-        let current_vhd = windows_fixture_vhd_path(&fixture.manager, target);
+        let current_vhd = fixture
+            .manager
+            .provider_home()
+            .join("data")
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join(target.provider.argument())
+            .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
+            .join(&machine)
+            .join("ext4.vhdx");
         ensure_managed_wsl_distribution_storage_directory(current_vhd.parent().unwrap())
             .expect("current replacement storage");
         fs::write(&current_vhd, b"verified replacement workspace")
             .expect("current replacement VHD");
         fixture.manager.wsl_registrations =
             Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000002".into(),
                 distribution_name: distribution.clone(),
                 base_path: current_vhd.parent().unwrap().canonicalize().unwrap(),
             }]));
@@ -14199,6 +15112,7 @@ mod tests {
         let distribution = format!("podman-{machine}");
         test_fixture.manager.wsl_registrations =
             Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000003".into(),
                 distribution_name: distribution.clone(),
                 base_path: distribution_root.clone(),
             }]));
@@ -14265,6 +15179,21 @@ mod tests {
             .expect("open fixture without sharing")
     }
 
+    #[cfg(windows)]
+    fn open_windows_writer_with_full_sharing(path: &Path) -> File {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(path)
+            .expect("open write-capable fixture with full sharing")
+    }
+
     #[test]
     fn machine_names_are_deterministic_unique_and_within_podman_limit() {
         let image = ManagedMachineImage {
@@ -14304,7 +15233,27 @@ mod tests {
         assert_eq!(names.iter().map(String::len).max(), Some(30));
         assert!(names.contains("assm1-linux-arm64-0123456789ab"));
         assert!(names.contains("assm1-macos-arm64-0123456789ab"));
-        assert!(names.contains("assm1-win-x64-0123456789ab"));
+        assert!(names.contains("assm2-win-x64-0123456789ab"));
+    }
+
+    #[test]
+    fn current_windows_compatibility_generation_match_is_exact_and_bounded() {
+        assert!(windows_machine_uses_current_compatibility_generation(
+            "assm2-win-x64-0123456789ab"
+        ));
+        for unrelated in [
+            "assm2",
+            "assm2-",
+            "assm20-win-x64-0123456789ab",
+            "assm1-win-x64-0123456789ab",
+            "podman-assm2-win-x64-0123456789ab",
+            "ASSM2-win-x64-0123456789ab",
+        ] {
+            assert!(
+                !windows_machine_uses_current_compatibility_generation(unrelated),
+                "unrelated machine name matched current compatibility generation: {unrelated}"
+            );
+        }
     }
 
     #[test]
@@ -14337,6 +15286,15 @@ mod tests {
         assert!(
             WINDOWS_GHOST_MIGRATION_MACHINE_NAME
                 .ends_with(&WINDOWS_GHOST_MIGRATION_MACHINE_IMAGE_SHA256[..12])
+        );
+        assert_eq!(WINDOWS_MACHINE_PREFIX, "assm2");
+        assert_eq!(
+            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
+            "assm2-win-x64-e2b6cbcadd8b"
+        );
+        assert_ne!(
+            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME, WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
+            "the current Windows compatibility generation must not collide with v0.1.7"
         );
         assert_eq!(
             [
@@ -16008,7 +16966,120 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_wsl_vhd_verification_waits_for_exact_handle_release() {
+    fn windows_wsl_vhd_verification_waits_for_exact_read_holder_release() {
+        let fixture = fixture();
+        let versions_root = fixture.manager.versions_root();
+        ensure_private_directory(&versions_root).unwrap();
+        let base_path = versions_root.join("exclusive-reader");
+        ensure_private_directory(&base_path).unwrap();
+        let vhd = base_path.join("ext4.vhdx");
+        fs::write(&vhd, b"exclusive read VHD fixture").unwrap();
+        let expected_size = fs::metadata(&vhd).unwrap().len();
+        let read_holder = open_without_windows_sharing(&vhd);
+        let started = Instant::now();
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            drop(read_holder);
+        });
+
+        let snapshot = verify_windows_wsl_recovery_vhd_with_timing(
+            || Ok(base_path.clone()),
+            Duration::from_secs(5),
+            Duration::from_millis(25),
+        )
+        .expect("VHD proof resumes after the exact reader is released");
+        release.join().expect("release fixture VHD reader");
+
+        assert_eq!(snapshot.size, expected_size);
+        assert!(started.elapsed() >= Duration::from_millis(250));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_wsl_vhd_verification_blocks_writers_and_deleters_while_guarded() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let fixture = fixture();
+        let versions_root = fixture.manager.versions_root();
+        ensure_private_directory(&versions_root).unwrap();
+        let base_path = versions_root.join("guarded-vhd");
+        ensure_private_directory(&base_path).unwrap();
+        let vhd = base_path.join("ext4.vhdx");
+        fs::write(&vhd, b"guarded VHD fixture").unwrap();
+        let renamed = base_path.join("renamed.vhdx");
+        let guard = open_windows_wsl_vhd_quiescence_guard(&vhd).expect("open VHD guard");
+
+        let reader = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&vhd)
+            .expect("the guard still permits a reader");
+        let writer_error = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&vhd)
+            .expect_err("the guard must reject a writer");
+        assert!(windows_error_is_sharing_violation(&writer_error));
+        let delete_error = OpenOptions::new()
+            .access_mode(FILE_GENERIC_READ | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&vhd)
+            .expect_err("the guard must reject delete access");
+        assert!(windows_error_is_sharing_violation(&delete_error));
+        assert!(fs::rename(&vhd, &renamed).is_err());
+
+        drop(reader);
+        drop(guard);
+        fs::rename(&vhd, &renamed).expect("rename after guard release");
+        fs::rename(&renamed, &vhd).expect("restore guarded fixture name");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_wsl_vhd_observation_allows_live_writers_and_blocks_replacement() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let fixture = fixture();
+        let versions_root = fixture.manager.versions_root();
+        ensure_private_directory(&versions_root).unwrap();
+        let base_path = versions_root.join("observed-live-vhd");
+        ensure_private_directory(&base_path).unwrap();
+        let vhd = base_path.join("ext4.vhdx");
+        fs::write(&vhd, b"observed live VHD fixture").unwrap();
+        let renamed = base_path.join("renamed.vhdx");
+        let live_writer = open_windows_writer_with_full_sharing(&vhd);
+        let guard = open_windows_wsl_vhd_observation_guard(&vhd)
+            .expect("observe a VHD that already has a fully shared writer");
+
+        live_writer
+            .set_len(32)
+            .expect("the existing live writer remains usable");
+        let concurrent_writer = open_windows_writer_with_full_sharing(&vhd);
+        let delete_error = OpenOptions::new()
+            .access_mode(FILE_READ_DATA | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&vhd)
+            .expect_err("the observation guard must reject delete access");
+        assert!(windows_error_is_sharing_violation(&delete_error));
+        assert!(fs::rename(&vhd, &renamed).is_err());
+
+        drop(concurrent_writer);
+        drop(guard);
+        fs::rename(&vhd, &renamed).expect("rename after observation guard release");
+        fs::rename(&renamed, &vhd).expect("restore observed fixture name");
+        drop(live_writer);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_wsl_vhd_verification_waits_for_exact_writer_release() {
         let fixture = fixture();
         let versions_root = fixture.manager.versions_root();
         ensure_private_directory(&versions_root).unwrap();
@@ -16017,7 +17088,7 @@ mod tests {
         let vhd = base_path.join("ext4.vhdx");
         fs::write(&vhd, b"bounded VHD release fixture").unwrap();
         let expected_size = fs::metadata(&vhd).unwrap().len();
-        let locked_vhd = open_without_windows_sharing(&vhd);
+        let locked_vhd = open_windows_writer_with_full_sharing(&vhd);
         let started = Instant::now();
         let release = thread::spawn(move || {
             thread::sleep(Duration::from_millis(250));
@@ -16029,7 +17100,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_millis(25),
         )
-        .expect("VHD proof resumes after the exact handle is released");
+        .expect("VHD proof resumes after the exact writer is released");
         release.join().expect("release fixture VHD handle");
 
         assert_eq!(snapshot.size, expected_size);
@@ -16038,7 +17109,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file() {
+    fn windows_wsl_vhd_writer_timeout_is_typed_and_preserves_the_file() {
         let fixture = fixture();
         let versions_root = fixture.manager.versions_root();
         ensure_private_directory(&versions_root).unwrap();
@@ -16046,7 +17117,7 @@ mod tests {
         ensure_private_directory(&base_path).unwrap();
         let vhd = base_path.join("ext4.vhdx");
         fs::write(&vhd, b"bounded VHD timeout fixture").unwrap();
-        let locked_vhd = open_without_windows_sharing(&vhd);
+        let locked_vhd = open_windows_writer_with_full_sharing(&vhd);
         let started = Instant::now();
 
         let error = verify_windows_wsl_recovery_vhd_with_timing(
@@ -16057,7 +17128,11 @@ mod tests {
         .expect_err("an unreleased VHD must hit the bounded deadline");
 
         assert!(matches!(error, AppError::Runtime(_)));
-        assert!(error.to_string().contains("remained in use"));
+        assert!(
+            error
+                .to_string()
+                .contains("remained writable or replaceable")
+        );
         assert!(started.elapsed() >= Duration::from_millis(150));
         assert!(vhd.is_file());
         drop(locked_vhd);
@@ -16963,6 +18038,7 @@ mod tests {
         let hidden_registration = fixture.manager.provider_home().join("hidden-registration");
         fixture.manager.wsl_registrations =
             Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000004".into(),
                 distribution_name: expected_distribution.clone(),
                 base_path: hidden_registration,
             }]));
@@ -17392,7 +18468,7 @@ mod tests {
         let mut fixture = fixture();
         let (target, _, distribution_root, _) =
             seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         let managed_command = fixture
             .manager
@@ -17447,11 +18523,203 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn side_by_side_ghost_retention_keeps_a_live_legacy_vhd_and_consumes_only_the_receipt() {
+        let mut fixture = fixture();
+        let (target, previous_provider, distribution_root, install_location) =
+            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
+        let installation = install_current_windows_nsis_candidate(
+            &mut fixture,
+            &install_location,
+            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
+        );
+        fixture
+            .manager
+            .runtime_command(&target)
+            .expect("prepare current assm2 provider");
+        let current_vhd = add_current_assm2_registration(&mut fixture, &target, &distribution_root);
+        let legacy_vhd = distribution_root.join("ext4.vhdx");
+        let legacy_before = fs::read(&legacy_vhd).expect("legacy VHD before observation");
+        let config = previous_provider
+            .join("config")
+            .join("containers")
+            .join("containers.conf");
+        let config_before = fs::read(&config).expect("legacy config before observation");
+        let writer = open_windows_writer_with_full_sharing(&legacy_vhd);
+
+        fixture
+            .manager
+            .record_bounded_windows_legacy_workspace_retained(
+                &target,
+                WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
+            )
+            .expect("record observation without stopping the legacy writer");
+
+        assert_eq!(installation.install_transition(), None);
+        assert_eq!(fs::read(&legacy_vhd).unwrap(), legacy_before);
+        assert_eq!(fs::read(&config).unwrap(), config_before);
+        assert!(current_vhd.is_file());
+        assert!(fixture.commands.calls().is_empty());
+        let proof_path = fixture
+            .manager
+            .windows_wsl_legacy_retained_path("00000000-0000-0000-0000-000000000001")
+            .unwrap();
+        let proof: WindowsWslLegacyWorkspaceRetainedProof =
+            read_bounded_private_json(&proof_path, 64 * 1024, "retained legacy fixture proof")
+                .unwrap();
+        assert_eq!(proof.schema_version, WINDOWS_WSL_LEGACY_RETAINED_SCHEMA);
+        assert!(!proof.authorizes_cleanup);
+        assert_eq!(
+            proof.transition_evidence_source,
+            WindowsWslLegacyTransitionEvidenceSource::NsisInstallTransition
+        );
+        assert_eq!(
+            proof.legacy_registration_id,
+            "00000000-0000-0000-0000-000000000001"
+        );
+        assert_eq!(
+            proof.current_machine_name,
+            WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME
+        );
+        drop(writer);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn side_by_side_retention_accepts_only_the_exact_duplicated_pending_intent_after_consumption() {
+        let mut fixture = fixture();
+        let (target, _, distribution_root, install_location) =
+            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
+        let installation = install_current_windows_nsis_candidate(
+            &mut fixture,
+            &install_location,
+            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
+        );
+        let legacy_distribution = format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
+        let intent = fixture
+            .manager
+            .begin_windows_wsl_recovery_locked(
+                &target,
+                WINDOWS_GHOST_MIGRATION_MACHINE_NAME,
+                &legacy_distribution,
+                std::slice::from_ref(&legacy_distribution),
+            )
+            .expect("persist exact legacy recovery intent");
+        fixture
+            .manager
+            .claim_bounded_windows_ghost_migration_receipt(&intent)
+            .expect("consume transition before the simulated candidate failure");
+        assert_eq!(installation.install_transition(), None);
+        let pending_path = fixture
+            .manager
+            .windows_wsl_recovery_pending_path(WINDOWS_GHOST_MIGRATION_MACHINE_NAME);
+        let pending_before = fs::read(&pending_path).expect("pending pointer before restart");
+        let durable_before = fs::read(intent.attempt_directory.join("intent.json"))
+            .expect("durable intent before restart");
+
+        fixture
+            .manager
+            .runtime_command(&target)
+            .expect("prepare current assm2 provider");
+        add_current_assm2_registration(&mut fixture, &target, &distribution_root);
+        fixture
+            .manager
+            .record_bounded_windows_legacy_workspace_retained(
+                &target,
+                WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
+            )
+            .expect("retain legacy workspace from duplicated pending evidence");
+
+        assert_eq!(fs::read(&pending_path).unwrap(), pending_before);
+        assert_eq!(
+            fs::read(intent.attempt_directory.join("intent.json")).unwrap(),
+            durable_before
+        );
+        let proof_path = fixture
+            .manager
+            .windows_wsl_legacy_retained_path("00000000-0000-0000-0000-000000000001")
+            .unwrap();
+        let proof: WindowsWslLegacyWorkspaceRetainedProof = read_bounded_private_json(
+            &proof_path,
+            64 * 1024,
+            "pending-backed retained legacy proof",
+        )
+        .unwrap();
+        assert_eq!(
+            proof.transition_evidence_source,
+            WindowsWslLegacyTransitionEvidenceSource::LegacyPendingRecoveryIntent
+        );
+        assert_eq!(proof.legacy_recovery_id, Some(intent.recovery_id.clone()));
+        assert_eq!(
+            proof.legacy_recovery_intent_sha256,
+            Some(sha256_bytes(&pending_before))
+        );
+        assert!(!proof.authorizes_cleanup);
+        assert!(distribution_root.join("ext4.vhdx").is_file());
+        assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ambiguous_legacy_registrations_are_ignored_without_consuming_or_mutating_them() {
+        let mut fixture = fixture();
+        let (target, _, distribution_root, install_location) =
+            seed_n_minus_one_windows_ghost_workspace(&mut fixture);
+        let installation = install_current_windows_nsis_candidate(
+            &mut fixture,
+            &install_location,
+            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
+        );
+        fixture
+            .manager
+            .runtime_command(&target)
+            .expect("prepare current assm2 provider");
+        let current_vhd = add_current_assm2_registration(&mut fixture, &target, &distribution_root);
+        let mut registrations = fixture
+            .manager
+            .wsl_registrations
+            .registrations()
+            .expect("fixture registrations");
+        registrations.push(WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000003".into(),
+            distribution_name: format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}"),
+            base_path: distribution_root.canonicalize().unwrap(),
+        });
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(registrations));
+        let legacy_before = fs::read(distribution_root.join("ext4.vhdx")).unwrap();
+
+        fixture
+            .manager
+            .retain_bounded_windows_legacy_workspace_nonblocking(
+                &target,
+                WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME,
+            );
+
+        assert_eq!(
+            installation.install_transition().as_deref(),
+            Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT)
+        );
+        assert_eq!(
+            fs::read(distribution_root.join("ext4.vhdx")).unwrap(),
+            legacy_before
+        );
+        assert!(current_vhd.is_file());
+        assert!(fixture.commands.calls().is_empty());
+        assert!(
+            !fixture
+                .manager
+                .state_root
+                .join(WINDOWS_WSL_LEGACY_RETAINED_DIRECTORY)
+                .exists()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn n_minus_one_ghost_install_without_versions_manifest_starts_verified_recovery() {
         let mut fixture = fixture();
         let (target, previous_provider, distribution_root, install_location) =
             seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
 
         assert_eq!(
@@ -17545,9 +18813,9 @@ mod tests {
     #[test]
     fn n_minus_one_ghost_admission_is_pinned_to_the_exact_v018_manifest() {
         let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
+        let (_target, _, distribution_root, install_location) =
             seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let _installation = install_current_windows_nsis_candidate(
             &mut fixture,
             &install_location,
@@ -17575,7 +18843,7 @@ mod tests {
             &install_location,
             Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
         );
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         let intent = fixture
             .manager
@@ -17622,7 +18890,7 @@ mod tests {
         installation
             .consume_failures_remaining
             .store(1, Ordering::Release);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         let intent = fixture
             .manager
@@ -17684,7 +18952,7 @@ mod tests {
     fn n_minus_one_vhd_release_reproof_rejects_a_rebound_distribution_before_export() {
         let (mut fixture, target, distribution_root, _, intent) =
             bounded_n_minus_one_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         fixture
             .manager
@@ -17707,10 +18975,12 @@ mod tests {
         )
         .expect("rebound registration VHD");
         let before = vec![WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000005".into(),
             distribution_name: distribution.clone(),
             base_path: distribution_root.clone(),
         }];
         let after = vec![WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000006".into(),
             distribution_name: distribution.clone(),
             base_path: rebound_base_path,
         }];
@@ -17730,7 +19000,7 @@ mod tests {
         fixture.manager.windows_wsl_vhd_release_timing =
             Some((Duration::from_secs(5), Duration::from_millis(25)));
         let source_vhd = distribution_root.join("ext4.vhdx");
-        let locked_vhd = open_without_windows_sharing(&source_vhd);
+        let locked_vhd = open_windows_writer_with_full_sharing(&source_vhd);
         let rebind = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(10);
             while !armed.load(Ordering::Acquire) {
@@ -17789,7 +19059,7 @@ mod tests {
     fn n_minus_one_vhd_timeout_preserves_the_full_recovery_checkpoint() {
         let (mut fixture, target, distribution_root, _, intent) =
             bounded_n_minus_one_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         fixture
             .manager
@@ -17841,10 +19111,12 @@ mod tests {
             .expect("import checkpoint");
 
         let original_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000007".into(),
             distribution_name: distribution.clone(),
             base_path: distribution_root.clone(),
         };
         let quarantine_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000008".into(),
             distribution_name: intent.quarantine_distribution_name.clone(),
             base_path: intent.quarantine_install_directory.clone(),
         };
@@ -17865,7 +19137,7 @@ mod tests {
         ]
         .map(|path| (path.clone(), fs::read(path).expect("checkpoint bytes")));
         let source_vhd = distribution_root.join("ext4.vhdx");
-        let locked_vhd = open_without_windows_sharing(&source_vhd);
+        let locked_vhd = open_windows_writer_with_full_sharing(&source_vhd);
         fixture.commands.push(success(Vec::new()));
 
         let error = fixture
@@ -17883,7 +19155,11 @@ mod tests {
             .expect_err("an unreleased old VHD must retain the complete retry checkpoint");
 
         assert!(matches!(error, AppError::Runtime(_)));
-        assert!(error.to_string().contains("remained in use"));
+        assert!(
+            error
+                .to_string()
+                .contains("remained writable or replaceable")
+        );
         for (path, expected) in preserved {
             assert_eq!(
                 fs::read(&path).unwrap(),
@@ -17934,9 +19210,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn uncheckpointed_quarantine_without_a_vhd_is_exactly_unregistered() {
-        let (mut fixture, target, distribution_root, intent, managed_command) =
+        let (mut fixture, _target, distribution_root, intent, managed_command) =
             current_verified_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = intent.machine_name.clone();
         ensure_managed_wsl_distribution_storage_directory(
             &fixture.manager.windows_wsl_recovery_workspace_root(),
         )
@@ -17967,6 +19243,7 @@ mod tests {
             )
         });
         let quarantine_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000009".into(),
             distribution_name: intent.quarantine_distribution_name.clone(),
             base_path: intent.quarantine_install_directory.clone(),
         };
@@ -18028,7 +19305,7 @@ mod tests {
         installation
             .post_consume_failures_remaining
             .store(1, Ordering::Release);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         let intent = fixture
             .manager
@@ -18094,6 +19371,7 @@ mod tests {
         restarted_manager.nsis_installation = installation.clone();
         restarted_manager.wsl_registrations =
             Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000010".into(),
                 distribution_name: distribution.clone(),
                 base_path: distribution_root.clone(),
             }]));
@@ -18141,6 +19419,7 @@ mod tests {
 
         fixture.manager.wsl_registrations =
             Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000011".into(),
                 distribution_name: distribution,
                 base_path: distribution_root.clone(),
             }]));
@@ -18163,7 +19442,7 @@ mod tests {
             &install_location,
             Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
         );
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let distribution = format!("podman-{machine}");
         let intent = fixture
             .manager
@@ -18203,6 +19482,7 @@ mod tests {
         installation.set_install_transition(Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT));
         fixture.manager.wsl_registrations =
             Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000012".into(),
                 distribution_name: distribution.clone(),
                 base_path: distribution_root.clone(),
             }]));
@@ -18245,14 +19525,14 @@ mod tests {
     #[test]
     fn malformed_consumed_marker_blocks_fresh_ghost_admission() {
         let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
+        let (_target, _, distribution_root, install_location) =
             seed_n_minus_one_windows_ghost_workspace(&mut fixture);
         let installation = install_current_windows_nsis_candidate(
             &mut fixture,
             &install_location,
             Some(WINDOWS_GHOST_MIGRATION_RECOVERED_RECEIPT),
         );
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         write_private_atomic(
             &fixture
                 .manager
@@ -18278,7 +19558,7 @@ mod tests {
     #[test]
     fn pending_v1_recovery_intent_requires_manual_action_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, intent) = bounded_n_minus_one_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let mut legacy = serde_json::to_value(&intent).expect("encode v1 fixture");
         let legacy = legacy.as_object_mut().expect("recovery intent object");
         legacy.insert(
@@ -18306,7 +19586,7 @@ mod tests {
     fn pending_v2_with_wrong_current_manifest_requires_manual_action_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, mut intent) =
             bounded_n_minus_one_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         intent.manifest_sha256 = "a".repeat(64);
         replace_windows_wsl_recovery_pending(
             &fixture.manager,
@@ -18326,7 +19606,7 @@ mod tests {
     fn pending_bounded_v2_without_receipt_requires_manual_action_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, mut intent) =
             bounded_n_minus_one_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         intent.install_transition_receipt = None;
         replace_windows_wsl_recovery_pending(
             &fixture.manager,
@@ -18362,10 +19642,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn pending_bounded_v2_with_consumed_current_receipt_remains_resumable() {
-        let (mut fixture, target, distribution_root, install_location, intent) =
+        let (mut fixture, _target, distribution_root, install_location, intent) =
             bounded_n_minus_one_pending_fixture();
         let _ = install_current_windows_nsis_candidate(&mut fixture, &install_location, None);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
 
         assert_eq!(
             fixture
@@ -18387,7 +19667,7 @@ mod tests {
     fn pending_bounded_v2_with_wrong_source_manifest_requires_manual_action_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, mut intent) =
             bounded_n_minus_one_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         intent.source_provider_manifest_sha256 = "b".repeat(64);
         replace_windows_wsl_recovery_pending(
             &fixture.manager,
@@ -18406,7 +19686,7 @@ mod tests {
     #[test]
     fn hard_linked_pending_recovery_intent_requires_manual_action_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, _) = bounded_n_minus_one_pending_fixture();
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let pending = fixture.manager.windows_wsl_recovery_pending_path(&machine);
         fs::hard_link(&pending, pending.with_extension("alias.json"))
             .expect("create adversarial hard link to pending intent");
@@ -18434,6 +19714,7 @@ mod tests {
             &distribution_root,
             &managed_command,
             false,
+            &machine,
         );
     }
 
@@ -18456,6 +19737,7 @@ mod tests {
             &distribution_root,
             &managed_command,
             true,
+            &machine,
         );
     }
 
@@ -18472,6 +19754,7 @@ mod tests {
             &distribution_root,
             &managed_command,
             true,
+            &machine_name(&target),
         );
     }
 
@@ -18479,9 +19762,9 @@ mod tests {
     #[test]
     fn n_minus_one_ghost_migration_fails_closed_when_any_independent_proof_is_missing() {
         let mut fixture = fixture();
-        let (target, previous_provider, distribution_root, install_location) =
+        let (_target, previous_provider, distribution_root, install_location) =
             seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
 
         let _ = install_current_windows_nsis_candidate(
             &mut fixture,
@@ -18534,9 +19817,9 @@ mod tests {
     #[test]
     fn installed_current_nsis_record_preserves_bounded_n_minus_one_migration_after_upgrade() {
         let mut fixture = fixture();
-        let (target, _, distribution_root, install_location) =
+        let (_target, _, distribution_root, install_location) =
             seed_n_minus_one_windows_ghost_workspace(&mut fixture);
-        let machine = machine_name(&target);
+        let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         ensure_private_directory(&install_location).expect("current install location");
         let bundled_runtime = install_location.join("managed-runtime");
         ensure_private_directory(&bundled_runtime).expect("installed runtime resource");
@@ -18676,226 +19959,127 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn verified_recovery_checkpoint_replaces_then_cleans_the_quarantine_workspace() {
-        let mut fixture = fixture();
-        fixture.manager.install().expect("install");
-        let target = fixture.manager.loaded.target().expect("target");
+    fn full_setup_with_pending_assm2_checkpoint_fails_closed_without_name_based_wsl_mutation() {
+        let (mut fixture, target, distribution_root, intent, _) =
+            current_verified_pending_fixture();
+        let machine = machine_name(&target);
+        assert!(windows_machine_uses_current_compatibility_generation(
+            &machine
+        ));
+        let distribution = format!("podman-{machine}");
+        let quarantine = intent.quarantine_distribution_name.clone();
+
         fixture
             .manager
-            .runtime_command(target)
-            .expect("private provider home");
-        let machine = machine_name(target);
-        let distribution = format!("podman-{machine}");
-        let source_vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        fs::create_dir(source_vhd.parent().expect("source VHD parent"))
-            .expect("create source distribution directory");
-        fs::write(&source_vhd, b"old scanner workspace").expect("write source VHD");
-        let registration_base_path = source_vhd
-            .parent()
-            .expect("source distribution directory")
-            .canonicalize()
-            .expect("canonical source distribution");
-        let recovery_id = Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap();
-        let quarantine = windows_wsl_recovery_distribution_name(recovery_id);
-        let attempt_directory = fixture
-            .manager
-            .windows_wsl_recovery_root()
-            .join(recovery_id.simple().to_string());
-        let quarantine_install_directory = fixture
-            .manager
-            .windows_wsl_recovery_workspace_root()
-            .join(recovery_id.simple().to_string());
-        ensure_managed_private_directory(&fixture.manager.windows_wsl_recovery_root()).unwrap();
-        ensure_managed_private_directory(&attempt_directory).unwrap();
+            .prepare_machine_ssh_identity_locked()
+            .expect("current assm2 SSH identity");
         ensure_managed_wsl_distribution_storage_directory(
             &fixture.manager.windows_wsl_recovery_workspace_root(),
         )
-        .unwrap();
-        ensure_managed_wsl_distribution_storage_directory(&quarantine_install_directory).unwrap();
-        let quarantine_vhd = quarantine_install_directory.join("ext4.vhdx");
-        fs::write(&quarantine_vhd, b"imported recovery workspace").expect("write quarantine VHD");
-        let recovery_archive = attempt_directory.join("workspace-recovery.tar");
-        fs::write(&recovery_archive, b"durable recovery archive").expect("write recovery archive");
-        OpenOptions::new()
-            .write(true)
-            .open(&recovery_archive)
-            .expect("open recovery archive for durable fixture write")
-            .sync_all()
-            .expect("sync recovery archive fixture");
-        let original_registration = WindowsWslRegistration {
-            distribution_name: distribution.clone(),
-            base_path: registration_base_path.clone(),
-        };
-        let quarantine_registration = WindowsWslRegistration {
-            distribution_name: quarantine.clone(),
-            base_path: quarantine_install_directory.clone(),
-        };
-        let original_and_quarantine = vec![
-            original_registration.clone(),
-            quarantine_registration.clone(),
-        ];
-        let quarantine_only = vec![quarantine_registration.clone()];
-        let replacement_and_quarantine = original_and_quarantine.clone();
-        let replacement_only = vec![original_registration];
-        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
-            VecDeque::from(vec![
-                original_and_quarantine.clone(),
-                original_and_quarantine.clone(),
-                original_and_quarantine.clone(),
-                original_and_quarantine.clone(),
-                original_and_quarantine.clone(),
-                original_and_quarantine.clone(),
-                original_and_quarantine,
-                quarantine_only.clone(),
-                quarantine_only.clone(),
-                quarantine_only,
-                replacement_and_quarantine.clone(),
-                replacement_and_quarantine.clone(),
-                replacement_and_quarantine.clone(),
-                replacement_and_quarantine,
-                replacement_only,
-            ]),
-        )));
-        let intent = WindowsWslRecoveryIntent {
-            schema_version: WINDOWS_WSL_RECOVERY_INTENT_SCHEMA.into(),
-            recovery_id: recovery_id.to_string(),
-            manifest_sha256: fixture.manager.loaded.sha256.clone(),
-            machine_image_sha256: target.machine_image.sha256.clone(),
-            ownership_basis: WindowsWslRecoveryOwnershipBasis::VerifiedManifest,
-            source_provider_manifest_sha256: fixture.manager.loaded.sha256.clone(),
-            install_transition_receipt: None,
-            machine_name: machine.clone(),
-            distribution_name: distribution.clone(),
-            quarantine_distribution_name: quarantine.clone(),
-            registration_base_path,
-            provider_home: fixture.manager.provider_home(),
-            attempt_directory: attempt_directory.clone(),
-            quarantine_install_directory: quarantine_install_directory.clone(),
-            staging_archive: attempt_directory.join("workspace.exporting.tar"),
-            recovery_archive: recovery_archive.clone(),
-        };
-        fixture
-            .manager
-            .validate_windows_wsl_recovery_intent(&machine, &intent)
-            .expect("valid recovery intent");
-        let intent_bytes = serde_json::to_vec(&intent).unwrap();
-        write_private_atomic(&attempt_directory.join("intent.json"), &intent_bytes).unwrap();
-        write_private_atomic(
-            &fixture.manager.windows_wsl_recovery_pending_path(&machine),
-            &intent_bytes,
-        )
-        .unwrap();
-        let proof = WindowsWslRecoveryBackupProof {
-            schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
-            recovery_id: recovery_id.to_string(),
-            distribution_name: distribution.clone(),
-            quarantine_distribution_name: quarantine.clone(),
-            recovery_archive: recovery_archive.clone(),
-            size_bytes: b"durable recovery archive".len() as u64,
-            sha256: sha256_bytes(b"durable recovery archive"),
-        };
-        write_private_atomic(
-            &attempt_directory.join("backup.json"),
-            &serde_json::to_vec(&proof).unwrap(),
-        )
-        .unwrap();
-        let import_proof = WindowsWslRecoveryImportProof {
-            schema_version: WINDOWS_WSL_RECOVERY_IMPORT_SCHEMA.into(),
-            recovery_id: recovery_id.to_string(),
-            quarantine_distribution_name: quarantine.clone(),
-            quarantine_install_directory: quarantine_install_directory.clone(),
-            recovery_archive: recovery_archive.clone(),
-            archive_size_bytes: proof.size_bytes,
-            archive_sha256: proof.sha256.clone(),
-        };
-        write_private_atomic(
-            &attempt_directory.join("import.json"),
-            &serde_json::to_vec(&import_proof).unwrap(),
-        )
-        .unwrap();
+        .expect("recovery workspace root");
+        ensure_managed_wsl_distribution_storage_directory(&intent.quarantine_install_directory)
+            .expect("pending assm2 quarantine workspace");
+        let quarantine_vhd = intent.quarantine_install_directory.join("ext4.vhdx");
+        fs::write(&quarantine_vhd, b"pending assm2 quarantine VHD")
+            .expect("pending assm2 quarantine VHD");
+        let recovery_archive = intent.recovery_archive.clone();
+        fs::write(&recovery_archive, b"pending assm2 recovery archive")
+            .expect("pending assm2 recovery archive");
+        let backup_path = intent.attempt_directory.join("backup.json");
+        write_private_atomic(&backup_path, b"{\"pending\":\"assm2-backup\"}")
+            .expect("pending assm2 backup bytes");
+        let import_path = intent.attempt_directory.join("import.json");
+        write_private_atomic(&import_path, b"{\"pending\":\"assm2-import\"}")
+            .expect("pending assm2 import bytes");
+
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(vec![
+            WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000003".into(),
+                distribution_name: distribution.clone(),
+                base_path: distribution_root.clone(),
+            },
+            WindowsWslRegistration {
+                registration_id: "00000000-0000-0000-0000-000000000004".into(),
+                distribution_name: quarantine.clone(),
+                base_path: intent.quarantine_install_directory.clone(),
+            },
+        ]));
+
+        let pending_path = fixture.manager.windows_wsl_recovery_pending_path(&machine);
+        let intent_path = intent.attempt_directory.join("intent.json");
+        let preserved = [
+            pending_path.clone(),
+            intent_path,
+            recovery_archive.clone(),
+            backup_path,
+            import_path,
+            distribution_root.join("ext4.vhdx"),
+            quarantine_vhd.clone(),
+        ]
+        .map(|path| {
+            (
+                path.clone(),
+                fs::read(&path).unwrap_or_else(|error| {
+                    panic!("could not snapshot {}: {error}", path.display())
+                }),
+            )
+        });
 
         push_windows_wsl_ready(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
-        fixture.commands.push(success(utf16le(&format!(
-            "Ubuntu\r\n{distribution}\r\n{quarantine}\r\n"
-        ))));
-        fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(utf16le(&format!(
-            "Ubuntu\r\n{distribution}\r\n{quarantine}\r\n"
-        ))));
-        fixture.commands.push(success(Vec::new()));
         fixture
             .commands
-            .push(success(utf16le(&format!("Ubuntu\r\n{quarantine}\r\n"))));
-        fixture.commands.push_with_side_effect(
-            success(Vec::new()),
-            FakeCommandSideEffect::CreateManagedWslVhd {
-                path: source_vhd.clone(),
-                bytes: b"replacement scanner workspace".to_vec(),
-            },
-        );
+            .push(success(machine_json(&fixture.manager, true)));
         fixture
             .commands
-            .push(success(machine_json(&fixture.manager, false)));
-        fixture.commands.push(success(Vec::new()));
+            .push(success(machine_json(&fixture.manager, true)));
         fixture.commands.push(success(b"5.8.2".to_vec()));
-        fixture.commands.push(success(utf16le(&format!(
-            "Ubuntu\r\n{distribution}\r\n{quarantine}\r\n"
-        ))));
-        fixture.commands.push(success(Vec::new()));
-        fixture.commands.push(success(Vec::new()));
-        fixture
-            .commands
-            .push(success(utf16le(&format!("Ubuntu\r\n{distribution}\r\n"))));
-        fixture.commands.push(success(b"5.8.2".to_vec()));
-
         let setup = ManagedRuntimeSetupController::default();
-        let status = fixture.manager.setup(&setup).expect("recover and start");
 
-        assert!(status.available);
-        assert_eq!(
-            setup.status().unwrap().phase,
-            ManagedRuntimeSetupPhase::Completed
+        let error = fixture
+            .manager
+            .setup(&setup)
+            .expect_err("pending assm2 recovery must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("wsl_distribution_requires_manual_action")
         );
-        assert!(recovery_archive.is_file());
-        assert!(attempt_directory.join("intent.json").is_file());
-        assert!(attempt_directory.join("backup.json").is_file());
-        assert!(!quarantine_install_directory.exists());
+        let status = setup.status().expect("failed assm2 setup status");
+        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
+        assert_eq!(
+            status.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
+        );
+        for (path, expected) in preserved {
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                expected,
+                "pending assm2 state changed: {}",
+                path.display()
+            );
+        }
         assert!(
             !fixture
                 .manager
-                .windows_wsl_recovery_pending_path(&machine)
+                .windows_wsl_ghost_migration_consumed_path(&machine)
                 .exists()
         );
         let calls = fixture.commands.calls();
-        let original_unregister = calls
-            .iter()
-            .position(|arguments| arguments == &["--unregister", distribution.as_str()])
-            .expect("one exact original unregister");
-        let quarantine_unregister = calls
-            .iter()
-            .position(|arguments| arguments == &["--unregister", quarantine.as_str()])
-            .expect("one exact quarantine unregister");
-        let server_ready = calls
-            .iter()
-            .position(|arguments| arguments == &["version", "--format", "{{.Server.Version}}"])
-            .expect("server verification");
-        assert!(original_unregister < server_ready);
-        assert!(server_ready < quarantine_unregister);
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|arguments| arguments
-                    .first()
-                    .is_some_and(|value| value == "--unregister"))
-                .count(),
-            2
-        );
         assert!(calls.iter().all(|arguments| {
-            arguments
-                .first()
-                .is_none_or(|argument| argument != "--export" && argument != "--import")
+            arguments.iter().all(|argument| {
+                !matches!(
+                    argument.as_str(),
+                    "--terminate" | "--export" | "--import" | "--unregister" | "--shutdown"
+                )
+            })
         }));
+        assert!(distribution_root.join("ext4.vhdx").is_file());
+        assert!(quarantine_vhd.is_file());
     }
 
     #[cfg(windows)]
@@ -19083,6 +20267,69 @@ mod tests {
             .split("\n#[cfg(test)]")
             .next()
             .expect("production source");
+        let current_generation = &production[production
+            .find("fn windows_machine_uses_current_compatibility_generation")
+            .expect("current Windows compatibility-generation predicate")
+            ..production
+                .find("fn machine_name(target: &ManagedTarget)")
+                .expect("current Windows compatibility-generation predicate end")];
+        assert!(current_generation.contains("strip_prefix(WINDOWS_MACHINE_PREFIX)"));
+        assert!(current_generation.contains("suffix.strip_prefix('-')"));
+        assert!(current_generation.contains("!suffix.is_empty()"));
+        assert!(
+            source.contains(
+                "fn current_windows_compatibility_generation_match_is_exact_and_bounded()"
+            )
+        );
+        assert!(source.contains(
+            "fn full_setup_with_pending_assm2_checkpoint_fails_closed_without_name_based_wsl_mutation()"
+        ));
+        let absence_proof = &production[production
+            .find("fn prove_windows_wsl_distribution_absent_locked")
+            .expect("current Windows distribution absence proof")
+            ..production
+                .find("fn windows_wsl_distribution_inventory")
+                .expect("current Windows distribution absence proof end")];
+        let absence_current_guard = absence_proof
+            .find("if windows_machine_uses_current_compatibility_generation(machine_name)")
+            .expect("assm2 absence-proof guard");
+        let absence_manual_failure = absence_proof[absence_current_guard..]
+            .find("return fail_windows_wsl_distribution_requires_manual_action")
+            .map(|index| index + absence_current_guard)
+            .expect("assm2 absence-proof manual failure");
+        let legacy_recovery = absence_proof
+            .find("self.recover_windows_wsl_distribution_locked")
+            .expect("legacy recovery call after assm2 guard");
+        assert!(absence_current_guard < absence_manual_failure);
+        assert!(absence_manual_failure < legacy_recovery);
+        assert_eq!(
+            production
+                .matches("self.recover_windows_wsl_distribution_locked(")
+                .count(),
+            1,
+            "legacy recovery must retain one guarded production caller"
+        );
+        for forbidden_operation in [
+            "ManagedCommandOperation::MachineInitialization",
+            "ManagedCommandOperation::MachineStop",
+            "ManagedCommandOperation::MachineRemoval",
+            "ManagedCommandOperation::WslDistributionTerminate",
+            "ManagedCommandOperation::WslDistributionExport",
+            "ManagedCommandOperation::WslDistributionImport",
+            "ManagedCommandOperation::WslDistributionRemoval",
+            "--shutdown",
+        ] {
+            assert!(
+                !absence_proof[..legacy_recovery].contains(forbidden_operation),
+                "assm2 absence proof must fail before {forbidden_operation}"
+            );
+        }
+        assert!(
+            production.contains(
+                "const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = MACHINE_STOP_TIMEOUT;"
+            )
+        );
+        assert!(!production.contains("--shutdown"));
         assert_eq!(production.matches(&forbidden).count(), 4);
         let recovery = &production[production
             .find("fn recover_windows_wsl_distribution_locked")
@@ -19141,7 +20388,7 @@ mod tests {
         assert!(vhd_wait.contains("windows_error_is_sharing_violation"));
         assert!(vhd_wait.contains("checked_add(timeout)"));
         assert!(vhd_wait.contains("thread::sleep"));
-        assert!(vhd_wait.contains("open_windows_managed_ssh_identity_file"));
+        assert!(vhd_wait.contains("open_windows_wsl_vhd_quiescence_guard"));
         assert!(vhd_wait.contains("validate_windows_wsl_recovery_file_information"));
         assert_eq!(
             vhd_wait.matches("verify_registration_base_path()?").count(),
@@ -19152,13 +20399,99 @@ mod tests {
                 .find("let base_path = verify_registration_base_path()?")
                 .expect("registration proof before VHD open")
                 < vhd_wait
-                    .find("open_windows_managed_ssh_identity_file(&path)")
+                    .find("open_windows_wsl_vhd_quiescence_guard(&path)")
                     .expect("first VHD open")
         );
         assert!(vhd_wait.contains("let rebound_base_path = verify_registration_base_path()?"));
         assert!(vhd_wait.contains("windows_paths_refer_to_same_location"));
         assert!(vhd_wait.contains("rebound_information != information"));
         assert!(vhd_wait.contains("last_sharing_error"));
+        let directory_guard = &source[source
+            .find("fn open_windows_real_directory_security_handle")
+            .expect("Windows real-directory guard")
+            ..source
+                .find("fn verify_windows_managed_namespace_ancestor_chain")
+                .expect("Windows real-directory guard end")];
+        assert!(directory_guard.contains("FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,"));
+        assert!(directory_guard.contains("FILE_SHARE_READ | FILE_SHARE_WRITE,"));
+        assert!(directory_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
+        let managed_directory_guard = &source[source
+            .find("fn open_or_create_windows_managed_directory_guard")
+            .expect("Windows managed-directory guard")
+            ..source
+                .find("fn ensure_windows_managed_private_directory")
+                .expect("Windows managed-directory guard end")];
+        assert!(
+            managed_directory_guard
+                .contains("FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,")
+        );
+        assert!(managed_directory_guard.contains("FILE_SHARE_READ | FILE_SHARE_WRITE,"));
+        assert!(managed_directory_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
+        let vhd_guard = &source[source
+            .find("fn open_windows_wsl_vhd_quiescence_guard")
+            .expect("Windows WSL VHD quiescence guard")
+            ..source
+                .find("fn open_windows_wsl_vhd_observation_guard")
+                .expect("Windows WSL VHD quiescence guard end")];
+        assert!(vhd_guard.contains("CreateFileW"));
+        assert!(vhd_guard.contains("            FILE_READ_DATA,"));
+        assert!(vhd_guard.contains("            FILE_SHARE_READ,"));
+        assert!(vhd_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
+        assert!(!vhd_guard.contains("FILE_GENERIC_READ"));
+        assert!(!vhd_guard.contains("FILE_SHARE_WRITE"));
+        assert!(!vhd_guard.contains("FILE_SHARE_DELETE"));
+        let observation_guard = &source[source
+            .find("fn open_windows_wsl_vhd_observation_guard")
+            .expect("Windows WSL VHD observation guard")
+            ..source
+                .find("fn open_windows_managed_ssh_cleanup_file")
+                .expect("Windows WSL VHD observation guard end")];
+        assert!(observation_guard.contains("CreateFileW"));
+        assert!(observation_guard.contains("            FILE_READ_DATA,"));
+        assert!(observation_guard.contains("FILE_SHARE_READ | FILE_SHARE_WRITE"));
+        assert!(observation_guard.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
+        assert!(!observation_guard.contains("FILE_GENERIC_READ"));
+        assert!(!observation_guard.contains("FILE_SHARE_DELETE"));
+        let retained = &production[production
+            .find("fn record_bounded_windows_legacy_workspace_retained")
+            .expect("bounded retained-legacy recorder")
+            ..production
+                .find("fn record_bounded_windows_ghost_migration_consumed")
+                .expect("bounded retained-legacy recorder end")];
+        assert!(retained.contains("authorizes_cleanup: false"));
+        assert!(retained.contains("legacy_registration.registration_id"));
+        assert!(retained.contains("legacy_vhd_volume_serial_number"));
+        assert!(retained.contains("legacy_provider_config_sha256"));
+        assert!(retained.contains("legacy_ssh_public_key_sha256"));
+        for forbidden_operation in [
+            "ManagedCommandOperation::MachineInitialization",
+            "ManagedCommandOperation::MachineStop",
+            "ManagedCommandOperation::MachineRemoval",
+            "ManagedCommandOperation::WslDistributionTerminate",
+            "ManagedCommandOperation::WslDistributionExport",
+            "ManagedCommandOperation::WslDistributionImport",
+            "ManagedCommandOperation::WslDistributionRemoval",
+            "--shutdown",
+        ] {
+            assert!(
+                !retained.contains(forbidden_operation),
+                "retained observation must not contain {forbidden_operation}"
+            );
+        }
+        let start = &production[production
+            .find("fn start_locked")
+            .expect("managed runtime start")
+            ..production
+                .find("fn require_windows_wsl_prerequisite_locked")
+                .expect("managed runtime start end")];
+        assert!(
+            start
+                .find("self.wait_for_server")
+                .expect("assm2 server preflight")
+                < start
+                    .find("retain_bounded_windows_legacy_workspace_nonblocking")
+                    .expect("legacy observation after assm2 preflight")
+        );
         let provider_delete = &source[source
             .find("fn remove_windows_private_file")
             .expect("Windows provider file deletion")
@@ -19206,6 +20539,44 @@ mod tests {
             ..production
                 .find("fn windows_wsl_ownership_proof_path")
                 .expect("recovery completion end")];
+        let completion_current_guard = completion
+            .find("if windows_machine_uses_current_compatibility_generation(machine_name)")
+            .expect("assm2 completion guard");
+        let completion_current_pending = completion[completion_current_guard..]
+            .find("if private_entry_exists(&pending)?")
+            .map(|index| index + completion_current_guard)
+            .expect("assm2 pending checkpoint guard");
+        let completion_current_manual = completion[completion_current_pending..]
+            .find("return fail_windows_wsl_distribution_requires_manual_action")
+            .map(|index| index + completion_current_pending)
+            .expect("assm2 pending checkpoint manual failure");
+        let completion_current_ok = completion[completion_current_manual..]
+            .find("return Ok(());")
+            .map(|index| index + completion_current_manual)
+            .expect("assm2 no-checkpoint completion");
+        let completion_legacy_pending = completion[completion_current_ok + 1..]
+            .find("if private_entry_exists(&pending)?")
+            .map(|index| index + completion_current_ok + 1)
+            .expect("legacy pending recovery branch");
+        assert!(completion_current_guard < completion_current_pending);
+        assert!(completion_current_pending < completion_current_manual);
+        assert!(completion_current_manual < completion_current_ok);
+        assert!(completion_current_ok < completion_legacy_pending);
+        for forbidden_operation in [
+            "windows_wsl_distribution_inventory",
+            "read_windows_wsl_recovery_intent_locked",
+            "ManagedCommandOperation::WslDistributionTerminate",
+            "ManagedCommandOperation::WslDistributionExport",
+            "ManagedCommandOperation::WslDistributionImport",
+            "ManagedCommandOperation::WslDistributionRemoval",
+            "remove_regular_file(&pending)",
+            "--shutdown",
+        ] {
+            assert!(
+                !completion[..completion_legacy_pending].contains(forbidden_operation),
+                "assm2 completion guard must precede {forbidden_operation}"
+            );
+        }
         assert_eq!(completion.matches(&forbidden).count(), 1);
         assert!(completion.contains("verify_windows_wsl_recovery_archive"));
         assert!(completion.contains("verify_windows_wsl_quarantine_registration"));

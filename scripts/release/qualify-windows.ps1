@@ -640,7 +640,10 @@ try {
   if ($machineImageSha256 -cnotmatch "^[0-9a-f]{64}$") {
     throw "Windows qualification target has an invalid machine-image SHA-256."
   }
-  $managedMachineName = "assm1-win-x64-$($machineImageSha256.Substring(0, 12))"
+  # v0.1.8 intentionally uses a new Windows compatibility epoch. This keeps an
+  # exact v0.1.7 assm1 workspace attached and untouched while the current
+  # release initializes its own provider-owned WSL distribution.
+  $managedMachineName = "assm2-win-x64-$($machineImageSha256.Substring(0, 12))"
   $managedWslDistribution = "podman-$managedMachineName"
   $reportedSystemRoot = Get-OsWindowsDirectory
   $systemRoot = (Resolve-Path -LiteralPath $reportedSystemRoot).Path

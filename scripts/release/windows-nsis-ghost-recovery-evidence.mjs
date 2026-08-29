@@ -17,9 +17,12 @@ const SCHEMA_VERSION = 1;
 const PLATFORM = "windows-x86_64";
 const RUNNER = "windows-2025";
 const INSTALLER_TYPE = "nsis";
+const OLD_MACHINE = "assm1-win-x64-e2b6cbcadd8b";
 const OLD_DISTRIBUTION = "podman-assm1-win-x64-e2b6cbcadd8b";
+const CURRENT_MACHINE = "assm2-win-x64-e2b6cbcadd8b";
+const CURRENT_DISTRIBUTION = "podman-assm2-win-x64-e2b6cbcadd8b";
 const OLD_VERSION_DIRECTORY = "podman-machine-5.8.2-8b2257ace33ecb14";
-const CONSUMED_PROOF_SCHEMA = "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1";
+const RETAINED_PROOF_SCHEMA = "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1";
 const CANDIDATE_RUNTIME_MANIFEST_SHA256 =
   "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a";
 const SELF_TEST_SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -153,18 +156,18 @@ function validateObservations(observations, identity, version) {
       "candidate",
       "ghostFixture",
       "installerMigration",
-      "runtimeRecovery",
+      "runtimeSideBySide",
       "dataPreservation",
       "cleanup",
     ],
-    "ghost-recovery observations",
+    "side-by-side ghost observations",
   );
-  assert(observations.schemaVersion === SCHEMA_VERSION, "ghost-recovery schema is unsupported");
+  assert(observations.schemaVersion === SCHEMA_VERSION, "side-by-side ghost schema is unsupported");
   assert(
-    observations.scenario === "real_registered_wsl_n_minus_one_ghost_install_recovery",
-    "ghost-recovery scenario is not the real registered-WSL fixture",
+    observations.scenario === "real_registered_wsl_n_minus_one_ghost_install_side_by_side",
+    "ghost fixture did not exercise the non-destructive side-by-side contract",
   );
-  assert(observations.platform === PLATFORM && observations.runner === RUNNER, "ghost-recovery runner is incorrect");
+  assert(observations.platform === PLATFORM && observations.runner === RUNNER, "ghost runner is incorrect");
   exactKeys(observations.priorRelease, Object.keys(PRIOR_GHOST_RELEASE), "prior ghost release");
   assert(
     JSON.stringify(observations.priorRelease) === JSON.stringify(PRIOR_GHOST_RELEASE),
@@ -197,13 +200,18 @@ function validateObservations(observations, identity, version) {
       "oldProviderNamespace",
       "oldProviderCryptographicIdentityPresent",
       "distributionName",
+      "registrationId",
       "registeredWslStateExercised",
       "registrationBoundToOldProvider",
+      "missingVersionsManifestExercised",
       "oldVersionDirectory",
       "oldVersionPayloadDigestVerifiedBeforeRemoval",
       "oldVersionPayloadDirectoryRemoved",
       "oldDesktopRemoved",
       "oldUninstallerRemoved",
+      "unrelatedDistributionName",
+      "unrelatedRegistrationId",
+      "unrelatedDistributionRunning",
     ],
     "real ghost fixture",
   );
@@ -217,17 +225,22 @@ function validateObservations(observations, identity, version) {
     "oldProviderCryptographicIdentityPresent",
     "registeredWslStateExercised",
     "registrationBoundToOldProvider",
+    "missingVersionsManifestExercised",
     "oldVersionPayloadDigestVerifiedBeforeRemoval",
     "oldVersionPayloadDirectoryRemoved",
     "oldDesktopRemoved",
     "oldUninstallerRemoved",
-  ]) yes(fixture[field], `ghost fixture ${field}`);
+    "unrelatedDistributionRunning",
+  ]) yes(fixture[field], "ghost fixture " + field);
   assert(
     fixture.oldProviderNamespace === PRIOR_GHOST_RELEASE.runtimeManifestSha256.slice(0, 16),
     "ghost fixture provider namespace is not pinned N-1",
   );
   assert(fixture.distributionName === OLD_DISTRIBUTION, "ghost fixture distribution is not deterministic N-1");
   assert(fixture.oldVersionDirectory === OLD_VERSION_DIRECTORY, "ghost fixture removed the wrong versions entry");
+  assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(fixture.registrationId), "legacy registration ID is not canonical");
+  assert(/^ai-security-scanner-unrelated-[0-9a-f]{32}$/u.test(fixture.unrelatedDistributionName), "unrelated WSL fixture name is malformed");
+  assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(fixture.unrelatedRegistrationId), "unrelated registration ID is not canonical");
 
   const migration = observations.installerMigration;
   exactKeys(
@@ -257,151 +270,151 @@ function validateObservations(observations, identity, version) {
     "exactPrivateDataSnapshotPreserved",
     "sameVersionSilentReinstallCompleted",
     "transitionReceiptSurvivedSameVersionReinstall",
-  ]) yes(migration[field], `installer migration ${field}`);
+  ]) yes(migration[field], "installer migration " + field);
   assert(migration.transitionReceipt === "recovered-ghost-v0.1.7", "bounded ghost installer branch was not observed");
   assert(migration.candidateCliVersion === version, "ghost migration did not install the candidate CLI");
 
-  const recovery = observations.runtimeRecovery;
+  const sideBySide = observations.runtimeSideBySide;
   exactKeys(
-    recovery,
+    sideBySide,
     [
       "startSucceeded",
       "noManualActionFallback",
       "runningAndAvailable",
-      "sameDistributionName",
-      "registrationMovedToCurrentProvider",
+      "legacyMachineName",
+      "legacyDistributionName",
+      "legacyRegistrationIdBefore",
+      "legacyRegistrationIdAfter",
+      "legacyRegistrationBasePathExact",
+      "legacyProviderRetained",
+      "legacyProviderNamespace",
+      "legacyVhdIdentityPreserved",
+      "legacyProviderProofFilesPreserved",
+      "legacySentinelProcessSurvived",
+      "currentMachineName",
+      "currentDistributionName",
+      "currentRegistrationId",
+      "currentRegistrationBasePathExact",
       "currentProviderNamespace",
-      "oldProviderRemoved",
-      "recoveryId",
-      "durableIntentPresent",
-      "intentProofValid",
-      "intentSchemaVersion",
-      "intentOwnershipBasis",
-      "intentManifestSha256",
-      "intentMachineImageSha256",
-      "intentSourceProviderManifestSha256",
-      "intentTransitionReceipt",
+      "currentProviderCreated",
+      "unrelatedDistributionName",
+      "unrelatedRegistrationIdBefore",
+      "unrelatedRegistrationIdAfter",
+      "unrelatedRegistrationBasePathExact",
+      "unrelatedSentinelProcessSurvived",
+      "noQuarantineDistributionCreated",
+      "retainedProof",
       "receiptConsumption",
-      "durableArchivePresent",
-      "archiveBytes",
-      "archiveSha256",
-      "backupReceiptValid",
-      "importReceiptValid",
-      "backupAndImportAgree",
-      "pendingRecoveryAbsent",
-      "temporaryWorkspaceAbsent",
-      "quarantineDistributionAbsent",
     ],
-    "managed-runtime ghost recovery",
+    "managed-runtime side-by-side initialization",
   );
   for (const field of [
     "startSucceeded",
     "noManualActionFallback",
     "runningAndAvailable",
-    "sameDistributionName",
-    "registrationMovedToCurrentProvider",
-    "oldProviderRemoved",
-    "durableIntentPresent",
-    "intentProofValid",
-    "durableArchivePresent",
-    "backupReceiptValid",
-    "importReceiptValid",
-    "backupAndImportAgree",
-    "pendingRecoveryAbsent",
-    "temporaryWorkspaceAbsent",
-    "quarantineDistributionAbsent",
-  ]) yes(recovery[field], `runtime recovery ${field}`);
-  assert(recovery.currentProviderNamespace === identity.providerNamespace, "recovered provider namespace is not the candidate");
-  assert(typeof recovery.recoveryId === "string" && /^[0-9a-f]{32}$/u.test(recovery.recoveryId), "recovery ID is not UUID-simple");
+    "legacyRegistrationBasePathExact",
+    "legacyProviderRetained",
+    "legacyVhdIdentityPreserved",
+    "legacyProviderProofFilesPreserved",
+    "legacySentinelProcessSurvived",
+    "currentRegistrationBasePathExact",
+    "currentProviderCreated",
+    "unrelatedRegistrationBasePathExact",
+    "unrelatedSentinelProcessSurvived",
+    "noQuarantineDistributionCreated",
+  ]) yes(sideBySide[field], "runtime side-by-side " + field);
+  assert(sideBySide.legacyMachineName === OLD_MACHINE, "legacy machine epoch changed");
+  assert(sideBySide.legacyDistributionName === OLD_DISTRIBUTION, "legacy distribution changed");
+  assert(sideBySide.legacyRegistrationIdBefore === fixture.registrationId, "legacy registration does not match fixture");
+  assert(sideBySide.legacyRegistrationIdAfter === sideBySide.legacyRegistrationIdBefore, "legacy registration GUID changed");
   assert(
-    recovery.intentSchemaVersion === "ai-security-scanner.managed-wsl-recovery-intent/v2",
-    "recovery intent schema is not the bounded migration contract",
+    sideBySide.legacyProviderNamespace === PRIOR_GHOST_RELEASE.runtimeManifestSha256.slice(0, 16),
+    "legacy provider namespace changed",
   );
-  assert(
-    recovery.intentOwnershipBasis === "bounded_n_minus_one_ghost_migration",
-    "recovery intent did not prove the bounded N-1 ownership basis",
-  );
-  assert(
-    recovery.intentManifestSha256 === identity.runtimeManifestSha256,
-    "recovery intent is not bound to the candidate runtime manifest",
-  );
-  assert(
-    recovery.intentMachineImageSha256 === identity.machineImageSha256,
-    "recovery intent is not bound to the candidate machine image",
-  );
-  assert(
-    recovery.intentSourceProviderManifestSha256 === PRIOR_GHOST_RELEASE.runtimeManifestSha256,
-    "recovery intent is not bound to the immutable N-1 provider manifest",
-  );
-  assert(
-    recovery.intentTransitionReceipt === migration.transitionReceipt,
-    "recovery intent is not bound to the exact installer transition receipt",
-  );
+  assert(sideBySide.currentMachineName === CURRENT_MACHINE, "candidate did not use the assm2 epoch");
+  assert(sideBySide.currentDistributionName === CURRENT_DISTRIBUTION, "candidate distribution is not assm2");
+  assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(sideBySide.currentRegistrationId), "current registration ID is not canonical");
+  assert(sideBySide.currentProviderNamespace === identity.providerNamespace, "current provider namespace is not the candidate");
+  assert(sideBySide.unrelatedDistributionName === fixture.unrelatedDistributionName, "unrelated distribution identity changed");
+  assert(sideBySide.unrelatedRegistrationIdBefore === fixture.unrelatedRegistrationId, "unrelated registration does not match fixture");
+  assert(sideBySide.unrelatedRegistrationIdAfter === sideBySide.unrelatedRegistrationIdBefore, "unrelated registration GUID changed");
 
-  const consumption = recovery.receiptConsumption;
+  const proof = sideBySide.retainedProof;
   exactKeys(
-    consumption,
+    proof,
     [
-      "registryValueAbsent",
-      "proofPathExact",
+      "pathBoundToLegacyRegistrationId",
       "proofPresent",
       "proofProtected",
       "proofBytes",
       "proofSha256",
       "schemaVersion",
-      "recoveryId",
+      "authorizesCleanup",
+      "transitionEvidenceSource",
       "installTransitionReceipt",
-      "sourceProviderManifestSha256",
-      "manifestSha256",
+      "previousManifestSha256",
+      "currentManifestSha256",
       "machineImageSha256",
-      "machineName",
-      "distributionName",
-      "proofRetainedAfterRuntimePurge",
+      "legacyMachineName",
+      "legacyDistributionName",
+      "currentMachineName",
+      "currentDistributionName",
+      "legacyRegistrationId",
+      "currentRegistrationId",
+      "legacyProviderNamespace",
+      "legacyVhdSizeBytes",
+      "legacyVhdVolumeSerialNumber",
+      "legacyVhdFileIndex",
+      "legacyVhdNumberOfLinks",
+      "legacyVhdAttributes",
+      "legacyProviderConfigSha256",
+      "legacySshPublicKeySha256",
+      "proofRetainedAfterCurrentRuntimePurge",
       "proofRetainedUntilExplicitPrivateDataCleanup",
     ],
-    "ghost migration receipt consumption",
+    "retained legacy-workspace proof",
   );
   for (const field of [
-    "registryValueAbsent",
-    "proofPathExact",
+    "pathBoundToLegacyRegistrationId",
     "proofPresent",
     "proofProtected",
-    "proofRetainedAfterRuntimePurge",
+    "proofRetainedAfterCurrentRuntimePurge",
     "proofRetainedUntilExplicitPrivateDataCleanup",
-  ]) yes(consumption[field], `ghost migration receipt consumption ${field}`);
-  bounded(consumption.proofBytes, 1, 64 * 1024, "consumed proof bytes");
-  sha256(consumption.proofSha256, "consumed proof digest");
-  assert(consumption.schemaVersion === CONSUMED_PROOF_SCHEMA, "consumed proof schema changed");
-  assert(
-    typeof consumption.recoveryId === "string" &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(consumption.recoveryId) &&
-      consumption.recoveryId.replaceAll("-", "") === recovery.recoveryId,
-    "consumed proof recovery ID is not the exact recovery attempt",
+  ]) yes(proof[field], "retained proof " + field);
+  assert(proof.authorizesCleanup === false, "retained proof incorrectly grants cleanup authority");
+  assert(proof.schemaVersion === RETAINED_PROOF_SCHEMA, "retained proof schema changed");
+  assert(proof.transitionEvidenceSource === "nsis_install_transition", "live ghost fixture did not use the exact NSIS receipt");
+  assert(proof.installTransitionReceipt === migration.transitionReceipt, "retained proof lost the exact transition receipt");
+  assert(proof.previousManifestSha256 === PRIOR_GHOST_RELEASE.runtimeManifestSha256, "retained proof is not bound to N-1");
+  assert(proof.currentManifestSha256 === identity.runtimeManifestSha256, "retained proof is not bound to candidate manifest");
+  assert(proof.machineImageSha256 === identity.machineImageSha256, "retained proof is not bound to machine image");
+  assert(proof.legacyMachineName === OLD_MACHINE && proof.legacyDistributionName === OLD_DISTRIBUTION, "retained proof legacy identity changed");
+  assert(proof.currentMachineName === CURRENT_MACHINE && proof.currentDistributionName === CURRENT_DISTRIBUTION, "retained proof current identity changed");
+  assert(proof.legacyRegistrationId === sideBySide.legacyRegistrationIdBefore, "retained proof legacy GUID changed");
+  assert(proof.currentRegistrationId === sideBySide.currentRegistrationId, "retained proof current GUID changed");
+  assert(proof.legacyProviderNamespace === PRIOR_GHOST_RELEASE.runtimeManifestSha256.slice(0, 16), "retained proof provider namespace changed");
+  bounded(proof.proofBytes, 1, 64 * 1024, "retained proof bytes");
+  sha256(proof.proofSha256, "retained proof digest");
+  bounded(proof.legacyVhdSizeBytes, 1, 64 * 1024 * 1024 * 1024, "legacy VHD bytes");
+  bounded(proof.legacyVhdVolumeSerialNumber, 0, 0xffffffff, "legacy VHD volume serial");
+  assert(typeof proof.legacyVhdFileIndex === "string" && /^[0-9]{1,20}$/u.test(proof.legacyVhdFileIndex), "legacy VHD file index is not a bounded decimal string");
+  bounded(proof.legacyVhdNumberOfLinks, 1, 1024, "legacy VHD link count");
+  bounded(proof.legacyVhdAttributes, 0, 0xffffffff, "legacy VHD attributes");
+  sha256(proof.legacyProviderConfigSha256, "legacy provider config digest");
+  sha256(proof.legacySshPublicKeySha256, "legacy SSH public-key digest");
+
+  exactKeys(
+    sideBySide.receiptConsumption,
+    [
+      "proofAbsentWhileRegistryReceiptPresent",
+      "proofValidatedBeforeRegistryAbsenceCheck",
+      "registryValueAbsentAfterDurableProof",
+    ],
+    "side-by-side receipt consumption",
   );
-  assert(
-    consumption.installTransitionReceipt === migration.transitionReceipt &&
-      consumption.installTransitionReceipt === recovery.intentTransitionReceipt,
-    "consumed proof is not bound to the exact installer transition receipt",
-  );
-  assert(
-    consumption.sourceProviderManifestSha256 === PRIOR_GHOST_RELEASE.runtimeManifestSha256 &&
-      consumption.sourceProviderManifestSha256 === recovery.intentSourceProviderManifestSha256,
-    "consumed proof is not bound to the immutable N-1 provider manifest",
-  );
-  assert(
-    consumption.manifestSha256 === identity.runtimeManifestSha256 &&
-      consumption.manifestSha256 === recovery.intentManifestSha256,
-    "consumed proof is not bound to the candidate runtime manifest",
-  );
-  assert(
-    consumption.machineImageSha256 === identity.machineImageSha256 &&
-      consumption.machineImageSha256 === recovery.intentMachineImageSha256,
-    "consumed proof is not bound to the candidate machine image",
-  );
-  assert(consumption.machineName === "assm1-win-x64-e2b6cbcadd8b", "consumed proof machine name changed");
-  assert(consumption.distributionName === OLD_DISTRIBUTION, "consumed proof distribution name changed");
-  bounded(recovery.archiveBytes, 1, 8 * 1024 * 1024 * 1024, "recovery archive bytes");
-  sha256(recovery.archiveSha256, "recovery archive digest");
+  for (const [name, value] of Object.entries(sideBySide.receiptConsumption)) {
+    yes(value, "side-by-side receipt consumption " + name);
+  }
 
   const data = observations.dataPreservation;
   exactKeys(
@@ -436,6 +449,7 @@ function validateObservations(observations, identity, version) {
       "identityPublicKeyBase64",
       "firstBundleValid",
       "secondBundleValid",
+      "masterFrameworkReport",
     ],
     "ghost data preservation",
   );
@@ -457,43 +471,78 @@ function validateObservations(observations, identity, version) {
     "rotationIntentAbsent",
     "firstBundleValid",
     "secondBundleValid",
-  ]) {
-    yes(data[field], `ghost data preservation ${field}`);
-  }
+  ]) yes(data[field], "ghost data preservation " + field);
   validateSigningIdentity(data.publicKeyBase64Before, data.signingKeyIdBefore, "N-1 ghost signing identity");
-  validateSigningIdentity(data.publicKeyBase64After, data.signingKeyIdAfter, "recovered signing identity");
+  validateSigningIdentity(data.publicKeyBase64After, data.signingKeyIdAfter, "side-by-side signing identity");
   bounded(data.identityDocumentBytes, 1, 64 * 1024, "durable signing identity document bytes");
   sha256(data.identityDocumentCompactSha256, "durable signing identity document compact digest");
   bounded(data.identityAnchorBytes, 1, 64 * 1024, "durable signing identity anchor bytes");
   assert(data.anchorSchemaVersion === "1", "durable signing identity anchor schema is not v1");
   sha256(data.anchorIdentityDocumentSha256, "durable signing identity anchor digest");
-  assert(
-    data.anchorIdentityDocumentSha256 === data.identityDocumentCompactSha256,
-    "durable signing identity anchor digest differs from the identity document",
-  );
+  assert(data.anchorIdentityDocumentSha256 === data.identityDocumentCompactSha256, "signing identity anchor digest differs");
   assert(data.continuityEvent === "legacy_key_adopted", "candidate did not record legacy-key adoption");
-  assert(data.signingKeyIdAfter === data.signingKeyIdBefore, "integrity signing key ID changed during ghost recovery");
-  assert(data.publicKeyBase64After === data.publicKeyBase64Before, "integrity signing public key changed during ghost recovery");
-  assert(data.identityKeyId === data.signingKeyIdBefore, "durable identity key ID differs from both ghost bundles");
-  assert(
-    data.identityPublicKeyBase64 === data.publicKeyBase64Before,
-    "durable identity public key differs from both ghost bundles",
+  assert(data.signingKeyIdAfter === data.signingKeyIdBefore, "integrity signing key ID changed");
+  assert(data.publicKeyBase64After === data.publicKeyBase64Before, "integrity signing public key changed");
+  assert(data.identityKeyId === data.signingKeyIdBefore, "durable identity key ID differs");
+  assert(data.identityPublicKeyBase64 === data.publicKeyBase64Before, "durable identity public key differs");
+
+  const report = data.masterFrameworkReport;
+  exactKeys(
+    report,
+    [
+      "reportFile",
+      "reportBytes",
+      "reportSha256",
+      "bundleEntryPath",
+      "bundleEntryBytes",
+      "bundleEntrySha256",
+      "exactBundleEntryMatch",
+      "schemaVersion",
+      "product",
+      "productVersion",
+      "caseId",
+      "runId",
+      "frameworkKeys",
+      "truthfulUnknownCoverage",
+      "noComplianceOutcomeClaims",
+    ],
+    "master NIST ISO AIDEFEND report",
   );
+  assert(report.reportFile === "master-framework-report.json", "master report filename changed");
+  bounded(report.reportBytes, 1, 4 * 1024 * 1024, "master report bytes");
+  sha256(report.reportSha256, "master report digest");
+  assert(report.bundleEntryPath === "exports/master-framework-report.json", "master report bundle path changed");
+  assert(report.bundleEntryBytes === report.reportBytes, "master report bundle bytes differ");
+  assert(report.bundleEntrySha256 === report.reportSha256, "master report bundle digest differs");
+  yes(report.exactBundleEntryMatch, "master report exact signed-bundle binding");
+  assert(report.schemaVersion === "1.1.0", "master report schema changed");
+  assert(report.product === "ai-security-scanner" && report.productVersion === version, "master report product identity changed");
+  assert(report.caseId === data.demoCaseId, "master report case changed");
+  assert(typeof report.runId === "string" && /^[0-9a-f-]{36}$/u.test(report.runId), "master report run ID is malformed");
+  assert(JSON.stringify(report.frameworkKeys) === JSON.stringify(["nist_csf", "iso_iec_27001", "aidefend"]), "master report frameworks changed");
+  yes(report.truthfulUnknownCoverage, "master report truthful unknown coverage");
+  yes(report.noComplianceOutcomeClaims, "master report no-compliance-outcome contract");
 
   exactKeys(
     observations.cleanup,
     [
-      "managedRuntimePurged",
-      "exactWslDistributionAbsent",
+      "currentRuntimePurged",
+      "currentDistributionAbsent",
+      "legacyDistributionRetainedThroughRuntimePurge",
+      "unrelatedDistributionRetainedThroughRuntimePurge",
+      "retainedProofPreservedThroughRuntimePurge",
+      "legacyDataPreservedThroughNsisUninstall",
+      "explicitQualificationTeardownRemovedLegacy",
+      "explicitQualificationTeardownRemovedUnrelated",
       "quarantineDistributionsAbsent",
       "candidateUninstalled",
       "installDirectoryRemoved",
       "privateDataRemoved",
       "productRegistryRemoved",
     ],
-    "ghost qualification cleanup",
+    "ghost side-by-side qualification cleanup",
   );
-  for (const [name, value] of Object.entries(observations.cleanup)) yes(value, `ghost cleanup ${name}`);
+  for (const [name, value] of Object.entries(observations.cleanup)) yes(value, "ghost cleanup " + name);
 }
 
 async function identityFromArgs(args) {
@@ -544,7 +593,7 @@ async function create(args) {
   validateObservations(observations, identity.candidate, identity.version);
   const evidence = {
     schemaVersion: SCHEMA_VERSION,
-    qualification: "windows_nsis_real_registered_wsl_n_minus_one_ghost_recovery",
+    qualification: "windows_nsis_real_registered_wsl_n_minus_one_ghost_side_by_side",
     releaseIdentity: {
       product: "ai-security-scanner",
       version: identity.version,
@@ -564,7 +613,7 @@ async function create(args) {
     observations,
   };
   await writeJsonAtomic(path.resolve(requireString(args, "out")), evidence);
-  process.stdout.write("Created strict real registered-WSL ghost-recovery evidence\n");
+  process.stdout.write("Created strict real registered-WSL side-by-side ghost evidence\n");
 }
 
 async function validate(args) {
@@ -591,7 +640,7 @@ async function validate(args) {
   );
   assert(evidence.schemaVersion === SCHEMA_VERSION, "ghost evidence schema is unsupported");
   assert(
-    evidence.qualification === "windows_nsis_real_registered_wsl_n_minus_one_ghost_recovery",
+    evidence.qualification === "windows_nsis_real_registered_wsl_n_minus_one_ghost_side_by_side",
     "ghost evidence qualification ID is wrong",
   );
   exactKeys(evidence.releaseIdentity, ["product", "version", "tag", "sourceCommit"], "ghost release identity");
@@ -616,7 +665,7 @@ async function validate(args) {
   );
   assert(JSON.stringify(evidence.priorReleasePin) === JSON.stringify(PRIOR_GHOST_RELEASE), "ghost evidence prior pin changed");
   validateObservations(evidence.observations, identity.candidate, identity.version);
-  process.stdout.write(`Validated real registered-WSL ghost recovery for ${identity.tag}\n`);
+  process.stdout.write(`Validated real registered-WSL side-by-side ghost handling for ${identity.tag}\n`);
   return evidence;
 }
 
