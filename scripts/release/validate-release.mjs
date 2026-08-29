@@ -1836,6 +1836,88 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     assert(start !== -1 && end > start, `managed runtime is missing the real Windows test ${name}`);
     return managedRuntime.slice(start, end);
   };
+  const vhdReleaseWaitTest = windowsTestSection(
+    "windows_wsl_vhd_verification_waits_for_exact_handle_release",
+  );
+  assertOrderedTokens(
+    vhdReleaseWaitTest,
+    [
+      "let versions_root = fixture.manager.versions_root();",
+      "ensure_private_directory(&versions_root).unwrap();",
+      'let base_path = versions_root.join("release-wait");',
+      "ensure_private_directory(&base_path).unwrap();",
+      'let vhd = base_path.join("ext4.vhdx");',
+      "let locked_vhd = open_without_windows_sharing(&vhd);",
+      "verify_windows_wsl_recovery_vhd_with_timing(",
+      "|| Ok(base_path.clone()),",
+      'expect("VHD proof resumes after the exact handle is released")',
+      'release.join().expect("release fixture VHD handle")',
+      "assert_eq!(snapshot.size, expected_size);",
+      "assert!(started.elapsed() >= Duration::from_millis(250));",
+    ],
+    "Windows exact-VHD release-wait test",
+  );
+  assert(
+    vhdReleaseWaitTest.includes("drop(locked_vhd);") &&
+      vhdReleaseWaitTest.includes("Duration::from_secs(5)") &&
+      vhdReleaseWaitTest.includes("Duration::from_millis(25)"),
+    "Windows exact-VHD release-wait test does not prove a bounded sharing-violation retry",
+  );
+  const vhdReleaseTimeoutTest = windowsTestSection(
+    "windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file",
+  );
+  assertOrderedTokens(
+    vhdReleaseTimeoutTest,
+    [
+      "let versions_root = fixture.manager.versions_root();",
+      "ensure_private_directory(&versions_root).unwrap();",
+      'let base_path = versions_root.join("release-timeout");',
+      "ensure_private_directory(&base_path).unwrap();",
+      'let vhd = base_path.join("ext4.vhdx");',
+      "let locked_vhd = open_without_windows_sharing(&vhd);",
+      "verify_windows_wsl_recovery_vhd_with_timing(",
+      "|| Ok(base_path.clone()),",
+      "Duration::from_millis(150)",
+      'expect_err("an unreleased VHD must hit the bounded deadline")',
+      "matches!(error, AppError::Runtime(_))",
+      'contains("remained in use")',
+      "assert!(vhd.is_file());",
+      "drop(locked_vhd);",
+      'expect("the retained VHD can be verified on retry")',
+    ],
+    "Windows exact-VHD release-timeout test",
+  );
+  assert(
+    vhdReleaseTimeoutTest.split("verify_windows_wsl_recovery_vhd_with_timing(").length - 1 === 2 &&
+      vhdReleaseTimeoutTest.split("|| Ok(base_path.clone()),").length - 1 === 2 &&
+      vhdReleaseTimeoutTest.includes("Duration::from_millis(25)"),
+    "Windows exact-VHD release-timeout test does not retain and retry the same BasePath checkpoint",
+  );
+  const unregisterContractStart = managedRuntime.indexOf(
+    "    #[test]\n    fn direct_wsl_unregister_is_whitelisted_only_for_verified_backup_recovery()",
+  );
+  const unregisterContractEnd = managedRuntime.indexOf(
+    "\n    #[test]\n    fn managed_ssh_identity_is_reused_and_partial_regular_pair_is_safely_repaired()",
+    unregisterContractStart,
+  );
+  assert(
+    unregisterContractStart !== -1 && unregisterContractEnd > unregisterContractStart,
+    "managed runtime is missing the scoped direct-unregister source-contract test",
+  );
+  const unregisterContractTest = managedRuntime.slice(
+    unregisterContractStart,
+    unregisterContractEnd,
+  );
+  assertOrderedTokens(
+    unregisterContractTest,
+    [
+      'let normalized_source = include_str!("managed_runtime.rs").replace("\\r\\n", "\\n");',
+      "let source = normalized_source.as_str();",
+      '.split("\\n#[cfg(test)]")',
+      '.find("#[cfg(not(windows))]\\nfn verify_windows_wsl_recovery_vhd_with_timing")',
+    ],
+    "direct-unregister CRLF-neutral source-contract test",
+  );
   const reboundVhdTest = windowsTestSection(
     "n_minus_one_vhd_release_reproof_rejects_a_rebound_distribution_before_export",
   );
