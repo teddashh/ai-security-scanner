@@ -3606,45 +3606,59 @@ impl ManagedRuntimeManager {
             if private_entry_exists(&intent.staging_archive)? {
                 remove_regular_file(&intent.staging_archive)?;
             }
-            if !private_entry_exists(&intent.recovery_archive)? {
-                require_windows_wsl_recovery_free_space(
-                    &intent.attempt_directory,
-                    &intent.registration_base_path.join("ext4.vhdx"),
-                )?;
-                let output = self.run_command_args(
-                    ManagedCommandOperation::WslDistributionTerminate,
-                    &command,
-                    &[
-                        OsString::from("--terminate"),
-                        OsString::from(&intent.distribution_name),
-                    ],
-                    MACHINE_STOP_TIMEOUT,
-                )?;
-                require_success("managed Windows WSL distribution stop", &output)?;
-                self.verify_pending_windows_wsl_registration(&intent)?;
-                let output = self.run_command_args(
-                    ManagedCommandOperation::WslDistributionExport,
-                    &command,
-                    &[
-                        OsString::from("--export"),
-                        OsString::from(&intent.distribution_name),
-                        intent.staging_archive.as_os_str().to_owned(),
-                    ],
-                    WINDOWS_WSL_RECOVERY_TIMEOUT,
-                )?;
-                if let Err(error) = require_success("managed Windows WSL recovery export", &output)
-                {
-                    let _ = remove_regular_file(&intent.staging_archive);
-                    return Err(error);
-                }
-                verify_windows_wsl_recovery_file(
-                    &intent.staging_archive,
-                    "managed Windows WSL recovery archive",
-                )?;
-                File::open(&intent.staging_archive)?.sync_all()?;
-                fs::rename(&intent.staging_archive, &intent.recovery_archive)?;
-                sync_directory(&intent.attempt_directory)?;
+            // A final archive without backup.json is not committed evidence.
+            // It can be a crash remnant or a path substituted after the
+            // durable staging handle closed. Because the original WSL
+            // distribution is still present in this branch, discard only the
+            // exact uncommitted regular entry and export it again. Unsafe
+            // entries fail removal and can never fall through to hashing.
+            if private_entry_exists(&intent.recovery_archive)? {
+                remove_regular_file(&intent.recovery_archive)?;
             }
+            require_windows_wsl_recovery_free_space(
+                &intent.attempt_directory,
+                &intent.registration_base_path.join("ext4.vhdx"),
+            )?;
+            let output = self.run_command_args(
+                ManagedCommandOperation::WslDistributionTerminate,
+                &command,
+                &[
+                    OsString::from("--terminate"),
+                    OsString::from(&intent.distribution_name),
+                ],
+                MACHINE_STOP_TIMEOUT,
+            )?;
+            require_success("managed Windows WSL distribution stop", &output)?;
+            self.verify_pending_windows_wsl_registration(&intent)?;
+            let output = self.run_command_args(
+                ManagedCommandOperation::WslDistributionExport,
+                &command,
+                &[
+                    OsString::from("--export"),
+                    OsString::from(&intent.distribution_name),
+                    intent.staging_archive.as_os_str().to_owned(),
+                ],
+                WINDOWS_WSL_RECOVERY_TIMEOUT,
+            )?;
+            if let Err(error) = require_success("managed Windows WSL recovery export", &output) {
+                let _ = remove_regular_file(&intent.staging_archive);
+                return Err(error);
+            }
+            verify_windows_wsl_recovery_file(
+                &intent.staging_archive,
+                "managed Windows WSL recovery archive",
+            )?;
+            let durable_archive = sync_windows_wsl_recovery_file(
+                &intent.staging_archive,
+                "managed Windows WSL recovery archive",
+            )?;
+            fs::rename(&intent.staging_archive, &intent.recovery_archive)?;
+            verify_renamed_windows_wsl_recovery_file(
+                &intent.recovery_archive,
+                "managed Windows WSL recovery archive",
+                &durable_archive,
+            )?;
+            sync_directory(&intent.attempt_directory)?;
             let source_vhd_size =
                 fs::symlink_metadata(intent.registration_base_path.join("ext4.vhdx"))?.len();
             let max_bytes = windows_wsl_recovery_archive_max_bytes(
@@ -6509,6 +6523,17 @@ struct WindowsFileInformation {
     attributes: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsWslRecoveryFileSnapshot {
+    size: u64,
+    #[cfg(windows)]
+    identity: WindowsFileIdentity,
+    #[cfg(windows)]
+    number_of_links: u32,
+    #[cfg(windows)]
+    attributes: u32,
+}
+
 #[cfg(windows)]
 struct WindowsCurrentUserSid {
     storage: Vec<u32>,
@@ -8763,6 +8788,128 @@ fn verify_windows_wsl_recovery_file(path: &Path, label: &str) -> AppResult<()> {
                 "{label} must be one real, non-empty file"
             )));
         }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_windows_wsl_recovery_file_information(
+    information: &WindowsFileInformation,
+    label: &str,
+) -> AppResult<()> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || information.number_of_links != 1
+        || information.size == 0
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} must be one real, non-empty file"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn sync_windows_wsl_recovery_file(
+    path: &Path,
+    label: &str,
+) -> AppResult<WindowsWslRecoveryFileSnapshot> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    // FlushFileBuffers requires a writable Windows handle. Deny write/delete
+    // sharing and open the directory entry itself so the durable object can be
+    // bound to an exact identity before the path is renamed.
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "{label} could not be opened for durable verification without following links: {error}"
+            ))
+        })?;
+    let before = windows_file_information(&file)?;
+    validate_windows_wsl_recovery_file_information(&before, label)?;
+    file.sync_all()?;
+    let after = windows_file_information(&file)?;
+    if after != before {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed while it was being made durable"
+        )));
+    }
+    Ok(WindowsWslRecoveryFileSnapshot {
+        size: after.size,
+        identity: after.identity,
+        number_of_links: after.number_of_links,
+        attributes: after.attributes,
+    })
+}
+
+#[cfg(not(windows))]
+fn sync_windows_wsl_recovery_file(
+    path: &Path,
+    label: &str,
+) -> AppResult<WindowsWslRecoveryFileSnapshot> {
+    verify_windows_wsl_recovery_file(path, label)?;
+    let file = File::open(path)?;
+    file.sync_all()?;
+    Ok(WindowsWslRecoveryFileSnapshot {
+        size: file.metadata()?.len(),
+    })
+}
+
+#[cfg(windows)]
+fn verify_renamed_windows_wsl_recovery_file(
+    path: &Path,
+    label: &str,
+    expected: &WindowsWslRecoveryFileSnapshot,
+) -> AppResult<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| {
+            AppError::NotAuthorized(format!(
+                "{label} could not be reopened after its durable rename without following links: {error}"
+            ))
+        })?;
+    let actual = windows_file_information(&file)?;
+    validate_windows_wsl_recovery_file_information(&actual, label)?;
+    let actual = WindowsWslRecoveryFileSnapshot {
+        size: actual.size,
+        identity: actual.identity,
+        number_of_links: actual.number_of_links,
+        attributes: actual.attributes,
+    };
+    if &actual != expected {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} identity changed during its durable rename"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn verify_renamed_windows_wsl_recovery_file(
+    path: &Path,
+    label: &str,
+    expected: &WindowsWslRecoveryFileSnapshot,
+) -> AppResult<()> {
+    verify_windows_wsl_recovery_file(path, label)?;
+    if fs::symlink_metadata(path)?.len() != expected.size {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} changed during its durable rename"
+        )));
     }
     Ok(())
 }
@@ -13439,6 +13586,7 @@ mod tests {
             .commands
             .push(success(utf16le(&format!("{distribution}\r\n"))));
         let setup = ManagedRuntimeSetupController::default();
+        setup.begin().expect("begin failed recovery fixture setup");
 
         let error = fixture
             .manager
@@ -13449,15 +13597,24 @@ mod tests {
                 Some(&setup),
             )
             .expect_err("invalid pending recovery must require manual action");
+        setup
+            .finish_failed(error.to_string())
+            .expect("finish failed recovery fixture setup");
 
         assert!(
             error
                 .to_string()
                 .contains("wsl_distribution_requires_manual_action")
         );
+        let status = setup.status().expect("terminal failed recovery status");
+        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
         assert_eq!(
-            setup.status().unwrap().failure_reason,
+            status.failure_reason,
             Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
         );
         assert_eq!(
             fixture.commands.calls(),
@@ -13535,9 +13692,7 @@ mod tests {
         let recovery_archive = intent.attempt_directory.join("workspace-recovery.tar");
         fs::write(&recovery_archive, b"durable bounded recovery archive")
             .expect("bounded recovery archive");
-        File::open(&recovery_archive)
-            .expect("open bounded recovery archive")
-            .sync_all()
+        sync_windows_wsl_recovery_file(&recovery_archive, "bounded recovery archive fixture")
             .expect("sync bounded recovery archive");
         let backup = WindowsWslRecoveryBackupProof {
             schema_version: WINDOWS_WSL_RECOVERY_BACKUP_SCHEMA.into(),
@@ -16206,6 +16361,7 @@ mod tests {
             .commands
             .push(success(utf16le(&format!("{distribution}\r\n"))));
         let setup = ManagedRuntimeSetupController::default();
+        setup.begin().expect("begin failed recovery fixture setup");
 
         let error = fixture
             .manager
@@ -16216,15 +16372,24 @@ mod tests {
                 Some(&setup),
             )
             .expect_err("a stale v0.1.7 registry name is not an ownership receipt");
+        setup
+            .finish_failed(error.to_string())
+            .expect("finish failed recovery fixture setup");
 
         assert!(
             error
                 .to_string()
                 .contains("wsl_distribution_requires_manual_action")
         );
+        let status = setup.status().expect("terminal failed recovery status");
+        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
         assert_eq!(
-            setup.status().unwrap().failure_reason,
+            status.failure_reason,
             Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+        );
+        assert_eq!(
+            status.next_action,
+            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
         );
         assert_eq!(
             fixture.commands.calls(),
