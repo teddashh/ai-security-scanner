@@ -16010,7 +16010,9 @@ mod tests {
     #[test]
     fn windows_wsl_vhd_verification_waits_for_exact_handle_release() {
         let fixture = fixture();
-        let base_path = fixture.manager.versions_root().join("release-wait");
+        let versions_root = fixture.manager.versions_root();
+        ensure_private_directory(&versions_root).unwrap();
+        let base_path = versions_root.join("release-wait");
         ensure_private_directory(&base_path).unwrap();
         let vhd = base_path.join("ext4.vhdx");
         fs::write(&vhd, b"bounded VHD release fixture").unwrap();
@@ -16038,7 +16040,9 @@ mod tests {
     #[test]
     fn windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file() {
         let fixture = fixture();
-        let base_path = fixture.manager.versions_root().join("release-timeout");
+        let versions_root = fixture.manager.versions_root();
+        ensure_private_directory(&versions_root).unwrap();
+        let base_path = versions_root.join("release-timeout");
         ensure_private_directory(&base_path).unwrap();
         let vhd = base_path.join("ext4.vhdx");
         fs::write(&vhd, b"bounded VHD timeout fixture").unwrap();
