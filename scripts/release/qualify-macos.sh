@@ -72,7 +72,8 @@ done
 [[ -f "${runtime_manifest}" ]]
 node -e '
   const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  if (manifest.schema_version !== "2" || typeof manifest.bundle_id !== "string" ||
+  if (manifest.schema_version !== "3" || manifest.management_contract_revision !== "2026-08-29.1" ||
+      typeof manifest.bundle_id !== "string" ||
       manifest.bundle_id.length === 0 || typeof manifest.runtime_version !== "string" ||
       manifest.runtime_version.length === 0 || !Array.isArray(manifest.targets) ||
       !manifest.targets.some((target) => target?.operating_system === "macos" &&

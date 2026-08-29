@@ -18,6 +18,10 @@ import {
   updaterLayoutsFor,
 } from "./updater-layout.mjs";
 import { verifyPlatformQualificationFile } from "./platform-qualification.mjs";
+import { validateWindowsNsisUpgradeEvidenceFile } from "./windows-nsis-upgrade-evidence.mjs";
+import { validateWindowsNsisGhostRecoveryEvidenceFile } from "./windows-nsis-ghost-recovery-evidence.mjs";
+
+const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
 
 function assert(condition, message) {
   if (!condition) {
@@ -442,11 +446,17 @@ async function verifyPlatformManifest(directory, platform, version, tag, commit)
 
 async function verifyRuntimeEvidence(directory, platform) {
   const prefix = `managed-runtime-${platform}`;
-  const manifest = await readJson(path.join(directory, `${prefix}.manifest.json`));
+  const manifestPath = path.join(directory, `${prefix}.manifest.json`);
+  const manifest = await readJson(manifestPath);
+  const manifestSha256 = await sha256File(manifestPath);
   const cyclonedx = await readJson(path.join(directory, `${prefix}.cyclonedx.json`));
   const spdx = await readJson(path.join(directory, `${prefix}.spdx.json`));
   const notices = await readFile(path.join(directory, `${prefix}.NOTICES.txt`), "utf8");
-  assert(manifest.schema_version === "2", `${prefix} has an unsupported manifest schema`);
+  assert(manifest.schema_version === "3", `${prefix} has an unsupported manifest schema`);
+  assert(
+    manifest.management_contract_revision === "2026-08-29.1",
+    `${prefix} has the wrong management contract revision`,
+  );
   assert(Array.isArray(manifest.files) && manifest.files.length > 0, `${prefix} has no file inventory`);
   assert(Array.isArray(manifest.targets) && manifest.targets.length > 0, `${prefix} has no target inventory`);
   assert(Array.isArray(manifest.components) && manifest.components.length > 0, `${prefix} has no components`);
@@ -473,9 +483,29 @@ async function verifyRuntimeEvidence(directory, platform) {
     cyclonedx.bomFormat === "CycloneDX" && cyclonedx.components?.length === manifest.components.length,
     `${prefix} CycloneDX inventory does not match its manifest`,
   );
+  const runtimeProperties = new Map(
+    (cyclonedx.metadata?.properties ?? []).map((property) => [
+      property.name,
+      property.value,
+    ]),
+  );
+  assert(
+    runtimeProperties.get("ai-security-scanner:manifest-sha256") === manifestSha256 &&
+      runtimeProperties.get("ai-security-scanner:management-contract-revision") ===
+        manifest.management_contract_revision,
+    `${prefix} CycloneDX metadata does not bind its manifest and management contract`,
+  );
   assert(
     spdx.spdxVersion === "SPDX-2.3" && spdx.packages?.length === manifest.components.length,
     `${prefix} SPDX inventory does not match its manifest`,
+  );
+  assert(
+    spdx.documentNamespace?.endsWith(`/${manifestSha256}`) &&
+      notices.includes(`Manifest SHA-256: ${manifestSha256}`) &&
+      notices.includes(
+        `Management contract revision: ${manifest.management_contract_revision}`,
+      ),
+    `${prefix} release provenance does not bind its exact manifest identity`,
   );
   return manifest.components.map((component) => ({ ...component, platform }));
 }
@@ -579,6 +609,17 @@ async function main() {
   const version = requireString(args, "version");
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
+  const publicationMode = requireString(args, "publication-mode");
+  const testOnlyWindowsRuntimeManifestSha256 = args.get(
+    "test-only-windows-runtime-manifest-sha256",
+  );
+  if (
+    testOnlyWindowsRuntimeManifestSha256 !== undefined &&
+    (typeof testOnlyWindowsRuntimeManifestSha256 !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(testOnlyWindowsRuntimeManifestSha256))
+  ) {
+    throw new Error("test-only Windows runtime manifest identity is malformed");
+  }
   const configuredPath = args.get("tauri-config");
   if (configuredPath !== undefined && typeof configuredPath !== "string") {
     throw new Error("--tauri-config requires an explicit path");
@@ -589,6 +630,10 @@ async function main() {
   if (!isSemver(version) || tag !== `v${version}` || !/^[0-9a-f]{40}$/u.test(commit)) {
     throw new Error("release identity is malformed or inconsistent");
   }
+  assert(
+    PUBLICATION_MODES.has(publicationMode),
+    "publication mode must be commit-bound-qc or public-github-release",
+  );
 
   const metadata = await readJson(path.join(directory, "release-metadata.json"));
   const tauriConfig = await readJson(tauriConfigPath);
@@ -598,6 +643,7 @@ async function main() {
     typeof updaterPublicKey === "string" && updaterPublicKey.length >= 64,
     "tauri config has no embedded updater public key",
   );
+  assert(metadata.schemaVersion === 2, "release metadata schemaVersion must be 2");
   assert(metadata.version === version && metadata.tag === tag, "release metadata version/tag mismatch");
   assert(
     metadata.releaseChannel === packageJson.release?.channel &&
@@ -605,6 +651,15 @@ async function main() {
     "release metadata publication channel does not match the source package",
   );
   assert(metadata.sourceCommit === commit, "release metadata commit mismatch");
+  assert(metadata.publicationMode === publicationMode, "release metadata publication mode mismatch");
+  const expectedProvenanceAttestation = publicationMode === "public-github-release"
+    ? { state: "required-before-publication", provider: "GitHub artifact attestations" }
+    : { state: "not-created-for-commit-bound-qc", provider: "none" };
+  assert(
+    JSON.stringify(metadata.security?.provenanceAttestation) ===
+      JSON.stringify(expectedProvenanceAttestation),
+    "release metadata provenance-attestation state does not match its publication mode",
+  );
   assert(
     metadata.security?.operatingSystemCodeSigning?.state === "not-configured" &&
       metadata.security?.appleNotarization?.state === "not-configured",
@@ -653,6 +708,17 @@ async function main() {
     JSON.stringify(qualificationNames) === JSON.stringify(qualificationSpecs.map(({ platform, installerType }) => `platform-qualification-${platform}-${installerType}.json`).sort()),
     "release must contain exactly the four recognized installer qualification records",
   );
+  const windowsNsisQualificationNames = (await regularFiles(directory))
+    .map((file) => file.relative)
+    .filter((name) => name.startsWith("windows-nsis-") && name.endsWith("-qualification.json"))
+    .sort();
+  assert(
+    JSON.stringify(windowsNsisQualificationNames) === JSON.stringify([
+      "windows-nsis-ghost-recovery-qualification.json",
+      "windows-nsis-upgrade-qualification.json",
+    ]),
+    "release must contain exactly the normal N-1 NSIS upgrade and real registered-WSL ghost-recovery records",
+  );
   const installers = [];
   const sidecars = [];
   const updaters = [];
@@ -679,6 +745,21 @@ async function main() {
       },
     ));
   }
+  const windowsNsisUpgradeQualification = await validateWindowsNsisUpgradeEvidenceFile({
+    file: path.join(directory, "windows-nsis-upgrade-qualification.json"),
+    artifactDirectory: directory,
+    version,
+    tag,
+    commit,
+  });
+  const windowsNsisGhostRecoveryQualification = await validateWindowsNsisGhostRecoveryEvidenceFile({
+    file: path.join(directory, "windows-nsis-ghost-recovery-qualification.json"),
+    artifactDirectory: directory,
+    version,
+    tag,
+    commit,
+    testOnlyRuntimeManifestSha256: testOnlyWindowsRuntimeManifestSha256,
+  });
   assert(installers.some((file) => file.endsWith(".deb")), "release has no Debian installer");
   assert(installers.some((file) => file.endsWith(".rpm")), "release has no RPM installer");
   assert(installers.some((file) => file.endsWith(".AppImage")), "release has no AppImage installer");
@@ -723,6 +804,16 @@ async function main() {
   await writeJsonAtomic(path.join(directory, cyclonedxName), cyclonedx);
   await writeJsonAtomic(path.join(directory, spdxName), spdx);
 
+  const distributionVerification = publicationMode === "public-github-release"
+    ? [
+      "These desktop installers are published as a GitHub Release. Verify the selected file against",
+      "`SHA256SUMS.txt` and its public GitHub artifact attestation before installing.",
+    ]
+    : [
+      "These files are a commit-bound GitHub Actions QC artifact, not a public GitHub Release.",
+      "Verify the selected file against `SHA256SUMS.txt`. This workflow artifact has no public",
+      "GitHub artifact attestation.",
+    ];
   const notes = [
     `# ai-security-scanner ${version}`,
     "",
@@ -730,8 +821,8 @@ async function main() {
     "",
     ...releaseCopy.releaseNotes,
     "These desktop installers are built for Linux x86-64, universal macOS (Intel + Apple silicon),",
-    "and Windows x86-64. Verify the selected file against `SHA256SUMS.txt` and the public GitHub",
-    "artifact attestation before installing.",
+    "and Windows x86-64.",
+    ...distributionVerification,
     "",
     "Fresh GitHub-hosted qualification jobs independently installed the Debian package, macOS DMG,",
     "Windows MSI, and Windows NSIS Setup executable. Linux and both Windows installers completed",
@@ -741,8 +832,14 @@ async function main() {
     "runtime manifest, CLI, desktop startup, and cleanup passed on GitHub's Intel macos-15-intel",
     "runner. Its managed-runtime, egress gateway, and container lifecycle is explicitly recorded as not observed",
     "because GitHub-hosted macOS does not support the nested virtualization required by AppleHV.",
-    "This limited macOS evidence is accepted only for a pre-release. Exact evidence is published",
-    "per installer.",
+    "This limited macOS evidence is accepted only for a pre-release. Exact evidence is included",
+    "per installer in the candidate bundle.",
+    "The Windows NSIS candidate also passed two separate v0.1.7 migration qualifications.",
+    "One installed and uninstalled the real N-1 package while preserving a synthetic case and its",
+    "durable export-signing identity. The other started and stopped the real N-1 managed runtime,",
+    "removed exactly its old payload and installer executables while retaining its registered WSL",
+    "workspace, then proved automatic bounded recovery without the manual-action fallback.",
+    "Both machine-readable qualification records are included in the candidate bundle and in SHA256SUMS.txt.",
     "",
     "> The current installers are not signed with Apple Developer ID or Windows Authenticode and",
     "> are not Apple-notarized. Application update payloads are separately signed with the updater",
@@ -768,11 +865,12 @@ async function main() {
     fileRecords.push({ path: file.relative, bytes: file.bytes, sha256: await sha256File(file.absolute) });
   }
   await writeJsonAtomic(path.join(directory, "release-assets.json"), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     product: "ai-security-scanner",
     version,
     tag,
     sourceCommit: commit,
+    publicationMode,
     indexSelfExcluded: true,
     files: fileRecords,
   });
@@ -786,7 +884,7 @@ async function main() {
   }
   await writeTextAtomic(path.join(directory, "SHA256SUMS.txt"), `${checksums.join("\n")}\n`);
   process.stdout.write(
-    `Finalized ${installers.length} installers, ${updaters.length} signed updater payloads, ${sidecars.length} first-party companion executables, ${platformQualifications.length} hosted platform qualifications, and ${finalFiles.length} evidence files for ${tag}.\n`,
+    `Finalized ${installers.length} installers, ${updaters.length} signed updater payloads, ${sidecars.length} first-party companion executables, ${platformQualifications.length} hosted platform qualifications, two Windows NSIS migration qualifications (${windowsNsisUpgradeQualification.qualification}, ${windowsNsisGhostRecoveryQualification.qualification}), and ${finalFiles.length} evidence files for ${tag}.\n`,
   );
 }
 

@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "mapping_version",
+    "provenance",
     "relationship",
     "disclaimer",
     "sources",
@@ -14,10 +15,27 @@
     "entries"
   ],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "const": "1.1" },
     "mapping_version": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[1-9][0-9]*$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewed_at", "review_process", "canonical_sha256"],
+      "properties": {
+        "reviewed_at": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "review_process": { "const": "source_coordinate_and_rationale_review_v1" },
+        "canonical_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
     },
     "relationship": { "const": "related" },
     "disclaimer": { "type": "string", "minLength": 40, "maxLength": 512 },

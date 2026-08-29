@@ -567,6 +567,30 @@ fn fingerprints_are_stable_across_repeat_runs() {
 }
 
 #[test]
+fn semgrep_lossy_rule_ids_never_gain_mapping_proof() {
+    let output = normalize_bytes(
+        "semgrep",
+        include_bytes!("fixtures/adapters/semgrep-lossy-rule-ids.json"),
+        "semgrep-lossy-rule-ids.json",
+        "application/json",
+        "run-lossy-rule-ids",
+    );
+
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    assert_eq!(output.findings.len(), 2);
+    assert!(output.findings.iter().all(|finding| {
+        finding.control_references.is_empty()
+            && finding.evidence.iter().all(|evidence| {
+                evidence.source_rule.is_none() && evidence.result_pointer_sha256.is_some()
+            })
+    }));
+}
+
+#[test]
 fn versioned_control_references_are_allowlisted_relationships_not_assurance_claims() {
     let mapped_engines = [
         "steampipe",

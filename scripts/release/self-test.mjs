@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   copyFile,
@@ -42,6 +43,8 @@ const TAG = `v${VERSION}`;
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TEST_KEY_PASSWORD = "release-self-test-only";
 const TAURI_CLI = path.join(PROJECT_ROOT, "node_modules", "@tauri-apps", "cli", "tauri.js");
+const LEGACY_PUBLIC_KEY_BASE64 = Buffer.alloc(32, 0x5a).toString("base64");
+const LEGACY_KEY_ID = createHash("sha256").update(Buffer.alloc(32, 0x5a)).digest("hex");
 
 function run(script, arguments_) {
   execFileSync(process.execPath, [path.join(PROJECT_ROOT, "scripts/release", script), ...arguments_], {
@@ -182,9 +185,10 @@ async function createPlatformFixture(
   await writeFile(
     runtimeManifest,
     `${JSON.stringify({
-      schema_version: "2",
-      bundle_id: "release-self-test",
-      runtime_version: VERSION,
+      schema_version: "3",
+      management_contract_revision: "2026-08-29.1",
+      bundle_id: platform === "windows-x86_64" ? "podman-machine" : "release-self-test",
+      runtime_version: platform === "windows-x86_64" ? "5.8.2" : VERSION,
       driver_path: runtimeBinaryRelative,
       files: [{
         path: runtimeBinaryRelative,
@@ -471,6 +475,238 @@ async function createQualificationFixture(output, platform, installerType) {
   await rm(qualificationRoot, { recursive: true, force: true });
 }
 
+async function createWindowsNsisMigrationQualificationFixtures(output) {
+  const installerManifest = await readJson(path.join(output, "installers-windows-x86_64.json"));
+  const nsis = installerManifest.installers.find((installer) => installer.bundleType === "nsis");
+  if (!nsis) throw new Error("release self-test Windows fixture has no NSIS installer");
+  const runtimeFile = path.join(output, "managed-runtime-windows-x86_64.manifest.json");
+  const runtime = await readJson(runtimeFile);
+  const runtimeSha256 = await sha256File(runtimeFile);
+  const machineImageSha256 = runtime.targets[0].machine_image.sha256;
+  const fixtureRoot = path.join(output, "windows-nsis-migration-fixtures");
+  await mkdir(fixtureRoot);
+  const priorRelease = {
+    version: "0.1.7",
+    tag: "v0.1.7",
+    installerFile: "ai-security-scanner_0.1.7_x64-setup.exe",
+    installerBytes: 38_730_365,
+    installerSha256: "4d2057ca4c008b46dc0195a792075e4b4b377c1909a7795b29efc30f9ae48b1a",
+    downloadUrl: "https://github.com/teddashh/ai-security-scanner/releases/download/v0.1.7/ai-security-scanner_0.1.7_x64-setup.exe",
+    runtimeManifestSha256: "8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f",
+    machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
+  };
+  const signing = {
+    signingKeyIdBefore: LEGACY_KEY_ID,
+    signingKeyIdAfter: LEGACY_KEY_ID,
+    publicKeyBase64Before: LEGACY_PUBLIC_KEY_BASE64,
+    publicKeyBase64After: LEGACY_PUBLIC_KEY_BASE64,
+    privateSigningKeyProtected: true,
+    publicIdentitySummaryExact: true,
+    durableIdentityDocumentPresent: true,
+    identityDocumentBytes: 1024,
+    identityDocumentCompactSha256: "ab".repeat(32),
+    identityDocumentProtected: true,
+    durableIdentityAnchorPresent: true,
+    identityAnchorBytes: 2048,
+    identityAnchorProtected: true,
+    anchorSchemaVersion: "1",
+    anchorIdentityDocumentSha256: "ab".repeat(32),
+    anchorDigestVerified: true,
+    anchorMatchesIdentityDocument: true,
+    identitySelfSignatureVerifiedByCandidate: true,
+    rotationIntentAbsent: true,
+    continuityEvent: "legacy_key_adopted",
+    identityKeyId: LEGACY_KEY_ID,
+    identityPublicKeyBase64: LEGACY_PUBLIC_KEY_BASE64,
+    firstBundleValid: true,
+    secondBundleValid: true,
+  };
+  const candidate = {
+    version: VERSION,
+    installerFile: nsis.file,
+    installerBytes: nsis.bytes,
+    installerSha256: nsis.sha256,
+  };
+  const upgradeObservations = {
+    schemaVersion: 1,
+    scenario: "real_n_minus_one_nsis_upgrade",
+    platform: "windows-x86_64",
+    runner: "windows-2025",
+    priorRelease,
+    candidate,
+    installation: {
+      priorCliVersion: "0.1.7",
+      candidateCliVersion: VERSION,
+      sameCanonicalInstallDirectory: true,
+      registryHive: "HKEY_CURRENT_USER",
+      registryEntryIdentityPreserved: true,
+      displayVersionUpdated: true,
+      uninstallerReplaced: true,
+      unattendedMode: "silent",
+      sameVersionSilentReinstallCompleted: true,
+      transitionReceiptSurvivedSameVersionReinstall: true,
+      transitionReceipt: "uninstalled-0.1.7",
+    },
+    dataPreservation: {
+      defaultLocalDataDirectoryUsed: true,
+      preInstallerFileCount: 8,
+      preInstallerBytes: 8192,
+      exactPreInstallerSnapshotPreserved: true,
+      sentinelPreserved: true,
+      demoCaseId: "00112233-4455-6677-8899-aabbccddeeff",
+      demoCasePreserved: true,
+      privateSigningMaterialBytePreserved: true,
+      ...signing,
+    },
+    managedRuntimeFilesystemSentinel: {
+      priorProviderNamespace: "8b2257ace33ecb14",
+      priorVersionDirectory: "podman-machine-5.8.2-8b2257ace33ecb14",
+      priorVersionPayloadDirectoryAbsentBeforeUpgrade: true,
+      priorVersionPayloadDirectoryAbsentAfterInstaller: true,
+      providerHomeSentinelPreserved: true,
+      registeredWslStateExercised: false,
+    },
+    cleanup: {
+      candidateUninstalled: true,
+      installDirectoryRemoved: true,
+      privateDataRemoved: true,
+      registrySentinelRemoved: true,
+    },
+  };
+  const upgradeObservationsFile = path.join(fixtureRoot, "upgrade-observations.json");
+  await writeFile(upgradeObservationsFile, `${JSON.stringify(upgradeObservations, null, 2)}\n`);
+  const upgradeEvidence = path.join(output, "windows-nsis-upgrade-qualification.json");
+  run("windows-nsis-upgrade-evidence.mjs", [
+    "create", "--artifact-dir", output, "--observations", upgradeObservationsFile,
+    "--out", upgradeEvidence, "--version", VERSION, "--tag", TAG, "--commit", COMMIT,
+  ]);
+  run("windows-nsis-upgrade-evidence.mjs", [
+    "validate", "--file", upgradeEvidence, "--artifact-dir", output,
+    "--version", VERSION, "--tag", TAG, "--commit", COMMIT,
+  ]);
+
+  const ghostObservations = {
+    schemaVersion: 1,
+    scenario: "real_registered_wsl_n_minus_one_ghost_install_recovery",
+    platform: "windows-x86_64",
+    runner: "windows-2025",
+    priorRelease,
+    candidate: {
+      ...candidate,
+      runtimeManifestSha256: runtimeSha256,
+      machineImageSha256,
+    },
+    ghostFixture: {
+      defaultInstallDirectoryUsed: true,
+      priorCliVersion: "0.1.7",
+      oldRegistryIdentityExact: true,
+      oldRuntimeInstalled: true,
+      oldRuntimeStarted: true,
+      oldRuntimeStopped: true,
+      oldProviderNamespace: "8b2257ace33ecb14",
+      oldProviderCryptographicIdentityPresent: true,
+      distributionName: "podman-assm1-win-x64-e2b6cbcadd8b",
+      registeredWslStateExercised: true,
+      registrationBoundToOldProvider: true,
+      oldVersionDirectory: "podman-machine-5.8.2-8b2257ace33ecb14",
+      oldVersionPayloadDigestVerifiedBeforeRemoval: true,
+      oldVersionPayloadDirectoryRemoved: true,
+      oldDesktopRemoved: true,
+      oldUninstallerRemoved: true,
+    },
+    installerMigration: {
+      candidateInstallerCompleted: true,
+      transitionReceipt: "recovered-ghost-v0.1.7",
+      candidateCliVersion: VERSION,
+      registryVersionUpdated: true,
+      registryIdentityExact: true,
+      candidateDesktopRestored: true,
+      candidateUninstallerRestored: true,
+      candidateRuntimeResourceMatchesRelease: true,
+      exactPrivateDataSnapshotPreserved: true,
+      sameVersionSilentReinstallCompleted: true,
+      transitionReceiptSurvivedSameVersionReinstall: true,
+    },
+    runtimeRecovery: {
+      startSucceeded: true,
+      noManualActionFallback: true,
+      runningAndAvailable: true,
+      sameDistributionName: true,
+      registrationMovedToCurrentProvider: true,
+      currentProviderNamespace: runtimeSha256.slice(0, 16),
+      oldProviderRemoved: true,
+      recoveryId: "00112233445566778899aabbccddeeff",
+      durableIntentPresent: true,
+      intentProofValid: true,
+      intentSchemaVersion: "ai-security-scanner.managed-wsl-recovery-intent/v2",
+      intentOwnershipBasis: "bounded_n_minus_one_ghost_migration",
+      intentManifestSha256: runtimeSha256,
+      intentMachineImageSha256: machineImageSha256,
+      intentSourceProviderManifestSha256: priorRelease.runtimeManifestSha256,
+      intentTransitionReceipt: "recovered-ghost-v0.1.7",
+      receiptConsumption: {
+        registryValueAbsent: true,
+        proofPathExact: true,
+        proofPresent: true,
+        proofProtected: true,
+        proofBytes: 1024,
+        proofSha256: "ef".repeat(32),
+        schemaVersion: "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1",
+        recoveryId: "00112233-4455-6677-8899-aabbccddeeff",
+        installTransitionReceipt: "recovered-ghost-v0.1.7",
+        sourceProviderManifestSha256: priorRelease.runtimeManifestSha256,
+        manifestSha256: runtimeSha256,
+        machineImageSha256,
+        machineName: "assm1-win-x64-e2b6cbcadd8b",
+        distributionName: "podman-assm1-win-x64-e2b6cbcadd8b",
+        proofRetainedAfterRuntimePurge: true,
+        proofRetainedUntilExplicitPrivateDataCleanup: true,
+      },
+      durableArchivePresent: true,
+      archiveBytes: 65_536,
+      archiveSha256: "cd".repeat(32),
+      backupReceiptValid: true,
+      importReceiptValid: true,
+      backupAndImportAgree: true,
+      pendingRecoveryAbsent: true,
+      temporaryWorkspaceAbsent: true,
+      quarantineDistributionAbsent: true,
+    },
+    dataPreservation: {
+      preInstallerFileCount: 8,
+      preInstallerBytes: 8192,
+      demoCaseId: "00112233-4455-6677-8899-aabbccddeeff",
+      demoCasePreserved: true,
+      privateSigningMaterialBytePreserved: true,
+      ...signing,
+    },
+    cleanup: {
+      managedRuntimePurged: true,
+      exactWslDistributionAbsent: true,
+      quarantineDistributionsAbsent: true,
+      candidateUninstalled: true,
+      installDirectoryRemoved: true,
+      privateDataRemoved: true,
+      productRegistryRemoved: true,
+    },
+  };
+  const ghostObservationsFile = path.join(fixtureRoot, "ghost-observations.json");
+  await writeFile(ghostObservationsFile, `${JSON.stringify(ghostObservations, null, 2)}\n`);
+  const ghostEvidence = path.join(output, "windows-nsis-ghost-recovery-qualification.json");
+  run("windows-nsis-ghost-recovery-evidence.mjs", [
+    "create", "--artifact-dir", output, "--observations", ghostObservationsFile,
+    "--out", ghostEvidence, "--version", VERSION, "--tag", TAG, "--commit", COMMIT,
+    "--test-only-runtime-manifest-sha256", runtimeSha256,
+  ]);
+  run("windows-nsis-ghost-recovery-evidence.mjs", [
+    "validate", "--file", ghostEvidence, "--artifact-dir", output,
+    "--version", VERSION, "--tag", TAG, "--commit", COMMIT,
+    "--test-only-runtime-manifest-sha256", runtimeSha256,
+  ]);
+  await rm(fixtureRoot, { recursive: true, force: true });
+  return runtimeSha256;
+}
+
 async function main() {
   for (const version of ["0.1.2", "0.1.4", "0.2.0", "2.3.4"]) {
     if (!isSemver(version)) throw new Error(`native-compatible release version was rejected: ${version}`);
@@ -595,6 +831,8 @@ async function main() {
     await createQualificationFixture(outputs[1], "macos-universal", "dmg");
     await createQualificationFixture(outputs[2], "windows-x86_64", "msi");
     await createQualificationFixture(outputs[2], "windows-x86_64", "nsis");
+    const selfTestRuntimeManifestSha256 =
+      await createWindowsNsisMigrationQualificationFixtures(outputs[2]);
     const release = path.join(temporary, "release-assets");
     await mkdir(release);
     for (const output of outputs) {
@@ -616,7 +854,7 @@ async function main() {
     await writeFile(
       path.join(release, "release-metadata.json"),
       `${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         product: "ai-security-scanner",
         version: VERSION,
         tag: TAG,
@@ -625,6 +863,7 @@ async function main() {
         sourceRepository: "https://github.com/teddashh/ai-security-scanner",
         sourceCommit: COMMIT,
         sourceDate: "2026-08-24T00:00:00Z",
+        publicationMode: "commit-bound-qc",
         distribution: {
           desktopInstallers: ["linux-x86_64", "macos-universal", "windows-x86_64"],
           bundledEngines: [],
@@ -645,8 +884,8 @@ async function main() {
             `ai-security-scanner-${VERSION}.spdx.json`,
           ],
           provenanceAttestation: {
-            state: "required-before-publication",
-            provider: "GitHub artifact attestations",
+            state: "not-created-for-commit-bound-qc",
+            provider: "none",
           },
         },
         inventories: { npmPackageCount: 0, cargoPackageCount: 0, engineReferenceCount: 0 },
@@ -662,9 +901,60 @@ async function main() {
       TAG,
       "--commit",
       COMMIT,
+      "--publication-mode",
+      "commit-bound-qc",
       "--tauri-config",
       tauriConfig,
+      "--test-only-windows-runtime-manifest-sha256",
+      selfTestRuntimeManifestSha256,
     ];
+    const upgradeQualification = path.join(release, "windows-nsis-upgrade-qualification.json");
+    const hiddenUpgradeQualification = `${upgradeQualification}.missing`;
+    await rename(upgradeQualification, hiddenUpgradeQualification);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "missing normal NSIS upgrade qualification");
+    await rename(hiddenUpgradeQualification, upgradeQualification);
+    const ghostQualification = path.join(release, "windows-nsis-ghost-recovery-qualification.json");
+    const hiddenGhostQualification = `${ghostQualification}.missing`;
+    await rename(ghostQualification, hiddenGhostQualification);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "missing registered-WSL ghost qualification");
+    await rename(hiddenGhostQualification, ghostQualification);
+    const validUpgradeQualification = await readFile(upgradeQualification);
+    const dishonestUpgradeQualification = JSON.parse(validUpgradeQualification.toString("utf8"));
+    dishonestUpgradeQualification.observations.dataPreservation.continuityEvent = "generated";
+    await writeFile(upgradeQualification, `${JSON.stringify(dishonestUpgradeQualification, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "upgrade evidence without legacy identity adoption");
+    await writeFile(upgradeQualification, validUpgradeQualification);
+    const mismatchedUpgradeAnchor = JSON.parse(validUpgradeQualification.toString("utf8"));
+    mismatchedUpgradeAnchor.observations.dataPreservation.anchorIdentityDocumentSha256 = "cd".repeat(32);
+    await writeFile(upgradeQualification, `${JSON.stringify(mismatchedUpgradeAnchor, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "upgrade evidence with mismatched signing identity anchor");
+    await writeFile(upgradeQualification, validUpgradeQualification);
+    const validGhostQualification = await readFile(ghostQualification);
+    const dishonestGhostQualification = JSON.parse(validGhostQualification.toString("utf8"));
+    dishonestGhostQualification.observations.runtimeRecovery.intentProofValid = false;
+    await writeFile(ghostQualification, `${JSON.stringify(dishonestGhostQualification, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence without a verified v2 recovery intent");
+    await writeFile(ghostQualification, validGhostQualification);
+    const lostGhostTransition = JSON.parse(validGhostQualification.toString("utf8"));
+    lostGhostTransition.observations.installerMigration.transitionReceiptSurvivedSameVersionReinstall = false;
+    await writeFile(ghostQualification, `${JSON.stringify(lostGhostTransition, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with a lost same-version transition receipt");
+    await writeFile(ghostQualification, validGhostQualification);
+    const unconsumedGhostReceipt = JSON.parse(validGhostQualification.toString("utf8"));
+    unconsumedGhostReceipt.observations.runtimeRecovery.receiptConsumption.registryValueAbsent = false;
+    await writeFile(ghostQualification, `${JSON.stringify(unconsumedGhostReceipt, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with an unconsumed registry receipt");
+    await writeFile(ghostQualification, validGhostQualification);
+    const tamperedConsumedProof = JSON.parse(validGhostQualification.toString("utf8"));
+    tamperedConsumedProof.observations.runtimeRecovery.receiptConsumption.manifestSha256 = "ef".repeat(32);
+    await writeFile(ghostQualification, `${JSON.stringify(tamperedConsumedProof, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with a mutated consumed proof");
+    await writeFile(ghostQualification, validGhostQualification);
+    const incompleteConsumedProof = JSON.parse(validGhostQualification.toString("utf8"));
+    delete incompleteConsumedProof.observations.runtimeRecovery.receiptConsumption.installTransitionReceipt;
+    await writeFile(ghostQualification, `${JSON.stringify(incompleteConsumedProof, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with an incomplete consumed proof");
+    await writeFile(ghostQualification, validGhostQualification);
     const macQualification = path.join(release, "platform-qualification-macos-universal-dmg.json");
     const hiddenMacQualification = `${macQualification}.missing`;
     await rename(macQualification, hiddenMacQualification);
@@ -801,6 +1091,13 @@ async function main() {
       () => validatePlatformQualification(wrongGatewayImage, { expectedQualificationImage, expectedGatewayImage: EXPECTED_GATEWAY_IMAGE }),
       "egress gateway qualification with an image absent from the release manifest",
     );
+    const wrongPublicationModeArguments = [...finalizeArguments];
+    wrongPublicationModeArguments[wrongPublicationModeArguments.indexOf("commit-bound-qc")] =
+      "public-github-release";
+    expectFailure(
+      () => run("finalize-release.mjs", wrongPublicationModeArguments),
+      "release metadata with a mismatched publication mode",
+    );
     run("finalize-release.mjs", finalizeArguments);
     const finalizedVerificationArguments = [
       "--dir",
@@ -811,6 +1108,8 @@ async function main() {
       TAG,
       "--commit",
       COMMIT,
+      "--publication-mode",
+      "commit-bound-qc",
     ];
     const tamperedFinalizedFile = path.join(release, "LICENSE.txt");
     const originalFinalizedBytes = await readFile(tamperedFinalizedFile);
@@ -849,9 +1148,16 @@ async function main() {
       !checksums.includes("platform-qualification-macos-universal-dmg.json") ||
       !checksums.includes("platform-qualification-windows-x86_64-msi.json") ||
       !checksums.includes("platform-qualification-windows-x86_64-nsis.json") ||
+      !checksums.includes("windows-nsis-upgrade-qualification.json") ||
+      !checksums.includes("windows-nsis-ghost-recovery-qualification.json") ||
       !releaseNotes.includes("Linux and both Windows installers completed") ||
+      !releaseNotes.includes("two separate v0.1.7 migration qualifications") ||
+      !releaseNotes.includes("automatic bounded recovery without the manual-action fallback") ||
       !releaseNotes.includes("fixed no-upstream managed egress gateway readiness") ||
       !releaseNotes.includes("managed-runtime, egress gateway, and container lifecycle is explicitly recorded as not observed") ||
+      !releaseNotes.includes("commit-bound GitHub Actions QC artifact, not a public GitHub Release") ||
+      !releaseNotes.includes("This workflow artifact has no public") ||
+      releaseNotes.includes("public GitHub artifact attestation before installing") ||
       Object.keys(latest.platforms).length !== 11 ||
       !latest.platforms["windows-x86_64-nsis"] ||
       !latest.platforms["windows-x86_64-msi"] ||
@@ -866,7 +1172,7 @@ async function main() {
       throw new Error("finalized release did not preserve updater and companion executable evidence");
     }
     process.stdout.write(
-      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact runtime-manifest evidence sets, and four strict hosted installer qualifications.\n",
+      "Release tooling self-test passed with six installers, six signed updater payloads, nine companion executables, three exact runtime-manifest evidence sets, four strict hosted installer qualifications, and two required Windows NSIS migration qualifications.\n",
     );
   } finally {
     await rm(temporary, { recursive: true, force: true });

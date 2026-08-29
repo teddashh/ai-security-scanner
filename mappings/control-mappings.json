@@ -1,6 +1,11 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "mapping_version": "2026-08-28.1",
+  "provenance": {
+    "reviewed_at": "2026-08-29",
+    "review_process": "source_coordinate_and_rationale_review_v1",
+    "canonical_sha256": "7e53c9fe72584ee455ec2a94ee6bcf5705fc717b8bb3fbe97cd7377bb7fd5123"
+  },
   "relationship": "related",
   "disclaimer": "These evidence-to-control references indicate topical relationships only. They do not establish implementation, effectiveness, certification, or compliance.",
   "sources": [

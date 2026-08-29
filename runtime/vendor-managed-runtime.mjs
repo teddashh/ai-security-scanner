@@ -101,6 +101,18 @@ function requireSha256(value, label) {
   return value;
 }
 
+function requireManagementContractRevision(value) {
+  const revision = requireText(value, 'managed runtime management contract revision');
+  if (!/^\d{4}-\d{2}-\d{2}\.[1-9]\d{0,3}$/.test(revision)) {
+    throw new Error('managed runtime management contract revision must be a dated positive revision');
+  }
+  const [date] = revision.split('.');
+  if (new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
+    throw new Error('managed runtime management contract revision has an invalid calendar date');
+  }
+  return revision;
+}
+
 function requireSize(value, label, maximum = MAX_DOWNLOAD_BYTES) {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
     throw new Error(`${label} has an invalid locked size`);
@@ -227,6 +239,7 @@ function linuxVirtiofsdBuildContract(lock) {
 function validateLock(lock, targetName) {
   requireObject(lock, 'upstream lock');
   if (lock.schema_version !== '1') throw new Error('upstream lock schema is unsupported');
+  requireManagementContractRevision(lock.management_contract_revision);
   const runtime = requireObject(lock.runtime, 'runtime lock');
   requireText(runtime.version, 'runtime version');
   approvedUrl(runtime.repository_url, 'runtime repository');
@@ -1012,7 +1025,10 @@ async function createManifest(lock, targetName, stageRoot, target) {
   if (!files.some((entry) => entry.path === driverPath)) throw new Error('managed runtime driver is absent');
   const targets = manifestTargets(lock, targetName, target);
   return {
-    schema_version: '2',
+    schema_version: '3',
+    management_contract_revision: requireManagementContractRevision(
+      lock.management_contract_revision,
+    ),
     bundle_id: 'podman-machine',
     runtime_version: requireText(lock.runtime.version, 'runtime version'),
     driver_path: driverPath,

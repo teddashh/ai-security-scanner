@@ -56,13 +56,13 @@ test("finding-only formats require a durable fully completed run", () => {
   assert.equal(runSupportsFindingOnlyExport(undefined), false);
 });
 
-test("interim and incomplete runs retain case bundle, canonical JSON, and HTML", () => {
+test("interim and incomplete runs retain exports that carry the coverage ledger", () => {
   for (const incompleteRun of [
     run("running", "running", { finished: false }),
     run("partial", "partial"),
     run("failed", "failed"),
   ]) {
-    for (const format of ["case_bundle", "json", "html"] as const) {
+    for (const format of ["case_bundle", "json", "framework_report", "html"] as const) {
       assert.equal(exportFormatIsAvailable(format, incompleteRun), true);
       assert.equal(resetUnavailableExportFormat(format, incompleteRun), format);
     }

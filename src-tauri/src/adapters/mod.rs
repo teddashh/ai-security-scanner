@@ -10,7 +10,7 @@ use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter
 use crate::domain::{
     Confidence, Evidence, EvidenceKind, Finding, FindingStatus, RawArtifact, Severity,
 };
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 use serde_json::{Map, Value};
@@ -21,11 +21,15 @@ use std::io::{Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.1.2";
+pub const ADAPTER_VERSION: &str = "0.1.3";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
 pub const FINGERPRINT_SCHEMA_VERSION: &str = "v1";
+/// Stable identity for the evidence-ID commitment. Version 2 binds the
+/// producing engine and normalized source rule in addition to the finding,
+/// artifact, result pointer, and exact engine execution.
+pub const EVIDENCE_ID_SCHEMA_VERSION: &str = "v2";
 pub const BUILTIN_ENGINE_IDS: &[&str] = &[
     "cloudquery",
     "steampipe",
@@ -97,7 +101,15 @@ struct BuiltinAdapter {
 #[derive(Debug, Clone)]
 struct SourceRecord {
     pointer: String,
+    /// Bounded display text only. It must never be used as mapping proof
+    /// because sanitization can be lossy.
     rule_id: String,
+    /// Exact raw scanner rule, present only when it was already bounded,
+    /// trimmed, and control-free. Only this value can select catalog entries.
+    mapping_source_rule: Option<String>,
+    /// Collision-resistant internal identity. Valid rules use their exact
+    /// bytes; invalid rules use a domain-separated digest of the raw bytes.
+    rule_identity: String,
     title: String,
     severity: Severity,
     source_severity: String,
@@ -263,6 +275,88 @@ pub fn builtin_adapter_registry() -> AppResult<AdapterRegistry> {
 /// Exact embedded mapping identity frozen into every planned engine run.
 pub(crate) fn control_mapping_version() -> AppResult<&'static str> {
     control_mapping::catalog_version()
+}
+
+/// Canonical catalog identity frozen into each new relationship snapshot.
+pub(crate) fn control_mapping_provenance() -> AppResult<crate::domain::ControlMappingProvenance> {
+    control_mapping::catalog_provenance()
+}
+
+/// Fail-closed proof that a frozen relationship carrying the current catalog
+/// identity is an exact reviewed entry for its evidence-producing engine and
+/// frozen AI context.
+pub(crate) fn validate_current_control_reference(
+    reference: &crate::domain::ControlReference,
+    evidence_sources: &[(String, String)],
+    ai_system_applicable: bool,
+    ai_generated_artifact_applicable: bool,
+) -> AppResult<()> {
+    control_mapping::validate_current_reference(
+        reference,
+        evidence_sources,
+        ai_system_applicable,
+        ai_generated_artifact_applicable,
+    )
+}
+
+/// Return the exact scanner rule only when the current structured evidence ID
+/// commits to it and to the rest of the frozen evidence identity. Older
+/// records deliberately return `None` and cannot be upgraded from prose or
+/// tags into verified-current mapping provenance.
+pub(crate) fn validated_evidence_source_rule<'a>(
+    evidence: &'a crate::domain::Evidence,
+    finding_fingerprint: &str,
+) -> AppResult<Option<&'a str>> {
+    let Some(source_rule) = evidence.source_rule.as_deref() else {
+        return Ok(None);
+    };
+    if source_rule.is_empty()
+        || source_rule.chars().count() > MAX_SHORT_TEXT
+        || source_rule.trim() != source_rule
+        || source_rule.chars().any(char::is_control)
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "evidence {} has malformed structured source-rule provenance",
+            evidence.id
+        )));
+    }
+    let engine_run_id = evidence.engine_run_id.as_deref().ok_or_else(|| {
+        AppError::InvalidRequest(format!(
+            "evidence {} has a structured source rule but no exact engine run",
+            evidence.id
+        ))
+    })?;
+    let pointer_sha256 = evidence.result_pointer_sha256.as_deref().ok_or_else(|| {
+        AppError::InvalidRequest(format!(
+            "evidence {} has a structured source rule but no result-pointer digest",
+            evidence.id
+        ))
+    })?;
+    if pointer_sha256.len() != 64
+        || !pointer_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "evidence {} has a malformed result-pointer digest",
+            evidence.id
+        )));
+    }
+    let expected = stable_evidence_id(
+        finding_fingerprint,
+        &evidence.engine_id,
+        source_rule,
+        &evidence.artifact_sha256,
+        pointer_sha256,
+        engine_run_id,
+    );
+    if evidence.id != expected {
+        return Err(AppError::InvalidRequest(format!(
+            "evidence {} source rule does not match its structured evidence identity",
+            evidence.id
+        )));
+    }
+    Ok(Some(source_rule))
 }
 
 impl EngineAdapter for BuiltinAdapter {
@@ -1103,11 +1197,11 @@ fn extract_prowler(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
             );
             continue;
         }
-        let rule = nested_string(value, &["metadata", "event_code"])
-            .or_else(|| nested_string(value, &["finding_info", "analytic", "uid"]))
-            .or_else(|| string_any(object, &["CheckID", "check_id"]))
-            .or_else(|| nested_string(value, &["unmapped", "CheckID"]))
-            .or_else(|| nested_string(value, &["unmapped", "check_id"]));
+        let rule = exact_nested_rule_scalar(value, &["metadata", "event_code"])
+            .or_else(|| exact_nested_rule_scalar(value, &["finding_info", "analytic", "uid"]))
+            .or_else(|| exact_rule_string_any(object, &["CheckID", "check_id"]))
+            .or_else(|| exact_nested_rule_scalar(value, &["unmapped", "CheckID"]))
+            .or_else(|| exact_nested_rule_scalar(value, &["unmapped", "check_id"]));
         let Some(rule_id) = rule else {
             push_warning(
                 warnings,
@@ -1169,7 +1263,7 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
             if !flagged && !status.as_deref().is_some_and(is_failure) {
                 return None;
             }
-            let rule_id = string_any(object, &["id", "rule_id", "key"])?;
+            let rule_id = exact_rule_string_any(object, &["id", "rule_id", "key"])?;
             let title = string_any(object, &["description", "title", "name"])
                 .unwrap_or_else(|| format!("ScoutSuite rule {rule_id}"));
             Some(record!(
@@ -1233,7 +1327,7 @@ fn extract_cloudsplaining(
 fn cloudsplaining_record(value: &Value, pointer: String, risk: &str) -> Option<SourceRecord> {
     let object = value.as_object()?;
     let identity = string_any(object, &["arn", "principal", "name", "resource"])?;
-    let rule_id = string_any(object, &["finding_id", "rule_id"])
+    let rule_id = exact_rule_string_any(object, &["finding_id", "rule_id"])
         .unwrap_or_else(|| format!("cloudsplaining:{risk}"));
     Some(record!(
         pointer,
@@ -1297,7 +1391,7 @@ fn extract_m365(
         if !is_failure(&status) {
             continue;
         }
-        let Some(rule_id) = string_any(object, rule_keys) else {
+        let Some(rule_id) = exact_rule_string_any(object, rule_keys) else {
             push_warning(
                 warnings,
                 format!("{engine} failed result at {pointer} lacked a rule id"),
@@ -1388,7 +1482,8 @@ fn extract_nuclei(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<So
         .into_iter()
         .filter_map(|(pointer, value)| {
             let object = value.as_object()?;
-            let rule_id = string_any(object, &["template-id", "template_id", "templateID"])?;
+            let rule_id =
+                exact_rule_string_any(object, &["template-id", "template_id", "templateID"])?;
             let title = nested_string(value, &["info", "name"])
                 .unwrap_or_else(|| format!("Nuclei template {rule_id}"));
             let severity = nested_string(value, &["info", "severity"])
@@ -1536,7 +1631,7 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         .enumerate()
         .filter_map(|(index, value)| {
             let object = value.as_object()?;
-            let rule_id = string_any(object, &["check_id"])?;
+            let rule_id = exact_rule_string_any(object, &["check_id"])?;
             let path = string_any(object, &["path"]).unwrap_or_else(|| "source-file".into());
             let line = nested_string(value, &["start", "line"]);
             let pointer = format!("/results/{index}");
@@ -1564,7 +1659,7 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
         .into_iter()
         .filter_map(|(pointer, value)| {
             let object = value.as_object()?;
-            let rule_id = string_any(object, &["RuleID", "rule_id"])?;
+            let rule_id = exact_rule_string_any(object, &["RuleID", "rule_id"])?;
             let location = gitleaks_location(object);
             Some(record!(
                 pointer,
@@ -1636,7 +1731,7 @@ fn extract_trufflehog(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
         .into_iter()
         .filter_map(|(pointer, value)| {
             let object = value.as_object()?;
-            let detector = string_any(object, &["DetectorName", "DetectorType"])?;
+            let detector = exact_rule_string_any(object, &["DetectorName", "DetectorType"])?;
             let verified = object
                 .get("Verified")
                 .and_then(Value::as_bool)
@@ -1688,7 +1783,7 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         .enumerate()
         .filter_map(|(index, value)| {
             let object = value.as_object()?;
-            let rule_id = string_any(object, &["check_id"])?;
+            let rule_id = exact_rule_string_any(object, &["check_id"])?;
             Some(record!(
                 format!("/results/failed_checks/{index}"),
                 rule_id.clone(),
@@ -1720,7 +1815,7 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
         let Some(query_object) = query.as_object() else {
             continue;
         };
-        let Some(rule_id) = string_any(query_object, &["query_id"]) else {
+        let Some(rule_id) = exact_rule_string_any(query_object, &["query_id"]) else {
             continue;
         };
         let title = string_any(query_object, &["query_name"])
@@ -1792,7 +1887,9 @@ fn extract_trivy(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
                 let Some(object) = item.as_object() else {
                     continue;
                 };
-                let Some(rule_id) = string_any(object, &["VulnerabilityID", "ID", "RuleID"]) else {
+                let Some(rule_id) =
+                    exact_rule_string_any(object, &["VulnerabilityID", "ID", "RuleID"])
+                else {
                     continue;
                 };
                 let title = string_any(object, &["Title", "Message"])
@@ -1838,7 +1935,7 @@ fn extract_grype(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
         .take(MAX_RECORDS)
         .enumerate()
         .filter_map(|(index, value)| {
-            let rule_id = nested_string(value, &["vulnerability", "id"])?;
+            let rule_id = exact_nested_rule_scalar(value, &["vulnerability", "id"])?;
             let package =
                 nested_string(value, &["artifact", "name"]).unwrap_or_else(|| "package".into());
             let location = nested_string(value, &["artifact", "locations", "0", "path"])
@@ -1877,7 +1974,8 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
         if !status.as_deref().is_some_and(is_failure) {
             continue;
         }
-        let Some(rule_id) = string_any(object, &["controlID", "control_id", "id", "rule_id"])
+        let Some(rule_id) =
+            exact_rule_string_any(object, &["controlID", "control_id", "id", "rule_id"])
         else {
             continue;
         };
@@ -1935,7 +2033,7 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 if !is_failure(&status) {
                     continue;
                 }
-                let Some(rule_id) = string_any(object, &["test_number", "id"]) else {
+                let Some(rule_id) = exact_rule_string_any(object, &["test_number", "id"]) else {
                     continue;
                 };
                 records.push(record!(
@@ -1982,7 +2080,8 @@ fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             if !is_failure(&status) {
                 continue;
             }
-            let Some(rule_id) = string_any(object, &["control_id", "reason", "id"]) else {
+            let Some(rule_id) = exact_rule_string_any(object, &["control_id", "reason", "id"])
+            else {
                 continue;
             };
             records.push(record!(
@@ -2012,17 +2111,20 @@ fn merge_finding(
     record: SourceRecord,
     asset_id: String,
 ) {
-    let rule_id = safe_text(&record.rule_id, MAX_SHORT_TEXT);
+    let rule_id = record.rule_id.clone();
     let location = redact_location(&record.location);
-    let fingerprint = stable_fingerprint(adapter.id, &rule_id, &asset_id, &location);
+    let fingerprint = stable_fingerprint(adapter.id, &record.rule_identity, &asset_id, &location);
     let finding_id = format!(
         "finding-{}",
         &fingerprint.rsplit(':').next().unwrap_or(&fingerprint)[..32]
     );
+    let result_pointer_sha256 = hex::encode(Sha256::digest(record.pointer.as_bytes()));
     let evidence_id = stable_evidence_id(
         &fingerprint,
+        adapter.id,
+        &record.rule_identity,
         &artifact.sha256,
-        &record.pointer,
+        &result_pointer_sha256,
         input.engine_run_id,
     );
     let evidence = Evidence {
@@ -2032,6 +2134,8 @@ fn merge_finding(
         engine_run_id: Some(input.engine_run_id.to_owned()),
         kind: record.evidence_kind,
         engine_id: adapter.id.to_owned(),
+        source_rule: record.mapping_source_rule.clone(),
+        result_pointer_sha256: Some(result_pointer_sha256),
         observed_at: artifact.created_at,
         summary: format!(
             "{} reported rule {} at {}. Raw target text is retained only as untrusted evidence.",
@@ -2109,9 +2213,9 @@ fn merge_finding(
             ],
             asset_ids: vec![asset_id],
             evidence: vec![evidence],
-            control_references: control_mapping::lookup(
+            control_references: mapping_control_references(
                 adapter.id,
-                &rule_id,
+                record.mapping_source_rule.as_deref(),
                 input.ai_system_applicable,
                 input.ai_generated_artifact_applicable,
             ),
@@ -2136,9 +2240,19 @@ fn merge_finding(
 }
 
 fn record_from_draft(draft: RecordDraft) -> SourceRecord {
+    let mapping_source_rule = exact_mapping_source_rule(&draft.rule_id);
+    let rule_identity = mapping_source_rule.clone().unwrap_or_else(|| {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ai-security-scanner.unmappable-source-rule");
+        hasher.update([0]);
+        hasher.update(draft.rule_id.as_bytes());
+        format!("unmappable-sha256:{}", hex::encode(hasher.finalize()))
+    });
     SourceRecord {
         pointer: safe_text(&draft.pointer, MAX_SHORT_TEXT),
         rule_id: safe_text(&draft.rule_id, MAX_SHORT_TEXT),
+        mapping_source_rule,
+        rule_identity,
         title: safe_text(&draft.title, MAX_SHORT_TEXT),
         severity: parse_severity(&draft.source_severity),
         source_severity: safe_text(&draft.source_severity, 80),
@@ -2152,6 +2266,36 @@ fn record_from_draft(draft: RecordDraft) -> SourceRecord {
         references: draft.references,
         tags: draft.tags,
     }
+}
+
+fn exact_mapping_source_rule(value: &str) -> Option<String> {
+    if value.is_empty()
+        || value.chars().count() > MAX_SHORT_TEXT
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+fn mapping_control_references(
+    engine_id: &str,
+    mapping_source_rule: Option<&str>,
+    ai_system_applicable: bool,
+    ai_generated_artifact_applicable: bool,
+) -> Vec<crate::domain::ControlReference> {
+    mapping_source_rule
+        .map(|source_rule| {
+            control_mapping::lookup(
+                engine_id,
+                source_rule,
+                ai_system_applicable,
+                ai_generated_artifact_applicable,
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn resolve_asset(
@@ -2223,14 +2367,25 @@ fn stable_fingerprint(engine: &str, rule: &str, asset: &str, location: &str) -> 
     format!("{engine}:{}", hex::encode(hasher.finalize()))
 }
 
-fn stable_evidence_id(
+pub(crate) fn stable_evidence_id(
     fingerprint: &str,
+    engine_id: &str,
+    source_rule: &str,
     artifact_hash: &str,
-    pointer: &str,
+    result_pointer_sha256: &str,
     engine_run_id: &str,
 ) -> String {
     let mut hasher = Sha256::new();
-    for component in [fingerprint, artifact_hash, pointer, engine_run_id] {
+    for component in [
+        "ai-security-scanner.evidence-id",
+        EVIDENCE_ID_SCHEMA_VERSION,
+        fingerprint,
+        engine_id,
+        source_rule,
+        artifact_hash,
+        result_pointer_sha256,
+        engine_run_id,
+    ] {
         hasher.update(component.as_bytes());
         hasher.update([0]);
     }
@@ -2366,6 +2521,22 @@ fn nested_string(value: &Value, path: &[&str]) -> Option<String> {
     scalar_string(current)
 }
 
+/// Rule identifiers need their exact scalar bytes until `RecordDraft` decides
+/// whether they are eligible to become structured mapping proof. General UI
+/// text uses `scalar_string`, which is intentionally lossy and must not be
+/// reused for this purpose.
+fn exact_nested_rule_scalar(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for segment in path {
+        current = if let Ok(index) = segment.parse::<usize>() {
+            current.as_array()?.get(index)?
+        } else {
+            current.get(*segment)?
+        };
+    }
+    exact_rule_scalar(current)
+}
+
 fn nested_strings(value: &Value, path: &[&str]) -> Vec<String> {
     let mut current = value;
     for segment in path {
@@ -2395,9 +2566,23 @@ fn scalar_string(value: &Value) -> Option<String> {
     }
 }
 
+fn exact_rule_scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
 fn string_any(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| object.get(*key).and_then(scalar_string))
+}
+
+fn exact_rule_string_any(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(exact_rule_scalar))
 }
 
 fn number_any(object: &Map<String, Value>, keys: &[&str]) -> Option<f64> {
@@ -2544,6 +2729,21 @@ fn push_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
 mod tests {
     use super::*;
 
+    fn draft_with_rule(rule_id: &str) -> RecordDraft {
+        RecordDraft {
+            pointer: "/results/0".into(),
+            rule_id: rule_id.into(),
+            title: "Rule finding".into(),
+            source_severity: "high".into(),
+            location: "src/example.py".into(),
+            asset_hint: Some("asset-1".into()),
+            confidence: Confidence::High,
+            evidence_kind: EvidenceKind::SourceCode,
+            references: vec![],
+            tags: vec![],
+        }
+    }
+
     #[test]
     fn fingerprints_are_stable_and_location_queries_are_removed() {
         assert_eq!(
@@ -2559,13 +2759,73 @@ mod tests {
 
     #[test]
     fn evidence_identity_is_distinct_for_each_engine_execution() {
-        let first = stable_evidence_id("fingerprint", "artifact", "/result/0", "engine-run-1");
-        let second = stable_evidence_id("fingerprint", "artifact", "/result/0", "engine-run-2");
+        assert_eq!(EVIDENCE_ID_SCHEMA_VERSION, "v2");
+        let first = stable_evidence_id(
+            "fingerprint",
+            "semgrep",
+            "rule-1",
+            "artifact",
+            &"a".repeat(64),
+            "engine-run-1",
+        );
+        let second = stable_evidence_id(
+            "fingerprint",
+            "semgrep",
+            "rule-1",
+            "artifact",
+            &"a".repeat(64),
+            "engine-run-2",
+        );
         assert_ne!(first, second);
         assert_eq!(
             first,
-            stable_evidence_id("fingerprint", "artifact", "/result/0", "engine-run-1")
+            stable_evidence_id(
+                "fingerprint",
+                "semgrep",
+                "rule-1",
+                "artifact",
+                &"a".repeat(64),
+                "engine-run-1",
+            )
         );
+    }
+
+    #[test]
+    fn lossy_rule_display_text_never_becomes_mapping_proof() {
+        const RULE: &str = "ai-security-scanner.python.dynamic-code-execution";
+        let valid = record_from_draft(draft_with_rule(RULE));
+        assert_eq!(valid.rule_id, RULE);
+        assert_eq!(valid.mapping_source_rule.as_deref(), Some(RULE));
+        assert!(
+            !mapping_control_references(
+                "semgrep",
+                valid.mapping_source_rule.as_deref(),
+                false,
+                false,
+            )
+            .is_empty()
+        );
+
+        for raw_rule in [
+            "ai-security-\0scanner.python.dynamic-code-execution".to_owned(),
+            format!(" {RULE} "),
+        ] {
+            let invalid = record_from_draft(draft_with_rule(&raw_rule));
+            // Both values sanitize to text that looks exactly like a reviewed
+            // rule, but their raw bytes are not acceptable mapping evidence.
+            assert_eq!(invalid.rule_id, RULE);
+            assert!(invalid.mapping_source_rule.is_none());
+            assert_ne!(invalid.rule_identity, RULE);
+            assert!(
+                mapping_control_references(
+                    "semgrep",
+                    invalid.mapping_source_rule.as_deref(),
+                    true,
+                    true,
+                )
+                .is_empty()
+            );
+        }
     }
 
     #[test]

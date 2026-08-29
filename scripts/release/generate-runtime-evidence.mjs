@@ -11,6 +11,10 @@ import {
   writeTextAtomic,
 } from "./lib.mjs";
 
+const MANAGEMENT_CONTRACT_REVISION = "2026-08-29.1";
+const WINDOWS_X86_64_MANIFEST_SHA256 =
+  "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a";
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -21,8 +25,13 @@ async function main() {
   const bundleRoot = path.dirname(manifestPath);
   const output = path.resolve(requireString(args, "out"));
   const platform = requireString(args, "platform");
+  const expectedManifestSha256 = args.get("expected-manifest-sha256");
   const manifest = await readJson(manifestPath);
-  assert(manifest.schema_version === "2", "managed runtime evidence requires schema 2");
+  assert(manifest.schema_version === "3", "managed runtime evidence requires schema 3");
+  assert(
+    manifest.management_contract_revision === MANAGEMENT_CONTRACT_REVISION,
+    "managed runtime evidence has the wrong management contract revision",
+  );
   assert(Array.isArray(manifest.files) && manifest.files.length > 0, "runtime file inventory is empty");
   assert(Array.isArray(manifest.components) && manifest.components.length > 0, "runtime component inventory is empty");
 
@@ -61,6 +70,22 @@ async function main() {
 
   const prefix = `managed-runtime-${platform}`;
   const manifestSha256 = await sha256File(manifestPath);
+  if (expectedManifestSha256 !== undefined) {
+    assert(
+      typeof expectedManifestSha256 === "string" && /^[0-9a-f]{64}$/u.test(expectedManifestSha256),
+      "expected managed runtime manifest identity must be a lowercase SHA-256 digest",
+    );
+    assert(
+      manifestSha256 === expectedManifestSha256,
+      "managed runtime manifest differs from its reviewed immutable identity",
+    );
+  }
+  if (platform === "windows-x86_64" && expectedManifestSha256 !== undefined) {
+    assert(
+      expectedManifestSha256 === WINDOWS_X86_64_MANIFEST_SHA256,
+      "Windows managed runtime evidence was not pinned to the reviewed v0.1.8 identity",
+    );
+  }
   const deterministicUuid = `${manifestSha256.slice(0, 8)}-${manifestSha256.slice(8, 12)}-${manifestSha256.slice(12, 16)}-${manifestSha256.slice(16, 20)}-${manifestSha256.slice(20, 32)}`;
   await writeJsonAtomic(path.join(output, `${prefix}.manifest.json`), manifest);
   await writeJsonAtomic(path.join(output, `${prefix}.cyclonedx.json`), {
@@ -70,7 +95,13 @@ async function main() {
     version: 1,
     metadata: {
       component: { type: "application", name: `ai-security-scanner-managed-runtime-${platform}`, version: manifest.runtime_version },
-      properties: [{ name: "ai-security-scanner:manifest-sha256", value: manifestSha256 }],
+      properties: [
+        { name: "ai-security-scanner:manifest-sha256", value: manifestSha256 },
+        {
+          name: "ai-security-scanner:management-contract-revision",
+          value: manifest.management_contract_revision,
+        },
+      ],
     },
     components: manifest.components.map((component) => ({
       type: "application",
@@ -113,6 +144,7 @@ async function main() {
   const notices = [
     `ai-security-scanner managed runtime inventory: ${platform}`,
     `Manifest SHA-256: ${manifestSha256}`,
+    `Management contract revision: ${manifest.management_contract_revision}`,
     "",
     ...manifest.components.flatMap((component) => [
       `${component.name} ${component.version}`,

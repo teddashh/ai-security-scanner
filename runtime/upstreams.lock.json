@@ -1,6 +1,7 @@
 {
   "schema_version": "1",
-  "updated_at": "2026-08-25T00:00:00Z",
+  "updated_at": "2026-08-29T00:00:00Z",
+  "management_contract_revision": "2026-08-29.1",
   "runtime": {
     "name": "Podman machine",
     "version": "5.8.2",

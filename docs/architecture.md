@@ -300,16 +300,18 @@ ControlMapping
   framework: nist_csf | iso_27001 | aidefend
   framework_version
   control_id
-  relationship: related | supporting_evidence | partial_signal
+  relationship: related              # exact literal; other relationship claims are rejected
   rationale
   mapping_version
-  reviewed_by
-  reviewed_at
+  mapping_provenance:
+    reviewed_at
+    review_process
+    canonical_sha256
 ```
 
 There is deliberately no `pass`, `fail`, or compliance score field.
 
-AIDEFEND is available only as a reviewed relationship coordinate for findings that actually apply
+AIDEFEND is available only as a versioned relationship coordinate for findings that actually apply
 to an AI system or AI-generated artifact. The mapping input is a selected CC BY 4.0-derived snapshot
 of AIDEFEND `1.20260805`, pinned to source commit
 `e10c1678ee49f03f8fb0c97d446ba3fbc3543655`; provenance records the selected fields and changes.
@@ -475,7 +477,7 @@ Adapters must not:
 - map engine failure to zero findings;
 - suppress raw output because normalization failed;
 - invent NIST, ISO, or AIDEFEND mappings with an unreviewed language-model response;
-- attach AIDEFEND coordinates without a reviewed AI-system applicability rationale.
+- attach AIDEFEND coordinates without a reviewed AI-system or AI-generated-artifact applicability rationale.
 
 ## 10. Orchestration and recovery
 
@@ -561,9 +563,40 @@ The canonical model is the source of truth because the product requires case, sc
 
 - An OCSF exporter emits compatible finding and evidence fields where defined.
 - An OSCAL exporter emits appropriate assessment and control-related data for exchange.
+- A deterministic master framework relationship exporter groups selected-run observations under
+  NIST CSF, ISO/IEC 27001, and applicable AIDEFEND coordinates. It records selected-run completion,
+  current coverage-ledger unknowns, and historical-ledger provenance mismatches without producing a
+  compliance, implementation, score, pass, or fail conclusion. The same JSON is directly
+  downloadable and included in the signed case bundle. Recognized references accept only the exact
+  `related` relationship; each framework records its observed framework versions, observed mapping
+  versions, and explicit version-consistency states.
+  A connected source that returns no assets remains incomplete/unknown. Historical relationships
+  are emitted only from immutable selected-run finding snapshots; missing legacy snapshots are
+  recorded in an observation-provenance ledger and are never hydrated from the current finding.
+  Every relationship carries its rationale and frozen catalog provenance. A current-catalog claim is
+  accepted only when its coordinate, title, relationship, rationale, evidence engine, and AIDEFEND
+  applicability condition exactly match one validated catalog entry. Each binding preserves its
+  exact evidence-record ID, artifact ID and hash, engine-run ID, and engine ID. Version/provenance
+  state is decided per relationship before framework totals are rolled up. Executions are never pooled
+  by engine ID; legacy provenance, a historical catalog without an authenticated local snapshot, or
+  evidence spanning multiple engine runs is explicitly unavailable. AIDEFEND applicability is
+  tri-state, so legacy or unanswered context remains unknown rather than becoming not-applicable.
+  Portable source/attribution metadata accompanies each framework.
 - The raw engine artifact remains available even when neither exporter can represent a field.
 
 Exporters are versioned and must disclose omitted or extension fields. OCSF and OSCAL are interoperability formats, not product database schemas and not evidence that a formal audit occurred.
+
+Signed bundles embed the local signer's self-signed public identity document. The identity contains
+only public key material, its key ID, establishment event, and a bounded self-signed predecessor
+chain. The private key and identity document use strict owner-only files. Startup may report an
+identity problem without blocking scans, while bundle creation and bundle verification require an
+exact key/identity/envelope match. A second owner-only identity anchor distinguishes a managed key
+from the exact bounded legacy predecessor even if the public document is deleted. If that exact
+managed key and exact anchor still agree, the missing public document is reconstructed byte for byte
+from the anchor; a mismatch or missing private key remains an error. Explicit rotation
+uses a secret-bearing, owner-only two-phase intent that binds the acknowledged predecessor to one
+candidate key and self-signed identity; retries accept only that candidate and remove the intent
+after exact key/document/anchor readback.
 
 ## 14. Prioritization and grouping
 

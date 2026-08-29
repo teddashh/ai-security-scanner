@@ -263,6 +263,18 @@ pub enum AiGeneratedArtifactAnswer {
     Unknown,
 }
 
+/// Frozen answer to whether the selected scan is about an AI system. This is
+/// separate from the historical boolean so an explicit non-AI answer is not
+/// confused with an unanswered or legacy value.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiSystemApplicabilityAnswer {
+    Applicable,
+    NotApplicable,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeGrant {
     pub id: Id,
@@ -668,6 +680,11 @@ pub struct EngineRun {
     /// run. Missing values identify legacy runs and fail closed during diffing.
     #[serde(default)]
     pub mapping_version: Option<String>,
+    /// Exact mapping catalog provenance frozen with the execution. `None`
+    /// identifies a legacy run; a matching version string alone is not enough
+    /// to establish an exact relationship mapping identity.
+    #[serde(default)]
+    pub mapping_provenance: Option<ControlMappingProvenance>,
     /// Exact fingerprint algorithm/schema identity used by the adapter.
     /// Future migrations must be explicitly allowlisted before differently
     /// versioned fingerprints can be compared.
@@ -700,11 +717,18 @@ pub struct ScanRun {
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub knowledge_cutoff: DateTime<Utc>,
-    /// Framework-classification context frozen when the run was planned. It
-    /// never grants scan permission or changes scanner execution. Legacy runs
-    /// fail closed to `false`.
+    /// Historical framework-classification context frozen when the run was
+    /// planned. It never grants scan permission or changes scanner execution.
+    /// For compatibility, only a legacy `true` upgrades to `Applicable`;
+    /// legacy `false` remains `Unknown` rather than claiming non-applicability.
     #[serde(default)]
     pub ai_system_applicable: bool,
+    /// Tri-state framework context frozen for new runs. Runs written before
+    /// this field existed deserialize as `Unknown`; their historical `true`
+    /// boolean is upgraded conservatively by `frozen_ai_system_applicability`,
+    /// while historical `false` remains unknown.
+    #[serde(default)]
+    pub ai_system_applicability: AiSystemApplicabilityAnswer,
     /// Exact case-creation answer frozen with this run. Legacy runs and
     /// unanswered cases deserialize as `Unknown`, which never enables an
     /// AI-generated-artifact control reference.
@@ -721,6 +745,17 @@ pub struct ScanRun {
     #[serde(default)]
     pub scope_grant_snapshots: Vec<ScopeGrant>,
     pub engine_runs: Vec<EngineRun>,
+}
+
+impl ScanRun {
+    pub fn frozen_ai_system_applicability(&self) -> AiSystemApplicabilityAnswer {
+        match self.ai_system_applicability {
+            AiSystemApplicabilityAnswer::Unknown if self.ai_system_applicable => {
+                AiSystemApplicabilityAnswer::Applicable
+            }
+            answer => answer,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -765,6 +800,16 @@ pub struct Evidence {
     pub engine_run_id: Option<Id>,
     pub kind: EvidenceKind,
     pub engine_id: String,
+    /// Exact normalized scanner rule that produced this evidence. New adapter
+    /// records bind this value into the evidence ID. `None` identifies legacy
+    /// evidence and can never support a verified-current catalog claim.
+    #[serde(default)]
+    pub source_rule: Option<String>,
+    /// SHA-256 of the exact bounded result pointer used by the adapter. This
+    /// lets redacted exports verify the v2 evidence identity without exposing
+    /// the original pointer. Missing values identify legacy evidence.
+    #[serde(default)]
+    pub result_pointer_sha256: Option<String>,
     pub observed_at: DateTime<Utc>,
     pub summary: String,
     pub artifact_id: Id,
@@ -796,6 +841,20 @@ pub struct ControlReference {
     pub relationship: String,
     pub rationale: String,
     pub mapping_version: String,
+    /// Catalog identity frozen into the finding at adaptation time. `None`
+    /// identifies a legacy relationship whose mapping provenance is
+    /// unavailable; exporters must say so explicitly.
+    #[serde(default)]
+    pub mapping_provenance: Option<ControlMappingProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControlMappingProvenance {
+    pub mapping_version: String,
+    pub reviewed_at: String,
+    pub review_process: String,
+    pub catalog_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1403,8 +1462,29 @@ mod tests {
         assert!(run.verification_baseline_run_id.is_none());
         assert!(!run.ai_system_applicable);
         assert_eq!(
+            run.frozen_ai_system_applicability(),
+            AiSystemApplicabilityAnswer::Unknown
+        );
+        assert_eq!(
             run.ai_generated_artifact,
             AiGeneratedArtifactAnswer::Unknown
+        );
+
+        let legacy_true: ScanRun = serde_json::from_value(serde_json::json!({
+            "id": "run-2",
+            "case_id": "case-1",
+            "sequence": 2,
+            "created_at": "2026-08-24T12:00:00Z",
+            "completed_at": "2026-08-24T12:01:00Z",
+            "knowledge_cutoff": "2026-08-24T12:00:00Z",
+            "ai_system_applicable": true,
+            "scope_grant_ids": [],
+            "engine_runs": []
+        }))
+        .unwrap();
+        assert_eq!(
+            legacy_true.frozen_ai_system_applicability(),
+            AiSystemApplicabilityAnswer::Applicable
         );
     }
 
@@ -1472,6 +1552,7 @@ mod tests {
                 completed_at: None,
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
+                ai_system_applicability: Default::default(),
                 ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec![],

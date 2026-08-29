@@ -386,6 +386,8 @@ mod tests {
                 engine_run_id: Some(artifact.engine_run_id.clone()),
                 kind: EvidenceKind::RawToolOutput,
                 engine_id: "scanner".into(),
+                source_rule: None,
+                result_pointer_sha256: None,
                 observed_at: Utc::now(),
                 summary: "raw evidence".into(),
                 artifact_id: artifact.id.clone(),

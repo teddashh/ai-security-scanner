@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "check_id": "ai-security-\u0000scanner.python.dynamic-code-execution",
+      "path": "src/nul.py",
+      "start": { "line": 1 },
+      "extra": { "severity": "ERROR" }
+    },
+    {
+      "check_id": " ai-security-scanner.python.dynamic-code-execution ",
+      "path": "src/whitespace.py",
+      "start": { "line": 2 },
+      "extra": { "severity": "ERROR" }
+    }
+  ]
+}

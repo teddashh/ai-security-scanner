@@ -6,6 +6,9 @@ no publication privileges, creates no tag or GitHub Release, and preserves the f
 as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag such as
 `v0.1.8` must exactly match the versions in `package.json`, `package-lock.json`,
 `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
+For the current `v0.1.8` candidate, the tag path is additionally fail-closed before any downstream
+job because Windows Authenticode signing and verification are not configured. The manual
+main-branch path remains available for a commit-bound QC artifact only.
 
 `package.json` declares whether that exact build uses the `prerelease` or `stable` publication
 channel. Preview builds publish with GitHub's pre-release flag and `make_latest: false`; stable
@@ -99,6 +102,21 @@ configuration, WSL data, SSH-identity-parent, and image-cache directories alread
 current-user-only inheritable DACLs. Podman therefore never gets an opportunity to create those
 security-sensitive namespace ancestors with the administrator token's ambient default owner.
 
+The separate registered-WSL ghost qualification also proves the migration is one-shot. Successful
+recovery must atomically consume the exact HKCU `InstallTransition` receipt and leave the exact
+`wsl-recovery/ghost-migration-consumed-<machine>.json` proof. That proof is a no-follow, single-link,
+current-user-owned, owner-only file bound to the immutable v0.1.7 provider manifest and the exact
+candidate runtime manifest and machine image. It must survive managed-runtime purge and NSIS
+uninstall, and is removed only by the qualification's explicit private-data cleanup.
+
+The candidate Windows runtime is also byte-pinned independently of the installer. Its schema-3
+manifest must declare management contract revision `2026-08-29.1` and hash to
+`a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a`. Windows CI reconstructs the
+bundle from the unchanged upstream size/digest pins and rejects any different manifest before NSIS
+is compiled. The public v0.1.7 Windows manifest remains the strict schema-2 N-1 identity
+`8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f`; schema 2 cannot be used as the
+current v0.1.8 bundled resource.
+
 The universal macOS package is still built on `macos-14`, while its independent qualification runs
 the Intel slice on `macos-15-intel`. The job must mount the DMG read-only, copy and inspect the app,
 verify every installed executable, parse the packaged AppleHV runtime manifest, prove that the
@@ -125,8 +143,10 @@ egress result, and the fixed container result;
 macOS instead contains the exact ordered `not_observed` records and fixed hosted-runner limitation
 code. Unknown fields, missing operations, caller-selected commands/images, inconsistent status
 phases, digest changes, a fabricated runtime pass, and a false cleanup claim fail closed.
-Finalization requires all four records (DEB, DMG, MSI, and NSIS); the global checksum index and GitHub provenance attestation
-cover them like every other published release file.
+Finalization requires all four records (DEB, DMG, MSI, and NSIS). The global checksum index covers
+them in both modes. A public GitHub provenance attestation covers them only when the tag-driven
+public-release path is enabled and succeeds; a manual commit-bound QC workflow artifact does not
+have a public GitHub artifact attestation.
 
 The workflow compiles all three real companion executables before every desktop build; no placeholder binary is kept
 in Git. For a local native desktop check, run:
@@ -192,10 +212,11 @@ The pipeline deliberately reports the current state without implying controls th
 - Tauri updater artifacts are generated and signed with a dedicated updater key held only in the
   repository Actions secret `TAURI_SIGNING_PRIVATE_KEY`.
 
-Consequently, operating systems can still show an unidentified-developer warning. The updater
-signature proves that an update payload matches the public key embedded in the installed app; it
-does not provide Apple Developer ID, notarization, or Windows Authenticode trust. Release metadata
-and notes preserve that distinction.
+Consequently, the current manual QC artifact can still show an unidentified-developer warning,
+has no public GitHub artifact attestation, and must be verified with its commit identity and
+`SHA256SUMS.txt`. Public tag publication remains blocked. The updater signature proves that an update payload
+matches the public key embedded in the installed app; it does not provide Apple Developer ID,
+notarization, or Windows Authenticode trust. Release metadata and notes preserve that distinction.
 
 The desktop checks the fixed HTTPS GitHub Release endpoint. It never accepts a downgrade, an
 unsigned payload, a caller-supplied endpoint, or a caller-supplied public key. Installation starts

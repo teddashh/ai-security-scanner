@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "upstreamRepository": "https://github.com/tauri-apps/tauri",
+  "upstreamTag": "tauri-cli-v2.11.4",
+  "upstreamCommit": "8909f221d1515955fc843808032bdc5d62209c96",
+  "upstreamPath": "crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
+  "upstreamUrl": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
+  "upstreamSha256": "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
+  "patchContract": "ai-security-scanner.bounded-v0.1.7-ghost-registration/v2",
+  "vendoredSha256": "71b8773dd1c7dc6c27b56fe40d4986dc496a9dca0cf5402b553e7b911bc76a77"
+}

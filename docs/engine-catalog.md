@@ -1,6 +1,6 @@
 # ai-security-scanner engine catalog
 
-Status: v0.2.0 catalog companion and research inventory; current engine artifacts released with the v0.1.2 adapter contract
+Status: v0.2.0 catalog companion and research inventory; current engine artifacts released with the v0.1.3 adapter contract
 
 Last updated: 2026-08-28
 

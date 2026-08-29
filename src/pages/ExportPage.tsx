@@ -201,6 +201,14 @@ const formatCopy = {
     },
     extension: ".json",
   },
+  framework_report: {
+    title: { en: "See every framework reference in one report", zhTW: "一份報告看完所有框架對照" },
+    detail: {
+      en: "Groups NIST CSF, ISO 27001, and AIDEFEND references, while keeping missing and unfinished coverage visible.",
+      zhTW: "集中整理 NIST CSF、ISO 27001 與 AIDEFEND 對照，也清楚保留沒看到與沒掃完的地方。",
+    },
+    extension: ".frameworks.json",
+  },
   ocsf: {
     title: { en: "Send findings to a security platform", zhTW: "把問題送到資安平台" },
     detail: {

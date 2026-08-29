@@ -234,6 +234,12 @@ interface NativeControlReference {
   relationship: string;
   rationale: string;
   mapping_version: string;
+  mapping_provenance?: {
+    mapping_version: string;
+    reviewed_at: string;
+    review_process: string;
+    catalog_sha256: string;
+  } | null;
 }
 
 interface NativeFinding {
@@ -992,7 +998,7 @@ const runStatus = (runs: EngineRun[]): RunStatus => {
 };
 
 const storedExportFormat = (format?: string | null): ExportFormat | undefined =>
-  ["case_bundle", "json", "ocsf", "oscal", "html"].includes(format ?? "")
+  ["case_bundle", "json", "framework_report", "ocsf", "oscal", "html"].includes(format ?? "")
     ? format as ExportFormat
     : undefined;
 
@@ -1224,6 +1230,14 @@ export const adaptNativeCase = (
         title: control.title,
         rationale: control.rationale,
         mappingVersion: control.mapping_version,
+        mappingProvenance: control.mapping_provenance
+          ? {
+              mappingVersion: control.mapping_provenance.mapping_version,
+              reviewedAt: control.mapping_provenance.reviewed_at,
+              reviewProcess: control.mapping_provenance.review_process,
+              catalogSha256: control.mapping_provenance.catalog_sha256,
+            }
+          : undefined,
         note: [control.title, control.rationale, `mapping ${control.mapping_version}`].filter(Boolean).join("；"),
       })),
       officialReferences: finding.official_references,

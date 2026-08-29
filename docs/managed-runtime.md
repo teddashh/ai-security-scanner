@@ -298,6 +298,18 @@ and device firmware while excluding eight foreign-architecture firmware images t
 x86_64-only emulator cannot use. Tauri maps the completed directory to
 `$RESOURCE/managed-runtime/`.
 
+Manifest schema 3 records the lock-sourced `management_contract_revision` alongside the pinned
+upstream payload. This revision identifies the product-side lifecycle and ownership rules that
+interpret those bytes. Version 0.1.8 uses `2026-08-29.1`; its reviewed Windows x86-64 manifest is
+`a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a`. The current application fails
+closed on any other schema-3 contract. It can still reopen a strict schema-2 installed manifest
+only when the revision field is absent, preserving the public v0.1.7 identity for the bounded N-1
+recovery proof; a schema-2 manifest is never accepted as the current bundled v0.1.8 resource.
+
+A schema number, revision, or formatting-only edit must not be used to manufacture a provider
+identity. Changing the revision requires a reviewed change to the product-side runtime management
+contract plus release evidence from a real platform build.
+
 The cheap lock-only validation used during development is:
 
 ```text

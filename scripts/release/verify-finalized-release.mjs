@@ -17,6 +17,8 @@ function assert(condition, message) {
   }
 }
 
+const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
+
 async function regularFiles(directory, root = directory) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -50,9 +52,14 @@ async function main() {
   const version = requireString(args, "version");
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
+  const publicationMode = requireString(args, "publication-mode");
   if (!isSemver(version) || tag !== `v${version}` || !/^[0-9a-f]{40}$/u.test(commit)) {
     throw new Error("release identity is malformed or inconsistent");
   }
+  assert(
+    PUBLICATION_MODES.has(publicationMode),
+    "publication mode must be commit-bound-qc or public-github-release",
+  );
 
   const files = await regularFiles(directory);
   const actualByPath = new Map(files.map((file) => [file.relative, file]));
@@ -94,10 +101,11 @@ async function main() {
   }
 
   const index = await readJson(path.join(directory, "release-assets.json"));
-  assert(index.schemaVersion === 1, "release index schemaVersion must be 1");
+  assert(index.schemaVersion === 2, "release index schemaVersion must be 2");
   assert(index.product === "ai-security-scanner", "release index product is incorrect");
   assert(index.version === version && index.tag === tag, "release index version/tag mismatch");
   assert(index.sourceCommit === commit, "release index source commit mismatch");
+  assert(index.publicationMode === publicationMode, "release index publication mode mismatch");
   assert(index.indexSelfExcluded === true, "release index must declare its self-exclusion");
   assert(Array.isArray(index.files), "release index has no files array");
 

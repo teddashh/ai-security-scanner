@@ -3,9 +3,12 @@
 //! The embedded catalog is project-authored metadata. A match never means a
 //! control is implemented, effective, certified, or compliant.
 
-use crate::domain::ControlReference;
+use crate::domain::{ControlMappingProvenance, ControlReference};
 use crate::error::{AppError, AppResult};
+use chrono::NaiveDate;
 use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
@@ -14,17 +17,30 @@ const MAX_CONTROLS: usize = 1_024;
 const MAX_ENTRIES: usize = 4_096;
 const MAX_REFERENCES_PER_ENTRY: usize = 8;
 const MAX_LOOKUP_RESULTS: usize = 32;
+const REVIEW_PROCESS_V1: &str = "source_coordinate_and_rationale_review_v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MappingCatalog {
     schema_version: String,
     mapping_version: String,
+    provenance: MappingCatalogProvenance,
     relationship: String,
     disclaimer: String,
     sources: Vec<FrameworkSource>,
     controls: Vec<ControlDefinition>,
     entries: Vec<MappingEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MappingCatalogProvenance {
+    reviewed_at: String,
+    review_process: String,
+    /// SHA-256 of canonical JSON for the complete catalog after removing only
+    /// this field. This avoids a self-referential digest while binding every
+    /// mapping, source, rationale, and remaining provenance field.
+    canonical_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +90,7 @@ enum AidefendApplicability {
 #[derive(Debug)]
 struct ValidatedCatalog {
     mapping_version: String,
+    provenance: ControlMappingProvenance,
     relationship: String,
     controls: BTreeMap<String, ControlDefinition>,
     entries: Vec<MappingEntry>,
@@ -100,6 +117,92 @@ pub(super) fn catalog_version() -> AppResult<&'static str> {
     Ok(catalog.mapping_version.as_str())
 }
 
+pub(super) fn catalog_provenance() -> AppResult<ControlMappingProvenance> {
+    let catalog = catalog().map_err(AppError::EngineRegistry)?;
+    Ok(catalog.provenance.clone())
+}
+
+/// Prove that a frozen current-catalog relationship is one exact reviewed
+/// catalog entry for every bound evidence-producing engine/rule pair. The
+/// catalog digest alone only identifies the catalog; engine identity without
+/// the structured source rule does not prove which matcher produced a
+/// relationship.
+pub(super) fn validate_current_reference(
+    reference: &ControlReference,
+    evidence_sources: &[(String, String)],
+    ai_system_applicable: bool,
+    ai_generated_artifact_applicable: bool,
+) -> AppResult<()> {
+    let catalog = catalog().map_err(AppError::EngineRegistry)?;
+    if reference.mapping_version != catalog.mapping_version
+        || reference.relationship != catalog.relationship
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "framework reference {} {} does not use the exact current catalog version and relationship",
+            reference.framework, reference.control_id
+        )));
+    }
+
+    let matching_controls = catalog
+        .controls
+        .iter()
+        .filter(|(_, control)| {
+            control.framework == reference.framework
+                && control.framework_version == reference.framework_version
+                && control.control_id == reference.control_id
+        })
+        .collect::<Vec<_>>();
+    if matching_controls.len() != 1 {
+        return Err(AppError::InvalidRequest(format!(
+            "framework reference {} {} is not one exact current-catalog coordinate",
+            reference.framework, reference.control_id
+        )));
+    }
+    let &(control_key, control) = matching_controls
+        .first()
+        .expect("one exact current-catalog coordinate was established");
+    if control.title != reference.title {
+        return Err(AppError::InvalidRequest(format!(
+            "framework reference {} {} title does not match the exact current-catalog control",
+            reference.framework, reference.control_id
+        )));
+    }
+    let applicable = match control.aidefend_applicability {
+        Some(AidefendApplicability::AiSystem) => ai_system_applicable,
+        Some(AidefendApplicability::AiGeneratedArtifact) => ai_generated_artifact_applicable,
+        None => control.framework != "AIDEFEND",
+    };
+    if !applicable {
+        return Err(AppError::InvalidRequest(format!(
+            "framework reference {} {} does not match its exact current-catalog AIDEFEND applicability condition",
+            reference.framework, reference.control_id
+        )));
+    }
+    if evidence_sources.is_empty()
+        || evidence_sources.iter().any(|(engine_id, source_rule)| {
+            !catalog.entries.iter().any(|entry| {
+                entry.engine_id == *engine_id
+                    && source_rule_matches(entry, source_rule)
+                    && entry.rationale == reference.rationale
+                    && entry.controls.iter().any(|key| key == control_key)
+            })
+        })
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "framework reference {} {} rationale and structured evidence source rule do not match one exact current-catalog entry",
+            reference.framework, reference.control_id
+        )));
+    }
+    Ok(())
+}
+
+fn source_rule_matches(entry: &MappingEntry, source_rule: &str) -> bool {
+    match entry.match_kind {
+        MatchKind::Exact => source_rule == entry.source_rule,
+        MatchKind::Prefix => source_rule.starts_with(&entry.source_rule),
+    }
+}
+
 pub(super) fn lookup(
     engine_id: &str,
     source_rule: &str,
@@ -114,13 +217,11 @@ pub(super) fn lookup(
     };
 
     let mut references = BTreeMap::new();
-    for entry in catalog.entries.iter().filter(|entry| {
-        entry.engine_id == engine_id
-            && match entry.match_kind {
-                MatchKind::Exact => source_rule == entry.source_rule,
-                MatchKind::Prefix => source_rule.starts_with(&entry.source_rule),
-            }
-    }) {
+    for entry in catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.engine_id == engine_id && source_rule_matches(entry, source_rule))
+    {
         for key in &entry.controls {
             let Some(control) = catalog.controls.get(key) else {
                 continue;
@@ -141,6 +242,8 @@ pub(super) fn lookup(
                 control.framework.clone(),
                 control.framework_version.clone(),
                 control.control_id.clone(),
+                control.title.clone(),
+                entry.rationale.clone(),
             );
             references
                 .entry(identity)
@@ -152,6 +255,7 @@ pub(super) fn lookup(
                     relationship: catalog.relationship.clone(),
                     rationale: entry.rationale.clone(),
                     mapping_version: catalog.mapping_version.clone(),
+                    mapping_provenance: Some(catalog.provenance.clone()),
                 });
             if references.len() >= MAX_LOOKUP_RESULTS {
                 break;
@@ -172,16 +276,47 @@ fn catalog() -> Result<&'static ValidatedCatalog, String> {
 }
 
 fn parse_and_validate() -> Result<ValidatedCatalog, String> {
-    let parsed: MappingCatalog = serde_json::from_str(CATALOG_JSON)
+    parse_and_validate_json(CATALOG_JSON)
+}
+
+fn parse_and_validate_json(input: &str) -> Result<ValidatedCatalog, String> {
+    let raw: Value = serde_json::from_str(input)
+        .map_err(|error| format!("invalid embedded control mapping JSON: {error}"))?;
+    let actual_catalog_sha256 = canonical_catalog_sha256(&raw)?;
+    let parsed: MappingCatalog = serde_json::from_value(raw)
         .map_err(|error| format!("invalid embedded control mapping JSON: {error}"))?;
 
-    if parsed.schema_version != "1.0" {
+    if parsed.schema_version != "1.1" {
         return Err(format!(
             "unsupported control mapping schema version {}",
             parsed.schema_version
         ));
     }
-    validate_mapping_version(&parsed.mapping_version)?;
+    let mapping_date = validate_mapping_version(&parsed.mapping_version)?;
+    let reviewed_at = validate_calendar_date(
+        "mapping provenance reviewed_at",
+        &parsed.provenance.reviewed_at,
+    )?;
+    if reviewed_at < mapping_date {
+        return Err(
+            "mapping provenance reviewed_at cannot predate the mapping version date".into(),
+        );
+    }
+    if parsed.provenance.review_process != REVIEW_PROCESS_V1 {
+        return Err(format!(
+            "mapping provenance review_process must be {REVIEW_PROCESS_V1}"
+        ));
+    }
+    validate_sha256(
+        "mapping provenance canonical_sha256",
+        &parsed.provenance.canonical_sha256,
+    )?;
+    if parsed.provenance.canonical_sha256 != actual_catalog_sha256 {
+        return Err(format!(
+            "control mapping canonical SHA-256 mismatch: expected {}, calculated {actual_catalog_sha256}",
+            parsed.provenance.canonical_sha256
+        ));
+    }
     if parsed.relationship != "related" {
         return Err("control mapping relationship must be related".into());
     }
@@ -327,15 +462,22 @@ fn parse_and_validate() -> Result<ValidatedCatalog, String> {
         }
     }
 
+    let mapping_version = parsed.mapping_version;
     Ok(ValidatedCatalog {
-        mapping_version: parsed.mapping_version,
+        mapping_version: mapping_version.clone(),
+        provenance: ControlMappingProvenance {
+            mapping_version,
+            reviewed_at: parsed.provenance.reviewed_at,
+            review_process: parsed.provenance.review_process,
+            catalog_sha256: parsed.provenance.canonical_sha256,
+        },
         relationship: parsed.relationship,
         controls,
         entries: parsed.entries,
     })
 }
 
-fn validate_mapping_version(value: &str) -> Result<(), String> {
+fn validate_mapping_version(value: &str) -> Result<NaiveDate, String> {
     let Some((date, revision)) = value.split_once('.') else {
         return Err("control mapping version must be YYYY-MM-DD.N".into());
     };
@@ -350,6 +492,88 @@ fn validate_mapping_version(value: &str) -> Result<(), String> {
         !revision.starts_with('0') && revision.parse::<u32>().is_ok_and(|revision| revision > 0);
     if !date_is_valid || !revision_is_valid {
         return Err("control mapping version must be YYYY-MM-DD.N".into());
+    }
+    validate_calendar_date("control mapping version date", date)
+}
+
+fn validate_calendar_date(label: &str, value: &str) -> Result<NaiveDate, String> {
+    if value.len() != 10
+        || value.as_bytes().get(4) != Some(&b'-')
+        || value.as_bytes().get(7) != Some(&b'-')
+    {
+        return Err(format!("{label} must be a real YYYY-MM-DD calendar date"));
+    }
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| format!("{label} must be a real YYYY-MM-DD calendar date"))
+}
+
+fn validate_sha256(label: &str, value: &str) -> Result<(), String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{label} must contain exactly 64 hexadecimal characters"
+        ));
+    }
+    if value != value.to_ascii_lowercase() {
+        return Err(format!("{label} must use lowercase hexadecimal"));
+    }
+    Ok(())
+}
+
+fn canonical_catalog_sha256(raw: &Value) -> Result<String, String> {
+    let mut canonical = raw.clone();
+    let root = canonical
+        .as_object_mut()
+        .ok_or_else(|| "control mapping catalog must be a JSON object".to_owned())?;
+    let provenance = root
+        .get_mut("provenance")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "control mapping catalog provenance must be a JSON object".to_owned())?;
+    if provenance.remove("canonical_sha256").is_none() {
+        return Err("control mapping catalog provenance has no canonical_sha256".into());
+    }
+    let mut bytes = Vec::new();
+    write_canonical_json(&canonical, &mut bytes)?;
+    Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+fn write_canonical_json(value: &Value, output: &mut Vec<u8>) -> Result<(), String> {
+    match value {
+        Value::Null => output.extend_from_slice(b"null"),
+        Value::Bool(value) => output.extend_from_slice(if *value { b"true" } else { b"false" }),
+        Value::Number(value) => output.extend_from_slice(value.to_string().as_bytes()),
+        Value::String(value) => output.extend_from_slice(
+            serde_json::to_string(value)
+                .map_err(|error| format!("cannot canonicalize mapping string: {error}"))?
+                .as_bytes(),
+        ),
+        Value::Array(values) => {
+            output.push(b'[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    output.push(b',');
+                }
+                write_canonical_json(value, output)?;
+            }
+            output.push(b']');
+        }
+        Value::Object(values) => {
+            output.push(b'{');
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort();
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(b',');
+                }
+                output.extend_from_slice(
+                    serde_json::to_string(key)
+                        .map_err(|error| format!("cannot canonicalize mapping key: {error}"))?
+                        .as_bytes(),
+                );
+                output.push(b':');
+                write_canonical_json(&values[key], output)?;
+            }
+            output.push(b'}');
+        }
     }
     Ok(())
 }
@@ -393,6 +617,17 @@ fn validate_text(label: &str, value: &str, min: usize, max: usize) -> Result<(),
 mod tests {
     use super::*;
 
+    fn catalog_fixture() -> Value {
+        serde_json::from_str(CATALOG_JSON).expect("embedded catalog JSON")
+    }
+
+    fn catalog_json_with_recalculated_digest(mut value: Value) -> String {
+        value["provenance"]["canonical_sha256"] = Value::String("0".repeat(64));
+        let digest = canonical_catalog_sha256(&value).expect("canonical fixture digest");
+        value["provenance"]["canonical_sha256"] = Value::String(digest);
+        serde_json::to_string(&value).expect("catalog fixture JSON")
+    }
+
     const ENGINES: &[&str] = &[
         "cloudquery",
         "steampipe",
@@ -420,6 +655,11 @@ mod tests {
     #[test]
     fn embedded_catalog_is_bounded_and_only_uses_known_engines() {
         validate_catalog(ENGINES).expect("valid embedded mappings");
+        let provenance = catalog_provenance().expect("embedded provenance");
+        assert_eq!(provenance.mapping_version, "2026-08-28.1");
+        assert_eq!(provenance.reviewed_at, "2026-08-29");
+        assert_eq!(provenance.review_process, REVIEW_PROCESS_V1);
+        assert_eq!(provenance.catalog_sha256.len(), 64);
     }
 
     #[test]
@@ -434,6 +674,10 @@ mod tests {
         assert!(public_bucket.iter().all(|item| {
             item.relationship == "related"
                 && item.mapping_version == "2026-08-28.1"
+                && item.mapping_provenance.as_ref().is_some_and(|provenance| {
+                    provenance.catalog_sha256
+                        == "7e53c9fe72584ee455ec2a94ee6bcf5705fc717b8bb3fbe97cd7377bb7fd5123"
+                })
                 && !item.rationale.to_ascii_lowercase().contains("compliant")
         }));
 
@@ -518,5 +762,53 @@ mod tests {
         assert!(lookup("prowler", "new-unknown-check", false, false).is_empty());
         assert!(lookup("httpx", "http-service-observed", false, false).is_empty());
         assert!(lookup("naabu", "open-tcp-port", false, false).is_empty());
+    }
+
+    #[test]
+    fn catalog_rejects_invalid_calendar_dates_historical_order_and_digest_mismatch() {
+        let mut invalid_mapping_date = catalog_fixture();
+        invalid_mapping_date["mapping_version"] = Value::String("2026-02-30.1".into());
+        let error =
+            parse_and_validate_json(&catalog_json_with_recalculated_digest(invalid_mapping_date))
+                .unwrap_err();
+        assert!(error.contains("real YYYY-MM-DD calendar date"));
+
+        let mut invalid_review_date = catalog_fixture();
+        invalid_review_date["provenance"]["reviewed_at"] = Value::String("2026-02-30".into());
+        let error =
+            parse_and_validate_json(&catalog_json_with_recalculated_digest(invalid_review_date))
+                .unwrap_err();
+        assert!(error.contains("real YYYY-MM-DD calendar date"));
+
+        let mut predating_review = catalog_fixture();
+        predating_review["mapping_version"] = Value::String("2026-08-30.1".into());
+        let error =
+            parse_and_validate_json(&catalog_json_with_recalculated_digest(predating_review))
+                .unwrap_err();
+        assert!(error.contains("cannot predate"));
+
+        let mut digest_mismatch = catalog_fixture();
+        digest_mismatch["entries"][0]["rationale"] = Value::String(
+            "Changed relationship text that must invalidate the canonical digest.".into(),
+        );
+        let error = parse_and_validate_json(
+            &serde_json::to_string(&digest_mismatch).expect("digest mismatch JSON"),
+        )
+        .unwrap_err();
+        assert!(error.contains("canonical SHA-256 mismatch"));
+    }
+
+    #[test]
+    fn catalog_control_coordinates_remain_unique_even_when_titles_match() {
+        let mut duplicate = catalog_fixture();
+        let mut alias = duplicate["controls"][0].clone();
+        alias["key"] = Value::String("nist-id-ra-01-alias".into());
+        duplicate["controls"]
+            .as_array_mut()
+            .expect("controls array")
+            .push(alias);
+        let error =
+            parse_and_validate_json(&catalog_json_with_recalculated_digest(duplicate)).unwrap_err();
+        assert!(error.contains("duplicate framework coordinate"));
     }
 }

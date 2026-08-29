@@ -13,6 +13,8 @@ import {
   writeTextAtomic,
 } from "./lib.mjs";
 
+const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
+
 function git(...arguments_) {
   return execFileSync("git", arguments_, {
     cwd: PROJECT_ROOT,
@@ -121,6 +123,13 @@ function dependencyNotices(version, npmPackages, cargoPackages) {
     "ai-security-scanner-bootstrap-broker, and ai-security-scanner-cli executables are",
     "bundled beside the desktop executable and built from this repository under Apache-2.0.",
     "",
+    "VENDORED PACKAGING SOURCE",
+    "=========================",
+    "Tauri CLI NSIS installer template | tauri-cli-v2.11.4 | Apache-2.0 OR MIT",
+    "Source: https://github.com/tauri-apps/tauri/tree/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
+    "Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
+    "The local reviewed patch adds bounded v0.1.7 Windows ghost-install recovery and transition receipts.",
+    "",
     "NPM LOCKED PACKAGES",
     "===================",
   ];
@@ -203,6 +212,10 @@ async function main() {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
     throw new Error("repository must be an owner/name pair");
   }
+  const publicationMode = args.get("publication-mode");
+  if (typeof publicationMode !== "string" || !PUBLICATION_MODES.has(publicationMode)) {
+    throw new Error("--publication-mode must be commit-bound-qc or public-github-release");
+  }
 
   const packageLock = await readJson(path.join(PROJECT_ROOT, "package-lock.json"));
   const catalog = await readJson(path.join(PROJECT_ROOT, "engines/catalog.json"));
@@ -231,7 +244,7 @@ async function main() {
   await copyFile(path.join(PROJECT_ROOT, "LICENSE"), path.join(output, "LICENSE.txt"));
 
   const metadata = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     product: "ai-security-scanner",
     version,
     tag,
@@ -240,6 +253,7 @@ async function main() {
     sourceRepository: `https://github.com/${repository}`,
     sourceCommit: commit,
     sourceDate,
+    publicationMode,
     distribution: {
       desktopInstallers: ["linux-x86_64", "macos-universal", "windows-x86_64"],
       bundledEngines: [],
@@ -270,8 +284,12 @@ async function main() {
         `ai-security-scanner-${version}.spdx.json`,
       ],
       provenanceAttestation: {
-        state: "required-before-publication",
-        provider: "GitHub artifact attestations",
+        state: publicationMode === "public-github-release"
+          ? "required-before-publication"
+          : "not-created-for-commit-bound-qc",
+        provider: publicationMode === "public-github-release"
+          ? "GitHub artifact attestations"
+          : "none",
       },
     },
     inventories: {

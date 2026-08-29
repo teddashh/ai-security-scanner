@@ -43,7 +43,7 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 <!-- Release line: v0.1.8. -->
 
-> **Project status:** `v0.1.8` is a Windows-first public pre-release. It can now finish a product-owned setup left by an older version automatically, while showing clear progress instead of sending you to Windows Terminal.
+> **Project status:** `v0.1.8` is still being qualified on Windows and is not an install candidate yet. The current work focuses on recovering a verified workspace left by `v0.1.7`, preserving existing local data, and completing setup without sending you to Windows Terminal. Main-branch preflight produces a commit-bound QC artifact only; public tag publication stays blocked until Windows Authenticode signing and verification exist.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 
@@ -239,7 +239,7 @@ docs/usability/              Real-person study protocol and evidence schema
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 
-Manual workflow dispatch from `main` is preflight-only: it cannot create a tag or public GitHub Release. A tagged preview publishes with GitHub's **Pre-release** label and does not replace the latest stable release. Apple Developer ID/notarization and Windows Authenticode are not configured, so operating systems may still show an unidentified-developer warning; Tauri updater signing is a separate integrity control and does not claim OS publisher identity.
+Manual workflow dispatch from `main` is preflight-only: it cannot create a tag or public GitHub Release. It produces a commit-bound QC artifact for qualification. Tagged publication is fail-closed while Windows Authenticode signing and verification are not configured; Tauri updater signing is a separate integrity control and does not claim OS publisher identity. Apple Developer ID/notarization is also not configured.
 
 Before the stable `v0.2.0` publication, the project still requires:
 

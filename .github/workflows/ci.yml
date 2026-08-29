@@ -53,6 +53,8 @@ jobs:
   windows-managed-runtime:
     name: Windows managed-runtime repair
     runs-on: windows-2025
+    env:
+      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -68,6 +70,29 @@ jobs:
       - run: >-
           cargo test --locked --package ai-security-scanner --no-default-features --lib
           managed_runtime::tests
+      - name: Test Windows export-identity ACL and legacy-key continuity
+        run: >-
+          cargo test --locked --package ai-security-scanner --no-default-features --lib
+          export_identity::tests
+      - name: Parse Windows NSIS migration qualification scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($script in @(
+            "scripts/release/qualify-windows-nsis-upgrade.ps1",
+            "scripts/release/qualify-windows-nsis-ghost-recovery.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $script),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              throw "$script has PowerShell parser errors: $($errors -join '; ')"
+            }
+          }
       - name: Test Windows installed gateway path normalization
         run: >-
           cargo test --locked --package ai-security-scanner --no-default-features --lib
@@ -76,8 +101,25 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Build and stage required Windows sidecars
         run: npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-msvc
+      - name: Vendor the release-equivalent Windows managed runtime
+        run: >-
+          node runtime/vendor-managed-runtime.mjs
+          --target x86_64-pc-windows-msvc
+          --output runtime/staged/managed-runtime
+      - name: Verify the staged Windows managed-runtime manifest and files
+        run: >-
+          node scripts/release/generate-runtime-evidence.mjs
+          --manifest runtime/staged/managed-runtime/manifest.json
+          --out target/ci-managed-runtime-evidence
+          --platform windows-x86_64
+          --expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a
       - name: Compile Windows desktop and UAC prerequisite repair
         run: cargo check --locked --package ai-security-scanner --features desktop --lib
+      - name: Compile the reviewed custom NSIS installer
+        run: >-
+          npm run tauri build -- --ci --bundles nsis
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          -- --locked
 
   desktop-linux:
     name: Tauri Linux compile

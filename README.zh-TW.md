@@ -43,7 +43,7 @@
 
 <!-- Release line: v0.1.8. -->
 
-> **專案狀態：**`v0.1.8` 是 Windows 優先公開測試版。現在能自動完成舊版本留下、且可確認屬於本產品的設定，不再一開始就把你丟到 Windows Terminal；處理進度也會直接顯示在畫面上。
+> **專案狀態：**`v0.1.8` 仍在進行 Windows 實機驗證，目前還不是可安裝候選。這一版正在處理 `v0.1.7` 留下、且能確認屬於本產品的工作區，同時保留既有本機資料，讓設定能自動完成，不再一開始就把你丟到 Windows Terminal。從 `main` 執行的預檢只會產生綁定 commit 的 QC artifact；在 Windows Authenticode 簽署與驗證完成前，公開 tag 發布會維持封鎖。
 
 多數人先看上面的產品流程就夠了。如果你正在評估部署、權限、隔離方式、工具整合或發布證據，可以直接查這些文件：
 
@@ -239,7 +239,7 @@ docs/usability/              真人研究流程與 evidence schema
 
 發布工作流程會建置 Linux、通用 macOS 與 Windows 原生安裝程式，在各平台觀察安裝後的桌面程式啟動，再從全新主機驗證產品管理執行環境的完整生命週期與固定隔離容器。定稿候選版本也包含校驗碼、CycloneDX／SPDX 軟體物料清單、第三方聲明、更新簽章、平台資格紀錄與 GitHub 建置來源證明。
 
-從 `main` 手動執行工作流程只會產生發布前檢查，無權建立版本標籤或公開 GitHub Release。精確的測試版標籤通過所有發布檢查後，會帶著 GitHub **Pre-release** 標記發布，而且不會取代最新正式版。Apple Developer ID／公證與 Windows Authenticode 尚未設定，因此作業系統仍可能顯示「無法識別的開發者」警告；Tauri 更新簽章是另一項完整性控制，不代表作業系統發布者身分。
+從 `main` 手動執行工作流程只會產生綁定 commit 的 QC artifact，無權建立版本標籤或公開 GitHub Release。在 Windows Authenticode 簽署與驗證尚未設定完成前，標籤發布會採 fail-closed 方式封鎖；Tauri 更新簽章是另一項完整性控制，不代表作業系統發布者身分。Apple Developer ID／公證目前也尚未設定。
 
 發布正式 `v0.2.0` 前仍需要：
 

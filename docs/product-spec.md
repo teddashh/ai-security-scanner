@@ -160,13 +160,16 @@ Adapters preserve raw output and translate it into the canonical model described
 - confidence and verification state;
 - scan time and scope;
 - related findings without destructively deleting duplicates;
-- potentially related NIST CSF and ISO 27001 controls, plus reviewed AIDEFEND coordinates when the finding actually concerns an AI system or AI-generated artifact;
+- potentially related NIST CSF and ISO 27001 controls, plus cataloged AIDEFEND coordinates when the frozen run context explicitly concerns an AI system or AI-generated artifact;
 - plain-language risk, likely impact, suggested next step, official references, and recommended expert type.
 
 AIDEFEND relationships use a selected, versioned metadata snapshot derived from AIDEFEND
 `1.20260805` under CC BY 4.0. The snapshot and each project-authored relationship rationale are
-pinned and reviewed with the other mapping inputs. A scanner result that does not concern an
-applicable AI-system context receives no AIDEFEND relationship. This is an independent, unofficial
+pinned with a dated review-process identifier and canonical catalog SHA-256. A scanner result that
+does not concern an applicable AI-system or AI-generated-artifact context receives no AIDEFEND
+relationship. Legacy or unanswered AI context remains `unknown`; only an explicit non-AI context
+and explicit non-AI-generated answer produces `not_applicable`. This is
+an independent, unofficial
 integration and is not affiliated with, approved, certified, sponsored, or endorsed by AIDEFEND or
 its owner.
 
@@ -185,10 +188,43 @@ The user can export a portable case package. It must include:
 - evidence hashes;
 - engine, rule, database, adapter, mapping, and digest versions;
 - run status and error information;
+- one versioned master framework relationship report covering NIST CSF, ISO/IEC 27001, and
+  applicable AIDEFEND coordinates, including incomplete/unknown coverage and any difference between
+  the selected historical run and the current case coverage ledger;
 - plain-language report and expert-oriented machine-readable data;
 - an explicit statement that the package is preliminary scanner evidence, not an audit or forensic conclusion.
 
-A local signature may establish package integrity after export. It must not be described as proof that the scan was complete, correct, or performed by a legally identified entity.
+The master framework relationship report is also available as a direct JSON download, including for
+an incomplete run. It has no compliance, implementation, score, pass, or fail field. Missing
+relationships remain unknown when the selected checks or current coverage ledger are incomplete.
+`source_connected_nothing_discovered` remains unknown rather than proving an empty environment.
+Historical mappings come only from the selected run's immutable finding snapshot; a legacy
+observation without that snapshot is retained as an explicit provenance limitation and is never
+silently rebuilt from the mutable current finding. A relationship that claims the current catalog
+must exactly match one reviewed catalog coordinate, title, relationship, rationale, evidence engine,
+and AIDEFEND applicability condition; the catalog digest alone cannot bless arbitrary fields. Each
+relationship binds one exact evidence-record ID, artifact ID and hash, engine-run ID, and engine ID.
+Another execution of the same engine is never pooled into that decision. Missing legacy provenance,
+historical catalog identities for which this build has no authenticated catalog snapshot, and
+relationships whose evidence spans multiple engine runs are explicitly unavailable rather than exact.
+The portable report carries source and attribution notices,
+including the pinned, modified CC BY 4.0 AIDEFEND selection.
+
+A local signature may establish package integrity after export. It must not be described as proof
+that the scan was complete, correct, or performed by a legally identified entity. Its private key
+must be a single-link, non-reparse, current-user-owned file with an owner-only protected Windows
+DACL (or equivalent owner-only Unix mode). An exact legacy Windows ACL containing only the current
+user, LocalSystem, and Builtin Administrators may be hardened in place without changing the key.
+Every new signed bundle carries the self-signed public identity and bounded predecessor history.
+Missing prior keys are never silently recreated: rotation requires acknowledgement of the exact
+recorded lost key ID. A separate owner-only continuity anchor prevents deletion of the public
+identity document from making a managed key look legacy. When the exact protected managed key and
+its exact anchor both remain, the application recreates only the byte-equivalent anchored public
+document; it neither adopts a different key nor rotates the signer. Rotation first persists an owner-only
+intent that binds the exact predecessor, candidate private key, and candidate self-signed public
+identity; only that candidate may resume an interrupted rotation. The secret-bearing intent is
+removed after exact key/document/anchor readback. Identity preparation is best-effort at startup so
+scanning remains available; signed export creation and verification still fail closed.
 
 ### 6.8 Verify
 
