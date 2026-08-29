@@ -16010,11 +16010,11 @@ mod tests {
     #[test]
     fn windows_wsl_vhd_verification_waits_for_exact_handle_release() {
         let fixture = fixture();
-        let vhd = fixture.manager.versions_root().join("release-wait.vhdx");
-        ensure_private_directory(&fixture.manager.versions_root()).unwrap();
+        let base_path = fixture.manager.versions_root().join("release-wait");
+        ensure_private_directory(&base_path).unwrap();
+        let vhd = base_path.join("ext4.vhdx");
         fs::write(&vhd, b"bounded VHD release fixture").unwrap();
         let expected_size = fs::metadata(&vhd).unwrap().len();
-        let base_path = vhd.parent().unwrap().to_path_buf();
         let locked_vhd = open_without_windows_sharing(&vhd);
         let started = Instant::now();
         let release = thread::spawn(move || {
@@ -16038,10 +16038,10 @@ mod tests {
     #[test]
     fn windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file() {
         let fixture = fixture();
-        let vhd = fixture.manager.versions_root().join("release-timeout.vhdx");
-        ensure_private_directory(&fixture.manager.versions_root()).unwrap();
+        let base_path = fixture.manager.versions_root().join("release-timeout");
+        ensure_private_directory(&base_path).unwrap();
+        let vhd = base_path.join("ext4.vhdx");
         fs::write(&vhd, b"bounded VHD timeout fixture").unwrap();
-        let base_path = vhd.parent().unwrap().to_path_buf();
         let locked_vhd = open_without_windows_sharing(&vhd);
         let started = Instant::now();
 
@@ -19070,7 +19070,11 @@ mod tests {
     #[test]
     fn direct_wsl_unregister_is_whitelisted_only_for_verified_backup_recovery() {
         let forbidden = ["--", "unregister"].concat();
-        let source = include_str!("managed_runtime.rs");
+        // Git may check this source out with CRLF on the native Windows
+        // qualification runner. Normalize only the in-memory contract input
+        // so the assertions describe Rust structure rather than line endings.
+        let normalized_source = include_str!("managed_runtime.rs").replace("\r\n", "\n");
+        let source = normalized_source.as_str();
         let production = source
             .split("\n#[cfg(test)]")
             .next()
