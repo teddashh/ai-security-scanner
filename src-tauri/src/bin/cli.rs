@@ -540,7 +540,22 @@ enum ExportCommand {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    Identity {
+        #[command(subcommand)]
+        command: ExportIdentityCommand,
+    },
     Formats,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExportIdentityCommand {
+    /// Show or establish the durable public identity for local signed exports.
+    Show,
+    /// Replace a private key only after its exact recorded key ID is confirmed lost.
+    RotateAfterKeyLoss {
+        #[arg(long)]
+        acknowledge_lost_key_id: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -568,6 +583,7 @@ struct ExportCreateArgs {
 enum ExportFormatArg {
     CaseBundle,
     Json,
+    FrameworkReport,
     Ocsf,
     Oscal,
     Html,
@@ -578,6 +594,7 @@ impl From<ExportFormatArg> for CaseExportFormat {
         match value {
             ExportFormatArg::CaseBundle => Self::CaseBundle,
             ExportFormatArg::Json => Self::CanonicalJson,
+            ExportFormatArg::FrameworkReport => Self::FrameworkReport,
             ExportFormatArg::Ocsf => Self::OcsfJson,
             ExportFormatArg::Oscal => Self::OscalJson,
             ExportFormatArg::Html => Self::Html,
@@ -870,6 +887,9 @@ fn command_requires_exclusive_data_directory(command: &Command) -> bool {
         Command::Runtime {
             command: RuntimeCommand::Managed { command },
         } => !matches!(command, ManagedRuntimeCliCommand::Status),
+        Command::Export {
+            command: ExportCommand::Identity { .. },
+        } => true,
         _ => false,
     }
 }
@@ -1407,10 +1427,26 @@ fn execute_export(
                 ));
             }
         },
+        ExportCommand::Identity { command } => match command {
+            ExportIdentityCommand::Show => {
+                print_value(&service.ensure_export_signing_identity()?, json_output)?;
+            }
+            ExportIdentityCommand::RotateAfterKeyLoss {
+                acknowledge_lost_key_id,
+            } => {
+                print_value(
+                    &service.rotate_export_signing_identity_after_confirmed_loss(
+                        &acknowledge_lost_key_id,
+                    )?,
+                    json_output,
+                )?;
+            }
+        },
         ExportCommand::Formats => print_value(
             &json!([
                 { "id": "case-bundle", "signed": true, "portable": true },
                 { "id": "json", "signed": false, "schema": "canonical" },
+                { "id": "framework-report", "signed": false, "schema": "master NIST CSF, ISO/IEC 27001, and AIDEFEND relationship report with incomplete and unknown coverage" },
                 { "id": "ocsf", "signed": false, "schema": "OCSF detection findings" },
                 { "id": "oscal", "signed": false, "schema": "OSCAL assessment results; coordinates only" },
                 { "id": "html", "signed": false, "schema": "local human-readable report" }

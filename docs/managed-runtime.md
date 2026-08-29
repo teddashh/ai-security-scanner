@@ -9,9 +9,9 @@ explicit compatibility providers; they are not silently mixed with managed runs.
 - A release carries an immutable, platform-specific Podman machine client bundle in the app
   resources directory. Every bundled file has an exact size and SHA-256 in `manifest.json`.
 - The app verifies the resource bundle before copying it to a versioned directory under its own
-  local application-data directory. It never changes the system `PATH` or invokes a package
-  manager. The only elevated host change is the explicit Windows WSL prerequisite repair described
-  below; scanner engines and the managed runtime remain rootless.
+  local application-data directory. It never changes the system `PATH`, invokes a package manager,
+  requests elevation, enables Windows optional features, or runs Windows servicing commands.
+  Scanner engines and the managed runtime remain rootless.
 - A fresh installed desktop with no existing cases enters a first-launch scan-tool installation
   phase whenever the release-managed runtime has not been prepared yet. It starts this
   product-owned lifecycle operation automatically; an already-ready host reaches the scan workspace
@@ -25,15 +25,11 @@ explicit compatibility providers; they are not silently mixed with managed runs.
   before any VM-image bytes are downloaded. It records one stable `failure_reason` and paired
   `next_action`: install WSL, enable its optional components, update WSL, restart Windows, or retry
   the check. Console output is accepted only as bounded UTF-8 or UTF-16LE; mixed or unsafe bytes are
-  never interpolated into UI errors. For install, enable, and update actions only, the user may
-  choose one-click repair. The backend derives the action from the exact failed reason/action pair,
-  resolves the real `System32\wsl.exe`, and invokes either fixed
-  `--install --no-distribution` or fixed `--update` arguments through the standard Windows UAC
-  dialog. No executable or arguments come from the webview, no shell is involved, and the app never
-  sees the administrator password. UAC cancellation makes no change. Restart codes become the sole
-  visible restart action; the app never restarts Windows automatically. Reopening the app after the
-  restart repeats the read-only check and continues the private runtime setup automatically. Manual
-  commands are retained only as a secondary fallback.
+  never interpolated into UI errors. Install, enable, and update outcomes lead to one link to
+  Microsoft's official WSL setup and one safe recheck. No elevation or servicing action is exposed
+  through the webview. The app never restarts Windows automatically. Reopening the app after a
+  Microsoft-requested restart repeats the read-only check and continues the private runtime setup
+  automatically.
 - The VM image is downloaded from the exact HTTPS URL pinned in the release manifest. Bounded
   resumable downloads are accepted only from approved GitHub release hosts and are committed only
   after the locked size and SHA-256 match.
@@ -297,6 +293,18 @@ The native launcher probes KVM and changes only Podman's exact `-accel kvm -cpu 
 and device firmware while excluding eight foreign-architecture firmware images that the
 x86_64-only emulator cannot use. Tauri maps the completed directory to
 `$RESOURCE/managed-runtime/`.
+
+Manifest schema 3 records the lock-sourced `management_contract_revision` alongside the pinned
+upstream payload. This revision identifies the product-side lifecycle and ownership rules that
+interpret those bytes. Version 0.1.8 uses `2026-08-29.1`; its reviewed Windows x86-64 manifest is
+`a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a`. The current application fails
+closed on any other schema-3 contract. It can still reopen a strict schema-2 installed manifest
+only when the revision field is absent, preserving the public v0.1.7 identity for the bounded N-1
+recovery proof; a schema-2 manifest is never accepted as the current bundled v0.1.8 resource.
+
+A schema number, revision, or formatting-only edit must not be used to manufacture a provider
+identity. Changing the revision requires a reviewed change to the product-side runtime management
+contract plus release evidence from a real platform build.
 
 The cheap lock-only validation used during development is:
 

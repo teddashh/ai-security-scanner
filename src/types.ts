@@ -726,7 +726,16 @@ export interface ControlReference {
   title?: string;
   rationale?: string;
   mappingVersion?: string;
+  /** Exact reviewed mapping-catalog identity frozen with this relationship. */
+  mappingProvenance?: ControlMappingProvenance;
   note?: string;
+}
+
+export interface ControlMappingProvenance {
+  mappingVersion: string;
+  reviewedAt: string;
+  reviewProcess: string;
+  catalogSha256: string;
 }
 
 export interface Finding {
@@ -853,7 +862,13 @@ export interface VerificationSummary {
   diffs: VerificationDiff[];
 }
 
-export type ExportFormat = "case_bundle" | "json" | "ocsf" | "oscal" | "html";
+export type ExportFormat =
+  | "case_bundle"
+  | "json"
+  | "framework_report"
+  | "ocsf"
+  | "oscal"
+  | "html";
 
 export interface CaseExport {
   id: string;

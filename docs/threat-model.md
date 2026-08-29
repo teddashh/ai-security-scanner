@@ -64,16 +64,15 @@ It considers a single human user on one workstation. Shared-workstation authoriz
 
 All UI input is untrusted. Tauri commands validate identifiers, state transitions, paths, scope grants, and target syntax in Rust. A disabled button is not an authorization control.
 
-### Boundary A2: backend to Windows WSL setup
+### Boundary A2: backend to Windows WSL prerequisite checks
 
-The optional one-click Windows prerequisite repair is a host-setup action, not scanner remediation.
-Its Tauri command accepts no path, arguments, verb, or operation from the UI. The backend derives
-one allowlisted action from the exact current failed prerequisite pair, resolves the canonical
-Windows-owned `System32\wsl.exe`, rejects reparse points, and supplies only fixed
-`--install --no-distribution` or `--update` arguments to `ShellExecuteExW` with `runas`. It never
-uses a shell, inherited `PATH`, or an elevated project helper. Windows owns the UAC credential
-surface; the app never receives the administrator password. Cancellation is reported as no change,
-and restart-required results never cause an automatic restart or runtime-image download.
+The desktop resolves the Windows-owned `System32\wsl.exe`, rejects reparse points, and performs only
+bounded read-only status and inventory probes with fixed arguments and a cleared environment. The
+webview cannot supply an executable, arguments, verb, or servicing operation. The current product
+does not elevate itself, enable optional features, invoke Windows servicing, or expose the legacy
+repair backend as a Tauri command. A missing or outdated WSL installation leads to Microsoft's
+official setup outside the app; returning or reopening the app performs the same read-only check
+before any runtime-image download.
 
 ### Boundary B: backend to bootstrap broker
 
@@ -239,6 +238,23 @@ Export defaults should exclude raw engine logs unless the user selects an expert
 
 Once the user exports a package to an arbitrary location, confidentiality depends on that destination. The application cannot guarantee secure email, cloud drive, or third-party handling.
 
+The local bundle-signing private key is opened by handle and accepted only when it is a nonempty,
+bounded, single-link, non-reparse regular file owned by the current user. Windows requires a
+protected DACL with exactly one current-user full-access ACE. Migration is limited to the exact
+predecessor ACL containing one full-access ACE each for the current user, LocalSystem, and Builtin
+Administrators; any foreign principal, duplicate, malformed ACE, wrong owner, link, or reparse point
+fails closed. The corresponding public identity is self-signed and included in new bundles with a
+bounded predecessor chain. Losing the recorded private key requires explicit rotation acknowledging
+that exact key ID; it is never silently replaced while its identity remains.
+A separate owner-only continuity anchor keeps a managed key distinguishable when the public identity
+document is deleted. The exact retained managed key plus its matching anchor may restore only the
+byte-equivalent anchored public document; neither signal alone can endorse a key. Only a still-exact
+legacy key may complete an interrupted N-1 adoption.
+Rotation persists a bounded owner-only intent containing the exact candidate secret and self-signed
+identity before changing the primary key. Any unbound mismatching key, mutated intent, or candidate
+that differs from that intent fails closed; completed rotation removes the secret-bearing intent
+only after exact key, document, and anchor readback.
+
 ## 11. AI skill security
 
 Repository skills may:
@@ -265,6 +281,24 @@ They must not:
 - If evidence normalization fails, raw evidence is retained and the result is marked unnormalized; it is not dropped.
 - If an engine cannot be verified or its license disposition is blocked, it is unavailable and coverage reflects `not_executed`.
 - If export hashing fails, no signed or “verified” package is produced.
+- If local signing identity preparation fails during startup, scanning remains available and the
+  failure is logged; a signed export still fails closed until the identity is repaired or explicitly
+  rotated after confirmed key loss.
+- If an embedded bundle signing identity is missing, malformed, has an unsupported schema, or does
+  not match the manifest signer, bundles that declare that identity schema do not verify.
+- If a historical observation lacks its immutable finding snapshot, the framework report records
+  that limitation and does not reconstruct mappings or prose from the mutable current finding.
+- If a relationship cannot resolve an exact evidence-record ID, artifact ID and hash, engine-run ID,
+  and engine ID, or either the relationship or that execution lacks matching verified-current mapping
+  provenance, the relationship is reported as unavailable or mismatched rather than exact. A current
+  catalog digest is insufficient unless the coordinate, title, relationship, rationale, evidence
+  engine, and AIDEFEND applicability condition also match one exact catalog entry. Historical catalog
+  identities without an authenticated local snapshot remain unverified and unavailable. Same-engine
+  executions are never pooled.
+- Legacy or unanswered AI context remains unknown; it is not converted to an AIDEFEND
+  not-applicable statement.
+- If a connected source returns no assets, framework coverage stays incomplete/unknown; zero
+  returned inventory is not treated as proof that the source is empty.
 - If a runtime provider cannot enforce a manifest boundary, the engine does not run through that provider.
 - If a re-scan lacks comparable scope or engine completion, the result is `unverifiable`.
 

@@ -29,10 +29,7 @@ use crate::managed_network::{
     ManagedNetworkLease, ManagedNetworkOwner, ProviderServiceEgressRequest,
     resolve_provider_service_plan, validate_provider_service_request_static,
 };
-use crate::managed_runtime::{
-    ManagedRuntimePrerequisiteRepairResult, ManagedRuntimeSetupController,
-    ManagedRuntimeSetupStatus, repair_windows_wsl_prerequisite,
-};
+use crate::managed_runtime::ManagedRuntimeSetupStatus;
 use crate::source_authorization::discovery::{
     LiveProviderFailure, LiveProviderFailureKind, capture_provider_inventory,
 };
@@ -72,7 +69,7 @@ use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -162,53 +159,6 @@ pub fn cancel_managed_runtime_setup(
     state: State<'_, AppState>,
 ) -> AppResult<ManagedRuntimeSetupStatus> {
     state.managed_runtime_setup().request_cancel()
-}
-
-struct ManagedRuntimePrerequisiteRepairGuard {
-    setup: Arc<ManagedRuntimeSetupController>,
-    finished: bool,
-}
-
-impl ManagedRuntimePrerequisiteRepairGuard {
-    fn finish(&mut self, result: &ManagedRuntimePrerequisiteRepairResult) {
-        self.setup.finish_prerequisite_repair(Some(result));
-        self.finished = true;
-    }
-}
-
-impl Drop for ManagedRuntimePrerequisiteRepairGuard {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.setup.finish_prerequisite_repair(None);
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn repair_managed_runtime_prerequisite(
-    state: State<'_, AppState>,
-) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
-    let setup = state.managed_runtime_setup().clone();
-    let action = setup.begin_prerequisite_repair()?;
-    let worker_setup = setup.clone();
-    match tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = ManagedRuntimePrerequisiteRepairGuard {
-            setup: worker_setup,
-            finished: false,
-        };
-        let result = repair_windows_wsl_prerequisite(action);
-        if let Ok(value) = &result {
-            guard.finish(value);
-        }
-        result
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(AppError::Internal(
-            "Windows prerequisite repair worker terminated unexpectedly".into(),
-        )),
-    }
 }
 
 fn default_true() -> bool {

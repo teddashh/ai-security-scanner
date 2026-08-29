@@ -15,6 +15,7 @@ pub mod discovery;
 pub mod domain;
 pub mod error;
 pub mod export;
+pub mod export_identity;
 pub mod exporters;
 pub mod external_scope;
 #[cfg(any(feature = "desktop", feature = "cli"))]
@@ -114,6 +115,21 @@ pub fn run() {
             .with_process_lease(process_lease);
             if let Some(manager) = managed_runtime {
                 state = state.with_managed_runtime(manager);
+            }
+            // Prepare and harden the local export identity early, but never
+            // turn a damaged optional export identity into a scanner startup
+            // gate. Signed bundle creation remains fail-closed and reports the
+            // exact identity recovery action when the user chooses to export.
+            match state.case_service().ensure_export_signing_identity() {
+                Ok(signing_identity) => tracing::info!(
+                    key_id = %signing_identity.key_id,
+                    continuity_event = ?signing_identity.continuity_event,
+                    "local export-integrity identity is ready"
+                ),
+                Err(error) => tracing::error!(
+                    error = %error,
+                    "local export-integrity identity needs attention; scanning remains available"
+                ),
             }
             match state.reconcile_managed_networks() {
                 Ok(network_recovery)

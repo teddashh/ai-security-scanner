@@ -2316,7 +2316,7 @@ impl ProcessContainerRuntime {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with_test_execution_timeout(mut self, timeout: StdDuration) -> Self {
         self.test_execution_timeout = Some(timeout);
         self
@@ -4110,6 +4110,7 @@ esac
         }
     }
 
+    #[cfg(unix)]
     fn owned_container_inspect(plan: &ContainerRunPlan, immutable_id: &str) -> Vec<u8> {
         let labels = plan
             .ownership()

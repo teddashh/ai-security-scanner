@@ -14,12 +14,13 @@
     "sourceRepository",
     "sourceCommit",
     "sourceDate",
+    "publicationMode",
     "distribution",
     "security",
     "inventories"
   ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "product": { "const": "ai-security-scanner" },
     "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
     "tag": { "type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
@@ -28,6 +29,7 @@
     "sourceRepository": { "type": "string", "format": "uri", "pattern": "^https://github\\.com/" },
     "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "sourceDate": { "type": "string", "format": "date-time" },
+    "publicationMode": { "enum": ["commit-bound-qc", "public-github-release"] },
     "distribution": {
       "type": "object",
       "additionalProperties": false,
@@ -85,8 +87,10 @@
           "additionalProperties": false,
           "required": ["state", "provider"],
           "properties": {
-            "state": { "const": "required-before-publication" },
-            "provider": { "const": "GitHub artifact attestations" }
+            "state": {
+              "enum": ["not-created-for-commit-bound-qc", "required-before-publication"]
+            },
+            "provider": { "enum": ["none", "GitHub artifact attestations"] }
           }
         }
       }
@@ -102,6 +106,39 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "publicationMode": { "const": "commit-bound-qc" } } },
+      "then": {
+        "properties": {
+          "security": {
+            "properties": {
+              "provenanceAttestation": {
+                "properties": {
+                  "state": { "const": "not-created-for-commit-bound-qc" },
+                  "provider": { "const": "none" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "security": {
+            "properties": {
+              "provenanceAttestation": {
+                "properties": {
+                  "state": { "const": "required-before-publication" },
+                  "provider": { "const": "GitHub artifact attestations" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "notConfigured": {
       "type": "object",

@@ -365,9 +365,13 @@ export function validatePlatformQualification(evidence, context = {}) {
   }
   assert(evidence.installedLayout.cli === evidence.installedLayout.companions[2].path, "installed CLI path differs from its companion record");
 
-  exactKeys(evidence.runtime, ["bundleId", "runtimeVersion", "manifestReleaseFile", "manifestSha256", "installedManifestSnapshotSha256", "installedManifestExactMatch", "machineImages", "selectedTarget"], "qualified runtime");
+  exactKeys(evidence.runtime, ["bundleId", "runtimeVersion", "managementContractRevision", "manifestReleaseFile", "manifestSha256", "installedManifestSnapshotSha256", "installedManifestExactMatch", "machineImages", "selectedTarget"], "qualified runtime");
   requireText(evidence.runtime.bundleId, "runtime bundle id");
   requireText(evidence.runtime.runtimeVersion, "runtime version");
+  assert(
+    evidence.runtime.managementContractRevision === "2026-08-29.1",
+    "runtime management contract revision is not the reviewed release contract",
+  );
   assert(evidence.runtime.manifestReleaseFile === `managed-runtime-${evidence.platform}.manifest.json`, "runtime release manifest filename is incorrect");
   requireDigest(evidence.runtime.manifestSha256, "runtime manifest digest");
   assert(evidence.runtime.installedManifestSnapshotSha256 === evidence.runtime.manifestSha256 && evidence.runtime.installedManifestExactMatch === true, "installed runtime manifest does not exactly match release evidence");
@@ -495,6 +499,7 @@ function observationsToEvidence(observations, inputs) {
     runtime: {
       bundleId: runtimeManifest.bundle_id,
       runtimeVersion: runtimeManifest.runtime_version,
+      managementContractRevision: runtimeManifest.management_contract_revision,
       manifestReleaseFile: `managed-runtime-${platform}.manifest.json`,
       manifestSha256: runtimeManifestSha256,
       installedManifestSnapshotSha256: installedManifestSha256,
@@ -550,7 +555,13 @@ export async function createPlatformQualification({ artifactDirectory, observati
   const runtimeManifestMetadata = await lstat(runtimeManifestFile);
   assert(runtimeManifestMetadata.isFile() && !runtimeManifestMetadata.isSymbolicLink(), "qualification runtime manifest is not a regular file");
   const runtimeManifest = await readJson(runtimeManifestFile);
-  assert(runtimeManifest.schema_version === "2" && Array.isArray(runtimeManifest.targets) && runtimeManifest.targets.length > 0, "qualification runtime manifest is malformed");
+  assert(
+    runtimeManifest.schema_version === "3" &&
+      runtimeManifest.management_contract_revision === "2026-08-29.1" &&
+      Array.isArray(runtimeManifest.targets) &&
+      runtimeManifest.targets.length > 0,
+    "qualification runtime manifest is malformed",
+  );
   const runtimeManifestSha256 = await sha256File(runtimeManifestFile);
   const observationsMetadata = await lstat(observationsFile);
   assert(
@@ -613,6 +624,11 @@ export async function verifyPlatformQualificationFile(file, context = {}) {
     const runtimeManifestFile = path.join(context.releaseDirectory, evidence.runtime.manifestReleaseFile);
     assert((await sha256File(runtimeManifestFile)) === evidence.runtime.manifestSha256, `${evidence.platform} qualification runtime manifest does not match finalized assets`);
     const runtimeManifest = await readJson(runtimeManifestFile);
+    assert(
+      runtimeManifest.schema_version === "3" &&
+        runtimeManifest.management_contract_revision === evidence.runtime.managementContractRevision,
+      `${evidence.platform} qualification management contract differs from finalized runtime evidence`,
+    );
     const expectedImages = runtimeManifest.targets.map((target) => ({ operatingSystem: target.operating_system, architecture: target.architecture, provider: target.provider, url: target.machine_image.url, sha256: target.machine_image.sha256, bytes: target.machine_image.size_bytes }));
     assert(JSON.stringify(evidence.runtime.machineImages) === JSON.stringify(expectedImages), `${evidence.platform} qualification machine-image inventory differs from finalized runtime evidence`);
   }

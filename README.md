@@ -43,7 +43,7 @@ See how a website check moves from setup to a prioritized fix list using ready-m
 
 <!-- Release line: v0.1.8. -->
 
-> **Project status:** `v0.1.8` is a Windows-first public pre-release. It can now finish a product-owned setup left by an older version automatically, while showing clear progress instead of sending you to Windows Terminal.
+> **Project status:** `v0.1.8` is still being qualified on Windows and is not an install candidate yet. The current work focuses on recovering a verified workspace left by `v0.1.7`, preserving existing local data, and completing setup without sending you to Windows Terminal. Main-branch preflight produces a commit-bound QC artifact only; public tag publication stays blocked until Windows Authenticode signing and verification exist.
 
 Most people can start with the product flow above. If you are evaluating deployment, permissions, isolation, integrations, or release evidence, use these references:
 
@@ -113,13 +113,13 @@ Installed desktop packages carry a pinned, product-managed Podman machine client
 
 The installed desktop app prepares its private scan tools automatically on first launch, before the scan workspace appears. It verifies the packaged runtime and checks the computer **before** downloading the checksum-locked machine image, then initializes a private rootless machine while showing progress. Downloads can be cancelled and resumed. The application does not modify the system `PATH` or use a package manager.
 
-On Windows, an already-ready WSL 2 setup requires no click. If the automatic read-only check proves that WSL must be installed or updated, the first-launch screen shows one clear action and Windows asks for administrator approval once. ai-security-scanner runs only Microsoft's trusted `wsl.exe` with the fixed action needed; it never receives or stores the administrator password. If Windows needs a restart, the app stops before the roughly 257 MB machine-image download. Reopen ai-security-scanner after restarting and setup continues automatically. Manual Microsoft commands remain under **Other ways**.
+On Windows, an already-ready WSL 2 setup requires no click. If the automatic read-only check proves that WSL must be installed or updated, the first-launch screen opens Microsoft's official WSL setup and offers one safe recheck. ai-security-scanner does not elevate itself, enable Windows features, or run Windows servicing commands. If Microsoft asks for a restart, reopen ai-security-scanner afterward and setup continues automatically before the roughly 257 MB machine-image download begins.
 
 | Desktop host | Managed provider | Host prerequisite |
 | --- | --- | --- |
 | Linux x86-64 | Rootless Podman machine with packaged QEMU | None; KVM is used when available, otherwise slower QEMU software emulation is used. |
 | macOS Intel or Apple silicon | Rootless Podman machine with Apple virtualization | A supported macOS release with Apple virtualization support. |
-| Windows x86-64 | Rootless Podman machine with WSL | WSL 2. If it is unavailable or outdated, one explicit Windows approval lets the app prepare it; a required restart remains a visible user action. |
+| Windows x86-64 | Rootless Podman machine with WSL | WSL 2. If it is unavailable or outdated, complete Microsoft's official setup once; the app then rechecks it and continues automatically. |
 
 Docker or a user-installed Podman can be selected only as an explicitly labeled compatibility provider; they are not required or silently mixed with managed runs. See the [managed runtime contract](docs/managed-runtime.md) for lifecycle, recovery, verification, and exact cleanup behavior.
 
@@ -239,7 +239,7 @@ docs/usability/              Real-person study protocol and evidence schema
 
 The release workflow builds native Linux, universal macOS, and Windows installers, observes an installed desktop startup on each platform, and then runs a fresh-host managed-runtime lifecycle and fixed isolated-container qualification. A finalized candidate also contains checksums, CycloneDX and SPDX SBOMs, notices, updater signatures, platform qualification records, and GitHub build provenance.
 
-Manual workflow dispatch from `main` is preflight-only: it cannot create a tag or public GitHub Release. A tagged preview publishes with GitHub's **Pre-release** label and does not replace the latest stable release. Apple Developer ID/notarization and Windows Authenticode are not configured, so operating systems may still show an unidentified-developer warning; Tauri updater signing is a separate integrity control and does not claim OS publisher identity.
+Manual workflow dispatch from `main` is preflight-only: it cannot create a tag or public GitHub Release. It produces a commit-bound QC artifact for qualification. Tagged publication is fail-closed while Windows Authenticode signing and verification are not configured; Tauri updater signing is a separate integrity control and does not claim OS publisher identity. Apple Developer ID/notarization is also not configured.
 
 Before the stable `v0.2.0` publication, the project still requires:
 

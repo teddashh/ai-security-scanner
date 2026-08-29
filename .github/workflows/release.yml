@@ -27,6 +27,7 @@ jobs:
       commit: ${{ steps.identity.outputs.commit }}
       source_date: ${{ steps.identity.outputs.source_date }}
       release_channel: ${{ steps.identity.outputs.release_channel }}
+      publication_mode: ${{ steps.identity.outputs.publication_mode }}
       prerelease: ${{ steps.identity.outputs.prerelease }}
       make_latest: ${{ steps.identity.outputs.make_latest }}
     steps:
@@ -90,12 +91,16 @@ jobs:
           fi
           case "${EVENT_NAME}" in
             push)
+              publication_mode="public-github-release"
               if [[ "${EVENT_REF}" != "refs/tags/${candidate_tag}" ]]; then
                 printf 'Release tag %s does not exactly match candidate %s.\n' "${EVENT_REF}" "${candidate_tag}" >&2
                 exit 1
               fi
+              printf 'PUBLIC_RELEASE_BLOCKED_AUTHENTICODE: Windows Authenticode signing and verification are not configured; use the main-branch workflow_dispatch QC artifact only.\n' >&2
+              exit 1
               ;;
             workflow_dispatch)
+              publication_mode="commit-bound-qc"
               if [[ "${EVENT_REF}" != "refs/heads/main" ]]; then
                 printf 'Release preflight must be dispatched from refs/heads/main, not %s.\n' "${EVENT_REF}" >&2
                 exit 1
@@ -111,6 +116,7 @@ jobs:
           printf 'commit=%s\n' "${commit}" >> "${GITHUB_OUTPUT}"
           printf 'source_date=%s\n' "${source_date}" >> "${GITHUB_OUTPUT}"
           printf 'release_channel=%s\n' "${release_channel}" >> "${GITHUB_OUTPUT}"
+          printf 'publication_mode=%s\n' "${publication_mode}" >> "${GITHUB_OUTPUT}"
           printf 'prerelease=%s\n' "${prerelease}" >> "${GITHUB_OUTPUT}"
           printf 'make_latest=%s\n' "${make_latest}" >> "${GITHUB_OUTPUT}"
 
@@ -156,6 +162,7 @@ jobs:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
           SOURCE_DATE: ${{ needs.validate.outputs.source_date }}
+          PUBLICATION_MODE: ${{ needs.validate.outputs.publication_mode }}
         run: >-
           node scripts/release/generate-notices.mjs
           --out release-assets
@@ -163,6 +170,7 @@ jobs:
           --tag "${RELEASE_TAG}"
           --commit "${SOURCE_COMMIT}"
           --source-date "${SOURCE_DATE}"
+          --publication-mode "${PUBLICATION_MODE}"
           --repository "${GITHUB_REPOSITORY}"
 
       - name: Generate CycloneDX JSON SBOM
@@ -190,9 +198,11 @@ jobs:
       - name: Validate honest release metadata
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          PUBLICATION_MODE: ${{ needs.validate.outputs.publication_mode }}
         run: >-
           node scripts/release/validate-release.mjs
           --tag "${RELEASE_TAG}"
+          --publication-mode "${PUBLICATION_MODE}"
           --metadata release-assets/release-metadata.json
 
       - name: Preserve supply-chain evidence
@@ -503,11 +513,19 @@ jobs:
 
       - name: Generate exact managed runtime manifest, SBOM, notices, and source evidence
         shell: bash
-        run: >-
-          node scripts/release/generate-runtime-evidence.mjs
-          --manifest runtime/staged/managed-runtime/manifest.json
-          --out release-assets
-          --platform "${{ matrix.platform }}"
+        env:
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          expected_identity=()
+          if [[ "${RELEASE_PLATFORM}" == "windows-x86_64" ]]; then
+            expected_identity=(--expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a)
+          fi
+          node scripts/release/generate-runtime-evidence.mjs \
+            --manifest runtime/staged/managed-runtime/manifest.json \
+            --out release-assets \
+            --platform "${RELEASE_PLATFORM}" \
+            "${expected_identity[@]}"
 
       - name: Preserve platform installers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -521,7 +539,7 @@ jobs:
   qualification:
     name: Qualify installed ${{ matrix.platform }} artifact on a fresh hosted runner
     needs: [validate, build]
-    timeout-minutes: 240
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -587,6 +605,74 @@ jobs:
           -WorkDirectory "$env:RUNNER_TEMP/ai-security-scanner-platform-qualification-evidence"
           -InstallerType "${{ matrix.installer_type }}"
 
+      - name: Qualify a real N-1 NSIS upgrade and private-data preservation
+        if: matrix.platform == 'windows-x86_64' && matrix.installer_type == 'nsis'
+        shell: pwsh
+        run: >-
+          scripts/release/qualify-windows-nsis-upgrade.ps1
+          -ArtifactDirectory release-input
+          -WorkDirectory "$env:RUNNER_TEMP/ai-security-scanner-nsis-upgrade-evidence"
+          -CurrentVersion "${{ needs.validate.outputs.version }}"
+
+      - name: Create and validate strict N-1 NSIS upgrade evidence
+        if: matrix.platform == 'windows-x86_64' && matrix.installer_type == 'nsis'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p nsis-upgrade-evidence
+          evidence="nsis-upgrade-evidence/windows-nsis-upgrade-qualification.json"
+          node scripts/release/windows-nsis-upgrade-evidence.mjs create \
+            --artifact-dir release-input \
+            --observations "${RUNNER_TEMP}/ai-security-scanner-nsis-upgrade-evidence/observations.json" \
+            --out "${evidence}" \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --commit "${SOURCE_COMMIT}"
+          node scripts/release/windows-nsis-upgrade-evidence.mjs validate \
+            --file "${evidence}" \
+            --artifact-dir release-input \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --commit "${SOURCE_COMMIT}"
+
+      - name: Qualify the real registered-WSL N-1 ghost recovery
+        if: matrix.platform == 'windows-x86_64' && matrix.installer_type == 'nsis'
+        shell: pwsh
+        run: >-
+          scripts/release/qualify-windows-nsis-ghost-recovery.ps1
+          -ArtifactDirectory release-input
+          -WorkDirectory "$env:RUNNER_TEMP/ai-security-scanner-nsis-ghost-recovery-evidence"
+          -CurrentVersion "${{ needs.validate.outputs.version }}"
+
+      - name: Create and validate strict registered-WSL ghost-recovery evidence
+        if: matrix.platform == 'windows-x86_64' && matrix.installer_type == 'nsis'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p nsis-ghost-recovery-evidence
+          evidence="nsis-ghost-recovery-evidence/windows-nsis-ghost-recovery-qualification.json"
+          node scripts/release/windows-nsis-ghost-recovery-evidence.mjs create \
+            --artifact-dir release-input \
+            --observations "${RUNNER_TEMP}/ai-security-scanner-nsis-ghost-recovery-evidence/observations.json" \
+            --out "${evidence}" \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --commit "${SOURCE_COMMIT}"
+          node scripts/release/windows-nsis-ghost-recovery-evidence.mjs validate \
+            --file "${evidence}" \
+            --artifact-dir release-input \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --commit "${SOURCE_COMMIT}"
+
       - name: Create and fail-closed validate platform qualification evidence
         shell: bash
         env:
@@ -624,6 +710,24 @@ jobs:
         with:
           name: platform-qualification-${{ matrix.qualification_id }}
           path: qualification-evidence/platform-qualification-${{ matrix.qualification_id }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve strict N-1 NSIS upgrade evidence
+        if: matrix.platform == 'windows-x86_64' && matrix.installer_type == 'nsis'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-nsis-upgrade-qualification
+          path: nsis-upgrade-evidence/windows-nsis-upgrade-qualification.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve strict registered-WSL ghost-recovery evidence
+        if: matrix.platform == 'windows-x86_64' && matrix.installer_type == 'nsis'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-nsis-ghost-recovery-qualification
+          path: nsis-ghost-recovery-evidence/windows-nsis-ghost-recovery-qualification.json
           if-no-files-found: error
           retention-days: 14
 
@@ -701,29 +805,71 @@ jobs:
           name: platform-qualification-windows-x86_64-nsis
           path: release-assets
 
+      - name: Download Windows N-1 NSIS upgrade qualification
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-nsis-upgrade-qualification
+          path: release-assets
+
+      - name: Revalidate the Windows N-1 NSIS upgrade qualification
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: >-
+          node scripts/release/windows-nsis-upgrade-evidence.mjs validate
+          --file release-assets/windows-nsis-upgrade-qualification.json
+          --artifact-dir release-assets
+          --version "${RELEASE_VERSION}"
+          --tag "${RELEASE_TAG}"
+          --commit "${SOURCE_COMMIT}"
+
+      - name: Download Windows registered-WSL ghost-recovery qualification
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-nsis-ghost-recovery-qualification
+          path: release-assets
+
+      - name: Revalidate the Windows registered-WSL ghost-recovery qualification
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: >-
+          node scripts/release/windows-nsis-ghost-recovery-evidence.mjs validate
+          --file release-assets/windows-nsis-ghost-recovery-qualification.json
+          --artifact-dir release-assets
+          --version "${RELEASE_VERSION}"
+          --tag "${RELEASE_TAG}"
+          --commit "${SOURCE_COMMIT}"
+
       - name: Verify installers and create the release index
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+          PUBLICATION_MODE: ${{ needs.validate.outputs.publication_mode }}
         run: >-
           node scripts/release/finalize-release.mjs
           --dir release-assets
           --version "${RELEASE_VERSION}"
           --tag "${RELEASE_TAG}"
           --commit "${SOURCE_COMMIT}"
+          --publication-mode "${PUBLICATION_MODE}"
 
       - name: Verify finalized checksums and release index
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+          PUBLICATION_MODE: ${{ needs.validate.outputs.publication_mode }}
         run: >-
           node scripts/release/verify-finalized-release.mjs
           --dir release-assets
           --version "${RELEASE_VERSION}"
           --tag "${RELEASE_TAG}"
           --commit "${SOURCE_COMMIT}"
+          --publication-mode "${PUBLICATION_MODE}"
 
       - name: Preserve the finalized release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -767,12 +913,14 @@ jobs:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+          PUBLICATION_MODE: ${{ needs.validate.outputs.publication_mode }}
         run: >-
           node scripts/release/verify-finalized-release.mjs
           --dir release-assets
           --version "${RELEASE_VERSION}"
           --tag "${RELEASE_TAG}"
           --commit "${SOURCE_COMMIT}"
+          --publication-mode "${PUBLICATION_MODE}"
 
       - name: Attest every published file
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

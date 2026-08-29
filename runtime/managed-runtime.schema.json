@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "management_contract_revision",
     "bundle_id",
     "runtime_version",
     "driver_path",
@@ -16,7 +17,11 @@
     "source"
   ],
   "properties": {
-    "schema_version": { "const": "2" },
+    "schema_version": { "const": "3" },
+    "management_contract_revision": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])\\.[1-9][0-9]{0,3}$"
+    },
     "bundle_id": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{1,64}$"

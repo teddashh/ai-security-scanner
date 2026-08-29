@@ -6,8 +6,8 @@
 
 use crate::adapter::AdapterRegistry;
 use crate::adapters::{
-    FINGERPRINT_SCHEMA_VERSION, control_mapping_version, is_mapping_independent_empty_json_lines,
-    is_runtime_stream_capture_path,
+    FINGERPRINT_SCHEMA_VERSION, control_mapping_provenance, control_mapping_version,
+    is_mapping_independent_empty_json_lines, is_runtime_stream_capture_path,
 };
 use crate::artifact_store::inspect_raw_artifacts;
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
@@ -22,21 +22,29 @@ use crate::discovery::{
     DiscoveredAsset, DiscoveryBatch, ReconciliationReport, reconcile_discovery,
 };
 use crate::domain::{
-    AiGeneratedArtifactAnswer, ArtifactCleanupObligation, AssessmentCase, AssessmentIntent, Asset,
-    AssetIdentifier, AssetKind, CaseExport, CaseStatus, CaseSummary, CoverageStatus,
-    CreateCaseRequest, DataSource, DeclaredAssetInput, DeclaredAssetKind, DeclaredWebProtocol,
-    DeclaredWebServiceInput, DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun,
-    EngineRunStatus, Finding, FindingDiffStatus, FindingGroup, FindingGroupAction,
-    FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id, ManifestStatus,
-    OrganizationProfile, RawArtifact, ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus,
-    SourceKind, VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
+    AiGeneratedArtifactAnswer, AiSystemApplicabilityAnswer, ArtifactCleanupObligation,
+    AssessmentCase, AssessmentIntent, Asset, AssetIdentifier, AssetKind, CaseExport, CaseStatus,
+    CaseSummary, CoverageStatus, CreateCaseRequest, DataSource, DeclaredAssetInput,
+    DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput, DistributionMode,
+    EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus, Finding, FindingDiffStatus,
+    FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation, FindingStatus,
+    FindingWorkflowEvent, Id, ManifestStatus, OrganizationProfile, RawArtifact, ScanPermission,
+    ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
+    valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export::{
     BundleVerification, ExportOptions, INTEGRITY_ONLY_NOTICE, case_for_export, create_case_bundle,
     verify_case_bundle_against,
 };
-use crate::exporters::{export_ocsf_finding_events_bytes, export_oscal_assessment_results_bytes};
+use crate::export_identity::{
+    LocalSigningIdentitySummary, ensure_local_signing_identity,
+    rotate_local_signing_identity_after_confirmed_loss,
+};
+use crate::exporters::{
+    export_master_framework_report_bytes, export_ocsf_finding_events_bytes,
+    export_oscal_assessment_results_bytes,
+};
 use crate::external_scope::{
     CanonicalTarget, ExternalActivity, ExternalScopeGrant, ExternalScopeRequest,
     explicit_target_requires_sensitive_network_allowance,
@@ -378,6 +386,8 @@ pub enum CaseExportFormat {
     CaseBundle,
     #[serde(rename = "json", alias = "canonical_json")]
     CanonicalJson,
+    #[serde(rename = "framework_report", alias = "master_framework_report")]
+    FrameworkReport,
     #[serde(rename = "ocsf", alias = "ocsf_json")]
     OcsfJson,
     #[serde(rename = "oscal", alias = "oscal_json")]
@@ -390,6 +400,7 @@ impl CaseExportFormat {
         match self {
             Self::CaseBundle => "case_bundle",
             Self::CanonicalJson => "json",
+            Self::FrameworkReport => "framework_report",
             Self::OcsfJson => "ocsf",
             Self::OscalJson => "oscal",
             Self::Html => "html",
@@ -473,6 +484,20 @@ impl<'a> CaseService<'a> {
             artifact_root: artifact_root.into(),
             signing_key_path: signing_key_path.into(),
         }
+    }
+
+    pub fn ensure_export_signing_identity(&self) -> AppResult<LocalSigningIdentitySummary> {
+        ensure_local_signing_identity(&self.signing_key_path)
+    }
+
+    pub fn rotate_export_signing_identity_after_confirmed_loss(
+        &self,
+        acknowledged_lost_key_id: &str,
+    ) -> AppResult<LocalSigningIdentitySummary> {
+        rotate_local_signing_identity_after_confirmed_loss(
+            &self.signing_key_path,
+            acknowledged_lost_key_id,
+        )
     }
 
     pub fn create_case(&self, request: &CreateCaseRequest) -> AppResult<AssessmentCase> {
@@ -1591,6 +1616,11 @@ impl<'a> CaseService<'a> {
         }
         let scan_run_id = new_id();
         let ai_system_applicable = case.assessment_intent == Some(AssessmentIntent::AiApplication);
+        let ai_system_applicability = match case.assessment_intent {
+            Some(AssessmentIntent::AiApplication) => AiSystemApplicabilityAnswer::Applicable,
+            Some(_) => AiSystemApplicabilityAnswer::NotApplicable,
+            None => AiSystemApplicabilityAnswer::Unknown,
+        };
         let ai_generated_artifact = case.ai_generated_artifact;
         let sequence = case
             .scan_runs
@@ -1756,6 +1786,7 @@ impl<'a> CaseService<'a> {
                         &relevant_grants,
                     )?),
                     mapping_version: Some(control_mapping_version()?.to_owned()),
+                    mapping_provenance: Some(control_mapping_provenance()?),
                     fingerprint_schema_version: Some(FINGERPRINT_SCHEMA_VERSION.to_owned()),
                     runtime_provider: None,
                     runtime_version: None,
@@ -1797,6 +1828,7 @@ impl<'a> CaseService<'a> {
             completed_at,
             knowledge_cutoff: now,
             ai_system_applicable,
+            ai_system_applicability,
             ai_generated_artifact,
             verification_baseline_run_id: verification_baseline_run_id.map(str::to_owned),
             scope_grant_ids,
@@ -2255,9 +2287,11 @@ impl<'a> CaseService<'a> {
                 )));
             }
             let current_mapping_version = control_mapping_version()?;
+            let current_mapping_provenance = control_mapping_provenance()?;
             let current_execution_timeout_seconds = manifest.execution_timeout_seconds();
-            let mapping_version_differs =
-                engine_run.mapping_version.as_deref() != Some(current_mapping_version);
+            let mapping_version_differs = engine_run.mapping_version.as_deref()
+                != Some(current_mapping_version)
+                || engine_run.mapping_provenance.as_ref() != Some(&current_mapping_provenance);
             // Releases before the enforced execution-deadline contract did
             // not record a timeout and did not enforce the current limit. A
             // missing value is therefore an incompatible execution identity,
@@ -2923,7 +2957,7 @@ impl<'a> CaseService<'a> {
         Ok(export)
     }
 
-    /// Unified five-format export entry point used by desktop and CLI. Every
+    /// Unified six-format export entry point used by desktop and CLI. Every
     /// format requires a caller-selected destination and refuses overwrite.
     pub fn export_case(
         &self,
@@ -2985,6 +3019,9 @@ impl<'a> CaseService<'a> {
         let document_case = case_for_document_export(&case, &options);
         let bytes = match format {
             CaseExportFormat::CanonicalJson => canonical_json_bytes(&case, run_id, &options)?,
+            CaseExportFormat::FrameworkReport => {
+                export_master_framework_report_bytes(&document_case, run_id)?
+            }
             CaseExportFormat::OcsfJson => export_ocsf_finding_events_bytes(&document_case, run_id)?,
             CaseExportFormat::OscalJson => {
                 export_oscal_assessment_results_bytes(&document_case, run_id)?
@@ -4594,6 +4631,7 @@ fn not_executed_run(
         mapping_version: manifest
             .and_then(|_| control_mapping_version().ok())
             .map(str::to_owned),
+        mapping_provenance: manifest.and_then(|_| control_mapping_provenance().ok()),
         fingerprint_schema_version: manifest.map(|_| FINGERPRINT_SCHEMA_VERSION.to_owned()),
         runtime_provider: None,
         runtime_version: None,
@@ -4894,6 +4932,7 @@ fn validate_resume_manifest_identity(
     let image = manifest.image.as_ref();
     let command_sha256 = sha256_bytes(&serde_json::to_vec(&manifest.command)?);
     let mapping_version = control_mapping_version()?;
+    let mapping_provenance = control_mapping_provenance()?;
     let execution_timeout_seconds = manifest.execution_timeout_seconds();
     let execution_timeout_matches =
         engine_run.execution_timeout_seconds == Some(execution_timeout_seconds);
@@ -4910,7 +4949,8 @@ fn validate_resume_manifest_identity(
         && engine_run.command_sha256.as_deref() == Some(command_sha256.as_str())
         && (execution_timeout_matches || allowance.execution_timeout)
         && engine_run.knowledge_input.as_ref() == Some(&dated_knowledge_input(manifest))
-        && (engine_run.mapping_version.as_deref() == Some(mapping_version)
+        && ((engine_run.mapping_version.as_deref() == Some(mapping_version)
+            && engine_run.mapping_provenance.as_ref() == Some(&mapping_provenance))
             || allowance.mapping_version)
         && engine_run.fingerprint_schema_version.as_deref() == Some(FINGERPRINT_SCHEMA_VERSION);
     if !identity_matches {
@@ -6779,6 +6819,7 @@ mod tests {
             completed_at: Some(time),
             knowledge_cutoff: time,
             ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
             ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
@@ -6808,6 +6849,10 @@ mod tests {
             (
                 "canonical_json",
                 canonical_json_bytes(&case, "run-redaction", &options).unwrap(),
+            ),
+            (
+                "framework_report",
+                export_master_framework_report_bytes(&document_case, "run-redaction").unwrap(),
             ),
             (
                 "ocsf",
@@ -7900,6 +7945,7 @@ mod tests {
             completed_at: Some(now),
             knowledge_cutoff: now,
             ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
             ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
@@ -7931,6 +7977,8 @@ mod tests {
                     engine_run_id: None,
                     kind: EvidenceKind::Configuration,
                     engine_id: fingerprint.split(':').next().unwrap().into(),
+                    source_rule: None,
+                    result_pointer_sha256: None,
                     observed_at: now,
                     summary: format!("Independent evidence for {id}"),
                     artifact_id: format!("artifact-{id}"),
@@ -8517,6 +8565,7 @@ mod tests {
                 completed_at: None,
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
+                ai_system_applicability: Default::default(),
                 ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec![],
@@ -8803,6 +8852,13 @@ mod tests {
             Some(FINGERPRINT_SCHEMA_VERSION)
         );
         assert!(plan.scan_run.engine_runs[0].mapping_version.is_some());
+        assert_eq!(
+            plan.scan_run.engine_runs[0]
+                .mapping_provenance
+                .as_ref()
+                .map(|provenance| provenance.mapping_version.as_str()),
+            plan.scan_run.engine_runs[0].mapping_version.as_deref()
+        );
         assert_eq!(plan.executable[0].scope_grants.len(), 1);
         assert_eq!(
             plan.executable[0].scope_grants[0].permission,
@@ -8810,6 +8866,10 @@ mod tests {
         );
         assert!(plan.scan_run.engine_runs[0].resume_token.is_some());
         assert!(!plan.executable[0].ai_system_applicable);
+        assert_eq!(
+            plan.scan_run.ai_system_applicability,
+            AiSystemApplicabilityAnswer::Unknown
+        );
     }
 
     #[test]
@@ -8849,8 +8909,54 @@ mod tests {
         );
         assert!(plan.scan_run.ai_system_applicable);
         assert_eq!(
+            plan.scan_run.ai_system_applicability,
+            AiSystemApplicabilityAnswer::Applicable
+        );
+        assert_eq!(
             plan.scan_run.ai_generated_artifact,
             AiGeneratedArtifactAnswer::Unknown
+        );
+    }
+
+    #[test]
+    fn explicit_non_ai_journey_freezes_not_applicable_distinct_from_unanswered() {
+        let fixture = Fixture::new();
+        let case = fixture.create_with_ai_provenance(
+            Some(AssessmentIntent::SourceCode),
+            AiGeneratedArtifactAnswer::No,
+        );
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert!(!plan.scan_run.ai_system_applicable);
+        assert_eq!(
+            plan.scan_run.ai_system_applicability,
+            AiSystemApplicabilityAnswer::NotApplicable
+        );
+        assert_eq!(
+            plan.scan_run.ai_generated_artifact,
+            AiGeneratedArtifactAnswer::No
         );
     }
 
@@ -8906,6 +9012,10 @@ mod tests {
 
         let resumed = service.plan_resume(&case.id, &planned.scan_run.id).unwrap();
         assert!(resumed.executable[0].ai_system_applicable);
+        assert_eq!(
+            resumed.scan_run.ai_system_applicability,
+            AiSystemApplicabilityAnswer::Applicable
+        );
         assert_eq!(
             resumed.executable[0].ai_generated_artifact,
             AiGeneratedArtifactAnswer::Yes,
@@ -10511,6 +10621,7 @@ mod tests {
             completed_at: None,
             knowledge_cutoff: now,
             ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
             ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec!["grant-1".into()],
@@ -10540,6 +10651,7 @@ mod tests {
                 knowledge_input: None,
                 scope_contract_sha256: None,
                 mapping_version: None,
+                mapping_provenance: None,
                 fingerprint_schema_version: None,
                 runtime_provider: None,
                 runtime_version: None,
@@ -10597,6 +10709,8 @@ mod tests {
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Configuration,
                 engine_id: "cloudquery".into(),
+                source_rule: None,
+                result_pointer_sha256: None,
                 observed_at: now,
                 summary: "Observed".into(),
                 artifact_id: artifact.id.clone(),
@@ -10777,6 +10891,12 @@ mod tests {
             }),
             scope_contract_sha256: Some("d".repeat(64)),
             mapping_version: Some("2026-08-24.1".into()),
+            mapping_provenance: Some(crate::domain::ControlMappingProvenance {
+                mapping_version: "2026-08-24.1".into(),
+                reviewed_at: "2026-08-24".into(),
+                review_process: "source_coordinate_and_rationale_review_v1".into(),
+                catalog_sha256: "e".repeat(64),
+            }),
             fingerprint_schema_version: Some("v1".into()),
             runtime_provider: None,
             runtime_version: None,
@@ -10798,6 +10918,7 @@ mod tests {
                 completed_at: Some(now),
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
+                ai_system_applicability: Default::default(),
                 ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec!["grant-1".into()],
@@ -10823,6 +10944,7 @@ mod tests {
                 completed_at,
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
+                ai_system_applicability: Default::default(),
                 ai_generated_artifact: Default::default(),
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec!["grant-1".into()],
@@ -10909,6 +11031,24 @@ mod tests {
             assert_eq!(interim_preview.selected_run_finding_count, 0);
             assert_eq!(interim_preview.selected_engine_run_count, 1);
             assert_eq!(interim_preview.incomplete_engine_run_count, 1);
+            let framework_destination = fixture
+                .directory
+                .path()
+                .join(format!("framework-{run_id}.json"));
+            let framework_export = service
+                .export_schema(
+                    &case.id,
+                    run_id,
+                    CaseExportFormat::FrameworkReport,
+                    &framework_destination,
+                )
+                .unwrap();
+            assert_eq!(framework_export.format.as_deref(), Some("framework_report"));
+            let framework: Value =
+                serde_json::from_slice(&fs::read(&framework_destination).unwrap()).unwrap();
+            assert_eq!(framework["frameworks"].as_array().unwrap().len(), 3);
+            assert_eq!(framework["coverage"]["state"], "incomplete_or_unknown");
+            assert_eq!(framework["coverage"]["selected_run_checks_complete"], false);
         }
         let complete_zero_finding_preview = service
             .preview_export(
@@ -10963,7 +11103,11 @@ mod tests {
             crate::domain::FindingDiffStatus::Resolved
         );
         let reopened = service.show_case(&case.id).unwrap();
-        assert_eq!(reopened.exports.len(), 2);
+        assert_eq!(
+            reopened.exports.len(),
+            4,
+            "the two incomplete-run framework reports and two baseline exports must be persisted"
+        );
         assert_eq!(reopened.comparisons.len(), 1);
         assert!(
             service
@@ -11014,6 +11158,8 @@ mod tests {
                 engine_run_id: Some(format!("engine-{run_id}")),
                 kind: EvidenceKind::Configuration,
                 engine_id: "cloudquery".into(),
+                source_rule: None,
+                result_pointer_sha256: None,
                 observed_at: Utc::now(),
                 summary: format!("evidence for {run_id}"),
                 artifact_id: format!("artifact-{run_id}"),

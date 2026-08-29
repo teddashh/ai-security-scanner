@@ -261,6 +261,11 @@ export const plannedNotApplicableSourceKinds = (
 const exportFileTypes: Record<ExportCaseInput["format"], { suffix: string; extensions: string[]; label: string }> = {
   case_bundle: { suffix: "case.tar.gz", extensions: ["gz"], label: "ai-security-scanner case bundle" },
   json: { suffix: "json", extensions: ["json"], label: "Canonical JSON" },
+  framework_report: {
+    suffix: "frameworks.json",
+    extensions: ["json"],
+    label: "NIST, ISO, and AIDEFEND framework report",
+  },
   ocsf: { suffix: "ocsf.json", extensions: ["json"], label: "OCSF JSON" },
   oscal: { suffix: "oscal.json", extensions: ["json"], label: "OSCAL JSON" },
   html: { suffix: "html", extensions: ["html"], label: "HTML report" },

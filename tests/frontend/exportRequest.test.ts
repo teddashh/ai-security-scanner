@@ -19,6 +19,7 @@ test("native export arguments preserve absolute Windows save-dialog paths", () =
   for (const [format, destination] of [
     ["html", String.raw`C:\Users\example\Downloads\assessment-report.html`],
     ["json", String.raw`C:\Users\example\Downloads\assessment-report.json`],
+    ["framework_report", String.raw`C:\Users\example\Downloads\assessment-report.frameworks.json`],
   ] as const) {
     assert.deepEqual(buildNativeExportCaseArguments(input(format), destination), {
       input: { ...input(format), destination },
@@ -89,4 +90,5 @@ test("case-bundle destination repair always supplies the backend's compound suff
 test("the native scanner forwards the path returned by the save dialog", () => {
   const source = readFileSync(new URL("../../src/services/scanner.ts", import.meta.url), "utf8");
   assert.match(source, /buildNativeExportCaseArguments\(input, destination\)/u);
+  assert.match(source, /framework_report:[\s\S]*suffix: "frameworks\.json"/u);
 });

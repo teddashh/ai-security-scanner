@@ -7,6 +7,7 @@ import {
   isSemver,
   parseArgs,
   readJson,
+  requireString,
   runMain,
 } from "./lib.mjs";
 
@@ -100,13 +101,18 @@ function cargoLockPackageVersion(lock) {
   return packageRecord[1];
 }
 
-function validateReleaseMetadata(metadata, version, tag, releaseChannel, releaseTarget) {
-  assert(metadata.schemaVersion === 1, "release metadata schemaVersion must be 1");
+function validateReleaseMetadata(metadata, version, tag, releaseChannel, releaseTarget, publicationMode) {
+  assert(metadata.schemaVersion === 2, "release metadata schemaVersion must be 2");
   assert(metadata.product === "ai-security-scanner", "release metadata product is incorrect");
   assert(metadata.version === version, "release metadata version is incorrect");
   assert(metadata.tag === tag, "release metadata tag is incorrect");
   assert(metadata.releaseChannel === releaseChannel, "release metadata channel is incorrect");
   assert(metadata.stableTarget === releaseTarget, "release metadata stable target is incorrect");
+  assert(
+    ["commit-bound-qc", "public-github-release"].includes(publicationMode),
+    "expected publication mode is invalid",
+  );
+  assert(metadata.publicationMode === publicationMode, "release metadata publication mode is incorrect");
   assert(
     /^[0-9a-f]{40}$/u.test(metadata.sourceCommit),
     "release metadata sourceCommit must be a full lowercase Git object ID",
@@ -139,9 +145,12 @@ function validateReleaseMetadata(metadata, version, tag, releaseChannel, release
       metadata.security?.updater?.signingConfigured === true,
     "updater metadata must require generated and signed updater artifacts",
   );
+  const expectedAttestation = publicationMode === "public-github-release"
+    ? { state: "required-before-publication", provider: "GitHub artifact attestations" }
+    : { state: "not-created-for-commit-bound-qc", provider: "none" };
   assert(
-    metadata.security?.provenanceAttestation?.state === "required-before-publication",
-    "publication must require a provenance attestation",
+    JSON.stringify(metadata.security?.provenanceAttestation) === JSON.stringify(expectedAttestation),
+    "release metadata provenance-attestation state does not match its publication mode",
   );
 }
 
@@ -244,6 +253,15 @@ function validateReleaseWorkflow(workflow) {
     typeof macosBuild?.run === "string" && macosBuild.run.includes("--bundles app,dmg"),
     "macOS release build must create both the signed app updater payload and DMG installer",
   );
+  const runtimeEvidence = build.steps?.find(
+    (step) => step.name === "Generate exact managed runtime manifest, SBOM, notices, and source evidence",
+  );
+  assert(
+    typeof runtimeEvidence?.run === "string" &&
+      runtimeEvidence.run.includes('[[ "${RELEASE_PLATFORM}" == "windows-x86_64" ]]') &&
+      runtimeEvidence.run.includes("--expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a"),
+    "Windows release build must verify the exact reviewed v0.1.8 managed-runtime identity",
+  );
   const debianSmoke = build.steps?.find(
     (step) => step.name === "Install the Debian package and prove the desktop starts",
   );
@@ -261,6 +279,7 @@ function validateReleaseWorkflow(workflow) {
   );
   assert(
     validate.outputs?.release_channel === "${{ steps.identity.outputs.release_channel }}" &&
+      validate.outputs?.publication_mode === "${{ steps.identity.outputs.publication_mode }}" &&
       validate.outputs?.prerelease === "${{ steps.identity.outputs.prerelease }}" &&
       validate.outputs?.make_latest === "${{ steps.identity.outputs.make_latest }}",
     "release workflow must export its source-declared publication channel",
@@ -277,8 +296,12 @@ function validateReleaseWorkflow(workflow) {
     'case "${release_channel}" in',
     "isSemver(process.argv[1])",
     "release_channel=%s",
+    "publication_mode=%s",
+    'publication_mode="commit-bound-qc"',
+    'publication_mode="public-github-release"',
     "prerelease=%s",
     "make_latest=%s",
+    "PUBLIC_RELEASE_BLOCKED_AUTHENTICODE",
   ]) {
     assert(identity.run.includes(required), `release identity resolver is missing: ${required}`);
   }
@@ -290,7 +313,7 @@ function validateReleaseWorkflow(workflow) {
     "platform qualification must consume identity and completed build artifacts in a separate job",
   );
   assert(qualification.permissions?.contents === "read", "platform qualification must remain read-only");
-  assert(Number.isInteger(qualification["timeout-minutes"]) && qualification["timeout-minutes"] >= 180, "platform qualification timeout cannot truncate managed runtime lifecycle proof");
+  assert(Number.isInteger(qualification["timeout-minutes"]) && qualification["timeout-minutes"] >= 360, "platform qualification timeout cannot truncate the N-1 runtime and registered-WSL migration proof");
   assert(
     JSON.stringify(qualification.strategy?.matrix?.include) === JSON.stringify([
       { platform: "linux-x86_64", runner: "ubuntu-24.04", qualification_id: "linux-x86_64-deb", installer_type: "deb" },
@@ -313,9 +336,23 @@ function validateReleaseWorkflow(workflow) {
     "--installer-type",
     "needs.validate.outputs.release_channel",
     "platform-qualification-${{ matrix.qualification_id }}.json",
+    "qualify-windows-nsis-upgrade.ps1",
+    "windows-nsis-upgrade-evidence.mjs create",
+    "windows-nsis-upgrade-qualification.json",
+    "qualify-windows-nsis-ghost-recovery.ps1",
+    "windows-nsis-ghost-recovery-evidence.mjs create",
+    "windows-nsis-ghost-recovery-qualification.json",
   ]) {
     assert(qualificationSource.includes(required), `platform qualification job is missing: ${required}`);
   }
+
+  const supplyChainSource = JSON.stringify(workflow.jobs?.["supply-chain"]);
+  assert(
+    supplyChainSource.includes("generate-notices.mjs") &&
+      supplyChainSource.includes("--publication-mode") &&
+      supplyChainSource.includes("needs.validate.outputs.publication_mode"),
+    "release metadata generation must bind the explicit publication mode",
+  );
 
   const assemble = workflow.jobs?.assemble;
   assert(assemble, "release workflow has no read-only assemble job");
@@ -329,10 +366,24 @@ function validateReleaseWorkflow(workflow) {
     "assemble job must not receive write permissions",
   );
   const assembleSource = JSON.stringify(assemble);
+  assert(
+    assembleSource.includes("--publication-mode") &&
+      assembleSource.includes("needs.validate.outputs.publication_mode"),
+    "assemble and finalized verification must bind the explicit publication mode",
+  );
   for (const platform of ["linux-x86_64-deb", "macos-universal-dmg", "windows-x86_64-msi", "windows-x86_64-nsis"]) {
     assert(
       assembleSource.includes(`platform-qualification-${platform}`),
       `assemble job does not download ${platform} qualification evidence`,
+    );
+  }
+  for (const migrationEvidence of [
+    "windows-nsis-upgrade-qualification",
+    "windows-nsis-ghost-recovery-qualification",
+  ]) {
+    assert(
+      assembleSource.includes(migrationEvidence),
+      `assemble job does not download and revalidate ${migrationEvidence}`,
     );
   }
 
@@ -405,6 +456,11 @@ function validateReleaseWorkflow(workflow) {
     "platform-qualification-macos-universal-dmg",
     "platform-qualification-windows-x86_64-msi",
     "platform-qualification-windows-x86_64-nsis",
+    "windows-nsis-upgrade-qualification",
+    "windows-nsis-ghost-recovery-qualification",
+    "commit-bound-qc",
+    "public-github-release",
+    "--publication-mode",
   ]) {
     assert(serialized.includes(required), `release workflow is missing required element: ${required}`);
   }
@@ -415,6 +471,12 @@ function validatePlatformQualificationSources(sources) {
   const macos = sources.get("qualify-macos.sh");
   const windows = sources.get("qualify-windows.ps1");
   const evidence = sources.get("platform-qualification.mjs");
+  const nsisUpgrade = sources.get("qualify-windows-nsis-upgrade.ps1");
+  const nsisUpgradeEvidence = sources.get("windows-nsis-upgrade-evidence.mjs");
+  const nsisGhost = sources.get("qualify-windows-nsis-ghost-recovery.ps1");
+  const nsisGhostEvidence = sources.get("windows-nsis-ghost-recovery-evidence.mjs");
+  const finalizer = sources.get("finalize-release.mjs");
+  const selfTest = sources.get("self-test.mjs");
   for (const [name, source] of sources) {
     assert(typeof source === "string" && source.length > 0, `${name} is empty`);
     assert(!/(?:docker|podman)\s+(?:run|pull)\b/iu.test(source), `${name} bypasses the fixed qualification CLI with an arbitrary container command`);
@@ -476,6 +538,8 @@ function validatePlatformQualificationSources(sources) {
   for (const required of [
     "hdiutil attach",
     "Installed macOS managed-runtime manifest is malformed or lacks its released AppleHV target.",
+    'manifest.schema_version !== "3"',
+    'manifest.management_contract_revision !== "2026-08-29.1"',
     '"${cli}" --help',
     "Installed macOS desktop exited before the 12-second observation window.",
     "Do not invoke any managed-runtime lifecycle command",
@@ -542,6 +606,156 @@ function validatePlatformQualificationSources(sources) {
     "if (Test-ExactEntryExists $dataDirectory)",
     "New-Item -ItemType Directory -Path $dataDirectory -Force",
   ]) assert(windows.includes(required), `Windows qualification is missing: ${required}`);
+  for (const required of [
+    "ai-security-scanner_0.1.7_x64-setup.exe",
+    "4d2057ca4c008b46dc0195a792075e4b4b377c1909a7795b29efc30f9ae48b1a",
+    "podman-machine-5.8.2-$providerNamespace",
+    'Invoke-ExactProcess $candidateInstallerPath @("/S", "/D=$installDirectory")',
+    "Candidate same-version silent NSIS reinstall",
+    'unattendedMode = "silent"',
+    "transitionReceiptSurvivedSameVersionReinstall",
+    'transitionReceipt = "uninstalled-$priorVersion"',
+    '"export", "identity", "show"',
+    'continuity_event -cne "legacy_key_adopted"',
+    "integrity-signing-key",
+    "integrity-signing-key.identity-anchor.json",
+    "integrity-signing-key.rotation-intent.json",
+    "Assert-OwnerOnlyFullControlFile",
+    "anchorIdentitySha256",
+    "identityDocumentSha256",
+    "rotationIntentAbsent = $true",
+    "FILE_FLAG_OPEN_REPARSE_POINT",
+    "Open-NoFollowSingleLinkFile",
+    "Get-NoFollowFileSha256Proof",
+    "ExpectedExecutableProof",
+    "HashData($executionGuard)",
+    "executable is not the exact previously verified installer",
+    "-ExpectedExecutableProof $priorInstallerProof",
+    "-ExpectedExecutableProof $candidateInstallerItem",
+    "[NsisUpgradeQualificationNativeMethods]::CreateFileW",
+    "registeredWslStateExercised = $false",
+  ]) assert(nsisUpgrade.includes(required), `normal Windows N-1 upgrade qualification is missing: ${required}`);
+  for (const required of [
+    "windows_nsis_n_minus_one_upgrade_and_data_preservation",
+    "managedRuntimeFilesystemSentinel",
+    "normal N-1 upgrade did not exercise /S",
+    "transition receipt survival across same-version reinstall",
+    "legacy_key_adopted",
+    "identityDocumentCompactSha256",
+    "anchorIdentityDocumentSha256",
+    "anchorMatchesIdentityDocument",
+    "rotationIntentAbsent",
+    "validateWindowsNsisUpgradeEvidenceFile",
+  ]) assert(nsisUpgradeEvidence.includes(required), `normal Windows N-1 evidence contract is missing: ${required}`);
+  for (const required of [
+    '"runtime", "managed", "install"',
+    '"runtime", "managed", "start"',
+    '"runtime", "managed", "stop", "--force"',
+    "podman-$oldMachineName",
+    "Remove-ExactTree $oldVersionDirectory",
+    "recovered-ghost-v0.1.7",
+    "wsl_distribution_requires_manual_action",
+    "workspace-recovery.tar",
+    "FILE_FLAG_OPEN_REPARSE_POINT",
+    "Open-NoFollowSingleLinkFile",
+    "Get-NoFollowFileSha256Proof",
+    "ExpectedExecutableProof",
+    "HashData($executionGuard)",
+    "executable is not the exact previously verified installer",
+    "-ExpectedExecutableProof $priorInstallerProof",
+    "-ExpectedExecutableProof $candidateInstaller",
+    "[GhostQualificationNativeMethods]::CreateFileW",
+    "ai-security-scanner.managed-wsl-recovery-intent/v2",
+    "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
+    '$candidateRuntimeEvidence.schema_version -cne "3"',
+    '$candidateRuntimeEvidence.management_contract_revision -cne "2026-08-29.1"',
+    "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1",
+    "bounded_n_minus_one_ghost_migration",
+    "intentProofValid = $true",
+    "ghost-migration-consumed-$oldMachineName.json",
+    "InstallTransitionPresent",
+    "Automatic recovery did not consume the exact HKCU InstallTransition value.",
+    "Assert-OwnerOnlyFullControlFile $consumedProofPath",
+    "proofRetainedAfterRuntimePurge = $true",
+    "proofRetainedUntilExplicitPrivateDataCleanup = $true",
+    "Candidate same-version silent reinstall before ghost recovery",
+    "transitionReceiptSurvivedSameVersionReinstall = $true",
+    "backup.json",
+    "import.json",
+    '"export", "identity", "show"',
+    "integrity-signing-key.identity-anchor.json",
+    "integrity-signing-key.rotation-intent.json",
+    "Assert-OwnerOnlyFullControlFile",
+    "anchorIdentitySha256",
+    "identityDocumentSha256",
+    "rotationIntentAbsent = $true",
+    'registeredWslStateExercised = $true',
+  ]) assert(nsisGhost.includes(required), `registered-WSL ghost qualification is missing: ${required}`);
+  assert(
+    (nsisUpgrade.match(/-ExpectedExecutableProof/gu) ?? []).length === 3,
+    "normal Windows N-1 qualification must bind all three installer launches to exact handle proofs",
+  );
+  assert(
+    (nsisGhost.match(/-ExpectedExecutableProof/gu) ?? []).length === 3,
+    "registered-WSL ghost qualification must bind all three installer launches to exact handle proofs",
+  );
+  for (const required of [
+    "windows_nsis_real_registered_wsl_n_minus_one_ghost_recovery",
+    "registeredWslStateExercised",
+    "noManualActionFallback",
+    "intentProofValid",
+    "intentSourceProviderManifestSha256",
+    "receiptConsumption",
+    "registryValueAbsent",
+    "proofPathExact",
+    "proofProtected",
+    "proofRetainedAfterRuntimePurge",
+    "proofRetainedUntilExplicitPrivateDataCleanup",
+    "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1",
+    "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
+    'runtime.schema_version === "3"',
+    'runtime.management_contract_revision === "2026-08-29.1"',
+    "transitionReceiptSurvivedSameVersionReinstall",
+    "legacy_key_adopted",
+    "identityDocumentCompactSha256",
+    "anchorIdentityDocumentSha256",
+    "anchorMatchesIdentityDocument",
+    "rotationIntentAbsent",
+    "validateWindowsNsisGhostRecoveryEvidenceFile",
+  ]) assert(nsisGhostEvidence.includes(required), `registered-WSL ghost evidence contract is missing: ${required}`);
+  for (const required of [
+    "validateWindowsNsisUpgradeEvidenceFile",
+    "validateWindowsNsisGhostRecoveryEvidenceFile",
+    "windows-nsis-upgrade-qualification.json",
+    "windows-nsis-ghost-recovery-qualification.json",
+    "two separate v0.1.7 migration qualifications",
+    'manifest.schema_version === "3"',
+    'manifest.management_contract_revision === "2026-08-29.1"',
+    "These files are a commit-bound GitHub Actions QC artifact, not a public GitHub Release.",
+    "This workflow artifact has no public",
+    "These desktop installers are published as a GitHub Release.",
+    "public GitHub artifact attestation before installing.",
+    "release metadata publication mode mismatch",
+  ]) assert(finalizer.includes(required), `release finalizer is missing Windows migration contract: ${required}`);
+  for (const required of [
+    "createWindowsNsisMigrationQualificationFixtures",
+    "missing normal NSIS upgrade qualification",
+    "missing registered-WSL ghost qualification",
+    "upgrade evidence without legacy identity adoption",
+    "upgrade evidence with mismatched signing identity anchor",
+    "ghost evidence without a verified v2 recovery intent",
+    "ghost evidence with a lost same-version transition receipt",
+    "ghost evidence with an unconsumed registry receipt",
+    "ghost evidence with a mutated consumed proof",
+    "ghost evidence with an incomplete consumed proof",
+    "windows-nsis-upgrade-qualification.json",
+    "windows-nsis-ghost-recovery-qualification.json",
+    'schema_version: "3"',
+    'management_contract_revision: "2026-08-29.1"',
+    "release metadata with a mismatched publication mode",
+    "commit-bound GitHub Actions QC artifact, not a public GitHub Release",
+    "public GitHub artifact attestation before installing",
+  ]) assert(selfTest.includes(required), `release self-test is missing Windows migration coverage: ${required}`);
   assertOrderedTokens(linux, [
     "Linux qualification did not begin with a fresh exact short XDG runtime directory.",
     "run_managed initial-status status",
@@ -655,6 +869,17 @@ function validatePlatformQualificationSources(sources) {
 }
 
 function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
+  assert(
+    lock?.schema_version === "1" &&
+      lock?.updated_at === "2026-08-29T00:00:00Z" &&
+      lock?.management_contract_revision === "2026-08-29.1",
+    "managed runtime lock must identify the reviewed dated management contract",
+  );
+  const contractDate = lock.management_contract_revision.split(".")[0];
+  assert(
+    new Date(`${contractDate}T00:00:00Z`).toISOString().slice(0, 10) === contractDate,
+    "managed runtime management contract revision has an invalid calendar date",
+  );
   const qemu = lock?.linux_qemu;
   const virtiofsd = lock?.linux_virtiofsd;
   assert(
@@ -707,6 +932,9 @@ function validateManagedRuntimeBuildContract(lock, dockerfile, vendor) {
     assert(dockerfile.includes(required), `Linux managed QEMU build is missing: ${required}`);
   }
   for (const required of [
+    "requireManagementContractRevision(lock.management_contract_revision)",
+    "schema_version: '3'",
+    "management_contract_revision: requireManagementContractRevision(",
     "'bin/virtiofsd'",
     "'--platform'",
     "'linux/amd64'",
@@ -765,7 +993,7 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     );
   }
   const directWslUnregister = 'OsString::from("--unregister")';
-  const managedRuntimeProduction = managedRuntime.split("\n#[cfg(test)]")[0];
+  const managedRuntimeProduction = managedRuntime.split("\n#[cfg(test)]\nmod tests {")[0];
   const boundedRecoverySection = (start, end, label) => {
     const startIndex = managedRuntimeProduction.indexOf(start);
     const endIndex = managedRuntimeProduction.indexOf(end, startIndex + start.length);
@@ -885,6 +1113,9 @@ async function main() {
   const cargoLock = await readFile(path.join(PROJECT_ROOT, "Cargo.lock"), "utf8");
   const repositoryReadme = await readFile(path.join(PROJECT_ROOT, "README.md"), "utf8");
   const releaseGuide = await readFile(path.join(PROJECT_ROOT, "docs/release/README.md"), "utf8");
+  const releaseMetadataSchema = await readJson(
+    path.join(PROJECT_ROOT, "docs/release/release-metadata.schema.json"),
+  );
   const catalog = await readJson(path.join(PROJECT_ROOT, "engines/catalog.json"));
   const version = packageJson.version;
   const tag = typeof args.get("tag") === "string" ? args.get("tag") : `v${version}`;
@@ -893,6 +1124,9 @@ async function main() {
     "utf8",
   );
   const managedRuntimeLock = await readJson(path.join(PROJECT_ROOT, "runtime/upstreams.lock.json"));
+  const managedRuntimeSchema = await readJson(
+    path.join(PROJECT_ROOT, "runtime/managed-runtime.schema.json"),
+  );
   const managedEgressGatewayManifest = await readJson(
     path.join(PROJECT_ROOT, "runtime/managed-egress-gateway.json"),
   );
@@ -907,6 +1141,14 @@ async function main() {
   const managedRuntimeSource = await readFile(
     path.join(PROJECT_ROOT, "src-tauri/src/managed_runtime.rs"),
     "utf8",
+  );
+  assert(
+    releaseMetadataSchema.properties?.schemaVersion?.const === 2 &&
+      JSON.stringify(releaseMetadataSchema.properties?.publicationMode?.enum) ===
+        JSON.stringify(["commit-bound-qc", "public-github-release"]) &&
+      Array.isArray(releaseMetadataSchema.allOf) &&
+      releaseMetadataSchema.allOf.length === 1,
+    "release metadata schema does not bind QC/public publication and attestation modes",
   );
   const containerRuntimeSource = await readFile(
     path.join(PROJECT_ROOT, "src-tauri/src/container_runtime.rs"),
@@ -1074,11 +1316,46 @@ async function main() {
     "Rust desktop plugin dependencies must be exactly pinned",
   );
 
+  execFileSync(
+    process.execPath,
+    [path.join(PROJECT_ROOT, "scripts", "release", "validate-windows-nsis-template.mjs")],
+    { cwd: PROJECT_ROOT, stdio: "inherit" },
+  );
+
   const workflows = await validateWorkflowSyntaxAndPins();
   validateReleaseWorkflow(workflows.get("release.yml"));
   assert(
     workflows.get("ci.yml")?.jobs?.["windows-managed-runtime"]?.["runs-on"] === "windows-2025",
     "Windows managed-runtime native tests must match the fresh release qualification runner",
+  );
+  const windowsCiSource = JSON.stringify(workflows.get("ci.yml")?.jobs?.["windows-managed-runtime"]);
+  for (const required of [
+    "Vendor the release-equivalent Windows managed runtime",
+    "runtime/vendor-managed-runtime.mjs",
+    "--target x86_64-pc-windows-msvc",
+    "--output runtime/staged/managed-runtime",
+    "Verify the staged Windows managed-runtime manifest and files",
+    "scripts/release/generate-runtime-evidence.mjs",
+    "--manifest runtime/staged/managed-runtime/manifest.json",
+    "--expected-manifest-sha256 a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
+  ]) {
+    assert(windowsCiSource.includes(required), `Windows release-equivalent CI is missing: ${required}`);
+  }
+  const windowsCiSteps = workflows.get("ci.yml")?.jobs?.["windows-managed-runtime"]?.steps ?? [];
+  const windowsVendorIndex = windowsCiSteps.findIndex(
+    (step) => step.name === "Vendor the release-equivalent Windows managed runtime",
+  );
+  const windowsManifestVerificationIndex = windowsCiSteps.findIndex(
+    (step) => step.name === "Verify the staged Windows managed-runtime manifest and files",
+  );
+  const windowsNsisBuildIndex = windowsCiSteps.findIndex(
+    (step) => step.name === "Compile the reviewed custom NSIS installer",
+  );
+  assert(
+    windowsVendorIndex >= 0 &&
+      windowsVendorIndex < windowsManifestVerificationIndex &&
+      windowsManifestVerificationIndex < windowsNsisBuildIndex,
+    "Windows CI must vendor and verify the release managed runtime before compiling NSIS",
   );
   assert(
     !JSON.stringify(workflows.get("release.yml")).includes("qemu-utils"),
@@ -1089,6 +1366,12 @@ async function main() {
     managedRuntimeDockerfile,
     managedRuntimeVendor,
   );
+  assert(
+    managedRuntimeSchema?.properties?.schema_version?.const === "3" &&
+      managedRuntimeSchema?.required?.includes("management_contract_revision") &&
+      typeof managedRuntimeSchema?.properties?.management_contract_revision?.pattern === "string",
+    "managed runtime schema must require the schema-3 management contract revision",
+  );
   validateManagedRuntimeExecutionContract(managedRuntimeSource, containerRuntimeSource);
   const qualificationSources = new Map();
   for (const name of [
@@ -1096,6 +1379,12 @@ async function main() {
     "qualify-macos.sh",
     "qualify-windows.ps1",
     "platform-qualification.mjs",
+    "qualify-windows-nsis-upgrade.ps1",
+    "windows-nsis-upgrade-evidence.mjs",
+    "qualify-windows-nsis-ghost-recovery.ps1",
+    "windows-nsis-ghost-recovery-evidence.mjs",
+    "finalize-release.mjs",
+    "self-test.mjs",
   ]) {
     qualificationSources.set(
       name,
@@ -1164,8 +1453,13 @@ async function main() {
   });
 
   if (typeof args.get("metadata") === "string") {
+    const publicationMode = requireString(args, "publication-mode");
+    assert(
+      ["commit-bound-qc", "public-github-release"].includes(publicationMode),
+      "publication mode must be commit-bound-qc or public-github-release",
+    );
     const metadata = await readJson(path.resolve(PROJECT_ROOT, args.get("metadata")));
-    validateReleaseMetadata(metadata, version, tag, releaseChannel, releaseTarget);
+    validateReleaseMetadata(metadata, version, tag, releaseChannel, releaseTarget, publicationMode);
   }
 
   process.stdout.write(

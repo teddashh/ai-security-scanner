@@ -2,9 +2,17 @@ use crate::domain::{
     AssessmentCase, CaseExport, DataSource, Finding, RawArtifact, ScanRun, ScopeGrant, new_id,
 };
 use crate::error::{AppError, AppResult};
+use crate::export_identity::{
+    LOCAL_SIGNING_IDENTITY_SCHEMA_VERSION, LocalSigningIdentityDocument,
+    load_or_create_local_signing_identity, verify_identity_document,
+};
+use crate::exporters::framework_report::MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION;
 use crate::exporters::ocsf::OCSF_SCHEMA_VERSION;
 use crate::exporters::oscal::OSCAL_VERSION;
-use crate::exporters::{export_ocsf_finding_events_bytes, export_oscal_assessment_results_bytes};
+use crate::exporters::{
+    export_master_framework_report_bytes, export_ocsf_finding_events_bytes,
+    export_oscal_assessment_results_bytes,
+};
 use crate::external_scope::CanonicalTarget;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -20,17 +28,18 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use tar::{Builder, EntryType, Header};
-use zeroize::Zeroize;
 
 pub const BUNDLE_SCHEMA_VERSION: &str = "1";
 pub const MANIFEST_PATH: &str = "manifest.json";
 pub const SIGNATURE_PATH: &str = "signature.json";
+pub const SIGNING_IDENTITY_PATH: &str = "integrity/local-signing-identity.json";
 pub const INTEGRITY_ONLY_NOTICE: &str = "The Ed25519 signature establishes integrity of the signed manifest only. It does not prove scanner correctness, completeness, legal authorization, authorship, identity, audit status, or forensic validity.";
 pub const PRELIMINARY_EVIDENCE_NOTICE: &str = "This package contains preliminary scanner evidence, not an audit, certification, attestation, compliance determination, or forensic conclusion. Related control references are navigation coordinates only.";
 
 const IO_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_RESERVED_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_SIGNING_IDENTITY_DOCUMENT_BYTES: u64 = 64 * 1024;
 const MAX_UNCOMPRESSED_BUNDLE_BYTES: u64 = 50 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_PATH_BYTES: usize = 1_024;
 
@@ -227,10 +236,18 @@ pub fn create_case_bundle_at(
         )));
     }
 
-    let signing_key = load_or_create_signing_key(signing_key_path.as_ref())?;
+    let identity = load_or_create_local_signing_identity(signing_key_path.as_ref())?;
+    let expected_signer_key_id = identity.document.key_id.clone();
+    let signing_identity = identity.document;
+    let signing_key = identity.signing_key;
     let verifying_key = signing_key.verifying_key();
     let public_key_base64 = BASE64.encode(verifying_key.as_bytes());
     let key_id = sha256_bytes(verifying_key.as_bytes());
+    if key_id != expected_signer_key_id {
+        return Err(AppError::NotAuthorized(
+            "local export-integrity key changed after its public identity was verified".into(),
+        ));
+    }
 
     let redacted_case = case_for_export(case, options.redaction);
     let artifact_root = artifact_root.as_ref();
@@ -240,7 +257,7 @@ pub fn create_case_bundle_at(
         options.redaction,
         options.include_raw_artifacts,
     )?;
-    let documents = build_documents(
+    let mut documents = build_documents(
         &redacted_case,
         run,
         run_id,
@@ -248,6 +265,12 @@ pub fn create_case_bundle_at(
         options.redaction,
         options.include_raw_artifacts,
         created_at,
+    )?;
+    insert_json(
+        &mut documents,
+        SIGNING_IDENTITY_PATH,
+        &signing_identity,
+        false,
     )?;
 
     let temp_path = parent.join(format!(".ai-security-scanner-{}.case.tmp", new_id()));
@@ -369,6 +392,7 @@ pub fn verify_case_bundle_against(
     let mut observed = BTreeMap::<String, ObservedEntry>::new();
     let mut manifest_bytes = None;
     let mut signature_bytes = None;
+    let mut signing_identity_bytes = None;
     let mut entry_count = 0_usize;
     let mut total_bytes = 0_u64;
 
@@ -420,6 +444,21 @@ pub fn verify_case_bundle_against(
             } else {
                 signature_bytes = Some(bytes);
             }
+        } else if archive_path == SIGNING_IDENTITY_PATH {
+            if size > MAX_SIGNING_IDENTITY_DOCUMENT_BYTES {
+                return Err(AppError::InvalidRequest(
+                    "bundle signing identity document is too large".into(),
+                ));
+            }
+            let bytes = read_exact_entry(&mut entry, size)?;
+            observed.insert(
+                archive_path,
+                ObservedEntry {
+                    sha256: sha256_bytes(&bytes),
+                    byte_length: bytes.len() as u64,
+                },
+            );
+            signing_identity_bytes = Some(bytes);
         } else {
             let (sha256, byte_length) = sha256_reader(&mut entry)?;
             if byte_length != size {
@@ -451,6 +490,7 @@ pub fn verify_case_bundle_against(
 
     validate_manifest(&manifest, &observed)?;
     verify_signature(&manifest_bytes, &manifest, &envelope)?;
+    verify_embedded_signing_identity(&manifest, &envelope, signing_identity_bytes.as_deref())?;
 
     if let Some(expected_public_key) = expected_public_key_base64
         && expected_public_key != envelope.public_key_base64
@@ -513,6 +553,14 @@ fn build_archive(
     let raw_artifacts_included = artifact_sources.len();
     let mut schemas = BTreeMap::new();
     schemas.insert("bundle".into(), BUNDLE_SCHEMA_VERSION.into());
+    schemas.insert(
+        "master_framework_report".into(),
+        MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION.into(),
+    );
+    schemas.insert(
+        "local_signing_identity".into(),
+        LOCAL_SIGNING_IDENTITY_SCHEMA_VERSION.into(),
+    );
     schemas.insert("ocsf".into(), OCSF_SCHEMA_VERSION.into());
     schemas.insert("oscal".into(), OSCAL_VERSION.into());
     let mut notices = vec![
@@ -748,6 +796,14 @@ fn build_documents(
         &json!({ "raw_artifacts": artifact_records }),
         true,
     )?;
+    documents.insert(
+        "exports/master-framework-report.json".into(),
+        PreparedDocument {
+            media_type: "application/json".into(),
+            bytes: export_master_framework_report_bytes(case, run_id)?,
+            contains_sensitive_data: true,
+        },
+    );
     documents.insert(
         "exports/ocsf-detection-findings.json".into(),
         PreparedDocument {
@@ -1704,64 +1760,51 @@ fn verify_signature(
         .map_err(|_| AppError::InvalidRequest("bundle manifest signature is invalid".into()))
 }
 
-fn load_or_create_signing_key(path: &Path) -> AppResult<SigningKey> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
+fn verify_embedded_signing_identity(
+    manifest: &BundleManifest,
+    envelope: &SignatureEnvelope,
+    identity_bytes: Option<&[u8]>,
+) -> AppResult<()> {
+    let declared_version = manifest
+        .schemas
+        .get("local_signing_identity")
+        .map(String::as_str);
+    match (declared_version, identity_bytes) {
+        (None, None) => return Ok(()),
+        (None, Some(_)) => {
+            return Err(AppError::InvalidRequest(
+                "bundle contains signing identity metadata without declaring its schema".into(),
+            ));
+        }
+        (Some(_), None) => {
+            return Err(AppError::InvalidRequest(format!(
+                "bundle declares a signing identity but is missing {SIGNING_IDENTITY_PATH}"
+            )));
+        }
+        (Some(version), Some(_)) if version != LOCAL_SIGNING_IDENTITY_SCHEMA_VERSION => {
+            return Err(AppError::InvalidRequest(format!(
+                "unsupported bundle signing identity schema version: {version}"
+            )));
+        }
+        (Some(_), Some(_)) => {}
+    }
+    let identity: LocalSigningIdentityDocument = serde_json::from_slice(
+        identity_bytes.expect("matched signing identity bytes"),
+    )
+    .map_err(|error| {
+        AppError::InvalidRequest(format!(
+            "bundle signing identity document is invalid JSON: {error}"
+        ))
+    })?;
+    verify_identity_document(&identity, 1)?;
+    if identity.key_id != envelope.key_id
+        || identity.public_key_base64 != envelope.public_key_base64
     {
-        fs::create_dir_all(parent)?;
+        return Err(AppError::InvalidRequest(
+            "bundle signing identity does not match the manifest signer".into(),
+        ));
     }
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(AppError::InvalidRequest(format!(
-                    "signing key must be a regular file and not a symlink: {}",
-                    path.display()
-                )));
-            }
-            validate_private_key_permissions(&metadata, path)?;
-            let mut bytes = Vec::new();
-            File::open(path)?.read_to_end(&mut bytes)?;
-            if bytes.len() != 32 {
-                bytes.zeroize();
-                return Err(AppError::InvalidRequest(format!(
-                    "local Ed25519 key must contain exactly 32 bytes: {}",
-                    path.display()
-                )));
-            }
-            let mut secret = [0_u8; 32];
-            secret.copy_from_slice(&bytes);
-            bytes.zeroize();
-            let key = SigningKey::from_bytes(&secret);
-            secret.zeroize();
-            Ok(key)
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let mut secret = [0_u8; 32];
-            getrandom::fill(&mut secret).map_err(|error| {
-                AppError::Internal(format!("could not generate local signing key: {error}"))
-            })?;
-            let key = SigningKey::from_bytes(&secret);
-            let mut file = match create_private_new_file(path) {
-                Ok(file) => file,
-                Err(AppError::Internal(message))
-                    if message.contains("File exists") || message.contains("exists") =>
-                {
-                    secret.zeroize();
-                    return load_or_create_signing_key(path);
-                }
-                Err(error) => {
-                    secret.zeroize();
-                    return Err(error);
-                }
-            };
-            file.write_all(&secret)?;
-            file.sync_all()?;
-            secret.zeroize();
-            Ok(key)
-        }
-        Err(error) => Err(error.into()),
-    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1782,23 +1825,6 @@ fn create_private_new_file(path: &Path) -> AppResult<File> {
         .create_new(true)
         .open(path)
         .map_err(Into::into)
-}
-
-#[cfg(unix)]
-fn validate_private_key_permissions(metadata: &fs::Metadata, path: &Path) -> AppResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(AppError::InvalidRequest(format!(
-            "local signing key permissions must not allow group or other access: {}",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_private_key_permissions(_metadata: &fs::Metadata, _path: &Path) -> AppResult<()> {
-    Ok(())
 }
 
 fn normalized_sha256(value: &str) -> AppResult<String> {
@@ -1929,6 +1955,7 @@ mod tests {
             completed_at: Some(time),
             knowledge_cutoff: time,
             ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
             ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
@@ -1958,6 +1985,7 @@ mod tests {
                 knowledge_input: None,
                 scope_contract_sha256: None,
                 mapping_version: None,
+                mapping_provenance: None,
                 fingerprint_schema_version: None,
                 runtime_provider: None,
                 runtime_version: None,
@@ -2052,6 +2080,8 @@ mod tests {
                     engine_run_id: Some(artifact.engine_run_id.clone()),
                     kind: EvidenceKind::Observation,
                     engine_id: "engine-1".into(),
+                    source_rule: None,
+                    result_pointer_sha256: None,
                     observed_at: time,
                     summary: "Independent fixture evidence".into(),
                     artifact_id: artifact.id.clone(),
@@ -2160,7 +2190,7 @@ mod tests {
             &artifact_root,
             &second,
             &key,
-            options,
+            options.clone(),
             created_at,
         )
         .unwrap();
@@ -2181,7 +2211,61 @@ mod tests {
                 .iter()
                 .any(|entry| entry.path.starts_with("artifacts/sha256/"))
         );
+        assert!(verified.manifest.entries.iter().any(|entry| {
+            entry.path == "exports/master-framework-report.json"
+                && entry.media_type == "application/json"
+        }));
+        assert_eq!(
+            verified
+                .manifest
+                .schemas
+                .get("master_framework_report")
+                .map(String::as_str),
+            Some(MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION)
+        );
+        let framework_report: Value = serde_json::from_slice(&archive_entry(
+            &first,
+            "exports/master-framework-report.json",
+        ))
+        .unwrap();
+        assert_eq!(
+            framework_report["export_kind"],
+            "master_framework_relationship_report"
+        );
+        assert_eq!(framework_report["frameworks"].as_array().unwrap().len(), 3);
+        let signing_identity: LocalSigningIdentityDocument =
+            serde_json::from_slice(&archive_entry(&first, SIGNING_IDENTITY_PATH)).unwrap();
+        verify_identity_document(&signing_identity, 1).unwrap();
+        assert_eq!(signing_identity.key_id, verified.signer_key_id);
+        assert_eq!(
+            signing_identity.public_key_base64,
+            verified.public_key_base64
+        );
+        assert_eq!(
+            verified
+                .manifest
+                .schemas
+                .get("local_signing_identity")
+                .map(String::as_str),
+            Some(LOCAL_SIGNING_IDENTITY_SCHEMA_VERSION)
+        );
+        assert!(crate::export_identity::signing_identity_document_path(&key).is_file());
         assert_eq!(verified.integrity_only_notice, INTEGRITY_ONLY_NOTICE);
+
+        fs::remove_file(&key).unwrap();
+        let missing_key_output = temp.path().join("missing-key.case.tar.gz");
+        let error = create_case_bundle_at(
+            &case,
+            "run-1",
+            &artifact_root,
+            &missing_key_output,
+            &key,
+            options,
+            created_at,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(&signing_identity.key_id));
+        assert!(!missing_key_output.exists());
     }
 
     #[test]
@@ -2212,6 +2296,8 @@ mod tests {
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Observation,
                 engine_id: "engine-1".into(),
+                source_rule: None,
+                result_pointer_sha256: None,
                 observed_at: artifact.created_at,
                 summary: "Observed".into(),
                 artifact_id: artifact.id.clone(),
@@ -2476,6 +2562,8 @@ mod tests {
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Observation,
                 engine_id: "engine-1".into(),
+                source_rule: None,
+                result_pointer_sha256: None,
                 observed_at: time,
                 summary: SENTINEL.into(),
                 artifact_id: "artifact-1".into(),

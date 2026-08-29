@@ -43,7 +43,7 @@
 
 <!-- Release line: v0.1.8. -->
 
-> **專案狀態：**`v0.1.8` 是 Windows 優先公開測試版。現在能自動完成舊版本留下、且可確認屬於本產品的設定，不再一開始就把你丟到 Windows Terminal；處理進度也會直接顯示在畫面上。
+> **專案狀態：**`v0.1.8` 仍在進行 Windows 實機驗證，目前還不是可安裝候選。這一版正在處理 `v0.1.7` 留下、且能確認屬於本產品的工作區，同時保留既有本機資料，讓設定能自動完成，不再一開始就把你丟到 Windows Terminal。從 `main` 執行的預檢只會產生綁定 commit 的 QC artifact；在 Windows Authenticode 簽署與驗證完成前，公開 tag 發布會維持封鎖。
 
 多數人先看上面的產品流程就夠了。如果你正在評估部署、權限、隔離方式、工具整合或發布證據，可以直接查這些文件：
 
@@ -113,13 +113,13 @@
 
 安裝版桌面程式會在第一次啟動時自動準備專用掃描工具，完成前不會先把你丟進掃描工作區。程式會先驗證隨附執行環境並檢查這台電腦，確認後才下載以校驗碼鎖定的機器映像，再初始化不具管理員權限的私有隔離環境並顯示進度。下載可取消及續傳；程式不會修改系統 `PATH` 或使用套件管理器。
 
-在 Windows 上，如果 WSL 2 已經準備好，全程不必多按一次。如果自動唯讀檢查確認必須安裝或更新 WSL，第一次啟動畫面才會顯示一個清楚的操作，並由 Windows 要求一次管理員確認。ai-security-scanner 只會用 Microsoft 的可信任 `wsl.exe` 執行固定操作，不會看到或儲存管理員密碼。如果 Windows 需要重新開機，程式會在下載約 257 MB 的機器映像前停下；重開機後再打開 ai-security-scanner，就會自動接著完成。手動 Microsoft 指令仍放在 **其他方式** 裡。
+在 Windows 上，如果 WSL 2 已經準備好，全程不必多按一次。如果自動唯讀檢查確認必須安裝或更新 WSL，第一次啟動畫面只會開啟 Microsoft 官方的 WSL 設定，並提供一次安全的重新檢查。ai-security-scanner 不會自行提權、不會開啟 Windows 功能，也不會執行 Windows 維護指令。如果 Microsoft 要求重新開機，重開後再打開 ai-security-scanner，程式就會在下載約 257 MB 的機器映像前自動接著完成。
 
 | 桌面系統 | 產品管理的執行環境 | 主機必要條件 |
 | --- | --- | --- |
 | Linux x86-64 | 不具管理員權限的 Podman 機器與隨附 QEMU | 無；能用 KVM 時會使用，否則改用較慢的 QEMU 軟體模擬。 |
 | macOS Intel 或 Apple silicon | 不具管理員權限的 Podman 機器與 Apple 虛擬化 | 支援 Apple 虛擬化的 macOS 版本。 |
-| Windows x86-64 | 不具管理員權限的 Podman 機器與 WSL | WSL 2；如果尚未可用或需要更新，只要明確同意一次 Windows 確認即可由程式準備；需要重新開機時仍會交由使用者決定。 |
+| Windows x86-64 | 不具管理員權限的 Podman 機器與 WSL | WSL 2；如果尚未可用或需要更新，完成一次 Microsoft 官方設定即可，程式之後會自動重新檢查並接著完成。 |
 
 Docker 或使用者已安裝的 Podman 只能作為明確標示的相容執行環境；它們不是必要條件，也不會偷偷與產品管理的執行環境混用。完整生命週期、恢復、驗證與精確清理規則請看[產品管理執行環境契約](docs/managed-runtime.md)。
 
@@ -239,7 +239,7 @@ docs/usability/              真人研究流程與 evidence schema
 
 發布工作流程會建置 Linux、通用 macOS 與 Windows 原生安裝程式，在各平台觀察安裝後的桌面程式啟動，再從全新主機驗證產品管理執行環境的完整生命週期與固定隔離容器。定稿候選版本也包含校驗碼、CycloneDX／SPDX 軟體物料清單、第三方聲明、更新簽章、平台資格紀錄與 GitHub 建置來源證明。
 
-從 `main` 手動執行工作流程只會產生發布前檢查，無權建立版本標籤或公開 GitHub Release。精確的測試版標籤通過所有發布檢查後，會帶著 GitHub **Pre-release** 標記發布，而且不會取代最新正式版。Apple Developer ID／公證與 Windows Authenticode 尚未設定，因此作業系統仍可能顯示「無法識別的開發者」警告；Tauri 更新簽章是另一項完整性控制，不代表作業系統發布者身分。
+從 `main` 手動執行工作流程只會產生綁定 commit 的 QC artifact，無權建立版本標籤或公開 GitHub Release。在 Windows Authenticode 簽署與驗證尚未設定完成前，標籤發布會採 fail-closed 方式封鎖；Tauri 更新簽章是另一項完整性控制，不代表作業系統發布者身分。Apple Developer ID／公證目前也尚未設定。
 
 發布正式 `v0.2.0` 前仍需要：
 

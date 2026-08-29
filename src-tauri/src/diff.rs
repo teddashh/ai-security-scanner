@@ -674,15 +674,16 @@ fn engine_identity_issues(
         asset_id,
         "engine command contract changed",
     );
-    compare_identity_field(
-        &mut issues,
-        baseline.mapping_version.as_ref(),
-        current.mapping_version.as_ref(),
-        FindingDiffReasonCode::MappingVersionChanged,
-        engine_id,
-        asset_id,
-        "control-mapping catalog changed",
-    );
+    if baseline.mapping_version != current.mapping_version
+        || baseline.mapping_provenance != current.mapping_provenance
+    {
+        issues.push(reason(
+            FindingDiffReasonCode::MappingVersionChanged,
+            Some(engine_id),
+            asset_id,
+            "control-mapping catalog version or canonical provenance changed".into(),
+        ));
+    }
     if baseline.fingerprint_schema_version != current.fingerprint_schema_version
         && !adapter_migrated
     {
@@ -747,6 +748,9 @@ fn missing_identity_fields(engine_run: &EngineRun) -> Vec<&'static str> {
     }
     if !present(engine_run.mapping_version.as_deref()) {
         missing.push("mapping_version");
+    }
+    if engine_run.mapping_provenance.is_none() {
+        missing.push("mapping_provenance");
     }
     if !present(engine_run.fingerprint_schema_version.as_deref()) {
         missing.push("fingerprint_schema_version");
@@ -903,6 +907,7 @@ mod tests {
             completed_at: Some(time),
             knowledge_cutoff: time,
             ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
             ai_generated_artifact: Default::default(),
             verification_baseline_run_id: None,
             scope_grant_ids: vec!["grant-a".into()],
@@ -955,6 +960,12 @@ mod tests {
             }),
             scope_contract_sha256: Some("d".repeat(64)),
             mapping_version: Some("2026-08-24.1".into()),
+            mapping_provenance: Some(crate::domain::ControlMappingProvenance {
+                mapping_version: "2026-08-24.1".into(),
+                reviewed_at: "2026-08-24".into(),
+                review_process: "source_coordinate_and_rationale_review_v1".into(),
+                catalog_sha256: "e".repeat(64),
+            }),
             fingerprint_schema_version: Some("v1".into()),
             runtime_provider: None,
             runtime_version: None,
