@@ -923,6 +923,7 @@ mod tests {
                 notes: None,
                 external_scope: None,
             }],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![engine_run(id, EngineRunStatus::Completed)],
         }
     }

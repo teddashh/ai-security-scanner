@@ -1,11 +1,13 @@
 use crate::domain::{
-    AssetKind, EngineManifest, LocalInputProfile, MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS,
-    MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS, ScanPermission,
+    AssetKind, EngineAdmissionIssue, EngineManifest, LocalInputProfile,
+    MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS, MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS, ScanPermission,
 };
 use crate::error::{AppError, AppResult};
 use chrono::NaiveDate;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
-const EXPECTED_ENGINE_IDS: [&str; 21] = [
+const KNOWN_ENGINE_IDS: [&str; 21] = [
     "cloudquery",
     "steampipe",
     "prowler",
@@ -37,6 +39,7 @@ const BUILTIN_CATALOG: &str = include_str!("../../engines/catalog.json");
 #[derive(Debug)]
 pub struct EngineRegistry {
     manifests: Vec<EngineManifest>,
+    admission_issues: Vec<EngineAdmissionIssue>,
 }
 
 impl EngineRegistry {
@@ -48,35 +51,134 @@ impl EngineRegistry {
     pub fn empty() -> Self {
         Self {
             manifests: Vec::new(),
+            admission_issues: Vec::new(),
         }
     }
 
     pub fn load_builtin() -> AppResult<Self> {
-        let manifests: Vec<EngineManifest> = serde_json::from_str(BUILTIN_CATALOG)
-            .map_err(|error| AppError::EngineRegistry(error.to_string()))?;
+        Self::load_catalog(BUILTIN_CATALOG)
+    }
 
-        let actual_ids = manifests
-            .iter()
-            .map(|manifest| manifest.id.as_str())
-            .collect::<Vec<_>>();
-        if actual_ids != EXPECTED_ENGINE_IDS {
-            return Err(AppError::EngineRegistry(
-                "built-in engine catalog does not match the fixed 21-engine release set".into(),
-            ));
-        }
-
-        let mut ids = std::collections::BTreeSet::new();
-        for manifest in &manifests {
-            if !ids.insert(&manifest.id) {
-                return Err(AppError::EngineRegistry(format!(
-                    "duplicate engine id: {}",
-                    manifest.id
+    pub(crate) fn load_catalog(catalog: &str) -> AppResult<Self> {
+        let document: Value = match serde_json::from_str(catalog) {
+            Ok(document) => document,
+            Err(error) => {
+                return Ok(Self::catalog_container_unavailable(format!(
+                    "the packaged engine catalog is not valid JSON: {error}"
                 )));
             }
-            validate_release_contract(manifest)?;
+        };
+        let Some(entries) = document.as_array() else {
+            return Ok(Self::catalog_container_unavailable(
+                "the packaged engine catalog root is not an array".into(),
+            ));
+        };
+        let known_ids = KNOWN_ENGINE_IDS.into_iter().collect::<BTreeSet<_>>();
+        let mut canonical_occurrences = BTreeMap::<String, usize>::new();
+        let mut manifests = Vec::new();
+        let mut admission_issues = Vec::new();
+
+        // Resolve only present catalog IDs to supported coordinates before
+        // decoding any entry. Whitespace never makes an ID admissible, but it
+        // still identifies the supported coordinate that was packaged
+        // incorrectly. A valid entry beside any such duplicate is ambiguous,
+        // so ordering never decides which executable contract is trusted.
+        for entry in entries {
+            if let Some(id) = entry.get("id").and_then(Value::as_str)
+                && let Some(coordinate) = supported_coordinate(id)
+            {
+                *canonical_occurrences
+                    .entry(coordinate.to_owned())
+                    .or_insert(0) += 1;
+            }
+        }
+        let duplicate_ids = canonical_occurrences
+            .iter()
+            .filter(|(_, count)| **count > 1)
+            .map(|(id, _)| id.clone())
+            .collect::<BTreeSet<_>>();
+        for engine_id in &duplicate_ids {
+            admission_issues.push(EngineAdmissionIssue {
+                engine_id: Some(engine_id.clone()),
+                code: "duplicate_engine_id".into(),
+                detail: format!(
+                    "the packaged catalog contains {} entries for this supported engine coordinate; the coordinate was disabled",
+                    canonical_occurrences[engine_id]
+                ),
+            });
         }
 
-        Ok(Self { manifests })
+        for (index, entry) in entries.iter().cloned().enumerate() {
+            let candidate_id = entry
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
+            let candidate_coordinate = candidate_id
+                .as_deref()
+                .and_then(supported_coordinate)
+                .map(str::to_owned);
+            if candidate_coordinate
+                .as_ref()
+                .is_some_and(|id| duplicate_ids.contains(id))
+            {
+                continue;
+            }
+            if let (Some(candidate_id), Some(coordinate)) =
+                (candidate_id.as_deref(), candidate_coordinate.as_deref())
+                && candidate_id != coordinate
+            {
+                admission_issues.push(EngineAdmissionIssue {
+                    engine_id: Some(coordinate.to_owned()),
+                    code: "noncanonical_engine_id".into(),
+                    detail: "the packaged engine ID contains leading or trailing whitespace; the coordinate was disabled"
+                        .into(),
+                });
+                continue;
+            }
+            let manifest = match serde_json::from_value::<EngineManifest>(entry) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    admission_issues.push(EngineAdmissionIssue {
+                        engine_id: candidate_coordinate.or(candidate_id),
+                        code: "catalog_entry_invalid".into(),
+                        detail: format!(
+                            "catalog entry {} could not be decoded and was isolated: {error}",
+                            index + 1
+                        ),
+                    });
+                    continue;
+                }
+            };
+            if !known_ids.contains(manifest.id.as_str()) {
+                admission_issues.push(EngineAdmissionIssue {
+                    engine_id: Some(manifest.id.clone()),
+                    code: "unsupported_engine_id".into(),
+                    detail: "the engine ID is not a product-supported catalog coordinate".into(),
+                });
+                continue;
+            }
+            if let Err(error) = validate_release_contract(&manifest) {
+                admission_issues.push(EngineAdmissionIssue {
+                    engine_id: Some(manifest.id.clone()),
+                    code: "engine_contract_invalid".into(),
+                    detail: error.to_string(),
+                });
+                continue;
+            }
+            manifests.push(manifest);
+        }
+        manifests.sort_by_key(|manifest| {
+            KNOWN_ENGINE_IDS
+                .iter()
+                .position(|engine_id| *engine_id == manifest.id)
+                .unwrap_or(usize::MAX)
+        });
+
+        Ok(Self {
+            manifests,
+            admission_issues,
+        })
     }
 
     pub fn manifests(&self) -> &[EngineManifest] {
@@ -86,6 +188,63 @@ impl EngineRegistry {
     pub fn get(&self, id: &str) -> Option<&EngineManifest> {
         self.manifests.iter().find(|manifest| manifest.id == id)
     }
+
+    pub fn admission_issues(&self) -> &[EngineAdmissionIssue] {
+        &self.admission_issues
+    }
+
+    /// Freeze only supported coordinates that were present but rejected into
+    /// a scan. Optional absent coordinates never become inferred coverage
+    /// claims, and unknown extras stay observable only in current diagnostics.
+    /// A malformed catalog container is retained once rather than expanded
+    /// into synthetic per-engine tasks.
+    pub fn run_bound_admission_issues(&self) -> Vec<EngineAdmissionIssue> {
+        if let Some(issue) = self
+            .admission_issues
+            .iter()
+            .find(|issue| issue.code == "catalog_container_invalid")
+        {
+            return vec![issue.clone()];
+        }
+        let mut retained = self
+            .admission_issues
+            .iter()
+            .filter(|issue| {
+                issue.engine_id.as_deref().is_some_and(|engine_id| {
+                    KNOWN_ENGINE_IDS.contains(&engine_id) && self.get(engine_id).is_none()
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        retained.sort_by(|left, right| {
+            left.engine_id
+                .cmp(&right.engine_id)
+                .then_with(|| left.code.cmp(&right.code))
+        });
+        retained.dedup_by(|left, right| left.engine_id == right.engine_id);
+        retained
+    }
+
+    fn catalog_container_unavailable(detail: String) -> Self {
+        Self {
+            manifests: Vec::new(),
+            admission_issues: vec![EngineAdmissionIssue {
+                engine_id: None,
+                code: "catalog_container_invalid".into(),
+                detail,
+            }],
+        }
+    }
+}
+
+/// Return the supported coordinate represented by this exact or
+/// whitespace-corrupted packaged ID. The returned coordinate is diagnostic
+/// identity only; callers must still reject a non-exact raw ID.
+fn supported_coordinate(raw_id: &str) -> Option<&'static str> {
+    let trimmed = raw_id.trim();
+    KNOWN_ENGINE_IDS
+        .into_iter()
+        .find(|engine_id| *engine_id == raw_id || *engine_id == trimmed)
 }
 
 fn validate_release_contract(manifest: &EngineManifest) -> AppResult<()> {
@@ -353,7 +512,8 @@ mod tests {
     #[test]
     fn builtin_catalog_has_unique_supported_engines() {
         let registry = EngineRegistry::load_builtin().expect("valid catalog");
-        assert!(registry.manifests().len() >= 21);
+        assert!(!registry.manifests().is_empty());
+        assert!(registry.admission_issues().is_empty());
         assert!(registry.get("prowler").is_some());
         assert!(registry.get("scubagear").is_some());
         assert!(registry.get("nuclei").is_some());
@@ -386,6 +546,179 @@ mod tests {
 
         assert!(registry.manifests().is_empty());
         assert!(registry.get("naabu").is_none());
+        assert!(registry.admission_issues().is_empty());
+    }
+
+    #[test]
+    fn one_invalid_engine_is_isolated_without_disabling_its_siblings() {
+        let mut entries: Vec<Value> = serde_json::from_str(BUILTIN_CATALOG).unwrap();
+        let naabu = entries
+            .iter_mut()
+            .find(|entry| entry["id"] == "naabu")
+            .expect("naabu catalog entry");
+        naabu["schema_version"] = Value::String("unsupported-test-schema".into());
+        let registry = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("the catalog container remains readable");
+
+        assert!(registry.get("naabu").is_none());
+        assert!(registry.get("httpx").is_some());
+        assert!(registry.get("gitleaks").is_some());
+        assert!(registry.admission_issues().iter().any(|issue| {
+            issue.engine_id.as_deref() == Some("naabu") && issue.code == "engine_contract_invalid"
+        }));
+        assert!(
+            !registry
+                .admission_issues()
+                .iter()
+                .any(|issue| { issue.engine_id.as_deref() == Some("httpx") })
+        );
+    }
+
+    #[test]
+    fn an_absent_optional_engine_does_not_create_an_admission_issue() {
+        let mut entries: Vec<Value> = serde_json::from_str(BUILTIN_CATALOG).unwrap();
+        entries.retain(|entry| entry["id"] != "gitleaks");
+        let registry = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("a supported catalog subset remains independently admissible");
+
+        assert_eq!(registry.manifests().len(), entries.len());
+        assert!(registry.get("gitleaks").is_none());
+        assert!(registry.get("semgrep").is_some());
+        assert!(registry.admission_issues().is_empty());
+        assert!(registry.run_bound_admission_issues().is_empty());
+    }
+
+    #[test]
+    fn a_duplicate_engine_disables_the_entire_coordinate_and_keeps_siblings() {
+        let mut entries: Vec<Value> = serde_json::from_str(BUILTIN_CATALOG).unwrap();
+        let duplicate = entries
+            .iter()
+            .find(|entry| entry["id"] == "httpx")
+            .expect("httpx catalog entry")
+            .clone();
+        entries.push(duplicate);
+        let registry = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("duplicate isolation is not a whole-catalog failure");
+
+        assert!(registry.get("httpx").is_none());
+        assert!(registry.get("naabu").is_some());
+        assert!(registry.admission_issues().iter().any(|issue| {
+            issue.engine_id.as_deref() == Some("httpx") && issue.code == "duplicate_engine_id"
+        }));
+        assert_eq!(
+            registry.run_bound_admission_issues()[0]
+                .engine_id
+                .as_deref(),
+            Some("httpx")
+        );
+    }
+
+    #[test]
+    fn an_invalid_and_valid_duplicate_still_disable_the_coordinate() {
+        let mut entries: Vec<Value> = serde_json::from_str(BUILTIN_CATALOG).unwrap();
+        let mut duplicate = entries
+            .iter()
+            .find(|entry| entry["id"] == "httpx")
+            .expect("httpx catalog entry")
+            .clone();
+        duplicate["schema_version"] = Value::String("invalid-duplicate-schema".into());
+        entries.push(duplicate);
+        let registry = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("duplicate ambiguity remains isolated");
+
+        assert!(registry.get("httpx").is_none());
+        assert!(registry.get("naabu").is_some());
+        assert_eq!(
+            registry
+                .admission_issues()
+                .iter()
+                .filter(|issue| issue.engine_id.as_deref() == Some("httpx"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            registry
+                .admission_issues()
+                .iter()
+                .find(|issue| issue.engine_id.as_deref() == Some("httpx"))
+                .unwrap()
+                .code,
+            "duplicate_engine_id"
+        );
+    }
+
+    #[test]
+    fn exact_and_whitespace_forms_are_one_duplicate_supported_coordinate() {
+        let mut entries: Vec<Value> = serde_json::from_str(BUILTIN_CATALOG).unwrap();
+        let mut duplicate = entries
+            .iter()
+            .find(|entry| entry["id"] == "httpx")
+            .expect("httpx catalog entry")
+            .clone();
+        duplicate["id"] = Value::String(" httpx ".into());
+        entries.push(duplicate);
+        let registry = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("duplicate ambiguity remains isolated");
+
+        assert!(registry.get("httpx").is_none());
+        assert!(registry.get("naabu").is_some());
+        assert_eq!(registry.admission_issues().len(), 1);
+        assert_eq!(
+            registry.admission_issues()[0].engine_id.as_deref(),
+            Some("httpx")
+        );
+        assert_eq!(registry.admission_issues()[0].code, "duplicate_engine_id");
+        assert_eq!(
+            registry.run_bound_admission_issues(),
+            registry.admission_issues()
+        );
+    }
+
+    #[test]
+    fn whitespace_engine_id_is_a_present_invalid_supported_coordinate() {
+        let mut entries: Vec<Value> = serde_json::from_str(BUILTIN_CATALOG).unwrap();
+        let naabu = entries
+            .iter_mut()
+            .find(|entry| entry["id"] == "naabu")
+            .expect("naabu catalog entry");
+        naabu["id"] = Value::String(" naabu ".into());
+        let registry = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("noncanonical entry is isolated");
+
+        assert!(registry.get("naabu").is_none());
+        assert_eq!(registry.admission_issues().len(), 1);
+        assert_eq!(
+            registry.admission_issues()[0].engine_id.as_deref(),
+            Some("naabu")
+        );
+        assert_eq!(
+            registry.admission_issues()[0].code,
+            "noncanonical_engine_id"
+        );
+        assert_eq!(
+            registry.run_bound_admission_issues(),
+            registry.admission_issues()
+        );
+    }
+
+    #[test]
+    fn malformed_catalog_container_becomes_one_observable_global_issue() {
+        for catalog in ["{not-json", r#"{"engines": []}"#] {
+            let registry = EngineRegistry::load_catalog(catalog)
+                .expect("catalog container failure must remain a degraded registry");
+            assert!(registry.manifests().is_empty());
+            assert_eq!(registry.admission_issues().len(), 1);
+            assert_eq!(registry.admission_issues()[0].engine_id, None);
+            assert_eq!(
+                registry.admission_issues()[0].code,
+                "catalog_container_invalid"
+            );
+            assert_eq!(
+                registry.run_bound_admission_issues(),
+                registry.admission_issues()
+            );
+            assert!(serde_json::to_value(registry.admission_issues()).is_ok());
+        }
     }
 
     #[test]

@@ -512,6 +512,7 @@ fn ledger_represents_all_six_states_without_using_findings() {
         verification_baseline_run_id: None,
         scope_grant_ids: vec!["grant-incomplete".into(), "grant-scanned".into()],
         scope_grant_snapshots: run_scope_snapshots,
+        engine_admission_issues: Vec::new(),
         engine_runs: vec![engine_run("run-1", "scanned", EngineRunStatus::Completed)],
     });
     assert!(
@@ -603,6 +604,7 @@ fn failed_partial_cancelled_and_not_executed_never_become_green() {
             verification_baseline_run_id: None,
             scope_grant_ids: vec!["grant-target".into()],
             scope_grant_snapshots: vec![run_scope_snapshot],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![engine_run("run", "target", status.clone())],
         });
 
@@ -658,6 +660,7 @@ fn built_in_localhost_coverage_uses_typed_outcomes_without_a_manifest() {
         verification_baseline_run_id: None,
         scope_grant_ids: vec!["grant-localhost".into()],
         scope_grant_snapshots: vec![run_scope_snapshot],
+        engine_admission_issues: Vec::new(),
         engine_runs: vec![completed],
     });
 
@@ -722,6 +725,7 @@ fn completed_provider_incompatible_run_never_becomes_green() {
         verification_baseline_run_id: None,
         scope_grant_ids: vec!["grant-target".into()],
         scope_grant_snapshots: vec![run_scope_snapshot],
+        engine_admission_issues: Vec::new(),
         engine_runs: vec![engine_run("run", "target", EngineRunStatus::Completed)],
     });
     let mut aws_manifest = manifest();
@@ -803,6 +807,7 @@ fn active_low_impact_engine_uses_its_declared_permission_for_coverage() {
         verification_baseline_run_id: None,
         scope_grant_ids: vec![low_impact.id.clone()],
         scope_grant_snapshots: vec![low_impact],
+        engine_admission_issues: Vec::new(),
         engine_runs: vec![completed],
     });
 
@@ -853,6 +858,7 @@ fn coverage_uses_frozen_run_grants_and_never_backfills_legacy_runs() {
         verification_baseline_run_id: None,
         scope_grant_ids: vec!["grant-target".into()],
         scope_grant_snapshots: vec![],
+        engine_admission_issues: Vec::new(),
         engine_runs: vec![engine_run("run", "target", EngineRunStatus::Completed)],
     });
 

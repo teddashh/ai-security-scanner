@@ -148,6 +148,14 @@ pub fn run() {
                 );
                 EngineRegistry::empty()
             });
+            for issue in engines.admission_issues() {
+                tracing::warn!(
+                    engine_id = issue.engine_id.as_deref().unwrap_or("unidentified"),
+                    issue_code = %issue.code,
+                    detail = %issue.detail,
+                    "one catalog engine is unavailable; independent checks remain available"
+                );
+            }
             let adapters = adapters::builtin_adapter_registry().unwrap_or_else(|error| {
                 tracing::error!(
                     error = %error,
@@ -239,6 +247,7 @@ pub fn run() {
             commands::attach_workspace_snapshot,
             commands::seed_demo_case,
             commands::list_engine_manifests,
+            commands::list_engine_admission_issues,
             commands::start_discovery,
             commands::cancel_discovery,
             commands::approve_scope,

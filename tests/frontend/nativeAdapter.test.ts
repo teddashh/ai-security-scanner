@@ -452,6 +452,31 @@ test("native snapshot preserves beginner-safe diagnostics for unreadable saved p
   assert.equal(snapshot.provenance, "native");
 });
 
+test("native snapshot retains packaged scanner issues only as technical structured data", () => {
+  const snapshot = adaptNativeSnapshot({
+    ...snapshotFixture([summaryFixture()]),
+    engine_admission_issues: [{
+      engine_id: "gitleaks",
+      code: "engine_contract_invalid",
+      detail: "test-only catalog detail",
+    }, {
+      engine_id: null,
+      code: "catalog_container_invalid",
+      detail: "test-only root detail",
+    }],
+  }, []);
+
+  assert.deepEqual(snapshot.engineAdmissionIssues, [{
+    engineId: "gitleaks",
+    code: "engine_contract_invalid",
+    detail: "test-only catalog detail",
+  }, {
+    engineId: undefined,
+    code: "catalog_container_invalid",
+    detail: "test-only root detail",
+  }]);
+});
+
 test("missing or malformed AI-generated answers fail closed to unknown", () => {
   for (const ai_generated_artifact of [undefined, null, "maybe", true]) {
     const snapshot = adaptNativeSnapshot(snapshotFixture([summaryFixture({
@@ -761,6 +786,39 @@ test("mixed terminal and queued engine work keeps the scan queued for downstream
     assert.equal(workspace.runs[0]?.engineRuns[1]?.status, "pending", terminalStatus);
     assert.equal(workspace.runs[0]?.status, "queued", terminalStatus);
   }
+});
+
+test("run-bound packaged scanner issues remain available to technical diagnostics", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    status: "needs_attention",
+    scan_runs: [{
+      id: "run-catalog-limitation",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-26T00:00:00Z",
+      completed_at: "2026-08-26T00:00:01Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      request_outcome: {
+        status: "no_checks_completed",
+        code: "no_applicable_checks",
+        requested_asset_ids: [],
+        requested_engine_ids: [],
+        explanation: "No available check could be planned.",
+      },
+      engine_admission_issues: [{
+        engine_id: "gitleaks",
+        code: "engine_contract_invalid",
+        detail: "test-only catalog detail",
+      }],
+      engine_runs: [],
+    }],
+  }));
+
+  assert.deepEqual(workspace.runs[0]?.engineAdmissionIssues, [{
+    engineId: "gitleaks",
+    code: "engine_contract_invalid",
+    detail: "test-only catalog detail",
+  }]);
 });
 
 const adaptGatewayFailure = (

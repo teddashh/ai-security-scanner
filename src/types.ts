@@ -670,9 +670,17 @@ export interface ScanRun {
   /** Most recent durable scan lifecycle update; never derived from scanner output. */
   lastProgressAt?: string;
   knowledgeDate: string;
+  /** Technical-only packaged scanner diagnostics frozen with this run. */
+  engineAdmissionIssues?: EngineAdmissionIssue[];
   engineRuns: EngineRun[];
   coveredAssetCount: number;
   totalAssetCount: number;
+}
+
+export interface EngineAdmissionIssue {
+  engineId?: string;
+  code: string;
+  detail: string;
 }
 
 export type BeginnerReportSummary = "complete" | "partial" | "no_checks_completed";
@@ -1198,6 +1206,8 @@ export interface AppSnapshot {
   artifactCleanupObligations?: CaseArtifactDeletionPlan[];
   /** Saved projects that were preserved but could not be opened in this snapshot. */
   caseRecoveryDiagnostics?: CaseRecoveryDiagnostic[];
+  /** Technical-only current packaged scanner diagnostics. */
+  engineAdmissionIssues?: EngineAdmissionIssue[];
   engineCount?: number;
 }
 

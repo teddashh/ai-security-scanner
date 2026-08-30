@@ -507,6 +507,18 @@ pub struct EngineManifest {
     pub execution: Option<EngineExecutionContract>,
 }
 
+/// One packaged engine-catalog problem that was isolated from otherwise
+/// usable product work. `engine_id == None` means no exact engine coordinate
+/// could be recovered; `catalog_container_invalid` specifically identifies a
+/// catalog-wide decode failure. These records are safe to expose and freeze
+/// with a scan run; they never authorize a target or claim applicability.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EngineAdmissionIssue {
+    pub engine_id: Option<String>,
+    pub code: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DirectNetworkExecutionContract {
@@ -955,6 +967,11 @@ pub struct ScanRun {
     /// expire or be replaced. Empty means a legacy run with unknown history.
     #[serde(default)]
     pub scope_grant_snapshots: Vec<ScopeGrant>,
+    /// Packaged catalog limitations frozen when this run was planned. They
+    /// are reportable `not tested` gaps with unknown applicability, not
+    /// synthetic engine executions and not product-wide start gates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engine_admission_issues: Vec<EngineAdmissionIssue>,
     pub engine_runs: Vec<EngineRun>,
 }
 
@@ -1688,6 +1705,7 @@ mod tests {
 
         assert!(run.verification_baseline_run_id.is_none());
         assert!(run.request_outcome.is_none());
+        assert!(run.engine_admission_issues.is_empty());
         assert!(!run.ai_system_applicable);
         assert_eq!(
             run.frozen_ai_system_applicability(),
@@ -1740,6 +1758,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![],
         };
 
@@ -1975,6 +1994,7 @@ mod tests {
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec![],
                 scope_grant_snapshots: vec![],
+                engine_admission_issues: Vec::new(),
                 engine_runs: vec![],
             });
         }

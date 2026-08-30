@@ -836,6 +836,10 @@ pub struct DesktopAppSnapshot {
     /// One pure, run-bound report projection per selected-case run. This is
     /// derived from durable state and is never a second lifecycle authority.
     pub beginner_reports: Vec<crate::beginner_report::BeginnerMasterReport>,
+    /// Isolated packaged-catalog problems. They never gate the shell or
+    /// admitted sibling checks; default scans freeze relevant limitations so
+    /// reports cannot silently imply full scanner availability.
+    pub engine_admission_issues: Vec<EngineAdmissionIssue>,
     /// Project-scoped recovery notices. Unreadable case bytes remain in the
     /// database unchanged and never prevent healthy projects or the shell from
     /// opening.
@@ -1039,6 +1043,7 @@ pub async fn get_app_snapshot(
             engine_count: state.engines.manifests().len(),
         },
         beginner_reports,
+        engine_admission_issues: state.engines.admission_issues().to_vec(),
         case_recovery_diagnostics: readable.recovery_diagnostics,
     })
 }
@@ -2356,6 +2361,11 @@ pub fn seed_demo_case(state: State<'_, AppState>) -> AppResult<AssessmentCase> {
 #[tauri::command]
 pub fn list_engine_manifests(state: State<'_, AppState>) -> Vec<EngineManifest> {
     state.engines.manifests().to_vec()
+}
+
+#[tauri::command]
+pub fn list_engine_admission_issues(state: State<'_, AppState>) -> Vec<EngineAdmissionIssue> {
+    state.engines.admission_issues().to_vec()
 }
 
 #[tauri::command]

@@ -232,7 +232,14 @@ interface NativeScanRun {
     requested_engine_ids: string[];
     explanation: string;
   } | null;
+  engine_admission_issues?: NativeEngineAdmissionIssue[];
   engine_runs: NativeEngineRun[];
+}
+
+interface NativeEngineAdmissionIssue {
+  engine_id: string | null;
+  code: string;
+  detail: string;
 }
 
 export interface NativeBeginnerMasterReport {
@@ -606,6 +613,8 @@ export interface NativeAppSnapshot {
     requires_explicit_confirmation: boolean;
   }>;
   engine_count: number;
+  /** Technical-only packaged scanner diagnostics; absent in older snapshots. */
+  engine_admission_issues?: NativeEngineAdmissionIssue[];
   /** Added in v0.1.8. Older development snapshots may omit this projection. */
   beginner_reports?: NativeBeginnerMasterReport[];
   /** Added in v0.1.8. Unreadable project bytes are preserved instead of aborting startup. */
@@ -1726,6 +1735,11 @@ export const adaptNativeCase = (
         ? nativeCase.updated_at
         : run.completed_at ?? lastEngineActivityAt ?? run.created_at,
       knowledgeDate: run.knowledge_cutoff,
+      engineAdmissionIssues: (run.engine_admission_issues ?? []).map((issue) => ({
+        engineId: issue.engine_id ?? undefined,
+        code: issue.code,
+        detail: issue.detail,
+      })),
       engineRuns,
       coveredAssetCount: coveredAssetIds.length,
       totalAssetCount: allAssetIds.length,
@@ -1894,6 +1908,11 @@ export const adaptNativeSnapshot = (
       code: diagnostic.code,
       message: diagnostic.message,
       preserved: diagnostic.preserved,
+    })),
+    engineAdmissionIssues: (snapshot.engine_admission_issues ?? []).map((issue) => ({
+      engineId: issue.engine_id ?? undefined,
+      code: issue.code,
+      detail: issue.detail,
     })),
     engineCount: snapshot.engine_count,
   };

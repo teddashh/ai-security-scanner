@@ -951,6 +951,7 @@ async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8>
                     "compatibility": compatibility_runtime,
                 },
                 "engine_manifests": engines.manifests().len(),
+                "engine_admission_issues": engines.admission_issues(),
                 "release_approved_engines": engines.manifests().iter()
                     .filter(|manifest| manifest.release_blocker().is_none())
                     .count(),

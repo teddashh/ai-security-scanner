@@ -2053,6 +2053,7 @@ impl<'a> CaseService<'a> {
             verification_baseline_run_id: verification_baseline_run_id.map(str::to_owned),
             scope_grant_ids: effective.iter().map(|grant| grant.id.clone()).collect(),
             scope_grant_snapshots: effective.to_vec(),
+            engine_admission_issues: default_scan_admission_issues(self.engines, request),
             engine_runs: Vec::new(),
         };
         let plan = ScanPlan {
@@ -2472,6 +2473,7 @@ impl<'a> CaseService<'a> {
             verification_baseline_run_id: verification_baseline_run_id.map(str::to_owned),
             scope_grant_ids,
             scope_grant_snapshots: frozen_scope_grants(&effective),
+            engine_admission_issues: default_scan_admission_issues(self.engines, &request),
             engine_runs,
         };
         let plan = ScanPlan {
@@ -5423,6 +5425,17 @@ fn selected_engine_ids(
     Ok(selected.into_iter().collect())
 }
 
+fn default_scan_admission_issues(
+    engines: &EngineRegistry,
+    request: &ScanPlanRequest,
+) -> Vec<crate::domain::EngineAdmissionIssue> {
+    if request.engine_ids.is_empty() {
+        engines.run_bound_admission_issues()
+    } else {
+        Vec::new()
+    }
+}
+
 fn compatible_authorized_assets<'a>(
     case: &'a AssessmentCase,
     manifest: &EngineManifest,
@@ -7955,9 +7968,12 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_engines(EngineRegistry::load_builtin().unwrap())
+        }
+
+        fn with_engines(engines: EngineRegistry) -> Self {
             let directory = tempfile::tempdir().unwrap();
             let storage = Storage::open(directory.path().join("casework.db")).unwrap();
-            let engines = EngineRegistry::load_builtin().unwrap();
             let adapters = crate::adapters::builtin_adapter_registry().unwrap();
             Self {
                 directory,
@@ -8557,6 +8573,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![],
         });
         let options = ExportOptions::default();
@@ -8984,6 +9001,148 @@ mod tests {
             )
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn default_scan_freezes_catalog_limitations_without_fabricating_engine_target_tasks() {
+        let mut entries: Vec<Value> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        entries
+            .iter_mut()
+            .find(|entry| entry["id"] == "gitleaks")
+            .expect("gitleaks catalog entry")["schema_version"] =
+            Value::String("invalid-test-schema".into());
+        let engines = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("one rejected entry is a degraded catalog, not a gate");
+        let fixture = Fixture::with_engines(engines);
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                }],
+                ScanPlanRequest::default(),
+            )
+            .unwrap();
+
+        assert!(
+            !plan.executable.is_empty(),
+            "admitted siblings must still run"
+        );
+        assert!(
+            plan.scan_run
+                .engine_runs
+                .iter()
+                .all(|task| task.engine_id != "gitleaks"),
+            "unknown applicability must not become an assetless engine task"
+        );
+        assert_eq!(plan.scan_run.engine_admission_issues.len(), 1);
+        assert_eq!(
+            plan.scan_run.engine_admission_issues[0]
+                .engine_id
+                .as_deref(),
+            Some("gitleaks")
+        );
+        let stored = fixture.service().show_case(&created.id).unwrap();
+        let report = build_beginner_master_report(&stored, &plan.scan_run.id).unwrap();
+        let admission_gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "additional packaged checks")
+            .expect("run-bound catalog limitation is a beginner coverage gap");
+        assert_eq!(
+            admission_gap.kind,
+            crate::beginner_report::CoverageGapKind::NotTested
+        );
+        assert!(admission_gap.target_asset_ids.is_empty());
+        assert!(!admission_gap.reason.contains("gitleaks"));
+        assert!(!admission_gap.reason.contains("engine_contract_invalid"));
+    }
+
+    #[test]
+    fn supported_catalog_subset_does_not_create_a_default_run_admission_gap() {
+        let mut entries: Vec<Value> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        entries.retain(|entry| entry["id"] != "gitleaks");
+        let engines = EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap())
+            .expect("an optional supported-engine subset is a valid catalog");
+        assert!(engines.admission_issues().is_empty());
+        let fixture = Fixture::with_engines(engines);
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                }],
+                ScanPlanRequest::default(),
+            )
+            .unwrap();
+
+        assert!(!plan.executable.is_empty());
+        assert!(plan.scan_run.engine_admission_issues.is_empty());
+        let stored = fixture.service().show_case(&created.id).unwrap();
+        let report = build_beginner_master_report(&stored, &plan.scan_run.id).unwrap();
+        assert!(
+            report
+                .coverage_gaps
+                .iter()
+                .all(|gap| gap.dimension != "additional packaged checks")
+        );
+    }
+
+    #[test]
+    fn unreadable_catalog_still_persists_a_reportable_default_scan_outcome() {
+        let engines = EngineRegistry::load_catalog("{not-json")
+            .expect("malformed root becomes a degraded registry");
+        let fixture = Fixture::with_engines(engines);
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                }],
+                ScanPlanRequest::default(),
+            )
+            .unwrap();
+
+        assert!(plan.executable.is_empty());
+        assert!(plan.scan_run.is_terminal_no_checks());
+        assert_eq!(plan.scan_run.engine_admission_issues.len(), 1);
+        assert_eq!(plan.scan_run.engine_admission_issues[0].engine_id, None);
+        let stored = fixture.service().show_case(&created.id).unwrap();
+        let report = build_beginner_master_report(&stored, &plan.scan_run.id).unwrap();
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == crate::beginner_report::CoverageGapKind::NotTested
+                && gap.dimension == "additional packaged checks"
+                && gap.target_asset_ids.is_empty()
+        }));
     }
 
     #[test]
@@ -11006,6 +11165,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![],
         });
         for (id, fingerprint, priority) in [
@@ -11632,6 +11792,7 @@ mod tests {
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec![],
                 scope_grant_snapshots: vec![],
+                engine_admission_issues: Vec::new(),
                 engine_runs: vec![engine_run],
             });
             fixture
@@ -14133,6 +14294,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec!["grant-1".into()],
             scope_grant_snapshots: case.scope_grants.clone(),
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
                 id: "engine-run-1".into(),
                 scan_run_id: "scan-1".into(),
@@ -14435,6 +14597,7 @@ mod tests {
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec!["grant-1".into()],
                 scope_grant_snapshots: case.scope_grants.clone(),
+                engine_admission_issues: Vec::new(),
                 engine_runs: vec![completed_engine(id)],
             });
         }
@@ -14462,6 +14625,7 @@ mod tests {
                 verification_baseline_run_id: None,
                 scope_grant_ids: vec!["grant-1".into()],
                 scope_grant_snapshots: case.scope_grants.clone(),
+                engine_admission_issues: Vec::new(),
                 engine_runs: vec![engine_run],
             });
         }

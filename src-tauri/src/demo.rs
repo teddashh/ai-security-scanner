@@ -197,6 +197,7 @@ pub fn build_demo_case() -> AssessmentCase {
         verification_baseline_run_id: None,
         scope_grant_ids: vec![scope_id],
         scope_grant_snapshots: case.scope_grants.clone(),
+        engine_admission_issues: Vec::new(),
         engine_runs: vec![
             EngineRun {
                 id: prowler_run_id.clone(),

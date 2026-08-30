@@ -200,6 +200,7 @@ pub fn prepare_localhost_quick_scan(
         verification_baseline_run_id: None,
         scope_grant_ids: vec![grant_id],
         scope_grant_snapshots: vec![grant],
+        engine_admission_issues: Vec::new(),
         engine_runs: vec![engine_run],
     });
 

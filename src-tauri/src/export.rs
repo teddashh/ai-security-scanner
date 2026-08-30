@@ -2121,6 +2121,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),

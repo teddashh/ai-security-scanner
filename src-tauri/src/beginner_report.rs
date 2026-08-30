@@ -406,6 +406,7 @@ pub fn build_beginner_master_report(
     let requested = project_requested_coverage(case, run, !contradictory_request_outcome);
     let (actual, mut coverage_gaps) = project_actual_coverage(run);
     append_request_outcome_gaps(run, !contradictory_request_outcome, &mut coverage_gaps);
+    append_engine_admission_gaps(run, &mut coverage_gaps);
     append_case_exclusions(case, run, &mut coverage_gaps);
 
     for unavailable in requested
@@ -990,6 +991,39 @@ fn append_request_outcome_gaps(
             });
         }
     }
+}
+
+fn append_engine_admission_gaps(run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
+    if run.engine_admission_issues.is_empty() {
+        return;
+    }
+    let catalog_list_unavailable = run
+        .engine_admission_issues
+        .iter()
+        .any(|issue| issue.code == "catalog_container_invalid");
+    let count = run.engine_admission_issues.len();
+    gaps.push(CoverageGap {
+        kind: CoverageGapKind::NotTested,
+        task_id: None,
+        // Catalog admission failed before applicability could be trusted, so
+        // this gap must not fabricate either a scanner or target binding.
+        target_asset_ids: Vec::new(),
+        dimension: "additional packaged checks".into(),
+        reason: if catalog_list_unavailable {
+            "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested."
+                .into()
+        } else if count == 1 {
+            "One additional packaged check was unavailable before planning. Whether it applied to the selected target is unknown, so it is not tested."
+                .into()
+        } else {
+            format!(
+                "{count} additional packaged checks were unavailable before planning. Whether they applied to the selected target is unknown, so they are not tested."
+            )
+        },
+        next_action_code: NextActionCode::PreserveVisibleLimitation,
+        next_action: "Keep the available results. The app can include these checks in a later run after their packaged scanner information is restored."
+            .into(),
+    });
 }
 
 fn append_case_exclusions(case: &AssessmentCase, run: &ScanRun, gaps: &mut Vec<CoverageGap>) {
@@ -1640,6 +1674,7 @@ mod tests {
                 notes: None,
                 external_scope: None,
             }],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
                 id: "task-1".into(),
                 scan_run_id: run_id,
@@ -1760,6 +1795,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
             engine_runs: tasks,
         });
         case
@@ -1965,6 +2001,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![],
         });
 
@@ -2045,6 +2082,64 @@ mod tests {
 
         assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
         assert_eq!(report.state.lifecycle, ReportLifecycle::Final);
+    }
+
+    #[test]
+    fn packaged_scanner_limitation_prevents_a_complete_claim_without_exposing_internals() {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        case.scan_runs[0]
+            .engine_admission_issues
+            .push(crate::domain::EngineAdmissionIssue {
+                engine_id: Some("gitleaks".into()),
+                code: "engine_contract_invalid".into(),
+                detail: "technical fixture detail".into(),
+            });
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "additional packaged checks")
+            .expect("catalog limitation gap");
+        assert_eq!(gap.kind, CoverageGapKind::NotTested);
+        assert!(gap.target_asset_ids.is_empty());
+        assert!(!gap.reason.contains("gitleaks"));
+        assert!(!gap.reason.contains("engine_contract_invalid"));
+        assert_eq!(report.coverage_counts.not_tested, 1);
+    }
+
+    #[test]
+    fn unreadable_packaged_check_list_never_invents_a_check_count() {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        case.scan_runs[0]
+            .engine_admission_issues
+            .push(crate::domain::EngineAdmissionIssue {
+                engine_id: None,
+                code: "catalog_container_invalid".into(),
+                detail: "test-only root detail".into(),
+            });
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let gap = report
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.dimension == "additional packaged checks")
+            .expect("catalog-list limitation gap");
+
+        assert_eq!(
+            gap.reason,
+            "The packaged check list could not be loaded. Available checks may still run, but checks from that list are not tested."
+        );
+        assert!(!gap.reason.chars().any(|character| character.is_numeric()));
+        assert!(!gap.reason.contains("One additional"));
     }
 
     #[test]

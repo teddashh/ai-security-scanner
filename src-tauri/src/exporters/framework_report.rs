@@ -775,6 +775,7 @@ fn coverage_summary(
         .is_empty()
         || selected_run_missing_planned_asset_coverage_count > 0
         || selected_run_unmatched_coverage_entry_count > 0
+        || !run.engine_admission_issues.is_empty()
         || unknown_source_count > 0
         || connected_no_asset_count > 0
         || authorized_incomplete_count > 0
@@ -803,6 +804,12 @@ fn coverage_summary(
     if unfinished_engine_count > 0 {
         limitations.push(format!(
             "{unfinished_engine_count} scanner check(s) did not complete; their areas remain unknown."
+        ));
+    }
+    if !run.engine_admission_issues.is_empty() {
+        limitations.push(format!(
+            "{} packaged scanner catalog limitation(s) were frozen with this run. Applicability for those unavailable checks remains unknown; they are not treated as tested or passed.",
+            run.engine_admission_issues.len()
         ));
     }
     if unknown_source_count > 0 {
@@ -1514,6 +1521,7 @@ mod tests {
             verification_baseline_run_id: None,
             scope_grant_ids: vec![],
             scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
             engine_runs: vec![EngineRun {
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),
@@ -1784,6 +1792,30 @@ mod tests {
                 .coverage
                 .selected_run_coverage_has_unknown_or_incomplete_entries
         );
+    }
+
+    #[test]
+    fn run_bound_engine_admission_limitation_keeps_framework_coverage_incomplete() {
+        let mut case = fixture();
+        case.scan_runs[0]
+            .engine_admission_issues
+            .push(crate::domain::EngineAdmissionIssue {
+                engine_id: Some("gitleaks".into()),
+                code: "engine_contract_invalid".into(),
+                detail: "test fixture rejection".into(),
+            });
+
+        let report = export_master_framework_report(&case, "run-1").unwrap();
+        assert_eq!(report.coverage.state, "incomplete_or_unknown");
+        assert!(
+            report
+                .coverage
+                .selected_run_coverage_has_unknown_or_incomplete_entries
+        );
+        assert!(report.coverage.limitations.iter().any(|limitation| {
+            limitation.contains("packaged scanner catalog limitation")
+                && limitation.contains("Applicability")
+        }));
     }
 
     #[test]
