@@ -688,7 +688,7 @@ function validateObservations(observations, identity, version) {
   assert(report.bundleEntryBytes === report.reportBytes, "master report bundle bytes differ");
   assert(report.bundleEntrySha256 === report.reportSha256, "master report bundle digest differs");
   yes(report.exactBundleEntryMatch, "master report exact signed-bundle binding");
-  assert(report.schemaVersion === "1.1.0", "master report schema changed");
+  assert(report.schemaVersion === "1.2.0", "master report schema changed");
   assert(report.product === "ai-security-scanner" && report.productVersion === version, "master report product identity changed");
   assert(report.caseId === data.demoCaseId, "master report case changed");
   assert(typeof report.runId === "string" && /^[0-9a-f-]{36}$/u.test(report.runId), "master report run ID is malformed");

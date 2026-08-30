@@ -755,7 +755,7 @@ function createMasterFrameworkSignedFixture(caseId, runId, identityDocument) {
     title: "Information access restriction",
   };
   const report = {
-    schema_version: "1.1.0",
+    schema_version: "1.2.0",
     product_name: "ai-security-scanner",
     product_version: VERSION,
     export_kind: "master_framework_relationship_report",
@@ -767,16 +767,21 @@ function createMasterFrameworkSignedFixture(caseId, runId, identityDocument) {
     notice: MASTER_FRAMEWORK_REPORT_NOTICE,
     coverage: {
       state: "incomplete_or_unknown",
-      coverage_ledger_basis: "current_case_coverage_as_of_export",
+      selected_run_coverage_ledger_basis: "selected_run_entries_matching_frozen_planned_assets",
       selected_run_checks_complete: true,
-      current_coverage_ledger_has_unknown_or_incomplete_entries: true,
-      historical_coverage_mismatch_count: 0,
+      selected_run_coverage_ledger_available: false,
+      selected_run_coverage_has_unknown_or_incomplete_entries: true,
+      excluded_other_run_coverage_entry_count: 1,
+      excluded_unbound_coverage_entry_count: 0,
       planned_engine_count: 1,
       completed_engine_count: 1,
       unfinished_engine_count: 0,
       not_executed_engine_count: 0,
-      coverage_entry_count: 1,
-      unknown_source_count: 1,
+      selected_run_planned_asset_count: 1,
+      selected_run_matched_coverage_entry_count: 0,
+      selected_run_missing_planned_asset_coverage_count: 1,
+      selected_run_unmatched_coverage_entry_count: 0,
+      unknown_source_count: 0,
       connected_no_asset_count: 0,
       authorized_incomplete_count: 0,
       discovered_not_authorized_count: 0,
@@ -785,9 +790,10 @@ function createMasterFrameworkSignedFixture(caseId, runId, identityDocument) {
       selected_run_missing_snapshot_count: 0,
       selected_run_observations_without_evidence_count: 0,
       engine_states: { completed: 1 },
-      coverage_states: { source_not_connected_unknown: 1 },
+      selected_run_coverage_states: {},
       limitations: [
-        "1 source area(s) had no visibility; this is unknown coverage, not zero assets.",
+        "1 frozen planned asset(s) have no unique coverage-ledger entry bound to the selected run. Missing historical coverage remains unknown; entries from later or unbound snapshots were not borrowed.",
+        "1 coverage-ledger entry is bound to other runs and excluded from selected-run coverage states, counts, and completeness.",
         "No related finding or framework coordinate is interpreted as a passed control or a complete environment.",
       ],
     },
@@ -866,6 +872,7 @@ function createMasterFrameworkSignedFixture(caseId, runId, identityDocument) {
         id: engineRunId,
         scan_run_id: runId,
         engine_id: "gitleaks",
+        asset_ids: [assetId],
         status: "completed",
         mapping_version: null,
         mapping_provenance: null,
@@ -909,9 +916,11 @@ function createMasterFrameworkSignedFixture(caseId, runId, identityDocument) {
   };
   const coverage = {
     coverage: [{
-      id: "coverage-source-unknown-001",
-      last_run_id: runId,
-      status: "source_not_connected_unknown",
+      id: "coverage-overwritten-by-later-run-001",
+      scope_key: `asset:${assetId}`,
+      asset_id: assetId,
+      last_run_id: "run-after-selected",
+      status: "discovered_authorized_scanned",
     }],
   };
   const reportBytes = jsonFixtureBytes(report);
@@ -1011,7 +1020,7 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
     schemas: {
       bundle: "1",
       local_signing_identity: "1",
-      master_framework_report: "1.1.0",
+      master_framework_report: "1.2.0",
     },
     rawArtifactCount: 1,
   };
@@ -1071,7 +1080,7 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       bundleEntryBytes: masterFrameworkReportBytes,
       bundleEntrySha256: masterFrameworkReportSha256,
       exactBundleEntryMatch: true,
-      schemaVersion: "1.1.0",
+      schemaVersion: "1.2.0",
       product: "ai-security-scanner",
       productVersion: VERSION,
       caseId: reportCaseId,
@@ -1333,7 +1342,7 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
         bundleEntryBytes: 4096,
         bundleEntrySha256: "bc".repeat(32),
         exactBundleEntryMatch: true,
-        schemaVersion: "1.1.0",
+        schemaVersion: "1.2.0",
         product: "ai-security-scanner",
         productVersion: VERSION,
         caseId: "00112233-4455-6677-8899-aabbccddeeff",

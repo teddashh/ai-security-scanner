@@ -11,7 +11,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION: &str = "1.1.0";
+pub const MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION: &str = "1.2.0";
 pub const MASTER_FRAMEWORK_REPORT_NOTICE: &str = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete.";
 
 const FRAMEWORKS: [(&str, &str); 3] = [
@@ -43,15 +43,20 @@ pub struct MasterFrameworkReport {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FrameworkCoverageSummary {
     pub state: String,
-    pub coverage_ledger_basis: String,
+    pub selected_run_coverage_ledger_basis: String,
     pub selected_run_checks_complete: bool,
-    pub current_coverage_ledger_has_unknown_or_incomplete_entries: bool,
-    pub historical_coverage_mismatch_count: usize,
+    pub selected_run_coverage_ledger_available: bool,
+    pub selected_run_coverage_has_unknown_or_incomplete_entries: bool,
+    pub excluded_other_run_coverage_entry_count: usize,
+    pub excluded_unbound_coverage_entry_count: usize,
     pub planned_engine_count: usize,
     pub completed_engine_count: usize,
     pub unfinished_engine_count: usize,
     pub not_executed_engine_count: usize,
-    pub coverage_entry_count: usize,
+    pub selected_run_planned_asset_count: usize,
+    pub selected_run_matched_coverage_entry_count: usize,
+    pub selected_run_missing_planned_asset_coverage_count: usize,
+    pub selected_run_unmatched_coverage_entry_count: usize,
     pub unknown_source_count: usize,
     pub connected_no_asset_count: usize,
     pub authorized_incomplete_count: usize,
@@ -61,7 +66,7 @@ pub struct FrameworkCoverageSummary {
     pub selected_run_missing_snapshot_count: usize,
     pub selected_run_observations_without_evidence_count: usize,
     pub engine_states: BTreeMap<String, usize>,
-    pub coverage_states: BTreeMap<String, usize>,
+    pub selected_run_coverage_states: BTreeMap<String, usize>,
     pub limitations: Vec<String>,
 }
 
@@ -674,9 +679,52 @@ fn coverage_summary(
     for engine in &run.engine_runs {
         *engine_states.entry(enum_key(&engine.status)).or_insert(0) += 1;
     }
-    let mut coverage_states = BTreeMap::new();
-    for entry in &case.coverage {
-        *coverage_states.entry(enum_key(&entry.status)).or_insert(0) += 1;
+    let selected_run_bound_coverage = case
+        .coverage
+        .iter()
+        .filter(|entry| entry.last_run_id.as_deref() == Some(run_id))
+        .collect::<Vec<_>>();
+    let selected_run_planned_assets = run
+        .scope_grant_snapshots
+        .iter()
+        .filter(|grant| run.scope_grant_ids.contains(&grant.id))
+        .map(|grant| grant.asset_id.as_str())
+        .chain(
+            run.engine_runs
+                .iter()
+                .flat_map(|engine_run| engine_run.asset_ids.iter().map(String::as_str)),
+        )
+        .collect::<BTreeSet<_>>();
+    let selected_run_matched_coverage = selected_run_planned_assets
+        .iter()
+        .filter_map(|asset_id| {
+            let expected_scope_key = format!("asset:{asset_id}");
+            let matches = selected_run_bound_coverage
+                .iter()
+                .copied()
+                .filter(|entry| {
+                    entry.asset_id.as_deref() == Some(*asset_id)
+                        && entry.scope_key == expected_scope_key
+                })
+                .collect::<Vec<_>>();
+            if matches.len() == 1 {
+                Some(matches[0])
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let selected_run_missing_planned_asset_coverage_count = selected_run_planned_assets
+        .len()
+        .saturating_sub(selected_run_matched_coverage.len());
+    let selected_run_unmatched_coverage_entry_count = selected_run_bound_coverage
+        .len()
+        .saturating_sub(selected_run_matched_coverage.len());
+    let mut selected_run_coverage_states = BTreeMap::new();
+    for entry in &selected_run_matched_coverage {
+        *selected_run_coverage_states
+            .entry(enum_key(&entry.status))
+            .or_insert(0) += 1;
     }
     let completed_engine_count = run
         .engine_runs
@@ -689,36 +737,68 @@ fn coverage_summary(
         .filter(|engine| engine.status == EngineRunStatus::NotExecuted)
         .count();
     let unfinished_engine_count = run.engine_runs.len().saturating_sub(completed_engine_count);
-    let unknown_source_count = count_coverage(case, CoverageStatus::SourceNotConnectedUnknown);
-    let connected_no_asset_count =
-        count_coverage(case, CoverageStatus::SourceConnectedNothingDiscovered);
-    let authorized_incomplete_count =
-        count_coverage(case, CoverageStatus::AuthorizedScanIncomplete);
-    let discovered_not_authorized_count =
-        count_coverage(case, CoverageStatus::DiscoveredNotAuthorized);
+    let unknown_source_count = count_coverage(
+        &selected_run_matched_coverage,
+        CoverageStatus::SourceNotConnectedUnknown,
+    );
+    let connected_no_asset_count = count_coverage(
+        &selected_run_matched_coverage,
+        CoverageStatus::SourceConnectedNothingDiscovered,
+    );
+    let authorized_incomplete_count = count_coverage(
+        &selected_run_matched_coverage,
+        CoverageStatus::AuthorizedScanIncomplete,
+    );
+    let discovered_not_authorized_count = count_coverage(
+        &selected_run_matched_coverage,
+        CoverageStatus::DiscoveredNotAuthorized,
+    );
     let selected_run_checks_complete =
         run.completed_at.is_some() && !run.engine_runs.is_empty() && unfinished_engine_count == 0;
-    let historical_coverage_mismatch_count = case
+    let excluded_other_run_coverage_entry_count = case
         .coverage
         .iter()
-        .filter(|entry| entry.last_run_id.as_deref() != Some(run_id))
+        .filter(|entry| {
+            entry
+                .last_run_id
+                .as_deref()
+                .is_some_and(|last_run_id| last_run_id != run_id)
+        })
         .count();
-    let current_coverage_ledger_has_unknown_or_incomplete_entries = case.coverage.is_empty()
+    let excluded_unbound_coverage_entry_count = case
+        .coverage
+        .iter()
+        .filter(|entry| entry.last_run_id.is_none())
+        .count();
+    let selected_run_coverage_ledger_available = !selected_run_matched_coverage.is_empty();
+    let selected_run_coverage_has_unknown_or_incomplete_entries = selected_run_planned_assets
+        .is_empty()
+        || selected_run_missing_planned_asset_coverage_count > 0
+        || selected_run_unmatched_coverage_entry_count > 0
         || unknown_source_count > 0
         || connected_no_asset_count > 0
         || authorized_incomplete_count > 0
-        || discovered_not_authorized_count > 0
-        || historical_coverage_mismatch_count > 0;
+        || discovered_not_authorized_count > 0;
 
     let mut limitations = Vec::new();
     if run.engine_runs.is_empty() {
         limitations.push("No scanner checks were recorded for the selected run.".into());
     }
-    if case.coverage.is_empty() {
+    if selected_run_planned_assets.is_empty() {
         limitations.push(
-            "The case has no coverage-ledger entries. Missing inventory must remain unknown."
+            "The selected run has no frozen planned asset coordinate. Exact selected-run coverage cannot be established and remains unknown."
                 .into(),
         );
+    }
+    if selected_run_missing_planned_asset_coverage_count > 0 {
+        limitations.push(format!(
+            "{selected_run_missing_planned_asset_coverage_count} frozen planned asset(s) have no unique coverage-ledger entry bound to the selected run. Missing historical coverage remains unknown; entries from later or unbound snapshots were not borrowed."
+        ));
+    }
+    if selected_run_unmatched_coverage_entry_count > 0 {
+        limitations.push(format!(
+            "{selected_run_unmatched_coverage_entry_count} selected-run-bound coverage-ledger entry or entries do not uniquely match the frozen planned asset coordinates and were excluded from coverage states and counts."
+        ));
     }
     if unfinished_engine_count > 0 {
         limitations.push(format!(
@@ -755,14 +835,24 @@ fn coverage_summary(
             "{selected_run_observations_without_evidence_count} selected-run observation(s) have no exact evidence hash reference; their provenance remains incomplete."
         ));
     }
-    if historical_coverage_mismatch_count > 0 {
-        let noun = if historical_coverage_mismatch_count == 1 {
-            "entry was"
+    if excluded_other_run_coverage_entry_count > 0 {
+        let (noun, verb) = if excluded_other_run_coverage_entry_count == 1 {
+            ("entry", "is")
         } else {
-            "entries were"
+            ("entries", "are")
         };
         limitations.push(format!(
-            "{historical_coverage_mismatch_count} current coverage-ledger {noun} last updated by a different run. This is current case context, not a historical snapshot of the selected run."
+            "{excluded_other_run_coverage_entry_count} coverage-ledger {noun} {verb} bound to other runs and excluded from selected-run coverage states, counts, and completeness."
+        ));
+    }
+    if excluded_unbound_coverage_entry_count > 0 {
+        let (noun, verb, excluded_verb) = if excluded_unbound_coverage_entry_count == 1 {
+            ("entry", "has", "was")
+        } else {
+            ("entries", "have", "were")
+        };
+        limitations.push(format!(
+            "{excluded_unbound_coverage_entry_count} coverage-ledger {noun} {verb} no run ID and {excluded_verb} excluded from selected-run coverage states, counts, and completeness."
         ));
     }
     limitations.push(
@@ -771,23 +861,29 @@ fn coverage_summary(
 
     FrameworkCoverageSummary {
         state: if selected_run_checks_complete
-            && !current_coverage_ledger_has_unknown_or_incomplete_entries
+            && !selected_run_coverage_has_unknown_or_incomplete_entries
             && selected_run_missing_snapshot_count == 0
             && selected_run_observations_without_evidence_count == 0
         {
-            "selected_run_checks_complete_with_no_known_current_ledger_gap".into()
+            "selected_run_checks_complete_with_no_known_coverage_gap".into()
         } else {
             "incomplete_or_unknown".into()
         },
-        coverage_ledger_basis: "current_case_coverage_as_of_export".into(),
+        selected_run_coverage_ledger_basis: "selected_run_entries_matching_frozen_planned_assets"
+            .into(),
         selected_run_checks_complete,
-        current_coverage_ledger_has_unknown_or_incomplete_entries,
-        historical_coverage_mismatch_count,
+        selected_run_coverage_ledger_available,
+        selected_run_coverage_has_unknown_or_incomplete_entries,
+        excluded_other_run_coverage_entry_count,
+        excluded_unbound_coverage_entry_count,
         planned_engine_count: run.engine_runs.len(),
         completed_engine_count,
         unfinished_engine_count,
         not_executed_engine_count,
-        coverage_entry_count: case.coverage.len(),
+        selected_run_planned_asset_count: selected_run_planned_assets.len(),
+        selected_run_matched_coverage_entry_count: selected_run_matched_coverage.len(),
+        selected_run_missing_planned_asset_coverage_count,
+        selected_run_unmatched_coverage_entry_count,
         unknown_source_count,
         connected_no_asset_count,
         authorized_incomplete_count,
@@ -797,13 +893,13 @@ fn coverage_summary(
         selected_run_missing_snapshot_count,
         selected_run_observations_without_evidence_count,
         engine_states,
-        coverage_states,
+        selected_run_coverage_states,
         limitations,
     }
 }
 
-fn count_coverage(case: &AssessmentCase, status: CoverageStatus) -> usize {
-    case.coverage
+fn count_coverage(coverage: &[&crate::domain::CoverageEntry], status: CoverageStatus) -> usize {
+    coverage
         .iter()
         .filter(|entry| entry.status == status)
         .count()
@@ -941,7 +1037,7 @@ fn framework_summary(
             "No AIDEFEND coordinate was inferred because at least one required AI-context answer is legacy or unanswered. This remains unknown, not not-applicable.",
         )
     } else if !coverage.selected_run_checks_complete
-        || coverage.current_coverage_ledger_has_unknown_or_incomplete_entries
+        || coverage.selected_run_coverage_has_unknown_or_incomplete_entries
         || coverage.selected_run_missing_snapshot_count > 0
         || coverage.selected_run_observations_without_evidence_count > 0
     {
@@ -1395,10 +1491,10 @@ mod tests {
         case.id = "case-1".into();
         case.coverage.push(CoverageEntry {
             id: "coverage-1".into(),
-            scope_key: "source-1".into(),
-            label: "Unknown cloud source".into(),
+            scope_key: "asset:asset-1".into(),
+            label: "Planned asset".into(),
             source_kind: SourceKind::AwsOrganization,
-            asset_id: None,
+            asset_id: Some("asset-1".into()),
             status: CoverageStatus::SourceNotConnectedUnknown,
             explanation: "Not connected".into(),
             last_run_id: Some("run-1".into()),
@@ -1588,7 +1684,7 @@ mod tests {
         assert!(
             report
                 .coverage
-                .current_coverage_ledger_has_unknown_or_incomplete_entries
+                .selected_run_coverage_has_unknown_or_incomplete_entries
         );
         assert_eq!(report.coverage.unknown_source_count, 1);
         assert_eq!(report.coverage.unfinished_engine_count, 1);
@@ -1679,12 +1775,156 @@ mod tests {
         unknown_provenance.last_run_id = None;
         case.coverage.push(unknown_provenance);
         let report = export_master_framework_report(&case, "run-1").unwrap();
-        assert_eq!(report.coverage.historical_coverage_mismatch_count, 1);
+        assert_eq!(report.coverage.excluded_unbound_coverage_entry_count, 1);
+        assert_eq!(report.coverage.selected_run_planned_asset_count, 1);
+        assert_eq!(report.coverage.selected_run_matched_coverage_entry_count, 1);
         assert_eq!(report.coverage.selected_run_finding_count, 1);
         assert!(
             report
                 .coverage
-                .current_coverage_ledger_has_unknown_or_incomplete_entries
+                .selected_run_coverage_has_unknown_or_incomplete_entries
+        );
+    }
+
+    #[test]
+    fn historical_export_never_borrows_coverage_overwritten_by_a_later_run() {
+        let mut case = fixture();
+        case.scan_runs[0].engine_runs[0].status = EngineRunStatus::Completed;
+        case.scan_runs[0].engine_runs[0].progress_percent = 100;
+        case.scan_runs[0].engine_runs[0].error_code = None;
+
+        let mut later_run = case.scan_runs[0].clone();
+        later_run.id = "run-2".into();
+        later_run.sequence = 2;
+        later_run.engine_runs.clear();
+        case.scan_runs.push(later_run);
+        case.coverage[0].last_run_id = Some("run-2".into());
+        case.coverage[0].status = CoverageStatus::DiscoveredAuthorizedScanned;
+
+        let report = export_master_framework_report(&case, "run-1").unwrap();
+        assert!(report.coverage.selected_run_checks_complete);
+        assert!(!report.coverage.selected_run_coverage_ledger_available);
+        assert!(
+            report
+                .coverage
+                .selected_run_coverage_has_unknown_or_incomplete_entries
+        );
+        assert_eq!(report.coverage.selected_run_planned_asset_count, 1);
+        assert_eq!(report.coverage.selected_run_matched_coverage_entry_count, 0);
+        assert_eq!(
+            report
+                .coverage
+                .selected_run_missing_planned_asset_coverage_count,
+            1
+        );
+        assert_eq!(
+            report.coverage.selected_run_unmatched_coverage_entry_count,
+            0
+        );
+        assert_eq!(report.coverage.excluded_other_run_coverage_entry_count, 1);
+        assert!(report.coverage.selected_run_coverage_states.is_empty());
+        assert_eq!(report.coverage.unknown_source_count, 0);
+        assert_eq!(report.coverage.connected_no_asset_count, 0);
+        assert_eq!(report.coverage.authorized_incomplete_count, 0);
+        assert_eq!(report.coverage.discovered_not_authorized_count, 0);
+        assert_eq!(report.coverage.state, "incomplete_or_unknown");
+        assert!(report.coverage.limitations.iter().any(|limitation| {
+            limitation.contains("frozen planned asset(s) have no unique coverage-ledger entry")
+        }));
+        assert!(report.coverage.limitations.iter().any(|limitation| {
+            limitation
+                .contains("excluded from selected-run coverage states, counts, and completeness")
+        }));
+        let encoded = serde_json::to_string(&report.coverage).unwrap();
+        assert!(!encoded.contains("discovered_authorized_scanned"));
+        assert!(!encoded.contains("run-2"));
+    }
+
+    #[test]
+    fn one_retained_selected_run_row_cannot_hide_another_planned_asset_overwritten_later() {
+        let mut case = fixture();
+        case.scan_runs[0].engine_runs[0].status = EngineRunStatus::Completed;
+        case.scan_runs[0].engine_runs[0].progress_percent = 100;
+        case.scan_runs[0].engine_runs[0].error_code = None;
+        case.scan_runs[0].engine_runs[0]
+            .asset_ids
+            .push("asset-2".into());
+        case.coverage[0].status = CoverageStatus::DiscoveredAuthorizedScanned;
+
+        let mut overwritten_asset = case.coverage[0].clone();
+        overwritten_asset.id = "coverage-asset-2".into();
+        overwritten_asset.scope_key = "asset:asset-2".into();
+        overwritten_asset.asset_id = Some("asset-2".into());
+        overwritten_asset.last_run_id = Some("run-2".into());
+        overwritten_asset.status = CoverageStatus::SourceNotConnectedUnknown;
+        case.coverage.push(overwritten_asset);
+
+        let report = export_master_framework_report(&case, "run-1").unwrap();
+        assert!(report.coverage.selected_run_checks_complete);
+        assert_eq!(report.coverage.selected_run_planned_asset_count, 2);
+        assert_eq!(report.coverage.selected_run_matched_coverage_entry_count, 1);
+        assert_eq!(
+            report
+                .coverage
+                .selected_run_missing_planned_asset_coverage_count,
+            1
+        );
+        assert_eq!(report.coverage.excluded_other_run_coverage_entry_count, 1);
+        assert_eq!(report.coverage.unknown_source_count, 0);
+        assert_eq!(
+            report.coverage.selected_run_coverage_states,
+            BTreeMap::from([("discovered_authorized_scanned".into(), 1)])
+        );
+        assert!(
+            report
+                .coverage
+                .selected_run_coverage_has_unknown_or_incomplete_entries
+        );
+        assert_eq!(report.coverage.state, "incomplete_or_unknown");
+        let encoded = serde_json::to_string(&report.coverage).unwrap();
+        assert!(!encoded.contains("source_not_connected_unknown"));
+        assert!(!encoded.contains("run-2"));
+    }
+
+    #[test]
+    fn other_run_coverage_is_context_only_and_cannot_reduce_selected_run_completeness() {
+        let mut case = fixture();
+        case.scan_runs[0].engine_runs[0].status = EngineRunStatus::Completed;
+        case.scan_runs[0].engine_runs[0].progress_percent = 100;
+        case.scan_runs[0].engine_runs[0].error_code = None;
+        case.coverage[0].status = CoverageStatus::DiscoveredAuthorizedScanned;
+
+        let mut other_run_entry = case.coverage[0].clone();
+        other_run_entry.id = "coverage-run-2".into();
+        other_run_entry.last_run_id = Some("run-2".into());
+        other_run_entry.status = CoverageStatus::SourceNotConnectedUnknown;
+        case.coverage.push(other_run_entry);
+
+        let report = export_master_framework_report(&case, "run-1").unwrap();
+        assert!(report.coverage.selected_run_coverage_ledger_available);
+        assert!(report.coverage.selected_run_checks_complete);
+        assert!(
+            !report
+                .coverage
+                .selected_run_coverage_has_unknown_or_incomplete_entries
+        );
+        assert_eq!(report.coverage.selected_run_planned_asset_count, 1);
+        assert_eq!(report.coverage.selected_run_matched_coverage_entry_count, 1);
+        assert_eq!(
+            report
+                .coverage
+                .selected_run_missing_planned_asset_coverage_count,
+            0
+        );
+        assert_eq!(report.coverage.excluded_other_run_coverage_entry_count, 1);
+        assert_eq!(report.coverage.unknown_source_count, 0);
+        assert_eq!(
+            report.coverage.selected_run_coverage_states,
+            BTreeMap::from([("discovered_authorized_scanned".into(), 1)])
+        );
+        assert_eq!(
+            report.coverage.state,
+            "selected_run_checks_complete_with_no_known_coverage_gap"
         );
     }
 
@@ -1723,7 +1963,7 @@ mod tests {
         assert!(
             report
                 .coverage
-                .current_coverage_ledger_has_unknown_or_incomplete_entries
+                .selected_run_coverage_has_unknown_or_incomplete_entries
         );
         assert_eq!(report.coverage.state, "incomplete_or_unknown");
         assert!(report.frameworks.iter().all(|framework| {

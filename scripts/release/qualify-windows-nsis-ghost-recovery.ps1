@@ -2593,7 +2593,7 @@ try {
   ) "Installed-artifact master framework report"
   $expectedReportNotice = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete."
   $frameworks = @($masterFrameworkReport.frameworks)
-  if ($masterFrameworkReport.schema_version -cne "1.1.0" -or
+  if ($masterFrameworkReport.schema_version -cne "1.2.0" -or
       $masterFrameworkReport.product_name -cne "ai-security-scanner" -or
       $masterFrameworkReport.product_version -cne $CurrentVersion -or
       $masterFrameworkReport.export_kind -cne "master_framework_relationship_report" -or
@@ -2601,7 +2601,10 @@ try {
       $masterFrameworkReport.selected_run_id -cne $runId -or
       $masterFrameworkReport.notice -cne $expectedReportNotice -or
       $masterFrameworkReport.coverage.state -cne "incomplete_or_unknown" -or
-      $masterFrameworkReport.coverage.current_coverage_ledger_has_unknown_or_incomplete_entries -ne $true -or
+      $masterFrameworkReport.coverage.selected_run_coverage_has_unknown_or_incomplete_entries -ne $true -or
+      $masterFrameworkReport.coverage.selected_run_planned_asset_count -ne 1 -or
+      $masterFrameworkReport.coverage.selected_run_matched_coverage_entry_count -ne 0 -or
+      $masterFrameworkReport.coverage.selected_run_missing_planned_asset_coverage_count -ne 1 -or
       @($masterFrameworkReport.coverage.limitations).Count -lt 1 -or
       $masterFrameworkReport.declared_ai_context.aidefend_applicability -cne "unknown" -or
       $frameworks.Count -ne 3 -or

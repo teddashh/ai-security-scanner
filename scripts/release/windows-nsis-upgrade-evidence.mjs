@@ -931,7 +931,7 @@ function validateFrameworkSummary(framework, contract, coverage, declaredAiConte
         : "all_relationships_exact_match";
   assert(framework.mapping_version_state === expectedMappingState, `${label} mapping-state summary is incorrect`);
   const incompleteForEmptyFramework = !coverage.selected_run_checks_complete ||
-    coverage.current_coverage_ledger_has_unknown_or_incomplete_entries ||
+    coverage.selected_run_coverage_has_unknown_or_incomplete_entries ||
     coverage.selected_run_missing_snapshot_count > 0 ||
     coverage.selected_run_observations_without_evidence_count > 0;
   const expectedState = relationships.length > 0
@@ -961,15 +961,20 @@ function validateCoverage(coverage) {
     coverage,
     [
       "state",
-      "coverage_ledger_basis",
+      "selected_run_coverage_ledger_basis",
       "selected_run_checks_complete",
-      "current_coverage_ledger_has_unknown_or_incomplete_entries",
-      "historical_coverage_mismatch_count",
+      "selected_run_coverage_ledger_available",
+      "selected_run_coverage_has_unknown_or_incomplete_entries",
+      "excluded_other_run_coverage_entry_count",
+      "excluded_unbound_coverage_entry_count",
       "planned_engine_count",
       "completed_engine_count",
       "unfinished_engine_count",
       "not_executed_engine_count",
-      "coverage_entry_count",
+      "selected_run_planned_asset_count",
+      "selected_run_matched_coverage_entry_count",
+      "selected_run_missing_planned_asset_coverage_count",
+      "selected_run_unmatched_coverage_entry_count",
       "unknown_source_count",
       "connected_no_asset_count",
       "authorized_incomplete_count",
@@ -979,32 +984,40 @@ function validateCoverage(coverage) {
       "selected_run_missing_snapshot_count",
       "selected_run_observations_without_evidence_count",
       "engine_states",
-      "coverage_states",
+      "selected_run_coverage_states",
       "limitations",
     ],
     "master framework report coverage",
   );
   assertEnum(
     coverage.state,
-    ["selected_run_checks_complete_with_no_known_current_ledger_gap", "incomplete_or_unknown"],
+    ["selected_run_checks_complete_with_no_known_coverage_gap", "incomplete_or_unknown"],
     "master framework report coverage state",
   );
   assert(
-    coverage.coverage_ledger_basis === "current_case_coverage_as_of_export",
+    coverage.selected_run_coverage_ledger_basis === "selected_run_entries_matching_frozen_planned_assets",
     "master framework report coverage basis changed",
   );
   assert(typeof coverage.selected_run_checks_complete === "boolean", "selected-run completion is not boolean");
   assert(
-    typeof coverage.current_coverage_ledger_has_unknown_or_incomplete_entries === "boolean",
-    "coverage-ledger unknown flag is not boolean",
+    typeof coverage.selected_run_coverage_ledger_available === "boolean",
+    "selected-run coverage-ledger availability is not boolean",
+  );
+  assert(
+    typeof coverage.selected_run_coverage_has_unknown_or_incomplete_entries === "boolean",
+    "selected-run coverage-ledger unknown flag is not boolean",
   );
   const countFields = [
-    "historical_coverage_mismatch_count",
+    "excluded_other_run_coverage_entry_count",
+    "excluded_unbound_coverage_entry_count",
     "planned_engine_count",
     "completed_engine_count",
     "unfinished_engine_count",
     "not_executed_engine_count",
-    "coverage_entry_count",
+    "selected_run_planned_asset_count",
+    "selected_run_matched_coverage_entry_count",
+    "selected_run_missing_planned_asset_coverage_count",
+    "selected_run_unmatched_coverage_entry_count",
     "unknown_source_count",
     "connected_no_asset_count",
     "authorized_incomplete_count",
@@ -1018,7 +1031,7 @@ function validateCoverage(coverage) {
     assertBoundedInteger(coverage[field], 0, 1_000_000, `master framework report coverage ${field}`);
   }
   validateCountMap(coverage.engine_states, "master framework report engine states");
-  validateCountMap(coverage.coverage_states, "master framework report coverage states");
+  validateCountMap(coverage.selected_run_coverage_states, "master framework report selected-run coverage states");
   const allowedEngineStates = new Set([
     "not_executed", "queued", "preparing", "running", "paused", "completed",
     "partially_completed", "failed", "cancelled",
@@ -1028,15 +1041,15 @@ function validateCoverage(coverage) {
     "source_connected_nothing_discovered", "source_not_connected_unknown", "not_applicable",
   ]);
   assert(Object.keys(coverage.engine_states).every((state) => allowedEngineStates.has(state)), "master framework report has an unknown engine state");
-  assert(Object.keys(coverage.coverage_states).every((state) => allowedCoverageStates.has(state)), "master framework report has an unknown coverage state");
+  assert(Object.keys(coverage.selected_run_coverage_states).every((state) => allowedCoverageStates.has(state)), "master framework report has an unknown selected-run coverage state");
   assertStringArray(coverage.limitations, "master framework report limitations", { minimum: 1, maximum: 4096 });
   assert(
     sumCountMap(coverage.engine_states) === coverage.planned_engine_count,
     "master framework report planned-engine count differs from its state ledger",
   );
   assert(
-    sumCountMap(coverage.coverage_states) === coverage.coverage_entry_count,
-    "master framework report coverage-entry count differs from its state ledger",
+    sumCountMap(coverage.selected_run_coverage_states) === coverage.selected_run_matched_coverage_entry_count,
+    "master framework report matched selected-run coverage-entry count differs from its state ledger",
   );
   assert(
     coverage.unfinished_engine_count === coverage.planned_engine_count - coverage.completed_engine_count,
@@ -1052,24 +1065,33 @@ function validateCoverage(coverage) {
     "master framework report engine summary counts differ from the state ledger",
   );
   assert(
-    coverage.unknown_source_count === (coverage.coverage_states.source_not_connected_unknown ?? 0) &&
-      coverage.connected_no_asset_count === (coverage.coverage_states.source_connected_nothing_discovered ?? 0) &&
-      coverage.authorized_incomplete_count === (coverage.coverage_states.authorized_scan_incomplete ?? 0) &&
-      coverage.discovered_not_authorized_count === (coverage.coverage_states.discovered_not_authorized ?? 0),
-    "master framework report gap counts differ from the coverage ledger",
+    coverage.unknown_source_count === (coverage.selected_run_coverage_states.source_not_connected_unknown ?? 0) &&
+      coverage.connected_no_asset_count === (coverage.selected_run_coverage_states.source_connected_nothing_discovered ?? 0) &&
+      coverage.authorized_incomplete_count === (coverage.selected_run_coverage_states.authorized_scan_incomplete ?? 0) &&
+      coverage.discovered_not_authorized_count === (coverage.selected_run_coverage_states.discovered_not_authorized ?? 0),
+    "master framework report gap counts differ from the selected-run coverage ledger",
   );
-  const expectedCurrentLedgerGap = coverage.coverage_entry_count === 0 ||
-    coverage.unknown_source_count > 0 || coverage.connected_no_asset_count > 0 ||
-    coverage.authorized_incomplete_count > 0 || coverage.discovered_not_authorized_count > 0 ||
-    coverage.historical_coverage_mismatch_count > 0;
   assert(
-    coverage.current_coverage_ledger_has_unknown_or_incomplete_entries === expectedCurrentLedgerGap,
-    "master framework report current-ledger gap flag is inconsistent",
+    coverage.selected_run_coverage_ledger_available === (coverage.selected_run_matched_coverage_entry_count > 0),
+    "master framework report selected-run coverage availability is inconsistent",
+  );
+  assert(
+    coverage.selected_run_matched_coverage_entry_count + coverage.selected_run_missing_planned_asset_coverage_count ===
+      coverage.selected_run_planned_asset_count,
+    "master framework report planned-asset coverage counts are inconsistent",
+  );
+  const expectedSelectedRunCoverageGap = coverage.selected_run_planned_asset_count === 0 ||
+    coverage.selected_run_missing_planned_asset_coverage_count > 0 ||
+    coverage.selected_run_unmatched_coverage_entry_count > 0 ||
+    coverage.unknown_source_count > 0 || coverage.connected_no_asset_count > 0 ||
+    coverage.authorized_incomplete_count > 0 || coverage.discovered_not_authorized_count > 0;
+  assert(
+    coverage.selected_run_coverage_has_unknown_or_incomplete_entries === expectedSelectedRunCoverageGap,
+    "master framework report selected-run coverage gap flag is inconsistent",
   );
   const incompleteReasons = [
     !coverage.selected_run_checks_complete,
-    coverage.current_coverage_ledger_has_unknown_or_incomplete_entries,
-    coverage.historical_coverage_mismatch_count > 0,
+    coverage.selected_run_coverage_has_unknown_or_incomplete_entries,
     coverage.unfinished_engine_count > 0,
     coverage.not_executed_engine_count > 0,
     coverage.unknown_source_count > 0,
@@ -1201,7 +1223,7 @@ function validateMasterFrameworkReport(report, reportObservation, currentVersion
     ],
     "master framework report",
   );
-  assert(report.schema_version === "1.1.0", "master framework report schema is not 1.1.0");
+  assert(report.schema_version === "1.2.0", "master framework report schema is not 1.2.0");
   assert(report.product_name === "ai-security-scanner", "master framework report product is incorrect");
   assert(report.product_version === currentVersion, "master framework report product version differs from the installed candidate");
   assert(report.export_kind === "master_framework_relationship_report", "master framework report export kind is incorrect");
@@ -1362,13 +1384,19 @@ function derivedMappingProvenanceState(mappingVersion, provenance, label) {
   return state;
 }
 
-function exactCoverageLimitations(run, coverage, summary) {
+function exactCoverageLimitations(run, summary) {
   const limitations = [];
   if (run.engine_runs.length === 0) {
     limitations.push("No scanner checks were recorded for the selected run.");
   }
-  if (coverage.length === 0) {
-    limitations.push("The case has no coverage-ledger entries. Missing inventory must remain unknown.");
+  if (summary.selected_run_planned_asset_count === 0) {
+    limitations.push("The selected run has no frozen planned asset coordinate. Exact selected-run coverage cannot be established and remains unknown.");
+  }
+  if (summary.selected_run_missing_planned_asset_coverage_count > 0) {
+    limitations.push(`${summary.selected_run_missing_planned_asset_coverage_count} frozen planned asset(s) have no unique coverage-ledger entry bound to the selected run. Missing historical coverage remains unknown; entries from later or unbound snapshots were not borrowed.`);
+  }
+  if (summary.selected_run_unmatched_coverage_entry_count > 0) {
+    limitations.push(`${summary.selected_run_unmatched_coverage_entry_count} selected-run-bound coverage-ledger entry or entries do not uniquely match the frozen planned asset coordinates and were excluded from coverage states and counts.`);
   }
   if (summary.unfinished_engine_count > 0) {
     limitations.push(`${summary.unfinished_engine_count} scanner check(s) did not complete; their areas remain unknown.`);
@@ -1391,9 +1419,16 @@ function exactCoverageLimitations(run, coverage, summary) {
   if (summary.selected_run_observations_without_evidence_count > 0) {
     limitations.push(`${summary.selected_run_observations_without_evidence_count} selected-run observation(s) have no exact evidence hash reference; their provenance remains incomplete.`);
   }
-  if (summary.historical_coverage_mismatch_count > 0) {
-    const noun = summary.historical_coverage_mismatch_count === 1 ? "entry was" : "entries were";
-    limitations.push(`${summary.historical_coverage_mismatch_count} current coverage-ledger ${noun} last updated by a different run. This is current case context, not a historical snapshot of the selected run.`);
+  if (summary.excluded_other_run_coverage_entry_count > 0) {
+    const noun = summary.excluded_other_run_coverage_entry_count === 1 ? "entry" : "entries";
+    const verb = summary.excluded_other_run_coverage_entry_count === 1 ? "is" : "are";
+    limitations.push(`${summary.excluded_other_run_coverage_entry_count} coverage-ledger ${noun} ${verb} bound to other runs and excluded from selected-run coverage states, counts, and completeness.`);
+  }
+  if (summary.excluded_unbound_coverage_entry_count > 0) {
+    const noun = summary.excluded_unbound_coverage_entry_count === 1 ? "entry" : "entries";
+    const verb = summary.excluded_unbound_coverage_entry_count === 1 ? "has" : "have";
+    const excludedVerb = summary.excluded_unbound_coverage_entry_count === 1 ? "was" : "were";
+    limitations.push(`${summary.excluded_unbound_coverage_entry_count} coverage-ledger ${noun} ${verb} no run ID and ${excludedVerb} excluded from selected-run coverage states, counts, and completeness.`);
   }
   limitations.push("No related finding or framework coordinate is interpreted as a passed control or a complete environment.");
   return limitations;
@@ -1614,21 +1649,42 @@ function validateReportAgainstSignedBundle(report, bundle) {
 
   const engineStates = {};
   for (const engine of run.engine_runs) engineStates[engine.status] = (engineStates[engine.status] ?? 0) + 1;
-  const coverageStates = {};
-  for (const entry of coverageDocument.coverage) coverageStates[entry.status] = (coverageStates[entry.status] ?? 0) + 1;
+  const selectedRunPlannedAssets = new Set([
+    ...(run.scope_grant_snapshots ?? [])
+      .filter((grant) => (run.scope_grant_ids ?? []).includes(grant.id))
+      .map((grant) => grant.asset_id),
+    ...run.engine_runs.flatMap((engine) => engine.asset_ids ?? []),
+  ].filter((assetId) => typeof assetId === "string" && assetId.length > 0));
+  const selectedRunBoundCoverage = coverageDocument.coverage.filter((entry) => entry.last_run_id === run.id);
+  const selectedRunCoverage = [];
+  for (const assetId of [...selectedRunPlannedAssets].sort()) {
+    const matches = selectedRunBoundCoverage.filter((entry) =>
+      entry.asset_id === assetId && entry.scope_key === `asset:${assetId}`);
+    if (matches.length === 1) selectedRunCoverage.push(matches[0]);
+  }
+  const selectedRunCoverageStates = {};
+  for (const entry of selectedRunCoverage) {
+    selectedRunCoverageStates[entry.status] = (selectedRunCoverageStates[entry.status] ?? 0) + 1;
+  }
   const completedEngines = engineStates.completed ?? 0;
   const unfinishedEngines = run.engine_runs.length - completedEngines;
   const coverageSummary = {
-    historical_coverage_mismatch_count: coverageDocument.coverage.filter((entry) => entry.last_run_id !== run.id).length,
+    excluded_other_run_coverage_entry_count: coverageDocument.coverage.filter((entry) =>
+      entry.last_run_id !== null && entry.last_run_id !== undefined && entry.last_run_id !== run.id).length,
+    excluded_unbound_coverage_entry_count: coverageDocument.coverage.filter((entry) =>
+      entry.last_run_id === null || entry.last_run_id === undefined).length,
     planned_engine_count: run.engine_runs.length,
     completed_engine_count: completedEngines,
     unfinished_engine_count: unfinishedEngines,
     not_executed_engine_count: engineStates.not_executed ?? 0,
-    coverage_entry_count: coverageDocument.coverage.length,
-    unknown_source_count: coverageStates.source_not_connected_unknown ?? 0,
-    connected_no_asset_count: coverageStates.source_connected_nothing_discovered ?? 0,
-    authorized_incomplete_count: coverageStates.authorized_scan_incomplete ?? 0,
-    discovered_not_authorized_count: coverageStates.discovered_not_authorized ?? 0,
+    selected_run_planned_asset_count: selectedRunPlannedAssets.size,
+    selected_run_matched_coverage_entry_count: selectedRunCoverage.length,
+    selected_run_missing_planned_asset_coverage_count: selectedRunPlannedAssets.size - selectedRunCoverage.length,
+    selected_run_unmatched_coverage_entry_count: selectedRunBoundCoverage.length - selectedRunCoverage.length,
+    unknown_source_count: selectedRunCoverageStates.source_not_connected_unknown ?? 0,
+    connected_no_asset_count: selectedRunCoverageStates.source_connected_nothing_discovered ?? 0,
+    authorized_incomplete_count: selectedRunCoverageStates.authorized_scan_incomplete ?? 0,
+    discovered_not_authorized_count: selectedRunCoverageStates.discovered_not_authorized ?? 0,
     selected_run_finding_count: new Set(selectedObservations.map((observation) => observation.finding_id)).size,
     selected_run_snapshot_count: selectedObservations.length - missingSnapshots,
     selected_run_missing_snapshot_count: missingSnapshots,
@@ -1636,21 +1692,26 @@ function validateReportAgainstSignedBundle(report, bundle) {
   };
   const selectedRunChecksComplete = run.completed_at !== null && run.completed_at !== undefined &&
     run.engine_runs.length > 0 && unfinishedEngines === 0;
-  const currentLedgerGap = coverageDocument.coverage.length === 0 || coverageSummary.unknown_source_count > 0 ||
+  const selectedRunCoverageGap = selectedRunPlannedAssets.size === 0 ||
+    coverageSummary.selected_run_missing_planned_asset_coverage_count > 0 ||
+    coverageSummary.selected_run_unmatched_coverage_entry_count > 0 ||
+    coverageSummary.unknown_source_count > 0 ||
     coverageSummary.connected_no_asset_count > 0 || coverageSummary.authorized_incomplete_count > 0 ||
-    coverageSummary.discovered_not_authorized_count > 0 || coverageSummary.historical_coverage_mismatch_count > 0;
+    coverageSummary.discovered_not_authorized_count > 0;
   for (const [field, expected] of Object.entries(coverageSummary)) {
     assert(report.coverage[field] === expected, `master framework coverage ${field} differs from the signed run or coverage ledger`);
   }
   assert(report.coverage.selected_run_checks_complete === selectedRunChecksComplete,
     "master framework selected-run completion differs from the signed engine ledger");
-  assert(report.coverage.current_coverage_ledger_has_unknown_or_incomplete_entries === currentLedgerGap,
-    "master framework current-ledger gap flag differs from signed coverage");
+  assert(report.coverage.selected_run_coverage_ledger_available === (selectedRunCoverage.length > 0),
+    "master framework selected-run coverage availability differs from signed coverage");
+  assert(report.coverage.selected_run_coverage_has_unknown_or_incomplete_entries === selectedRunCoverageGap,
+    "master framework selected-run coverage gap flag differs from signed coverage");
   assert(jsonEqual(report.coverage.engine_states, Object.fromEntries(Object.entries(engineStates).sort())),
     "master framework engine-state counts differ from the signed engine ledger");
-  assert(jsonEqual(report.coverage.coverage_states, Object.fromEntries(Object.entries(coverageStates).sort())),
-    "master framework coverage-state counts differ from the signed coverage ledger");
-  assert(jsonEqual(report.coverage.limitations, exactCoverageLimitations(run, coverageDocument.coverage, coverageSummary)),
+  assert(jsonEqual(report.coverage.selected_run_coverage_states, Object.fromEntries(Object.entries(selectedRunCoverageStates).sort())),
+    "master framework coverage-state counts differ from selected-run entries that uniquely match the frozen planned assets");
+  assert(jsonEqual(report.coverage.limitations, exactCoverageLimitations(run, coverageSummary)),
     "master framework limitations differ from the exact signed coverage limitations");
 
   const frozenAiSystem = (run.ai_system_applicability ?? "unknown") === "unknown" && run.ai_system_applicable === true
@@ -1697,8 +1758,8 @@ async function validateMasterFrameworkArtifacts(
   assert(prior.envelope.key_id === candidate.envelope.key_id &&
     prior.envelope.public_key_base64 === candidate.envelope.public_key_base64,
   "N-1 and candidate signed case bundles do not prove the same integrity-signing identity");
-  assert(candidate.manifest.schemas.master_framework_report === "1.1.0",
-    "candidate signed case bundle does not declare master framework report schema 1.1.0");
+  assert(candidate.manifest.schemas.master_framework_report === "1.2.0",
+    "candidate signed case bundle does not declare master framework report schema 1.2.0");
   const reportEntry = candidate.manifestEntries.get(MASTER_FRAMEWORK_REPORT_ENTRY);
   assert(reportEntry?.media_type === "application/json" && reportEntry.contains_sensitive_data === true,
     "candidate signed report entry metadata is incorrect");
@@ -1944,7 +2005,7 @@ function validateObservations(observations, currentVersion, currentInstaller) {
   assertTrue(report.exactBundleEntryMatch, "standalone report equality with signed bundle entry");
   assert(report.reportBytes === report.bundleEntryBytes, "standalone and signed-bundle report byte lengths differ");
   assert(report.reportSha256 === report.bundleEntrySha256, "standalone and signed-bundle report digests differ");
-  assert(report.schemaVersion === "1.1.0", "master framework report observation schema is not 1.1.0");
+  assert(report.schemaVersion === "1.2.0", "master framework report observation schema is not 1.2.0");
   assert(report.product === "ai-security-scanner", "master framework report observation product is incorrect");
   assert(report.productVersion === currentVersion, "master framework report observation version differs from the candidate");
   assertString(report.caseId, "master framework report observation case ID", 512);
