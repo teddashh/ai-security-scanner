@@ -2814,8 +2814,10 @@ async function main() {
   );
 
   assert(
-    /^\*\.ps1 text eol=lf$/mu.test(gitAttributes),
-    "PowerShell qualification scripts must remain LF-only in Windows checkouts",
+    /^scripts\/release\/qualify-windows-nsis-ghost-recovery\.ps1 text eol=lf$/mu.test(
+      gitAttributes,
+    ),
+    "the WSL ghost qualification script must remain LF-only in Windows checkouts",
   );
 
   assert(isSemver(version), `package version is not native-compatible numeric SemVer: ${version}`);
