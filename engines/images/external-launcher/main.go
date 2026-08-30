@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -29,6 +31,7 @@ import (
 
 const (
 	scopeMountPath               = "/run/ai-security-scanner/scope.json"
+	journalPlanMountPath         = "/run/ai-security-scanner/execution-journal-v2.json"
 	outputMountPath              = "/output"
 	templateRootPath             = "/opt/nuclei-templates"
 	templateRevision             = "24858b4bfabfa86f0bcfd36aea24fb535152b012"
@@ -48,7 +51,22 @@ const (
 	naabuEngineCeiling           = 4 * time.Hour
 	httpEngineCeiling            = 2 * time.Hour
 	maxNucleiRequestsPerTemplate = 20
+	launcherV2SchemaVersion      = 2
+	maxLauncherV2Units           = 512
+	maxLauncherV2JournalBytes    = 4 * 1024 * 1024
+	maxLauncherV2RecordBytes     = 1024 * 1024
+	maxLauncherV2OpaqueIDBytes   = 128
+	maxLauncherV2RelativeBytes   = 512
+	maxLauncherV2PlanBytes       = 1024 * 1024
+	maxLauncherV2Diagnostics     = 8
+	maxLauncherV2DiagnosticBytes = 256
+	launcherV2WorkUnitPrefix     = "wu_"
+	launcherV2WorkUnitHexChars   = 32
+	launcherV2Directory          = "launcher-v2"
+	launcherV2JournalName        = "journal.jsonl"
 )
+
+const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 type scopeDocument struct {
 	SchemaVersion string       `json:"schema_version"`
@@ -137,6 +155,99 @@ type invocation struct {
 	Timeout time.Duration
 }
 
+type launcherV2Options struct {
+	PlanPath string
+}
+
+type launcherV2RequestedUnit struct {
+	UnitID      string `json:"unit_id"`
+	ScopeSHA256 string `json:"scope_sha256"`
+}
+
+type launcherV2Header struct {
+	RecordType         string                    `json:"record_type"`
+	SchemaVersion      int                       `json:"schema_version"`
+	EngineRunID        string                    `json:"engine_run_id"`
+	ExecutionAttempt   uint32                    `json:"execution_attempt"`
+	RequestedWorkUnits []launcherV2RequestedUnit `json:"requested_work_units"`
+}
+
+type launcherV2PlannedUnit struct {
+	ScopeGrantID string `json:"scope_grant_id"`
+	UnitID       string `json:"unit_id"`
+	ScopeSHA256  string `json:"scope_sha256"`
+}
+
+type launcherV2Plan struct {
+	SchemaVersion      int                     `json:"schema_version"`
+	EngineID           string                  `json:"engine_id"`
+	EngineRunID        string                  `json:"engine_run_id"`
+	ExecutionAttempt   uint32                  `json:"execution_attempt"`
+	RequestedWorkUnits []launcherV2PlannedUnit `json:"requested_work_units"`
+}
+
+type launcherV2FinalArtifact struct {
+	EngineRunID  string `json:"engine_run_id"`
+	UnitID       string `json:"unit_id"`
+	ScopeSHA256  string `json:"scope_sha256"`
+	Attempt      uint32 `json:"attempt"`
+	RelativePath string `json:"relative_path"`
+	SHA256       string `json:"sha256"`
+	ByteLength   uint64 `json:"byte_length"`
+}
+
+type launcherV2AttemptFinished struct {
+	RecordType       string                   `json:"record_type"`
+	UnitID           string                   `json:"unit_id"`
+	ScopeSHA256      string                   `json:"scope_sha256"`
+	Attempt          uint32                   `json:"attempt"`
+	Outcome          string                   `json:"outcome"`
+	IncompleteReason string                   `json:"incomplete_reason,omitempty"`
+	FinalArtifact    *launcherV2FinalArtifact `json:"final_artifact,omitempty"`
+}
+
+type launcherV2Journal struct {
+	file             *os.File
+	engineRunID      string
+	executionAttempt uint32
+	requested        map[string]launcherV2RequestedUnit
+	terminalWritten  map[string]bool
+	written          int64
+	recordsWritten   int
+	budget           *launcherV2ByteBudget
+}
+
+type launcherV2ByteBudget struct {
+	journalUsed int64
+	payloadUsed int64
+}
+
+// launcherV2Diagnostics stays outside the privacy-safe coverage journal. It is
+// returned through the launcher's already captured technical stderr so a
+// missing binary, scanner stderr, normalization failure, or quarantine failure
+// does not collapse into an unactionable count. Entries are ordinal, bounded,
+// and best-effort; they never alter terminal coverage truth.
+type launcherV2Diagnostics struct {
+	entries []string
+	omitted int
+}
+
+type launcherV2RunOutcome string
+
+const (
+	launcherV2RunSucceeded launcherV2RunOutcome = "succeeded"
+	launcherV2RunFailed    launcherV2RunOutcome = "failed"
+	launcherV2RunTimedOut  launcherV2RunOutcome = "timed_out"
+	launcherV2RunCancelled launcherV2RunOutcome = "cancelled"
+)
+
+type launcherV2RunResult struct {
+	Outcome launcherV2RunOutcome
+	Err     error
+}
+
+var errScannerTimedOut = errors.New("scanner exceeded the frozen total timeout")
+
 type boundedBuffer struct {
 	bytes.Buffer
 	remaining int
@@ -170,6 +281,8 @@ func run(arguments []string, now time.Time) error {
 	engineID := flags.String("engine", "", "fixed engine identifier")
 	scopePath := flags.String("scope", "", "immutable scope document")
 	outputPath := flags.String("output", "", "evidence output directory")
+	journalVersion := flags.Int("journal-version", 0, "opt-in execution journal schema")
+	journalPlanPath := flags.String("journal-plan", "", "host-frozen execution journal plan")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return errors.New("arguments do not match the static launcher contract")
 	}
@@ -178,6 +291,10 @@ func run(arguments []string, now time.Time) error {
 	}
 	if *scopePath != scopeMountPath || *outputPath != outputMountPath {
 		return errors.New("scope and output paths must use the runtime-owned mounts")
+	}
+	journal, err := validateLauncherV2Options(*journalVersion, *journalPlanPath, *engineID)
+	if err != nil {
+		return err
 	}
 	if err := validateOutputDirectory(*outputPath); err != nil {
 		return err
@@ -193,6 +310,13 @@ func run(arguments []string, now time.Time) error {
 	units, err := validateAndPlan(document, *engineID, now)
 	if err != nil {
 		return err
+	}
+	var journalPlan *launcherV2Plan
+	if journal != nil {
+		journalPlan, err = loadLauncherV2Plan(journal.PlanPath, *engineID, units)
+		if err != nil {
+			return err
+		}
 	}
 
 	temporaryRoot, err := os.MkdirTemp("/tmp", "ai-security-scanner-external-")
@@ -215,6 +339,26 @@ func run(arguments []string, now time.Time) error {
 		}
 	}
 
+	environment := childEnvironment(proxy, temporaryRoot)
+	nucleiProxy := nucleiCompatibleProxy(proxy)
+	if *engineID == "nuclei" {
+		// Nuclei v3.11.1 calls the same remote-name SOCKS5 protocol "socks5";
+		// its parser rejects the conventional socks5h URL spelling. The endpoint
+		// was already reduced above to the runtime-owned literal bridge IP:1080.
+		environment = childEnvironment(nucleiProxy, temporaryRoot)
+	}
+	if journal != nil {
+		return runNaabuLauncherV2(
+			*outputPath,
+			temporaryRoot,
+			journalPlan,
+			units,
+			naabuProxy,
+			environment,
+			now,
+			runCommandForLauncherV2,
+		)
+	}
 	finalPath := filepath.Join(*outputPath, *engineID+".jsonl")
 	final, err := os.OpenFile(finalPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -229,14 +373,6 @@ func run(arguments []string, now time.Time) error {
 	}()
 	writer := bufio.NewWriterSize(final, 64*1024)
 	written := int64(0)
-	environment := childEnvironment(proxy, temporaryRoot)
-	nucleiProxy := nucleiCompatibleProxy(proxy)
-	if *engineID == "nuclei" {
-		// Nuclei v3.11.1 calls the same remote-name SOCKS5 protocol "socks5";
-		// its parser rejects the conventional socks5h URL spelling. The endpoint
-		// was already reduced above to the runtime-owned literal bridge IP:1080.
-		environment = childEnvironment(nucleiProxy, temporaryRoot)
-	}
 
 	for index, unit := range units {
 		if !now.Before(unit.Grant.ExpiresAt) || !time.Now().UTC().Before(unit.Grant.ExpiresAt) {
@@ -282,6 +418,711 @@ func run(arguments []string, now time.Time) error {
 	}
 	complete = true
 	return nil
+}
+
+func validateLauncherV2Options(version int, planPath, engineID string) (*launcherV2Options, error) {
+	if version == 0 && planPath == "" {
+		return nil, nil
+	}
+	if version != launcherV2SchemaVersion || planPath != journalPlanMountPath {
+		return nil, errors.New("launcher-v2 requires its exact versioned host-frozen plan mount")
+	}
+	if engineID != "naabu" {
+		return nil, errors.New("launcher-v2 execution evidence is currently available only for Naabu")
+	}
+	return &launcherV2Options{PlanPath: planPath}, nil
+}
+
+func loadLauncherV2Plan(planPath, expectedEngine string, units []scanUnit) (*launcherV2Plan, error) {
+	value, err := readBoundedRegularFile(planPath, maxLauncherV2PlanBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read launcher-v2 host-frozen plan: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.DisallowUnknownFields()
+	var plan launcherV2Plan
+	if err := decoder.Decode(&plan); err != nil || requireJSONEOF(decoder) != nil {
+		return nil, errors.New("launcher-v2 host-frozen plan is malformed")
+	}
+	if plan.SchemaVersion != launcherV2SchemaVersion || plan.EngineID != expectedEngine || expectedEngine != "naabu" {
+		return nil, errors.New("launcher-v2 host-frozen plan version or engine is invalid")
+	}
+	if !launcherV2OpaqueID(plan.EngineRunID) {
+		return nil, errors.New("launcher-v2 engine run identity is not a bounded opaque identifier")
+	}
+	if len(units) < 1 || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxLauncherV2Units || len(plan.RequestedWorkUnits) > len(units) {
+		return nil, errors.New("launcher-v2 requested work-unit subset does not fit the validated Naabu plan")
+	}
+	if plan.ExecutionAttempt == 0 {
+		return nil, errors.New("launcher-v2 execution attempt must be non-zero")
+	}
+	seen := make(map[string]struct{}, len(plan.RequestedWorkUnits))
+	availableGrants := make(map[string]struct{}, len(units))
+	for _, unit := range units {
+		availableGrants[unit.Grant.ID] = struct{}{}
+	}
+	seenGrants := make(map[string]struct{}, len(plan.RequestedWorkUnits))
+	for _, requested := range plan.RequestedWorkUnits {
+		if !launcherV2WorkUnitID(requested.UnitID) || !launcherV2SHA256(requested.ScopeSHA256) {
+			return nil, errors.New("launcher-v2 requested work-unit identity is invalid")
+		}
+		if _, exists := availableGrants[requested.ScopeGrantID]; !exists {
+			return nil, errors.New("launcher-v2 requested work unit is outside the validated Naabu grants")
+		}
+		if _, exists := seen[requested.UnitID]; exists {
+			return nil, errors.New("launcher-v2 requested work-unit identities are not unique")
+		}
+		if _, exists := seenGrants[requested.ScopeGrantID]; exists {
+			return nil, errors.New("launcher-v2 requested Naabu grants are not unique")
+		}
+		seen[requested.UnitID] = struct{}{}
+		seenGrants[requested.ScopeGrantID] = struct{}{}
+	}
+	return &plan, nil
+}
+
+// runNaabuLauncherV2 is deliberately separate from the legacy aggregate
+// writer. The host owns the ordered unit identities and scope digests in the
+// sidecar plan; the launcher only maps that exact order to the already
+// validated Naabu units. This avoids a second cross-language canonicalization
+// algorithm while keeping target names and addresses out of journal IDs.
+func runNaabuLauncherV2(
+	outputRoot string,
+	temporaryRoot string,
+	plan *launcherV2Plan,
+	units []scanUnit,
+	proxy string,
+	environment []string,
+	now time.Time,
+	runner func(invocation) launcherV2RunResult,
+) error {
+	if plan == nil || runner == nil || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > len(units) {
+		return errors.New("launcher-v2 execution plan is unavailable or mismatched")
+	}
+	budget := &launcherV2ByteBudget{}
+	journal, err := createLauncherV2Journal(outputRoot, plan, budget)
+	if err != nil {
+		return err
+	}
+	journalOpen := true
+	defer func() {
+		if journalOpen {
+			_ = journal.file.Close()
+		}
+	}()
+
+	incompleteUnits := 0
+	quarantineFailures := 0
+	diagnostics := &launcherV2Diagnostics{}
+	unitByGrant := make(map[string]int, len(units))
+	for index, unit := range units {
+		unitByGrant[unit.Grant.ID] = index
+	}
+	for _, planned := range plan.RequestedWorkUnits {
+		planIndex, exists := unitByGrant[planned.ScopeGrantID]
+		if !exists {
+			return errors.New("launcher-v2 work unit escaped the validated Naabu grants")
+		}
+		unit := units[planIndex]
+		requested := launcherV2RequestedUnit{UnitID: planned.UnitID, ScopeSHA256: planned.ScopeSHA256}
+		attempt := plan.ExecutionAttempt
+		temporaryOutput := filepath.Join(temporaryRoot, fmt.Sprintf("result-%06d.jsonl", planIndex))
+		finishWithoutArtifact := func(outcome string, retainRaw bool) error {
+			if retainRaw {
+				if _, quarantineErr := quarantineLauncherV2Raw(outputRoot, temporaryOutput, planIndex, attempt, budget); quarantineErr != nil {
+					quarantineFailures++
+					diagnostics.add(planIndex, "raw-evidence quarantine", quarantineErr)
+				}
+			}
+			incompleteUnits++
+			return journal.appendAttempt(launcherV2AttemptFinished{
+				RecordType:  "attempt_finished",
+				UnitID:      requested.UnitID,
+				ScopeSHA256: requested.ScopeSHA256,
+				Attempt:     attempt,
+				Outcome:     outcome,
+			})
+		}
+
+		if !now.Before(unit.Grant.ExpiresAt) || !time.Now().UTC().Before(unit.Grant.ExpiresAt) {
+			diagnostics.add(planIndex, "authorization", errors.New("authorization expired before the unit could start"))
+			if err := finishWithoutArtifact("not_tested", false); err != nil {
+				return fmt.Errorf("record launcher-v2 unit-%06d outcome: %w", planIndex, err)
+			}
+			continue
+		}
+		command, invocationErr := naabuInvocation(
+			unit, proxy, temporaryOutput, environment, temporaryRoot, planIndex,
+		)
+		if invocationErr != nil {
+			diagnostics.add(planIndex, "invocation setup", invocationErr)
+			if err := finishWithoutArtifact("not_tested", false); err != nil {
+				return fmt.Errorf("record launcher-v2 unit-%06d outcome: %w", planIndex, err)
+			}
+			continue
+		}
+		runResult := runner(command)
+		if !validLauncherV2RunOutcome(runResult) {
+			runResult = launcherV2RunResult{Outcome: launcherV2RunFailed, Err: errors.New("invalid runner outcome")}
+		}
+		if runResult.Err != nil {
+			diagnostics.add(planIndex, "scanner", runResult.Err)
+		}
+		allowEmpty := runResult.Outcome == launcherV2RunSucceeded
+		artifact, artifactErr := publishLauncherV2FinalArtifact(
+			outputRoot,
+			temporaryOutput,
+			plan.EngineRunID,
+			requested,
+			planIndex,
+			attempt,
+			unit,
+			allowEmpty,
+			budget,
+		)
+		if artifactErr != nil {
+			diagnostics.add(planIndex, "evidence publish", artifactErr)
+			outcome := string(runResult.Outcome)
+			if runResult.Outcome == launcherV2RunSucceeded {
+				outcome = "failed"
+			}
+			if err := finishWithoutArtifact(outcome, true); err != nil {
+				return fmt.Errorf("record launcher-v2 unit-%06d outcome: %w", planIndex, err)
+			}
+			continue
+		}
+		outcome := "tested_complete"
+		incompleteReason := ""
+		if runResult.Outcome != launcherV2RunSucceeded {
+			outcome = "tested_partial"
+			incompleteReason = string(runResult.Outcome)
+			incompleteUnits++
+		}
+		if err := journal.appendAttempt(launcherV2AttemptFinished{
+			RecordType:       "attempt_finished",
+			UnitID:           requested.UnitID,
+			ScopeSHA256:      requested.ScopeSHA256,
+			Attempt:          attempt,
+			Outcome:          outcome,
+			IncompleteReason: incompleteReason,
+			FinalArtifact:    artifact,
+		}); err != nil {
+			return fmt.Errorf("record launcher-v2 unit-%06d outcome: %w", planIndex, err)
+		}
+	}
+	if err := journal.file.Close(); err != nil {
+		return fmt.Errorf("close launcher-v2 journal: %w", err)
+	}
+	journalOpen = false
+	if incompleteUnits > 0 {
+		diagnosticSummary := diagnostics.summary()
+		if diagnosticSummary != "" {
+			return fmt.Errorf(
+				"launcher-v2 finished with %d incomplete work unit(s) and %d raw-evidence quarantine failure(s); bounded technical diagnostics: %s",
+				incompleteUnits,
+				quarantineFailures,
+				diagnosticSummary,
+			)
+		}
+		return fmt.Errorf(
+			"launcher-v2 finished with %d incomplete work unit(s) and %d raw-evidence quarantine failure(s)",
+			incompleteUnits,
+			quarantineFailures,
+		)
+	}
+	return nil
+}
+
+func createLauncherV2Journal(outputRoot string, plan *launcherV2Plan, budget *launcherV2ByteBudget) (*launcherV2Journal, error) {
+	if plan == nil || !launcherV2OpaqueID(plan.EngineRunID) || plan.ExecutionAttempt == 0 || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxLauncherV2Units {
+		return nil, errors.New("launcher-v2 journal identity plan is invalid")
+	}
+	seenUnits := make(map[string]struct{}, len(plan.RequestedWorkUnits))
+	for _, unit := range plan.RequestedWorkUnits {
+		if !launcherV2WorkUnitID(unit.UnitID) || !launcherV2SHA256(unit.ScopeSHA256) {
+			return nil, errors.New("launcher-v2 journal work-unit identity is invalid")
+		}
+		if _, exists := seenUnits[unit.UnitID]; exists {
+			return nil, errors.New("launcher-v2 journal work-unit identities are not unique")
+		}
+		seenUnits[unit.UnitID] = struct{}{}
+	}
+	root := filepath.Join(outputRoot, launcherV2Directory)
+	if err := os.Mkdir(root, 0o700); err != nil {
+		return nil, fmt.Errorf("create exclusive launcher-v2 output directory: %w", err)
+	}
+	// Persist the new namespace itself before relying on files synced inside it.
+	// A crash must not erase every earlier terminal record merely because the
+	// parent directory entry was still only in memory.
+	if err := syncDirectory(outputRoot); err != nil {
+		return nil, err
+	}
+	journalPath := filepath.Join(root, launcherV2JournalName)
+	file, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create exclusive launcher-v2 journal: %w", err)
+	}
+	requested := make(map[string]launcherV2RequestedUnit, len(plan.RequestedWorkUnits))
+	for _, unit := range plan.RequestedWorkUnits {
+		requested[unit.UnitID] = launcherV2RequestedUnit{UnitID: unit.UnitID, ScopeSHA256: unit.ScopeSHA256}
+	}
+	journal := &launcherV2Journal{
+		file:             file,
+		engineRunID:      plan.EngineRunID,
+		executionAttempt: plan.ExecutionAttempt,
+		requested:        requested,
+		terminalWritten:  make(map[string]bool, len(requested)),
+		budget:           budget,
+	}
+	headerUnits := make([]launcherV2RequestedUnit, 0, len(plan.RequestedWorkUnits))
+	for _, unit := range plan.RequestedWorkUnits {
+		headerUnits = append(headerUnits, launcherV2RequestedUnit{UnitID: unit.UnitID, ScopeSHA256: unit.ScopeSHA256})
+	}
+	if err := journal.appendRecord(launcherV2Header{
+		RecordType:         "header",
+		SchemaVersion:      launcherV2SchemaVersion,
+		EngineRunID:        plan.EngineRunID,
+		ExecutionAttempt:   plan.ExecutionAttempt,
+		RequestedWorkUnits: headerUnits,
+	}); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := syncDirectory(root); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return journal, nil
+}
+
+func (journal *launcherV2Journal) appendAttempt(record launcherV2AttemptFinished) error {
+	requested, exists := journal.requested[record.UnitID]
+	if !exists || requested.ScopeSHA256 != record.ScopeSHA256 {
+		return errors.New("launcher-v2 terminal record does not match a requested work unit")
+	}
+	if record.Attempt != journal.executionAttempt || journal.terminalWritten[record.UnitID] {
+		return errors.New("launcher-v2 permits one terminal outcome per requested unit and host invocation")
+	}
+	switch record.Outcome {
+	case "tested_complete":
+		if record.IncompleteReason != "" || record.FinalArtifact == nil || !validLauncherV2FinalArtifact(*record.FinalArtifact, journal.engineRunID, requested, record.Attempt) {
+			return errors.New("launcher-v2 completed attempt lacks one exact final artifact")
+		}
+	case "tested_partial":
+		if !launcherV2IncompleteReason(record.IncompleteReason) || record.FinalArtifact == nil || record.FinalArtifact.ByteLength == 0 || !validLauncherV2FinalArtifact(*record.FinalArtifact, journal.engineRunID, requested, record.Attempt) {
+			return errors.New("launcher-v2 partial attempt lacks exact non-empty evidence or its bounded reason")
+		}
+	case "failed", "timed_out", "cancelled", "not_tested":
+		if record.IncompleteReason != "" || record.FinalArtifact != nil {
+			return errors.New("launcher-v2 untested attempt cannot claim evidence or a partial reason")
+		}
+	default:
+		return errors.New("launcher-v2 terminal outcome is unsupported")
+	}
+	if record.RecordType != "attempt_finished" {
+		return errors.New("launcher-v2 terminal record type is invalid")
+	}
+	if err := journal.appendRecord(record); err != nil {
+		return err
+	}
+	journal.terminalWritten[record.UnitID] = true
+	return nil
+}
+
+func (journal *launcherV2Journal) appendRecord(record any) error {
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return errors.New("encode launcher-v2 journal record")
+	}
+	if len(encoded) == 0 || len(encoded) > maxLauncherV2RecordBytes {
+		return errors.New("launcher-v2 journal record exceeds its bound")
+	}
+	encoded = append(encoded, '\n')
+	if journal.written+int64(len(encoded)) > maxLauncherV2JournalBytes || journal.recordsWritten >= 1+maxLauncherV2Units {
+		return errors.New("launcher-v2 journal exceeds its aggregate bound")
+	}
+	if journal.budget == nil || !journal.budget.reserveJournal(int64(len(encoded))) {
+		return errors.New("launcher-v2 output exceeds its shared aggregate byte budget")
+	}
+	written, err := journal.file.Write(encoded)
+	if err != nil || written != len(encoded) {
+		return errors.New("append launcher-v2 journal record")
+	}
+	if err := journal.file.Sync(); err != nil {
+		return fmt.Errorf("sync launcher-v2 journal record: %w", err)
+	}
+	journal.written += int64(written)
+	journal.recordsWritten++
+	return nil
+}
+
+func (budget *launcherV2ByteBudget) reserveJournal(length int64) bool {
+	if length < 0 || budget.journalUsed > maxLauncherV2JournalBytes-int64(length) || budget.journalUsed+budget.payloadUsed > maxEvidenceBytes-length {
+		return false
+	}
+	budget.journalUsed += length
+	return true
+}
+
+func (budget *launcherV2ByteBudget) reservePayload(length int64) bool {
+	if !budget.canReservePayload(length) {
+		return false
+	}
+	budget.payloadUsed += length
+	return true
+}
+
+func (budget *launcherV2ByteBudget) canReservePayload(length int64) bool {
+	maximumPayload := int64(maxEvidenceBytes - maxLauncherV2JournalBytes)
+	if length < 0 || budget.payloadUsed > maximumPayload-length || budget.journalUsed+budget.payloadUsed > maxEvidenceBytes-length {
+		return false
+	}
+	return true
+}
+
+func (budget *launcherV2ByteBudget) releasePayload(length int64) {
+	if length >= 0 && length <= budget.payloadUsed {
+		budget.payloadUsed -= length
+	}
+}
+
+func (diagnostics *launcherV2Diagnostics) add(planIndex int, phase string, cause error) {
+	if diagnostics == nil || cause == nil {
+		return
+	}
+	if len(diagnostics.entries) >= maxLauncherV2Diagnostics {
+		diagnostics.omitted++
+		return
+	}
+	message := boundedLauncherV2Diagnostic(cause.Error())
+	if message == "" {
+		message = "no diagnostic text was provided"
+	}
+	diagnostics.entries = append(
+		diagnostics.entries,
+		fmt.Sprintf("unit-%06d %s: %s", planIndex, phase, message),
+	)
+}
+
+func (diagnostics *launcherV2Diagnostics) summary() string {
+	if diagnostics == nil || len(diagnostics.entries) == 0 {
+		return ""
+	}
+	value := strings.Join(diagnostics.entries, "; ")
+	if diagnostics.omitted > 0 {
+		value += fmt.Sprintf("; %d additional diagnostic(s) omitted", diagnostics.omitted)
+	}
+	return value
+}
+
+func boundedLauncherV2Diagnostic(value string) string {
+	var cleaned strings.Builder
+	lastWasSpace := false
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			character = ' '
+		}
+		if character == ' ' {
+			if lastWasSpace {
+				continue
+			}
+			lastWasSpace = true
+		} else {
+			lastWasSpace = false
+		}
+		encoded := string(character)
+		if cleaned.Len()+len(encoded) > maxLauncherV2DiagnosticBytes {
+			break
+		}
+		cleaned.WriteString(encoded)
+	}
+	return strings.TrimSpace(cleaned.String())
+}
+
+func validLauncherV2RunOutcome(result launcherV2RunResult) bool {
+	switch result.Outcome {
+	case launcherV2RunSucceeded:
+		return result.Err == nil
+	case launcherV2RunFailed, launcherV2RunTimedOut, launcherV2RunCancelled:
+		return result.Err != nil
+	default:
+		return false
+	}
+}
+
+func launcherV2IncompleteReason(value string) bool {
+	return value == "failed" || value == "timed_out" || value == "cancelled"
+}
+
+func publishLauncherV2FinalArtifact(
+	outputRoot string,
+	scannerOutput string,
+	engineRunID string,
+	requested launcherV2RequestedUnit,
+	planIndex int,
+	attempt uint32,
+	unit scanUnit,
+	allowEmpty bool,
+	budget *launcherV2ByteBudget,
+) (*launcherV2FinalArtifact, error) {
+	relativePath := path.Join(
+		launcherV2Directory,
+		"units",
+		fmt.Sprintf("unit-%06d", planIndex),
+		fmt.Sprintf("attempt-%d.jsonl", attempt),
+	)
+	if !launcherV2RelativePath(relativePath) {
+		return nil, errors.New("launcher-v2 final artifact path is unsafe")
+	}
+	var digest string
+	byteLength, err := publishLauncherV2File(outputRoot, relativePath, budget, func(staging *os.File) (int64, error) {
+		hasher := sha256.New()
+		writer := bufio.NewWriterSize(io.MultiWriter(staging, hasher), 64*1024)
+		prospective := int64(maxLauncherV2JournalBytes) + budget.payloadUsed
+		if err := normalizeEvidence(scannerOutput, writer, &prospective, "naabu", unit); err != nil {
+			return 0, err
+		}
+		if err := writer.Flush(); err != nil {
+			return 0, fmt.Errorf("flush launcher-v2 final artifact: %w", err)
+		}
+		length := prospective - int64(maxLauncherV2JournalBytes) - budget.payloadUsed
+		digest = fmt.Sprintf("%x", hasher.Sum(nil))
+		if length == 0 && (!allowEmpty || digest != emptySHA256) {
+			return 0, errors.New("launcher-v2 non-successful scanner produced no usable normalized evidence")
+		}
+		return length, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &launcherV2FinalArtifact{
+		EngineRunID:  engineRunID,
+		UnitID:       requested.UnitID,
+		ScopeSHA256:  requested.ScopeSHA256,
+		Attempt:      attempt,
+		RelativePath: relativePath,
+		SHA256:       digest,
+		ByteLength:   uint64(byteLength),
+	}, nil
+}
+
+func quarantineLauncherV2Raw(outputRoot, scannerOutput string, planIndex int, attempt uint32, budget *launcherV2ByteBudget) (bool, error) {
+	metadata, err := os.Lstat(scannerOutput)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil || !metadata.Mode().IsRegular() || metadata.Mode()&os.ModeSymlink != 0 || metadata.Size() > maxEvidenceBytes {
+		return false, errors.New("launcher-v2 raw evidence is not a bounded regular file")
+	}
+	relativePath := path.Join(
+		launcherV2Directory,
+		"quarantine",
+		fmt.Sprintf("unit-%06d", planIndex),
+		fmt.Sprintf("attempt-%d.raw.jsonl", attempt),
+	)
+	if !launcherV2RelativePath(relativePath) {
+		return false, errors.New("launcher-v2 raw-evidence quarantine path is unsafe")
+	}
+	source, err := os.Open(scannerOutput)
+	if err != nil {
+		return false, fmt.Errorf("open launcher-v2 raw evidence: %w", err)
+	}
+	defer source.Close()
+	openedMetadata, err := source.Stat()
+	if err != nil || !openedMetadata.Mode().IsRegular() || openedMetadata.Size() != metadata.Size() || openedMetadata.Size() > maxEvidenceBytes {
+		return false, errors.New("launcher-v2 raw evidence changed before quarantine")
+	}
+	if !budget.canReservePayload(openedMetadata.Size()) {
+		return false, errors.New("launcher-v2 output exceeds its shared aggregate byte budget")
+	}
+	_, err = publishLauncherV2File(outputRoot, relativePath, budget, func(staging *os.File) (int64, error) {
+		written, err := io.Copy(staging, io.LimitReader(source, maxEvidenceBytes+1))
+		if err != nil || written != openedMetadata.Size() {
+			return 0, errors.New("copy launcher-v2 raw evidence exactly")
+		}
+		return written, nil
+	})
+	return err == nil, err
+}
+
+func publishLauncherV2File(
+	outputRoot, relativePath string,
+	budget *launcherV2ByteBudget,
+	write func(*os.File) (int64, error),
+) (int64, error) {
+	finalPath := filepath.Join(outputRoot, filepath.FromSlash(relativePath))
+	parent := filepath.Dir(finalPath)
+	if err := ensureLauncherV2Directory(parent, outputRoot); err != nil {
+		return 0, err
+	}
+	stagingPath := finalPath + ".partial"
+	staging, err := os.OpenFile(stagingPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return 0, fmt.Errorf("create launcher-v2 staged output: %w", err)
+	}
+	published := false
+	defer func() {
+		_ = staging.Close()
+		if !published {
+			_ = os.Remove(stagingPath)
+		}
+	}()
+	length, err := write(staging)
+	if err != nil {
+		return 0, err
+	}
+	if !budget.reservePayload(length) {
+		return 0, errors.New("launcher-v2 output exceeds its shared aggregate byte budget")
+	}
+	defer func() {
+		if !published {
+			budget.releasePayload(length)
+		}
+	}()
+	if err := staging.Sync(); err != nil {
+		return 0, fmt.Errorf("sync launcher-v2 staged output: %w", err)
+	}
+	if err := staging.Close(); err != nil {
+		return 0, fmt.Errorf("close launcher-v2 staged output: %w", err)
+	}
+	if _, err := os.Lstat(finalPath); !os.IsNotExist(err) {
+		return 0, errors.New("launcher-v2 final output already exists or cannot be inspected")
+	}
+	if err := os.Rename(stagingPath, finalPath); err != nil {
+		return 0, fmt.Errorf("publish launcher-v2 output atomically: %w", err)
+	}
+	if err := syncDirectory(parent); err != nil {
+		_ = os.Remove(finalPath)
+		return 0, err
+	}
+	published = true
+	return length, nil
+}
+
+func ensureLauncherV2Directory(directory, outputRoot string) error {
+	root := filepath.Join(outputRoot, launcherV2Directory)
+	relative, err := filepath.Rel(root, directory)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return errors.New("launcher-v2 directory escaped its output root")
+	}
+	current := root
+	if relative == "." {
+		return nil
+	}
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		created := false
+		if err := os.Mkdir(current, 0o700); err != nil {
+			if !os.IsExist(err) {
+				return fmt.Errorf("create launcher-v2 private directory: %w", err)
+			}
+		} else {
+			created = true
+		}
+		metadata, err := os.Lstat(current)
+		if err != nil || !metadata.IsDir() || metadata.Mode()&os.ModeSymlink != 0 || metadata.Mode().Perm()&0o077 != 0 {
+			return errors.New("launcher-v2 private directory is unsafe")
+		}
+		if created {
+			if err := syncDirectory(filepath.Dir(current)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func syncDirectory(directory string) error {
+	handle, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("open launcher-v2 directory for sync: %w", err)
+	}
+	defer handle.Close()
+	if err := handle.Sync(); err != nil {
+		return fmt.Errorf("sync launcher-v2 directory: %w", err)
+	}
+	return nil
+}
+
+func launcherV2OpaqueID(value string) bool {
+	if value == "" || len(value) > maxLauncherV2OpaqueIDBytes {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("-_.:", rune(character))) {
+			return false
+		}
+	}
+	return true
+}
+
+// Work-unit IDs are host-generated 128-bit lowercase hexadecimal values with
+// a fixed namespace. A target-shaped IP address or domain is therefore not a
+// valid journal identity even though other durable opaque IDs remain backward
+// compatible with the wider identifier alphabet.
+func launcherV2WorkUnitID(value string) bool {
+	if len(value) != len(launcherV2WorkUnitPrefix)+launcherV2WorkUnitHexChars || !strings.HasPrefix(value, launcherV2WorkUnitPrefix) {
+		return false
+	}
+	for _, character := range []byte(value[len(launcherV2WorkUnitPrefix):]) {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func launcherV2SHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func launcherV2RelativePath(value string) bool {
+	if value == "" || len(value) > maxLauncherV2RelativeBytes || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") || strings.ContainsAny(value, "\\:") {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("/-_.", rune(character))) {
+			return false
+		}
+	}
+	for _, component := range strings.Split(value, "/") {
+		if component == "" || component == "." || component == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func validLauncherV2FinalArtifact(
+	artifact launcherV2FinalArtifact,
+	engineRunID string,
+	requested launcherV2RequestedUnit,
+	attempt uint32,
+) bool {
+	return artifact.EngineRunID == engineRunID &&
+		artifact.UnitID == requested.UnitID &&
+		artifact.ScopeSHA256 == requested.ScopeSHA256 &&
+		artifact.Attempt == attempt &&
+		launcherV2OpaqueID(artifact.EngineRunID) &&
+		launcherV2WorkUnitID(artifact.UnitID) &&
+		launcherV2SHA256(artifact.ScopeSHA256) &&
+		launcherV2RelativePath(artifact.RelativePath) &&
+		launcherV2SHA256(artifact.SHA256) &&
+		(artifact.ByteLength != 0 || artifact.SHA256 == emptySHA256)
 }
 
 func supportedEngine(engineID string) bool {
@@ -784,11 +1625,25 @@ func runCommand(plan invocation) error {
 	command.WaitDelay = 2 * time.Second
 	if err := command.Run(); err != nil {
 		if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
-			return errors.New("scanner exceeded the frozen total timeout")
+			return errScannerTimedOut
+		}
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+			return errors.New("scanner executable is unavailable")
 		}
 		return fmt.Errorf("scanner exited unsuccessfully%s", sanitizedStderr(stderr.String()))
 	}
 	return nil
+}
+
+func runCommandForLauncherV2(plan invocation) launcherV2RunResult {
+	err := runCommand(plan)
+	if err == nil {
+		return launcherV2RunResult{Outcome: launcherV2RunSucceeded}
+	}
+	if errors.Is(err, errScannerTimedOut) {
+		return launcherV2RunResult{Outcome: launcherV2RunTimedOut, Err: err}
+	}
+	return launcherV2RunResult{Outcome: launcherV2RunFailed, Err: err}
 }
 
 func sanitizedStderr(value string) string {

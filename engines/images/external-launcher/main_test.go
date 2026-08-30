@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -591,3 +592,409 @@ func TestScopeDecoderRequiresWireVersionTwoForEveryExternalEngine(t *testing.T) 
 }
 
 func portText(port uint16) string { return strconv.Itoa(int(port)) }
+
+const (
+	launcherV2ScopeA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	launcherV2ScopeB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	launcherV2UnitA  = "wu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	launcherV2UnitB  = "wu_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+// LAUNCHER_V2_RUST_GOLDEN_START
+const launcherV2RustGoldenJournal = `{"record_type":"header","schema_version":2,"engine_run_id":"run-opaque","execution_attempt":7,"requested_work_units":[{"unit_id":"wu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}
+{"record_type":"attempt_finished","unit_id":"wu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attempt":7,"outcome":"tested_partial","incomplete_reason":"timed_out","final_artifact":{"engine_run_id":"run-opaque","unit_id":"wu_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attempt":7,"relative_path":"launcher-v2/units/unit-000000/attempt-7.jsonl","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","byte_length":12}}
+`
+
+// LAUNCHER_V2_RUST_GOLDEN_END
+
+func launcherV2TestPlan(attempt uint32, units ...launcherV2PlannedUnit) *launcherV2Plan {
+	return &launcherV2Plan{
+		SchemaVersion:      launcherV2SchemaVersion,
+		EngineID:           "naabu",
+		EngineRunID:        "run:opaque-1",
+		ExecutionAttempt:   attempt,
+		RequestedWorkUnits: units,
+	}
+}
+
+func launcherV2TestUnits(t *testing.T, now time.Time) []scanUnit {
+	t.Helper()
+	units, err := validateAndPlan(fixtureDocument("naabu", now), "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return units
+}
+
+func launcherV2Records(t *testing.T, outputRoot string) []map[string]any {
+	t.Helper()
+	file, err := os.Open(filepath.Join(outputRoot, launcherV2Directory, launcherV2JournalName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	var records []map[string]any
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var record map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, record)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
+func TestLauncherV2KeepsCompletedSiblingWhenLaterUnitFails(t *testing.T) {
+	now := time.Now().UTC()
+	units := launcherV2TestUnits(t, now)
+	plan := launcherV2TestPlan(1,
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2PlannedUnit{ScopeGrantID: "grant-b", UnitID: launcherV2UnitB, ScopeSHA256: launcherV2ScopeB},
+	)
+	outputRoot := t.TempDir()
+	temporaryRoot := t.TempDir()
+	calls := 0
+	runner := func(command invocation) launcherV2RunResult {
+		calls++
+		output, ok := argumentValue(command.Args, "-output")
+		if !ok {
+			t.Fatal("Naabu invocation has no output path")
+		}
+		if calls == 1 {
+			value := []byte(`{"host":"192.0.2.10","port":443,"protocol":"tcp"}` + "\n")
+			if err := os.WriteFile(output, value, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return launcherV2RunResult{Outcome: launcherV2RunSucceeded}
+		}
+		return launcherV2RunResult{Outcome: launcherV2RunFailed, Err: errors.New("fixture failure")}
+	}
+	err := runNaabuLauncherV2(outputRoot, temporaryRoot, plan, units, "172.30.0.1:1080", nil, now, runner)
+	if err == nil {
+		t.Fatal("partial launcher-v2 invocation returned success")
+	}
+	if !strings.Contains(err.Error(), "unit-000001 scanner: fixture failure") {
+		t.Fatalf("bounded technical diagnostics lost the actionable scanner error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("later work units did not continue after a failure: %d calls", calls)
+	}
+	records := launcherV2Records(t, outputRoot)
+	if len(records) != 3 || records[0]["execution_attempt"] != float64(1) || records[1]["outcome"] != "tested_complete" || records[2]["outcome"] != "failed" {
+		t.Fatalf("unexpected launcher-v2 lifecycle: %#v", records)
+	}
+	journalBytes := mustReadFile(t, filepath.Join(outputRoot, launcherV2Directory, launcherV2JournalName))
+	for _, secret := range []string{"a.example.test", "b.example.test", "192.0.2.10", "192.0.2.20", "fixture failure"} {
+		if bytes.Contains(journalBytes, []byte(secret)) {
+			t.Fatalf("journal exposed target material %q", secret)
+		}
+	}
+	artifact := records[1]["final_artifact"].(map[string]any)
+	relative := artifact["relative_path"].(string)
+	if relative != "launcher-v2/units/unit-000000/attempt-1.jsonl" {
+		t.Fatalf("final artifact path used identity data instead of its ordinal: %s", relative)
+	}
+	if _, err := os.Stat(filepath.Join(outputRoot, filepath.FromSlash(relative))); err != nil {
+		t.Fatalf("completed sibling artifact was lost: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputRoot, launcherV2Directory, "units", "unit-000001", "attempt-1.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("failed unit claimed a final artifact: %v", err)
+	}
+}
+
+func TestLauncherV2PublishesCompletedEmptyEvidenceWithExactDigest(t *testing.T) {
+	now := time.Now().UTC()
+	units := launcherV2TestUnits(t, now)
+	plan := launcherV2TestPlan(^uint32(0),
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	runner := func(invocation) launcherV2RunResult {
+		return launcherV2RunResult{Outcome: launcherV2RunSucceeded}
+	}
+	outputRoot := t.TempDir()
+	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), plan, units, "172.30.0.1:1080", nil, now, runner); err != nil {
+		t.Fatal(err)
+	}
+	records := launcherV2Records(t, outputRoot)
+	artifact := records[1]["final_artifact"].(map[string]any)
+	if artifact["sha256"] != emptySHA256 || artifact["byte_length"] != float64(0) || artifact["attempt"] != float64(^uint32(0)) {
+		t.Fatalf("completed-empty identity is not exact: %#v", artifact)
+	}
+	path := filepath.Join(outputRoot, filepath.FromSlash(artifact["relative_path"].(string)))
+	if metadata, err := os.Stat(path); err != nil || metadata.Size() != 0 {
+		t.Fatalf("completed-empty artifact is not an exact zero-byte file: %v %#v", err, metadata)
+	}
+}
+
+func TestLauncherV2PreservesValidObservationsFromFailedScannerAsTestedPartial(t *testing.T) {
+	now := time.Now().UTC()
+	units := launcherV2TestUnits(t, now)
+	plan := launcherV2TestPlan(3,
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	runner := func(command invocation) launcherV2RunResult {
+		output, _ := argumentValue(command.Args, "-output")
+		value := []byte(`{"host":"192.0.2.10","port":443,"protocol":"tcp"}` + "\n")
+		if err := os.WriteFile(output, value, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return launcherV2RunResult{Outcome: launcherV2RunTimedOut, Err: errors.New("fixture timeout")}
+	}
+	outputRoot := t.TempDir()
+	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), plan, units, "172.30.0.1:1080", nil, now, runner); err == nil {
+		t.Fatal("tested-partial invocation did not retain its non-success process result")
+	}
+	records := launcherV2Records(t, outputRoot)
+	if records[1]["outcome"] != "tested_partial" || records[1]["incomplete_reason"] != "timed_out" || records[1]["final_artifact"] == nil {
+		t.Fatalf("valid partial observations were discarded: %#v", records[1])
+	}
+	if _, err := os.Stat(filepath.Join(outputRoot, launcherV2Directory, "quarantine", "unit-000000", "attempt-3.raw.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("valid partial evidence was also misclassified as quarantine: %v", err)
+	}
+}
+
+func TestLauncherV2DoesNotClaimEmptyInterruptedRunAsTestedPartial(t *testing.T) {
+	now := time.Now().UTC()
+	plan := launcherV2TestPlan(2,
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	runner := func(invocation) launcherV2RunResult {
+		return launcherV2RunResult{Outcome: launcherV2RunTimedOut, Err: errors.New("fixture timeout")}
+	}
+	outputRoot := t.TempDir()
+	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), plan, launcherV2TestUnits(t, now), "172.30.0.1:1080", nil, now, runner); err == nil {
+		t.Fatal("empty interrupted invocation returned success")
+	}
+	record := launcherV2Records(t, outputRoot)[1]
+	if record["outcome"] != "timed_out" || record["final_artifact"] != nil || record["incomplete_reason"] != nil {
+		t.Fatalf("empty interrupted invocation claimed tested coverage: %#v", record)
+	}
+}
+
+func TestLauncherV2QuarantinesExactRawOutputWhenNormalizationFails(t *testing.T) {
+	now := time.Now().UTC()
+	units := launcherV2TestUnits(t, now)
+	plan := launcherV2TestPlan(1,
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	raw := []byte("not-json\n")
+	runner := func(command invocation) launcherV2RunResult {
+		output, _ := argumentValue(command.Args, "-output")
+		if err := os.WriteFile(output, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return launcherV2RunResult{Outcome: launcherV2RunSucceeded}
+	}
+	outputRoot := t.TempDir()
+	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), plan, units, "172.30.0.1:1080", nil, now, runner); err == nil {
+		t.Fatal("malformed evidence did not fail its work unit")
+	}
+	records := launcherV2Records(t, outputRoot)
+	if records[1]["outcome"] != "failed" || records[1]["final_artifact"] != nil {
+		t.Fatalf("malformed evidence claimed tested coverage: %#v", records[1])
+	}
+	quarantine := filepath.Join(outputRoot, launcherV2Directory, "quarantine", "unit-000000", "attempt-1.raw.jsonl")
+	if got := mustReadFile(t, quarantine); !bytes.Equal(got, raw) {
+		t.Fatalf("raw quarantine changed scanner bytes: %q", got)
+	}
+}
+
+func TestLauncherV2HeaderAloneModelsInterruptionWithoutInventedTerminal(t *testing.T) {
+	plan := launcherV2TestPlan(7,
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	outputRoot := t.TempDir()
+	journal, err := createLauncherV2Journal(outputRoot, plan, &launcherV2ByteBudget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	records := launcherV2Records(t, outputRoot)
+	if len(records) != 1 || records[0]["record_type"] != "header" || records[0]["execution_attempt"] != float64(7) {
+		t.Fatalf("interrupted journal invented terminal truth: %#v", records)
+	}
+}
+
+func TestLauncherV2EmitsTheRustGoldenJournalContract(t *testing.T) {
+	plan := launcherV2TestPlan(7,
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	plan.EngineRunID = "run-opaque"
+	outputRoot := t.TempDir()
+	journal, err := createLauncherV2Journal(outputRoot, plan, &launcherV2ByteBudget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.appendAttempt(launcherV2AttemptFinished{
+		RecordType:       "attempt_finished",
+		UnitID:           launcherV2UnitA,
+		ScopeSHA256:      launcherV2ScopeA,
+		Attempt:          7,
+		Outcome:          "tested_partial",
+		IncompleteReason: "timed_out",
+		FinalArtifact: &launcherV2FinalArtifact{
+			EngineRunID:  "run-opaque",
+			UnitID:       launcherV2UnitA,
+			ScopeSHA256:  launcherV2ScopeA,
+			Attempt:      7,
+			RelativePath: "launcher-v2/units/unit-000000/attempt-7.jsonl",
+			SHA256:       "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			ByteLength:   12,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	actual := string(mustReadFile(t, filepath.Join(outputRoot, launcherV2Directory, launcherV2JournalName)))
+	if actual != launcherV2RustGoldenJournal {
+		t.Fatalf("Go journal bytes drifted from the Rust golden contract:\n%s", actual)
+	}
+}
+
+func TestLauncherV2OneJournalCannotAmbiguouslyMergeHostRetries(t *testing.T) {
+	plan := launcherV2TestPlan(7,
+		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	journal, err := createLauncherV2Journal(t.TempDir(), plan, &launcherV2ByteBudget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.file.Close()
+	terminal := launcherV2AttemptFinished{
+		RecordType: "attempt_finished", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA,
+		Attempt: 7, Outcome: "failed",
+	}
+	if err := journal.appendAttempt(terminal); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.appendAttempt(terminal); err == nil {
+		t.Fatal("one invocation journal accepted a duplicate terminal")
+	}
+	terminal.Attempt = 8
+	if err := journal.appendAttempt(terminal); err == nil {
+		t.Fatal("one invocation journal accepted a different host retry attempt")
+	}
+}
+
+func TestLauncherV2PlanAndPathsRequireGeneratedWorkUnitIdentity(t *testing.T) {
+	units := launcherV2TestUnits(t, time.Now().UTC())
+	if !launcherV2OpaqueID("unit:opaque") {
+		t.Fatal("backward-compatible generic opaque colon ID was rejected")
+	}
+	if !launcherV2WorkUnitID(launcherV2UnitA) {
+		t.Fatal("generated work-unit identity was rejected")
+	}
+	for _, unsafe := range []string{"", "target/name", "target name", strings.Repeat("a", maxLauncherV2OpaqueIDBytes+1)} {
+		if launcherV2OpaqueID(unsafe) {
+			t.Fatalf("unsafe opaque identity accepted: %q", unsafe)
+		}
+	}
+	for _, unsafe := range []string{"../result.jsonl", "/absolute.jsonl", "unit:opaque/result.jsonl", "units//result.jsonl", `units\result.jsonl`} {
+		if launcherV2RelativePath(unsafe) {
+			t.Fatalf("unsafe relative path accepted: %q", unsafe)
+		}
+	}
+
+	writePlan := func(plan *launcherV2Plan) string {
+		value, err := json.Marshal(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "execution-journal-v2.json")
+		if err := os.WriteFile(path, value, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := launcherV2TestPlan(^uint32(0),
+		launcherV2PlannedUnit{ScopeGrantID: "grant-b", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+	)
+	if _, err := loadLauncherV2Plan(writePlan(valid), "naabu", units); err != nil {
+		t.Fatalf("valid host-frozen subset rejected: %v", err)
+	}
+	invalidID := *valid
+	invalidID.RequestedWorkUnits = append([]launcherV2PlannedUnit(nil), valid.RequestedWorkUnits...)
+	invalidID.RequestedWorkUnits[0].UnitID = "a.example.test"
+	if _, err := loadLauncherV2Plan(writePlan(&invalidID), "naabu", units); err == nil {
+		t.Fatal("target-shaped unsafe unit identity was accepted")
+	}
+	invalidGrant := *valid
+	invalidGrant.RequestedWorkUnits = append([]launcherV2PlannedUnit(nil), valid.RequestedWorkUnits...)
+	invalidGrant.RequestedWorkUnits[0].ScopeGrantID = "grant-missing"
+	if _, err := loadLauncherV2Plan(writePlan(&invalidGrant), "naabu", units); err == nil {
+		t.Fatal("host sidecar grant outside the validated scope was accepted")
+	}
+}
+
+func TestLauncherV2SharedBudgetRejectsRawArtifactBeforePartialPublish(t *testing.T) {
+	outputRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(outputRoot, launcherV2Directory), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawPath := filepath.Join(t.TempDir(), "raw.jsonl")
+	if err := os.WriteFile(rawPath, []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	maximumPayload := int64(maxEvidenceBytes - maxLauncherV2JournalBytes)
+	budget := &launcherV2ByteBudget{payloadUsed: maximumPayload - 2}
+	if published, err := quarantineLauncherV2Raw(outputRoot, rawPath, 0, 1, budget); err == nil || published {
+		t.Fatalf("aggregate overflow was published: published=%v err=%v", published, err)
+	}
+	if budget.payloadUsed != maximumPayload-2 {
+		t.Fatalf("rejected artifact consumed budget: %d", budget.payloadUsed)
+	}
+	final := filepath.Join(outputRoot, launcherV2Directory, "quarantine", "unit-000000", "attempt-1.raw.jsonl")
+	if _, err := os.Stat(final); !os.IsNotExist(err) {
+		t.Fatalf("aggregate overflow left a final artifact: %v", err)
+	}
+	if _, err := os.Stat(final + ".partial"); !os.IsNotExist(err) {
+		t.Fatalf("aggregate overflow left a staged artifact: %v", err)
+	}
+}
+
+func TestLauncherV2IsExplicitlyOptInAndLegacyArgumentsRemainDisabled(t *testing.T) {
+	options, err := validateLauncherV2Options(0, "", "naabu")
+	if err != nil || options != nil {
+		t.Fatalf("legacy launcher unexpectedly enabled v2: %#v %v", options, err)
+	}
+	if _, err := validateLauncherV2Options(launcherV2SchemaVersion, journalPlanMountPath, "httpx"); err == nil {
+		t.Fatal("launcher-v2 was enabled for an unimplemented engine")
+	}
+	if _, err := validateLauncherV2Options(launcherV2SchemaVersion, "/tmp/untrusted.json", "naabu"); err == nil {
+		t.Fatal("launcher-v2 accepted an arbitrary host path")
+	}
+}
+
+func TestLauncherV2ReportsMissingScannerAsActionableTechnicalDiagnostic(t *testing.T) {
+	result := runCommandForLauncherV2(invocation{
+		Program: filepath.Join(t.TempDir(), "missing-naabu"),
+		Expiry:  time.Now().Add(time.Minute),
+		Timeout: time.Second,
+	})
+	if result.Outcome != launcherV2RunFailed || result.Err == nil || !strings.Contains(result.Err.Error(), "scanner executable is unavailable") {
+		t.Fatalf("missing scanner collapsed into a generic failure: %#v", result)
+	}
+}
+
+func TestLauncherV2TechnicalDiagnosticsAreBoundedAndSingleLine(t *testing.T) {
+	diagnostics := &launcherV2Diagnostics{}
+	for index := 0; index < maxLauncherV2Diagnostics+3; index++ {
+		diagnostics.add(index, "scanner", errors.New(strings.Repeat("x", maxLauncherV2DiagnosticBytes+20)+"\nprivate continuation"))
+	}
+	summary := diagnostics.summary()
+	if strings.Contains(summary, "\n") || strings.Contains(summary, "private continuation") {
+		t.Fatalf("diagnostic control or overflow text escaped its bound: %q", summary)
+	}
+	if len(diagnostics.entries) != maxLauncherV2Diagnostics || diagnostics.omitted != 3 || !strings.Contains(summary, "3 additional diagnostic(s) omitted") {
+		t.Fatalf("diagnostic entry bound drifted: %#v %q", diagnostics, summary)
+	}
+}
