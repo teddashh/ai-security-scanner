@@ -13,9 +13,7 @@ use crate::artifact_store::{
     ArtifactContext, LauncherV2OutputArtifact, classify_launcher_v2_output_artifact,
     inspect_raw_artifacts, read_verified_raw_artifact,
 };
-use crate::beginner_report::{
-    BeginnerReportSummary, ReportLifecycle, build_beginner_master_report,
-};
+use crate::beginner_report::{BeginnerReportSummary, ReportLifecycle};
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
     LIVE_PROVIDER_ARTIFACT_SET_SCHEMA, LiveProviderArtifactSet, MAX_LIVE_PROVIDER_PAGES,
@@ -47,8 +45,8 @@ use crate::execution_coverage::{
     reduce_naabu_attempt_coverage,
 };
 use crate::export::{
-    BundleVerification, ExportOptions, INTEGRITY_ONLY_NOTICE, case_for_export, create_case_bundle,
-    verify_case_bundle_against,
+    BundleVerification, ExportOptions, INTEGRITY_ONLY_NOTICE, beginner_report_for_export,
+    case_for_export, create_case_bundle, verify_case_bundle_against,
 };
 use crate::export_identity::{
     LocalSigningIdentitySummary, ensure_local_signing_identity,
@@ -5035,11 +5033,7 @@ impl<'a> CaseService<'a> {
                             .into(),
                     )
                 })?;
-            let report = build_beginner_master_report(&document_case, run_id).map_err(|error| {
-                AppError::Internal(format!(
-                    "selected-run coverage manifest could not be derived: {error}"
-                ))
-            })?;
+            let report = beginner_report_for_export(&case, run_id, options.redaction)?;
             let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
                 "schema_version": "1.0.0",
                 "export_kind": "coverage_manifest",
@@ -9382,9 +9376,7 @@ fn canonical_json_bytes(
     run_id: &str,
     options: &ExportOptions,
 ) -> AppResult<Vec<u8>> {
-    let exported = case_for_document_export(case, options);
-    let report = build_beginner_master_report(&exported, run_id)
-        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    let report = beginner_report_for_export(case, run_id, options.redaction)?;
     serde_json::to_vec_pretty(&serde_json::json!({
         "schema_version": "1.0.0",
         "product_name": "ai-security-scanner",
@@ -9405,8 +9397,7 @@ fn html_report_bytes(
     options: &ExportOptions,
 ) -> AppResult<Vec<u8>> {
     let exported = case_for_document_export(case, options);
-    let report = build_beginner_master_report(&exported, run_id)
-        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    let report = beginner_report_for_export(case, run_id, options.redaction)?;
     let display_time = |value: Option<&DateTime<Utc>>| {
         value
             .map(|time| time.to_rfc3339())
@@ -10038,6 +10029,7 @@ fn html_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::beginner_report::build_beginner_master_report;
     use crate::bootstrap::{
         CreatedBootstrapResources, create_cleanup_ledger, write_cleanup_ledger,
     };
@@ -10415,6 +10407,83 @@ mod tests {
             launcher_plan_sha256: sha256_bytes(
                 &serde_json::to_vec(&launcher).expect("launcher plan JSON"),
             ),
+        }
+    }
+
+    fn normalized_complete_naabu_result(
+        plan: &NaabuWorkPlanV1,
+        request: &NaabuAttemptRequest,
+    ) -> NaabuAttemptResult {
+        let empty_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let work_units_by_id = plan
+            .work_units
+            .iter()
+            .map(|unit| (unit.unit_id.as_str(), unit))
+            .collect::<BTreeMap<_, _>>();
+        let mut bindings = Vec::new();
+        let mut work_units = Vec::new();
+        for (ordinal, unit_id) in request.requested_unit_ids.iter().enumerate() {
+            let unit = work_units_by_id[unit_id.as_str()];
+            let identity = FinalArtifactIdentity {
+                engine_run_id: plan.identity.engine_run_id.clone(),
+                unit_id: unit.unit_id.clone(),
+                scope_sha256: unit.scope_sha256.clone(),
+                attempt: request.execution_attempt,
+                relative_path: format!(
+                    "attempt-{}/unit-{ordinal}.jsonl",
+                    request.execution_attempt
+                ),
+                sha256: empty_sha256.into(),
+                byte_length: 0,
+            };
+            bindings.push(crate::execution_coverage::ValidatedArtifactBinding {
+                raw_artifact_id: format!(
+                    "raw-naabu-complete-{}-{ordinal}",
+                    request.execution_attempt
+                ),
+                identity: identity.clone(),
+            });
+            work_units.push(crate::execution_coverage::WorkUnitCoverage {
+                unit_id: unit.unit_id.clone(),
+                scope_sha256: unit.scope_sha256.clone(),
+                outcome: WorkUnitOutcome::TestedComplete,
+                attempts: vec![crate::execution_coverage::WorkUnitAttempt {
+                    attempt: request.execution_attempt,
+                    outcome: WorkUnitOutcome::TestedComplete,
+                    incomplete_reason: None,
+                    final_artifact: Some(identity),
+                }],
+            });
+        }
+        let requested = work_units.len();
+        NaabuAttemptResult {
+            schema_version: NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
+            execution_attempt: request.execution_attempt,
+            journal_raw_artifact_id: format!(
+                "raw-naabu-complete-journal-{}",
+                request.execution_attempt
+            ),
+            coverage: crate::execution_coverage::ValidatedExecutionCoverage {
+                schema_version: crate::execution_coverage::LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
+                engine_run_id: plan.identity.engine_run_id.clone(),
+                execution_attempt: request.execution_attempt,
+                recovered_trailing_record: false,
+                validated_artifact_bindings: bindings,
+                unreferenced_final_artifacts: Vec::new(),
+                work_units,
+                summary: crate::execution_coverage::ExecutionCoverageSummary {
+                    requested,
+                    tested_complete: requested,
+                    tested_partial: 0,
+                    failed: 0,
+                    timed_out: 0,
+                    cancelled: 0,
+                    not_tested: 0,
+                    partial: false,
+                    has_usable_results: true,
+                },
+            },
+            normalization_complete: true,
         }
     }
 
@@ -11341,6 +11410,507 @@ mod tests {
             warning.contains("Framework relationships were omitted")
                 && warning.contains("Scanner findings remain usable")
         }));
+    }
+
+    #[test]
+    fn beginner_report_uses_cumulative_naabu_truth_after_a_failed_partial_attempt() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedPartial, false);
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(Utc::now());
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        engine_run.status = EngineRunStatus::Failed;
+        engine_run.phase = "failed".into();
+        engine_run.finished_at = run.completed_at;
+
+        let report = build_beginner_master_report(&case, &prepared.scan_run_id).unwrap();
+        assert_eq!(report.actual.checks.len(), 1);
+        assert_eq!(
+            report.actual.checks[0].status,
+            crate::beginner_report::CoverageDimensionStatus::TestedPartial
+        );
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+        assert!(report.actual.checks[0].tested_dimensions.iter().any(
+            |dimension| dimension.dimension == "partly completed planned work units"
+                && dimension.value.starts_with("1 of ")
+        ));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == crate::beginner_report::CoverageGapKind::NotTested
+                && gap.dimension.contains("partly completed work units")
+        }));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == crate::beginner_report::CoverageGapKind::Unavailable
+                && gap.dimension.contains("saved result processing")
+        }));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == crate::beginner_report::CoverageGapKind::Failed
+                && gap.task_id.as_deref() == Some(prepared.engine_run_id.as_str())
+                && gap.dimension.contains("stopped before finishing")
+        }));
+        assert_eq!(report.coverage_counts.failed, 1);
+    }
+
+    #[test]
+    fn partial_naabu_evidence_preserves_cancelled_and_timed_out_task_outcomes() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedPartial, false);
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+        let base = fixture.service().show_case(&prepared.case_id).unwrap();
+
+        for (status, phase, error_code, expected_gap) in [
+            (
+                EngineRunStatus::Cancelled,
+                "cancelled",
+                None,
+                crate::beginner_report::CoverageGapKind::Cancelled,
+            ),
+            (
+                EngineRunStatus::Failed,
+                "timed_out",
+                Some("execution_timeout"),
+                crate::beginner_report::CoverageGapKind::TimedOut,
+            ),
+        ] {
+            let mut case = base.clone();
+            let run = case
+                .scan_runs
+                .iter_mut()
+                .find(|run| run.id == prepared.scan_run_id)
+                .unwrap();
+            run.completed_at = Some(Utc::now());
+            let engine_run = run
+                .engine_runs
+                .iter_mut()
+                .find(|engine_run| engine_run.id == prepared.engine_run_id)
+                .unwrap();
+            engine_run.status = status;
+            engine_run.phase = phase.into();
+            engine_run.error_code = error_code.map(str::to_owned);
+            engine_run.finished_at = run.completed_at;
+
+            let report = build_beginner_master_report(&case, &prepared.scan_run_id).unwrap();
+            assert_eq!(
+                report.actual.checks[0].status,
+                crate::beginner_report::CoverageDimensionStatus::TestedPartial
+            );
+            assert!(report.coverage_gaps.iter().any(|gap| {
+                gap.kind == expected_gap
+                    && gap.task_id.as_deref() == Some(prepared.engine_run_id.as_str())
+            }));
+            match expected_gap {
+                crate::beginner_report::CoverageGapKind::Cancelled => {
+                    assert_eq!(report.coverage_counts.cancelled, 1)
+                }
+                crate::beginner_report::CoverageGapKind::TimedOut => {
+                    assert_eq!(report.coverage_counts.timed_out, 1)
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn partial_naabu_truth_is_identical_across_beginner_report_exports() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedPartial, false);
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(Utc::now());
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        engine_run.status = EngineRunStatus::Failed;
+        engine_run.phase = "failed".into();
+        engine_run.finished_at = run.completed_at;
+        fixture
+            .storage
+            .save_case(&mut case, "test.partial_naabu_export_truth")
+            .unwrap();
+        let case = fixture.service().show_case(&prepared.case_id).unwrap();
+
+        let authoritative = build_beginner_master_report(&case, &prepared.scan_run_id).unwrap();
+        assert_eq!(
+            beginner_report_for_export(&case, &prepared.scan_run_id, RedactionProfile::None)
+                .unwrap(),
+            authoritative,
+            "unredacted export must not rebuild or reinterpret the report"
+        );
+        let standard =
+            beginner_report_for_export(&case, &prepared.scan_run_id, RedactionProfile::Standard)
+                .unwrap();
+        assert_eq!(standard.state, authoritative.state);
+        assert_eq!(standard.coverage_counts, authoritative.coverage_counts);
+        assert_eq!(
+            standard.actual.checks[0].status,
+            authoritative.actual.checks[0].status
+        );
+        assert_eq!(
+            standard.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .map(|dimension| (&dimension.dimension, &dimension.value))
+                .collect::<Vec<_>>(),
+            authoritative.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .map(|dimension| (&dimension.dimension, &dimension.value))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            standard
+                .coverage_gaps
+                .iter()
+                .map(|gap| gap.kind)
+                .collect::<Vec<_>>(),
+            authoritative
+                .coverage_gaps
+                .iter()
+                .map(|gap| gap.kind)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(standard.state.summary, BeginnerReportSummary::Partial);
+        let expected_unit_count = format!("1 of {}", prepared.plan.work_units.len());
+        assert!(
+            standard.actual.checks[0]
+                .tested_dimensions
+                .iter()
+                .any(|dimension| dimension.value == expected_unit_count)
+        );
+
+        let authoritative_json = serde_json::to_string(&authoritative).unwrap();
+        assert!(
+            authoritative_json.contains("198.51.100.0/30"),
+            "the private-target fixture must be meaningful"
+        );
+        let standard_json = serde_json::to_string(&standard).unwrap();
+        for private_target in ["198.51.100.0/30", "198.51.100.1", "198.51.100.2"] {
+            assert!(
+                !standard_json.contains(private_target),
+                "standard report leaked frozen target {private_target}"
+            );
+        }
+
+        let canonical: Value = serde_json::from_slice(
+            &canonical_json_bytes(&case, &prepared.scan_run_id, &ExportOptions::default()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            canonical["report"],
+            serde_json::to_value(&standard).unwrap()
+        );
+
+        let html = String::from_utf8(
+            html_report_bytes(&case, &prepared.scan_run_id, &ExportOptions::default()).unwrap(),
+        )
+        .unwrap();
+        assert!(html.contains("Partial results"));
+        assert!(html.contains(&expected_unit_count));
+        for private_target in ["198.51.100.0/30", "198.51.100.1", "198.51.100.2"] {
+            assert!(!html.contains(private_target));
+        }
+
+        for format in [CaseExportFormat::OcsfJson, CaseExportFormat::OscalJson] {
+            let destination = fixture
+                .directory
+                .path()
+                .join(format!("partial-naabu-{}.json", format.as_str()));
+            let exported = fixture
+                .service()
+                .export_document(
+                    &prepared.case_id,
+                    &prepared.scan_run_id,
+                    format,
+                    &destination,
+                    ExportOptions::default(),
+                )
+                .unwrap();
+            let sidecar: Value = serde_json::from_slice(
+                &fs::read(
+                    exported
+                        .coverage_manifest_path
+                        .as_deref()
+                        .expect("findings export must have a coverage companion"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(sidecar["report"], serde_json::to_value(&standard).unwrap());
+        }
+    }
+
+    #[test]
+    fn beginner_report_is_available_but_never_invents_coverage_from_invalid_naabu_history() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(Utc::now());
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        let mut inconsistent = prepared.result;
+        inconsistent.schema_version = u32::MAX;
+        engine_run.naabu_attempt_results.push(inconsistent);
+        engine_run.status = EngineRunStatus::Completed;
+        engine_run.finished_at = run.completed_at;
+
+        let report = build_beginner_master_report(&case, &prepared.scan_run_id)
+            .expect("invalid saved coverage degrades inside the report");
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
+        assert_eq!(
+            report.actual.checks[0].status,
+            crate::beginner_report::CoverageDimensionStatus::NotTested
+        );
+        assert!(report.actual.checks[0].tested_dimensions.is_empty());
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == crate::beginner_report::CoverageGapKind::Unavailable
+                && gap.dimension.contains("saved work-unit coverage")
+        }));
+        assert_eq!(
+            report
+                .coverage_gaps
+                .iter()
+                .filter(|gap| gap.dimension.contains("saved work-unit coverage"))
+                .count(),
+            1,
+            "one invalid durable history must produce one canonical coverage gap"
+        );
+        assert_eq!(report.coverage_counts.unavailable, 1);
+        assert!(report.data_quality_warnings.iter().any(|warning| {
+            warning.contains("saved coverage history could not be reconciled")
+                && warning.contains("not counted complete")
+        }));
+    }
+
+    #[test]
+    fn completed_naabu_task_is_still_partial_when_frozen_work_remains_not_tested() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        assert!(prepared.plan.work_units.len() > 1);
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(Utc::now());
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        let mut one_completed_unit = prepared.result;
+        one_completed_unit.normalization_complete = true;
+        engine_run.naabu_attempt_results.push(one_completed_unit);
+        engine_run.status = EngineRunStatus::Completed;
+        engine_run.finished_at = run.completed_at;
+
+        let report = build_beginner_master_report(&case, &prepared.scan_run_id).unwrap();
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+        assert_eq!(
+            report.actual.checks[0].status,
+            crate::beginner_report::CoverageDimensionStatus::TestedPartial
+        );
+        assert!(report.actual.checks[0].tested_dimensions.iter().any(
+            |dimension| dimension.dimension == "completed planned work units"
+                && dimension.value.starts_with("1 of ")
+        ));
+        assert!(report.coverage_gaps.iter().any(|gap| {
+            gap.kind == crate::beginner_report::CoverageGapKind::NotTested
+                && gap.dimension.contains("not-tested work units")
+        }));
+    }
+
+    #[test]
+    fn fully_covered_normalized_naabu_task_can_produce_a_complete_report() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, _, plan) = prepared_naabu_work_plan(&fixture);
+        let execution = scan_plan
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == NAABU_ENGINE_ID)
+            .unwrap();
+        let request = naabu_attempt_request(
+            &plan,
+            1,
+            plan.work_units
+                .iter()
+                .map(|unit| unit.unit_id.clone())
+                .collect(),
+        );
+        fixture
+            .service()
+            .persist_naabu_attempt_request(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                &plan,
+                &request,
+            )
+            .unwrap();
+        let result = normalized_complete_naabu_result(&plan, &request);
+        let mut case = fixture.service().show_case(&case_id).unwrap();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == execution.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(Utc::now());
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap();
+        engine_run.naabu_attempt_results.push(result);
+        engine_run.status = EngineRunStatus::Completed;
+        engine_run.phase = "completed".into();
+        engine_run.finished_at = run.completed_at;
+
+        let report = build_beginner_master_report(&case, &execution.scan_run_id).unwrap();
+        assert_eq!(report.state.summary, BeginnerReportSummary::Complete);
+        assert_eq!(
+            report.actual.checks[0].status,
+            crate::beginner_report::CoverageDimensionStatus::TestedComplete
+        );
+        assert!(report.coverage_gaps.is_empty());
+        assert_eq!(
+            report.requested.stage.value,
+            Some(crate::beginner_report::ReportScanStage::Inventory)
+        );
+        assert_eq!(
+            report.requested.reductions_availability,
+            crate::beginner_report::DataAvailability::Recorded
+        );
+    }
+
+    #[test]
+    fn requested_network_stage_aggregates_all_saved_task_plans() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, _, plan) = prepared_naabu_work_plan(&fixture);
+        assert!(
+            plan.work_units
+                .iter()
+                .any(|unit| unit.stage == crate::naabu_work_plan::NaabuWorkStage::FullInventory)
+        );
+        let execution = scan_plan
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == NAABU_ENGINE_ID)
+            .unwrap();
+        let request = naabu_attempt_request(
+            &plan,
+            1,
+            plan.work_units
+                .iter()
+                .map(|unit| unit.unit_id.clone())
+                .collect(),
+        );
+        fixture
+            .service()
+            .persist_naabu_attempt_request(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                &plan,
+                &request,
+            )
+            .unwrap();
+
+        let mut case = fixture.service().show_case(&case_id).unwrap();
+        let run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == execution.scan_run_id)
+            .unwrap();
+        let mut corrupt_first = run.engine_runs[0].clone();
+        corrupt_first.id = "000-corrupt-naabu-task".into();
+        corrupt_first.naabu_attempt_requests.clear();
+        corrupt_first.naabu_attempt_results.clear();
+        corrupt_first
+            .naabu_work_plan
+            .as_mut()
+            .unwrap()
+            .identity
+            .schema_version = u32::MAX;
+        run.engine_runs.insert(0, corrupt_first);
+
+        let report = build_beginner_master_report(&case, &execution.scan_run_id).unwrap();
+        assert_eq!(
+            report.requested.stage.value,
+            Some(crate::beginner_report::ReportScanStage::Inventory),
+            "a corrupt first sibling must not hide a later valid inventory plan"
+        );
+        assert_eq!(
+            report.requested.stage.availability,
+            crate::beginner_report::DataAvailability::Unavailable,
+            "the report must also disclose that another sibling plan was unreadable"
+        );
+        assert!(
+            report
+                .requested
+                .stage
+                .explanation
+                .contains("highest known stage")
+        );
+        assert_eq!(
+            report.requested.reductions_availability,
+            crate::beginner_report::DataAvailability::Unavailable
+        );
     }
 
     #[test]

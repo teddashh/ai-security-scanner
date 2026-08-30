@@ -10,6 +10,8 @@ use crate::domain::{
     EngineRunStatus, EngineTaskKind, Finding, FindingObservation, Id, LocalhostTcpObservation,
     LocalhostTcpOutcome, ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun, Severity,
 };
+use crate::execution_coverage::{CumulativeNaabuCoverage, reduce_naabu_attempt_coverage};
+use crate::naabu_work_plan::{NAABU_ENGINE_ID, NaabuWorkStage};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -404,7 +406,10 @@ pub fn build_beginner_master_report(
     }
 
     let requested = project_requested_coverage(case, run, !contradictory_request_outcome);
-    let (actual, mut coverage_gaps) = project_actual_coverage(run);
+    let actual_projection = project_actual_coverage(run);
+    let actual = actual_projection.actual;
+    let mut coverage_gaps = actual_projection.gaps;
+    data_quality_warnings.extend(actual_projection.data_quality_warnings);
     append_request_outcome_gaps(run, !contradictory_request_outcome, &mut coverage_gaps);
     append_engine_admission_gaps(run, &mut coverage_gaps);
     append_case_exclusions(case, run, &mut coverage_gaps);
@@ -479,11 +484,8 @@ pub fn build_beginner_master_report(
     } else {
         ReportLifecycle::Live
     };
-    let has_useful_tested_outcome = !findings.is_empty()
-        || actual.checks.iter().any(|check| {
-            check.status == CoverageDimensionStatus::TestedPartial
-                || !check.tested_dimensions.is_empty()
-        });
+    let has_useful_tested_outcome =
+        !findings.is_empty() || !actual_projection.useful_task_ids.is_empty();
     let summary = if lifecycle == ReportLifecycle::Final
         && ((run.is_terminal_no_checks() && !contradictory_request_outcome)
             || !has_useful_tested_outcome)
@@ -494,7 +496,7 @@ pub fn build_beginner_master_report(
         && run
             .engine_runs
             .iter()
-            .all(exactly_completed_without_known_gap)
+            .all(|task| actual_projection.exact_complete_task_ids.contains(&task.id))
         && coverage_gaps.is_empty()
     {
         BeginnerReportSummary::Complete
@@ -576,12 +578,58 @@ fn project_requested_coverage(
             matches!(task.task_kind, EngineTaskKind::BuiltInLocalhostTcp { .. })
                 && task.task_kind.is_exact_built_in_localhost_tcp_contract()
         });
+    let naabu_tasks = run
+        .engine_runs
+        .iter()
+        .filter(|task| {
+            task.engine_id == NAABU_ENGINE_ID
+                && matches!(task.task_kind, EngineTaskKind::CatalogEngine)
+        })
+        .collect::<Vec<_>>();
+    let valid_naabu_plans = naabu_tasks
+        .iter()
+        .filter_map(|task| task.naabu_work_plan.as_ref())
+        .filter(|plan| plan.validate().is_ok())
+        .collect::<Vec<_>>();
+    let all_naabu_plans_valid =
+        !naabu_tasks.is_empty() && valid_naabu_plans.len() == naabu_tasks.len();
     let stage = if exact_localhost_only {
         RecordedStage {
             value: Some(ReportScanStage::QuickDiscovery),
             availability: DataAvailability::Recorded,
             explanation:
                 "The frozen native localhost task is a quick reachability discovery check.".into(),
+        }
+    } else if !valid_naabu_plans.is_empty() {
+        let includes_inventory = valid_naabu_plans
+            .iter()
+            .flat_map(|plan| &plan.work_units)
+            .any(|unit| unit.stage == NaabuWorkStage::FullInventory);
+        RecordedStage {
+            value: Some(if includes_inventory {
+                ReportScanStage::Inventory
+            } else {
+                ReportScanStage::QuickDiscovery
+            }),
+            availability: if all_naabu_plans_valid {
+                DataAvailability::Recorded
+            } else {
+                DataAvailability::Unavailable
+            },
+            explanation: if !all_naabu_plans_valid {
+                if includes_inventory {
+                    "At least one readable frozen network plan includes full inventory, but another network check has no valid saved plan. Inventory is the highest known stage, not a complete run-wide record."
+                        .into()
+                } else {
+                    "Readable frozen network plans contain quick discovery only, but another network check has no valid saved plan. Quick discovery is the highest known stage, not a complete run-wide record."
+                        .into()
+                }
+            } else if includes_inventory {
+                "The frozen network plan includes quick discovery followed by the full approved port inventory."
+                    .into()
+            } else {
+                "The frozen network plan contains quick discovery work only.".into()
+            },
         }
     } else {
         RecordedStage {
@@ -684,7 +732,7 @@ fn project_requested_coverage(
                 .into(),
         });
     }
-    let reductions_availability = if exact_localhost_only {
+    let reductions_availability = if exact_localhost_only || all_naabu_plans_valid {
         DataAvailability::Recorded
     } else {
         unavailable_dimensions.push(UnavailableDimension {
@@ -747,17 +795,17 @@ fn project_requested_target(case: &AssessmentCase, run: &ScanRun, asset_id: Id) 
         .find(|grant| grant.asset_id == asset_id)
         .and_then(|grant| grant.external_scope.as_ref())
     {
-        let current_asset = case.assets.iter().find(|asset| asset.id == asset_id);
+        let frozen_kind = match &external.target {
+            crate::external_scope::CanonicalTarget::Hostname(_) => AssetKind::Domain,
+            crate::external_scope::CanonicalTarget::Address(_)
+            | crate::external_scope::CanonicalTarget::Network(_) => AssetKind::IpAddress,
+        };
         return RequestedTarget {
             asset_id,
             label: Some(external.target.canonical_text()),
-            asset_kind: current_asset.map(|asset| asset.kind.clone()),
+            asset_kind: Some(frozen_kind),
             label_availability: DataAvailability::Recorded,
-            asset_kind_availability: if current_asset.is_some() {
-                DataAvailability::CurrentCaseFallback
-            } else {
-                DataAvailability::Unavailable
-            },
+            asset_kind_availability: DataAvailability::Recorded,
         };
     }
 
@@ -779,11 +827,22 @@ fn project_requested_target(case: &AssessmentCase, run: &ScanRun, asset_id: Id) 
     }
 }
 
-fn project_actual_coverage(run: &ScanRun) -> (ActualCoverage, Vec<CoverageGap>) {
+struct ActualCoverageProjection {
+    actual: ActualCoverage,
+    gaps: Vec<CoverageGap>,
+    data_quality_warnings: Vec<String>,
+    useful_task_ids: BTreeSet<Id>,
+    exact_complete_task_ids: BTreeSet<Id>,
+}
+
+fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
     let mut checks = Vec::new();
     let mut gaps = Vec::new();
     let mut unavailable_dimensions = Vec::new();
     let mut observed_times = Vec::new();
+    let mut data_quality_warnings = Vec::new();
+    let mut useful_task_ids = BTreeSet::new();
+    let mut exact_complete_task_ids = BTreeSet::new();
 
     for task in &run.engine_runs {
         observed_times.extend(task.started_at);
@@ -794,6 +853,9 @@ fn project_actual_coverage(run: &ScanRun) -> (ActualCoverage, Vec<CoverageGap>) 
 
         let mut tested_dimensions = Vec::new();
         let mut status = actual_status(task);
+        let mut task_gap_already_projected = false;
+        let mut exact_complete = false;
+        let mut useful_result = false;
         match task.task_kind {
             EngineTaskKind::BuiltInLocalhostTcp {
                 port,
@@ -816,6 +878,56 @@ fn project_actual_coverage(run: &ScanRun) -> (ActualCoverage, Vec<CoverageGap>) 
                             .into(),
                         observed_at: Some(observation.observed_at),
                     });
+                    useful_result = true;
+                }
+                exact_complete = exactly_completed_without_known_gap(task);
+            }
+            EngineTaskKind::CatalogEngine
+                if task.engine_id == NAABU_ENGINE_ID
+                    && (task.naabu_work_plan.is_some()
+                        || !task.naabu_attempt_requests.is_empty()
+                        || !task.naabu_attempt_results.is_empty()) =>
+            {
+                let reduced = task.naabu_work_plan.as_ref().map_or_else(
+                    || Err("saved work plan is missing"),
+                    |plan| {
+                        reduce_naabu_attempt_coverage(
+                            plan,
+                            &task.naabu_attempt_requests,
+                            &task.naabu_attempt_results,
+                        )
+                        .map_err(|_| "saved work-unit history is inconsistent")
+                    },
+                );
+                match reduced {
+                    Ok(coverage) => {
+                        status = naabu_coverage_status(task, &coverage);
+                        append_naabu_tested_dimensions(task, &coverage, &mut tested_dimensions);
+                        append_naabu_coverage_gaps(task, &coverage, &mut gaps);
+                        useful_result = coverage.summary.has_usable_results;
+                        exact_complete =
+                            task.status == EngineRunStatus::Completed && coverage.fully_complete;
+                        task_gap_already_projected = true;
+                    }
+                    Err(_) => {
+                        status = untrusted_naabu_history_status(task);
+                        let explanation = "The saved work-unit coverage for this check is internally inconsistent. The report did not guess which planned units were tested.";
+                        gaps.push(CoverageGap {
+                            kind: CoverageGapKind::Unavailable,
+                            task_id: Some(task.id.clone()),
+                            target_asset_ids: task.asset_ids.clone(),
+                            dimension: format!("{} saved work-unit coverage", check_id(task)),
+                            reason: explanation.into(),
+                            next_action_code: NextActionCode::RetryCheck,
+                            next_action: "Keep the saved evidence and other results. Retry this check to create a new consistent coverage record."
+                                .into(),
+                        });
+                        data_quality_warnings.push(
+                            "One check's saved coverage history could not be reconciled. Retained findings and evidence remain available, but that check is not counted complete."
+                                .into(),
+                        );
+                        task_gap_already_projected = true;
+                    }
                 }
             }
             EngineTaskKind::CatalogEngine if task.status == EngineRunStatus::Completed => {
@@ -833,8 +945,16 @@ fn project_actual_coverage(run: &ScanRun) -> (ActualCoverage, Vec<CoverageGap>) 
                     explanation: "The run records the completed engine/asset coordinate but not exact observed hosts, services, ports, paths, files, branches, accounts, or resources."
                         .into(),
                 });
+                useful_result = !tested_dimensions.is_empty();
+                exact_complete = exactly_completed_without_known_gap(task);
             }
-            _ => {}
+            EngineTaskKind::CatalogEngine => {
+                // Older adapters did not freeze granular executed dimensions.
+                // Their durable PartiallyCompleted state remains the only
+                // available coarse proof that some usable result arrived.
+                useful_result = status == CoverageDimensionStatus::TestedPartial;
+            }
+            EngineTaskKind::BuiltInLocalhostTcp { .. } => {}
         }
 
         if status == CoverageDimensionStatus::TestedComplete && tested_dimensions.is_empty() {
@@ -851,7 +971,15 @@ fn project_actual_coverage(run: &ScanRun) -> (ActualCoverage, Vec<CoverageGap>) 
             });
         }
 
-        append_task_gap(task, status, &mut gaps);
+        if !task_gap_already_projected {
+            append_task_gap(task, status, &mut gaps);
+        }
+        if useful_result {
+            useful_task_ids.insert(task.id.clone());
+        }
+        if exact_complete {
+            exact_complete_task_ids.insert(task.id.clone());
+        }
         checks.push(ActualCheck {
             task_id: task.id.clone(),
             check_id: check_id(task),
@@ -869,15 +997,283 @@ fn project_actual_coverage(run: &ScanRun) -> (ActualCoverage, Vec<CoverageGap>) 
     observed_times.sort();
     let observed_from = observed_times.first().copied();
     let observed_until = observed_times.last().copied();
-    (
-        ActualCoverage {
+    ActualCoverageProjection {
+        actual: ActualCoverage {
             observed_from,
             observed_until,
             checks,
             unavailable_dimensions,
         },
         gaps,
-    )
+        data_quality_warnings,
+        useful_task_ids,
+        exact_complete_task_ids,
+    }
+}
+
+fn naabu_coverage_status(
+    task: &EngineRun,
+    coverage: &CumulativeNaabuCoverage,
+) -> CoverageDimensionStatus {
+    if task.status == EngineRunStatus::Completed && coverage.fully_complete {
+        return CoverageDimensionStatus::TestedComplete;
+    }
+    if coverage.summary.has_usable_results {
+        return CoverageDimensionStatus::TestedPartial;
+    }
+    if task_is_active(task) {
+        return CoverageDimensionStatus::InProgress;
+    }
+    if coverage.summary.failed > 0 || task.status == EngineRunStatus::Failed {
+        return CoverageDimensionStatus::Failed;
+    }
+    if coverage.summary.timed_out > 0 || stable_timeout_marker(task) {
+        return CoverageDimensionStatus::TimedOut;
+    }
+    if coverage.summary.cancelled > 0 || task.status == EngineRunStatus::Cancelled {
+        return CoverageDimensionStatus::Cancelled;
+    }
+    CoverageDimensionStatus::NotTested
+}
+
+fn untrusted_naabu_history_status(task: &EngineRun) -> CoverageDimensionStatus {
+    if task_is_active(task) {
+        return CoverageDimensionStatus::InProgress;
+    }
+    if stable_timeout_marker(task) {
+        return CoverageDimensionStatus::TimedOut;
+    }
+    match task.status {
+        EngineRunStatus::Failed => CoverageDimensionStatus::Failed,
+        EngineRunStatus::Cancelled => CoverageDimensionStatus::Cancelled,
+        EngineRunStatus::NotExecuted
+        | EngineRunStatus::Completed
+        | EngineRunStatus::PartiallyCompleted => CoverageDimensionStatus::NotTested,
+        EngineRunStatus::Queued
+        | EngineRunStatus::Preparing
+        | EngineRunStatus::Running
+        | EngineRunStatus::Paused => CoverageDimensionStatus::InProgress,
+    }
+}
+
+fn append_naabu_tested_dimensions(
+    task: &EngineRun,
+    coverage: &CumulativeNaabuCoverage,
+    tested_dimensions: &mut Vec<TestedDimension>,
+) {
+    let total = coverage.summary.requested;
+    if coverage.summary.tested_complete > 0 {
+        tested_dimensions.push(TestedDimension {
+            dimension: "completed planned work units".into(),
+            value: format!("{} of {total}", coverage.summary.tested_complete),
+            observation: "These exact frozen work units have validated completed outcomes across all saved attempts. A completed network check reports reachability; it is not a security pass."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+    if coverage.summary.tested_partial > 0 {
+        tested_dimensions.push(TestedDimension {
+            dimension: "partly completed planned work units".into(),
+            value: format!("{} of {total}", coverage.summary.tested_partial),
+            observation: "These work units produced usable saved results but did not finish every planned operation."
+                .into(),
+            observed_at: task.finished_at,
+        });
+    }
+}
+
+fn append_naabu_coverage_gaps(
+    task: &EngineRun,
+    coverage: &CumulativeNaabuCoverage,
+    gaps: &mut Vec<CoverageGap>,
+) {
+    let summary = &coverage.summary;
+    let task_id = Some(task.id.clone());
+    let targets = task.asset_ids.clone();
+    let mut push = |kind: CoverageGapKind,
+                    dimension: String,
+                    reason: String,
+                    next_action_code: NextActionCode,
+                    next_action: &str| {
+        gaps.push(CoverageGap {
+            kind,
+            task_id: task_id.clone(),
+            target_asset_ids: targets.clone(),
+            dimension,
+            reason,
+            next_action_code,
+            next_action: next_action.into(),
+        });
+    };
+
+    if summary.tested_partial > 0 {
+        push(
+            CoverageGapKind::NotTested,
+            format!(
+                "{} partly completed work units ({})",
+                check_id(task),
+                summary.tested_partial
+            ),
+            "Usable results were saved for these work units, but their remaining planned operations were not tested complete."
+                .into(),
+            NextActionCode::RetryCheck,
+            "Keep the saved results and retry only the unfinished work.",
+        );
+    }
+    if summary.failed > 0 {
+        push(
+            CoverageGapKind::Failed,
+            format!("{} failed work units ({})", check_id(task), summary.failed),
+            "These planned work units stopped before establishing completed coverage.".into(),
+            NextActionCode::RetryCheck,
+            "Keep other saved results and retry only the failed work.",
+        );
+    }
+    if summary.timed_out > 0 {
+        push(
+            CoverageGapKind::TimedOut,
+            format!(
+                "{} timed-out work units ({})",
+                check_id(task),
+                summary.timed_out
+            ),
+            "These planned work units reached their bounded time limit before completed coverage was recorded."
+                .into(),
+            NextActionCode::RetryCheck,
+            "Keep other saved results and retry only the timed-out work.",
+        );
+    }
+    if summary.cancelled > 0 {
+        push(
+            CoverageGapKind::Cancelled,
+            format!(
+                "{} cancelled work units ({})",
+                check_id(task),
+                summary.cancelled
+            ),
+            "These planned work units were cancelled before completed coverage was recorded."
+                .into(),
+            NextActionCode::RetryCheck,
+            "Start only the cancelled work again when you want to finish it.",
+        );
+    }
+    if summary.not_tested > 0 {
+        push(
+            CoverageGapKind::NotTested,
+            format!(
+                "{} not-tested work units ({})",
+                check_id(task),
+                summary.not_tested
+            ),
+            "These frozen work units have no validated tested outcome in any saved attempt.".into(),
+            if task_is_active(task) {
+                NextActionCode::WaitOrCancel
+            } else {
+                NextActionCode::RetryCheck
+            },
+            if task_is_active(task) {
+                "Let the current check continue or cancel it; saved partial results remain available."
+            } else {
+                "Retry only the work that has not yet produced a tested outcome."
+            },
+        );
+    }
+    if !coverage.all_validated_final_artifacts_normalized {
+        push(
+            CoverageGapKind::Unavailable,
+            format!("{} saved result processing", check_id(task)),
+            "At least one validated scanner result has not been fully processed into findings. Tested coverage remains saved, but the finding list may be incomplete."
+                .into(),
+            NextActionCode::PreserveVisibleLimitation,
+            "Keep the saved results. The app should retry result processing automatically; keep this limitation visible until it succeeds.",
+        );
+    }
+
+    if coverage.fully_complete && task.status != EngineRunStatus::Completed {
+        let (kind, code, action) = if stable_timeout_marker(task) {
+            (
+                CoverageGapKind::TimedOut,
+                NextActionCode::RetryCheck,
+                "Keep the completed results. The app should reconcile the timed-out check before treating the run as final.",
+            )
+        } else if task.status == EngineRunStatus::Failed {
+            (
+                CoverageGapKind::Failed,
+                NextActionCode::RetryCheck,
+                "Keep the completed results. The app should reconcile the stopped check before treating the run as final.",
+            )
+        } else if task.status == EngineRunStatus::Cancelled {
+            (
+                CoverageGapKind::Cancelled,
+                NextActionCode::RetryCheck,
+                "Keep the completed results. The app should reconcile the cancelled check before treating the run as final.",
+            )
+        } else {
+            (
+                CoverageGapKind::Unavailable,
+                if task_is_active(task) {
+                    NextActionCode::WaitOrCancel
+                } else {
+                    NextActionCode::PreserveVisibleLimitation
+                },
+                "Keep the completed results while the app reconciles the check's final state.",
+            )
+        };
+        push(
+            kind,
+            format!("{} final-state reconciliation", check_id(task)),
+            "Every planned work unit has completed evidence, but the check itself has not recorded a completed final state."
+                .into(),
+            code,
+            action,
+        );
+    }
+
+    // Usable unit evidence never erases the task's terminal outcome. Avoid a
+    // duplicate when the cumulative unit projection already carries the same
+    // failure category.
+    if !coverage.fully_complete {
+        if stable_timeout_marker(task) && summary.timed_out == 0 {
+            push(
+                CoverageGapKind::TimedOut,
+                format!("{} ended after its time limit", check_id(task)),
+                if summary.has_usable_results {
+                    "The check reached its time limit after saving some usable results."
+                } else {
+                    "The check reached its time limit before saving a tested outcome."
+                }
+                .into(),
+                NextActionCode::RetryCheck,
+                "Keep saved results and retry only the unfinished work.",
+            );
+        } else if task.status == EngineRunStatus::Failed && summary.failed == 0 {
+            push(
+                CoverageGapKind::Failed,
+                format!("{} stopped before finishing", check_id(task)),
+                if summary.has_usable_results {
+                    "The check stopped after saving some usable results."
+                } else {
+                    "The check stopped before saving a tested outcome."
+                }
+                .into(),
+                NextActionCode::RetryCheck,
+                "Keep saved results and retry only the unfinished work.",
+            );
+        } else if task.status == EngineRunStatus::Cancelled && summary.cancelled == 0 {
+            push(
+                CoverageGapKind::Cancelled,
+                format!("{} was cancelled before finishing", check_id(task)),
+                if summary.has_usable_results {
+                    "The check was cancelled after saving some usable results."
+                } else {
+                    "The check was cancelled before saving a tested outcome."
+                }
+                .into(),
+                NextActionCode::RetryCheck,
+                "Keep saved results and start only the unfinished work again when you are ready.",
+            );
+        }
+    }
 }
 
 fn append_task_gap(task: &EngineRun, status: CoverageDimensionStatus, gaps: &mut Vec<CoverageGap>) {
@@ -1453,6 +1849,18 @@ fn run_is_authoritatively_final(run: &ScanRun) -> bool {
 }
 
 fn exactly_completed_without_known_gap(task: &EngineRun) -> bool {
+    if task.engine_id == NAABU_ENGINE_ID
+        && matches!(task.task_kind, EngineTaskKind::CatalogEngine)
+        && let Some(plan) = task.naabu_work_plan.as_ref()
+    {
+        return task.status == EngineRunStatus::Completed
+            && reduce_naabu_attempt_coverage(
+                plan,
+                &task.naabu_attempt_requests,
+                &task.naabu_attempt_results,
+            )
+            .is_ok_and(|coverage| coverage.fully_complete);
+    }
     if task.status != EngineRunStatus::Completed {
         return false;
     }

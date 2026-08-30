@@ -1,4 +1,7 @@
-use crate::beginner_report::{BEGINNER_MASTER_REPORT_SCHEMA_VERSION, build_beginner_master_report};
+use crate::beginner_report::{
+    BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerMasterReport, TechnicalExecution,
+    build_beginner_master_report,
+};
 use crate::domain::{
     AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, RawArtifact, ScanRun,
     ScopeGrant, new_id,
@@ -251,6 +254,11 @@ pub fn create_case_bundle_at(
         ));
     }
 
+    // Derive coverage truth before Standard redaction removes private Naabu
+    // work plans and attempt journals. The report is then redacted as a
+    // presentation document; execution evidence is never reconstructed from
+    // the reduced export case.
+    let beginner_report = beginner_report_for_export(case, run_id, options.redaction)?;
     let redacted_case = case_for_export(case, options.redaction);
     let artifact_root = artifact_root.as_ref();
     let (artifact_records, artifact_sources) = prepare_artifacts(
@@ -262,7 +270,7 @@ pub fn create_case_bundle_at(
     let mut documents = build_documents(
         &redacted_case,
         run,
-        run_id,
+        &beginner_report,
         &artifact_records,
         options.redaction,
         options.include_raw_artifacts,
@@ -692,13 +700,14 @@ fn normalized_header(size: u64) -> Header {
 fn build_documents(
     case: &AssessmentCase,
     selected_run: &ScanRun,
-    run_id: &str,
+    beginner_report: &BeginnerMasterReport,
     artifact_records: &[RawArtifactExportRecord],
     redaction: RedactionProfile,
     include_raw_artifacts: bool,
     created_at: DateTime<Utc>,
 ) -> AppResult<PreparedDocuments> {
     let mut documents = PreparedDocuments::new();
+    let run_id = beginner_report.run_id.as_str();
     let case_document = json!({
         "schema_version": BUNDLE_SCHEMA_VERSION,
         "id": case.id,
@@ -810,8 +819,6 @@ fn build_documents(
         &json!({ "raw_artifacts": artifact_records }),
         true,
     )?;
-    let beginner_report = build_beginner_master_report(case, run_id)
-        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
     insert_json(
         &mut documents,
         "exports/beginner-master-report.json",
@@ -1132,6 +1139,156 @@ pub(crate) fn case_for_export(
         }
     }
     exported
+}
+
+/// Builds the authoritative run report from the full durable case before any
+/// private execution corpus is removed. Standard redaction changes only
+/// presentation text and requested target details; coverage states, counts,
+/// gap kinds, run identity, and evidence hashes remain authoritative.
+pub(crate) fn beginner_report_for_export(
+    case: &AssessmentCase,
+    run_id: &str,
+    redaction: RedactionProfile,
+) -> AppResult<BeginnerMasterReport> {
+    let mut report = build_beginner_master_report(case, run_id)
+        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    if redaction == RedactionProfile::Standard {
+        let mut alias_case = case.clone();
+        sort_case(&mut alias_case);
+        redact_beginner_master_report(&mut report, &alias_case);
+    }
+    Ok(report)
+}
+
+fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &AssessmentCase) {
+    let replacements = standard_redaction_replacements(case);
+    report.project_title = "Redacted assessment case".into();
+    redact_known_literals(&mut report.state.explanation, &replacements);
+
+    for target in &mut report.requested.targets {
+        target.label = Some(
+            case.assets
+                .iter()
+                .position(|asset| asset.id == target.asset_id)
+                .map(|index| format!("Asset {}", index + 1))
+                .unwrap_or_else(|| "[redacted target]".into()),
+        );
+    }
+    redact_known_literals(&mut report.requested.stage.explanation, &replacements);
+    for limit in &mut report.requested.limits {
+        redact_known_literals(&mut limit.name, &replacements);
+        match limit.source {
+            crate::beginner_report::RequestedLimitSource::FrozenScopeGrant => {
+                limit.value = "[redacted scope limit]".into();
+            }
+            crate::beginner_report::RequestedLimitSource::FrozenTaskContract
+                if limit.name.eq_ignore_ascii_case("endpoint") =>
+            {
+                limit.value = "[redacted endpoint]".into();
+            }
+            crate::beginner_report::RequestedLimitSource::FrozenTaskContract => {
+                redact_known_literals(&mut limit.value, &replacements);
+            }
+        }
+    }
+    for reduction in &mut report.requested.automatic_reductions {
+        for value in [&mut reduction.dimension, &mut reduction.reason] {
+            redact_known_literals(value, &replacements);
+        }
+        reduction.requested = "[redacted requested scope]".into();
+        reduction.executed = "[redacted executed scope]".into();
+    }
+    for unavailable in &mut report.requested.unavailable_dimensions {
+        redact_known_literals(&mut unavailable.dimension, &replacements);
+        redact_known_literals(&mut unavailable.explanation, &replacements);
+    }
+
+    for check in &mut report.actual.checks {
+        for dimension in &mut check.tested_dimensions {
+            redact_known_literals(&mut dimension.dimension, &replacements);
+            redact_known_literals(&mut dimension.value, &replacements);
+            redact_known_literals(&mut dimension.observation, &replacements);
+        }
+    }
+    for unavailable in &mut report.actual.unavailable_dimensions {
+        redact_known_literals(&mut unavailable.dimension, &replacements);
+        redact_known_literals(&mut unavailable.explanation, &replacements);
+    }
+    for gap in &mut report.coverage_gaps {
+        if gap.kind == crate::beginner_report::CoverageGapKind::Excluded {
+            gap.dimension = "Excluded coverage area".into();
+            gap.reason = "[redacted coverage detail]".into();
+        } else {
+            redact_known_literals(&mut gap.dimension, &replacements);
+            redact_known_literals(&mut gap.reason, &replacements);
+        }
+        redact_known_literals(&mut gap.next_action, &replacements);
+    }
+
+    for finding in &mut report.findings {
+        for value in [
+            &mut finding.title,
+            &mut finding.plain_language_risk,
+            &mut finding.possible_impact,
+            &mut finding.next_step,
+            &mut finding.recommended_expert_type,
+        ] {
+            redact_known_literals(value, &replacements);
+        }
+        for reason in &mut finding.priority_reasons {
+            redact_known_literals(reason, &replacements);
+        }
+        for reference in &mut finding.framework_references {
+            for value in [
+                &mut reference.title,
+                &mut reference.relationship,
+                &mut reference.rationale,
+            ] {
+                redact_known_literals(value, &replacements);
+            }
+        }
+    }
+    for step in &mut report.next_steps {
+        redact_known_literals(&mut step.action, &replacements);
+        redact_known_literals(&mut step.reason, &replacements);
+        if let Some(expert) = &mut step.recommended_expert_type {
+            redact_known_literals(expert, &replacements);
+        }
+    }
+
+    for task in &mut report.technical_details.tasks {
+        redact_known_literals(&mut task.phase, &replacements);
+        for value in [
+            &mut task.cleanup_detail,
+            &mut task.redacted_scanner_message,
+            &mut task.redacted_diagnostic_log,
+        ] {
+            if let Some(value) = &mut value.value {
+                redact_known_literals(value, &replacements);
+            }
+            redact_known_literals(&mut value.explanation, &replacements);
+        }
+        match &mut task.execution {
+            TechnicalExecution::BuiltInLocalhostTcp { endpoint, .. } => {
+                *endpoint = "[redacted endpoint]".into();
+            }
+            TechnicalExecution::InvalidBuiltInTask { explanation } => {
+                redact_known_literals(explanation, &replacements);
+            }
+            TechnicalExecution::CatalogEngine { .. } => {}
+        }
+    }
+    redact_known_literals(
+        &mut report.framework_notice.non_certification,
+        &replacements,
+    );
+    redact_known_literals(
+        &mut report.framework_notice.aidefend_mapping_status,
+        &replacements,
+    );
+    for warning in &mut report.data_quality_warnings {
+        redact_known_literals(warning, &replacements);
+    }
 }
 
 fn redact_scope_grant(grant: &mut ScopeGrant) {
@@ -2840,6 +2997,33 @@ mod tests {
     }
 
     #[test]
+    fn standard_redaction_never_rewrites_stable_check_identity_on_asset_text_collision() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        let stable_check_id = case.scan_runs[0].engine_runs[0].engine_id.clone();
+        case.assets[0].name = stable_check_id.clone();
+        case.assets[0].identifiers[0].value = stable_check_id.clone();
+
+        let report =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+        assert_eq!(
+            report.requested.requested_check_ids,
+            [stable_check_id.clone()]
+        );
+        assert_eq!(report.actual.checks[0].check_id, stable_check_id);
+        assert!(matches!(
+            &report.technical_details.tasks[0].execution,
+            TechnicalExecution::CatalogEngine { engine_id, .. }
+                if engine_id == &report.actual.checks[0].check_id
+        ));
+        assert_eq!(
+            report.requested.targets[0].label.as_deref(),
+            Some("Asset 1")
+        );
+    }
+
+    #[test]
     fn standard_redaction_removes_sensitive_sentinels_from_every_bundle_document() {
         const SENTINEL: &str = "SENSITIVE_SENTINEL_DO_NOT_EXPORT_8f7c2a";
         const PLAN_HOSTNAME: &str = "work-plan-secret.example.test";
@@ -3160,6 +3344,36 @@ mod tests {
                 .naabu_attempt_results
                 .is_empty()
         );
+        let standard_report =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+        assert_ne!(
+            standard_report.state.summary,
+            crate::beginner_report::BeginnerReportSummary::Complete
+        );
+        assert!(standard_report.coverage_gaps.iter().any(|gap| {
+            matches!(
+                gap.kind,
+                crate::beginner_report::CoverageGapKind::NotTested
+                    | crate::beginner_report::CoverageGapKind::Unavailable
+            )
+        }));
+        let standard_report_json = serde_json::to_string(&standard_report).unwrap();
+        for private_value in [
+            SENTINEL,
+            PLAN_HOSTNAME,
+            PLAN_ADDRESS_ONE,
+            PLAN_ADDRESS_TWO,
+            HISTORICAL_HOSTNAME,
+            &PLAN_PORT_ONE.to_string(),
+            &PLAN_PORT_TWO.to_string(),
+        ] {
+            assert!(
+                !standard_report_json
+                    .to_ascii_lowercase()
+                    .contains(&private_value.to_ascii_lowercase()),
+                "standard-redacted beginner report leaked {private_value}"
+            );
+        }
         let ocsf = String::from_utf8(export_ocsf_finding_events_bytes(&redacted, "run-1").unwrap())
             .unwrap();
         let oscal =
@@ -3217,6 +3431,17 @@ mod tests {
                 "standard-redacted bundle entry leaked a historical mixed-case target"
             );
         }
+        drop(archive);
+        let bundled_report: Value = serde_json::from_slice(&archive_entry(
+            &destination,
+            "exports/beginner-master-report.json",
+        ))
+        .unwrap();
+        assert_eq!(
+            bundled_report["report"],
+            serde_json::to_value(&standard_report).unwrap(),
+            "the case bundle must use the same authoritative beginner report as every other export"
+        );
     }
 
     #[test]
