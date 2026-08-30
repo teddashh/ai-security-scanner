@@ -314,6 +314,25 @@ test("local-project formats stay available behind technical details", () => {
   assert.ok(source.includes("準備這份專案進行掃描"));
 });
 
+test("choosing a local folder authorizes its private read-only snapshot without a second ownership form", () => {
+  for (const phrase of [
+    "Choose once, then scan the private copy",
+    "選擇一次，再掃描私密副本",
+    "Press Start once to run the recommended checks; there is no second ownership form.",
+    "按一次「開始」即可執行建議檢查，不必再填第二份所有權表單。",
+  ]) {
+    assert.ok(source.includes(phrase), `missing local one-step permission contract: ${phrase}`);
+  }
+  for (const retired of [
+    "attaching it does not grant scan permission",
+    "附加動作不會授予掃描權限",
+    "Confirm ownership and read-only local review in step 3",
+    "請在步驟 3 確認所有權與本機唯讀檢查",
+  ]) {
+    assert.ok(!source.includes(retired), `retired duplicate local consent remains: ${retired}`);
+  }
+});
+
 test("source-code setup says local, masked, and unchanged instead of asking users to remove secrets", () => {
   for (const phrase of [
     "Code you wrote or generated with AI",

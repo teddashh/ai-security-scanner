@@ -415,8 +415,8 @@ const pageCopy = {
   gitWarningTitle: bilingual("Your project stays local and unchanged", "專案留在本機，檔案不會被修改"),
   gitWarningBody: bilingual("Only the selected folder is copied into the private local scan. Detected secret values are masked in results.", "只會把選定資料夾複製到私密的本機掃描；找到的秘密值會在結果中遮罩。"),
   gitTechnicalBody: bilingual("Every .git directory is excluded, so Git history, refs, hooks, and credentials stored inside .git are not opened or copied.", "所有 .git 目錄都會排除，因此不會開啟或複製其中的 Git history、refs、hooks 與 credentials。"),
-  localNoGrantTitle: bilingual("The input type is fixed, but attaching it does not grant scan permission", "輸入類型會固定，但附加動作不會授予掃描權限"),
-  localNoGrantBody: bilingual("The case saves a snapshot ID, input type, content hash, and relative-path manifest—not the original host path. Confirm ownership and read-only local review in step 3.", "案件只保存快照 ID、輸入類型、內容雜湊與相對路徑 manifest，不保存原始主機路徑。請在步驟 3 確認所有權與本機唯讀檢查。"),
+  localSelectionPermissionTitle: bilingual("Choose once, then scan the private copy", "選擇一次，再掃描私密副本"),
+  localSelectionPermissionBody: bilingual("Choosing the folder lets ai-security-scanner read only the private snapshot it creates. The case saves a snapshot ID, input type, content hash, and relative-path manifest—not the original host path. Press Start once to run the recommended checks; there is no second ownership form.", "選擇資料夾後，ai-security-scanner 只會讀取自己建立的私密副本。案件保存快照 ID、輸入類型、內容雜湊與相對路徑 manifest，不保存原始主機路徑。按一次「開始」即可執行建議檢查，不必再填第二份所有權表單。"),
   demoFolderTitle: bilingual("Browser preview cannot read a local folder", "瀏覽器預覽不會讀取本機目錄"),
   demoFolderBody: bilingual("Open the signed desktop app to create a real local snapshot. This preview only shows the steps.", "請使用已簽章的桌面程式建立真實本機快照；目前預覽只會顯示步驟。"),
   inputType: bilingual("What are you attaching?", "你要附加什麼？"),
@@ -1565,8 +1565,8 @@ export function CoveragePage({
             )}
             {workspaceInputProfile === "repository_working_tree" && <p>{text(pageCopy.gitTechnicalBody)}</p>}
             <p>{text(localInputDefinitions[workspaceInputProfile].technical)}</p>
-            <p><strong>{text(pageCopy.localNoGrantTitle)}</strong></p>
-            <p>{text(pageCopy.localNoGrantBody)}</p>
+            <p><strong>{text(pageCopy.localSelectionPermissionTitle)}</strong></p>
+            <p>{text(pageCopy.localSelectionPermissionBody)}</p>
             <p>{text(pageCopy.localEngineDetail, { engines: localInputEngines[workspaceInputProfile] })}</p>
             <code>{workspaceInputProfile}</code>
           </details>
