@@ -31,6 +31,10 @@ pub const PREFERRED_WORK_UNIT_WINDOW_SECONDS: u64 = 30 * 60;
 pub const HARD_WORK_UNIT_WINDOW_SECONDS: u64 = 4 * 60 * 60;
 pub const SCANNER_PROCESS_ALLOWANCE_SECONDS: u64 = 5;
 pub const MAX_NAABU_LAUNCHER_PLAN_BYTES: usize = 1024 * 1024;
+/// Fixed host reserve outside scanner work: container startup, journal flush,
+/// artifact capture, and final status persistence. A selected batch must leave
+/// strictly more than this reserve inside its outer host timeout.
+pub const NAABU_HOST_ATTEMPT_MARGIN_SECONDS: u64 = 60;
 const WORK_UNIT_ID_PREFIX: &str = "wu_";
 const WORK_UNIT_ID_HEX_CHARACTERS: usize = 32;
 const SCOPE_HASH_SCHEMA_VERSION: u32 = 1;
@@ -55,6 +59,24 @@ pub enum NaabuWorkPlanError {
     ArithmeticOverflow,
     #[error("Naabu scope hashing failed: {0}")]
     Hashing(String),
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum NaabuAttemptSelectionError {
+    #[error(transparent)]
+    InvalidPlan(#[from] NaabuWorkPlanError),
+    #[error("tested-complete Naabu work unit {unit_id} is not part of the saved plan")]
+    UnknownTestedCompleteUnit { unit_id: String },
+    #[error(
+        "the first unfinished Naabu work unit {unit_id} requires {required_timeout_seconds} seconds including the fixed host margin, which does not fit strictly within the {outer_host_timeout_seconds}-second outer timeout"
+    )]
+    FirstUnitExceedsTimeout {
+        unit_id: String,
+        required_timeout_seconds: u64,
+        outer_host_timeout_seconds: u64,
+    },
+    #[error("Naabu attempt-selection arithmetic overflowed")]
+    ArithmeticOverflow,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,6 +204,23 @@ pub struct NaabuLauncherWorkUnit {
     pub conservative_deadline_seconds: u64,
 }
 
+/// Pure, durable decision about the next bounded Naabu host attempt.
+///
+/// `Selected` IDs are kept in saved plan order. `AllTestedComplete` is an
+/// explicit terminal outcome so callers never invent an empty launcher batch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NaabuAttemptSelection {
+    AllTestedComplete,
+    Selected {
+        stage: NaabuWorkStage,
+        selected_unit_ids: Vec<String>,
+        conservative_work_seconds: u64,
+        host_margin_seconds: u64,
+        reserved_total_seconds: u64,
+    },
+}
+
 impl NaabuWorkPlanV1 {
     /// Intrinsically validates one saved plan without consulting DNS, a live
     /// grant, a gateway, or disposable runtime state.
@@ -304,6 +343,94 @@ impl NaabuWorkPlanV1 {
         }
         Ok(plan)
     }
+}
+
+/// Selects the next exact, nonempty prefix of unfinished work that fits inside
+/// one outer host timeout. This function has no runtime or storage side
+/// effects and does not activate launcher-v2 execution.
+///
+/// Unfinished quick-discovery units form a mandatory phase boundary: no full
+/// inventory work is returned until every quick unit is tested complete.
+/// Within the active phase, saved plan order is authoritative and selection
+/// stops at the first unit that would not fit; later, smaller units are never
+/// packed around it.
+pub fn select_naabu_attempt(
+    plan: &NaabuWorkPlanV1,
+    tested_complete_unit_ids: &BTreeSet<String>,
+    outer_host_timeout_seconds: u64,
+) -> Result<NaabuAttemptSelection, NaabuAttemptSelectionError> {
+    plan.validate()?;
+
+    let known_unit_ids = plan
+        .work_units
+        .iter()
+        .map(|unit| unit.unit_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if let Some(unit_id) = tested_complete_unit_ids
+        .iter()
+        .find(|unit_id| !known_unit_ids.contains(unit_id.as_str()))
+    {
+        return Err(NaabuAttemptSelectionError::UnknownTestedCompleteUnit {
+            unit_id: unit_id.clone(),
+        });
+    }
+
+    if tested_complete_unit_ids.len() == plan.work_units.len() {
+        return Ok(NaabuAttemptSelection::AllTestedComplete);
+    }
+
+    let has_unfinished_quick = plan.work_units.iter().any(|unit| {
+        unit.stage == NaabuWorkStage::QuickDiscovery
+            && !tested_complete_unit_ids.contains(&unit.unit_id)
+    });
+    let active_stage = if has_unfinished_quick {
+        NaabuWorkStage::QuickDiscovery
+    } else {
+        NaabuWorkStage::FullInventory
+    };
+
+    let mut selected_unit_ids = Vec::new();
+    let mut conservative_work_seconds = 0_u64;
+    for unit in plan.work_units.iter().filter(|unit| {
+        unit.stage == active_stage && !tested_complete_unit_ids.contains(&unit.unit_id)
+    }) {
+        let next_work_seconds = conservative_work_seconds
+            .checked_add(unit.conservative_deadline_seconds)
+            .ok_or(NaabuAttemptSelectionError::ArithmeticOverflow)?;
+        let next_reserved_total = checked_attempt_reserved_total(next_work_seconds)?;
+        if next_reserved_total >= outer_host_timeout_seconds {
+            if selected_unit_ids.is_empty() {
+                return Err(NaabuAttemptSelectionError::FirstUnitExceedsTimeout {
+                    unit_id: unit.unit_id.clone(),
+                    required_timeout_seconds: next_reserved_total,
+                    outer_host_timeout_seconds,
+                });
+            }
+            break;
+        }
+        selected_unit_ids.push(unit.unit_id.clone());
+        conservative_work_seconds = next_work_seconds;
+    }
+
+    if selected_unit_ids.is_empty() {
+        return Ok(NaabuAttemptSelection::AllTestedComplete);
+    }
+    let reserved_total_seconds = checked_attempt_reserved_total(conservative_work_seconds)?;
+    Ok(NaabuAttemptSelection::Selected {
+        stage: active_stage,
+        selected_unit_ids,
+        conservative_work_seconds,
+        host_margin_seconds: NAABU_HOST_ATTEMPT_MARGIN_SECONDS,
+        reserved_total_seconds,
+    })
+}
+
+fn checked_attempt_reserved_total(
+    conservative_work_seconds: u64,
+) -> Result<u64, NaabuAttemptSelectionError> {
+    conservative_work_seconds
+        .checked_add(NAABU_HOST_ATTEMPT_MARGIN_SECONDS)
+        .ok_or(NaabuAttemptSelectionError::ArithmeticOverflow)
 }
 
 /// Build a new immutable semantic plan, or validate and return an existing one
@@ -1366,6 +1493,270 @@ mod tests {
                 && unit.conservative_deadline_seconds <= PREFERRED_WORK_UNIT_WINDOW_SECONDS
         }));
         assert_eq!(expanded_pairs(&plan), expected);
+    }
+
+    #[test]
+    fn slash_24_with_40_ports_attempts_quick_then_full_in_saved_order() {
+        let plan = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.80.0/24", 40, default_policy())],
+            None,
+        )
+        .expect("work plan");
+        assert_eq!(plan.work_units.len(), 4);
+
+        let quick = select_naabu_attempt(&plan, &BTreeSet::new(), u64::MAX)
+            .expect("quick attempt selection");
+        assert_eq!(
+            quick,
+            NaabuAttemptSelection::Selected {
+                stage: NaabuWorkStage::QuickDiscovery,
+                selected_unit_ids: vec![plan.work_units[0].unit_id.clone()],
+                conservative_work_seconds: plan.work_units[0].conservative_deadline_seconds,
+                host_margin_seconds: NAABU_HOST_ATTEMPT_MARGIN_SECONDS,
+                reserved_total_seconds: plan.work_units[0].conservative_deadline_seconds
+                    + NAABU_HOST_ATTEMPT_MARGIN_SECONDS,
+            }
+        );
+
+        let quick_complete = [plan.work_units[0].unit_id.clone()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let full =
+            select_naabu_attempt(&plan, &quick_complete, u64::MAX).expect("full attempt selection");
+        match full {
+            NaabuAttemptSelection::Selected {
+                stage,
+                selected_unit_ids,
+                ..
+            } => {
+                assert_eq!(stage, NaabuWorkStage::FullInventory);
+                assert_eq!(
+                    selected_unit_ids,
+                    plan.work_units[1..]
+                        .iter()
+                        .map(|unit| unit.unit_id.clone())
+                        .collect::<Vec<_>>()
+                );
+            }
+            NaabuAttemptSelection::AllTestedComplete => panic!("full inventory remains"),
+        }
+    }
+
+    #[test]
+    fn every_unfinished_quick_unit_precedes_any_full_inventory_unit() {
+        let first = network_plan("192.168.81.0/30", 4, default_policy());
+        let mut second = network_plan("192.168.82.0/30", 4, default_policy());
+        second.grant_id = "grant-b".into();
+        second.asset_id = "asset-b".into();
+        let plan = build_naabu_work_plan(identity(), &[first, second], None).expect("work plan");
+        let quick_units = plan
+            .work_units
+            .iter()
+            .filter(|unit| unit.stage == NaabuWorkStage::QuickDiscovery)
+            .collect::<Vec<_>>();
+        assert_eq!(quick_units.len(), 2);
+        assert!(
+            plan.work_units
+                .iter()
+                .any(|unit| unit.stage == NaabuWorkStage::FullInventory)
+        );
+
+        let first_quick_complete = [quick_units[0].unit_id.clone()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let selection = select_naabu_attempt(&plan, &first_quick_complete, u64::MAX)
+            .expect("remaining quick selection");
+        match selection {
+            NaabuAttemptSelection::Selected {
+                stage,
+                selected_unit_ids,
+                ..
+            } => {
+                assert_eq!(stage, NaabuWorkStage::QuickDiscovery);
+                assert_eq!(selected_unit_ids, [quick_units[1].unit_id.clone()]);
+            }
+            NaabuAttemptSelection::AllTestedComplete => panic!("quick work remains"),
+        }
+    }
+
+    #[test]
+    fn retry_excludes_tested_complete_units_and_retains_remaining_plan_order() {
+        let plan = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.83.0/24", 40, default_policy())],
+            None,
+        )
+        .expect("work plan");
+        let complete = [
+            plan.work_units[0].unit_id.clone(),
+            plan.work_units[2].unit_id.clone(),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+        let selection = select_naabu_attempt(&plan, &complete, u64::MAX).expect("retry selection");
+        match selection {
+            NaabuAttemptSelection::Selected {
+                stage,
+                selected_unit_ids,
+                ..
+            } => {
+                assert_eq!(stage, NaabuWorkStage::FullInventory);
+                assert_eq!(
+                    selected_unit_ids,
+                    [
+                        plan.work_units[1].unit_id.clone(),
+                        plan.work_units[3].unit_id.clone(),
+                    ]
+                );
+                assert!(
+                    selected_unit_ids
+                        .iter()
+                        .all(|unit_id| !complete.contains(unit_id))
+                );
+            }
+            NaabuAttemptSelection::AllTestedComplete => panic!("retry work remains"),
+        }
+    }
+
+    #[test]
+    fn attempt_timeout_keeps_the_fixed_margin_strictly_inside_the_outer_bound() {
+        let plan = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.84.0/30", 1, default_policy())],
+            None,
+        )
+        .expect("one-unit plan");
+        assert_eq!(plan.work_units.len(), 1);
+        let unit = &plan.work_units[0];
+        let reserved = unit.conservative_deadline_seconds + NAABU_HOST_ATTEMPT_MARGIN_SECONDS;
+        let outer = reserved + 1;
+
+        let selection = select_naabu_attempt(&plan, &BTreeSet::new(), outer)
+            .expect("strictly bounded selection");
+        match selection {
+            NaabuAttemptSelection::Selected {
+                conservative_work_seconds,
+                host_margin_seconds,
+                reserved_total_seconds,
+                ..
+            } => {
+                assert_eq!(
+                    conservative_work_seconds,
+                    unit.conservative_deadline_seconds
+                );
+                assert_eq!(host_margin_seconds, NAABU_HOST_ATTEMPT_MARGIN_SECONDS);
+                assert_eq!(reserved_total_seconds, reserved);
+                assert!(reserved_total_seconds < outer);
+            }
+            NaabuAttemptSelection::AllTestedComplete => panic!("work remains"),
+        }
+    }
+
+    #[test]
+    fn first_eligible_unit_that_cannot_fit_returns_a_typed_error() {
+        let plan = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.85.0/30", 1, default_policy())],
+            None,
+        )
+        .expect("one-unit plan");
+        let unit = &plan.work_units[0];
+        let required = unit.conservative_deadline_seconds + NAABU_HOST_ATTEMPT_MARGIN_SECONDS;
+
+        assert_eq!(
+            select_naabu_attempt(&plan, &BTreeSet::new(), required),
+            Err(NaabuAttemptSelectionError::FirstUnitExceedsTimeout {
+                unit_id: unit.unit_id.clone(),
+                required_timeout_seconds: required,
+                outer_host_timeout_seconds: required,
+            })
+        );
+    }
+
+    #[test]
+    fn selector_stops_instead_of_packing_later_smaller_work() {
+        let plan = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.86.0/24", 40, default_policy())],
+            None,
+        )
+        .expect("work plan");
+        let complete = [plan.work_units[0].unit_id.clone()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let full = &plan.work_units[1..];
+        assert_eq!(full.len(), 3);
+        assert!(
+            full[2].conservative_deadline_seconds < full[1].conservative_deadline_seconds,
+            "fixture requires a later smaller unit"
+        );
+        let outer = NAABU_HOST_ATTEMPT_MARGIN_SECONDS
+            + full[0].conservative_deadline_seconds
+            + full[2].conservative_deadline_seconds
+            + 1;
+        assert!(
+            NAABU_HOST_ATTEMPT_MARGIN_SECONDS
+                + full[0].conservative_deadline_seconds
+                + full[1].conservative_deadline_seconds
+                >= outer
+        );
+
+        let selection = select_naabu_attempt(&plan, &complete, outer).expect("bounded prefix");
+        match selection {
+            NaabuAttemptSelection::Selected {
+                selected_unit_ids, ..
+            } => assert_eq!(selected_unit_ids, [full[0].unit_id.clone()]),
+            NaabuAttemptSelection::AllTestedComplete => panic!("full work remains"),
+        }
+    }
+
+    #[test]
+    fn unknown_tested_complete_unit_is_rejected() {
+        let plan = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.87.0/30", 1, default_policy())],
+            None,
+        )
+        .expect("work plan");
+        let unknown_id = format!("wu_{}", "f".repeat(32));
+        let complete = [unknown_id.clone()].into_iter().collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            select_naabu_attempt(&plan, &complete, u64::MAX),
+            Err(NaabuAttemptSelectionError::UnknownTestedCompleteUnit {
+                unit_id: unknown_id,
+            })
+        );
+    }
+
+    #[test]
+    fn all_tested_complete_returns_an_explicit_empty_outcome() {
+        let plan = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.88.0/30", 3, default_policy())],
+            None,
+        )
+        .expect("work plan");
+        let complete = plan
+            .work_units
+            .iter()
+            .map(|unit| unit.unit_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            select_naabu_attempt(&plan, &complete, 0).expect("complete outcome"),
+            NaabuAttemptSelection::AllTestedComplete
+        );
+    }
+
+    #[test]
+    fn attempt_margin_arithmetic_overflow_is_detected() {
+        assert_eq!(
+            checked_attempt_reserved_total(u64::MAX),
+            Err(NaabuAttemptSelectionError::ArithmeticOverflow)
+        );
     }
 
     #[test]
