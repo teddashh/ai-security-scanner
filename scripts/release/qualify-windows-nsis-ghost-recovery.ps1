@@ -23,7 +23,10 @@ $oldVersionDirectoryName = "podman-machine-5.8.2-$priorProviderNamespace"
 $maximumDownloadBytes = 64 * 1024 * 1024
 $maximumSnapshotFiles = 4096
 $maximumSnapshotBytes = 512 * 1024 * 1024
+$maximumCompleteSnapshotBytes = 64GB
 $processLeaseRelativePath = ".exclusive-process.lock"
+$existingExportIdentityFixtureSha256 = "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+$emptyFileSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 $maximumWindowsPathUtf16CodeUnits = 32760
 $maximumVerbatimWindowsPathUtf16CodeUnits = 32766
 $maximumRetainedProcessOutputBytes = 64 * 1024
@@ -36,11 +39,11 @@ $sentinelLifecycleRequiredPhases = @(
   "before_candidate_runtime_start",
   "after_candidate_runtime_running",
   "after_current_runtime_purge",
-  "after_candidate_uninstall"
+  "before_app_only_uninstall"
 )
 
 if ($CurrentVersion -cne "0.1.8") {
-  throw "The bounded v0.1.7 ghost migration qualification applies only to candidate 0.1.8."
+  throw "The bounded v0.1.7 ghost-migration data-preservation fixture applies only to candidate 0.1.8."
 }
 
 if ($null -eq ("GhostQualificationNativeMethods" -as [type])) {
@@ -97,7 +100,7 @@ public struct GhostQualificationByHandleFileInformation {
 
 public sealed class GhostQualificationBoundedCaptureStream : System.IO.Stream {
     // Keep draining after the retained prefix fills so a noisy child cannot
-    // deadlock while the qualification is waiting for its exact process exit.
+    // deadlock while the fixture is waiting for its exact process exit.
     private readonly byte[] retained;
     private readonly object sync = new object();
     private int retainedLength;
@@ -207,7 +210,7 @@ function Assert-RealDirectory([string]$Path, [string]$Label) {
 function Get-OpenFileIdentity([IO.FileStream]$Stream) {
   $information = [GhostQualificationByHandleFileInformation]::new()
   if (-not [GhostQualificationNativeMethods]::GetFileInformationByHandle($Stream.SafeFileHandle, [ref]$information)) {
-    throw "Could not inspect the exact qualification file handle."
+    throw "Could not inspect the exact data-preservation fixture file handle."
   }
   return [ordered]@{
     attributes = [uint32]$information.FileAttributes
@@ -220,11 +223,11 @@ function Get-OpenFileIdentity([IO.FileStream]$Stream) {
 
 function Get-OpenDirectoryIdentity([Microsoft.Win32.SafeHandles.SafeFileHandle]$Handle) {
   if ($null -eq $Handle -or $Handle.IsInvalid -or $Handle.IsClosed) {
-    throw "Qualification directory handle is not open."
+    throw "Data-preservation fixture directory handle is not open."
   }
   $information = [GhostQualificationByHandleFileInformation]::new()
   if (-not [GhostQualificationNativeMethods]::GetFileInformationByHandle($Handle, [ref]$information)) {
-    throw "Could not inspect the exact qualification directory handle."
+    throw "Could not inspect the exact data-preservation fixture directory handle."
   }
   return [ordered]@{
     attributes = [uint32]$information.FileAttributes
@@ -401,6 +404,45 @@ function Assert-ExactEmptyProcessLeaseFile([string]$Path, [string]$Label) {
     $stream.Dispose()
     $handle.Dispose()
   }
+}
+
+function Get-NoFollowEmptyFileProof([string]$Path, [string]$Label) {
+  $verbatimPath = Get-VerbatimWindowsPath $Path $Label
+  $handle = [GhostQualificationNativeMethods]::CreateFileW(
+    $verbatimPath,
+    [GhostQualificationNativeMethods]::GENERIC_READ,
+    [GhostQualificationNativeMethods]::FILE_SHARE_READ,
+    [IntPtr]::Zero,
+    [GhostQualificationNativeMethods]::OPEN_EXISTING,
+    [GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT,
+    [IntPtr]::Zero
+  )
+  if ($null -eq $handle -or $handle.IsInvalid) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($null -ne $handle) { $handle.Dispose() }
+    throw [ComponentModel.Win32Exception]::new($errorCode, "$Label could not be opened without following reparse points")
+  }
+  try { $stream = [IO.FileStream]::new($handle, [IO.FileAccess]::Read, 1, $false) }
+  catch { $handle.Dispose(); throw }
+  try {
+    $before = Get-OpenFileIdentity $stream
+    $after = Get-OpenFileIdentity $stream
+    if (($before.attributes -band [uint32][IO.FileAttributes]::Directory) -ne 0 -or
+        ($before.attributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $before.links -ne 1 -or $before.bytes -ne 0 -or
+        $before.attributes -ne $after.attributes -or $before.links -ne $after.links -or
+        $before.bytes -ne $after.bytes -or $before.volume -ne $after.volume -or
+        $before.index -ne $after.index) {
+      throw "$Label is not one stable empty no-follow single-link file."
+    }
+    return [PSCustomObject]@{
+      FullName = [IO.Path]::GetFullPath($Path)
+      Length = [int64]0
+      Sha256 = $emptyFileSha256
+      Volume = [uint32]$before.volume
+      FileIndex = [uint64]$before.index
+    }
+  } finally { $stream.Dispose() }
 }
 
 function Open-NoFollowWindowsSystemFile(
@@ -583,9 +625,84 @@ function Get-NoFollowFileSha256Proof(
       Sha256 = [Convert]::ToHexString($digest).ToLowerInvariant()
       Volume = [uint32]$before.volume
       FileIndex = [uint64]$before.index
+      NumberOfLinks = [uint32]$before.links
+      Attributes = [uint32]$before.attributes
     }
   } finally {
     $stream.Dispose()
+  }
+}
+
+function Assert-SameFileProof([object]$Expected, [object]$Actual, [string]$Label) {
+  if ($Expected.Length -ne $Actual.Length -or
+      $Expected.Sha256 -cne $Actual.Sha256 -or
+      $Expected.Volume -ne $Actual.Volume -or
+      $Expected.FileIndex -ne $Actual.FileIndex -or
+      $Expected.NumberOfLinks -ne $Actual.NumberOfLinks -or
+      $Expected.Attributes -ne $Actual.Attributes -or
+      -not [String]::Equals($Expected.FullName, $Actual.FullName, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "$Label changed file bytes or NTFS identity."
+  }
+}
+
+function Convert-FileProofObservation([object]$Proof) {
+  return [ordered]@{
+    length = [int64]$Proof.Length
+    sha256 = [string]$Proof.Sha256
+    volume = [uint32]$Proof.Volume
+    fileIndex = ([uint64]$Proof.FileIndex).ToString([Globalization.CultureInfo]::InvariantCulture)
+  }
+}
+
+function Convert-VhdFileProofObservation([object]$Proof) {
+  return [ordered]@{
+    length = [int64]$Proof.Length
+    sha256 = [string]$Proof.Sha256
+    volume = [uint32]$Proof.Volume
+    fileIndex = ([uint64]$Proof.FileIndex).ToString([Globalization.CultureInfo]::InvariantCulture)
+    numberOfLinks = [uint32]$Proof.NumberOfLinks
+    attributes = [uint32]$Proof.Attributes
+  }
+}
+
+function Assert-CanonicalUuid([string]$Value, [string]$Label) {
+  if ($Value -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+    throw "$Label is not a canonical lowercase UUID."
+  }
+}
+
+function Assert-HtmlExportReceipt(
+  [object]$Receipt,
+  [string]$ExpectedCaseId,
+  [string]$ExpectedRunId,
+  [string]$ExpectedDestination,
+  [object]$IndependentProof,
+  [string]$Label
+) {
+  Assert-ExactJsonProperties $Receipt @(
+    "id", "case_id", "run_id", "created_at", "format", "path", "sha256",
+    "coverage_manifest_path", "coverage_manifest_sha256", "signature", "public_key",
+    "redaction_profile", "raw_artifacts_included", "raw_artifacts_omitted",
+    "integrity_only_notice"
+  ) $Label
+  Assert-CanonicalUuid ([string]$Receipt.id) "$Label export ID"
+  Assert-CanonicalUuid ([string]$Receipt.case_id) "$Label case ID"
+  Assert-CanonicalUuid ([string]$Receipt.run_id) "$Label run ID"
+  if ([string]$Receipt.case_id -cne $ExpectedCaseId -or
+      [string]$Receipt.run_id -cne $ExpectedRunId -or
+      [string]$Receipt.format -cne "html" -or
+      -not [String]::Equals(
+        [IO.Path]::GetFullPath([string]$Receipt.path),
+        [IO.Path]::GetFullPath($ExpectedDestination),
+        [StringComparison]::OrdinalIgnoreCase
+      ) -or
+      [string]$Receipt.sha256 -cne [string]$IndependentProof.Sha256 -or
+      $null -ne $Receipt.signature -or $null -ne $Receipt.public_key -or
+      $null -ne $Receipt.coverage_manifest_path -or $null -ne $Receipt.coverage_manifest_sha256 -or
+      [string]$Receipt.redaction_profile -cne "standard" -or
+      [int]$Receipt.raw_artifacts_included -ne 0 -or
+      [String]::IsNullOrWhiteSpace([string]$Receipt.integrity_only_notice)) {
+    throw "$Label does not bind the exact unsigned HTML export."
   }
 }
 
@@ -1050,7 +1167,7 @@ function Assert-SameWindowsPath([string]$Actual, [string]$Expected, [string]$Lab
   $actualPath = Get-ComparableWindowsPath $Actual "$Label reported path"
   $expectedPath = Get-ComparableWindowsPath $Expected "$Label expected path"
   if (-not [String]::Equals($actualPath, $expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "$Label is not bound to its exact qualification path."
+    throw "$Label is not bound to its exact data-preservation fixture path."
   }
 }
 
@@ -1108,7 +1225,7 @@ function Get-WslRegistrations {
   $root = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss"
   if (-not (Test-Path -LiteralPath $root -PathType Container)) { return @() }
   $children = @(Get-ChildItem -LiteralPath $root -ErrorAction Stop)
-  if ($children.Count -gt 256) { throw "WSL registration registry exceeded its qualification bound." }
+  if ($children.Count -gt 256) { throw "WSL registration registry exceeded its data-preservation fixture bound." }
   return @(
     $children | ForEach-Object {
       $properties = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction Stop
@@ -1234,6 +1351,58 @@ function Get-PreservedDataSnapshot([string]$Root) {
   return [ordered]@{ fileCount = $ordered.Count; totalBytes = $totalBytes; digest = $digest }
 }
 
+function Get-CompletePrivateDataSnapshot([string]$Root) {
+  Assert-RealDirectory $Root "Complete private application data root" | Out-Null
+  $rootPath = [IO.Path]::GetFullPath($Root)
+  $files = [Collections.Generic.List[object]]::new()
+  [int64]$totalBytes = 0
+  $items = @(Get-ChildItem -LiteralPath $rootPath -Force -Recurse)
+  if ($items.Count -gt $maximumSnapshotFiles * 4) {
+    throw "Complete private data tree exceeded its entry bound."
+  }
+  foreach ($item in $items) {
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "Complete private data contains a reparse-point entry."
+    }
+    if ($item.PSIsContainer) { continue }
+    if ($files.Count -eq $maximumSnapshotFiles) {
+      throw "Complete private data exceeded its file-count bound."
+    }
+    $relative = [IO.Path]::GetRelativePath($rootPath, $item.FullName).Replace('\', '/')
+    if ([int64]$item.Length -eq 0) {
+      if ($relative -ceq $processLeaseRelativePath) {
+        Assert-ExactEmptyProcessLeaseFile $item.FullName "Complete snapshot root process lease"
+      }
+      $emptyProof = Get-NoFollowEmptyFileProof $item.FullName "Complete private data empty file"
+      $fileRecord = [ordered]@{
+        path = $relative
+        bytes = [int64]$emptyProof.Length
+        sha256 = [string]$emptyProof.Sha256
+      }
+    } else {
+      $fileProof = Get-NoFollowFileSha256Proof $item.FullName (
+        "Complete private data file"
+      ) $maximumCompleteSnapshotBytes
+      $fileRecord = [ordered]@{
+        path = $relative
+        bytes = [int64]$fileProof.Length
+        sha256 = [string]$fileProof.Sha256
+      }
+    }
+    $totalBytes += [int64]$fileRecord.bytes
+    if ($totalBytes -gt $maximumCompleteSnapshotBytes) {
+      throw "Complete private data exceeded its byte bound."
+    }
+    $files.Add($fileRecord)
+  }
+  $ordered = @($files | Sort-Object { $_.path })
+  $encoded = ConvertTo-Json -InputObject $ordered -Compress -Depth 5
+  $digest = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($encoded))
+  ).ToLowerInvariant()
+  return [ordered]@{ fileCount = $ordered.Count; totalBytes = $totalBytes; digest = $digest }
+}
+
 function Assert-PreservedDataSnapshotHousekeepingRegression([string]$Parent) {
   $fixtureName = "preserved-data-housekeeping-regression"
   $fixtureRoot = Assert-ExactChildPath $Parent (Join-Path $Parent $fixtureName) $fixtureName (
@@ -1322,47 +1491,6 @@ function Read-BoundedJsonFile(
     throw "$Label is not one stable bounded UTF-8 JSON document: $($_.Exception.Message)"
   }
 }
-
-function Convert-JsonTextToCompactUtf8Bytes(
-  [string]$Text,
-  [string]$PropertyName = ""
-) {
-  $document = [Text.Json.JsonDocument]::Parse($Text)
-  $memory = [IO.MemoryStream]::new()
-  $writerOptions = [Text.Json.JsonWriterOptions]::new()
-  # This output is hashed, not embedded in HTML. Rust serde_json leaves the
-  # standard Base64 `+` byte literal, while the default .NET encoder rewrites
-  # it as `\u002B` and would therefore compute a different digest.
-  $writerOptions.Encoder = [Text.Encodings.Web.JavaScriptEncoder]::UnsafeRelaxedJsonEscaping
-  $writer = [Text.Json.Utf8JsonWriter]::new($memory, $writerOptions)
-  try {
-    $element = if ([String]::IsNullOrEmpty($PropertyName)) {
-      $document.RootElement
-    } else {
-      $document.RootElement.GetProperty($PropertyName)
-    }
-    $element.WriteTo($writer)
-    $writer.Flush()
-    [byte[]]$bytes = $memory.ToArray()
-  } finally {
-    $writer.Dispose()
-    $memory.Dispose()
-    $document.Dispose()
-  }
-  return ,$bytes
-}
-
-function Assert-SerdeCompatibleJsonCompaction {
-  $fixture = '{"public_key_base64":"A\u002BB\/=="}'
-  $expected = '{"public_key_base64":"A+B/=="}'
-  [byte[]]$fixtureBytes = Convert-JsonTextToCompactUtf8Bytes $fixture
-  $observed = [Text.Encoding]::UTF8.GetString($fixtureBytes)
-  if ($observed -cne $expected) {
-    throw "JSON compaction is not byte-compatible with the Rust signing-identity digest contract."
-  }
-}
-
-Assert-SerdeCompatibleJsonCompaction
 
 function Get-LowerSha256Bytes([byte[]]$Bytes) {
   return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
@@ -1937,7 +2065,7 @@ function Assert-FailureCleanupWslBindingRegression([string]$Parent) {
       }) $exactName $oldBasePath $candidateBasePath $workspaceRoot | Out-Null
     } catch {
       if ($_.Exception.Message -cne (
-          "Failure-path WSL cleanup registration is not bound to its exact qualification path."
+          "Failure-path WSL cleanup registration is not bound to its exact data-preservation fixture path."
         )) { throw }
       $wrongQuarantineRejected = $true
     }
@@ -1994,9 +2122,9 @@ Assert-BoundedCaptureStreamRegression
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
 $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
 Assert-RealDirectory $runnerTemp "RUNNER_TEMP" | Out-Null
-$workRoot = Assert-ExactChildPath $runnerTemp $WorkDirectory "ai-security-scanner-nsis-ghost-recovery-evidence" "Ghost qualification work directory"
+$workRoot = Assert-ExactChildPath $runnerTemp $WorkDirectory "ai-security-scanner-nsis-ghost-recovery-evidence" "Ghost data-preservation fixture work directory"
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
-Assert-RealDirectory $workRoot "Ghost qualification work directory" | Out-Null
+Assert-RealDirectory $workRoot "Ghost data-preservation fixture work directory" | Out-Null
 Assert-NoFollowDirectoryIdentityRegression $workRoot
 Assert-PreservedDataSnapshotHousekeepingRegression $workRoot
 Assert-FailureCleanupWslBindingRegression $workRoot
@@ -2017,9 +2145,9 @@ $oldProviderConfigPath = Join-Path $oldProviderHome "config\containers\container
 $oldSshPublicKeyPath = Join-Path $oldProviderHome "data\containers\podman\machine\machine.pub"
 
 foreach ($path in @($installDirectory, $dataDirectory, $priorInstallerPath)) {
-  if (Test-Path -LiteralPath $path) { throw "Ghost qualification requires a fresh exact namespace: $path" }
+  if (Test-Path -LiteralPath $path) { throw "Ghost data-preservation fixture requires a fresh exact namespace: $path" }
 }
-if (@(Get-ProductRegistryEntries).Count -ne 0) { throw "Ghost qualification requires no existing product registration." }
+if (@(Get-ProductRegistryEntries).Count -ne 0) { throw "Ghost data-preservation fixture requires no existing product registration." }
 
 $installerManifest = Read-BoundedJsonFile (Join-Path $artifactRoot "installers-windows-x86_64.json") "Candidate installer manifest" (1024 * 1024)
 $candidateRecords = @($installerManifest.installers | Where-Object { $_.bundleType -ceq "nsis" })
@@ -2064,13 +2192,17 @@ $trustedWsl = Get-TrustedWslExecutable
 $unrelatedDistributionName = "ai-security-scanner-unrelated-$([Guid]::NewGuid().ToString("N"))"
 $unrelatedWslBasePath = Assert-ExactChildPath $workRoot (
   Join-Path $workRoot "unrelated-wsl"
-) "unrelated-wsl" "Unrelated WSL qualification workspace"
+) "unrelated-wsl" "Unrelated WSL data-preservation fixture workspace"
+$unrelatedVhdPath = Join-Path $unrelatedWslBasePath "ext4.vhdx"
 $unrelatedExportArchive = Assert-ExactChildPath $workRoot (
   Join-Path $workRoot "unrelated-rootfs.tar"
-) "unrelated-rootfs.tar" "Unrelated WSL qualification rootfs"
-$masterFrameworkReportPath = Assert-ExactChildPath $workRoot (
-  Join-Path $workRoot "master-framework-report.json"
-) "master-framework-report.json" "Retained master framework report"
+) "unrelated-rootfs.tar" "Unrelated WSL data-preservation fixture rootfs"
+$beginnerReportPath = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "beginner-report.html"
+) "beginner-report.html" "Readable beginner report"
+if (Test-Path -LiteralPath $beginnerReportPath) {
+  throw "Ghost data-preservation fixture requires a fresh beginner-report output path."
+}
 
 $activeCli = $null
 $activeUninstaller = $null
@@ -2122,20 +2254,17 @@ try {
   }
   $caseId = [string]$demoCase.id
   $runId = [string]$demoCase.scan_runs[0].id
-  $exportDirectory = Join-Path $dataDirectory "qualification-exports"
-  New-Item -ItemType Directory -Path $exportDirectory -Force | Out-Null
-  $beforeBundle = Join-Path $exportDirectory "before-ghost-recovery.case.tar.gz"
-  Invoke-CliJson $oldCli @(
-    "--json", "--data-dir", $dataDirectory, "export", "create", "--case-id", $caseId,
-    "--run-id", $runId, "--format", "case-bundle", "--destination", $beforeBundle
-  ) 120000 "v0.1.7 signed synthetic export" | Out-Null
-  $beforeVerification = Invoke-CliJson $oldCli @(
-    "--json", "--data-dir", $dataDirectory, "export", "verify", "--path", $beforeBundle
-  ) 120000 "v0.1.7 signed export verification"
-  if ($beforeVerification.valid -ne $true) { throw "v0.1.7 signed export did not verify." }
-  $privateSigningKey = Join-Path $dataDirectory "integrity-signing-key"
-  Assert-SingleLinkFile $privateSigningKey "Integrity signing key" (64 * 1024) | Out-Null
-  $privateSigningKeySha256Before = Get-LowerSha256 $privateSigningKey (64 * 1024)
+  Assert-CanonicalUuid $caseId "v0.1.7 synthetic case ID"
+  Assert-CanonicalUuid $runId "v0.1.7 synthetic run ID"
+  $existingExportIdentityPath = Join-Path $dataDirectory "integrity-signing-key"
+  [IO.File]::WriteAllBytes($existingExportIdentityPath, [byte[]](0..31))
+  $existingExportIdentityInitial = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
+    "Existing local export identity fixture"
+  ) (64 * 1024)
+  if ($existingExportIdentityInitial.Length -ne 32 -or
+      $existingExportIdentityInitial.Sha256 -cne $existingExportIdentityFixtureSha256) {
+    throw "Existing local export identity fixture bytes differ from the reviewed 32-byte fixture."
+  }
 
   $oldInstallStatus = Invoke-CliJson $oldCli @(
     "--json", "--data-dir", $dataDirectory, "runtime", "managed", "install"
@@ -2167,18 +2296,18 @@ try {
   $oldSshPublicKeySha256 = Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)
 
   # Build one unrelated WSL distribution from the stopped fixture before the
-  # candidate starts. Export/import here is qualification setup only; the
+  # candidate starts. Export/import here is fixture setup only; the
   # candidate must leave both registrations and their live processes alone.
   Invoke-TrustedWsl $trustedWsl @(
     "--export", $oldDistributionName, $unrelatedExportArchive
-  ) 900000 "Qualification-only unrelated WSL rootfs export" | Out-Null
+  ) 900000 "Fixture-only unrelated WSL rootfs export" | Out-Null
   Get-NoFollowFileSha256Proof $unrelatedExportArchive (
-    "Qualification-only unrelated WSL rootfs"
+    "Fixture-only unrelated WSL rootfs"
   ) (8GB) | Out-Null
   Invoke-TrustedWsl $trustedWsl @(
     "--import", $unrelatedDistributionName, $unrelatedWslBasePath,
     $unrelatedExportArchive, "--version", "2"
-  ) 900000 "Qualification-only unrelated WSL import" | Out-Null
+  ) 900000 "Fixture-only unrelated WSL import" | Out-Null
   $unrelatedRegistrationBefore = Get-ExactWslRegistration (
     $unrelatedDistributionName
   ) $unrelatedWslBasePath
@@ -2253,6 +2382,12 @@ try {
       $candidateRegistry.InstallTransition -cne "recovered-ghost-v0.1.7") {
     throw "Candidate installer did not emit the bounded ghost migration receipt."
   }
+  $existingExportIdentityAfterUpgrade = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
+    "Existing local export identity after ghost upgrade"
+  ) (64 * 1024)
+  Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterUpgrade (
+    "Ghost upgrade existing local export identity"
+  )
   $legacySentinelCheckpoints.Add((
     Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease "after_candidate_install" (
       "Legacy assm1 WSL checkpoint after_candidate_install"
@@ -2277,6 +2412,12 @@ try {
       $candidateRegistry.InstallTransition -cne "recovered-ghost-v0.1.7") {
     throw "Same-version silent reinstall erased the bounded ghost migration receipt."
   }
+  $existingExportIdentityAfterReinstall = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
+    "Existing local export identity after ghost same-version reinstall"
+  ) (64 * 1024)
+  Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterReinstall (
+    "Ghost same-version reinstall existing local export identity"
+  )
   $installerTransitionReceipt = [string]$candidateRegistry.InstallTransition
   $legacySentinelCheckpoints.Add((
     Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
@@ -2300,95 +2441,7 @@ try {
   if ($beforeInstallerSnapshot.digest -cne $afterInstallerSnapshot.digest -or
       $beforeInstallerSnapshot.fileCount -ne $afterInstallerSnapshot.fileCount -or
       $beforeInstallerSnapshot.totalBytes -ne $afterInstallerSnapshot.totalBytes) {
-    throw "Candidate installer changed private case or signing data during ghost migration."
-  }
-  $candidateSigningIdentity = Invoke-CliJson $candidateCli @(
-    "--json", "--data-dir", $dataDirectory, "export", "identity", "show"
-  ) 120000 "Candidate durable export identity adoption"
-  Assert-ExactJsonProperties $candidateSigningIdentity @(
-    "algorithm",
-    "key_id",
-    "public_key_base64",
-    "established_at",
-    "continuity_event",
-    "previous_key_id",
-    "notice"
-  ) "Public signing identity summary"
-  $identityDocumentPath = Assert-ExactChildPath $dataDirectory (
-    Join-Path $dataDirectory "integrity-signing-key.identity.json"
-  ) "integrity-signing-key.identity.json" "Durable export identity document"
-  $identityAnchorPath = Assert-ExactChildPath $dataDirectory (
-    Join-Path $dataDirectory "integrity-signing-key.identity-anchor.json"
-  ) "integrity-signing-key.identity-anchor.json" "Durable export identity anchor"
-  $rotationIntentPath = Assert-ExactChildPath $dataDirectory (
-    Join-Path $dataDirectory "integrity-signing-key.rotation-intent.json"
-  ) "integrity-signing-key.rotation-intent.json" "Signing identity rotation intent"
-  if ($candidateSigningIdentity.continuity_event -cne "legacy_key_adopted" -or
-      $candidateSigningIdentity.algorithm -cne "Ed25519" -or
-      $null -ne $candidateSigningIdentity.previous_key_id -or
-      [string]$candidateSigningIdentity.key_id -cne [string]$beforeVerification.signer_key_id -or
-      [string]$candidateSigningIdentity.public_key_base64 -cne [string]$beforeVerification.public_key_base64) {
-    throw "Candidate did not durably adopt the real v0.1.7 export-signing identity."
-  }
-  $privateSigningKeyItem = Assert-OwnerOnlyFullControlFile $privateSigningKey "Managed export signing key" 32
-  $identityDocumentItem = Assert-OwnerOnlyFullControlFile $identityDocumentPath "Durable export identity document" (64 * 1024)
-  $identityAnchorItem = Assert-OwnerOnlyFullControlFile $identityAnchorPath "Durable export identity anchor" (64 * 1024)
-  if ($privateSigningKeyItem.Length -ne 32) {
-    throw "Managed export signing key is not the exact 32-byte Ed25519 seed."
-  }
-  if (Test-Path -LiteralPath $rotationIntentPath) {
-    throw "Successful legacy signing-key adoption left a rotation intent behind."
-  }
-  $identityDocumentRecord = Read-BoundedUtf8File $identityDocumentPath "Durable export identity document" (64 * 1024)
-  $identityAnchorRecord = Read-BoundedUtf8File $identityAnchorPath "Durable export identity anchor" (64 * 1024)
-  try {
-    $identityDocument = $identityDocumentRecord.Text | ConvertFrom-Json -DateKind String
-    $identityAnchor = $identityAnchorRecord.Text | ConvertFrom-Json -DateKind String
-  } catch {
-    throw "Durable export identity document or anchor is invalid JSON."
-  }
-  $identityFields = @(
-    "schema_version",
-    "algorithm",
-    "key_id",
-    "public_key_base64",
-    "established_at",
-    "continuity_event",
-    "self_signature_base64",
-    "notice"
-  )
-  Assert-ExactJsonProperties $identityDocument $identityFields "Durable export identity document"
-  Assert-ExactJsonProperties $identityAnchor @(
-    "schema_version", "identity_document_sha256", "identity"
-  ) "Durable export identity anchor"
-  Assert-ExactJsonProperties $identityAnchor.identity $identityFields "Anchored export identity"
-  $identityCompactBytes = Convert-JsonTextToCompactUtf8Bytes $identityDocumentRecord.Text
-  $anchorIdentityCompactBytes = Convert-JsonTextToCompactUtf8Bytes $identityAnchorRecord.Text "identity"
-  $identityCompactJson = [Text.Encoding]::UTF8.GetString($identityCompactBytes)
-  $anchorIdentityCompactJson = [Text.Encoding]::UTF8.GetString($anchorIdentityCompactBytes)
-  $identityDocumentSha256 = Get-LowerSha256Bytes $identityCompactBytes
-  $anchorIdentitySha256 = Get-LowerSha256Bytes $anchorIdentityCompactBytes
-  try {
-    $publicKeyBytes = [Convert]::FromBase64String([string]$identityDocument.public_key_base64)
-    $selfSignatureBytes = [Convert]::FromBase64String([string]$identityDocument.self_signature_base64)
-  } catch {
-    throw "Durable export identity contains malformed base64."
-  }
-  if ($identityDocument.schema_version -cne "1" -or
-      $identityAnchor.schema_version -cne "1" -or
-      $identityDocument.algorithm -cne "Ed25519" -or
-      $identityDocument.continuity_event -cne "legacy_key_adopted" -or
-      $publicKeyBytes.Length -ne 32 -or $selfSignatureBytes.Length -ne 64 -or
-      [string]$identityDocument.key_id -cnotmatch '^[0-9a-f]{64}$' -or
-      [string]$identityDocument.key_id -cne [string]$beforeVerification.signer_key_id -or
-      [string]$identityDocument.public_key_base64 -cne [string]$beforeVerification.public_key_base64 -or
-      $identityCompactJson -cne $anchorIdentityCompactJson -or
-      $identityDocumentSha256 -cne $anchorIdentitySha256 -or
-      [string]$identityAnchor.identity_document_sha256 -cne $identityDocumentSha256 -or
-      [string]$identityDocument.established_at -cne [string]$candidateSigningIdentity.established_at -or
-      [string]$identityDocument.notice -cne [string]$candidateSigningIdentity.notice -or
-      (Get-LowerSha256 $privateSigningKey (64 * 1024)) -cne $privateSigningKeySha256Before) {
-    throw "Durable export identity document and anchor do not bind the preserved v0.1.7 key."
+    throw "Candidate installer changed private case data during ghost migration."
   }
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
 
@@ -2557,95 +2610,24 @@ try {
     "--json", "--data-dir", $dataDirectory, "case", "show", $caseId
   ) 120000 "Side-by-side candidate synthetic case read"
   if ([string]$candidateCase.id -cne $caseId) { throw "Side-by-side initialization did not preserve the synthetic case." }
-  $afterBundle = Join-Path $exportDirectory "after-side-by-side.case.tar.gz"
-  Invoke-CliJson $candidateCli @(
+  $beginnerReportExport = Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "export", "create", "--case-id", $caseId,
-    "--run-id", $runId, "--format", "case-bundle", "--destination", $afterBundle
-  ) 120000 "Side-by-side candidate signed synthetic export" | Out-Null
-  $afterVerification = Invoke-CliJson $candidateCli @(
-    "--json", "--data-dir", $dataDirectory, "export", "verify", "--path", $afterBundle
-  ) 120000 "Side-by-side candidate signed export verification"
-  if ($afterVerification.valid -ne $true -or
-      [string]$afterVerification.signer_key_id -cne [string]$beforeVerification.signer_key_id -or
-      [string]$afterVerification.public_key_base64 -cne [string]$beforeVerification.public_key_base64 -or
-      (Get-LowerSha256 $privateSigningKey (64 * 1024)) -cne $privateSigningKeySha256Before -or
-      -not (Test-Path -LiteralPath $sentinelPath -PathType Leaf) -or
-      (Test-Path -LiteralPath $rotationIntentPath)) {
-    throw "Side-by-side initialization did not preserve the case and integrity-signing identity."
-  }
-
-  Invoke-CliJson $candidateCli @(
-    "--json", "--data-dir", $dataDirectory,
-    "export", "create", "--case-id", $caseId, "--run-id", $runId,
-    "--format", "framework-report", "--destination", $masterFrameworkReportPath
-  ) 120000 "Candidate installed-artifact master framework report export" | Out-Null
-  $masterFrameworkReportProof = Get-NoFollowFileSha256Proof (
-    $masterFrameworkReportPath
-  ) "Installed-artifact master framework report" (4 * 1024 * 1024)
-  $masterFrameworkReport = Read-BoundedJsonFile (
-    $masterFrameworkReportPath
-  ) "Installed-artifact master framework report" (4 * 1024 * 1024)
-  Assert-ExactJsonProperties $masterFrameworkReport @(
-    "schema_version", "product_name", "product_version", "export_kind", "case_id",
-    "selected_run_id", "selected_run_sequence", "selected_run_recorded_at", "knowledge_date",
-    "notice", "coverage", "declared_ai_context", "observation_provenance", "frameworks",
-    "unrecognized_relationships"
-  ) "Installed-artifact master framework report"
-  $expectedReportNotice = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete."
-  $frameworks = @($masterFrameworkReport.frameworks)
-  if ($masterFrameworkReport.schema_version -cne "1.2.0" -or
-      $masterFrameworkReport.product_name -cne "ai-security-scanner" -or
-      $masterFrameworkReport.product_version -cne $CurrentVersion -or
-      $masterFrameworkReport.export_kind -cne "master_framework_relationship_report" -or
-      $masterFrameworkReport.case_id -cne $caseId -or
-      $masterFrameworkReport.selected_run_id -cne $runId -or
-      $masterFrameworkReport.notice -cne $expectedReportNotice -or
-      $masterFrameworkReport.coverage.state -cne "incomplete_or_unknown" -or
-      $masterFrameworkReport.coverage.selected_run_coverage_has_unknown_or_incomplete_entries -ne $true -or
-      $masterFrameworkReport.coverage.selected_run_planned_asset_count -ne 1 -or
-      $masterFrameworkReport.coverage.selected_run_matched_coverage_entry_count -ne 0 -or
-      $masterFrameworkReport.coverage.selected_run_missing_planned_asset_coverage_count -ne 1 -or
-      @($masterFrameworkReport.coverage.limitations).Count -lt 1 -or
-      $masterFrameworkReport.declared_ai_context.aidefend_applicability -cne "unknown" -or
-      $frameworks.Count -ne 3 -or
-      $frameworks[0].framework -cne "NIST CSF" -or $frameworks[0].expected_version -cne "2.0" -or
-      [int]$frameworks[0].relationship_count -lt 1 -or
-      $frameworks[1].framework -cne "ISO/IEC 27001" -or $frameworks[1].expected_version -cne "2022" -or
-      [int]$frameworks[1].relationship_count -lt 1 -or
-      $frameworks[2].framework -cne "AIDEFEND" -or $frameworks[2].expected_version -cne "1.20260805" -or
-      $frameworks[2].state -cne "unknown_due_to_unanswered_context" -or
-      [int]$frameworks[2].relationship_count -ne 0) {
-    throw "Installed candidate did not emit the fixed truthful NIST, ISO 27001, and AIDEFEND master report contract."
-  }
-  $masterReportBundleEntries = @(
-    $afterVerification.manifest.entries |
-      Where-Object { [string]$_.path -ceq "exports/master-framework-report.json" }
+    "--run-id", $runId, "--format", "html", "--destination", $beginnerReportPath
+  ) 120000 "Side-by-side candidate readable beginner report export"
+  $beginnerReportProof = Get-NoFollowFileSha256Proof (
+    $beginnerReportPath
+  ) "Readable beginner report" (16 * 1024 * 1024)
+  Assert-HtmlExportReceipt $beginnerReportExport $caseId $runId $beginnerReportPath (
+    $beginnerReportProof
+  ) "Side-by-side readable beginner report receipt"
+  $existingExportIdentityAfterExport = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
+    "Existing local export identity after side-by-side report export"
+  ) (64 * 1024)
+  Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterExport (
+    "Side-by-side report export existing local export identity"
   )
-  if ($masterReportBundleEntries.Count -ne 1) {
-    throw "Verified candidate bundle does not contain exactly one master framework report entry."
-  }
-  $masterReportBundleEntry = $masterReportBundleEntries[0]
-  if ([string]$masterReportBundleEntry.media_type -cne "application/json" -or
-      [string]$masterReportBundleEntry.sha256 -cne [string]$masterFrameworkReportProof.Sha256 -or
-      [int64]$masterReportBundleEntry.byte_length -ne [int64]$masterFrameworkReportProof.Length) {
-    throw "Standalone master framework report bytes do not exactly match the verified signed bundle entry."
-  }
-  $masterFrameworkReportObservation = [ordered]@{
-    reportFile = "master-framework-report.json"
-    reportBytes = [int64]$masterFrameworkReportProof.Length
-    reportSha256 = [string]$masterFrameworkReportProof.Sha256
-    bundleEntryPath = [string]$masterReportBundleEntry.path
-    bundleEntryBytes = [int64]$masterReportBundleEntry.byte_length
-    bundleEntrySha256 = [string]$masterReportBundleEntry.sha256
-    exactBundleEntryMatch = $true
-    schemaVersion = [string]$masterFrameworkReport.schema_version
-    product = [string]$masterFrameworkReport.product_name
-    productVersion = [string]$masterFrameworkReport.product_version
-    caseId = [string]$masterFrameworkReport.case_id
-    runId = [string]$masterFrameworkReport.selected_run_id
-    frameworkKeys = @("nist_csf", "iso_iec_27001", "aidefend")
-    truthfulUnknownCoverage = $true
-    noComplianceOutcomeClaims = $true
+  if (-not (Test-Path -LiteralPath $sentinelPath -PathType Leaf)) {
+    throw "Side-by-side initialization did not preserve the case data sentinel."
   }
 
   Invoke-CliJson $candidateCli @(
@@ -2685,30 +2667,88 @@ try {
       "after_current_runtime_purge"
     ) "Unrelated WSL checkpoint after_current_runtime_purge"
   ))
-  Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall" | Out-Null
-  $activeCli = $null
-  $postUninstallRetainedProof = Assert-OwnerOnlyFullControlFile $retainedProofPath (
-    "Retained proof until explicit private-data cleanup"
-  ) (64 * 1024)
-  if ($postUninstallRetainedProof.Length -ne $retainedProofItem.Length -or
-      (Get-LowerSha256 $retainedProofPath (64 * 1024)) -cne $retainedProofSha256 -or
-      -not (Test-Path -LiteralPath $oldProviderHome -PathType Container) -or
-      (Get-LowerSha256 $privateSigningKey (64 * 1024)) -cne $privateSigningKeySha256Before -or
-      -not (Test-Path -LiteralPath $sentinelPath -PathType Leaf)) {
-    throw "NSIS uninstall changed retained workspace, case, or signing data before explicit cleanup."
-  }
-  Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
-  Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
   $legacySentinelCheckpoints.Add((
     Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
-      "after_candidate_uninstall"
-    ) "Legacy assm1 WSL checkpoint after_candidate_uninstall"
+      "before_app_only_uninstall"
+    ) "Legacy assm1 WSL checkpoint before_app_only_uninstall"
   ))
   $unrelatedSentinelCheckpoints.Add((
     Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
-      "after_candidate_uninstall"
-    ) "Unrelated WSL checkpoint after_candidate_uninstall"
+      "before_app_only_uninstall"
+    ) "Unrelated WSL checkpoint before_app_only_uninstall"
   ))
+  Stop-WslSentinelLease $trustedWsl $oldSentinelLease (
+    "Legacy assm1 WSL stop before complete private-data snapshot"
+  )
+  Stop-WslSentinelLease $trustedWsl $unrelatedSentinelLease (
+    "Unrelated WSL stop before app-only uninstall"
+  )
+  Invoke-TrustedWsl $trustedWsl @(
+    "--terminate", $oldDistributionName
+  ) 90000 "Exact legacy WSL termination before complete snapshot" | Out-Null
+  Invoke-TrustedWsl $trustedWsl @(
+    "--terminate", $unrelatedDistributionName
+  ) 90000 "Exact unrelated WSL termination before app-only uninstall proof" | Out-Null
+  Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
+  Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
+  $unrelatedVhdBeforeUninstall = Get-NoFollowFileSha256Proof $unrelatedVhdPath (
+    "Unrelated WSL VHD immediately before app-only uninstall"
+  ) $maximumCompleteSnapshotBytes
+  $appOnlyUninstallSnapshotBefore = Get-CompletePrivateDataSnapshot $dataDirectory
+  Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall" | Out-Null
+  $activeCli = $null
+  if (@(Get-ProductRegistryEntries).Count -ne 0) {
+    throw "Candidate NSIS uninstaller left the product registry entry."
+  }
+  $appOnlyUninstallSnapshotAfter = Get-CompletePrivateDataSnapshot $dataDirectory
+  if ($appOnlyUninstallSnapshotAfter.digest -cne $appOnlyUninstallSnapshotBefore.digest -or
+      $appOnlyUninstallSnapshotAfter.fileCount -ne $appOnlyUninstallSnapshotBefore.fileCount -or
+      $appOnlyUninstallSnapshotAfter.totalBytes -ne $appOnlyUninstallSnapshotBefore.totalBytes) {
+    throw "App-only NSIS uninstall changed complete private application data before explicit teardown."
+  }
+  $existingExportIdentityAfterUninstall = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
+    "Existing local export identity after app-only ghost NSIS uninstall"
+  ) (64 * 1024)
+  Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterUninstall (
+    "App-only ghost NSIS uninstall existing local export identity"
+  )
+  $postUninstallRetainedProof = Assert-OwnerOnlyFullControlFile $retainedProofPath (
+    "Retained proof until explicit private-data cleanup"
+  ) (64 * 1024)
+  $oldProviderConfigAfterUninstallSha256 = Get-LowerSha256 $oldProviderConfigPath (16 * 1024)
+  $oldSshPublicKeyAfterUninstallSha256 = Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)
+  if ($postUninstallRetainedProof.Length -ne $retainedProofItem.Length -or
+      (Get-LowerSha256 $retainedProofPath (64 * 1024)) -cne $retainedProofSha256 -or
+      -not (Test-Path -LiteralPath $oldProviderHome -PathType Container) -or
+      $oldProviderConfigAfterUninstallSha256 -cne $oldProviderConfigSha256 -or
+      $oldSshPublicKeyAfterUninstallSha256 -cne $oldSshPublicKeySha256 -or
+      -not (Test-Path -LiteralPath $sentinelPath -PathType Leaf)) {
+    throw "NSIS uninstall changed retained workspace or case data before explicit cleanup."
+  }
+  $oldVhdAfterUninstall = Get-RetainedVhdIdentity $oldVhdPath (
+    "Retained legacy assm1 WSL VHD after app-only uninstall"
+  )
+  foreach ($identityField in @("sizeBytes", "volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes")) {
+    if ([uint64]$oldVhdAfterUninstall[$identityField] -ne [uint64]$oldVhdAfter[$identityField]) {
+      throw "App-only NSIS uninstall changed legacy VHD identity field $identityField."
+    }
+  }
+  $oldRegistrationAfterUninstall = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
+  $unrelatedRegistrationAfterUninstall = Get-ExactWslRegistration (
+    $unrelatedDistributionName
+  ) $unrelatedWslBasePath
+  if ([string]$oldRegistrationAfterUninstall.RegistrationId -cne
+        [string]$oldRegistrationBefore.RegistrationId -or
+      [string]$unrelatedRegistrationAfterUninstall.RegistrationId -cne
+      [string]$unrelatedRegistrationBefore.RegistrationId) {
+    throw "App-only NSIS uninstall rebound a legacy or unrelated WSL registration."
+  }
+  $unrelatedVhdAfterUninstall = Get-NoFollowFileSha256Proof $unrelatedVhdPath (
+    "Unrelated WSL VHD after app-only uninstall"
+  ) $maximumCompleteSnapshotBytes
+  Assert-SameFileProof $unrelatedVhdBeforeUninstall $unrelatedVhdAfterUninstall (
+    "App-only NSIS uninstall unrelated WSL VHD"
+  )
   foreach ($checkpointSet in @(
     [PSCustomObject]@{ Label = "legacy"; Checkpoints = $legacySentinelCheckpoints },
     [PSCustomObject]@{ Label = "unrelated"; Checkpoints = $unrelatedSentinelCheckpoints }
@@ -2724,11 +2764,11 @@ try {
     }
   }
 
-  # Explicit qualification teardown. Production never receives cleanup
+  # Explicit fixture teardown. Production never receives cleanup
   # authority from the retained proof; only these fixed test namespaces are
   # unregistered after every preservation assertion has passed.
-  Stop-WslSentinelLease $trustedWsl $oldSentinelLease "Legacy assm1 WSL qualification teardown"
-  Stop-WslSentinelLease $trustedWsl $unrelatedSentinelLease "Unrelated WSL qualification teardown"
+  Stop-WslSentinelLease $trustedWsl $oldSentinelLease "Legacy assm1 WSL fixture teardown"
+  Stop-WslSentinelLease $trustedWsl $unrelatedSentinelLease "Unrelated WSL fixture teardown"
   Unregister-ProvenExactWsl $trustedWsl $oldDistributionName $oldWslBasePath
   Unregister-ProvenExactWsl $trustedWsl $unrelatedDistributionName $unrelatedWslBasePath
   if (Test-Path -LiteralPath $installDirectory) {
@@ -2740,10 +2780,19 @@ try {
   $cleanupComplete = $true
 
   $observations = [ordered]@{
-    schemaVersion = 2
-    scenario = "real_registered_wsl_n_minus_one_ghost_install_side_by_side"
+    schemaVersion = 7
+    scenario = "automated_registered_wsl_n_minus_one_ghost_data_preservation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
+    fixtureScope = [ordered]@{
+      classification = "risk_focused_automated_data_preservation"
+      qualifiesPublicLifecycle = $false
+      syntheticCliCaseUsed = $true
+      installedDesktopInteractionObserved = $false
+      localhost1270019001ReportObserved = $false
+      projectReopenedInDesktopObserved = $false
+      postUninstallReinstallObserved = $false
+    }
     priorRelease = [ordered]@{
       version = $priorVersion
       tag = "v0.1.7"
@@ -2858,6 +2907,25 @@ try {
         proofValidatedBeforeRegistryAbsenceCheck = $true
         registryValueAbsentAfterDurableProof = $true
       }
+      legacyWorkspaceAfterAppOnlyUninstall = [ordered]@{
+        legacyRegistrationId = [string]$oldRegistrationAfterUninstall.RegistrationId
+        unrelatedRegistrationId = [string]$unrelatedRegistrationAfterUninstall.RegistrationId
+        legacyVhdSizeBytes = [uint64]$oldVhdAfterUninstall.sizeBytes
+        legacyVhdVolumeSerialNumber = [uint32]$oldVhdAfterUninstall.volumeSerialNumber
+        legacyVhdFileIndex = ([uint64]$oldVhdAfterUninstall.fileIndex).ToString(
+          [Globalization.CultureInfo]::InvariantCulture
+        )
+        legacyVhdNumberOfLinks = [uint32]$oldVhdAfterUninstall.numberOfLinks
+        legacyVhdAttributes = [uint32]$oldVhdAfterUninstall.attributes
+        legacyProviderConfigSha256 = $oldProviderConfigAfterUninstallSha256
+        legacySshPublicKeySha256 = $oldSshPublicKeyAfterUninstallSha256
+      }
+      unrelatedWorkspaceAfterAppOnlyUninstall = [ordered]@{
+        registrationIdBefore = [string]$unrelatedRegistrationBefore.RegistrationId
+        registrationIdAfter = [string]$unrelatedRegistrationAfterUninstall.RegistrationId
+        vhdBeforeAppOnlyUninstall = Convert-VhdFileProofObservation $unrelatedVhdBeforeUninstall
+        vhdAfterAppOnlyUninstall = Convert-VhdFileProofObservation $unrelatedVhdAfterUninstall
+      }
       sentinelLifecycle = [ordered]@{
         schemaVersion = 1
         requiredPhases = @($sentinelLifecycleRequiredPhases)
@@ -2869,33 +2937,33 @@ try {
       preInstallerFileCount = [int]$beforeInstallerSnapshot.fileCount
       preInstallerBytes = [int64]$beforeInstallerSnapshot.totalBytes
       demoCaseId = $caseId
+      demoRunId = $runId
       demoCasePreserved = $true
-      privateSigningMaterialBytePreserved = $true
-      signingKeyIdBefore = [string]$beforeVerification.signer_key_id
-      signingKeyIdAfter = [string]$afterVerification.signer_key_id
-      publicKeyBase64Before = [string]$beforeVerification.public_key_base64
-      publicKeyBase64After = [string]$afterVerification.public_key_base64
-      privateSigningKeyProtected = $true
-      publicIdentitySummaryExact = $true
-      durableIdentityDocumentPresent = $true
-      identityDocumentBytes = [int64]$identityDocumentItem.Length
-      identityDocumentCompactSha256 = $identityDocumentSha256
-      identityDocumentProtected = $true
-      durableIdentityAnchorPresent = $true
-      identityAnchorBytes = [int64]$identityAnchorItem.Length
-      identityAnchorProtected = $true
-      anchorSchemaVersion = [string]$identityAnchor.schema_version
-      anchorIdentityDocumentSha256 = [string]$identityAnchor.identity_document_sha256
-      anchorDigestVerified = $true
-      anchorMatchesIdentityDocument = $true
-      identitySelfSignatureVerifiedByCandidate = $true
-      rotationIntentAbsent = $true
-      continuityEvent = [string]$candidateSigningIdentity.continuity_event
-      identityKeyId = [string]$candidateSigningIdentity.key_id
-      identityPublicKeyBase64 = [string]$candidateSigningIdentity.public_key_base64
-      firstBundleValid = $true
-      secondBundleValid = $true
-      masterFrameworkReport = $masterFrameworkReportObservation
+      existingExportIdentity = [ordered]@{
+        fixtureSha256 = $existingExportIdentityFixtureSha256
+        initial = Convert-FileProofObservation $existingExportIdentityInitial
+        afterUpgrade = Convert-FileProofObservation $existingExportIdentityAfterUpgrade
+        afterReinstall = Convert-FileProofObservation $existingExportIdentityAfterReinstall
+        afterReportExport = Convert-FileProofObservation $existingExportIdentityAfterExport
+        afterAppOnlyUninstall = Convert-FileProofObservation $existingExportIdentityAfterUninstall
+      }
+      beginnerReportExport = [ordered]@{
+        receipt = $beginnerReportExport
+        independentFile = [ordered]@{
+          file = "beginner-report.html"
+          bytes = [int64]$beginnerReportProof.Length
+          sha256 = [string]$beginnerReportProof.Sha256
+        }
+      }
+      appOnlyUninstallSnapshot = [ordered]@{
+        beforeFileCount = [int]$appOnlyUninstallSnapshotBefore.fileCount
+        afterFileCount = [int]$appOnlyUninstallSnapshotAfter.fileCount
+        beforeBytes = [int64]$appOnlyUninstallSnapshotBefore.totalBytes
+        afterBytes = [int64]$appOnlyUninstallSnapshotAfter.totalBytes
+        beforeDigest = [string]$appOnlyUninstallSnapshotBefore.digest
+        afterDigest = [string]$appOnlyUninstallSnapshotAfter.digest
+        completePrivateDataPreserved = $true
+      }
     }
     cleanup = [ordered]@{
       currentRuntimePurged = $true
@@ -2904,13 +2972,13 @@ try {
       unrelatedDistributionRetainedThroughRuntimePurge = $true
       retainedProofPreservedThroughRuntimePurge = $true
       legacyDataPreservedThroughNsisUninstall = $true
-      explicitQualificationTeardownRemovedLegacy = $true
-      explicitQualificationTeardownRemovedUnrelated = $true
+      uninstallerInvoked = $true
+      productRegistryRemovedByUninstaller = $true
+      fixtureTeardownRemovedLegacy = $true
+      fixtureTeardownRemovedUnrelated = $true
       quarantineDistributionsAbsent = $true
-      candidateUninstalled = $true
-      installDirectoryRemoved = $true
-      privateDataRemoved = $true
-      productRegistryRemoved = $true
+      fixtureTeardownInstallDirectoryRemoved = $true
+      fixtureTeardownPrivateDataRemoved = $true
     }
   }
 } catch {
@@ -2971,7 +3039,7 @@ try {
     )) {
       try {
         if (Test-Path -LiteralPath $cleanup.path) {
-          Remove-ExactTree $cleanup.path $cleanup.parent $cleanup.name "Failure-path exact qualification tree"
+          Remove-ExactTree $cleanup.path $cleanup.parent $cleanup.name "Failure-path exact data-preservation fixture tree"
         }
       } catch { $cleanupFailures.Add($_.Exception.Message) }
     }
@@ -3003,7 +3071,7 @@ if ($null -ne $primaryFailure) {
   )
 }
 if (-not $cleanupComplete -or $null -eq $observations) {
-  throw "Real registered-WSL side-by-side ghost qualification did not reach its verified cleanup state."
+  throw "Registered-WSL side-by-side ghost data-preservation fixture did not reach its verified teardown state."
 }
 $observationsPath = Join-Path $workRoot "observations.json"
 $observations | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $observationsPath -Encoding utf8NoBOM -NoNewline

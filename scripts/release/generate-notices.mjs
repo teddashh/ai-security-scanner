@@ -12,6 +12,10 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from "./lib.mjs";
+import {
+  createPreparedReleaseMetadata,
+  parseRequestedPlatforms,
+} from "./release-metadata.mjs";
 
 const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
 
@@ -128,7 +132,7 @@ function dependencyNotices(version, npmPackages, cargoPackages) {
     "Tauri CLI NSIS installer template | tauri-cli-v2.11.4 | Apache-2.0 OR MIT",
     "Source: https://github.com/tauri-apps/tauri/tree/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
     "Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
-    "The local reviewed patch adds bounded v0.1.7 Windows ghost-install recovery and transition receipts.",
+    "The local reviewed patch preserves uncertain legacy data and bounds product-owned installer transitions.",
     "",
     "NPM LOCKED PACKAGES",
     "===================",
@@ -216,6 +220,7 @@ async function main() {
   if (typeof publicationMode !== "string" || !PUBLICATION_MODES.has(publicationMode)) {
     throw new Error("--publication-mode must be commit-bound-qc or public-github-release");
   }
+  const requestedPlatforms = parseRequestedPlatforms(args.get("platforms"));
 
   const packageLock = await readJson(path.join(PROJECT_ROOT, "package-lock.json"));
   const catalog = await readJson(path.join(PROJECT_ROOT, "engines/catalog.json"));
@@ -243,9 +248,7 @@ async function main() {
   });
   await copyFile(path.join(PROJECT_ROOT, "LICENSE"), path.join(output, "LICENSE.txt"));
 
-  const metadata = {
-    schemaVersion: 2,
-    product: "ai-security-scanner",
+  const metadata = createPreparedReleaseMetadata({
     version,
     tag,
     releaseChannel,
@@ -254,50 +257,17 @@ async function main() {
     sourceCommit: commit,
     sourceDate,
     publicationMode,
-    distribution: {
-      desktopInstallers: ["linux-x86_64", "macos-universal", "windows-x86_64"],
-      bundledEngines: [],
-      bundledAuxiliaryExecutables: [
-        "ai-security-scanner-egress-gateway",
-        "ai-security-scanner-bootstrap-broker",
-        "ai-security-scanner-cli",
-      ],
-      engineDelivery: "separate-artifacts-not-bundled-in-desktop-installers",
-    },
-    security: {
-      operatingSystemCodeSigning: {
-        state: "not-configured",
-        statement: "The release workflow does not use Apple Developer ID or Windows Authenticode credentials.",
-      },
-      appleNotarization: {
-        state: "not-configured",
-        statement: "The release workflow does not submit artifacts to Apple notarization.",
-      },
-      updater: {
-        state: "enabled-signed",
-        artifactsGenerated: true,
-        signingConfigured: true,
-      },
-      checksums: "SHA256SUMS.txt",
-      sboms: [
-        `ai-security-scanner-${version}.cyclonedx.json`,
-        `ai-security-scanner-${version}.spdx.json`,
-      ],
-      provenanceAttestation: {
-        state: publicationMode === "public-github-release"
-          ? "required-before-publication"
-          : "not-created-for-commit-bound-qc",
-        provider: publicationMode === "public-github-release"
-          ? "GitHub artifact attestations"
-          : "none",
-      },
-    },
+    requestedPlatforms,
+    sboms: [
+      `ai-security-scanner-${version}.cyclonedx.json`,
+      `ai-security-scanner-${version}.spdx.json`,
+    ],
     inventories: {
       npmPackageCount: npmPackages.length,
       cargoPackageCount: cargoPackages.length,
       engineReferenceCount: engines.length,
     },
-  };
+  });
   await writeJsonAtomic(path.join(output, "release-metadata.json"), metadata);
 
   process.stdout.write(

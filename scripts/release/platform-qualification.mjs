@@ -345,7 +345,10 @@ export function validatePlatformQualification(evidence, context = {}) {
   assert(evidence.runner.freshJob === true && evidence.runner.artifactOnlyFromBuild === true, "qualification is not bound to a fresh post-build job");
 
   exactKeys(evidence.sourceArtifact, ["name"], "qualification source artifact");
-  assert(evidence.sourceArtifact.name === `release-${evidence.platform}`, "qualification source artifact is incorrect");
+  assert(
+    evidence.sourceArtifact.name === `desktop-installers-${evidence.platform}`,
+    "qualification source artifact is incorrect",
+  );
   exactKeys(evidence.installer, ["bundleType", "file", "bytes", "sha256"], "qualified installer");
   assert(contract.bundleTypes.includes(evidence.installer.bundleType), "qualification used the wrong installer kind");
   requireText(evidence.installer.file, "qualified installer filename");
@@ -493,7 +496,7 @@ function observationsToEvidence(observations, inputs) {
       freshJob: true,
       artifactOnlyFromBuild: true,
     },
-    sourceArtifact: { name: `release-${platform}` },
+    sourceArtifact: { name: `desktop-installers-${platform}` },
     installer,
     installedLayout: observations.installedLayout,
     runtime: {
@@ -541,7 +544,10 @@ export async function createPlatformQualification({ artifactDirectory, observati
 
   const installerManifest = await readJson(path.join(artifactDirectory, `installers-${platform}.json`));
   assert(installerManifest.version === version && installerManifest.tag === tag && installerManifest.sourceCommit === commit && installerManifest.platform === platform, "installer manifest release identity mismatch");
-  const installers = installerManifest.installers?.filter((candidate) => candidate.bundleType === installerType) ?? [];
+  const installers = installerManifest.installers?.filter((candidate) =>
+    candidate && typeof candidate === "object" && !Array.isArray(candidate) &&
+      candidate.bundleType === installerType,
+  ) ?? [];
   assert(installers.length === 1, `${platform} must have exactly one ${installerType} qualification installer`);
   const installerRecord = installers[0];
   assert(path.posix.basename(installerRecord.file) === installerRecord.file && path.win32.basename(installerRecord.file) === installerRecord.file, "qualification installer manifest path is not flat");
@@ -619,7 +625,11 @@ export async function verifyPlatformQualificationFile(file, context = {}) {
   });
   if (context.releaseDirectory) {
     const installerManifest = await readJson(path.join(context.releaseDirectory, `installers-${evidence.platform}.json`));
-    const installer = installerManifest.installers?.find((candidate) => candidate.bundleType === evidence.installer.bundleType && candidate.file === evidence.installer.file);
+    const installer = installerManifest.installers?.find((candidate) =>
+      candidate && typeof candidate === "object" && !Array.isArray(candidate) &&
+        candidate.bundleType === evidence.installer.bundleType &&
+        candidate.file === evidence.installer.file,
+    );
     assert(installer && installer.bytes === evidence.installer.bytes && installer.sha256 === evidence.installer.sha256, `${evidence.platform} qualification installer does not match finalized assets`);
     const runtimeManifestFile = path.join(context.releaseDirectory, evidence.runtime.manifestReleaseFile);
     assert((await sha256File(runtimeManifestFile)) === evidence.runtime.manifestSha256, `${evidence.platform} qualification runtime manifest does not match finalized assets`);

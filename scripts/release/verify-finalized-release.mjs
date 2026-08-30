@@ -1,6 +1,7 @@
 import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  PROJECT_ROOT,
   assertSafeRelativePath,
   isSemver,
   parseArgs,
@@ -10,8 +11,11 @@ import {
   sha256File,
   toPosix,
 } from "./lib.mjs";
-import { validateWindowsNsisUpgradeEvidenceFile } from "./windows-nsis-upgrade-evidence.mjs";
-import { validateWindowsNsisGhostRecoveryEvidenceFile } from "./windows-nsis-ghost-recovery-evidence.mjs";
+import { validateReleaseMetadataV3 } from "./release-metadata.mjs";
+import { verifyBoundArtifactEvidenceFile } from "./artifact-evidence.mjs";
+import { verifyPlatformQualificationFile } from "./platform-qualification.mjs";
+import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
+import { verifyWindowsNsisSupportingDataPreservationEvidence } from "./windows-data-preservation-evidence.mjs";
 
 function assert(condition, message) {
   if (!condition) {
@@ -55,7 +59,6 @@ async function main() {
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
   const publicationMode = requireString(args, "publication-mode");
-  const testOnlyWindowsRuntimeManifestSha256 = args.get("test-only-windows-runtime-manifest-sha256");
   if (!isSemver(version) || tag !== `v${version}` || !/^[0-9a-f]{40}$/u.test(commit)) {
     throw new Error("release identity is malformed or inconsistent");
   }
@@ -143,27 +146,159 @@ async function main() {
     assert(checksums.get(relative) === record.sha256, `release index digest mismatch: ${relative}`);
   }
 
-  await validateWindowsNsisUpgradeEvidenceFile({
-    file: path.join(directory, "windows-nsis-upgrade-qualification.json"),
-    artifactDirectory: directory,
-    reportFile: path.join(directory, "master-framework-report.json"),
-    bundleFile: path.join(directory, "master-framework-report.case.tar.gz"),
-    priorBundleFile: path.join(directory, "n-minus-one-before-upgrade.case.tar.gz"),
+  const releaseMetadata = await readJson(path.join(directory, "release-metadata.json"));
+  validateReleaseMetadataV3(releaseMetadata, {
+    releaseState: "finalized",
     version,
     tag,
-    commit,
+    sourceCommit: commit,
+    publicationMode,
   });
-  await validateWindowsNsisGhostRecoveryEvidenceFile({
-    file: path.join(directory, "windows-nsis-ghost-recovery-qualification.json"),
-    artifactDirectory: directory,
-    version,
-    tag,
-    commit,
-    testOnlyRuntimeManifestSha256: testOnlyWindowsRuntimeManifestSha256,
-  });
+  const latest = await readJson(path.join(directory, "latest.json"));
+  assert(
+    latest.version === version && latest.tag === tag && latest.platforms &&
+      typeof latest.platforms === "object" && !Array.isArray(latest.platforms),
+    "finalized updater manifest identity is invalid",
+  );
+  const tauriConfigPath = path.resolve(args.get("tauri-config") ?? path.join(PROJECT_ROOT, "src-tauri", "tauri.conf.json"));
+  const tauriConfig = await readJson(tauriConfigPath);
+  const updaterPublicKey = tauriConfig.plugins?.updater?.pubkey;
+  const updaterTargets = new Set();
+  const updaterTargetRecords = new Map();
+  let offeredArtifacts = 0;
+  for (const platform of releaseMetadata.distribution.platforms) {
+    for (const installer of platform.installers) {
+      if (installer.availability !== "offered") continue;
+      offeredArtifacts += 1;
+      const artifact = installer.artifact;
+      const actual = actualByPath.get(artifact.file);
+      assert(actual, `offered artifact is missing: ${artifact.file}`);
+      assert(actual.bytes === artifact.bytes, `offered artifact byte count mismatch: ${artifact.file}`);
+      assert(checksums.get(artifact.file) === artifact.sha256, `offered artifact digest mismatch: ${artifact.file}`);
+      const technicalEvidence = artifact.technicalQualification.evidenceFile;
+      assert(actualByPath.has(technicalEvidence), `artifact-scoped evidence is missing: ${technicalEvidence}`);
+      await verifyPlatformQualificationFile(path.join(directory, technicalEvidence), {
+        platform: platform.platform,
+        installerType: installer.installerType,
+        version,
+        tag,
+        commit,
+        releaseChannel: releaseMetadata.releaseChannel,
+        releaseDirectory: directory,
+      });
+      for (const [outcome, evidenceType] of [
+        [artifact.humanPath, "beginner-human-path"],
+        [artifact.operatingSystemSigning, "operating-system-code-signing"],
+        [artifact.notarization, "apple-notarization"],
+      ]) {
+        if (!outcome.evidenceFile) continue;
+        assert(actualByPath.has(outcome.evidenceFile), `artifact-scoped evidence is missing: ${outcome.evidenceFile}`);
+        await verifyBoundArtifactEvidenceFile(path.join(directory, outcome.evidenceFile), {
+          platform: platform.platform,
+          installerType: installer.installerType,
+          version,
+          tag,
+          commit,
+          artifact,
+          evidenceType,
+          label: outcome.evidenceFile,
+        });
+      }
+      if (artifact.windowsDataPreservation.state === "supporting-data-preservation-only") {
+        for (const dataPreservationFile of artifact.windowsDataPreservation.evidenceFiles) {
+          const dataPreservationActual = actualByPath.get(dataPreservationFile.path);
+          assert(dataPreservationActual, `Windows data-preservation evidence is missing: ${dataPreservationFile.path}`);
+          assert(
+            dataPreservationActual.bytes === dataPreservationFile.bytes,
+            `Windows data-preservation evidence bytes changed: ${dataPreservationFile.path}`,
+          );
+          assert(
+            checksums.get(dataPreservationFile.path) === dataPreservationFile.sha256,
+            `Windows data-preservation evidence digest changed: ${dataPreservationFile.path}`,
+          );
+        }
+        const revalidatedDataPreservation = await verifyWindowsNsisSupportingDataPreservationEvidence({
+          root: directory,
+          artifactDirectory: directory,
+          version,
+          tag,
+          commit,
+        });
+        assert(
+          JSON.stringify(revalidatedDataPreservation) === JSON.stringify(artifact.windowsDataPreservation),
+          "publisher-side Windows data-preservation evidence differs from finalized metadata",
+        );
+      }
+      if (artifact.updater.state === "signed") {
+        assert(
+          typeof updaterPublicKey === "string" && updaterPublicKey.length >= 64,
+          `signed updater ${artifact.updater.payloadFile} has no embedded verification key`,
+        );
+        assert(actualByPath.has(artifact.updater.payloadFile), `updater payload is missing: ${artifact.updater.payloadFile}`);
+        assert(actualByPath.has(artifact.updater.signatureFile), `updater signature is missing: ${artifact.updater.signatureFile}`);
+        const platformManifest = await readJson(path.join(directory, `installers-${platform.platform}.json`));
+        assert(
+          platformManifest.schemaVersion === 3 && platformManifest.artifactScoped === true &&
+            platformManifest.version === version && platformManifest.tag === tag &&
+            platformManifest.sourceCommit === commit && platformManifest.platform === platform.platform,
+          `${platform.platform} finalized installer manifest identity is invalid`,
+        );
+        const updaterRecords = platformManifest.updaters.filter((record) =>
+          record.payloadFile === artifact.updater.payloadFile &&
+          record.signatureFile === artifact.updater.signatureFile,
+        );
+        assert(updaterRecords.length === 1, `updater record is missing or ambiguous: ${artifact.updater.payloadFile}`);
+        const updaterRecord = updaterRecords[0];
+        assert(
+          JSON.stringify(updaterRecord.targetKeys) === JSON.stringify(artifact.updater.targetKeys),
+          `updater target keys changed: ${artifact.updater.payloadFile}`,
+        );
+        const payloadActual = actualByPath.get(updaterRecord.payloadFile);
+        const signatureActual = actualByPath.get(updaterRecord.signatureFile);
+        assert(
+          payloadActual.bytes === updaterRecord.payloadBytes &&
+            checksums.get(updaterRecord.payloadFile) === updaterRecord.payloadSha256,
+          `updater payload identity changed: ${updaterRecord.payloadFile}`,
+        );
+        assert(
+          signatureActual.bytes === updaterRecord.signatureBytes &&
+            checksums.get(updaterRecord.signatureFile) === updaterRecord.signatureSha256,
+          `updater signature-file identity changed: ${updaterRecord.signatureFile}`,
+        );
+        const inlineSignature = (await readFile(signatureActual.absolute, "utf8")).trim();
+        assert(inlineSignature === updaterRecord.signature, `updater inline signature changed: ${updaterRecord.signatureFile}`);
+        verifyUpdaterSignatures(updaterPublicKey, [{
+          payload: payloadActual.absolute,
+          signature: signatureActual.absolute,
+        }]);
+        const expectedUrl =
+          `https://github.com/teddashh/ai-security-scanner/releases/download/${tag}/${encodeURIComponent(updaterRecord.payloadFile)}`;
+        for (const target of artifact.updater.targetKeys) {
+          assert(!updaterTargets.has(target), `duplicate finalized updater target: ${target}`);
+          updaterTargets.add(target);
+          const latestRecord = latest.platforms[target];
+          assert(
+            latestRecord && latestRecord.url === expectedUrl && latestRecord.signature === inlineSignature,
+            `latest.json does not bind ${target} to the exact ${tag} payload and inline signature`,
+          );
+          updaterTargetRecords.set(target, latestRecord);
+        }
+      }
+    }
+  }
+  assert(offeredArtifacts > 0, "finalized release metadata has no offered artifact");
+  assert(
+    JSON.stringify(sorted(Object.keys(latest.platforms))) === JSON.stringify(sorted(updaterTargets)),
+    "finalized updater manifest does not exactly match offered artifact updater targets",
+  );
+  assert(
+    JSON.stringify(Object.fromEntries([...updaterTargetRecords].sort(([left], [right]) => left.localeCompare(right)))) ===
+      JSON.stringify(Object.fromEntries(Object.entries(latest.platforms).sort(([left], [right]) => left.localeCompare(right)))),
+    "latest.json contains an unverified or resealed updater target",
+  );
 
   process.stdout.write(
-    `Verified ${checksums.size} finalized files, ${indexEntries.size} indexed release inputs, the installed-artifact master framework/signing-identity qualification, and the real registered-WSL ghost-recovery qualification for ${tag}.\n`,
+    `Verified ${checksums.size} finalized files, ${indexEntries.size} indexed release inputs, and ${offeredArtifacts} independently offered artifact(s) for ${tag}.\n`,
   );
 }
 

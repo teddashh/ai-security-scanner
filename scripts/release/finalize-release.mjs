@@ -1,7 +1,8 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   PROJECT_ROOT,
+  assertSafeRelativePath,
   isSemver,
   parseArgs,
   readJson,
@@ -13,18 +14,17 @@ import {
   writeTextAtomic,
 } from "./lib.mjs";
 import { verifyUpdaterSignatures } from "./verify-updater-signatures.mjs";
-import {
-  ALL_UPDATER_TARGET_KEYS,
-  updaterLayoutsFor,
-} from "./updater-layout.mjs";
+import { updaterLayoutsFor } from "./updater-layout.mjs";
 import { verifyPlatformQualificationFile } from "./platform-qualification.mjs";
-import { validateWindowsNsisUpgradeEvidenceFile } from "./windows-nsis-upgrade-evidence.mjs";
-import { validateWindowsNsisGhostRecoveryEvidenceFile } from "./windows-nsis-ghost-recovery-evidence.mjs";
+import { verifyBoundArtifactEvidenceFile } from "./artifact-evidence.mjs";
+import { verifyWindowsNsisSupportingDataPreservationEvidence } from "./windows-data-preservation-evidence.mjs";
+import {
+  platformContract,
+  provenanceForArtifact,
+  validateReleaseMetadataV3,
+} from "./release-metadata.mjs";
 
 const PUBLICATION_MODES = new Set(["commit-bound-qc", "public-github-release"]);
-const MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE = "master-framework-report.case.tar.gz";
-const N_MINUS_ONE_SIGNED_CASE_BUNDLE = "n-minus-one-before-upgrade.case.tar.gz";
-const MAX_MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE_BYTES = 64 * 1024 * 1024;
 
 function assert(condition, message) {
   if (!condition) {
@@ -37,263 +37,21 @@ const RELEASE_COPY = new Map([
     "0.1.8",
     {
       updaterNotes:
-        "Automatically recovers product-owned Windows scan-tool workspaces left by an earlier setup, preserves a verified recovery copy, and shows clear bilingual progress. Existing local cases and historical provenance remain intact.",
+        "Keeps old or uncertain scan-tool workspaces untouched, prepares a fresh isolated workspace automatically, and gets the first useful local scan moving without a manual cleanup detour.",
       releaseNotes: [
-        "> **Automatic Windows setup recovery pre-release.** This build removes the manual WSL",
-        "> cleanup step when ai-security-scanner can prove that the old workspace belongs to the product.",
+        "> **Faster first scan, safer automatic recovery.** This build keeps internal runtime details",
+        "> out of the beginner path and favors an isolated, reversible recovery when old state is unclear.",
         "",
-        "On first launch, an interrupted or older product-owned scan-tool workspace is preserved as",
-        "a verified recovery archive, copied into an isolated recovery workspace, and replaced",
-        "automatically. The new workspace must start successfully before the temporary bootable copy",
-        "is removed. Interrupted handoffs resume from durable checkpoints instead of starting over.",
+        "On first launch, product-owned disposable state is reconciled automatically. Old state whose",
+        "ownership is uncertain is left untouched while the app creates a uniquely named isolated",
+        "workspace and continues. Nothing unfamiliar is deleted just to make the scanner start.",
         "",
-        "The English and Traditional Chinese setup screens show recovery progress in plain language.",
-        "Manual Windows instructions appear only when the app cannot prove that a workspace is its own;",
-        "in that case, nothing is removed automatically.",
+        "The app opens the selected task immediately, keeps recovery in the background, and reports",
+        "tested, not tested, failed, and incomplete coverage separately instead of turning one optional",
+        "component failure into an all-or-nothing result.",
         "",
         "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
         "The app still waits for an explicit Start action before contacting a scan target.",
-        "",
-        "The release evidence retains a report produced by the installed candidate for NIST CSF 2.0,",
-        "ISO/IEC 27001:2022, and AIDEFEND 1.20260805. It preserves unknown coverage and preliminary",
-        "relationships without turning them into a compliance score, pass, certification, or audit claim.",
-        "The same report bytes are bound to the candidate's verified signed case bundle.",
-        "Both bounded synthetic case bundles—from the real N-1 install and the candidate—are retained",
-        "beside the standalone report so the signing-key continuity can be independently revalidated.",
-        "",
-      ],
-    },
-  ],
-  [
-    "0.1.7",
-    {
-      updaterNotes:
-        "Improves Windows setup and recovery, makes prepared scans start where users expect, preserves saved evidence through safe retries, and makes repository and AI-project imports safer. Existing local cases and historical provenance remain intact.",
-      releaseNotes: [
-        "> **Hands-on Windows testing pre-release.** This build carries the Candidate 11 product",
-        "> repairs produced by operating the real app end to end, then extends those repairs across",
-        "> the shared scan lifecycle.",
-        "",
-        "First launch recognizes prerequisites that are already available and prepares the private",
-        "scan tools before presenting a scan as ready. A scan starts from the action the user chose,",
-        "and startup listeners are attached early enough to preserve fast progress and failure events.",
-        "",
-        "Public and internal network checks accept an IP address or domain. Domain resolution is",
-        "frozen into the exact run, and the guided common-port inventory remains bounded. If a check",
-        "stops, the app preserves saved evidence, shows a useful next step, and offers a redacted",
-        "technical log without targets, paths, secrets, or raw scanner messages.",
-        "",
-        "When trusted ignore-rule evaluation is unavailable, files are retained rather than silently omitted.",
-        "Windows runtime recovery also treats initialization",
-        "proof as one-shot state; a stale journal is never permission to delete WSL state.",
-        "",
-        "AI app and agent checks reuse the existing code, secret, package, and deployment routes.",
-        "Applicable findings can carry AIDEFEND references beside NIST CSF and ISO 27001 references.",
-        "The managed Gitleaks path remains network-disabled and fully redacts detected secret values.",
-        "",
-        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
-        "",
-      ],
-    },
-  ],
-  [
-    "0.1.6",
-    {
-      updaterNotes:
-        "Fixes the local scan connection so network checks can start reliably, keeps gateway readiness honest, and independently tests both Windows installers. Existing local cases and historical provenance remain intact.",
-      releaseNotes: [
-        "> **Public testing pre-release.** This build repairs the private connection used by local",
-        "> network scanners. It has not completed the planned formal QC/code review.",
-        "",
-        "Local network scans no longer depend on a Windows process listening on an address that",
-        "exists only inside WSL. The gateway now runs beside the scanners in the private managed",
-        "runtime, with separate scanner and uplink networks.",
-        "",
-        "Gateway readiness comes from the running gateway itself. If setup fails, the scan preserves",
-        "the concrete failure and cleanup result instead of returning to an unexplained Ready/Repair",
-        "loop. Existing event logs and redacted technical downloads remain available for diagnosis.",
-        "",
-        "The downloadable Windows Setup executable and MSI are now installed and exercised in",
-        "separate fresh qualification jobs. Each one must prove the gateway is ready and reachable",
-        "from the scanner side without making an upstream connection, then remove every exact test",
-        "resource before the release can continue.",
-        "",
-        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
-        "",
-      ],
-    },
-  ],
-  [
-    "0.1.5",
-    {
-      updaterNotes:
-        "Windows-first public testing pre-release with automatic first-launch scan-tool preparation, a fixed Ready/Repair loop, and clear timestamped activity before and during scans. Existing local cases and historical provenance remain intact.",
-      releaseNotes: [
-        "> **Public testing pre-release.** This build makes Windows startup and live scan progress",
-        "> easier to understand. It has not completed the planned formal QC/code review.",
-        "",
-        "On first launch, the app checks installed Windows prerequisites before showing the normal",
-        "workspace. It recognizes components that are already available and automatically prepares",
-        "the private local scan tools when needed. A standard Windows approval dialog appears only",
-        "when Windows itself needs a change; an explicit restart remains under the user's control.",
-        "",
-        "The Ready/Repair loop is removed. A temporary local-tool connection issue can still be",
-        "retried, but a missing or invalid component from the installed package is no longer",
-        "presented as something the same broken installation can repair. The app explains the",
-        "problem and links to the latest installer while preserving existing local cases.",
-        "",
-        "Before a scan starts, the activity view records when readiness was checked and explains any",
-        "blocker in plain language. During a scan, the same timeline shows the active and next scanner,",
-        "the current wait reason, the last durable progress, and a delayed-update notice without",
-        "mistaking a paused scan for a stalled one. This behavior is shared by every supported scan route.",
-        "",
-        "When technical detail is useful, the app can download a redacted diagnostic containing safe",
-        "timestamps, statuses, phases, blocker codes, versions, and counts. It excludes target names,",
-        "local paths, raw evidence, credentials, and raw scanner output.",
-        "",
-        "Preparation never starts a scan or widens its scope. The app still waits for the user's",
-        "explicit Start action before contacting an approved target.",
-        "",
-        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
-        "",
-      ],
-    },
-  ],
-  [
-    "0.1.4",
-    {
-      updaterNotes:
-        "Public testing pre-release with guided use-case setup, safe local-network suggestions, useful bounded network presets, deterministic scan readiness, actionable setup recovery, and redacted diagnostic downloads. Existing local cases and historical provenance remain intact.",
-      releaseNotes: [
-        "> **Public testing pre-release.** This build fixes the empty 0/0 scan and repeated-consent",
-        "> experience reported during a first home-network test. It is not the latest stable release",
-        "> and has not completed the planned formal QC/code review.",
-        "",
-        "Choose what you want to check: a home or office network, website, external IP, source code,",
-        "infrastructure as code, cloud account, container image, or Kubernetes configuration. Each",
-        "choice now opens only the setup it actually needs and preserves that intent through the run.",
-        "",
-        "For a home or office network, the installed app can read local interface and route metadata",
-        "to suggest one safe private subnet. It does not probe the network, select the subnet, grant",
-        "permission, or start a scan automatically. One explicit click accepts the suggestion, and",
-        "the target remains editable before the single scan confirmation.",
-        "",
-        "A scan run is created only when at least one compatible engine has an authorized target,",
-        "the required local tools are ready, and every short-lived cloud connection has enough",
-        "capacity for the exact execution plan. Cloud capacity and backend-only credentials are",
-        "reserved atomically before the run is saved and released if storage or worker startup fails.",
-        "A blocked attempt therefore stays in setup instead of creating a 0/0 run or expanding one",
-        "setup problem into many failed scanner checks.",
-        "",
-        "The guided network preset checks a useful bounded set of common TCP services. Website checks",
-        "preserve the entered URL protocol and port. Advanced controls remain available without",
-        "cluttering the first path.",
-        "",
-        "Setup problems now lead to one relevant action: prepare the private scan tools, connect or",
-        "reconnect an account, choose between matching connections, review a mismatched target, or",
-        "retry a temporarily unavailable check. Failed or partial runs can export a redacted diagnostic containing",
-        "statuses, phases, error codes,",
-        "versions, and counts without target names, paths, evidence, or raw scanner messages.",
-        "",
-        "The macOS installer, app layout, packaged manifest, CLI, desktop startup, and cleanup are",
-        "qualified on a fresh GitHub-hosted Mac. Managed-runtime and container lifecycle operations",
-        "are explicitly recorded as not observed because that hosted environment does not provide the",
-        "nested virtualization required by AppleHV. This exception is accepted only for a pre-release;",
-        "a stable release still fails closed without real Mac runtime evidence.",
-        "",
-        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
-        "",
-      ],
-    },
-  ],
-  [
-    "0.1.3",
-    {
-      updaterNotes:
-        "Public testing pre-release with one-click Windows WSL setup, plain-language bilingual guidance, typed immutable local-input snapshots, exact-scope AWS/Azure/GCP provider execution, and digest-pinned engine integration. Existing local cases and historical provenance remain intact.",
-      releaseNotes: [
-        "> **Public testing pre-release.** This build replaces the manual Administrator PowerShell",
-        "> step with one in-app action and the standard Windows confirmation dialog. It is not the",
-        "> latest stable release and has not completed the planned formal QC/code review.",
-        "",
-        "When WSL 2 is missing, disabled, or outdated, choose **Fix this for me** /",
-        "**交給程式處理**. Windows asks for administrator approval once, then the app checks the",
-        "result and continues automatically. A required restart remains explicit and is never",
-        "triggered by the app.",
-        "",
-        "The backend accepts no executable or arguments from the UI. It derives the only allowed",
-        "operation from the current failed prerequisite, runs the Windows-owned System32 wsl.exe",
-        "with fixed Microsoft arguments, and never receives or stores the administrator password.",
-        "",
-        "Manual Microsoft commands remain available under **Other ways** as a fallback. The same",
-        "plain-language flow is available in English and Traditional Chinese on the setup page and",
-        "in the sidebar.",
-        "",
-        "This candidate retains typed immutable snapshots for repository, IaC, OCI image-layout,",
-        "Kubernetes manifest, and node-configuration inputs.",
-        "",
-        "Provider discovery stays inside its released AWS Organizations, Azure subscription, or GCP",
-        "organization source boundary. Prowler execution remains separately bound to one exact AWS",
-        "account, Azure subscription, or GCP project.",
-        "",
-        "The required 21-engine catalog is bound to immutable image, launcher, adapter, evidence,",
-        "coverage, license, and verification contracts. Scanner images remain separate artifacts",
-        "and are not bundled in the desktop installers.",
-        "",
-        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
-        "",
-      ],
-    },
-  ],
-  [
-    "0.1.2",
-    {
-      updaterNotes:
-        "Public testing pre-release with simplified bilingual setup, typed immutable local-input snapshots, exact-scope AWS/Azure/GCP provider execution, and digest-pinned engine integration. Existing local cases and historical provenance remain intact.",
-      releaseNotes: [
-        "> **Public testing pre-release.** Use this build to exercise the real desktop installer,",
-        "> one-time scan-tool setup, guided use cases, and end-to-end results flow. It is not the",
-        "> latest stable release and has not completed the planned formal QC/code review.",
-        "",
-        "This candidate includes the simplified English and Traditional Chinese product flow and",
-        "typed immutable snapshots for repository, IaC, OCI image-layout, Kubernetes manifest, and",
-        "node-configuration inputs.",
-        "",
-        "Provider discovery stays inside its released AWS Organizations, Azure subscription, or GCP",
-        "organization source boundary. Prowler execution is separately bound to one exact AWS account,",
-        "Azure subscription, or GCP project with provider-specific identity preflight and endpoint closure.",
-        "Other cloud engines retain their narrower released provider scope.",
-        "",
-        "The required 21-engine catalog is bound to immutable image, launcher, adapter, evidence,",
-        "coverage, license, and verification contracts. Scanner images remain separate artifacts",
-        "and are not bundled in the desktop installers.",
-        "",
-        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
-        "Unknown or partial scope remains visibly distinct from a completed or passing result.",
-        "",
-      ],
-    },
-  ],
-  [
-    "0.2.0",
-    {
-      updaterNotes:
-        "Product-completion line with typed immutable local-input snapshots, exact-scope AWS/Azure/GCP provider execution, and digest-pinned engine integration. Existing local cases and historical provenance remain intact.",
-      releaseNotes: [
-        "This product-completion release adds typed immutable snapshots for repository, IaC, OCI",
-        "image-layout, Kubernetes manifest, and node-configuration inputs.",
-        "",
-        "Provider discovery stays inside its released AWS Organizations, Azure subscription, or GCP",
-        "organization source boundary. Prowler execution is separately bound to one exact AWS account,",
-        "Azure subscription, or GCP project with provider-specific identity preflight and endpoint closure.",
-        "Other cloud engines retain their narrower released provider scope.",
-        "",
-        "The required 21-engine catalog is bound to immutable image, launcher, adapter, evidence,",
-        "coverage, license, and verification contracts. Scanner images remain separate artifacts",
-        "and are not bundled in the desktop installers.",
-        "",
-        "Existing local cases, cleanup obligations, evidence snapshots, and provenance remain intact.",
-        "Unknown or partial scope remains visibly distinct from a completed or passing result.",
         "",
       ],
     },
@@ -329,129 +87,6 @@ async function regularFiles(directory, root = directory) {
     }
   }
   return files;
-}
-
-async function verifyPlatformManifest(directory, platform, version, tag, commit) {
-  const name = `installers-${platform}.json`;
-  const manifest = await readJson(path.join(directory, name));
-  assert(manifest.schemaVersion === 2, `${name} has the wrong schema version`);
-  assert(manifest.product === "ai-security-scanner", `${name} has the wrong product`);
-  assert(manifest.version === version && manifest.tag === tag, `${name} version/tag mismatch`);
-  assert(manifest.sourceCommit === commit, `${name} source commit mismatch`);
-  assert(manifest.platform === platform, `${name} platform mismatch`);
-  assert(manifest.platformCodeSigning === "not-configured", `${name} makes a signing claim`);
-  assert(manifest.updaterArtifact === true, `${name} has no signed updater artifact`);
-  assert(Array.isArray(manifest.installers) && manifest.installers.length > 0, `${name} is empty`);
-
-  const checksumEntries = new Map();
-  for (const installer of manifest.installers) {
-    assert(typeof installer.file === "string", `${name} has an invalid installer path`);
-    assert(path.basename(installer.file) === installer.file, `${name} installer path is not flat`);
-    const file = path.join(directory, installer.file);
-    const metadata = await lstat(file);
-    assert(metadata.isFile() && !metadata.isSymbolicLink(), `${installer.file} is not a regular file`);
-    assert(metadata.size === installer.bytes, `${installer.file} byte length mismatch`);
-    assert((await sha256File(file)) === installer.sha256, `${installer.file} digest mismatch`);
-    checksumEntries.set(installer.file, installer.sha256);
-  }
-  assert(
-    Array.isArray(manifest.auxiliaryExecutables) && manifest.auxiliaryExecutables.length === 3,
-    `${name} must contain exactly three first-party companion executables`,
-  );
-  const expectedAuxiliary = [
-    ["managed-egress-gateway", "ai-security-scanner-egress-gateway"],
-    ["isolated-bootstrap-broker", "ai-security-scanner-bootstrap-broker"],
-    ["local-casework-cli", "ai-security-scanner-cli"],
-  ];
-  for (const [index, sidecar] of manifest.auxiliaryExecutables.entries()) {
-    const [expectedRole, expectedBinary] = expectedAuxiliary[index];
-    const expectedSibling = `${expectedBinary}${platform === "windows-x86_64" ? ".exe" : ""}`;
-    assert(sidecar.role === expectedRole, `${name} has an unknown or out-of-order auxiliary role`);
-    assert(sidecar.binaryName === expectedBinary, `${name} has the wrong auxiliary binary name`);
-    assert(sidecar.installedSiblingName === expectedSibling, `${name} has the wrong installed sidecar name`);
-    assert(
-      typeof sidecar.releaseFile === "string" && path.basename(sidecar.releaseFile) === sidecar.releaseFile,
-      `${name} has an invalid sidecar release path`,
-    );
-    const sidecarFile = path.join(directory, sidecar.releaseFile);
-    const sidecarMetadata = await lstat(sidecarFile);
-    assert(
-      sidecarMetadata.isFile() && !sidecarMetadata.isSymbolicLink(),
-      `${sidecar.releaseFile} is not regular`,
-    );
-    assert(sidecarMetadata.size === sidecar.bytes, `${sidecar.releaseFile} byte length mismatch`);
-    assert((await sha256File(sidecarFile)) === sidecar.sha256, `${sidecar.releaseFile} digest mismatch`);
-    checksumEntries.set(sidecar.releaseFile, sidecar.sha256);
-  }
-
-  const expectedLayouts = updaterLayoutsFor(platform);
-  assert(
-    Array.isArray(manifest.updaters) && manifest.updaters.length === expectedLayouts.length,
-    `${name} has incomplete signed updater records`,
-  );
-  for (const [index, updater] of manifest.updaters.entries()) {
-    const expected = expectedLayouts[index];
-    assert(updater && typeof updater === "object", `${name} has an invalid updater record`);
-    assert(updater.bundleType === expected.bundleType, `${name} updater bundle type is out of order`);
-    assert(
-      JSON.stringify(updater.targetKeys) === JSON.stringify(expected.targetKeys),
-      `${name}/${expected.bundleType} updater target keys are incomplete or out of order`,
-    );
-    for (const field of ["payloadFile", "signatureFile"]) {
-      assert(
-        typeof updater[field] === "string" && path.basename(updater[field]) === updater[field],
-        `${name}/${expected.bundleType} updater ${field} is not a flat filename`,
-      );
-    }
-    const payloadFile = path.join(directory, updater.payloadFile);
-    const payloadMetadata = await lstat(payloadFile);
-    assert(
-      payloadMetadata.isFile() && !payloadMetadata.isSymbolicLink(),
-      `${name}/${expected.bundleType} updater payload is not regular`,
-    );
-    assert(
-      payloadMetadata.size === updater.payloadBytes,
-      `${name}/${expected.bundleType} updater payload byte length mismatch`,
-    );
-    assert(
-      (await sha256File(payloadFile)) === updater.payloadSha256,
-      `${name}/${expected.bundleType} updater payload digest mismatch`,
-    );
-    const signatureFile = path.join(directory, updater.signatureFile);
-    const signatureMetadata = await lstat(signatureFile);
-    assert(
-      signatureMetadata.isFile() && !signatureMetadata.isSymbolicLink(),
-      `${name}/${expected.bundleType} updater signature is not regular`,
-    );
-    assert(
-      signatureMetadata.size === updater.signatureBytes,
-      `${name}/${expected.bundleType} updater signature byte length mismatch`,
-    );
-    assert(
-      (await sha256File(signatureFile)) === updater.signatureSha256,
-      `${name}/${expected.bundleType} updater signature digest mismatch`,
-    );
-    const signature = (await readFile(signatureFile, "utf8")).trim();
-    assert(
-      signature === updater.signature,
-      `${name}/${expected.bundleType} embedded updater signature differs from its file`,
-    );
-    assert(
-      signature.length >= 64 && /^[A-Za-z0-9+/=]+$/u.test(signature),
-      `${name}/${expected.bundleType} updater signature is malformed`,
-    );
-    checksumEntries.set(updater.payloadFile, updater.payloadSha256);
-    checksumEntries.set(updater.signatureFile, updater.signatureSha256);
-  }
-  const checksumFile = path.join(directory, `SHA256SUMS-${platform}.txt`);
-  const checksumContents = await readFile(checksumFile, "utf8");
-  const checksumLines = [...checksumEntries].map(([file, digest]) => `${digest}  ${file}`);
-  assert(checksumContents === `${checksumLines.join("\n")}\n`, `${platform} checksum file mismatch`);
-  return {
-    installers: manifest.installers.map((installer) => installer.file),
-    sidecars: manifest.auxiliaryExecutables.map((sidecar) => ({ ...sidecar, platform })),
-    updaters: manifest.updaters.map((updater) => ({ ...updater, platform })),
-  };
 }
 
 async function verifyRuntimeEvidence(directory, platform) {
@@ -613,283 +248,595 @@ function enrichSboms(cyclonedx, spdx, sidecars, runtimeComponents, version) {
   }
 }
 
-async function main() {
+async function regularFileIfPresent(file) {
+  try {
+    const metadata = await lstat(file);
+    return metadata.isFile() && !metadata.isSymbolicLink() ? metadata : null;
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function isFlatReleaseName(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !/[\0\r\n]/u.test(value) &&
+    value !== "." &&
+    value !== ".." &&
+    path.posix.basename(value) === value &&
+    path.win32.basename(value) === value
+  );
+}
+
+async function readCandidatePlatformManifest(input, platform, version, tag, commit) {
+  const name = `installers-${platform}.json`;
+  if (!(await regularFileIfPresent(path.join(input, name)))) return null;
+  const manifest = await readJson(path.join(input, name));
+  assert(manifest.schemaVersion === 2, `${name} has the wrong schema version`);
+  assert(manifest.product === "ai-security-scanner", `${name} has the wrong product`);
+  assert(manifest.version === version && manifest.tag === tag, `${name} version/tag mismatch`);
+  assert(manifest.sourceCommit === commit && manifest.platform === platform, `${name} release identity mismatch`);
+  assert(Array.isArray(manifest.installers), `${name} has no installer records`);
+  assert(Array.isArray(manifest.auxiliaryExecutables), `${name} has no companion records`);
+  assert(Array.isArray(manifest.updaters), `${name} has no updater records array`);
+  assert(Array.isArray(manifest.updaterFailures), `${name} has no optional-updater failure records array`);
+  const releasedInstallerTypes = platformContract(platform).installerTypes;
+  assert(
+    Array.isArray(manifest.requestedBundleTypes) &&
+      JSON.stringify([...manifest.requestedBundleTypes].sort()) ===
+        JSON.stringify([...releasedInstallerTypes].sort()),
+    `${name} requested installer matrix is invalid`,
+  );
+  assert(
+    Array.isArray(manifest.availableBundleTypes) && manifest.availableBundleTypes.length > 0 &&
+      new Set(manifest.availableBundleTypes).size === manifest.availableBundleTypes.length &&
+      manifest.availableBundleTypes.every((installerType) => releasedInstallerTypes.includes(installerType)),
+    `${name} available installer matrix is invalid`,
+  );
+  return manifest;
+}
+
+async function verifyCompanionEvidence(input, platform, manifest) {
+  const expected = [
+    ["managed-egress-gateway", "ai-security-scanner-egress-gateway"],
+    ["isolated-bootstrap-broker", "ai-security-scanner-bootstrap-broker"],
+    ["local-casework-cli", "ai-security-scanner-cli"],
+  ];
+  assert(manifest.auxiliaryExecutables.length === expected.length, `${platform} companion evidence is incomplete`);
+  for (const [index, sidecar] of manifest.auxiliaryExecutables.entries()) {
+    const [role, binaryName] = expected[index];
+    assert(sidecar.role === role && sidecar.binaryName === binaryName, `${platform} companion identity is invalid`);
+    assert(isFlatReleaseName(sidecar.releaseFile), `${platform} companion filename is invalid`);
+    const metadata = await regularFileIfPresent(path.join(input, sidecar.releaseFile));
+    assert(metadata && metadata.size === sidecar.bytes, `${platform}/${sidecar.releaseFile} companion bytes are invalid`);
+    assert((await sha256File(path.join(input, sidecar.releaseFile))) === sidecar.sha256, `${platform}/${sidecar.releaseFile} companion digest is invalid`);
+  }
+  return manifest.auxiliaryExecutables.map((sidecar) => ({ ...sidecar, platform }));
+}
+
+async function verifyUpdaterForInstaller(input, platform, installerType, manifest, updaterPublicKey) {
+  try {
+    const updaterType = platform === "macos-universal" && installerType === "dmg" ? "app" : installerType;
+    const layout = updaterLayoutsFor(platform).find(({ bundleType }) => bundleType === updaterType);
+    if (!layout) return null;
+    if (typeof updaterPublicKey !== "string" || updaterPublicKey.length < 64) return null;
+    const matches = manifest.updaters.filter((record) =>
+      record && typeof record === "object" && !Array.isArray(record) && record.bundleType === updaterType,
+    );
+    if (matches.length !== 1) return null;
+    const updater = matches[0];
+    if (JSON.stringify(updater.targetKeys) !== JSON.stringify(layout.targetKeys)) return null;
+    for (const field of ["payloadFile", "signatureFile"]) {
+      if (!isFlatReleaseName(updater[field])) return null;
+    }
+    if (
+      !Number.isSafeInteger(updater.payloadBytes) || updater.payloadBytes <= 0 ||
+      !Number.isSafeInteger(updater.signatureBytes) || updater.signatureBytes <= 0 ||
+      !/^[0-9a-f]{64}$/u.test(updater.payloadSha256) ||
+      !/^[0-9a-f]{64}$/u.test(updater.signatureSha256) ||
+      typeof updater.signature !== "string"
+    ) return null;
+    const payloadMetadata = await regularFileIfPresent(path.join(input, updater.payloadFile));
+    const signatureMetadata = await regularFileIfPresent(path.join(input, updater.signatureFile));
+    if (
+      !payloadMetadata || payloadMetadata.size !== updater.payloadBytes ||
+      !signatureMetadata || signatureMetadata.size !== updater.signatureBytes ||
+      (await sha256File(path.join(input, updater.payloadFile))) !== updater.payloadSha256 ||
+      (await sha256File(path.join(input, updater.signatureFile))) !== updater.signatureSha256
+    ) return null;
+    const signature = (await readFile(path.join(input, updater.signatureFile), "utf8")).trim();
+    if (signature !== updater.signature) return null;
+    verifyUpdaterSignatures(updaterPublicKey, [{
+      payload: path.join(input, updater.payloadFile),
+      signature: path.join(input, updater.signatureFile),
+    }]);
+    return updater;
+  } catch {
+    return null;
+  }
+}
+
+function unavailable(installer, reason) {
+  installer.availability = "not-offered";
+  installer.reason = reason;
+  installer.artifact = null;
+}
+
+async function scopedFinalizeMain() {
   const args = parseArgs(process.argv.slice(2));
-  const directory = path.resolve(requireString(args, "dir"));
+  const input = path.resolve(requireString(args, "input"));
+  const output = path.resolve(requireString(args, "out"));
+  assert(input !== output, "--input and --out must be different directories");
   const version = requireString(args, "version");
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
   const publicationMode = requireString(args, "publication-mode");
-  const testOnlyWindowsRuntimeManifestSha256 = args.get(
-    "test-only-windows-runtime-manifest-sha256",
-  );
-  if (
-    testOnlyWindowsRuntimeManifestSha256 !== undefined &&
-    (typeof testOnlyWindowsRuntimeManifestSha256 !== "string" ||
-      !/^[0-9a-f]{64}$/u.test(testOnlyWindowsRuntimeManifestSha256))
-  ) {
-    throw new Error("test-only Windows runtime manifest identity is malformed");
+  assert(isSemver(version) && tag === `v${version}` && /^[0-9a-f]{40}$/u.test(commit), "release identity is malformed or inconsistent");
+  assert(PUBLICATION_MODES.has(publicationMode), "publication mode must be commit-bound-qc or public-github-release");
+  const outputMetadata = await regularFileIfPresent(output);
+  assert(!outputMetadata, "release output must be a directory, not a file");
+  try {
+    assert((await readdir(output)).length === 0, "release output directory must start empty");
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "ENOENT") throw error;
   }
-  const configuredPath = args.get("tauri-config");
-  if (configuredPath !== undefined && typeof configuredPath !== "string") {
-    throw new Error("--tauri-config requires an explicit path");
-  }
-  const tauriConfigPath = path.resolve(
-    configuredPath ?? path.join(PROJECT_ROOT, "src-tauri", "tauri.conf.json"),
-  );
-  if (!isSemver(version) || tag !== `v${version}` || !/^[0-9a-f]{40}$/u.test(commit)) {
-    throw new Error("release identity is malformed or inconsistent");
-  }
-  assert(
-    PUBLICATION_MODES.has(publicationMode),
-    "publication mode must be commit-bound-qc or public-github-release",
-  );
 
-  const metadata = await readJson(path.join(directory, "release-metadata.json"));
-  const tauriConfig = await readJson(tauriConfigPath);
+  const metadata = await readJson(path.join(input, "release-metadata.json"));
+  validateReleaseMetadataV3(metadata, {
+    releaseState: "prepared",
+    version,
+    tag,
+    sourceCommit: commit,
+    publicationMode,
+  });
   const packageJson = await readJson(path.join(PROJECT_ROOT, "package.json"));
-  const updaterPublicKey = tauriConfig.plugins?.updater?.pubkey;
-  assert(
-    typeof updaterPublicKey === "string" && updaterPublicKey.length >= 64,
-    "tauri config has no embedded updater public key",
-  );
-  assert(metadata.schemaVersion === 2, "release metadata schemaVersion must be 2");
-  assert(metadata.version === version && metadata.tag === tag, "release metadata version/tag mismatch");
   assert(
     metadata.releaseChannel === packageJson.release?.channel &&
       metadata.stableTarget === packageJson.release?.target,
     "release metadata publication channel does not match the source package",
   );
-  assert(metadata.sourceCommit === commit, "release metadata commit mismatch");
-  assert(metadata.publicationMode === publicationMode, "release metadata publication mode mismatch");
-  const expectedProvenanceAttestation = publicationMode === "public-github-release"
-    ? { state: "required-before-publication", provider: "GitHub artifact attestations" }
-    : { state: "not-created-for-commit-bound-qc", provider: "none" };
-  assert(
-    JSON.stringify(metadata.security?.provenanceAttestation) ===
-      JSON.stringify(expectedProvenanceAttestation),
-    "release metadata provenance-attestation state does not match its publication mode",
-  );
-  assert(
-    metadata.security?.operatingSystemCodeSigning?.state === "not-configured" &&
-      metadata.security?.appleNotarization?.state === "not-configured",
-    "release metadata must not claim OS code signing or notarization",
-  );
-  assert(
-    metadata.security?.updater?.state === "enabled-signed" &&
-      metadata.security.updater.artifactsGenerated === true &&
-      metadata.security.updater.signingConfigured === true,
-    "release metadata must report updater artifacts enabled and signed",
-  );
-  assert(
-    Array.isArray(metadata.distribution?.bundledEngines) &&
-      metadata.distribution.bundledEngines.length === 0,
-    "release metadata must report that no engines are bundled",
-  );
+  const tauriConfigPath = path.resolve(args.get("tauri-config") ?? path.join(PROJECT_ROOT, "src-tauri", "tauri.conf.json"));
+  const tauriConfig = await readJson(tauriConfigPath);
+  const updaterPublicKey = tauriConfig.plugins?.updater?.pubkey;
 
+  const finalized = structuredClone(metadata);
+  finalized.releaseState = "finalized";
+  const selections = [];
+  const rejectionMessages = [];
+  for (const platformRecord of finalized.distribution.platforms) {
+    if (platformRecord.availability === "not-offered") continue;
+    let manifest;
+    try {
+      manifest = await readCandidatePlatformManifest(input, platformRecord.platform, version, tag, commit);
+    } catch (error) {
+      manifest = null;
+      rejectionMessages.push(`${platformRecord.platform}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!manifest) {
+      platformRecord.availability = "not-offered";
+      platformRecord.reason = "platform-build-unavailable-or-invalid";
+      for (const installer of platformRecord.installers) unavailable(installer, "platform-build-unavailable-or-invalid");
+      continue;
+    }
+    let shared;
+    try {
+      shared = {
+        sidecars: await verifyCompanionEvidence(input, platformRecord.platform, manifest),
+        runtimeComponents: await verifyRuntimeEvidence(input, platformRecord.platform),
+      };
+    } catch (error) {
+      rejectionMessages.push(`${platformRecord.platform}: ${error instanceof Error ? error.message : String(error)}`);
+      platformRecord.availability = "not-offered";
+      platformRecord.reason = "platform-shared-evidence-invalid";
+      for (const installer of platformRecord.installers) unavailable(installer, "platform-shared-evidence-invalid");
+      continue;
+    }
+    for (const installerSupport of platformRecord.installers) {
+      const qualificationName = `platform-qualification-${platformRecord.platform}-${installerSupport.installerType}.json`;
+      if (!(await regularFileIfPresent(path.join(input, qualificationName)))) {
+        unavailable(installerSupport, "technical-qualification-not-observed");
+        continue;
+      }
+      const installers = manifest.installers.filter((record) =>
+        record && typeof record === "object" && !Array.isArray(record) &&
+          record.bundleType === installerSupport.installerType,
+      );
+      if (installers.length !== 1) {
+        unavailable(installerSupport, "qualified-installer-artifact-missing-or-ambiguous");
+        continue;
+      }
+      const installer = installers[0];
+      if (
+        !isFlatReleaseName(installer.file) ||
+        !Number.isSafeInteger(installer.bytes) || installer.bytes <= 0 ||
+        !/^[0-9a-f]{64}$/u.test(installer.sha256)
+      ) {
+        unavailable(installerSupport, "qualified-installer-filename-invalid");
+        rejectionMessages.push(
+          `${platformRecord.platform}/${installerSupport.installerType}: qualified installer record is invalid`,
+        );
+        continue;
+      }
+      let installerBytesValid = false;
+      try {
+        const installerMetadata = await regularFileIfPresent(path.join(input, installer.file));
+        installerBytesValid = Boolean(
+          installerMetadata && installerMetadata.size === installer.bytes &&
+            (await sha256File(path.join(input, installer.file))) === installer.sha256,
+        );
+      } catch (error) {
+        rejectionMessages.push(
+          `${platformRecord.platform}/${installerSupport.installerType}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (!installerBytesValid) {
+        unavailable(installerSupport, "qualified-installer-bytes-invalid");
+        rejectionMessages.push(
+          `${platformRecord.platform}/${installerSupport.installerType}: qualified installer bytes are invalid`,
+        );
+        continue;
+      }
+      let qualification;
+      try {
+        qualification = await verifyPlatformQualificationFile(path.join(input, qualificationName), {
+          platform: platformRecord.platform,
+          installerType: installerSupport.installerType,
+          version,
+          tag,
+          commit,
+          releaseChannel: metadata.releaseChannel,
+          releaseDirectory: input,
+        });
+      } catch (error) {
+        rejectionMessages.push(`${platformRecord.platform}/${installerSupport.installerType}: ${error instanceof Error ? error.message : String(error)}`);
+        unavailable(installerSupport, "technical-qualification-invalid");
+        continue;
+      }
+      const identity = {
+        platform: platformRecord.platform,
+        installerType: installerSupport.installerType,
+        version,
+        tag,
+        commit,
+      };
+      let dataPreservationEvidence = null;
+      // No producer currently exercises the exact installed desktop application
+      // through localhost report, reopen, export, and uninstall/reinstall. The
+      // bounded data-preservation fixtures below deliberately do not fill this.
+      const installedAppLifecycleEvidence = null;
+      if (
+        platformRecord.platform === "windows-x86_64" &&
+        installerSupport.installerType === "nsis"
+      ) {
+        try {
+          dataPreservationEvidence = await verifyWindowsNsisSupportingDataPreservationEvidence({
+            root: input,
+            artifactDirectory: input,
+            version,
+            tag,
+            commit,
+          });
+        } catch (error) {
+          rejectionMessages.push(
+            `${platformRecord.platform}/${installerSupport.installerType} data preservation: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      const humanName = `human-path-qualification-${platformRecord.platform}-${installerSupport.installerType}.json`;
+      let humanEvidence = null;
+      try {
+        if (await regularFileIfPresent(path.join(input, humanName))) {
+          humanEvidence = await verifyBoundArtifactEvidenceFile(path.join(input, humanName), {
+            ...identity,
+            artifact: installer,
+            evidenceType: "beginner-human-path",
+            label: humanName,
+          });
+        }
+      } catch (error) {
+        rejectionMessages.push(`${humanName}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const signingName = `os-signing-${platformRecord.platform}-${installerSupport.installerType}.json`;
+      // v0.1.8 has no reviewed protected-producer/publisher allowlist contract.
+      // A same-run file alone must therefore never become OS-signing promotion
+      // evidence. The standalone verifier remains available for future policy
+      // work, while this candidate records the exact claim as not configured.
+      const signingEvidence = null;
+      if (
+        publicationMode === "public-github-release" &&
+        platformRecord.platform === "windows-x86_64" &&
+        (!humanEvidence || !signingEvidence || !installedAppLifecycleEvidence)
+      ) {
+        const missing = [
+          !signingEvidence ? "authenticode-not-verified" : null,
+          !humanEvidence ? "beginner-human-path-not-observed" : null,
+          installerSupport.installerType === "msi"
+            ? "equivalent-msi-lifecycle-not-observed"
+            : "real-installed-app-localhost-lifecycle-not-observed",
+        ].filter(Boolean).join(";");
+        unavailable(installerSupport, missing);
+        continue;
+      }
+      const notarizationName = `notarization-${platformRecord.platform}-${installerSupport.installerType}.json`;
+      let notarizationEvidence = null;
+      if (
+        platformRecord.platform === "macos-universal" &&
+        await regularFileIfPresent(path.join(input, notarizationName))
+      ) {
+        try {
+          notarizationEvidence = await verifyBoundArtifactEvidenceFile(path.join(input, notarizationName), {
+            ...identity,
+            artifact: installer,
+            evidenceType: "apple-notarization",
+            label: notarizationName,
+          });
+        } catch (error) {
+          rejectionMessages.push(`${notarizationName}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      const updater = await verifyUpdaterForInstaller(
+        input,
+        platformRecord.platform,
+        installerSupport.installerType,
+        manifest,
+        updaterPublicKey,
+      );
+      const limitations = [];
+      if (!humanEvidence) limitations.push("beginner-human-path-not-observed");
+      if (!signingEvidence) limitations.push("operating-system-signing-not-configured");
+      if (platformRecord.platform === "windows-x86_64") {
+        limitations.push(
+          installerSupport.installerType === "nsis" && dataPreservationEvidence
+            ? "data-preservation-fixtures-only;real-installed-app-localhost-lifecycle-not-observed"
+            : "windows-lifecycle-not-observed",
+        );
+      }
+      if (platformRecord.platform === "macos-universal" && !notarizationEvidence) {
+        limitations.push("apple-notarization-not-configured");
+      }
+      if (!updater) limitations.push("updater-not-offered-for-this-artifact");
+      if (qualification.qualificationState === "installer_passed_runtime_not_observed") {
+        limitations.push("managed-runtime-not-observed-on-qualification-host");
+      }
+      installerSupport.availability = "offered";
+      installerSupport.reason = null;
+      installerSupport.artifact = {
+        file: installer.file,
+        bytes: installer.bytes,
+        sha256: installer.sha256,
+        technicalQualification: {
+          state: qualification.qualificationState === "passed"
+            ? "passed"
+            : "installer-passed-runtime-not-observed",
+          evidenceFile: qualificationName,
+          reason: null,
+        },
+        humanPath: humanEvidence
+          ? { state: "verified", evidenceFile: humanName, reason: null }
+          : { state: "not-observed", evidenceFile: null, reason: "exact-candidate-beginner-path-not-observed" },
+        operatingSystemSigning: signingEvidence
+          ? { state: "verified", evidenceFile: signingName, reason: null }
+          : { state: "not-configured", evidenceFile: null, reason: "artifact-has-no-verified-operating-system-signature" },
+        notarization: platformRecord.platform === "macos-universal"
+          ? notarizationEvidence
+            ? { state: "verified", evidenceFile: notarizationName, reason: null }
+            : { state: "not-configured", evidenceFile: null, reason: "artifact-has-no-verified-apple-notarization" }
+          : { state: "not-applicable", evidenceFile: null, reason: "apple-notarization-does-not-apply" },
+        windowsLifecycle: platformRecord.platform !== "windows-x86_64"
+          ? { state: "not-applicable", evidenceFiles: [], reason: "Windows lifecycle does not apply" }
+          : {
+              state: "not-observed",
+              evidenceFiles: [],
+              reason: installerSupport.installerType === "msi"
+                ? "equivalent-msi-lifecycle-not-observed"
+                : "real-installed-app-localhost-lifecycle-not-observed",
+            },
+        windowsDataPreservation: platformRecord.platform !== "windows-x86_64"
+          ? { state: "not-applicable", evidenceFiles: [], reason: "Windows data preservation does not apply" }
+          : installerSupport.installerType === "nsis" && dataPreservationEvidence
+            ? dataPreservationEvidence
+            : {
+                state: "not-observed",
+                evidenceFiles: [],
+                reason: installerSupport.installerType === "msi"
+                  ? "equivalent-msi-data-preservation-not-observed"
+                  : "exact-current-candidate-nsis-data-preservation-not-observed",
+              },
+        updater: updater
+          ? {
+              state: "signed",
+              payloadFile: updater.payloadFile,
+              signatureFile: updater.signatureFile,
+              targetKeys: [...updater.targetKeys],
+              reason: null,
+            }
+          : {
+              state: "not-offered",
+              payloadFile: null,
+              signatureFile: null,
+              targetKeys: [],
+              reason: "no-valid-artifact-scoped-updater",
+            },
+        provenanceAttestation: provenanceForArtifact(publicationMode),
+        knownLimitations: limitations,
+      };
+      selections.push({
+        platform: platformRecord.platform,
+        installerType: installerSupport.installerType,
+        installer,
+        qualificationName,
+        humanName: humanEvidence ? humanName : null,
+        signingName: signingEvidence ? signingName : null,
+        notarizationName: notarizationEvidence ? notarizationName : null,
+        dataPreservationFiles: dataPreservationEvidence?.evidenceFiles ?? [],
+        updater,
+        manifest,
+        shared,
+      });
+    }
+    const offered = platformRecord.installers.filter(({ availability }) => availability === "offered");
+    platformRecord.availability = offered.length > 0 ? "offered" : "not-offered";
+    platformRecord.reason = offered.length > 0 ? null : "no-qualified-installer-artifact";
+  }
+  assert(selections.length > 0, `no releasable installer artifact remains (${rejectionMessages.join(" | ")})`);
+  validateReleaseMetadataV3(finalized, { releaseState: "finalized" });
+
+  await mkdir(output, { recursive: true });
+  const copied = new Map();
+  const copySelected = async (name) => {
+    assert(typeof name === "string" && name === toPosix(name), `release file path is not canonical POSIX: ${String(name)}`);
+    assertSafeRelativePath(name);
+    const source = path.join(input, name);
+    const metadata_ = await regularFileIfPresent(source);
+    assert(metadata_ && metadata_.size > 0, `selected release file is missing: ${name}`);
+    const digest = await sha256File(source);
+    if (copied.has(name)) {
+      assert(copied.get(name) === digest, `selected release filename collision: ${name}`);
+      return;
+    }
+    const destination = path.join(output, name);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await copyFile(source, destination);
+    copied.set(name, digest);
+  };
   const cyclonedxName = `ai-security-scanner-${version}.cyclonedx.json`;
   const spdxName = `ai-security-scanner-${version}.spdx.json`;
-  const cyclonedx = await readJson(path.join(directory, cyclonedxName));
-  const spdx = await readJson(path.join(directory, spdxName));
-  assert(cyclonedx.bomFormat === "CycloneDX", "CycloneDX SBOM has the wrong format marker");
-  assert(typeof spdx.spdxVersion === "string" && spdx.spdxVersion.startsWith("SPDX-"), "SPDX SBOM has the wrong format marker");
-  for (const required of [
+  for (const name of [
     "THIRD_PARTY_NOTICES.txt",
     "ENGINE_NOTICES.md",
     "ENGINE_NOTICES.json",
     "LICENSE.txt",
-    "master-framework-report.json",
-    MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE,
-    N_MINUS_ONE_SIGNED_CASE_BUNDLE,
-  ]) {
-    const metadata_ = await lstat(path.join(directory, required));
-    assert(
-      metadata_.isFile() && !metadata_.isSymbolicLink() && metadata_.size > 0,
-      `required release evidence is not a non-empty regular file: ${required}`,
-    );
-    if (required === MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE || required === N_MINUS_ONE_SIGNED_CASE_BUNDLE) {
+    cyclonedxName,
+    spdxName,
+  ]) await copySelected(name);
+
+  const includedPlatforms = new Map();
+  for (const selection of selections) {
+    const platform = includedPlatforms.get(selection.platform) ?? {
+      installers: [], sidecars: selection.shared.sidecars, updaters: [], runtimeComponents: selection.shared.runtimeComponents,
+    };
+    platform.installers.push(selection.installer);
+    if (selection.updater && !platform.updaters.some(({ bundleType }) => bundleType === selection.updater.bundleType)) {
+      platform.updaters.push(selection.updater);
+    }
+    includedPlatforms.set(selection.platform, platform);
+    await copySelected(selection.installer.file);
+    await copySelected(selection.qualificationName);
+    for (const name of [selection.humanName, selection.signingName, selection.notarizationName].filter(Boolean)) {
+      await copySelected(name);
+    }
+    for (const dataPreservationFile of selection.dataPreservationFiles) {
       assert(
-        metadata_.size <= MAX_MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE_BYTES,
-        `retained signed case bundle exceeds ${MAX_MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE_BYTES} bytes: ${required}`,
+        (await sha256File(path.join(input, dataPreservationFile.path))) === dataPreservationFile.sha256,
+        `data-preservation evidence changed before copy: ${dataPreservationFile.path}`,
       );
+      await copySelected(dataPreservationFile.path);
+    }
+    if (selection.updater) {
+      await copySelected(selection.updater.payloadFile);
+      await copySelected(selection.updater.signatureFile);
     }
   }
+  const runtimeSuffixes = ["manifest.json", "cyclonedx.json", "spdx.json", "NOTICES.txt"];
+  for (const [platform, records] of includedPlatforms) {
+    for (const sidecar of records.sidecars) await copySelected(sidecar.releaseFile);
+    for (const suffix of runtimeSuffixes) await copySelected(`managed-runtime-${platform}.${suffix}`);
+    const sourceManifestSha256 = await sha256File(path.join(input, `installers-${platform}.json`));
+    const filteredManifestName = `installers-${platform}.json`;
+    await writeJsonAtomic(path.join(output, filteredManifestName), {
+      schemaVersion: 3,
+      product: "ai-security-scanner",
+      version,
+      tag,
+      sourceCommit: commit,
+      platform,
+      artifactScoped: true,
+      sourceManifestSha256,
+      installers: records.installers,
+      auxiliaryExecutables: records.sidecars.map(({ platform: _platform, ...sidecar }) => sidecar),
+      updaters: records.updaters,
+    });
+    copied.set(filteredManifestName, await sha256File(path.join(output, filteredManifestName)));
+    const names = [...new Set([
+      filteredManifestName,
+      ...records.installers.map(({ file }) => file),
+      ...records.sidecars.map(({ releaseFile }) => releaseFile),
+      ...records.updaters.flatMap(({ payloadFile, signatureFile }) => [payloadFile, signatureFile]),
+      ...runtimeSuffixes.map((suffix) => `managed-runtime-${platform}.${suffix}`),
+    ])].sort();
+    const lines = [];
+    for (const name of names) lines.push(`${await sha256File(path.join(output, name))}  ${name}`);
+    await writeTextAtomic(path.join(output, `SHA256SUMS-${platform}.txt`), `${lines.join("\n")}\n`);
+  }
 
-  const platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"];
-  const qualificationSpecs = [
-    { platform: "linux-x86_64", installerType: "deb" },
-    { platform: "macos-universal", installerType: "dmg" },
-    { platform: "windows-x86_64", installerType: "msi" },
-    { platform: "windows-x86_64", installerType: "nsis" },
-  ];
-  const qualificationNames = (await regularFiles(directory))
-    .map((file) => file.relative)
-    .filter((name) => name.startsWith("platform-qualification-") && name.endsWith(".json"))
-    .sort();
-  assert(
-    JSON.stringify(qualificationNames) === JSON.stringify(qualificationSpecs.map(({ platform, installerType }) => `platform-qualification-${platform}-${installerType}.json`).sort()),
-    "release must contain exactly the four recognized installer qualification records",
-  );
-  const windowsNsisQualificationNames = (await regularFiles(directory))
-    .map((file) => file.relative)
-    .filter((name) => name.startsWith("windows-nsis-") && name.endsWith("-qualification.json"))
-    .sort();
-  assert(
-    JSON.stringify(windowsNsisQualificationNames) === JSON.stringify([
-      "windows-nsis-ghost-recovery-qualification.json",
-      "windows-nsis-upgrade-qualification.json",
-    ]),
-    "release must contain exactly the normal N-1 NSIS upgrade and real registered-WSL ghost-recovery records",
-  );
-  const installers = [];
-  const sidecars = [];
-  const updaters = [];
-  const runtimeComponents = [];
-  const platformQualifications = [];
-  for (const platform of platforms) {
-    const verified = await verifyPlatformManifest(directory, platform, version, tag, commit);
-    installers.push(...verified.installers);
-    sidecars.push(...verified.sidecars);
-    updaters.push(...verified.updaters);
-    runtimeComponents.push(...(await verifyRuntimeEvidence(directory, platform)));
-  }
-  for (const { platform, installerType } of qualificationSpecs) {
-    platformQualifications.push(await verifyPlatformQualificationFile(
-      path.join(directory, `platform-qualification-${platform}-${installerType}.json`),
-      {
-        platform,
-        installerType,
-        version,
-        tag,
-        commit,
-        releaseChannel: metadata.releaseChannel,
-        releaseDirectory: directory,
-      },
-    ));
-  }
-  const windowsNsisUpgradeQualification = await validateWindowsNsisUpgradeEvidenceFile({
-    file: path.join(directory, "windows-nsis-upgrade-qualification.json"),
-    artifactDirectory: directory,
-    reportFile: path.join(directory, "master-framework-report.json"),
-    bundleFile: path.join(directory, MASTER_FRAMEWORK_SIGNED_CASE_BUNDLE),
-    priorBundleFile: path.join(directory, N_MINUS_ONE_SIGNED_CASE_BUNDLE),
-    version,
-    tag,
-    commit,
-  });
-  const windowsNsisGhostRecoveryQualification = await validateWindowsNsisGhostRecoveryEvidenceFile({
-    file: path.join(directory, "windows-nsis-ghost-recovery-qualification.json"),
-    artifactDirectory: directory,
-    version,
-    tag,
-    commit,
-    testOnlyRuntimeManifestSha256: testOnlyWindowsRuntimeManifestSha256,
-  });
-  assert(installers.some((file) => file.endsWith(".deb")), "release has no Debian installer");
-  assert(installers.some((file) => file.endsWith(".rpm")), "release has no RPM installer");
-  assert(installers.some((file) => file.endsWith(".AppImage")), "release has no AppImage installer");
-  assert(installers.some((file) => file.endsWith(".dmg")), "release has no macOS DMG installer");
-  assert(installers.some((file) => file.endsWith(".msi")), "release has no Windows MSI installer");
-  assert(installers.some((file) => file.endsWith(".exe")), "release has no Windows NSIS installer");
-  assert(new Set(installers).size === installers.length, "installer names collide across platforms");
-  assert(
-    sidecars.length === 9 && new Set(sidecars.map((sidecar) => sidecar.releaseFile)).size === 9,
-    "companion executable set is incomplete or filenames collide",
-  );
-  verifyUpdaterSignatures(
-    updaterPublicKey,
-    updaters.map((updater) => ({
-      payload: path.join(directory, updater.payloadFile),
-      signature: path.join(directory, updater.signatureFile),
-    })),
-  );
+  const cyclonedx = await readJson(path.join(output, cyclonedxName));
+  const spdx = await readJson(path.join(output, spdxName));
+  const sidecars = [...includedPlatforms.values()].flatMap(({ sidecars }) => sidecars);
+  const runtimeComponents = [...includedPlatforms.values()].flatMap(({ runtimeComponents }) => runtimeComponents);
+  enrichSboms(cyclonedx, spdx, sidecars, runtimeComponents, version);
+  await writeJsonAtomic(path.join(output, cyclonedxName), cyclonedx);
+  await writeJsonAtomic(path.join(output, spdxName), spdx);
+  await writeJsonAtomic(path.join(output, "release-metadata.json"), finalized);
 
   const updatePlatforms = {};
-  for (const updater of updaters) {
-    const url = `https://github.com/teddashh/ai-security-scanner/releases/download/${tag}/${encodeURIComponent(updater.payloadFile)}`;
-    for (const target of updater.targetKeys) {
+  for (const selection of selections.filter(({ updater }) => updater)) {
+    const url = `https://github.com/teddashh/ai-security-scanner/releases/download/${tag}/${encodeURIComponent(selection.updater.payloadFile)}`;
+    for (const target of selection.updater.targetKeys) {
       assert(!updatePlatforms[target], `duplicate updater target key: ${target}`);
-      updatePlatforms[target] = { url, signature: updater.signature };
+      updatePlatforms[target] = { url, signature: selection.updater.signature };
     }
   }
-  assert(
-    Object.keys(updatePlatforms).length === ALL_UPDATER_TARGET_KEYS.length &&
-      ALL_UPDATER_TARGET_KEYS.every((target) => updatePlatforms[target]),
-    "release updater manifest has incomplete platform coverage",
-  );
-  const releaseCopy = releaseCopyFor(version);
-  await writeJsonAtomic(path.join(directory, "latest.json"), {
+  await writeJsonAtomic(path.join(output, "latest.json"), {
     version,
-    notes: releaseCopy.updaterNotes,
+    tag,
+    notes: releaseCopyFor(version).updaterNotes,
     pub_date: metadata.sourceDate,
     platforms: updatePlatforms,
   });
 
-  enrichSboms(cyclonedx, spdx, sidecars, runtimeComponents, version);
-  await writeJsonAtomic(path.join(directory, cyclonedxName), cyclonedx);
-  await writeJsonAtomic(path.join(directory, spdxName), spdx);
-
+  const offeredLines = finalized.distribution.platforms.flatMap((platform) =>
+    platform.installers
+      .filter(({ availability }) => availability === "offered")
+      .map(({ installerType, artifact }) =>
+        `- ${platform.platform} / ${installerType}: ${artifact.file}; technical qualification ${artifact.technicalQualification.state}; beginner human path ${artifact.humanPath.state}.`),
+  );
+  const unavailableLines = finalized.distribution.platforms.flatMap((platform) =>
+    platform.installers
+      .filter(({ availability }) => availability === "not-offered")
+      .map(({ installerType, reason }) => `- ${platform.platform} / ${installerType}: not offered (${reason}).`),
+  );
   const distributionVerification = publicationMode === "public-github-release"
-    ? [
-      "These desktop installers are published as a GitHub Release. Verify the selected file against",
-      "`SHA256SUMS.txt` and its public GitHub artifact attestation before installing.",
-    ]
-    : [
-      "These files are a commit-bound GitHub Actions QC artifact, not a public GitHub Release.",
-      "Verify the selected file against `SHA256SUMS.txt`. This workflow artifact has no public",
-      "GitHub artifact attestation.",
-    ];
-  const notes = [
+    ? "Verify the selected file against SHA256SUMS.txt and its artifact-specific public provenance before installing."
+    : "These are commit-bound QC artifacts, not a public release; public provenance has not been created.";
+  await writeTextAtomic(path.join(output, "RELEASE_NOTES.md"), [
     `# ai-security-scanner ${version}`,
     "",
     `Source: \`${commit}\``,
     "",
-    ...releaseCopy.releaseNotes,
-    "These desktop installers are built for Linux x86-64, universal macOS (Intel + Apple silicon),",
-    "and Windows x86-64.",
-    ...distributionVerification,
+    ...releaseCopyFor(version).releaseNotes,
+    "Artifacts offered by this finalized set:",
+    ...offeredLines,
     "",
-    "Fresh GitHub-hosted qualification jobs independently installed the Debian package, macOS DMG,",
-    "Windows MSI, and Windows NSIS Setup executable. Linux and both Windows installers completed",
-    "managed-runtime install, start, status, fixed no-upstream managed egress gateway readiness,",
-    "network-disabled Gitleaks container execution, stop, uninstall with image-cache purge, and",
-    "private-state cleanup. The universal macOS artifact's DMG installation, bundled layout, exact",
-    "runtime manifest, CLI, desktop startup, and cleanup passed on GitHub's Intel macos-15-intel",
-    "runner. Its managed-runtime, egress gateway, and container lifecycle is explicitly recorded as not observed",
-    "because GitHub-hosted macOS does not support the nested virtualization required by AppleHV.",
-    "This limited macOS evidence is accepted only for a pre-release. Exact evidence is included",
-    "per installer in the candidate bundle.",
-    "The Windows NSIS candidate also passed two separate v0.1.7 migration qualifications.",
-    "One installed and uninstalled the real N-1 package while preserving a synthetic case and its",
-    "durable export-signing identity. The other started and stopped the real N-1 managed runtime,",
-    "removed exactly its old payload and installer executables while retaining its registered WSL",
-    "workspace, then proved automatic bounded recovery without the manual-action fallback.",
-    "Both machine-readable qualification records are included in the candidate bundle and in SHA256SUMS.txt.",
+    "Not offered in this finalized set:",
+    ...unavailableLines,
     "",
-    "> The current installers are not signed with Apple Developer ID or Windows Authenticode and",
-    "> are not Apple-notarized. Application update payloads are separately signed with the updater",
-    "> key, but the operating system may still show an unidentified-developer warning. No scanner",
-    "> engine image is bundled.",
+    distributionVerification,
+    "Qualification, human-path observation, OS signing, notarization, updater availability,",
+    "provenance requirements, and known limitations are recorded independently for every offered artifact",
+    "in release-metadata.json. An absent platform never implies that it passed.",
     "",
-    "The first-party `ai-security-scanner-egress-gateway`, isolated",
-    "`ai-security-scanner-bootstrap-broker`, and local `ai-security-scanner-cli` companion",
-    "executables are installed beside the desktop executable.",
-    "Platform copies and hashes are included as release evidence and SBOM entries.",
-    "",
-    "CycloneDX and SPDX JSON SBOMs, generated third-party notices, engine reference notices, and",
-    "machine-readable release metadata accompany the installers.",
-    "",
-  ].join("\n");
-  await writeTextAtomic(path.join(directory, "RELEASE_NOTES.md"), notes);
+  ].join("\n"));
 
-  const beforeIndex = (await regularFiles(directory))
+  const beforeIndex = (await regularFiles(output))
     .filter((file) => file.relative !== "SHA256SUMS.txt" && file.relative !== "release-assets.json")
     .sort((left, right) => left.relative.localeCompare(right.relative));
   const fileRecords = [];
   for (const file of beforeIndex) {
     fileRecords.push({ path: file.relative, bytes: file.bytes, sha256: await sha256File(file.absolute) });
   }
-  await writeJsonAtomic(path.join(directory, "release-assets.json"), {
+  await writeJsonAtomic(path.join(output, "release-assets.json"), {
     schemaVersion: 2,
     product: "ai-security-scanner",
     version,
@@ -899,18 +846,16 @@ async function main() {
     indexSelfExcluded: true,
     files: fileRecords,
   });
-
-  const finalFiles = (await regularFiles(directory))
+  const finalFiles = (await regularFiles(output))
     .filter((file) => file.relative !== "SHA256SUMS.txt")
     .sort((left, right) => left.relative.localeCompare(right.relative));
   const checksums = [];
-  for (const file of finalFiles) {
-    checksums.push(`${await sha256File(file.absolute)}  ${file.relative}`);
-  }
-  await writeTextAtomic(path.join(directory, "SHA256SUMS.txt"), `${checksums.join("\n")}\n`);
+  for (const file of finalFiles) checksums.push(`${await sha256File(file.absolute)}  ${file.relative}`);
+  await writeTextAtomic(path.join(output, "SHA256SUMS.txt"), `${checksums.join("\n")}\n`);
+  for (const message of rejectionMessages) process.stderr.write(`release tooling: excluded candidate: ${message}\n`);
   process.stdout.write(
-    `Finalized ${installers.length} installers, ${updaters.length} signed updater payloads, ${sidecars.length} first-party companion executables, ${platformQualifications.length} hosted platform qualifications, one installed-artifact master NIST/ISO/AIDEFEND report with retained N-1 and candidate signed synthetic case bundles, two Windows NSIS migration qualifications (${windowsNsisUpgradeQualification.qualification}, ${windowsNsisGhostRecoveryQualification.qualification}), and ${finalFiles.length} evidence files for ${tag}.\n`,
+    `Finalized ${selections.length} independently qualified installer artifact(s) across ${includedPlatforms.size} platform(s); absent or unqualified siblings remain explicit in release-metadata.json.\n`,
   );
 }
 
-runMain(main);
+runMain(scopedFinalizeMain);

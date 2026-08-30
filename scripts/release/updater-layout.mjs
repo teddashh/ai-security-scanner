@@ -6,18 +6,6 @@ export const UPDATER_LAYOUTS = Object.freeze({
       signatureSuffix: ".AppImage.sig",
       targetKeys: Object.freeze(["linux-x86_64", "linux-x86_64-appimage"]),
     }),
-    Object.freeze({
-      bundleType: "deb",
-      directory: "deb",
-      signatureSuffix: ".deb.sig",
-      targetKeys: Object.freeze(["linux-x86_64-deb"]),
-    }),
-    Object.freeze({
-      bundleType: "rpm",
-      directory: "rpm",
-      signatureSuffix: ".rpm.sig",
-      targetKeys: Object.freeze(["linux-x86_64-rpm"]),
-    }),
   ]),
   "macos-universal": Object.freeze([
     Object.freeze({
@@ -38,12 +26,6 @@ export const UPDATER_LAYOUTS = Object.freeze({
       directory: "nsis",
       signatureSuffix: ".exe.sig",
       targetKeys: Object.freeze(["windows-x86_64", "windows-x86_64-nsis"]),
-    }),
-    Object.freeze({
-      bundleType: "msi",
-      directory: "msi",
-      signatureSuffix: ".msi.sig",
-      targetKeys: Object.freeze(["windows-x86_64-msi"]),
     }),
   ]),
 });

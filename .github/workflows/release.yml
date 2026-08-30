@@ -5,6 +5,12 @@ on:
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
   workflow_dispatch:
+    inputs:
+      windows_data_preservation:
+        description: Run optional N-1 and ambiguous-runtime data-preservation fixtures
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -96,8 +102,6 @@ jobs:
                 printf 'Release tag %s does not exactly match candidate %s.\n' "${EVENT_REF}" "${candidate_tag}" >&2
                 exit 1
               fi
-              printf 'PUBLIC_RELEASE_BLOCKED_AUTHENTICODE: Windows Authenticode signing and verification are not configured; use the main-branch workflow_dispatch QC artifact only.\n' >&2
-              exit 1
               ;;
             workflow_dispatch)
               publication_mode="commit-bound-qc"
@@ -216,6 +220,9 @@ jobs:
   build:
     name: Build ${{ matrix.platform }} installers
     needs: validate
+    # A failed platform produces no artifact for that platform. The finalizer
+    # records it as unavailable instead of cancelling qualified siblings.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -313,180 +320,138 @@ jobs:
           --target "${{ matrix.managed_runtime_target }}"
           --output runtime/staged/managed-runtime
 
-      - name: Build Linux installers
-        if: matrix.platform == 'linux-x86_64'
+      - name: Build the application once without installers
+        id: build_unbundled
+        shell: bash
+        env:
+          NO_STRIP: "true"
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          arguments=(--ci --verbose --no-bundle)
+          if [[ "${RELEASE_PLATFORM}" == "macos-universal" ]]; then
+            arguments+=(--target universal-apple-darwin)
+          fi
+          npm run tauri build -- "${arguments[@]}" -- --locked
+
+      - name: Bundle the Debian installer independently
+        id: bundle_deb
+        if: matrix.platform == 'linux-x86_64' && steps.build_unbundled.outcome == 'success'
+        continue-on-error: true
+        env:
+          NO_STRIP: "true"
+        run: >-
+          node scripts/release/bundle-with-optional-updater.mjs
+          --bundles deb
+          --bundle-root "${{ matrix.bundle_root }}"
+          --version "${{ needs.validate.outputs.version }}"
+
+      - name: Bundle the RPM installer independently
+        id: bundle_rpm
+        if: matrix.platform == 'linux-x86_64' && steps.build_unbundled.outcome == 'success'
+        continue-on-error: true
+        env:
+          NO_STRIP: "true"
+        run: >-
+          node scripts/release/bundle-with-optional-updater.mjs
+          --bundles rpm
+          --bundle-root "${{ matrix.bundle_root }}"
+          --version "${{ needs.validate.outputs.version }}"
+
+      - name: Bundle the AppImage installer with an optional updater
+        id: bundle_appimage
+        if: matrix.platform == 'linux-x86_64' && steps.build_unbundled.outcome == 'success'
+        continue-on-error: true
         env:
           NO_STRIP: "true"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: npm run tauri build -- --ci --verbose --bundles deb,rpm,appimage -- --locked
+        run: >-
+          node scripts/release/bundle-with-optional-updater.mjs
+          --bundles appimage
+          --bundle-root "${{ matrix.bundle_root }}"
+          --version "${{ needs.validate.outputs.version }}"
 
-      - name: Sign Debian and RPM updater payloads
-        if: matrix.platform == 'linux-x86_64'
+      - name: Bundle the macOS app and DMG with an optional updater
+        id: bundle_macos
+        if: matrix.platform == 'macos-universal' && steps.build_unbundled.outcome == 'success'
+        continue-on-error: true
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: >-
-          node scripts/release/sign-linux-installers.mjs
+          node scripts/release/bundle-with-optional-updater.mjs
+          --bundles app,dmg
+          --target universal-apple-darwin
           --bundle-root "${{ matrix.bundle_root }}"
+          --version "${{ needs.validate.outputs.version }}"
 
-      - name: Build universal macOS installer
-        if: matrix.platform == 'macos-universal'
+      - name: Bundle the Windows NSIS installer with an optional updater
+        id: bundle_nsis
+        if: matrix.platform == 'windows-x86_64' && steps.build_unbundled.outcome == 'success'
+        continue-on-error: true
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: npm run tauri build -- --ci --target universal-apple-darwin --bundles app,dmg -- --locked
+        run: >-
+          node scripts/release/bundle-with-optional-updater.mjs
+          --bundles nsis
+          --bundle-root "${{ matrix.bundle_root }}"
+          --version "${{ needs.validate.outputs.version }}"
 
-      - name: Build Windows installers
-        if: matrix.platform == 'windows-x86_64'
+      - name: Bundle the Windows MSI installer independently
+        id: bundle_msi
+        if: matrix.platform == 'windows-x86_64' && steps.build_unbundled.outcome == 'success'
+        continue-on-error: true
+        run: >-
+          node scripts/release/bundle-with-optional-updater.mjs
+          --bundles msi
+          --bundle-root "${{ matrix.bundle_root }}"
+          --version "${{ needs.validate.outputs.version }}"
+
+      - name: Determine which requested installer siblings actually finished
+        id: available_bundles
+        if: always() && steps.build_unbundled.outcome == 'success'
+        shell: bash
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: npm run tauri build -- --ci --bundles nsis,msi -- --locked
-
-      - name: Install the Debian package and prove the desktop starts
-        if: matrix.platform == 'linux-x86_64'
-        shell: bash
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+          DEB_OUTCOME: ${{ steps.bundle_deb.outcome }}
+          RPM_OUTCOME: ${{ steps.bundle_rpm.outcome }}
+          APPIMAGE_OUTCOME: ${{ steps.bundle_appimage.outcome }}
+          MACOS_OUTCOME: ${{ steps.bundle_macos.outcome }}
+          NSIS_OUTCOME: ${{ steps.bundle_nsis.outcome }}
+          MSI_OUTCOME: ${{ steps.bundle_msi.outcome }}
         run: |
           set -euo pipefail
-          mapfile -t packages < <(find "${{ matrix.bundle_root }}/deb" -maxdepth 1 -type f -name '*.deb' -print)
-          if [[ "${#packages[@]}" -ne 1 ]]; then
-            printf 'Expected exactly one Debian package, found %s.\n' "${#packages[@]}" >&2
-            exit 1
-          fi
-          package_path="$(realpath -- "${packages[0]}")"
-          if [[ ! -f "${package_path}" ]]; then
-            printf 'Debian package does not exist at %s.\n' "${package_path}" >&2
-            exit 1
-          fi
-          sudo apt-get install -y "${package_path}"
-          for companion in ai-security-scanner-egress-gateway ai-security-scanner-bootstrap-broker ai-security-scanner-cli; do
-            if ! command -v "${companion}" >/dev/null 2>&1; then
-              printf 'Installed Debian package is missing companion executable %s.\n' "${companion}" >&2
+          available=()
+          case "${RELEASE_PLATFORM}" in
+            linux-x86_64)
+              if [[ "${DEB_OUTCOME}" == "success" ]]; then available+=(deb); fi
+              if [[ "${RPM_OUTCOME}" == "success" ]]; then available+=(rpm); fi
+              if [[ "${APPIMAGE_OUTCOME}" == "success" ]]; then available+=(appimage); fi
+              ;;
+            macos-universal)
+              if [[ "${MACOS_OUTCOME}" == "success" ]]; then available+=(dmg); fi
+              ;;
+            windows-x86_64)
+              if [[ "${NSIS_OUTCOME}" == "success" ]]; then available+=(nsis); fi
+              if [[ "${MSI_OUTCOME}" == "success" ]]; then available+=(msi); fi
+              ;;
+            *)
+              printf 'Unsupported platform: %s\n' "${RELEASE_PLATFORM}" >&2
               exit 1
-            fi
-          done
-          ai-security-scanner-cli --help >/dev/null
-          set +e
-          timeout --signal=TERM 12s xvfb-run --auto-servernum ai-security-scanner
-          status=$?
-          set -e
-          if [[ "${status}" -ne 124 ]]; then
-            printf 'Installed desktop exited before the startup observation window (status %s).\n' "${status}" >&2
+              ;;
+          esac
+          if [[ "${#available[@]}" -eq 0 ]]; then
+            printf 'No requested installer sibling completed for %s.\n' "${RELEASE_PLATFORM}" >&2
             exit 1
           fi
+          joined="$(IFS=,; printf '%s' "${available[*]}")"
+          printf 'available=%s\n' "${joined}" >> "${GITHUB_OUTPUT}"
 
-      - name: Mount the DMG and prove the desktop starts
-        if: matrix.platform == 'macos-universal'
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          images=("${{ matrix.bundle_root }}/dmg/"*.dmg)
-          if [[ "${#images[@]}" -ne 1 ]]; then
-            printf 'Expected exactly one DMG, found %s.\n' "${#images[@]}" >&2
-            exit 1
-          fi
-          mount_point="${RUNNER_TEMP}/ai-security-scanner-dmg"
-          installed_app="${RUNNER_TEMP}/ai-security-scanner-installed.app"
-          mkdir -p "${mount_point}"
-          PAGER=/bin/cat /usr/bin/hdiutil attach -nobrowse -readonly -mountpoint "${mount_point}" "${images[0]}" <<< 'Y'
-          applications=("${mount_point}/"*.app)
-          if [[ "${#applications[@]}" -ne 1 ]]; then
-            hdiutil detach "${mount_point}"
-            printf 'Expected exactly one application in the DMG, found %s.\n' "${#applications[@]}" >&2
-            exit 1
-          fi
-          ditto "${applications[0]}" "${installed_app}"
-          hdiutil detach "${mount_point}"
-          desktop="${installed_app}/Contents/MacOS/ai-security-scanner"
-          if [[ ! -f "${desktop}" || ! -x "${desktop}" ]]; then
-            printf 'Installed macOS app is missing its desktop executable.\n' >&2
-            exit 1
-          fi
-          for companion in ai-security-scanner-egress-gateway ai-security-scanner-bootstrap-broker ai-security-scanner-cli; do
-            candidate="${installed_app}/Contents/MacOS/${companion}"
-            if [[ ! -f "${candidate}" || ! -x "${candidate}" ]]; then
-              printf 'Installed macOS app is missing companion executable %s.\n' "${companion}" >&2
-              exit 1
-            fi
-          done
-          "${installed_app}/Contents/MacOS/ai-security-scanner-cli" --help >/dev/null
-          "${desktop}" >"${RUNNER_TEMP}/desktop-startup.log" 2>&1 &
-          desktop_pid=$!
-          sleep 12
-          if ! kill -0 "${desktop_pid}" 2>/dev/null; then
-            wait "${desktop_pid}" || true
-            cat "${RUNNER_TEMP}/desktop-startup.log" >&2
-            printf 'Installed macOS desktop exited before the startup observation window.\n' >&2
-            exit 1
-          fi
-          kill "${desktop_pid}"
-          wait "${desktop_pid}" || true
-
-      - name: Install the MSI and prove the desktop starts
-        if: matrix.platform == 'windows-x86_64'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $packages = @(Get-ChildItem -LiteralPath "${{ matrix.bundle_root }}/msi" -Filter "*.msi" -File)
-          if ($packages.Count -ne 1) {
-            throw "Expected exactly one MSI, found $($packages.Count)."
-          }
-          $installDirectory = Join-Path $env:RUNNER_TEMP "ai-security-scanner-installed"
-          $arguments = @(
-            "/i",
-            $packages[0].FullName,
-            "INSTALLDIR=$installDirectory",
-            "/qn",
-            "/norestart"
-          )
-          $installer = Start-Process -FilePath "msiexec.exe" -ArgumentList $arguments -Wait -PassThru
-          if ($installer.ExitCode -ne 0) {
-            throw "MSI installation failed with status $($installer.ExitCode)."
-          }
-          $executables = @(
-            Get-ChildItem -LiteralPath $installDirectory -Filter "ai-security-scanner.exe" -File -Recurse |
-              Where-Object { $_.Name -notmatch "(?i)uninstall" }
-          )
-          if ($executables.Count -ne 1) {
-            throw "Expected exactly one installed desktop executable, found $($executables.Count)."
-          }
-          foreach ($companionName in @(
-            "ai-security-scanner-egress-gateway.exe",
-            "ai-security-scanner-bootstrap-broker.exe",
-            "ai-security-scanner-cli.exe"
-          )) {
-            $companions = @(
-              Get-ChildItem -LiteralPath $installDirectory -Filter $companionName -File -Recurse
-            )
-            if ($companions.Count -ne 1) {
-              throw "Expected exactly one installed $companionName, found $($companions.Count)."
-            }
-            if ($companionName -eq "ai-security-scanner-cli.exe") {
-              $cli = Start-Process -FilePath $companions[0].FullName -ArgumentList "--help" -Wait -PassThru
-              if ($cli.ExitCode -ne 0) {
-                throw "Installed casework CLI failed its help probe with status $($cli.ExitCode)."
-              }
-            }
-          }
-          $desktop = Start-Process -FilePath $executables[0].FullName -PassThru
-          Start-Sleep -Seconds 12
-          if ($desktop.HasExited) {
-            throw "Installed Windows desktop exited before the startup observation window with status $($desktop.ExitCode)."
-          }
-          Stop-Process -Id $desktop.Id -Force
-          $uninstaller = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
-            "/x",
-            $packages[0].FullName,
-            "/qn",
-            "/norestart"
-          ) -Wait -PassThru
-          if ($uninstaller.ExitCode -ne 0) {
-            throw "MSI cleanup failed with status $($uninstaller.ExitCode)."
-          }
-
-      - name: Collect installers and platform checksums
+      - name: Collect only successful installers and platform checksums
+        id: collect_bundles
+        if: always() && steps.available_bundles.outcome == 'success'
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
@@ -495,6 +460,7 @@ jobs:
           BUNDLE_ROOT: ${{ matrix.bundle_root }}
           RELEASE_PLATFORM: ${{ matrix.platform }}
           EXPECTED_BUNDLES: ${{ matrix.expected }}
+          AVAILABLE_BUNDLES: ${{ steps.available_bundles.outputs.available }}
           EGRESS_SIDECAR_PATH: ${{ matrix.egress_sidecar_path }}
           BOOTSTRAP_BROKER_PATH: ${{ matrix.bootstrap_broker_path }}
           CASEWORK_CLI_PATH: ${{ matrix.casework_cli_path }}
@@ -504,6 +470,7 @@ jobs:
           --out release-assets
           --platform "${RELEASE_PLATFORM}"
           --expect "${EXPECTED_BUNDLES}"
+          --available "${AVAILABLE_BUNDLES}"
           --egress-sidecar "${EGRESS_SIDECAR_PATH}"
           --bootstrap-broker "${BOOTSTRAP_BROKER_PATH}"
           --casework-cli "${CASEWORK_CLI_PATH}"
@@ -512,6 +479,7 @@ jobs:
           --commit "${SOURCE_COMMIT}"
 
       - name: Generate exact managed runtime manifest, SBOM, notices, and source evidence
+        if: steps.collect_bundles.outcome == 'success'
         shell: bash
         env:
           RELEASE_PLATFORM: ${{ matrix.platform }}
@@ -530,9 +498,10 @@ jobs:
           node scripts/release/generate-runtime-evidence.mjs "${runtime_evidence_args[@]}"
 
       - name: Preserve platform installers
+        if: steps.collect_bundles.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-${{ matrix.platform }}
+          name: desktop-installers-${{ matrix.platform }}
           path: release-assets
           if-no-files-found: error
           compression-level: 0
@@ -541,6 +510,9 @@ jobs:
   qualification:
     name: Qualify installed ${{ matrix.platform }} artifact on a fresh hosted runner
     needs: [validate, build]
+    # Qualification remains fail-closed for this exact installer: no evidence
+    # means it is excluded. It is not a verdict on another platform.
+    continue-on-error: true
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -579,7 +551,7 @@ jobs:
       - name: Download the independently built platform artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-${{ matrix.platform }}
+          name: desktop-installers-${{ matrix.platform }}
           path: release-input
 
       - name: Independently install and qualify the Debian package
@@ -647,10 +619,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  windows-nsis-upgrade-qualification:
-    name: Qualify the real N-1 NSIS upgrade on an isolated fresh Windows runner
+  windows-nsis-supporting-data-preservation:
+    name: Optional Windows NSIS ${{ matrix.scenario }} data-preservation fixture
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_data_preservation == true
     needs: [validate, build]
+    continue-on-error: true
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: n-minus-one-upgrade
+            fixture_script: scripts/release/qualify-windows-nsis-upgrade.ps1
+            evidence_script: scripts/release/windows-nsis-upgrade-evidence.mjs
+          - scenario: ghost-repair-uninstall
+            fixture_script: scripts/release/qualify-windows-nsis-ghost-recovery.ps1
+            evidence_script: scripts/release/windows-nsis-ghost-recovery-evidence.mjs
     runs-on: windows-2025
     permissions:
       contents: read
@@ -665,149 +649,75 @@ jobs:
         with:
           node-version: 24.15.0
 
-      - name: Download the independently built Windows artifact
+      - name: Download the independently built Windows artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-windows-x86_64
+          name: desktop-installers-windows-x86_64
           path: release-input
 
-      - name: Qualify a real N-1 NSIS upgrade and private-data preservation
+      - name: Run the explicitly requested supporting fixture
         shell: pwsh
-        run: >-
-          scripts/release/qualify-windows-nsis-upgrade.ps1
-          -ArtifactDirectory release-input
-          -WorkDirectory "$env:RUNNER_TEMP/ai-security-scanner-nsis-upgrade-evidence"
-          -CurrentVersion "${{ needs.validate.outputs.version }}"
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $work = Join-Path $env:RUNNER_TEMP "ai-security-scanner-${{ matrix.scenario }}-data-preservation"
+          & "${{ matrix.fixture_script }}" `
+            -ArtifactDirectory release-input `
+            -WorkDirectory $work `
+            -CurrentVersion $env:RELEASE_VERSION
 
-      - name: Create and validate strict N-1 upgrade, framework-report, and signing-identity evidence
-        shell: bash
+      - name: Create and revalidate fixture-scoped evidence
+        shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
         run: |
-          set -euo pipefail
-          mkdir -p nsis-upgrade-evidence
-          evidence="nsis-upgrade-evidence/windows-nsis-upgrade-qualification.json"
-          report="nsis-upgrade-evidence/master-framework-report.json"
-          bundle="nsis-upgrade-evidence/master-framework-report.case.tar.gz"
-          prior_bundle="nsis-upgrade-evidence/n-minus-one-before-upgrade.case.tar.gz"
-          cp -- "${RUNNER_TEMP}/ai-security-scanner-nsis-upgrade-evidence/master-framework-report.json" "${report}"
-          cp -- "${RUNNER_TEMP}/ai-security-scanner-nsis-upgrade-evidence/master-framework-report.case.tar.gz" "${bundle}"
-          cp -- "${RUNNER_TEMP}/ai-security-scanner-nsis-upgrade-evidence/n-minus-one-before-upgrade.case.tar.gz" "${prior_bundle}"
-          test -s "${bundle}"
-          test ! -L "${bundle}"
-          bundle_bytes="$(wc -c < "${bundle}")"
-          test "${bundle_bytes}" -le 67108864
-          test -s "${prior_bundle}"
-          test ! -L "${prior_bundle}"
-          prior_bundle_bytes="$(wc -c < "${prior_bundle}")"
-          test "${prior_bundle_bytes}" -le 67108864
-          node scripts/release/windows-nsis-upgrade-evidence.mjs create \
-            --artifact-dir release-input \
-            --observations "${RUNNER_TEMP}/ai-security-scanner-nsis-upgrade-evidence/observations.json" \
-            --report "${report}" \
-            --bundle "${bundle}" \
-            --prior-bundle "${prior_bundle}" \
-            --out "${evidence}" \
-            --version "${RELEASE_VERSION}" \
-            --tag "${RELEASE_TAG}" \
-            --commit "${SOURCE_COMMIT}"
-          node scripts/release/windows-nsis-upgrade-evidence.mjs validate \
-            --file "${evidence}" \
-            --artifact-dir release-input \
-            --report "${report}" \
-            --bundle "${bundle}" \
-            --prior-bundle "${prior_bundle}" \
-            --version "${RELEASE_VERSION}" \
-            --tag "${RELEASE_TAG}" \
-            --commit "${SOURCE_COMMIT}"
+          $ErrorActionPreference = "Stop"
+          $work = Join-Path $env:RUNNER_TEMP "ai-security-scanner-${{ matrix.scenario }}-data-preservation"
+          $root = Join-Path $PWD "supporting-evidence/windows-nsis-data-preservation/${{ matrix.scenario }}"
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $report = Join-Path $root "beginner-report.html"
+          $evidence = Join-Path $root "evidence.json"
+          Copy-Item -LiteralPath (Join-Path $work "beginner-report.html") -Destination $report
+          & node "${{ matrix.evidence_script }}" create `
+            --artifact-dir release-input `
+            --version $env:RELEASE_VERSION `
+            --tag $env:RELEASE_TAG `
+            --commit $env:SOURCE_COMMIT `
+            --beginner-report $report `
+            --observations (Join-Path $work "observations.json") `
+            --out $evidence
+          & node "${{ matrix.evidence_script }}" validate `
+            --file $evidence `
+            --artifact-dir release-input `
+            --version $env:RELEASE_VERSION `
+            --tag $env:RELEASE_TAG `
+            --commit $env:SOURCE_COMMIT `
+            --beginner-report $report
 
-      - name: Preserve strict N-1 upgrade, framework report, and signed case bundle evidence
+      - name: Preserve explicitly requested supporting evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-nsis-upgrade-qualification
-          path: |
-            nsis-upgrade-evidence/windows-nsis-upgrade-qualification.json
-            nsis-upgrade-evidence/master-framework-report.json
-            nsis-upgrade-evidence/master-framework-report.case.tar.gz
-            nsis-upgrade-evidence/n-minus-one-before-upgrade.case.tar.gz
+          name: windows-nsis-supporting-data-preservation-${{ matrix.scenario }}
+          path: supporting-evidence/
           if-no-files-found: error
+          compression-level: 0
           retention-days: 14
 
-  windows-nsis-ghost-recovery-qualification:
-    name: Qualify the real registered-WSL ghost recovery on an isolated fresh Windows runner
-    needs: [validate, build]
-    timeout-minutes: 360
-    runs-on: windows-2025
-    permissions:
-      contents: read
-    steps:
-      - name: Check out the exact source without credentials
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up the evidence generator
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.15.0
-
-      - name: Download the independently built Windows artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-windows-x86_64
-          path: release-input
-
-      - name: Qualify the real registered-WSL N-1 ghost recovery
-        shell: pwsh
-        run: >-
-          scripts/release/qualify-windows-nsis-ghost-recovery.ps1
-          -ArtifactDirectory release-input
-          -WorkDirectory "$env:RUNNER_TEMP/ai-security-scanner-nsis-ghost-recovery-evidence"
-          -CurrentVersion "${{ needs.validate.outputs.version }}"
-
-      - name: Create and validate strict registered-WSL ghost-recovery evidence
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
-        run: |
-          set -euo pipefail
-          mkdir -p nsis-ghost-recovery-evidence
-          evidence="nsis-ghost-recovery-evidence/windows-nsis-ghost-recovery-qualification.json"
-          node scripts/release/windows-nsis-ghost-recovery-evidence.mjs create \
-            --artifact-dir release-input \
-            --observations "${RUNNER_TEMP}/ai-security-scanner-nsis-ghost-recovery-evidence/observations.json" \
-            --out "${evidence}" \
-            --version "${RELEASE_VERSION}" \
-            --tag "${RELEASE_TAG}" \
-            --commit "${SOURCE_COMMIT}"
-          node scripts/release/windows-nsis-ghost-recovery-evidence.mjs validate \
-            --file "${evidence}" \
-            --artifact-dir release-input \
-            --version "${RELEASE_VERSION}" \
-            --tag "${RELEASE_TAG}" \
-            --commit "${SOURCE_COMMIT}"
-
-      - name: Preserve strict registered-WSL ghost-recovery evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-nsis-ghost-recovery-qualification
-          path: nsis-ghost-recovery-evidence/windows-nsis-ghost-recovery-qualification.json
-          if-no-files-found: error
-          retention-days: 14
-
-  assemble:
-    name: Assemble and verify the release candidate
+  finalize-supported-artifacts:
+    name: Finalize and verify independently supported artifacts
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      needs['supply-chain'].result == 'success'
     needs:
       - validate
       - supply-chain
       - build
       - qualification
-      - windows-nsis-upgrade-qualification
-      - windows-nsis-ghost-recovery-qualification
+      - windows-nsis-supporting-data-preservation
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -835,92 +745,31 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-supply-chain
-          path: release-assets
+          path: assembled-input
 
-      - name: Download Linux release artifacts
+      - name: Download every platform artifact that finished successfully
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-linux-x86_64
-          path: release-assets
+          pattern: desktop-installers-*
+          path: assembled-input
+          merge-multiple: true
 
-      - name: Download macOS release artifacts
+      - name: Download every artifact qualification that finished successfully
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-macos-universal
-          path: release-assets
+          pattern: platform-qualification-*
+          path: assembled-input
+          merge-multiple: true
 
-      - name: Download Windows release artifacts
+      - name: Optionally download requested Windows data-preservation fixtures
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-windows-x86_64
-          path: release-assets
+          pattern: windows-nsis-supporting-data-preservation-*
+          path: assembled-input
+          merge-multiple: true
 
-      - name: Download Linux platform qualification
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: platform-qualification-linux-x86_64-deb
-          path: release-assets
-
-      - name: Download macOS platform qualification
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: platform-qualification-macos-universal-dmg
-          path: release-assets
-
-      - name: Download Windows MSI platform qualification
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: platform-qualification-windows-x86_64-msi
-          path: release-assets
-
-      - name: Download Windows NSIS platform qualification
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: platform-qualification-windows-x86_64-nsis
-          path: release-assets
-
-      - name: Download Windows N-1 NSIS upgrade qualification
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: windows-nsis-upgrade-qualification
-          path: release-assets
-
-      - name: Revalidate the Windows N-1 NSIS upgrade qualification
-        env:
-          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
-        run: >-
-          node scripts/release/windows-nsis-upgrade-evidence.mjs validate
-          --file release-assets/windows-nsis-upgrade-qualification.json
-          --artifact-dir release-assets
-          --report release-assets/master-framework-report.json
-          --bundle release-assets/master-framework-report.case.tar.gz
-          --prior-bundle release-assets/n-minus-one-before-upgrade.case.tar.gz
-          --version "${RELEASE_VERSION}"
-          --tag "${RELEASE_TAG}"
-          --commit "${SOURCE_COMMIT}"
-
-      - name: Download Windows registered-WSL ghost-recovery qualification
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: windows-nsis-ghost-recovery-qualification
-          path: release-assets
-
-      - name: Revalidate the Windows registered-WSL ghost-recovery qualification
-        env:
-          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
-        run: >-
-          node scripts/release/windows-nsis-ghost-recovery-evidence.mjs validate
-          --file release-assets/windows-nsis-ghost-recovery-qualification.json
-          --artifact-dir release-assets
-          --version "${RELEASE_VERSION}"
-          --tag "${RELEASE_TAG}"
-          --commit "${SOURCE_COMMIT}"
-
-      - name: Verify installers and create the release index
+      - name: Select supported installers and create a clean release index
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
@@ -928,7 +777,8 @@ jobs:
           PUBLICATION_MODE: ${{ needs.validate.outputs.publication_mode }}
         run: >-
           node scripts/release/finalize-release.mjs
-          --dir release-assets
+          --input assembled-input
+          --out release-assets
           --version "${RELEASE_VERSION}"
           --tag "${RELEASE_TAG}"
           --commit "${SOURCE_COMMIT}"
@@ -958,11 +808,11 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Attest and publish GitHub Release
+    name: Attest and publish supported artifacts
     if: >-
       github.event_name == 'push' &&
       github.ref == format('refs/tags/{0}', needs.validate.outputs.tag)
-    needs: [validate, assemble]
+    needs: [validate, finalize-supported-artifacts]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

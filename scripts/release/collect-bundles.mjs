@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { copyFile, lstat, mkdir, readFile, readdir } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   isSemver,
@@ -19,6 +19,11 @@ const BUNDLE_EXTENSIONS = new Map([
   ["msi", ".msi"],
   ["nsis", ".exe"],
   ["rpm", ".rpm"],
+]);
+const PLATFORM_BUNDLES = new Map([
+  ["linux-x86_64", ["deb", "rpm", "appimage"]],
+  ["macos-universal", ["dmg"]],
+  ["windows-x86_64", ["nsis", "msi"]],
 ]);
 
 const AUXILIARY_LAYOUTS = Object.freeze([
@@ -106,43 +111,70 @@ async function collectUpdater(bundleRoot, output, platform, version, names, layo
     throw new Error(`${platform}/${layout.bundleType} updater filenames are malformed or lack their version`);
   }
 
-  const payloadDestination = path.join(output, payloadName);
-  if (names.has(payloadName)) {
-    if ((await sha256File(payloadDestination)) !== (await sha256File(payloadSource))) {
-      throw new Error(`${platform}/${layout.bundleType} updater payload differs from its collected installer`);
-    }
-  } else {
-    names.add(payloadName);
-    await copyFile(payloadSource, payloadDestination, constants.COPYFILE_EXCL);
-  }
   if (names.has(signatureName)) {
     throw new Error(`duplicate updater signature filename: ${signatureName}`);
   }
-  names.add(signatureName);
-  const signatureDestination = path.join(output, signatureName);
-  await copyFile(signatureSource, signatureDestination, constants.COPYFILE_EXCL);
-  const signatureMetadata = await lstat(signatureDestination);
-  const signature = (await readFile(signatureDestination, "utf8")).trim();
-  if (
-    signatureMetadata.size < 64 ||
-    signatureMetadata.size > 32 * 1024 ||
-    signature.length < 64 ||
-    !/^[A-Za-z0-9+/=]+$/u.test(signature)
-  ) {
-    throw new Error(`${platform}/${layout.bundleType} updater signature is not a bounded base64 minisign envelope`);
-  }
 
-  return {
-    bundleType: layout.bundleType,
-    targetKeys: [...layout.targetKeys],
-    payloadFile: payloadName,
-    payloadBytes: payloadMetadata.size,
-    payloadSha256: await sha256File(payloadDestination),
-    signatureFile: signatureName,
-    signatureBytes: signatureMetadata.size,
-    signatureSha256: await sha256File(signatureDestination),
-    signature,
-  };
+  // An updater is an optional pair. Stage and validate both files before either
+  // becomes visible in the collected artifact, then remove the entire staging
+  // directory on every path. A bad or partial updater must never contaminate a
+  // valid installer-only platform artifact.
+  const stage = await mkdtemp(path.join(output, ".updater-stage-"));
+  const stagedPayload = path.join(stage, payloadName);
+  const stagedSignature = path.join(stage, signatureName);
+  const payloadDestination = path.join(output, payloadName);
+  const signatureDestination = path.join(output, signatureName);
+  let payloadCommitted = false;
+  let signatureCommitted = false;
+  try {
+    await copyFile(payloadSource, stagedPayload, constants.COPYFILE_EXCL);
+    await copyFile(signatureSource, stagedSignature, constants.COPYFILE_EXCL);
+    const stagedPayloadMetadata = await lstat(stagedPayload);
+    const signatureMetadata = await lstat(stagedSignature);
+    const signature = (await readFile(stagedSignature, "utf8")).trim();
+    if (
+      !stagedPayloadMetadata.isFile() || stagedPayloadMetadata.isSymbolicLink() ||
+      stagedPayloadMetadata.size !== payloadMetadata.size ||
+      !signatureMetadata.isFile() || signatureMetadata.isSymbolicLink() ||
+      signatureMetadata.size < 64 ||
+      signatureMetadata.size > 32 * 1024 ||
+      signature.length < 64 ||
+      !/^[A-Za-z0-9+/=]+$/u.test(signature)
+    ) {
+      throw new Error(`${platform}/${layout.bundleType} updater pair is malformed`);
+    }
+    const payloadSha256 = await sha256File(stagedPayload);
+    const signatureSha256 = await sha256File(stagedSignature);
+    if (names.has(payloadName)) {
+      if ((await sha256File(payloadDestination)) !== payloadSha256) {
+        throw new Error(`${platform}/${layout.bundleType} updater payload differs from its collected installer`);
+      }
+    } else {
+      await rename(stagedPayload, payloadDestination);
+      payloadCommitted = true;
+    }
+    await rename(stagedSignature, signatureDestination);
+    signatureCommitted = true;
+    names.add(payloadName);
+    names.add(signatureName);
+    return {
+      bundleType: layout.bundleType,
+      targetKeys: [...layout.targetKeys],
+      payloadFile: payloadName,
+      payloadBytes: payloadMetadata.size,
+      payloadSha256,
+      signatureFile: signatureName,
+      signatureBytes: signatureMetadata.size,
+      signatureSha256,
+      signature,
+    };
+  } catch (error) {
+    if (signatureCommitted) await rm(signatureDestination, { force: true });
+    if (payloadCommitted) await rm(payloadDestination, { force: true });
+    throw error;
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
 }
 
 async function main() {
@@ -157,10 +189,14 @@ async function main() {
     ...layout,
     source: path.resolve(requireString(args, layout.argument)),
   }));
-  const expected = requireString(args, "expect").split(",");
+  const expected = requireString(args, "expect").split(",").map((kind) => kind.trim()).filter(Boolean);
+  const available = requireString(args, "available").split(",").map((kind) => kind.trim()).filter(Boolean);
 
   if (!Object.hasOwn(UPDATER_LAYOUTS, platform)) {
     throw new Error(`unsupported release platform: ${platform}`);
+  }
+  if (JSON.stringify(expected) !== JSON.stringify(PLATFORM_BUNDLES.get(platform))) {
+    throw new Error(`${platform} expected bundle kinds do not match its released installer matrix`);
   }
   if (!isSemver(version) || tag !== `v${version}`) {
     throw new Error("bundle version and tag are inconsistent");
@@ -171,9 +207,17 @@ async function main() {
   if (new Set(expected).size !== expected.length || expected.length === 0) {
     throw new Error("expected bundle kinds must be non-empty and unique");
   }
+  if (new Set(available).size !== available.length || available.length === 0) {
+    throw new Error("available bundle kinds must be non-empty and unique");
+  }
   for (const kind of expected) {
     if (!BUNDLE_EXTENSIONS.has(kind)) {
       throw new Error(`unknown bundle kind: ${kind}`);
+    }
+  }
+  for (const kind of available) {
+    if (!expected.includes(kind)) {
+      throw new Error(`available bundle kind was not requested: ${kind}`);
     }
   }
 
@@ -185,16 +229,19 @@ async function main() {
 
   const installers = [];
   const names = new Set();
-  for (const kind of expected) {
-    const typeDirectory = path.join(bundleRoot, kind);
-    const extension = BUNDLE_EXTENSIONS.get(kind);
-    const matches = (await regularFilesDirectlyBelow(typeDirectory)).filter((file) =>
-      file.endsWith(extension),
-    );
-    if (matches.length === 0) {
-      throw new Error(`no ${kind} installer was produced below ${typeDirectory}`);
-    }
-    for (const source of matches.sort()) {
+  const collectedBundleTypes = [];
+  for (const kind of available) {
+    let destination = null;
+    try {
+      const typeDirectory = path.join(bundleRoot, kind);
+      const extension = BUNDLE_EXTENSIONS.get(kind);
+      const matches = (await regularFilesDirectlyBelow(typeDirectory)).filter((file) =>
+        file.endsWith(extension),
+      );
+      if (matches.length !== 1) {
+        throw new Error(`expected exactly one ${kind} installer below ${typeDirectory}; found ${matches.length}`);
+      }
+      const source = matches[0];
       const name = path.basename(source);
       if (
         name.includes("\0") ||
@@ -206,23 +253,45 @@ async function main() {
       if (names.has(name)) {
         throw new Error(`duplicate installer filename: ${name}`);
       }
-      names.add(name);
-      const destination = path.join(output, name);
+      destination = path.join(output, name);
       await copyFile(source, destination, constants.COPYFILE_EXCL);
       const metadata = await lstat(destination);
+      const sha256 = await sha256File(destination);
       installers.push({
         bundleType: kind,
         file: name,
         bytes: metadata.size,
-        sha256: await sha256File(destination),
+        sha256,
       });
+      names.add(name);
+      collectedBundleTypes.push(kind);
+    } catch (error) {
+      if (destination) await rm(destination, { force: true });
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`release tooling: omitted invalid ${platform}/${kind} installer: ${reason}\n`);
     }
+  }
+  if (installers.length === 0) {
+    throw new Error(`${platform} has no valid installer artifact after independent collection`);
   }
 
   installers.sort((left, right) => left.file.localeCompare(right.file));
   const updaters = [];
+  const updaterFailures = [];
   for (const layout of updaterLayoutsFor(platform)) {
-    updaters.push(await collectUpdater(bundleRoot, output, platform, version, names, layout));
+    const installerKind = platform === "macos-universal" && layout.bundleType === "app"
+      ? "dmg"
+      : layout.bundleType;
+    if (!collectedBundleTypes.includes(installerKind)) continue;
+    try {
+      updaters.push(await collectUpdater(bundleRoot, output, platform, version, names, layout));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      updaterFailures.push({ bundleType: layout.bundleType, reason });
+      process.stderr.write(
+        `release tooling: omitted optional ${platform}/${layout.bundleType} updater: ${reason}\n`,
+      );
+    }
   }
   const sidecarExtension = platform === "windows-x86_64" ? ".exe" : "";
   const auxiliaryExecutables = [];
@@ -254,9 +323,10 @@ async function main() {
     tag,
     sourceCommit: commit,
     platform,
-    platformCodeSigning: "not-configured",
-    updaterArtifact: true,
+    requestedBundleTypes: expected,
+    availableBundleTypes: collectedBundleTypes,
     updaters,
+    updaterFailures,
     installers,
     auxiliaryExecutables,
   });

@@ -51,8 +51,46 @@ function minimalSecurePublicationWorkflow() {
           ].join("\n"),
         }],
       },
-      finalize_supported_artifacts: {
+      build_installers: {
         needs: [identityJobName],
+        "continue-on-error": true,
+        steps: [
+          {
+            id: "build_unbundled",
+            run: "npm run tauri build -- --ci --no-bundle -- --locked",
+          },
+          ...[
+            ["bundle_deb", "deb"],
+            ["bundle_rpm", "rpm"],
+            ["bundle_appimage", "appimage"],
+            ["bundle_macos", "app,dmg"],
+            ["bundle_nsis", "nsis"],
+            ["bundle_msi", "msi"],
+          ].map(([id, bundles]) => ({
+            id,
+            "continue-on-error": true,
+            run: `node scripts/release/bundle-with-optional-updater.mjs --bundles ${bundles} --bundle-root target/release/bundle --version 0.1.8`,
+          })),
+          {
+            id: "available_bundles",
+            env: {
+              DEB_OUTCOME: "${{ steps.bundle_deb.outcome }}",
+              RPM_OUTCOME: "${{ steps.bundle_rpm.outcome }}",
+              APPIMAGE_OUTCOME: "${{ steps.bundle_appimage.outcome }}",
+              MACOS_OUTCOME: "${{ steps.bundle_macos.outcome }}",
+              NSIS_OUTCOME: "${{ steps.bundle_nsis.outcome }}",
+              MSI_OUTCOME: "${{ steps.bundle_msi.outcome }}",
+            },
+            run: "printf 'available=%s\\n' deb >> $GITHUB_OUTPUT",
+          },
+          {
+            if: "always() && steps.available_bundles.outcome == 'success'",
+            run: "node scripts/release/collect-bundles.mjs --expect deb,rpm,appimage --available deb",
+          },
+        ],
+      },
+      finalize_supported_artifacts: {
+        needs: [identityJobName, "build_installers"],
         steps: [
           {
             env: {
@@ -63,7 +101,8 @@ function minimalSecurePublicationWorkflow() {
             },
             run: [
               "node scripts/release/finalize-release.mjs",
-              "--dir release-assets",
+              "--input assembled-input",
+              "--out release-assets",
               '--version "${RELEASE_VERSION}"',
               '--tag "${RELEASE_TAG}"',
               '--commit "${SOURCE_COMMIT}"',
@@ -150,9 +189,102 @@ function minimalSecurePublicationWorkflow() {
 test("release workflow validation accepts a safe platform-scoped topology", () => {
   const workflow = minimalSecurePublicationWorkflow();
   assert.doesNotThrow(() => validateReleaseWorkflow(workflow));
-  assert.equal(workflow.jobs.build, undefined);
+  assert.equal(workflow.jobs.build_installers["continue-on-error"], true);
   assert.equal(workflow.jobs.qualification, undefined);
   assert.equal(workflow.jobs.assemble, undefined);
+});
+
+test("manual release inputs are limited to the false-by-default supporting fixture switch", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  workflow.on.workflow_dispatch = {
+    inputs: {
+      publish_anyway: {
+        description: "unsafe",
+        required: false,
+        type: "boolean",
+        default: false,
+      },
+    },
+  };
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /may accept only the false-by-default Windows data-preservation fixture switch/u,
+  );
+});
+
+test("the optional Windows fixture input cannot exist without one bounded supporting job", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  workflow.on.workflow_dispatch = {
+    inputs: {
+      windows_data_preservation: {
+        description: "Run supporting fixtures",
+        required: false,
+        type: "boolean",
+        default: false,
+      },
+    },
+  };
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /must control exactly one supporting job/u,
+  );
+});
+
+test("release workflow validation rejects coupled installer sibling failures", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  workflow.jobs.build_installers.steps.find(({ id }) => id === "bundle_msi")["continue-on-error"] = false;
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /bundle_msi must independently bundle its installer and continue after sibling failure/u,
+  );
+});
+
+test("installer-only bundle formats cannot depend on updater private keys", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  workflow.jobs.build_installers.steps.find(({ id }) => id === "bundle_msi").env = {
+    TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+  };
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /bundle_msi must not depend on updater signing material/u,
+  );
+});
+
+test("eligible installers must use the installer-first optional-updater wrapper", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  workflow.jobs.build_installers.steps.find(({ id }) => id === "bundle_appimage").run =
+    "npm run tauri bundle -- --ci --bundles appimage";
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /bundle_appimage must independently bundle its installer/u,
+  );
+});
+
+test("release workflow validation requires explicit successful-bundle collection", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  const collect = workflow.jobs.build_installers.steps.find(({ run }) => run?.includes("collect-bundles.mjs"));
+  collect.run = collect.run.replace("--available deb", "");
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /requested and successful bundle sets explicitly/u,
+  );
+});
+
+test("release workflow validation rejects an unimplemented artifact observation namespace", () => {
+  const workflow = minimalSecurePublicationWorkflow();
+  workflow.jobs.finalize_supported_artifacts.steps.unshift({
+    uses: `actions/download-artifact@${"d".repeat(40)}`,
+    "continue-on-error": true,
+    with: {
+      pattern: "artifact-qc-observations-*",
+      path: "assembled-input",
+      "merge-multiple": true,
+    },
+  });
+  assert.throws(
+    () => validateReleaseWorkflow(workflow),
+    /must not ingest an unimplemented artifact observation or promotion namespace/u,
+  );
 });
 
 test("release workflow validation still rejects unrelated write authority", () => {

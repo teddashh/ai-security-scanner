@@ -1,11 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/docs/release/release-metadata.schema.json",
-  "title": "ai-security-scanner release metadata",
+  "title": "ai-security-scanner artifact-scoped release metadata",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schemaVersion",
+    "releaseState",
     "product",
     "version",
     "tag",
@@ -20,12 +21,13 @@
     "inventories"
   ],
   "properties": {
-    "schemaVersion": { "const": 2 },
+    "schemaVersion": { "const": 3 },
+    "releaseState": { "enum": ["prepared", "finalized"] },
     "product": { "const": "ai-security-scanner" },
-    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "version": { "$ref": "#/$defs/semver" },
     "tag": { "type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
     "releaseChannel": { "enum": ["prerelease", "stable"] },
-    "stableTarget": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "stableTarget": { "$ref": "#/$defs/semver" },
     "sourceRepository": { "type": "string", "format": "uri", "pattern": "^https://github\\.com/" },
     "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "sourceDate": { "type": "string", "format": "date-time" },
@@ -33,15 +35,21 @@
     "distribution": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["desktopInstallers", "bundledEngines", "bundledAuxiliaryExecutables", "engineDelivery"],
+      "required": ["platforms", "bundledEngines", "bundledAuxiliaryExecutables", "engineDelivery"],
       "properties": {
-        "desktopInstallers": {
+        "platforms": {
           "type": "array",
-          "const": ["linux-x86_64", "macos-universal", "windows-x86_64"]
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            { "$ref": "#/$defs/linuxPlatform" },
+            { "$ref": "#/$defs/macosPlatform" },
+            { "$ref": "#/$defs/windowsPlatform" }
+          ],
+          "items": false
         },
         "bundledEngines": { "type": "array", "maxItems": 0 },
         "bundledAuxiliaryExecutables": {
-          "type": "array",
           "const": [
             "ai-security-scanner-egress-gateway",
             "ai-security-scanner-bootstrap-broker",
@@ -54,44 +62,14 @@
     "security": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "operatingSystemCodeSigning",
-        "appleNotarization",
-        "updater",
-        "checksums",
-        "sboms",
-        "provenanceAttestation"
-      ],
+      "required": ["checksums", "sboms"],
       "properties": {
-        "operatingSystemCodeSigning": { "$ref": "#/$defs/notConfigured" },
-        "appleNotarization": { "$ref": "#/$defs/notConfigured" },
-        "updater": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["state", "artifactsGenerated", "signingConfigured"],
-          "properties": {
-            "state": { "const": "enabled-signed" },
-            "artifactsGenerated": { "const": true },
-            "signingConfigured": { "const": true }
-          }
-        },
         "checksums": { "const": "SHA256SUMS.txt" },
         "sboms": {
           "type": "array",
           "minItems": 2,
           "maxItems": 2,
-          "items": { "type": "string" }
-        },
-        "provenanceAttestation": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["state", "provider"],
-          "properties": {
-            "state": {
-              "enum": ["not-created-for-commit-bound-qc", "required-before-publication"]
-            },
-            "provider": { "enum": ["none", "GitHub artifact attestations"] }
-          }
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     },
@@ -108,15 +86,21 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "publicationMode": { "const": "commit-bound-qc" } } },
+      "if": { "properties": { "releaseState": { "const": "prepared" } }, "required": ["releaseState"] },
       "then": {
         "properties": {
-          "security": {
+          "distribution": {
             "properties": {
-              "provenanceAttestation": {
-                "properties": {
-                  "state": { "const": "not-created-for-commit-bound-qc" },
-                  "provider": { "const": "none" }
+              "platforms": {
+                "items": {
+                  "properties": {
+                    "availability": { "enum": ["pending", "not-offered"] },
+                    "installers": {
+                      "items": {
+                        "properties": { "availability": { "enum": ["pending", "not-offered"] } }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -125,13 +109,133 @@
       },
       "else": {
         "properties": {
-          "security": {
+          "distribution": {
             "properties": {
-              "provenanceAttestation": {
-                "properties": {
-                  "state": { "const": "required-before-publication" },
-                  "provider": { "const": "GitHub artifact attestations" }
+              "platforms": {
+                "items": {
+                  "properties": {
+                    "availability": { "enum": ["offered", "not-offered"] },
+                    "installers": {
+                      "items": {
+                        "properties": { "availability": { "enum": ["offered", "not-offered"] } }
+                      }
+                    }
+                  }
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "publicationMode": { "const": "commit-bound-qc" } },
+        "required": ["publicationMode"]
+      },
+      "then": {
+        "properties": {
+          "distribution": {
+            "properties": {
+              "platforms": {
+                "items": {
+                  "properties": {
+                    "installers": {
+                      "items": {
+                        "properties": {
+                          "artifact": {
+                            "oneOf": [
+                              { "type": "null" },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "provenanceAttestation": { "$ref": "#/$defs/qcProvenance" }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "distribution": {
+            "properties": {
+              "platforms": {
+                "items": {
+                  "properties": {
+                    "installers": {
+                      "items": {
+                        "properties": {
+                          "artifact": {
+                            "oneOf": [
+                              { "type": "null" },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "provenanceAttestation": { "$ref": "#/$defs/publicProvenance" }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "publicationMode": { "const": "public-github-release" } },
+        "required": ["publicationMode"]
+      },
+      "then": {
+        "properties": {
+          "distribution": {
+            "properties": {
+              "platforms": {
+                "prefixItems": [
+                  {},
+                  {},
+                  {
+                    "properties": {
+                      "installers": {
+                        "items": {
+                          "properties": {
+                            "artifact": {
+                              "oneOf": [
+                                { "type": "null" },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "humanPath": { "$ref": "#/$defs/verifiedHumanOutcome" },
+                                    "operatingSystemSigning": { "$ref": "#/$defs/verifiedSigningOutcome" },
+                                    "windowsLifecycle": {
+                                      "properties": { "state": { "const": "verified" } },
+                                      "required": ["state"]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -140,13 +244,634 @@
     }
   ],
   "$defs": {
-    "notConfigured": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "platform": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["state", "statement"],
+      "required": ["platform", "availability", "reason", "installers"],
       "properties": {
-        "state": { "const": "not-configured" },
-        "statement": { "type": "string", "minLength": 1 }
+        "platform": { "enum": ["linux-x86_64", "macos-universal", "windows-x86_64"] },
+        "availability": { "enum": ["pending", "offered", "not-offered"] },
+        "reason": { "type": ["string", "null"] },
+        "installers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/installerSupport" }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "availability": { "const": "pending" },
+            "reason": { "const": null },
+            "installers": { "contains": { "properties": { "availability": { "const": "pending" } } } }
+          }
+        },
+        {
+          "properties": {
+            "availability": { "const": "offered" },
+            "reason": { "const": null },
+            "installers": { "contains": { "properties": { "availability": { "const": "offered" } } } }
+          }
+        },
+        {
+          "properties": {
+            "availability": { "const": "not-offered" },
+            "reason": { "type": "string", "minLength": 1 },
+            "installers": {
+              "items": { "properties": { "availability": { "const": "not-offered" } } }
+            }
+          }
+        }
+      ]
+    },
+    "linuxPlatform": {
+      "allOf": [
+        { "$ref": "#/$defs/platform" },
+        {
+          "properties": {
+            "platform": { "const": "linux-x86_64" },
+            "installers": {
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                { "$ref": "#/$defs/appimageInstaller" },
+                { "$ref": "#/$defs/debInstaller" },
+                { "$ref": "#/$defs/rpmInstaller" }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "macosPlatform": {
+      "allOf": [
+        { "$ref": "#/$defs/platform" },
+        {
+          "properties": {
+            "platform": { "const": "macos-universal" },
+            "installers": {
+              "minItems": 1,
+              "maxItems": 1,
+              "prefixItems": [{ "$ref": "#/$defs/dmgInstaller" }],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "windowsPlatform": {
+      "allOf": [
+        { "$ref": "#/$defs/platform" },
+        {
+          "properties": {
+            "platform": { "const": "windows-x86_64" },
+            "installers": {
+              "minItems": 2,
+              "maxItems": 2,
+              "prefixItems": [
+                { "$ref": "#/$defs/msiInstaller" },
+                { "$ref": "#/$defs/nsisInstaller" }
+              ],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "installerSupport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installerType", "availability", "reason", "artifact"],
+      "properties": {
+        "installerType": { "enum": ["appimage", "deb", "rpm", "dmg", "msi", "nsis"] },
+        "availability": { "enum": ["pending", "offered", "not-offered"] },
+        "reason": { "type": ["string", "null"] },
+        "artifact": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/artifact" }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "availability": { "const": "pending" },
+            "reason": { "const": null },
+            "artifact": { "const": null }
+          }
+        },
+        {
+          "properties": {
+            "availability": { "const": "offered" },
+            "reason": { "const": null },
+            "artifact": { "$ref": "#/$defs/artifact" }
+          }
+        },
+        {
+          "properties": {
+            "availability": { "const": "not-offered" },
+            "reason": { "type": "string", "minLength": 1 },
+            "artifact": { "const": null }
+          }
+        }
+      ]
+    },
+    "appimageInstaller": { "$ref": "#/$defs/appimageInstallerContract" },
+    "debInstaller": { "$ref": "#/$defs/debInstallerContract" },
+    "rpmInstaller": { "$ref": "#/$defs/rpmInstallerContract" },
+    "dmgInstaller": { "$ref": "#/$defs/dmgInstallerContract" },
+    "msiInstaller": { "$ref": "#/$defs/msiInstallerContract" },
+    "nsisInstaller": { "$ref": "#/$defs/nsisInstallerContract" },
+    "appimageInstallerContract": {
+      "allOf": [
+        { "$ref": "#/$defs/installerSupport" },
+        { "properties": { "installerType": { "const": "appimage" }, "artifact": { "$ref": "#/$defs/appimageArtifactOrNull" } } }
+      ]
+    },
+    "debInstallerContract": {
+      "allOf": [
+        { "$ref": "#/$defs/installerSupport" },
+        { "properties": { "installerType": { "const": "deb" }, "artifact": { "$ref": "#/$defs/nonUpdaterArtifactOrNull" } } }
+      ]
+    },
+    "rpmInstallerContract": {
+      "allOf": [
+        { "$ref": "#/$defs/installerSupport" },
+        { "properties": { "installerType": { "const": "rpm" }, "artifact": { "$ref": "#/$defs/nonUpdaterArtifactOrNull" } } }
+      ]
+    },
+    "dmgInstallerContract": {
+      "allOf": [
+        { "$ref": "#/$defs/installerSupport" },
+        { "properties": { "installerType": { "const": "dmg" }, "artifact": { "$ref": "#/$defs/dmgArtifactOrNull" } } }
+      ]
+    },
+    "msiInstallerContract": {
+      "allOf": [
+        { "$ref": "#/$defs/installerSupport" },
+        { "properties": { "installerType": { "const": "msi" }, "artifact": { "$ref": "#/$defs/msiArtifactOrNull" } } }
+      ]
+    },
+    "nsisInstallerContract": {
+      "allOf": [
+        { "$ref": "#/$defs/installerSupport" },
+        { "properties": { "installerType": { "const": "nsis" }, "artifact": { "$ref": "#/$defs/nsisArtifactOrNull" } } }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "bytes",
+        "sha256",
+        "technicalQualification",
+        "humanPath",
+        "operatingSystemSigning",
+        "notarization",
+        "windowsLifecycle",
+        "windowsDataPreservation",
+        "updater",
+        "provenanceAttestation",
+        "knownLimitations"
+      ],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "technicalQualification": { "$ref": "#/$defs/technicalOutcome" },
+        "humanPath": { "$ref": "#/$defs/humanOutcome" },
+        "operatingSystemSigning": { "$ref": "#/$defs/signingOutcome" },
+        "notarization": { "$ref": "#/$defs/notarizationOutcome" },
+        "windowsLifecycle": { "$ref": "#/$defs/windowsLifecycle" },
+        "windowsDataPreservation": { "$ref": "#/$defs/windowsDataPreservation" },
+        "updater": { "$ref": "#/$defs/updater" },
+        "provenanceAttestation": { "$ref": "#/$defs/provenance" },
+        "knownLimitations": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "appimageArtifactOrNull": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/artifact" },
+            {
+              "properties": {
+                "updater": { "$ref": "#/$defs/appimageUpdater" },
+                "notarization": { "$ref": "#/$defs/notApplicableNotarization" },
+                "windowsLifecycle": { "$ref": "#/$defs/notApplicableWindowsLifecycle" },
+                "windowsDataPreservation": { "$ref": "#/$defs/notApplicableWindowsDataPreservation" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "dmgArtifactOrNull": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/artifact" },
+            {
+              "properties": {
+                "updater": { "$ref": "#/$defs/dmgUpdater" },
+                "notarization": { "$ref": "#/$defs/macNotarization" },
+                "windowsLifecycle": { "$ref": "#/$defs/notApplicableWindowsLifecycle" },
+                "windowsDataPreservation": { "$ref": "#/$defs/notApplicableWindowsDataPreservation" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "nsisArtifactOrNull": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/artifact" },
+            {
+              "properties": {
+                "updater": { "$ref": "#/$defs/nsisUpdater" },
+                "notarization": { "$ref": "#/$defs/notApplicableNotarization" },
+                "windowsLifecycle": { "$ref": "#/$defs/notObservedWindowsLifecycle" },
+                "windowsDataPreservation": { "$ref": "#/$defs/windowsNsisDataPreservation" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "nonUpdaterArtifactOrNull": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/artifact" },
+            {
+              "properties": {
+                "updater": { "$ref": "#/$defs/notOfferedUpdater" },
+                "notarization": { "$ref": "#/$defs/notApplicableNotarization" },
+                "windowsLifecycle": { "$ref": "#/$defs/notApplicableWindowsLifecycle" },
+                "windowsDataPreservation": { "$ref": "#/$defs/notApplicableWindowsDataPreservation" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "msiArtifactOrNull": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/artifact" },
+            {
+              "properties": {
+                "updater": { "$ref": "#/$defs/notOfferedUpdater" },
+                "notarization": { "$ref": "#/$defs/notApplicableNotarization" },
+                "windowsLifecycle": { "$ref": "#/$defs/notObservedWindowsLifecycle" },
+                "windowsDataPreservation": { "$ref": "#/$defs/notObservedWindowsDataPreservation" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "technicalOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFile", "reason"],
+      "properties": {
+        "state": { "enum": ["passed", "installer-passed-runtime-not-observed"] },
+        "evidenceFile": { "type": "string", "minLength": 1 },
+        "reason": { "const": null }
+      }
+    },
+    "humanOutcome": {
+      "oneOf": [
+        { "$ref": "#/$defs/verifiedHumanOutcome" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "evidenceFile", "reason"],
+          "properties": {
+            "state": { "const": "not-observed" },
+            "evidenceFile": { "const": null },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "verifiedHumanOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFile", "reason"],
+      "properties": {
+        "state": { "const": "verified" },
+        "evidenceFile": { "type": "string", "minLength": 1 },
+        "reason": { "const": null }
+      }
+    },
+    "signingOutcome": {
+      "oneOf": [
+        { "$ref": "#/$defs/verifiedSigningOutcome" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "evidenceFile", "reason"],
+          "properties": {
+            "state": { "const": "not-configured" },
+            "evidenceFile": { "const": null },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "verifiedSigningOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFile", "reason"],
+      "properties": {
+        "state": { "const": "verified" },
+        "evidenceFile": { "type": "string", "minLength": 1 },
+        "reason": { "const": null }
+      }
+    },
+    "notarizationOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "evidenceFile", "reason"],
+          "properties": {
+            "state": { "const": "verified" },
+            "evidenceFile": { "type": "string", "minLength": 1 },
+            "reason": { "const": null }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "evidenceFile", "reason"],
+          "properties": {
+            "state": { "enum": ["not-configured", "not-applicable"] },
+            "evidenceFile": { "const": null },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "notApplicableNotarization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFile", "reason"],
+      "properties": {
+        "state": { "const": "not-applicable" },
+        "evidenceFile": { "const": null },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "macNotarization": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "evidenceFile", "reason"],
+          "properties": {
+            "state": { "const": "verified" },
+            "evidenceFile": { "type": "string", "minLength": 1 },
+            "reason": { "const": null }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "evidenceFile", "reason"],
+          "properties": {
+            "state": { "const": "not-configured" },
+            "evidenceFile": { "const": null },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "dataPreservationEvidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "bytes", "sha256"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1, "pattern": "^[^/\\\\][^\\\\]*$" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "notApplicableWindowsLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFiles", "reason"],
+      "properties": {
+        "state": { "const": "not-applicable" },
+        "evidenceFiles": { "const": [] },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "notObservedWindowsLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFiles", "reason"],
+      "properties": {
+        "state": { "const": "not-observed" },
+        "evidenceFiles": { "const": [] },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "notApplicableWindowsDataPreservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFiles", "reason"],
+      "properties": {
+        "state": { "const": "not-applicable" },
+        "evidenceFiles": { "const": [] },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "notObservedWindowsDataPreservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFiles", "reason"],
+      "properties": {
+        "state": { "const": "not-observed" },
+        "evidenceFiles": { "const": [] },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "supportingWindowsNsisDataPreservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidenceFiles", "reason"],
+      "properties": {
+        "state": { "const": "supporting-data-preservation-only" },
+        "reason": { "const": "real-installed-app-localhost-lifecycle-not-observed" },
+        "evidenceFiles": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {
+              "allOf": [
+                { "$ref": "#/$defs/dataPreservationEvidenceRecord" },
+                { "properties": { "role": { "const": "n-minus-one-upgrade-evidence" }, "path": { "const": "windows-nsis-data-preservation/n-minus-one-upgrade/evidence.json" } } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/dataPreservationEvidenceRecord" },
+                { "properties": { "role": { "const": "n-minus-one-upgrade-report" }, "path": { "const": "windows-nsis-data-preservation/n-minus-one-upgrade/beginner-report.html" } } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/dataPreservationEvidenceRecord" },
+                { "properties": { "role": { "const": "ghost-repair-uninstall-evidence" }, "path": { "const": "windows-nsis-data-preservation/ghost-repair-uninstall/evidence.json" } } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/dataPreservationEvidenceRecord" },
+                { "properties": { "role": { "const": "ghost-repair-uninstall-report" }, "path": { "const": "windows-nsis-data-preservation/ghost-repair-uninstall/beginner-report.html" } } }
+              ]
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    "windowsLifecycle": {
+      "oneOf": [
+        { "$ref": "#/$defs/notApplicableWindowsLifecycle" },
+        { "$ref": "#/$defs/notObservedWindowsLifecycle" }
+      ]
+    },
+    "windowsDataPreservation": {
+      "oneOf": [
+        { "$ref": "#/$defs/notApplicableWindowsDataPreservation" },
+        { "$ref": "#/$defs/notObservedWindowsDataPreservation" },
+        { "$ref": "#/$defs/supportingWindowsNsisDataPreservation" }
+      ]
+    },
+    "windowsNsisDataPreservation": {
+      "oneOf": [
+        { "$ref": "#/$defs/notObservedWindowsDataPreservation" },
+        { "$ref": "#/$defs/supportingWindowsNsisDataPreservation" }
+      ]
+    },
+    "updater": {
+      "oneOf": [
+        { "$ref": "#/$defs/signedUpdater" },
+        { "$ref": "#/$defs/notOfferedUpdater" }
+      ]
+    },
+    "signedUpdater": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "payloadFile", "signatureFile", "targetKeys", "reason"],
+      "properties": {
+        "state": { "const": "signed" },
+        "payloadFile": { "type": "string", "minLength": 1 },
+        "signatureFile": { "type": "string", "minLength": 1 },
+        "targetKeys": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "reason": { "const": null }
+      }
+    },
+    "notOfferedUpdater": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "payloadFile", "signatureFile", "targetKeys", "reason"],
+      "properties": {
+        "state": { "const": "not-offered" },
+        "payloadFile": { "const": null },
+        "signatureFile": { "const": null },
+        "targetKeys": { "const": [] },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "appimageUpdater": {
+      "oneOf": [
+        { "$ref": "#/$defs/notOfferedUpdater" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signedUpdater" },
+            { "properties": { "targetKeys": { "const": ["linux-x86_64", "linux-x86_64-appimage"] } } }
+          ]
+        }
+      ]
+    },
+    "dmgUpdater": {
+      "oneOf": [
+        { "$ref": "#/$defs/notOfferedUpdater" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signedUpdater" },
+            {
+              "properties": {
+                "targetKeys": {
+                  "const": ["darwin-x86_64", "darwin-x86_64-app", "darwin-aarch64", "darwin-aarch64-app"]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "nsisUpdater": {
+      "oneOf": [
+        { "$ref": "#/$defs/notOfferedUpdater" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/signedUpdater" },
+            { "properties": { "targetKeys": { "const": ["windows-x86_64", "windows-x86_64-nsis"] } } }
+          ]
+        }
+      ]
+    },
+    "provenance": {
+      "oneOf": [
+        { "$ref": "#/$defs/qcProvenance" },
+        { "$ref": "#/$defs/publicProvenance" }
+      ]
+    },
+    "qcProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "provider", "evidenceFile"],
+      "properties": {
+        "state": { "const": "not-created-for-commit-bound-qc" },
+        "provider": { "const": null },
+        "evidenceFile": { "const": null }
+      }
+    },
+    "publicProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "provider", "evidenceFile"],
+      "properties": {
+        "state": { "const": "required-before-publication" },
+        "provider": { "const": "GitHub artifact attestations" },
+        "evidenceFile": { "const": null }
       }
     }
   }

@@ -2,7 +2,7 @@
 
 Normative status: subordinate to the [canonical product specification](../product-spec.md), especially sections 3, 15, and 16. This document may describe how release work is organized, but it cannot add a product-wide gate, turn publication evidence into scan readiness, or block an independently qualified platform, channel, feature, or engine.
 
-Implementation status: this is the target release policy. The current workflows still contain coupling identified in [audit findings A24–A26](../product-audit.md#a24--frameworkprovenance-and-release-validation-are-coupled-to-ordinary-product-work). Until that code is simplified, a workflow's global dependency graph is an implementation limitation—not a product requirement or proof that the coupling should remain.
+Implementation status: this is the target release policy. The release workflow now records installer siblings independently, treats updater creation as optional, and finalizes only the exact artifacts whose own evidence is usable. One latency limitation remains: the shared build matrix must finish before downstream platform qualification starts. That wait does not change any installer outcome and is P1 workflow optimization, not a product or publication gate. Other implementation gaps remain tracked in [audit findings A24–A26](../product-audit.md#a24--frameworkprovenance-and-release-validation-are-coupled-to-ordinary-product-work).
 
 ## Release rule in one sentence
 
@@ -77,6 +77,8 @@ The participant must be a qualifying beginner and the facilitator may observe bu
 
 Separate real-Windows integration/operator fixtures cover WSL absent/restart, unrelated WSL, healthy/damaged/ambiguous/ghost/interrupted runtime, Repair, N-1 upgrade, supported downgrade behavior, and the three uninstall choices. Those fixtures do not require a new novice session unless they change a user decision in the core path.
 
+The current NSIS N-1 and registered-WSL ghost fixtures are supporting data-preservation evidence only. They use a seeded case and CLI export to prove retained bytes; they do not prove the canonical installed-desktop `127.0.0.1:9001` report, reopen, and readable-export journey. Public NSIS therefore remains unavailable until a separate exact-artifact lifecycle record proves that real app path. MSI remains unavailable for public promotion until equivalent MSI lifecycle evidence exists. Commit-bound QC may retain either installer with the missing lifecycle observation disclosed.
+
 ### Feature-specific qualification
 
 Cloud, deep AI, Kubernetes, specialist exports, or another Advanced feature has its own qualification. A failed or unfinished AWS/IAM usability study blocks only the AWS feature claim or the artifact/channel that explicitly promises it. It cannot block localhost, website, internal-network, source-code, reporting, or another platform.
@@ -147,14 +149,32 @@ Numeric release tags and package versions must agree. Manual `main` dispatches m
 
 ### Current automation gap
 
-The checked-in workflows currently rebuild and fate-share more platforms, engine/release validators, and qualification records than this policy permits. They must be separated during implementation. Until then:
+The checked-in workflow now compiles once per platform, bundles each installer sibling independently,
+collects only bundle steps that actually succeeded, and finalizes each qualified installer separately.
+Updater signing is attempted only for an eligible artifact. Missing key material, payload, or signature
+falls back to an installer-only artifact; it cannot discard a valid installer sibling. Collection stages
+each optional updater pair transactionally, and `latest.json` contains only payloads reverified against
+the embedded updater public key and their exact inline signatures.
+The installed updater is offered only for AppImage, the macOS app archive, and NSIS; DEB, RPM, and
+MSI installers never appear as updater targets.
 
-- do not describe a global workflow pass as a human-path pass;
-- do not describe a global workflow failure as evidence that every artifact or local feature is unsafe;
-- do not publish a candidate that lacks its required artifact-scoped evidence; and
-- do not add more predecessor-specific or global qualification machinery to preserve the current coupling.
+Manual commit-bound QC may explicitly opt into the two long Windows NSIS data-preservation fixtures.
+They run on separate fresh Windows runners, are allowed to fail without changing sibling outcomes,
+and are skipped by default and for tag publication. If both exact records are present, they are
+retained only as supporting preservation evidence; missing or one-sided records remain
+`not-observed` and never delay ordinary development or qualify public Windows lifecycle behavior.
 
-The `v0.1.8` source line is not currently a recommended beginner installer. This status is an honest implementation gap, not a new permanent global gate.
+There is not yet a protected same-run producer for the exact-candidate Windows beginner record,
+real installed-app lifecycle record, or Authenticode verification record with an approved publisher
+identity and protected run/job identity. `v0.1.8` therefore accepts no generic observation or
+promotion artifact namespace. A future path must add its reviewed producer, bounded parser, and
+promotion policy together before the workflow may consume it. Until those parts exist and pass,
+public Windows artifacts remain unavailable.
+This does not withhold an independently qualified Linux or macOS artifact, block source work, or make
+an installed product unusable.
+
+The `v0.1.8` source line is not currently a recommended beginner installer. This status is an honest
+artifact/channel gap, not a product-wide gate.
 
 ## 7. Release artifacts and verification
 

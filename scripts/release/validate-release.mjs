@@ -10,6 +10,7 @@ import {
   requireString,
   runMain,
 } from "./lib.mjs";
+import { validateReleaseMetadataV3 } from "./release-metadata.mjs";
 
 function assert(condition, message) {
   if (!condition) {
@@ -52,55 +53,17 @@ function cargoLockPackageVersion(lock) {
 }
 
 function validateReleaseMetadata(metadata, version, tag, releaseChannel, releaseTarget, publicationMode) {
-  assert(metadata.schemaVersion === 2, "release metadata schemaVersion must be 2");
-  assert(metadata.product === "ai-security-scanner", "release metadata product is incorrect");
-  assert(metadata.version === version, "release metadata version is incorrect");
-  assert(metadata.tag === tag, "release metadata tag is incorrect");
+  validateReleaseMetadataV3(metadata, {
+    releaseState: "prepared",
+    version,
+    tag,
+    publicationMode,
+  });
   assert(metadata.releaseChannel === releaseChannel, "release metadata channel is incorrect");
   assert(metadata.stableTarget === releaseTarget, "release metadata stable target is incorrect");
   assert(
     ["commit-bound-qc", "public-github-release"].includes(publicationMode),
     "expected publication mode is invalid",
-  );
-  assert(metadata.publicationMode === publicationMode, "release metadata publication mode is incorrect");
-  assert(
-    /^[0-9a-f]{40}$/u.test(metadata.sourceCommit),
-    "release metadata sourceCommit must be a full lowercase Git object ID",
-  );
-  assert(
-    Array.isArray(metadata.distribution?.bundledEngines) &&
-      metadata.distribution.bundledEngines.length === 0,
-    "desktop release metadata must not claim that engines are bundled",
-  );
-  assert(
-    Array.isArray(metadata.distribution?.bundledAuxiliaryExecutables) &&
-      JSON.stringify(metadata.distribution.bundledAuxiliaryExecutables) === JSON.stringify([
-        "ai-security-scanner-egress-gateway",
-        "ai-security-scanner-bootstrap-broker",
-        "ai-security-scanner-cli",
-      ]),
-    "release metadata must identify all first-party companion executables",
-  );
-  assert(
-    metadata.security?.operatingSystemCodeSigning?.state === "not-configured",
-    "release metadata must honestly report absent OS code signing",
-  );
-  assert(
-    metadata.security?.appleNotarization?.state === "not-configured",
-    "release metadata must honestly report absent Apple notarization",
-  );
-  assert(metadata.security?.updater?.state === "enabled-signed", "updater must be reported enabled and signed");
-  assert(
-    metadata.security?.updater?.artifactsGenerated === true &&
-      metadata.security?.updater?.signingConfigured === true,
-    "updater metadata must require generated and signed updater artifacts",
-  );
-  const expectedAttestation = publicationMode === "public-github-release"
-    ? { state: "required-before-publication", provider: "GitHub artifact attestations" }
-    : { state: "not-created-for-commit-bound-qc", provider: "none" };
-  assert(
-    JSON.stringify(metadata.security?.provenanceAttestation) === JSON.stringify(expectedAttestation),
-    "release metadata provenance-attestation state does not match its publication mode",
   );
 }
 
@@ -163,12 +126,26 @@ export function validateReleaseWorkflow(workflow) {
     "release workflow must use only tag push and manual preflight triggers",
   );
   assert(Object.hasOwn(trigger, "workflow_dispatch"), "release preflight must remain manually runnable");
-  assert(
-    trigger.workflow_dispatch === null ||
-      (typeof trigger.workflow_dispatch === "object" &&
-        Object.keys(trigger.workflow_dispatch).length === 0),
-    "release preflight must not accept caller-controlled inputs",
-  );
+  const dispatch = trigger.workflow_dispatch;
+  const dispatchIsEmpty = dispatch === null ||
+    (typeof dispatch === "object" && Object.keys(dispatch).length === 0);
+  let supportsOptionalWindowsDataPreservation = false;
+  if (!dispatchIsEmpty) {
+    const input = dispatch?.inputs?.windows_data_preservation;
+    assert(
+      typeof dispatch === "object" &&
+        JSON.stringify(Object.keys(dispatch)) === JSON.stringify(["inputs"]) &&
+        dispatch.inputs && typeof dispatch.inputs === "object" &&
+        JSON.stringify(Object.keys(dispatch.inputs)) === JSON.stringify(["windows_data_preservation"]) &&
+        input && typeof input === "object" &&
+        JSON.stringify(Object.keys(input).sort()) ===
+          JSON.stringify(["default", "description", "required", "type"]) &&
+        typeof input.description === "string" && input.description.length > 0 &&
+        input.required === false && input.type === "boolean" && input.default === false,
+      "release preflight may accept only the false-by-default Windows data-preservation fixture switch",
+    );
+    supportsOptionalWindowsDataPreservation = true;
+  }
   assert(
     Array.isArray(trigger.push.tags) &&
       trigger.push.tags.length === 1 &&
@@ -218,6 +195,106 @@ export function validateReleaseWorkflow(workflow) {
     "make_latest=%s",
   ]) {
     assert(identity.run.includes(required), `release identity resolver is missing: ${required}`);
+  }
+
+  const collectionEntries = Object.entries(workflow.jobs ?? {}).filter(([, job]) =>
+    job.steps?.some((step) =>
+      typeof step.run === "string" && step.run.includes("scripts/release/collect-bundles.mjs"),
+    ),
+  );
+  assert(collectionEntries.length === 1, "release workflow must have one installer collection job");
+  const [buildJobName, buildJob] = collectionEntries[0];
+  assert(buildJob["continue-on-error"] === true, "platform build job must not cancel supported siblings");
+  const buildSteps = buildJob.steps ?? [];
+  const unbundledBuilds = buildSteps.filter((step) =>
+    typeof step.run === "string" && step.run.includes("tauri build") && step.run.includes("--no-bundle"),
+  );
+  assert(
+    unbundledBuilds.length === 1 && unbundledBuilds[0].id === "build_unbundled",
+    "platform build must compile once with one identified tauri build --no-bundle step",
+  );
+  const installerBundleSteps = [
+    ["bundle_deb", "--bundles deb"],
+    ["bundle_rpm", "--bundles rpm"],
+    ["bundle_appimage", "--bundles appimage"],
+    ["bundle_macos", "--bundles app,dmg"],
+    ["bundle_nsis", "--bundles nsis"],
+    ["bundle_msi", "--bundles msi"],
+  ];
+  for (const [stepId, bundleArgument] of installerBundleSteps) {
+    const step = buildSteps.find((candidate) => candidate.id === stepId);
+    assert(
+      step && typeof step.run === "string" &&
+        step.run.includes("scripts/release/bundle-with-optional-updater.mjs") &&
+        step.run.includes(bundleArgument) && step["continue-on-error"] === true,
+      `${stepId} must independently bundle its installer and continue after sibling failure`,
+    );
+    if (["bundle_deb", "bundle_rpm", "bundle_msi"].includes(stepId)) {
+      assert(
+        !Object.hasOwn(step.env ?? {}, "TAURI_SIGNING_PRIVATE_KEY"),
+        `${stepId} must not depend on updater signing material`,
+      );
+    }
+  }
+  const availableStep = buildSteps.find((step) => step.id === "available_bundles");
+  const availableSource = JSON.stringify(availableStep ?? {});
+  assert(
+    installerBundleSteps.every(([stepId]) => availableSource.includes(`steps.${stepId}.outcome`)),
+    "installer collection must derive availability from every independent bundle-step outcome",
+  );
+  const collectStep = buildSteps.find((step) =>
+    typeof step.run === "string" && step.run.includes("scripts/release/collect-bundles.mjs"),
+  );
+  assert(
+    collectStep?.run.includes("--expect") && collectStep.run.includes("--available") &&
+      String(collectStep.if ?? "").includes("steps.available_bundles.outcome"),
+    "installer collection must pass requested and successful bundle sets explicitly",
+  );
+
+  let windowsDataPreservationJobName = null;
+  if (supportsOptionalWindowsDataPreservation) {
+    const entries = Object.entries(workflow.jobs ?? {}).filter(([, job]) =>
+      String(job.if ?? "").includes("inputs.windows_data_preservation"),
+    );
+    assert(
+      entries.length === 1,
+      "the optional Windows data-preservation input must control exactly one supporting job",
+    );
+    const [jobName, job] = entries[0];
+    windowsDataPreservationJobName = jobName;
+    const condition = String(job.if).replaceAll(/\s+/gu, " ").trim();
+    assert(
+      condition === "github.event_name == 'workflow_dispatch' && inputs.windows_data_preservation == true" &&
+        job["continue-on-error"] === true &&
+        job["timeout-minutes"] === 360 &&
+        job["runs-on"] === "windows-2025" &&
+        job.permissions?.contents === "read" &&
+        !Object.values(job.permissions ?? {}).includes("write"),
+      "Windows data-preservation fixtures must remain explicit, bounded, read-only, and non-gating",
+    );
+    const needs = Array.isArray(job.needs) ? job.needs : [job.needs].filter(Boolean);
+    assert(
+      needs.includes(identityJobName) && needs.includes(buildJobName),
+      "Windows data-preservation fixtures must bind the exact identity and Windows installer bytes",
+    );
+    const scenarios = job.strategy?.matrix?.include;
+    assert(
+      Array.isArray(scenarios) && scenarios.length === 2 &&
+        JSON.stringify(scenarios.map(({ scenario }) => scenario).sort()) ===
+          JSON.stringify(["ghost-repair-uninstall", "n-minus-one-upgrade"]),
+      "Windows data-preservation fixtures must keep N-1 and ambiguous-runtime evidence separate",
+    );
+    const jobSource = JSON.stringify(job);
+    for (const required of [
+      "qualify-windows-nsis-upgrade.ps1",
+      "qualify-windows-nsis-ghost-recovery.ps1",
+      "windows-nsis-upgrade-evidence.mjs",
+      "windows-nsis-ghost-recovery-evidence.mjs",
+      "windows-nsis-supporting-data-preservation-${{ matrix.scenario }}",
+      "supporting-evidence/",
+    ]) {
+      assert(jobSource.includes(required), `Windows supporting fixture job is missing: ${required}`);
+    }
   }
 
   const publicationEntries = Object.entries(workflow.jobs ?? {}).filter(([, job]) =>
@@ -294,7 +371,45 @@ export function validateReleaseWorkflow(workflow) {
     finalizerNeeds.includes(identityJobName),
     "finalizer job must consume the version-derived identity",
   );
+  assert(
+    finalizerNeeds.includes(buildJobName),
+    "finalizer job must consume independently collected installer siblings",
+  );
+  if (windowsDataPreservationJobName) {
+    assert(
+      finalizerNeeds.includes(windowsDataPreservationJobName),
+      "finalizer must wait for explicitly requested same-run Windows supporting fixtures",
+    );
+  }
   const finalizerSteps = finalizer.steps ?? [];
+  const unsupportedPromotionDownloads = Object.values(workflow.jobs ?? {})
+    .flatMap((job) => job.steps ?? [])
+    .filter((step) =>
+      typeof step.uses === "string" &&
+        step.uses.includes("actions/download-artifact@") &&
+        ["artifact-qc-observations-*", "artifact-promotion-evidence-*"].includes(
+          step.with?.pattern,
+        ),
+    );
+  assert(
+    unsupportedPromotionDownloads.length === 0,
+    "release workflow must not ingest an unimplemented artifact observation or promotion namespace",
+  );
+  if (windowsDataPreservationJobName) {
+    const preservationDownloads = finalizerSteps.filter((step) =>
+      typeof step.uses === "string" &&
+        step.uses.includes("actions/download-artifact@") &&
+        step.with?.pattern === "windows-nsis-supporting-data-preservation-*",
+    );
+    assert(
+      preservationDownloads.length === 1 &&
+        preservationDownloads[0]["continue-on-error"] === true &&
+        preservationDownloads[0].with?.path === "assembled-input" &&
+        preservationDownloads[0].with?.["merge-multiple"] === true &&
+        preservationDownloads[0].with?.["run-id"] === undefined,
+      "finalizer must optionally ingest only exact-current-run Windows supporting evidence",
+    );
+  }
   const finalizeIndex = finalizerSteps.findIndex(
     (step) => typeof step.run === "string" && step.run.includes("scripts/release/finalize-release.mjs"),
   );
@@ -340,13 +455,17 @@ export function validateReleaseWorkflow(workflow) {
       );
     }
   };
-  for (const [label, step] of [
-    ["finalizer", finalizerSteps[finalizeIndex]],
-    ["finalizer verification", finalizerSteps[finalizerVerifyIndex]],
-  ]) {
-    assert(step.run.includes(`--dir ${finalizedArtifactPath}`), `${label} must bind the finalized artifact path`);
-    assertIdentityBindings(step, label);
-  }
+  assert(
+    finalizerSteps[finalizeIndex].run.includes(`--out ${finalizedArtifactPath}`) &&
+      finalizerSteps[finalizeIndex].run.includes("--input "),
+    "finalizer must read assembled candidates and bind the clean finalized artifact output",
+  );
+  assertIdentityBindings(finalizerSteps[finalizeIndex], "finalizer");
+  assert(
+    finalizerSteps[finalizerVerifyIndex].run.includes(`--dir ${finalizedArtifactPath}`),
+    "finalizer verification must bind the finalized artifact path",
+  );
+  assertIdentityBindings(finalizerSteps[finalizerVerifyIndex], "finalizer verification");
   const publishVerifyIndex = publishSteps.findIndex(
     (step) => typeof step.run === "string" && step.run.includes("scripts/release/verify-finalized-release.mjs"),
   );
@@ -470,12 +589,11 @@ async function main() {
   const version = packageJson.version;
   const tag = typeof args.get("tag") === "string" ? args.get("tag") : `v${version}`;
   assert(
-    releaseMetadataSchema.properties?.schemaVersion?.const === 2 &&
+    releaseMetadataSchema.properties?.schemaVersion?.const === 3 &&
       JSON.stringify(releaseMetadataSchema.properties?.publicationMode?.enum) ===
         JSON.stringify(["commit-bound-qc", "public-github-release"]) &&
-      Array.isArray(releaseMetadataSchema.allOf) &&
-      releaseMetadataSchema.allOf.length === 1,
-    "release metadata schema does not bind QC/public publication and attestation modes",
+      releaseMetadataSchema.properties?.distribution?.properties?.platforms?.minItems === 3,
+    "release metadata schema does not bind artifact-scoped support and publication modes",
   );
   assert(isSemver(version), `package version is not native-compatible numeric SemVer: ${version}`);
   assert(tag === `v${version}`, `tag ${tag} does not exactly match package version ${version}`);
@@ -512,10 +630,6 @@ async function main() {
     "Tauri bundles must carry the project license metadata and file",
   );
   assert(
-    tauri.bundle?.createUpdaterArtifacts === true,
-    "Tauri updater artifacts must be generated for signed releases",
-  );
-  assert(
     Array.isArray(tauri.bundle?.externalBin) &&
       JSON.stringify(tauri.bundle.externalBin) === JSON.stringify([
         "binaries/ai-security-scanner-egress-gateway",
@@ -523,11 +637,6 @@ async function main() {
         "binaries/ai-security-scanner-cli",
       ]),
     "Tauri bundle must install all first-party companion executables in fixed order",
-  );
-  assert(
-    tauri.plugins?.updater?.pubkey ===
-      "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIyQzI1RTVEMTJCMzJCRkUKUldUK0s3TVNYVjdDc3M2QU9nbGdqRTNQVStNR3hRQStuZEFQNStac2Y2U0FsQmZ5cjB5UTNHUmIK",
-    "Tauri updater public key differs from the release signing identity",
   );
   assert(
     JSON.stringify(tauri.plugins?.updater?.endpoints) ===

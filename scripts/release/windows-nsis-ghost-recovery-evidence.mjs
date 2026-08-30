@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +12,7 @@ import {
   writeJsonAtomic,
 } from "./lib.mjs";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 7;
 const PLATFORM = "windows-x86_64";
 const RUNNER = "windows-2025";
 const INSTALLER_TYPE = "nsis";
@@ -35,7 +34,7 @@ const SENTINEL_PHASES = Object.freeze([
   "before_candidate_runtime_start",
   "after_candidate_runtime_running",
   "after_current_runtime_purge",
-  "after_candidate_uninstall",
+  "before_app_only_uninstall",
 ]);
 const SENTINEL_CHECKPOINT_FIELDS = Object.freeze([
   "phase",
@@ -150,6 +149,80 @@ function canonicalPositiveDecimal(value, label) {
   assert(parsed <= MAX_U64, `${label} exceeds the unsigned 64-bit bound`);
 }
 
+function validateFileProof(value, label) {
+  exactKeys(value, ["length", "sha256", "volume", "fileIndex"], label);
+  bounded(value.length, 1, 64 * 1024, `${label} length`);
+  sha256(value.sha256, `${label} digest`);
+  bounded(value.volume, 0, 0xffff_ffff, `${label} volume`);
+  canonicalPositiveDecimal(value.fileIndex, `${label} file index`);
+}
+
+function validateVhdFileProof(value, label) {
+  exactKeys(value, [
+    "length", "sha256", "volume", "fileIndex", "numberOfLinks", "attributes",
+  ], label);
+  bounded(value.length, 1, 64 * 1024 * 1024 * 1024, `${label} length`);
+  sha256(value.sha256, `${label} digest`);
+  bounded(value.volume, 0, 0xffff_ffff, `${label} volume`);
+  canonicalPositiveDecimal(value.fileIndex, `${label} file index`);
+  bounded(value.numberOfLinks, 1, 1024, `${label} link count`);
+  bounded(value.attributes, 0, 0xffff_ffff, `${label} attributes`);
+}
+
+export function validateWindowsNsisUnrelatedVhdPreservation(before, after) {
+  validateVhdFileProof(before, "unrelated VHD before app-only uninstall");
+  validateVhdFileProof(after, "unrelated VHD after app-only uninstall");
+  for (const field of [
+    "length", "sha256", "volume", "fileIndex", "numberOfLinks", "attributes",
+  ]) {
+    assert(
+      after[field] === before[field],
+      `app-only uninstall changed unrelated WSL VHD ${field}`,
+    );
+  }
+}
+
+export function validateWindowsNsisGhostFixtureScope(scope) {
+  exactKeys(scope, [
+    "classification", "qualifiesPublicLifecycle", "syntheticCliCaseUsed", "installedDesktopInteractionObserved",
+    "localhost1270019001ReportObserved", "projectReopenedInDesktopObserved",
+    "postUninstallReinstallObserved",
+  ], "registered-WSL ghost fixture scope");
+  assert(scope.classification === "risk_focused_automated_data_preservation", "ghost fixture classification changed");
+  assert(scope.syntheticCliCaseUsed === true, "ghost data-preservation fixture must disclose its synthetic CLI case");
+  for (const field of [
+    "qualifiesPublicLifecycle", "installedDesktopInteractionObserved",
+    "localhost1270019001ReportObserved", "projectReopenedInDesktopObserved",
+    "postUninstallReinstallObserved",
+  ]) assert(scope[field] === false, `ghost data-preservation fixture cannot claim ${field}`);
+}
+
+export function validateWindowsNsisGhostInstallerManifestShape(installerManifest) {
+  if (installerManifest.schemaVersion === 2) {
+    exactKeys(installerManifest, [
+      "schemaVersion", "product", "version", "tag", "sourceCommit", "platform",
+      "requestedBundleTypes", "availableBundleTypes", "updaters", "updaterFailures",
+      "installers", "auxiliaryExecutables",
+    ], "source Windows installer manifest");
+    for (const field of [
+      "requestedBundleTypes", "availableBundleTypes", "updaters", "updaterFailures",
+      "installers", "auxiliaryExecutables",
+    ]) assert(Array.isArray(installerManifest[field]), `source Windows installer manifest ${field} is not an array`);
+  } else if (installerManifest.schemaVersion === 3) {
+    exactKeys(installerManifest, [
+      "schemaVersion", "product", "version", "tag", "sourceCommit", "platform",
+      "artifactScoped", "sourceManifestSha256", "installers", "auxiliaryExecutables", "updaters",
+    ], "finalized Windows installer manifest");
+    assert(installerManifest.artifactScoped === true, "finalized Windows installer manifest is not artifact-scoped");
+    sha256(installerManifest.sourceManifestSha256, "finalized Windows source-manifest digest");
+    for (const field of ["installers", "auxiliaryExecutables", "updaters"]) {
+      assert(Array.isArray(installerManifest[field]), `finalized Windows installer manifest ${field} is not an array`);
+    }
+  } else {
+    throw new Error("Windows installer manifest schema is unsupported");
+  }
+}
+
 function sentinelIdentity(checkpoint) {
   return SENTINEL_IDENTITY_FIELDS.map((field) => checkpoint[field]);
 }
@@ -249,20 +322,6 @@ function validateSentinelLifecycle(lifecycle, fixture, sideBySide) {
   );
 }
 
-function validateSigningIdentity(publicKeyBase64, keyId, label) {
-  sha256(keyId, `${label} key ID`);
-  assert(
-    typeof publicKeyBase64 === "string" && /^[A-Za-z0-9+/]{43}=$/u.test(publicKeyBase64),
-    `${label} public key is not canonical base64`,
-  );
-  const publicKey = Buffer.from(publicKeyBase64, "base64");
-  assert(publicKey.length === 32, `${label} public key is not Ed25519-sized`);
-  assert(
-    createHash("sha256").update(publicKey).digest("hex") === keyId,
-    `${label} key ID is not the public-key SHA-256`,
-  );
-}
-
 async function candidateIdentity(
   artifactDirectory,
   version,
@@ -273,7 +332,7 @@ async function candidateIdentity(
   const installerManifest = await readJson(
     path.join(artifactDirectory, "installers-windows-x86_64.json"),
   );
-  assert(installerManifest.schemaVersion === 2, "Windows installer manifest schema is unsupported");
+  validateWindowsNsisGhostInstallerManifestShape(installerManifest);
   assert(installerManifest.product === "ai-security-scanner", "Windows installer product is incorrect");
   assert(installerManifest.platform === PLATFORM, "Windows installer platform is incorrect");
   assert(
@@ -284,7 +343,10 @@ async function candidateIdentity(
   assert(installers.length === 1, "candidate must contain exactly one NSIS installer");
   const installer = installers[0];
   exactKeys(installer, ["bundleType", "file", "bytes", "sha256"], "candidate NSIS record");
-  assert(path.basename(installer.file) === installer.file, "candidate NSIS path is not flat");
+  assert(
+    path.posix.basename(installer.file) === installer.file && path.win32.basename(installer.file) === installer.file,
+    "candidate NSIS path is not flat",
+  );
   bounded(installer.bytes, 1, 256 * 1024 * 1024, "candidate NSIS bytes");
   sha256(installer.sha256, "candidate NSIS digest");
   const installerPath = path.join(artifactDirectory, installer.file);
@@ -331,6 +393,7 @@ function validateObservations(observations, identity, version) {
       "runner",
       "priorRelease",
       "candidate",
+      "fixtureScope",
       "ghostFixture",
       "installerMigration",
       "runtimeSideBySide",
@@ -341,10 +404,11 @@ function validateObservations(observations, identity, version) {
   );
   assert(observations.schemaVersion === SCHEMA_VERSION, "side-by-side ghost schema is unsupported");
   assert(
-    observations.scenario === "real_registered_wsl_n_minus_one_ghost_install_side_by_side",
-    "ghost fixture did not exercise the non-destructive side-by-side contract",
+    observations.scenario === "automated_registered_wsl_n_minus_one_ghost_data_preservation_fixture",
+    "ghost data-preservation fixture scenario is incorrect",
   );
   assert(observations.platform === PLATFORM && observations.runner === RUNNER, "ghost runner is incorrect");
+  validateWindowsNsisGhostFixtureScope(observations.fixtureScope);
   exactKeys(observations.priorRelease, Object.keys(PRIOR_GHOST_RELEASE), "prior ghost release");
   assert(
     JSON.stringify(observations.priorRelease) === JSON.stringify(PRIOR_GHOST_RELEASE),
@@ -479,6 +543,8 @@ function validateObservations(observations, identity, version) {
       "sentinelLifecycle",
       "retainedProof",
       "receiptConsumption",
+      "legacyWorkspaceAfterAppOnlyUninstall",
+      "unrelatedWorkspaceAfterAppOnlyUninstall",
     ],
     "managed-runtime side-by-side initialization",
   );
@@ -589,6 +655,56 @@ function validateObservations(observations, identity, version) {
     yes(value, "side-by-side receipt consumption " + name);
   }
 
+  const afterUninstall = sideBySide.legacyWorkspaceAfterAppOnlyUninstall;
+  exactKeys(afterUninstall, [
+    "legacyRegistrationId",
+    "unrelatedRegistrationId",
+    "legacyVhdSizeBytes",
+    "legacyVhdVolumeSerialNumber",
+    "legacyVhdFileIndex",
+    "legacyVhdNumberOfLinks",
+    "legacyVhdAttributes",
+    "legacyProviderConfigSha256",
+    "legacySshPublicKeySha256",
+  ], "legacy workspace after app-only uninstall");
+  assert(
+    afterUninstall.legacyRegistrationId === fixture.registrationId &&
+      afterUninstall.legacyRegistrationId === proof.legacyRegistrationId,
+    "app-only uninstall changed the legacy registration GUID",
+  );
+  assert(
+    afterUninstall.unrelatedRegistrationId === fixture.unrelatedRegistrationId,
+    "app-only uninstall changed the unrelated registration GUID",
+  );
+  assert(
+    afterUninstall.legacyVhdSizeBytes === proof.legacyVhdSizeBytes &&
+      afterUninstall.legacyVhdVolumeSerialNumber === proof.legacyVhdVolumeSerialNumber &&
+      afterUninstall.legacyVhdFileIndex === proof.legacyVhdFileIndex &&
+      afterUninstall.legacyVhdNumberOfLinks === proof.legacyVhdNumberOfLinks &&
+      afterUninstall.legacyVhdAttributes === proof.legacyVhdAttributes,
+    "app-only uninstall changed the retained legacy VHD identity",
+  );
+  assert(
+    afterUninstall.legacyProviderConfigSha256 === proof.legacyProviderConfigSha256 &&
+      afterUninstall.legacySshPublicKeySha256 === proof.legacySshPublicKeySha256,
+    "app-only uninstall changed the retained provider config or machine.pub digest",
+  );
+
+  const unrelatedAfterUninstall = sideBySide.unrelatedWorkspaceAfterAppOnlyUninstall;
+  exactKeys(unrelatedAfterUninstall, [
+    "registrationIdBefore", "registrationIdAfter",
+    "vhdBeforeAppOnlyUninstall", "vhdAfterAppOnlyUninstall",
+  ], "unrelated workspace after app-only uninstall");
+  assert(
+    unrelatedAfterUninstall.registrationIdBefore === fixture.unrelatedRegistrationId &&
+      unrelatedAfterUninstall.registrationIdAfter === unrelatedAfterUninstall.registrationIdBefore,
+    "app-only uninstall changed the unrelated WSL registration GUID",
+  );
+  validateWindowsNsisUnrelatedVhdPreservation(
+    unrelatedAfterUninstall.vhdBeforeAppOnlyUninstall,
+    unrelatedAfterUninstall.vhdAfterAppOnlyUninstall,
+  );
+
   const data = observations.dataPreservation;
   exactKeys(
     data,
@@ -596,105 +712,79 @@ function validateObservations(observations, identity, version) {
       "preInstallerFileCount",
       "preInstallerBytes",
       "demoCaseId",
+      "demoRunId",
       "demoCasePreserved",
-      "privateSigningMaterialBytePreserved",
-      "signingKeyIdBefore",
-      "signingKeyIdAfter",
-      "publicKeyBase64Before",
-      "publicKeyBase64After",
-      "privateSigningKeyProtected",
-      "publicIdentitySummaryExact",
-      "durableIdentityDocumentPresent",
-      "identityDocumentBytes",
-      "identityDocumentCompactSha256",
-      "identityDocumentProtected",
-      "durableIdentityAnchorPresent",
-      "identityAnchorBytes",
-      "identityAnchorProtected",
-      "anchorSchemaVersion",
-      "anchorIdentityDocumentSha256",
-      "anchorDigestVerified",
-      "anchorMatchesIdentityDocument",
-      "identitySelfSignatureVerifiedByCandidate",
-      "rotationIntentAbsent",
-      "continuityEvent",
-      "identityKeyId",
-      "identityPublicKeyBase64",
-      "firstBundleValid",
-      "secondBundleValid",
-      "masterFrameworkReport",
+      "existingExportIdentity",
+      "beginnerReportExport",
+      "appOnlyUninstallSnapshot",
     ],
     "ghost data preservation",
   );
-  bounded(data.preInstallerFileCount, 4, 4096, "ghost data file count");
+  bounded(data.preInstallerFileCount, 1, 4096, "ghost data file count");
   bounded(data.preInstallerBytes, 1, 512 * 1024 * 1024, "ghost data bytes");
-  assert(typeof data.demoCaseId === "string" && /^[0-9a-f-]{36}$/u.test(data.demoCaseId), "ghost demo case ID is malformed");
-  for (const field of [
-    "demoCasePreserved",
-    "privateSigningMaterialBytePreserved",
-    "privateSigningKeyProtected",
-    "publicIdentitySummaryExact",
-    "durableIdentityDocumentPresent",
-    "identityDocumentProtected",
-    "durableIdentityAnchorPresent",
-    "identityAnchorProtected",
-    "anchorDigestVerified",
-    "anchorMatchesIdentityDocument",
-    "identitySelfSignatureVerifiedByCandidate",
-    "rotationIntentAbsent",
-    "firstBundleValid",
-    "secondBundleValid",
-  ]) yes(data[field], "ghost data preservation " + field);
-  validateSigningIdentity(data.publicKeyBase64Before, data.signingKeyIdBefore, "N-1 ghost signing identity");
-  validateSigningIdentity(data.publicKeyBase64After, data.signingKeyIdAfter, "side-by-side signing identity");
-  bounded(data.identityDocumentBytes, 1, 64 * 1024, "durable signing identity document bytes");
-  sha256(data.identityDocumentCompactSha256, "durable signing identity document compact digest");
-  bounded(data.identityAnchorBytes, 1, 64 * 1024, "durable signing identity anchor bytes");
-  assert(data.anchorSchemaVersion === "1", "durable signing identity anchor schema is not v1");
-  sha256(data.anchorIdentityDocumentSha256, "durable signing identity anchor digest");
-  assert(data.anchorIdentityDocumentSha256 === data.identityDocumentCompactSha256, "signing identity anchor digest differs");
-  assert(data.continuityEvent === "legacy_key_adopted", "candidate did not record legacy-key adoption");
-  assert(data.signingKeyIdAfter === data.signingKeyIdBefore, "integrity signing key ID changed");
-  assert(data.publicKeyBase64After === data.publicKeyBase64Before, "integrity signing public key changed");
-  assert(data.identityKeyId === data.signingKeyIdBefore, "durable identity key ID differs");
-  assert(data.identityPublicKeyBase64 === data.publicKeyBase64Before, "durable identity public key differs");
+  canonicalUuid(data.demoCaseId, "ghost demo case ID");
+  canonicalUuid(data.demoRunId, "ghost demo run ID");
+  yes(data.demoCasePreserved, "ghost demo case preservation");
 
-  const report = data.masterFrameworkReport;
-  exactKeys(
-    report,
-    [
-      "reportFile",
-      "reportBytes",
-      "reportSha256",
-      "bundleEntryPath",
-      "bundleEntryBytes",
-      "bundleEntrySha256",
-      "exactBundleEntryMatch",
-      "schemaVersion",
-      "product",
-      "productVersion",
-      "caseId",
-      "runId",
-      "frameworkKeys",
-      "truthfulUnknownCoverage",
-      "noComplianceOutcomeClaims",
-    ],
-    "master NIST ISO AIDEFEND report",
+  const exportIdentity = data.existingExportIdentity;
+  exactKeys(exportIdentity, [
+    "fixtureSha256", "initial", "afterUpgrade", "afterReinstall", "afterReportExport", "afterAppOnlyUninstall",
+  ], "existing export identity preservation");
+  assert(exportIdentity.fixtureSha256 === "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd", "existing export identity fixture digest changed");
+  for (const field of ["initial", "afterUpgrade", "afterReinstall", "afterReportExport", "afterAppOnlyUninstall"]) {
+    validateFileProof(exportIdentity[field], `existing export identity ${field}`);
+    assert(JSON.stringify(exportIdentity[field]) === JSON.stringify(exportIdentity.initial), `existing export identity ${field} changed bytes or NTFS identity`);
+  }
+  assert(exportIdentity.initial.length === 32 && exportIdentity.initial.sha256 === exportIdentity.fixtureSha256, "existing export identity is not the exact 32-byte fixture");
+
+  const report = data.beginnerReportExport;
+  exactKeys(report, ["receipt", "independentFile"], "beginner report export evidence");
+  const receipt = report.receipt;
+  exactKeys(receipt, [
+    "id", "case_id", "run_id", "created_at", "format", "path", "sha256",
+    "coverage_manifest_path", "coverage_manifest_sha256", "signature", "public_key",
+    "redaction_profile", "raw_artifacts_included", "raw_artifacts_omitted",
+    "integrity_only_notice",
+  ], "raw CLI CaseExport receipt");
+  canonicalUuid(receipt.id, "beginner report export ID");
+  canonicalUuid(receipt.case_id, "beginner report case ID");
+  canonicalUuid(receipt.run_id, "beginner report run ID");
+  assert(
+    receipt.case_id === data.demoCaseId && receipt.run_id === data.demoRunId && receipt.format === "html",
+    "beginner report receipt is for the wrong seeded case, run, or format",
   );
-  assert(report.reportFile === "master-framework-report.json", "master report filename changed");
-  bounded(report.reportBytes, 1, 4 * 1024 * 1024, "master report bytes");
-  sha256(report.reportSha256, "master report digest");
-  assert(report.bundleEntryPath === "exports/master-framework-report.json", "master report bundle path changed");
-  assert(report.bundleEntryBytes === report.reportBytes, "master report bundle bytes differ");
-  assert(report.bundleEntrySha256 === report.reportSha256, "master report bundle digest differs");
-  yes(report.exactBundleEntryMatch, "master report exact signed-bundle binding");
-  assert(report.schemaVersion === "1.2.0", "master report schema changed");
-  assert(report.product === "ai-security-scanner" && report.productVersion === version, "master report product identity changed");
-  assert(report.caseId === data.demoCaseId, "master report case changed");
-  assert(typeof report.runId === "string" && /^[0-9a-f-]{36}$/u.test(report.runId), "master report run ID is malformed");
-  assert(JSON.stringify(report.frameworkKeys) === JSON.stringify(["nist_csf", "iso_iec_27001", "aidefend"]), "master report frameworks changed");
-  yes(report.truthfulUnknownCoverage, "master report truthful unknown coverage");
-  yes(report.noComplianceOutcomeClaims, "master report no-compliance-outcome contract");
+  assert(typeof receipt.created_at === "string" && Number.isFinite(Date.parse(receipt.created_at)), "beginner report creation time is invalid");
+  assert(
+    typeof receipt.path === "string" && path.win32.isAbsolute(receipt.path) &&
+      path.win32.basename(receipt.path) === "beginner-report.html",
+    "beginner report runner destination is not one exact absolute Windows path",
+  );
+  sha256(receipt.sha256, "beginner report CLI digest");
+  assert(receipt.coverage_manifest_path === null && receipt.coverage_manifest_sha256 === null, "HTML export unexpectedly has a companion coverage manifest");
+  assert(receipt.signature === null && receipt.public_key === null, "ordinary beginner report unexpectedly carries signing fields");
+  assert(receipt.redaction_profile === "standard", "beginner report did not use standard redaction");
+  assert(receipt.raw_artifacts_included === 0, "beginner report unexpectedly includes raw artifacts");
+  bounded(receipt.raw_artifacts_omitted, 0, 4096, "beginner report omitted raw-artifact count");
+  assert(typeof receipt.integrity_only_notice === "string" && receipt.integrity_only_notice.length > 0, "beginner report integrity notice is absent");
+  exactKeys(report.independentFile, ["file", "bytes", "sha256"], "independent beginner report file proof");
+  assert(report.independentFile.file === "beginner-report.html", "beginner report portable artifact filename changed");
+  assert(path.win32.basename(receipt.path) === report.independentFile.file, "CLI receipt and portable report filename differ");
+  bounded(report.independentFile.bytes, 1, 16 * 1024 * 1024, "beginner report bytes");
+  sha256(report.independentFile.sha256, "independent beginner report digest");
+  assert(receipt.sha256 === report.independentFile.sha256, "CLI and independent beginner report digests differ");
+
+  const uninstall = data.appOnlyUninstallSnapshot;
+  exactKeys(uninstall, [
+    "beforeFileCount", "afterFileCount", "beforeBytes", "afterBytes", "beforeDigest", "afterDigest", "completePrivateDataPreserved",
+  ], "app-only uninstall complete private-data snapshot");
+  bounded(uninstall.beforeFileCount, 1, 4096, "pre-uninstall complete file count");
+  bounded(uninstall.afterFileCount, 1, 4096, "post-uninstall complete file count");
+  bounded(uninstall.beforeBytes, 1, 64 * 1024 * 1024 * 1024, "pre-uninstall complete private-data bytes");
+  bounded(uninstall.afterBytes, 1, 64 * 1024 * 1024 * 1024, "post-uninstall complete private-data bytes");
+  sha256(uninstall.beforeDigest, "pre-uninstall complete private-data digest");
+  sha256(uninstall.afterDigest, "post-uninstall complete private-data digest");
+  yes(uninstall.completePrivateDataPreserved, "complete app-only uninstall private-data preservation");
+  assert(uninstall.beforeFileCount === uninstall.afterFileCount && uninstall.beforeBytes === uninstall.afterBytes && uninstall.beforeDigest === uninstall.afterDigest, "app-only uninstall changed complete private data");
 
   exactKeys(
     observations.cleanup,
@@ -705,17 +795,39 @@ function validateObservations(observations, identity, version) {
       "unrelatedDistributionRetainedThroughRuntimePurge",
       "retainedProofPreservedThroughRuntimePurge",
       "legacyDataPreservedThroughNsisUninstall",
-      "explicitQualificationTeardownRemovedLegacy",
-      "explicitQualificationTeardownRemovedUnrelated",
+      "uninstallerInvoked",
+      "productRegistryRemovedByUninstaller",
+      "fixtureTeardownRemovedLegacy",
+      "fixtureTeardownRemovedUnrelated",
       "quarantineDistributionsAbsent",
-      "candidateUninstalled",
-      "installDirectoryRemoved",
-      "privateDataRemoved",
-      "productRegistryRemoved",
+      "fixtureTeardownInstallDirectoryRemoved",
+      "fixtureTeardownPrivateDataRemoved",
     ],
-    "ghost side-by-side qualification cleanup",
+    "ghost side-by-side fixture teardown",
   );
   for (const [name, value] of Object.entries(observations.cleanup)) yes(value, "ghost cleanup " + name);
+}
+
+async function validateBeginnerReport(file, observation) {
+  const absolute = path.resolve(file);
+  const { receipt, independentFile } = observation;
+  assert(path.basename(absolute) === independentFile.file, "beginner report portable artifact filename changed");
+  const metadata = await lstat(absolute);
+  assert(metadata.isFile() && !metadata.isSymbolicLink(), "beginner report is not a regular file");
+  assert(metadata.size === independentFile.bytes, "beginner report byte length differs from the independent proof");
+  assert((await sha256File(absolute)) === receipt.sha256 && receipt.sha256 === independentFile.sha256, "beginner report digest differs from the CLI receipt or independent proof");
+  const html = await readFile(absolute, "utf8");
+  for (const marker of [
+    "<!doctype html><html lang=\"en\">",
+    "ai-security-scanner / local case export",
+    `<p>Selected run <code>${receipt.run_id}</code></p>`,
+    "<h2>What you asked to scan</h2>",
+    "<h2>What was actually tested</h2>",
+    "<h2>What was not tested</h2>",
+    "<section><h2>What to do next</h2>",
+    "<h2>Problems found</h2>",
+    "Integrity: unsigned HTML with SHA-256 retained in the local case.",
+  ]) assert(html.includes(marker), `beginner report is missing required structure: ${marker}`);
 }
 
 async function identityFromArgs(args) {
@@ -764,9 +876,10 @@ async function create(args) {
   );
   const observations = JSON.parse(await readFile(observationsFile, "utf8"));
   validateObservations(observations, identity.candidate, identity.version);
+  await validateBeginnerReport(requireString(args, "beginner-report"), observations.dataPreservation.beginnerReportExport);
   const evidence = {
     schemaVersion: SCHEMA_VERSION,
-    qualification: "windows_nsis_real_registered_wsl_n_minus_one_ghost_side_by_side",
+    qualification: "windows_nsis_registered_wsl_ghost_data_preservation_fixture",
     releaseIdentity: {
       product: "ai-security-scanner",
       version: identity.version,
@@ -776,6 +889,7 @@ async function create(args) {
     platform: PLATFORM,
     runner: RUNNER,
     installerType: INSTALLER_TYPE,
+    fixtureScope: { ...observations.fixtureScope },
     candidateInstaller: { ...identity.candidate.installer },
     candidateRuntime: {
       manifestSha256: identity.candidate.runtimeManifestSha256,
@@ -786,7 +900,7 @@ async function create(args) {
     observations,
   };
   await writeJsonAtomic(path.resolve(requireString(args, "out")), evidence);
-  process.stdout.write("Created strict real registered-WSL side-by-side ghost evidence\n");
+  process.stdout.write("Created registered-WSL ghost data-preservation fixture evidence\n");
 }
 
 async function validate(args) {
@@ -804,6 +918,7 @@ async function validate(args) {
       "platform",
       "runner",
       "installerType",
+      "fixtureScope",
       "candidateInstaller",
       "candidateRuntime",
       "priorReleasePin",
@@ -813,8 +928,8 @@ async function validate(args) {
   );
   assert(evidence.schemaVersion === SCHEMA_VERSION, "ghost evidence schema is unsupported");
   assert(
-    evidence.qualification === "windows_nsis_real_registered_wsl_n_minus_one_ghost_side_by_side",
-    "ghost evidence qualification ID is wrong",
+    evidence.qualification === "windows_nsis_registered_wsl_ghost_data_preservation_fixture",
+    "ghost data-preservation fixture evidence ID is wrong",
   );
   exactKeys(evidence.releaseIdentity, ["product", "version", "tag", "sourceCommit"], "ghost release identity");
   assert(
@@ -827,6 +942,11 @@ async function validate(args) {
     "ghost evidence release identity changed",
   );
   assert(evidence.platform === PLATFORM && evidence.runner === RUNNER && evidence.installerType === INSTALLER_TYPE, "ghost evidence execution identity changed");
+  validateWindowsNsisGhostFixtureScope(evidence.fixtureScope);
+  assert(
+    JSON.stringify(evidence.fixtureScope) === JSON.stringify(evidence.observations.fixtureScope),
+    "ghost fixture scope differs between evidence and observations",
+  );
   assert(JSON.stringify(evidence.candidateInstaller) === JSON.stringify(identity.candidate.installer), "ghost evidence installer binding changed");
   assert(
     JSON.stringify(evidence.candidateRuntime) === JSON.stringify({
@@ -838,17 +958,19 @@ async function validate(args) {
   );
   assert(JSON.stringify(evidence.priorReleasePin) === JSON.stringify(PRIOR_GHOST_RELEASE), "ghost evidence prior pin changed");
   validateObservations(evidence.observations, identity.candidate, identity.version);
-  process.stdout.write(`Validated real registered-WSL side-by-side ghost handling for ${identity.tag}\n`);
+  await validateBeginnerReport(requireString(args, "beginner-report"), evidence.observations.dataPreservation.beginnerReportExport);
+  process.stdout.write(`Validated registered-WSL ghost data-preservation fixture for ${identity.tag}\n`);
   return evidence;
 }
 
-export async function validateWindowsNsisGhostRecoveryEvidenceFile({
+export async function validateWindowsNsisGhostDataPreservationFixtureFile({
   file,
   artifactDirectory,
   version,
   tag,
   commit,
   testOnlyRuntimeManifestSha256,
+  beginnerReportFile,
 }) {
   const args = new Map([
     ["file", file],
@@ -856,6 +978,7 @@ export async function validateWindowsNsisGhostRecoveryEvidenceFile({
     ["version", version],
     ["tag", tag],
     ["commit", commit],
+    ["beginner-report", beginnerReportFile],
   ]);
   if (testOnlyRuntimeManifestSha256 !== undefined) {
     args.set("test-only-runtime-manifest-sha256", testOnlyRuntimeManifestSha256);
@@ -868,7 +991,7 @@ async function main() {
   const args = parseArgs(rest);
   if (command === "create") return create(args);
   if (command === "validate") return validate(args);
-  throw new Error("usage: windows-nsis-ghost-recovery-evidence.mjs <create|validate> [arguments]");
+  throw new Error("usage: windows-nsis-ghost-recovery-evidence.mjs <create|validate> --artifact-dir <dir> --version <semver> --tag <tag> --commit <sha> --beginner-report <beginner-report.html> [--observations <json>|--file <json>] [--out <json>]");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
