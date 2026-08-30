@@ -1,4 +1,7 @@
-use crate::domain::{AssessmentCase, Confidence, Evidence, Finding, FindingObservation, Severity};
+use crate::domain::{
+    AssessmentCase, Confidence, EngineRunStatus, Evidence, Finding, FindingObservation, ScanRun,
+    Severity,
+};
 use crate::error::{AppError, AppResult};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -44,30 +47,69 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
             .then_with(|| left.id.cmp(&right.id))
     });
 
+    let last_durable_activity = selected_run_last_durable_activity(run, &canonical_observations);
     let observations = canonical_observations
         .into_iter()
-        .map(|observation| {
-            let finding = observation
+        .filter_map(|observation| {
+            observation
                 .finding_snapshot
                 .as_ref()
                 .or_else(|| findings.get(observation.finding_id.as_str()).copied())
-                .ok_or_else(|| {
-                    AppError::InvalidRequest(format!(
-                        "observation {} references missing finding {}",
-                        observation.id, observation.finding_id
-                    ))
-                })?;
-            Ok(oscal_observation(finding, observation))
+                .map(|finding| oscal_observation(finding, observation))
         })
-        .collect::<AppResult<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
-    let end = run.completed_at.unwrap_or(run.created_at);
+    // OSCAL 1.2.3 defines `end` as optional and specifically as the end of
+    // evidence collection. An active run therefore omits it instead of
+    // substituting the run's creation time and implying work has ended.
+    let final_run = run_is_authoritatively_final(run);
+    let end = final_run.then_some(run.completed_at.unwrap_or(last_durable_activity));
+    let lifecycle = if final_run { "final" } else { "live-snapshot" };
+    let description = if final_run {
+        "Read-only and explicitly authorized scanner observations normalized by ai-security-scanner."
+    } else {
+        "Live snapshot of read-only and explicitly authorized scanner observations normalized by ai-security-scanner; evidence collection has not ended."
+    };
+    let mut result = json!({
+        "uuid": stable_uuid(&format!("assessment-result:{}:{}", case.id, run_id)),
+        "title": format!("Scanner run {} observations", run.sequence),
+        "description": description,
+        "start": run.created_at.to_rfc3339(),
+        "props": [
+            property("canonical-case-id", &case.id),
+            property("canonical-run-id", run_id),
+            property("export-kind", "preliminary-scanner-observations"),
+            property("result-lifecycle", lifecycle)
+        ],
+        "reviewed-controls": {
+            "description": "No formal catalog controls were reviewed. The required OSCAL selection contains only a product-local structural sentinel; related framework coordinates appear only on observations.",
+            "control-selections": [{
+                "description": "Product-local structural sentinel only; this is not a NIST, ISO, CIS, or other catalog control and makes no control assessment claim.",
+                "props": [property("selection-kind", "no-formal-controls-reviewed")],
+                "include-controls": [{
+                    "control-id": "ai-security-scanner-no-formal-controls-reviewed"
+                }]
+            }]
+        },
+        "observations": observations,
+        "remarks": if final_run {
+            OSCAL_EXPORT_NOTICE.to_string()
+        } else {
+            format!("{OSCAL_EXPORT_NOTICE} This is a live snapshot; the optional result end is intentionally absent because evidence collection has not ended.")
+        }
+    });
+    if let Some(end) = end {
+        result
+            .as_object_mut()
+            .expect("OSCAL result is an object")
+            .insert("end".into(), json!(end.to_rfc3339()));
+    }
     Ok(json!({
         "assessment-results": {
             "uuid": stable_uuid(&format!("assessment-results:{}:{}", case.id, run_id)),
             "metadata": {
                 "title": format!("{} — preliminary scanner observations", case.title),
-                "last-modified": end.to_rfc3339(),
+                "last-modified": last_durable_activity.to_rfc3339(),
                 "version": env!("CARGO_PKG_VERSION"),
                 "oscal-version": OSCAL_VERSION,
                 "remarks": OSCAL_EXPORT_NOTICE
@@ -76,32 +118,52 @@ pub fn export_oscal_assessment_results(case: &AssessmentCase, run_id: &str) -> A
                 "href": "urn:ai-security-scanner:placeholder:non-formal-assessment-plan",
                 "remarks": "Structural placeholder required by the OSCAL Assessment Results model. No formal assessment plan was executed or imported."
             },
-            "results": [{
-                "uuid": stable_uuid(&format!("assessment-result:{}:{}", case.id, run_id)),
-                "title": format!("Scanner run {} observations", run.sequence),
-                "description": "Read-only and explicitly authorized scanner observations normalized by ai-security-scanner.",
-                "start": run.created_at.to_rfc3339(),
-                "end": end.to_rfc3339(),
-                "props": [
-                    property("canonical-case-id", &case.id),
-                    property("canonical-run-id", run_id),
-                    property("export-kind", "preliminary-scanner-observations")
-                ],
-                "reviewed-controls": {
-                    "description": "No formal catalog controls were reviewed. The required OSCAL selection contains only a product-local structural sentinel; related framework coordinates appear only on observations.",
-                    "control-selections": [{
-                        "description": "Product-local structural sentinel only; this is not a NIST, ISO, CIS, or other catalog control and makes no control assessment claim.",
-                        "props": [property("selection-kind", "no-formal-controls-reviewed")],
-                        "include-controls": [{
-                            "control-id": "ai-security-scanner-no-formal-controls-reviewed"
-                        }]
-                    }]
-                },
-                "observations": observations,
-                "remarks": OSCAL_EXPORT_NOTICE
-            }]
+            "results": [result]
         }
     }))
+}
+
+fn run_is_authoritatively_final(run: &ScanRun) -> bool {
+    if run.is_terminal_no_checks() {
+        return true;
+    }
+    if run.engine_runs.is_empty() {
+        return run.completed_at.is_some();
+    }
+    run.engine_runs.iter().all(|task| {
+        matches!(
+            task.status,
+            EngineRunStatus::NotExecuted
+                | EngineRunStatus::Completed
+                | EngineRunStatus::PartiallyCompleted
+                | EngineRunStatus::Failed
+                | EngineRunStatus::Cancelled
+        )
+    })
+}
+
+fn selected_run_last_durable_activity(
+    run: &ScanRun,
+    observations: &[&FindingObservation],
+) -> chrono::DateTime<chrono::Utc> {
+    let mut latest = run.created_at;
+    for task in &run.engine_runs {
+        for timestamp in [task.started_at, task.finished_at].into_iter().flatten() {
+            latest = latest.max(timestamp);
+        }
+        if let Some(observation) = task.localhost_tcp_observation.as_ref() {
+            latest = latest.max(observation.observed_at);
+        }
+    }
+    for observation in observations {
+        latest = latest.max(observation.observed_at);
+    }
+    if run_is_authoritatively_final(run) {
+        if let Some(completed_at) = run.completed_at {
+            latest = latest.max(completed_at);
+        }
+    }
+    latest
 }
 
 pub fn export_oscal_assessment_results_bytes(
@@ -284,6 +346,7 @@ mod tests {
             sequence: 1,
             created_at: time,
             completed_at: Some(time),
+            request_outcome: None,
             knowledge_cutoff: time,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -403,5 +466,44 @@ mod tests {
                 .contains("Run one summary")
         );
         assert!(!observation.to_string().contains("Later run"));
+    }
+
+    #[test]
+    fn active_run_omits_optional_evidence_collection_end() {
+        let mut case = fixture();
+        case.scan_runs[0].completed_at = None;
+
+        let value = export_oscal_assessment_results(&case, "run-1").unwrap();
+        let result = &value["assessment-results"]["results"][0];
+
+        assert!(result.get("end").is_none());
+        assert!(
+            result["remarks"]
+                .as_str()
+                .unwrap()
+                .contains("live snapshot")
+        );
+        assert!(result["props"].as_array().unwrap().iter().any(|property| {
+            property["name"] == "result-lifecycle" && property["value"] == "live-snapshot"
+        }));
+    }
+
+    #[test]
+    fn dangling_observation_does_not_suppress_valid_siblings() {
+        let mut case = fixture();
+        let mut dangling = case.finding_observations[0].clone();
+        dangling.id = "observation-dangling".into();
+        dangling.finding_id = "finding-missing".into();
+        dangling.fingerprint = "fp-missing".into();
+        dangling.finding_snapshot = None;
+        case.finding_observations.push(dangling);
+
+        let value = export_oscal_assessment_results(&case, "run-1").unwrap();
+        let observations = value["assessment-results"]["results"][0]["observations"]
+            .as_array()
+            .unwrap();
+
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0]["title"], "Potential issue");
     }
 }

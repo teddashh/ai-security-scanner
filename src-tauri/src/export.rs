@@ -1,5 +1,7 @@
+use crate::beginner_report::{BEGINNER_MASTER_REPORT_SCHEMA_VERSION, build_beginner_master_report};
 use crate::domain::{
-    AssessmentCase, CaseExport, DataSource, Finding, RawArtifact, ScanRun, ScopeGrant, new_id,
+    AssessmentCase, CaseExport, DataSource, EngineTaskKind, Finding, RawArtifact, ScanRun,
+    ScopeGrant, new_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::export_identity::{
@@ -330,6 +332,8 @@ pub fn create_case_bundle_at(
         format: Some("case_bundle".into()),
         path: destination.display().to_string(),
         sha256: archive_sha256,
+        coverage_manifest_path: None,
+        coverage_manifest_sha256: None,
         signature: Some(envelope.signature_base64),
         public_key: Some(envelope.public_key_base64),
         redaction_profile: options.redaction.as_str().into(),
@@ -553,6 +557,10 @@ fn build_archive(
     let raw_artifacts_included = artifact_sources.len();
     let mut schemas = BTreeMap::new();
     schemas.insert("bundle".into(), BUNDLE_SCHEMA_VERSION.into());
+    schemas.insert(
+        "beginner_master_report".into(),
+        BEGINNER_MASTER_REPORT_SCHEMA_VERSION.into(),
+    );
     schemas.insert(
         "master_framework_report".into(),
         MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION.into(),
@@ -787,13 +795,37 @@ fn build_documents(
     insert_json(
         &mut documents,
         "engine-versions.json",
-        &json!({ "engine_runs": engine_version_records(case) }),
+        &json!({ "catalog_engine_runs": engine_version_records(case) }),
+        false,
+    )?;
+    insert_json(
+        &mut documents,
+        "built-in-tasks.json",
+        &json!({ "built_in_tasks": built_in_task_records(case) }),
         false,
     )?;
     insert_json(
         &mut documents,
         "raw-artifacts.json",
         &json!({ "raw_artifacts": artifact_records }),
+        true,
+    )?;
+    let beginner_report = build_beginner_master_report(case, run_id)
+        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    insert_json(
+        &mut documents,
+        "exports/beginner-master-report.json",
+        &json!({
+            "schema_version": BEGINNER_MASTER_REPORT_SCHEMA_VERSION,
+            "product_name": "ai-security-scanner",
+            "product_version": env!("CARGO_PKG_VERSION"),
+            "export_kind": "beginner_master_report",
+            "selected_run_id": beginner_report.run_id.clone(),
+            "redaction_profile": redaction.as_str(),
+            "raw_artifact_bytes_included": false,
+            "notice": beginner_report.framework_notice.non_certification.clone(),
+            "report": beginner_report,
+        }),
         true,
     )?;
     documents.insert(
@@ -896,6 +928,7 @@ fn readme(
          IMPORTANT LIMITATIONS\n\
          {}\n\
          {}\n\
+         Start with exports/beginner-master-report.json for what was tested, what was not tested, the problems found, and the next actions.\n\
          Control references in canonical, OCSF, and OSCAL files are related coordinates only.\n\
          Absence of a finding or omitted evidence is not a clean-result assertion.\n\
          Finding groups are reversible presentation metadata; canonical findings and evidence remain independent.\n\
@@ -923,6 +956,9 @@ fn engine_version_records(case: &AssessmentCase) -> Vec<Value> {
     let mut records = Vec::new();
     for run in &case.scan_runs {
         for engine_run in &run.engine_runs {
+            if engine_run.task_kind != EngineTaskKind::CatalogEngine {
+                continue;
+            }
             records.push(json!({
                 "scan_run_id": run.id,
                 "scan_run_sequence": run.sequence,
@@ -956,6 +992,36 @@ fn engine_version_records(case: &AssessmentCase) -> Vec<Value> {
     records
 }
 
+fn built_in_task_records(case: &AssessmentCase) -> Vec<Value> {
+    let mut records = Vec::new();
+    for run in &case.scan_runs {
+        for engine_run in &run.engine_runs {
+            if matches!(engine_run.task_kind, EngineTaskKind::CatalogEngine) {
+                continue;
+            }
+            records.push(json!({
+                "scan_run_id": run.id,
+                "scan_run_sequence": run.sequence,
+                "scan_run_completed_at": run.completed_at,
+                "task_run_id": engine_run.id,
+                "task_kind": engine_run.task_kind,
+                "asset_ids": engine_run.asset_ids,
+                "status": engine_run.status,
+                "progress_percent": engine_run.progress_percent,
+                "phase": engine_run.phase,
+                "started_at": engine_run.started_at,
+                "finished_at": engine_run.finished_at,
+                "localhost_tcp_observation": engine_run.localhost_tcp_observation,
+                "error_code": engine_run.error_code,
+                "error_message": engine_run.error_message,
+                "warnings": engine_run.warnings,
+                "notice": "This product-owned task record is not a catalog engine, container execution, vulnerability finding, or security verdict."
+            }));
+        }
+    }
+    records
+}
+
 fn selected_run<'a>(case: &'a AssessmentCase, run_id: &str) -> AppResult<&'a ScanRun> {
     let run = case
         .scan_runs
@@ -979,14 +1045,15 @@ pub(crate) fn case_for_export(
     sort_case(&mut exported);
 
     if redaction == RedactionProfile::Standard {
+        let sensitive_replacements = standard_redaction_replacements(&exported);
         exported.title = "Redacted assessment case".into();
         exported.profile.organization_name = "[redacted]".into();
         exported.profile.notes = None;
-        for source in &mut exported.data_sources {
-            redact_data_source(source);
+        for (index, source) in exported.data_sources.iter_mut().enumerate() {
+            redact_data_source(source, index + 1);
         }
-        for asset in &mut exported.assets {
-            asset.name = "[redacted asset]".into();
+        for (index, asset) in exported.assets.iter_mut().enumerate() {
+            asset.name = format!("Asset {}", index + 1);
             asset.provider = None;
             asset.region = None;
             asset.identifiers.clear();
@@ -1036,11 +1103,11 @@ pub(crate) fn case_for_export(
             }
         }
         for finding in &mut exported.findings {
-            redact_finding(finding);
+            redact_finding(finding, &sensitive_replacements);
         }
         for observation in &mut exported.finding_observations {
             if let Some(snapshot) = &mut observation.finding_snapshot {
-                redact_finding(snapshot);
+                redact_finding(snapshot, &sensitive_replacements);
             }
         }
         for artifact in &mut exported.raw_artifacts {
@@ -1073,16 +1140,109 @@ fn redact_scope_grant(grant: &mut ScopeGrant) {
     }
 }
 
-fn redact_data_source(source: &mut DataSource) {
-    source.label = "[redacted source]".into();
+fn redact_data_source(source: &mut DataSource, index: usize) {
+    source.label = format!("Source {index}");
     source.metadata.clear();
 }
 
-fn redact_finding(finding: &mut Finding) {
+fn redact_finding(finding: &mut Finding, replacements: &[(String, String)]) {
+    redact_known_literals(&mut finding.title, replacements);
+    redact_known_literals(&mut finding.plain_language_summary, replacements);
+    redact_known_literals(&mut finding.possible_impact, replacements);
+    redact_known_literals(&mut finding.recommendation, replacements);
+    redact_known_literals(&mut finding.verification_guidance, replacements);
+    if let Some(rollback) = &mut finding.rollback_considerations {
+        redact_known_literals(rollback, replacements);
+    }
+    for reason in &mut finding.priority_reasons {
+        redact_known_literals(reason, replacements);
+    }
+    for tag in &mut finding.tags {
+        redact_known_literals(tag, replacements);
+    }
     for evidence in &mut finding.evidence {
         evidence.summary = "[redacted evidence summary]".into();
         evidence.pointer = None;
         evidence.redacted = true;
+    }
+}
+
+fn standard_redaction_replacements(case: &AssessmentCase) -> Vec<(String, String)> {
+    let mut replacements = Vec::new();
+    add_redaction_replacement(&mut replacements, &case.title, "Redacted assessment case");
+    add_redaction_replacement(
+        &mut replacements,
+        &case.profile.organization_name,
+        "Organization",
+    );
+    for (index, source) in case.data_sources.iter().enumerate() {
+        add_redaction_replacement(
+            &mut replacements,
+            &source.label,
+            &format!("Source {}", index + 1),
+        );
+    }
+    for (index, asset) in case.assets.iter().enumerate() {
+        let alias = format!("Asset {}", index + 1);
+        add_redaction_replacement(&mut replacements, &asset.name, &alias);
+        if let Some(provider) = asset.provider.as_deref() {
+            add_redaction_replacement(&mut replacements, provider, "[redacted provider]");
+        }
+        if let Some(region) = asset.region.as_deref() {
+            add_redaction_replacement(&mut replacements, region, "[redacted region]");
+        }
+        for identifier in &asset.identifiers {
+            add_redaction_replacement(&mut replacements, &identifier.value, &alias);
+        }
+    }
+    for grant in &case.scope_grants {
+        if let Some(external) = grant.external_scope.as_ref() {
+            let alias = case
+                .assets
+                .iter()
+                .position(|asset| asset.id == grant.asset_id)
+                .map(|index| format!("Asset {}", index + 1))
+                .unwrap_or_else(|| "[redacted target]".into());
+            add_redaction_replacement(&mut replacements, &external.target.canonical_text(), &alias);
+        }
+    }
+    replacements.sort_by(|left, right| {
+        right
+            .0
+            .len()
+            .cmp(&left.0.len())
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    replacements
+}
+
+fn add_redaction_replacement(
+    replacements: &mut Vec<(String, String)>,
+    sensitive: &str,
+    alias: &str,
+) {
+    let sensitive = sensitive.trim();
+    if sensitive.is_empty()
+        || replacements
+            .iter()
+            .any(|(existing, _)| existing == sensitive)
+    {
+        return;
+    }
+    replacements.push((sensitive.to_owned(), alias.to_owned()));
+}
+
+fn redact_known_literals(value: &mut String, replacements: &[(String, String)]) {
+    for (sensitive, alias) in replacements {
+        if value == sensitive {
+            *value = alias.clone();
+            continue;
+        }
+        // Avoid corrupting ordinary prose for very short identifiers such as
+        // "IP". Exact-field matches above are still redacted at any length.
+        if sensitive.chars().count() >= 4 && value.contains(sensitive) {
+            *value = value.replace(sensitive, alias);
+        }
     }
 }
 
@@ -1953,6 +2113,7 @@ mod tests {
             sequence: 1,
             created_at: time,
             completed_at: Some(time),
+            request_outcome: None,
             knowledge_cutoff: time,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -1964,6 +2125,8 @@ mod tests {
                 id: "engine-run-1".into(),
                 scan_run_id: "run-1".into(),
                 engine_id: "engine-1".into(),
+                task_kind: Default::default(),
+                localhost_tcp_observation: None,
                 asset_ids: vec!["asset-1".into()],
                 status: EngineRunStatus::Completed,
                 progress_percent: 100,
@@ -2012,6 +2175,45 @@ mod tests {
             contains_sensitive_data: sensitive,
         });
         case
+    }
+
+    #[test]
+    fn built_in_tasks_are_exported_as_exact_observations_not_engine_provenance() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, false);
+        let task = &mut case.scan_runs[0].engine_runs[0];
+        task.engine_id = BUILT_IN_LOCALHOST_TCP_ENGINE_ID.into();
+        task.task_kind = EngineTaskKind::built_in_localhost_tcp(9_001);
+        task.localhost_tcp_observation = Some(LocalhostTcpObservation {
+            outcome: LocalhostTcpOutcome::Reachable,
+            observed_at: task.finished_at.expect("finished"),
+        });
+
+        assert!(engine_version_records(&case).is_empty());
+        let records = built_in_task_records(&case);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].pointer("/task_kind/kind"),
+            Some(&Value::String("built_in_localhost_tcp".into()))
+        );
+        assert_eq!(
+            records[0].pointer("/task_kind/port"),
+            Some(&Value::from(9_001))
+        );
+        assert_eq!(
+            records[0].pointer("/localhost_tcp_observation/outcome"),
+            Some(&Value::String("reachable".into()))
+        );
+        for forbidden in [
+            "engine_version",
+            "image_digest",
+            "adapter_version",
+            "runtime_provider",
+            "repository_url",
+        ] {
+            assert!(records[0].get(forbidden).is_none());
+        }
     }
 
     #[test]
@@ -2215,6 +2417,18 @@ mod tests {
             entry.path == "exports/master-framework-report.json"
                 && entry.media_type == "application/json"
         }));
+        assert!(verified.manifest.entries.iter().any(|entry| {
+            entry.path == "exports/beginner-master-report.json"
+                && entry.media_type == "application/json"
+        }));
+        assert_eq!(
+            verified
+                .manifest
+                .schemas
+                .get("beginner_master_report")
+                .map(String::as_str),
+            Some(BEGINNER_MASTER_REPORT_SCHEMA_VERSION)
+        );
         assert_eq!(
             verified
                 .manifest
@@ -2233,6 +2447,13 @@ mod tests {
             "master_framework_relationship_report"
         );
         assert_eq!(framework_report["frameworks"].as_array().unwrap().len(), 3);
+        let beginner_report: Value = serde_json::from_slice(&archive_entry(
+            &first,
+            "exports/beginner-master-report.json",
+        ))
+        .unwrap();
+        assert_eq!(beginner_report["export_kind"], "beginner_master_report");
+        assert_eq!(beginner_report["report"]["run_id"], "run-1");
         let signing_identity: LocalSigningIdentityDocument =
             serde_json::from_slice(&archive_entry(&first, SIGNING_IDENTITY_PATH)).unwrap();
         verify_identity_document(&signing_identity, 1).unwrap();
@@ -2460,6 +2681,65 @@ mod tests {
                 .iter()
                 .any(|entry| entry.path.starts_with("artifacts/"))
         );
+    }
+
+    #[test]
+    fn standard_redaction_keeps_stable_asset_aliases_and_scrubs_known_targets_from_prose() {
+        let temp = tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let mut case = fixture(&artifact_root, true);
+        case.assets.push(Asset {
+            id: "asset-2".into(),
+            kind: AssetKind::Other,
+            name: "customer-database.internal".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![AssetIdentifier {
+                namespace: "dns".into(),
+                value: "customer-database.internal".into(),
+            }],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(false),
+            contains_sensitive_data: Some(true),
+            metadata: BTreeMap::new(),
+        });
+        case.findings.push(Finding {
+            id: "finding-1".into(),
+            case_id: case.id.clone(),
+            first_seen_run_id: "run-1".into(),
+            last_seen_run_id: "run-1".into(),
+            fingerprint: "fingerprint-1".into(),
+            title: "private.example.test can reach customer-database.internal".into(),
+            plain_language_summary:
+                "Review traffic from private.example.test to customer-database.internal.".into(),
+            possible_impact: "customer-database.internal may be exposed.".into(),
+            severity: Severity::Medium,
+            confidence: Confidence::High,
+            priority: 50,
+            priority_reasons: vec!["private.example.test is connected".into()],
+            asset_ids: vec!["asset-1".into(), "asset-2".into()],
+            evidence: vec![],
+            control_references: vec![],
+            recommendation: "Review customer-database.internal.".into(),
+            verification_guidance: "Retest from private.example.test.".into(),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Network administrator".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![],
+        });
+
+        let redacted = case_for_export(&case, RedactionProfile::Standard);
+        let encoded = serde_json::to_string(&redacted).unwrap();
+
+        assert_eq!(redacted.assets[0].name, "Asset 1");
+        assert_eq!(redacted.assets[1].name, "Asset 2");
+        assert!(redacted.findings[0].title.contains("Asset 1"));
+        assert!(redacted.findings[0].title.contains("Asset 2"));
+        assert!(!encoded.contains("private.example.test"));
+        assert!(!encoded.contains("customer-database.internal"));
     }
 
     #[test]

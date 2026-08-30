@@ -635,11 +635,81 @@ pub enum EngineRunStatus {
     Cancelled,
 }
 
+/// The immutable kind of work represented by an [`EngineRun`].
+///
+/// Historical case files predate this discriminator, so a missing value must
+/// remain a catalog-backed engine run. Product-owned bounded tasks use an
+/// explicit variant instead of inventing catalog metadata such as an image or
+/// manifest identity.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EngineTaskKind {
+    #[default]
+    CatalogEngine,
+    BuiltInLocalhostTcp {
+        port: u16,
+        timeout_ms: u64,
+        payload_bytes: u64,
+    },
+}
+
+pub const BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS: u64 = 3_000;
+pub const BUILT_IN_LOCALHOST_TCP_PAYLOAD_BYTES: u64 = 0;
+pub const BUILT_IN_LOCALHOST_TCP_ENGINE_ID: &str = "built-in-localhost-tcp";
+pub const BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE: &str = "localhost_tcp_endpoint";
+pub const BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE: &str =
+    "user_started_exact_localhost_tcp_check";
+
+impl EngineTaskKind {
+    /// Freeze the only currently supported localhost quick-task contract: one
+    /// connection to the selected loopback port, bounded to three seconds,
+    /// with no application payload.
+    pub fn built_in_localhost_tcp(port: u16) -> Self {
+        Self::BuiltInLocalhostTcp {
+            port,
+            timeout_ms: BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS,
+            payload_bytes: BUILT_IN_LOCALHOST_TCP_PAYLOAD_BYTES,
+        }
+    }
+
+    pub fn is_exact_built_in_localhost_tcp_contract(&self) -> bool {
+        matches!(
+            self,
+            Self::BuiltInLocalhostTcp {
+                port: 1..=u16::MAX,
+                timeout_ms: BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS,
+                payload_bytes: BUILT_IN_LOCALHOST_TCP_PAYLOAD_BYTES,
+            }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalhostTcpOutcome {
+    Reachable,
+    Closed,
+    TimedOut,
+}
+
+/// A durable observation from the built-in localhost TCP task. It records
+/// reachability only and must never be interpreted as a vulnerability or
+/// security verdict.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalhostTcpObservation {
+    pub outcome: LocalhostTcpOutcome,
+    pub observed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineRun {
     pub id: Id,
     pub scan_run_id: Id,
     pub engine_id: String,
+    #[serde(default)]
+    pub task_kind: EngineTaskKind,
+    #[serde(default)]
+    pub localhost_tcp_observation: Option<LocalhostTcpObservation>,
     pub asset_ids: Vec<Id>,
     pub status: EngineRunStatus,
     pub progress_percent: u8,
@@ -709,6 +779,141 @@ pub struct EngineRun {
     pub error_message: Option<String>,
 }
 
+/// Closed reason codes for a scan request that reached a durable terminal
+/// state before any check contacted a target.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanRequestOutcomeCode {
+    NoEffectiveScopeGrants,
+    NoOwnershipConfirmedTargets,
+    NoApplicableChecks,
+}
+
+pub const MAX_SCAN_REQUEST_EXPLANATION_CHARS: usize = 1_000;
+pub const MAX_SCAN_REQUEST_ASSET_IDS: usize = 10_000;
+pub const MAX_SCAN_REQUEST_ENGINE_IDS: usize = 1_000;
+const MAX_SCAN_REQUEST_ID_CHARS: usize = 512;
+
+/// A durable request-level outcome. Keeping `no_checks_completed` as the
+/// tagged variant prevents an empty plan from looking queued, successful, or
+/// equivalent to a scan with zero findings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ScanRequestOutcome {
+    NoChecksCompleted {
+        code: ScanRequestOutcomeCode,
+        #[serde(deserialize_with = "deserialize_scan_request_asset_ids")]
+        requested_asset_ids: Vec<Id>,
+        #[serde(deserialize_with = "deserialize_scan_request_engine_ids")]
+        requested_engine_ids: Vec<String>,
+        #[serde(deserialize_with = "deserialize_scan_request_explanation")]
+        explanation: String,
+    },
+}
+
+impl ScanRequestOutcome {
+    pub fn no_checks_completed(
+        code: ScanRequestOutcomeCode,
+        requested_asset_ids: Vec<Id>,
+        requested_engine_ids: Vec<String>,
+        explanation: impl Into<String>,
+    ) -> Result<Self, String> {
+        let explanation = explanation.into();
+        validate_scan_request_explanation(&explanation)?;
+        let requested_asset_ids =
+            normalize_scan_request_ids(requested_asset_ids, MAX_SCAN_REQUEST_ASSET_IDS, "asset")?;
+        let requested_engine_ids = normalize_scan_request_ids(
+            requested_engine_ids,
+            MAX_SCAN_REQUEST_ENGINE_IDS,
+            "engine",
+        )?;
+        Ok(Self::NoChecksCompleted {
+            code,
+            requested_asset_ids,
+            requested_engine_ids,
+            explanation,
+        })
+    }
+
+    pub fn is_no_checks_completed(&self) -> bool {
+        matches!(self, Self::NoChecksCompleted { .. })
+    }
+}
+
+fn normalize_scan_request_ids(
+    values: Vec<String>,
+    maximum: usize,
+    kind: &str,
+) -> Result<Vec<String>, String> {
+    if values.len() > maximum {
+        return Err(format!(
+            "scan request exceeds {maximum} requested {kind} identifiers"
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut normalized = Vec::with_capacity(values.len());
+    for value in values {
+        if value.is_empty()
+            || value != value.trim()
+            || value.chars().count() > MAX_SCAN_REQUEST_ID_CHARS
+            || value.chars().any(char::is_control)
+        {
+            return Err(format!(
+                "scan request contains an invalid {kind} identifier"
+            ));
+        }
+        if seen.insert(value.clone()) {
+            normalized.push(value);
+        }
+    }
+    Ok(normalized)
+}
+
+fn deserialize_scan_request_asset_ids<'de, D>(deserializer: D) -> Result<Vec<Id>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<String>::deserialize(deserializer)?;
+    normalize_scan_request_ids(values, MAX_SCAN_REQUEST_ASSET_IDS, "asset")
+        .map_err(serde::de::Error::custom)
+}
+
+fn deserialize_scan_request_engine_ids<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<String>::deserialize(deserializer)?;
+    normalize_scan_request_ids(values, MAX_SCAN_REQUEST_ENGINE_IDS, "engine")
+        .map_err(serde::de::Error::custom)
+}
+
+fn validate_scan_request_explanation(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("scan request explanation must not be empty".into());
+    }
+    if value != value.trim() {
+        return Err("scan request explanation must not have surrounding whitespace".into());
+    }
+    if value.chars().count() > MAX_SCAN_REQUEST_EXPLANATION_CHARS {
+        return Err(format!(
+            "scan request explanation exceeds {MAX_SCAN_REQUEST_EXPLANATION_CHARS} characters"
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err("scan request explanation must be one plain-text line".into());
+    }
+    Ok(())
+}
+
+fn deserialize_scan_request_explanation<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    validate_scan_request_explanation(&value).map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanRun {
     pub id: Id,
@@ -716,6 +921,12 @@ pub struct ScanRun {
     pub sequence: u32,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    /// Terminal request-level outcome for a plan that contacted no target.
+    /// Missing means a legacy or ordinarily planned run, never implicit
+    /// success. New terminal zero-contact runs set this together with
+    /// `completed_at` and contain no queued engine runs.
+    #[serde(default)]
+    pub request_outcome: Option<ScanRequestOutcome>,
     pub knowledge_cutoff: DateTime<Utc>,
     /// Historical framework-classification context frozen when the run was
     /// planned. It never grants scan permission or changes scanner execution.
@@ -748,6 +959,15 @@ pub struct ScanRun {
 }
 
 impl ScanRun {
+    pub fn is_terminal_no_checks(&self) -> bool {
+        self.completed_at.is_some()
+            && self.engine_runs.is_empty()
+            && self
+                .request_outcome
+                .as_ref()
+                .is_some_and(ScanRequestOutcome::is_no_checks_completed)
+    }
+
     pub fn frozen_ai_system_applicability(&self) -> AiSystemApplicabilityAnswer {
         match self.ai_system_applicability {
             AiSystemApplicabilityAnswer::Unknown if self.ai_system_applicable => {
@@ -1068,6 +1288,13 @@ pub struct CaseExport {
     pub format: Option<String>,
     pub path: String,
     pub sha256: String,
+    /// Findings-only formats cannot carry the run coverage ledger in their
+    /// native schema. New records therefore persist the mandatory companion
+    /// manifest instead of disabling those exports for partial runs.
+    #[serde(default)]
+    pub coverage_manifest_path: Option<String>,
+    #[serde(default)]
+    pub coverage_manifest_sha256: Option<String>,
     pub signature: Option<String>,
     pub public_key: Option<String>,
     pub redaction_profile: String,
@@ -1460,6 +1687,7 @@ mod tests {
         .unwrap();
 
         assert!(run.verification_baseline_run_id.is_none());
+        assert!(run.request_outcome.is_none());
         assert!(!run.ai_system_applicable);
         assert_eq!(
             run.frozen_ai_system_applicability(),
@@ -1485,6 +1713,195 @@ mod tests {
         assert_eq!(
             legacy_true.frozen_ai_system_applicability(),
             AiSystemApplicabilityAnswer::Applicable
+        );
+    }
+
+    #[test]
+    fn terminal_no_checks_request_outcome_round_trips_without_becoming_queued_work() {
+        let now = Utc::now();
+        let outcome = ScanRequestOutcome::no_checks_completed(
+            ScanRequestOutcomeCode::NoApplicableChecks,
+            vec!["asset-1".into(), "asset-1".into()],
+            vec!["engine-a".into(), "engine-b".into(), "engine-a".into()],
+            "No selected check can inspect the requested target, so nothing contacted it.",
+        )
+        .unwrap();
+        let run = ScanRun {
+            id: "run-no-checks".into(),
+            case_id: "case-1".into(),
+            sequence: 1,
+            created_at: now,
+            completed_at: Some(now),
+            request_outcome: Some(outcome.clone()),
+            knowledge_cutoff: now,
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
+            engine_runs: vec![],
+        };
+
+        assert!(run.is_terminal_no_checks());
+        assert!(run.engine_runs.is_empty());
+        let encoded = serde_json::to_value(&run).unwrap();
+        assert_eq!(encoded["request_outcome"]["status"], "no_checks_completed");
+        assert_eq!(encoded["request_outcome"]["code"], "no_applicable_checks");
+        assert_eq!(
+            encoded["request_outcome"]["requested_asset_ids"][0],
+            "asset-1"
+        );
+        assert_eq!(
+            encoded["request_outcome"]["requested_engine_ids"],
+            serde_json::json!(["engine-a", "engine-b"])
+        );
+
+        let decoded: ScanRun = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.request_outcome, Some(outcome));
+        assert!(decoded.is_terminal_no_checks());
+
+        let mut contradictory = decoded;
+        contradictory.engine_runs.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "engine-run-1",
+                "scan_run_id": "run-no-checks",
+                "engine_id": "inventory",
+                "asset_ids": ["asset-1"],
+                "status": "completed",
+                "progress_percent": 100,
+                "phase": "complete",
+                "started_at": "2026-08-24T12:00:00Z",
+                "finished_at": "2026-08-24T12:00:01Z",
+                "resume_token": null,
+                "engine_version": "1.0.0",
+                "image_digest": null,
+                "rule_version": null,
+                "adapter_version": "1",
+                "raw_artifact_ids": [],
+                "error_code": null,
+                "error_message": null
+            }))
+            .unwrap(),
+        );
+        assert!(!contradictory.is_terminal_no_checks());
+    }
+
+    #[test]
+    fn no_checks_explanation_is_bounded_plain_language() {
+        assert!(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoEffectiveScopeGrants,
+                vec![],
+                vec![],
+                ""
+            )
+            .is_err()
+        );
+        assert!(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoOwnershipConfirmedTargets,
+                vec![],
+                vec![],
+                "A line with\na hidden second line."
+            )
+            .is_err()
+        );
+        assert!(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                vec![],
+                vec![],
+                "x".repeat(MAX_SCAN_REQUEST_EXPLANATION_CHARS + 1)
+            )
+            .is_err()
+        );
+
+        let oversized = serde_json::json!({
+            "status": "no_checks_completed",
+            "code": "no_applicable_checks",
+            "requested_asset_ids": [],
+            "requested_engine_ids": [],
+            "explanation": "x".repeat(MAX_SCAN_REQUEST_EXPLANATION_CHARS + 1)
+        });
+        assert!(serde_json::from_value::<ScanRequestOutcome>(oversized).is_err());
+
+        assert!(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                vec!["asset-1".into(); MAX_SCAN_REQUEST_ASSET_IDS + 1],
+                vec![],
+                "No requested check was applicable."
+            )
+            .is_err()
+        );
+        assert!(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                vec![" asset-1".into()],
+                vec![],
+                "No requested check was applicable."
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_engine_run_defaults_to_catalog_task_without_an_observation() {
+        let run: EngineRun = serde_json::from_value(serde_json::json!({
+            "id": "engine-run-1",
+            "scan_run_id": "run-1",
+            "engine_id": "inventory",
+            "asset_ids": ["asset-1"],
+            "status": "completed",
+            "progress_percent": 100,
+            "phase": "complete",
+            "started_at": "2026-08-24T12:00:00Z",
+            "finished_at": "2026-08-24T12:00:01Z",
+            "resume_token": null,
+            "engine_version": "1.0.0",
+            "image_digest": null,
+            "rule_version": null,
+            "adapter_version": "1",
+            "raw_artifact_ids": [],
+            "error_code": null,
+            "error_message": null
+        }))
+        .unwrap();
+
+        assert_eq!(run.task_kind, EngineTaskKind::CatalogEngine);
+        assert!(run.localhost_tcp_observation.is_none());
+    }
+
+    #[test]
+    fn localhost_task_and_observation_round_trip_as_typed_data() {
+        let observed_at = Utc::now();
+        let task = EngineTaskKind::built_in_localhost_tcp(9_001);
+        assert!(task.is_exact_built_in_localhost_tcp_contract());
+        assert!(
+            !EngineTaskKind::built_in_localhost_tcp(0).is_exact_built_in_localhost_tcp_contract()
+        );
+
+        let encoded = serde_json::to_value(&task).unwrap();
+        assert_eq!(encoded["kind"], "built_in_localhost_tcp");
+        assert_eq!(encoded["port"], 9_001);
+        assert_eq!(encoded["timeout_ms"], 3_000);
+        assert_eq!(encoded["payload_bytes"], 0);
+        assert_eq!(
+            serde_json::from_value::<EngineTaskKind>(encoded).unwrap(),
+            task
+        );
+
+        let observation = LocalhostTcpObservation {
+            outcome: LocalhostTcpOutcome::TimedOut,
+            observed_at,
+        };
+        assert_eq!(
+            serde_json::from_value::<LocalhostTcpObservation>(
+                serde_json::to_value(&observation).unwrap()
+            )
+            .unwrap(),
+            observation
         );
     }
 
@@ -1550,6 +1967,7 @@ mod tests {
                 sequence,
                 created_at: now,
                 completed_at: None,
+                request_outcome: None,
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),

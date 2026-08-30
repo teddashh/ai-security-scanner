@@ -208,7 +208,12 @@ enum ParsedArtifact {
 
 /// Construct the adapter set matching the complete built-in engine catalog.
 pub fn builtin_adapter_registry() -> AppResult<AdapterRegistry> {
-    control_mapping::validate_catalog(BUILTIN_ENGINE_IDS)?;
+    if let Err(error) = control_mapping::validate_catalog(BUILTIN_ENGINE_IDS) {
+        tracing::warn!(
+            error = %error,
+            "framework relationships are unavailable; finding normalization remains enabled"
+        );
+    }
     let definitions = [
         ("cloudquery", Profile::CloudQuery, "Cloud security engineer"),
         ("steampipe", Profile::Steampipe, "Cloud security engineer"),

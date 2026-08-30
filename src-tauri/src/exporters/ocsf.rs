@@ -48,27 +48,21 @@ pub fn export_ocsf_finding_events(case: &AssessmentCase, run_id: &str) -> AppRes
             .then_with(|| left.id.cmp(&right.id))
     });
 
-    observations
+    Ok(observations
         .into_iter()
-        .map(|observation| {
+        .filter_map(|observation| {
             let canonical_finding = findings.get(observation.finding_id.as_str()).copied();
             let finding = observation
                 .finding_snapshot
                 .as_ref()
-                .or(canonical_finding)
-                .ok_or_else(|| {
-                    AppError::InvalidRequest(format!(
-                        "observation {} references missing finding {}",
-                        observation.id, observation.finding_id
-                    ))
-                })?;
+                .or(canonical_finding)?;
             // Normalized evidence and prose are run-specific, while workflow
             // state is a current case projection (including expired temporary
             // suppressions). Never revive stale snapshot status in an export.
             let effective_status = canonical_finding
                 .map(|canonical| &canonical.status)
                 .unwrap_or(&finding.status);
-            Ok(to_event(
+            Some(to_event(
                 case,
                 run_id,
                 finding,
@@ -77,7 +71,7 @@ pub fn export_ocsf_finding_events(case: &AssessmentCase, run_id: &str) -> AppRes
                 &assets,
             ))
         })
-        .collect()
+        .collect())
 }
 
 pub fn export_ocsf_finding_events_bytes(case: &AssessmentCase, run_id: &str) -> AppResult<Vec<u8>> {
@@ -359,6 +353,7 @@ mod tests {
             sequence: 1,
             created_at: time,
             completed_at: Some(time),
+            request_outcome: None,
             knowledge_cutoff: time,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -471,5 +466,21 @@ mod tests {
             "Run one evidence"
         );
         assert!(!events[0].to_string().contains("Later run"));
+    }
+
+    #[test]
+    fn dangling_observation_does_not_suppress_valid_siblings() {
+        let mut case = fixture();
+        let mut dangling = case.finding_observations[0].clone();
+        dangling.id = "observation-dangling".into();
+        dangling.finding_id = "finding-missing".into();
+        dangling.fingerprint = "fp-missing".into();
+        dangling.finding_snapshot = None;
+        case.finding_observations.push(dangling);
+
+        let events = export_ocsf_finding_events(&case, "run-1").unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["finding_info"]["title"], "Public bucket");
     }
 }

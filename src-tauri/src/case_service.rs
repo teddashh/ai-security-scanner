@@ -10,6 +10,9 @@ use crate::adapters::{
     is_mapping_independent_empty_json_lines, is_runtime_stream_capture_path,
 };
 use crate::artifact_store::inspect_raw_artifacts;
+use crate::beginner_report::{
+    BeginnerReportSummary, ReportLifecycle, build_beginner_master_report,
+};
 use crate::bootstrap::executor::list_bootstrap_cleanup_obligations;
 use crate::connectors::{
     LIVE_PROVIDER_ARTIFACT_SET_SCHEMA, LiveProviderArtifactSet, MAX_LIVE_PROVIDER_PAGES,
@@ -24,11 +27,12 @@ use crate::discovery::{
 use crate::domain::{
     AiGeneratedArtifactAnswer, AiSystemApplicabilityAnswer, ArtifactCleanupObligation,
     AssessmentCase, AssessmentIntent, Asset, AssetIdentifier, AssetKind, CaseExport, CaseStatus,
-    CaseSummary, CoverageStatus, CreateCaseRequest, DataSource, DeclaredAssetInput,
-    DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput, DistributionMode,
-    EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus, Finding, FindingDiffStatus,
-    FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation, FindingStatus,
-    FindingWorkflowEvent, Id, ManifestStatus, OrganizationProfile, RawArtifact, ScanPermission,
+    CaseSummary, ControlMappingProvenance, CoverageStatus, CreateCaseRequest, DataSource,
+    DeclaredAssetInput, DeclaredAssetKind, DeclaredWebProtocol, DeclaredWebServiceInput,
+    DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus,
+    EngineTaskKind, Finding, FindingDiffStatus, FindingGroup, FindingGroupAction,
+    FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id, ManifestStatus,
+    OrganizationProfile, RawArtifact, ScanPermission, ScanRequestOutcome, ScanRequestOutcomeCode,
     ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
     valid_azure_subscription_id, valid_gcp_project_id,
 };
@@ -226,7 +230,7 @@ pub enum ScanReadinessState {
 }
 
 /// Machine-readable reason that the primary start-scan action is blocked.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanReadinessBlocker {
     DemoCase,
@@ -312,22 +316,135 @@ pub struct ScanReadiness {
     pub next_step: Option<ScanReadinessNextStep>,
 }
 
+impl ScanReadinessBlocker {
+    /// Stable beginner-safe explanation used by readiness and by durable
+    /// zero-contact execution outcomes. Raw dependency errors never cross
+    /// this boundary.
+    pub fn diagnostic(self) -> &'static str {
+        match self {
+            Self::RuntimeUnavailable => {
+                "The local scan tools could not be prepared, so this check was not tested. Other available checks can still continue; try this check again."
+            }
+            Self::ProviderSourceRequired => {
+                "This check needs a connected read-only cloud account, so it was not tested. Connect the account and try this check again."
+            }
+            Self::ProviderCapabilityUnavailable => {
+                "The saved read-only cloud connection is no longer available, so this check was not tested. Reconnect it and try again."
+            }
+            Self::ProviderSourceAmbiguous => {
+                "More than one cloud connection matches this target, so this check was not tested. Choose the intended connection and try again."
+            }
+            Self::ProviderAuthorizationBindingMismatch => {
+                "The saved cloud account no longer matches its verified read-only connection, so this check was not tested. Reconnect it and try again."
+            }
+            Self::ProviderTargetBindingMismatch => {
+                "The selected cloud target does not match the verified account, so this check was not tested. Choose the correct target and try again."
+            }
+            Self::ProviderPreflightUnavailable => {
+                "The cloud connection could not be checked right now, so this check was not tested. Other available checks can still continue; try again."
+            }
+            Self::WorkspaceSnapshotUnavailable => {
+                "The selected local input is missing or changed, so this check was not tested. Choose it again and retry."
+            }
+            Self::EgressGatewayUnavailable => {
+                "The isolated scan network could not be prepared, so this check was not tested. Other available checks can still continue; try again."
+            }
+            Self::EngineExecutionContractInvalid => {
+                "A required scan-tool component is unavailable, so this check was not tested. Other available checks can still continue."
+            }
+            Self::PassiveSourceUnavailable => {
+                "The saved read-only data source is missing or changed, so this check was not tested. Reconnect it and try again."
+            }
+            Self::CapturedEvidenceUnavailable => {
+                "Saved evidence needed to continue is missing or changed, so this check was not tested. Start a new scan for fresh results."
+            }
+            Self::ExecutionPreflightUnavailable => {
+                "Preparation for this check could not finish, so it was not tested. Other available checks can still continue; try again."
+            }
+            Self::DemoCase
+            | Self::ArchivedCase
+            | Self::ScanAlreadyActive
+            | Self::NoEffectiveScopeGrants
+            | Self::NoOwnershipConfirmedTargets
+            | Self::NoCompatibleAuthorizedTargets
+            | Self::NoRunnableAuthorizedTargets => {
+                "This check could not start with the saved scan scope. Review what is selected, then try again."
+            }
+        }
+    }
+}
+
+/// One exact task result produced by process-owned preparation. Every task in
+/// a persisted plan appears exactly once in the atomic outcome transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PersistedPreDispatchTaskOutcome {
+    Runnable {
+        engine_run_id: Id,
+    },
+    Failed {
+        engine_run_id: Id,
+        reason: ScanReadinessBlocker,
+    },
+}
+
+impl PersistedPreDispatchTaskOutcome {
+    fn engine_run_id(&self) -> &str {
+        match self {
+            Self::Runnable { engine_run_id } | Self::Failed { engine_run_id, .. } => engine_run_id,
+        }
+    }
+}
+
+/// The complete typed lifecycle for work that has been persisted but has not
+/// contacted a target. One bounded-retry CaseService entry point owns all
+/// durable projections, so callers cannot compose contradictory partial
+/// writes or declare temporal race compensation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PersistedPreDispatchTransition {
+    Preparing {
+        engine_run_ids: Vec<Id>,
+    },
+    ApplyOutcome {
+        task_outcomes: Vec<PersistedPreDispatchTaskOutcome>,
+    },
+    /// A source capability can change after the complete preparation outcome
+    /// is durable but before its credentials are checked out. Close only that
+    /// already-authorized source group; unrelated activated work continues.
+    FailActivated {
+        task_failures: Vec<PersistedPreDispatchTaskOutcome>,
+    },
+    Cancel {
+        engine_run_ids: Vec<Id>,
+    },
+}
+
+/// Transitional public name retained for call sites while the single
+/// readiness/preflight taxonomy is adopted. This is an alias, not a second
+/// enum or conversion layer.
+pub type PersistedScanPreflightFailureReason = ScanReadinessBlocker;
+
 const SCAN_PREFLIGHT_ERROR_PREFIX: &str = "scan_preflight";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScanPlanIntent {
     PersistAuditPlan,
+    PersistBeforeExecutionPreflight,
     PreviewExecution,
     StartExecution,
 }
 
 impl ScanPlanIntent {
     fn is_execution(self) -> bool {
+        matches!(
+            self,
+            Self::PersistBeforeExecutionPreflight | Self::PreviewExecution | Self::StartExecution
+        )
+    }
+
+    fn requires_executable_group(self) -> bool {
         matches!(self, Self::PreviewExecution | Self::StartExecution)
     }
 }
-
-type ExecutionPrePersist<'a> = dyn FnMut(&ScanPlan) -> AppResult<()> + 'a;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RescanPlan {
@@ -439,6 +556,9 @@ pub struct ExportPreview {
     pub raw_artifacts_omitted: usize,
     pub sensitive_raw_artifacts_omitted: usize,
     pub sensitive_data_warning: String,
+    /// OCSF and OSCAL carry findings in their native document while an
+    /// adjacent manifest carries the exact run coverage and gaps.
+    pub coverage_manifest_included: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -503,7 +623,8 @@ impl<'a> CaseService<'a> {
     pub fn create_case(&self, request: &CreateCaseRequest) -> AppResult<AssessmentCase> {
         let title = required_text("case title", &request.title, 200)?;
         let organization_name =
-            required_text("organization name", &request.organization_name, 200)?;
+            optional_text("organization name", Some(&request.organization_name), 200)?
+                .unwrap_or_default();
         let employee_range = required_text("employee range", &request.employee_range, 80)?;
         let notes = optional_text("case notes", request.notes.as_deref(), 8_000)?;
         let now = Utc::now();
@@ -1353,12 +1474,29 @@ impl<'a> CaseService<'a> {
         case_id: &str,
         requests: Vec<ScopeApprovalRequest>,
     ) -> AppResult<Vec<ScopeGrant>> {
+        let now = Utc::now();
+        let mut case = self.mutable_case(case_id, "approve scope")?;
+        let approved = self.apply_scope_approvals_at(&mut case, requests, now)?;
+        self.storage.save_case(&mut case, "scope.approved")?;
+        Ok(approved)
+    }
+
+    /// Applies exact scope decisions to one already-loaded case without
+    /// performing storage I/O. Keeping validation, grant refresh, ownership,
+    /// and coverage projection inside this mutation helper lets the combined
+    /// Start path commit authorization and its frozen run/tasks in one case
+    /// revision.
+    fn apply_scope_approvals_at(
+        &self,
+        case: &mut AssessmentCase,
+        requests: Vec<ScopeApprovalRequest>,
+        now: DateTime<Utc>,
+    ) -> AppResult<Vec<ScopeGrant>> {
         if requests.is_empty() {
             return Err(AppError::InvalidRequest(
                 "at least one scope approval request is required".into(),
             ));
         }
-        let now = Utc::now();
         for request in &requests {
             validate_scope_approval(request, now)?;
         }
@@ -1377,8 +1515,7 @@ impl<'a> CaseService<'a> {
                 }
             }
         }
-        let mut case = self.mutable_case(case_id, "approve scope")?;
-        ensure_no_active_scan(&case, "change scan authorization")?;
+        ensure_no_active_scan(case, "change scan authorization")?;
 
         // Collapse any legacy duplicates first, preserving the oldest stable
         // grant ID, then replace each requested decision in place.
@@ -1422,7 +1559,7 @@ impl<'a> CaseService<'a> {
                     trim_option(request.authorization_reference.as_deref());
                 grant.notes = optional_text("scope notes", request.notes.as_deref(), 4_000)?;
                 grant.external_scope = materialize_external_scope(
-                    case_id,
+                    &case.id,
                     &asset,
                     &grant.id,
                     &permission,
@@ -1455,9 +1592,43 @@ impl<'a> CaseService<'a> {
         });
         case.status = CaseStatus::Ready;
         case.touch();
-        refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(&mut case, "scope.approved")?;
+        refresh_coverage_ledger(case, self.engines.manifests(), now);
         Ok(approved)
+    }
+
+    /// Records the user's exact authorization assertion and freezes the scan
+    /// run plus every known task in one optimistic case save. Runtime,
+    /// provider, gateway, and engine preflight deliberately happen only after
+    /// this method returns.
+    pub fn authorize_and_persist_scan_before_execution_preflight(
+        &self,
+        case_id: &str,
+        decisions: Vec<ScopeApprovalRequest>,
+        request: ScanPlanRequest,
+    ) -> AppResult<ScanPlan> {
+        let now = Utc::now();
+        let mut case = self.mutable_case(case_id, "start a scan")?;
+        let exact_grant_ids = if decisions.is_empty() {
+            None
+        } else {
+            let approved = self.apply_scope_approvals_at(&mut case, decisions, now)?;
+            Some(
+                approved
+                    .iter()
+                    .map(|grant| grant.id.clone())
+                    .collect::<BTreeSet<_>>(),
+            )
+        };
+        let plan = self.build_scan_plan_at(
+            &mut case,
+            request,
+            None,
+            ScanPlanIntent::PersistBeforeExecutionPreflight,
+            exact_grant_ids.as_ref(),
+            now,
+        )?;
+        self.storage.save_case(&mut case, "scan.requested")?;
+        Ok(plan)
     }
 
     /// Reports whether a new desktop execution can start without mutating the
@@ -1481,7 +1652,6 @@ impl<'a> CaseService<'a> {
             None,
             ScanPlanIntent::PersistAuditPlan,
             Utc::now(),
-            None,
         )
     }
 
@@ -1499,7 +1669,6 @@ impl<'a> CaseService<'a> {
             None,
             ScanPlanIntent::PreviewExecution,
             Utc::now(),
-            None,
         )
     }
 
@@ -1517,30 +1686,386 @@ impl<'a> CaseService<'a> {
             None,
             ScanPlanIntent::StartExecution,
             Utc::now(),
-            None,
         )
     }
 
-    /// Execution planner with a final live-dependency check at the only safe
-    /// seam: the exact groups exist in memory, but no `ScanRun` has been
-    /// appended or saved. Hook failure leaves the durable case unchanged.
-    pub fn plan_scan_for_execution_checked<F>(
+    /// Persists the exact new-run contract before inspecting process-owned
+    /// runtime, gateway, provider-capability, or static-input dependencies.
+    /// Unlike the legacy checked seam, an all-`not_executed` plan is retained as
+    /// a terminal, reportable coverage result instead of being discarded.
+    ///
+    /// Active-run duplicate protection remains part of planning. Missing
+    /// permission, ownership, or applicable checks becomes a durable terminal
+    /// request outcome instead of an empty queued run or a user-visible abort.
+    pub fn persist_scan_before_execution_preflight(
         &self,
         case_id: &str,
         request: ScanPlanRequest,
-        mut pre_persist: F,
-    ) -> AppResult<ScanPlan>
-    where
-        F: FnMut(&ScanPlan) -> AppResult<()>,
-    {
+    ) -> AppResult<ScanPlan> {
         self.plan_scan_at(
             case_id,
             request,
             None,
-            ScanPlanIntent::StartExecution,
+            ScanPlanIntent::PersistBeforeExecutionPreflight,
             Utc::now(),
-            Some(&mut pre_persist),
         )
+    }
+
+    /// Applies one complete typed pre-dispatch lifecycle transition. The
+    /// transition is re-read and retried as one unit on revision conflicts;
+    /// failure and runnable siblings can therefore never be split across
+    /// storage revisions.
+    pub fn transition_persisted_scan_pre_dispatch(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        transition: &PersistedPreDispatchTransition,
+    ) -> AppResult<AssessmentCase> {
+        retry_case_revision_conflicts(|| {
+            self.transition_persisted_scan_pre_dispatch_once(case_id, scan_run_id, transition)
+        })
+    }
+
+    fn transition_persisted_scan_pre_dispatch_once(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        transition: &PersistedPreDispatchTransition,
+    ) -> AppResult<AssessmentCase> {
+        let (requested_ids, outcome_by_id, operation, event) = match transition {
+            PersistedPreDispatchTransition::Preparing { engine_run_ids } => (
+                exact_engine_run_id_set(engine_run_ids, "preflight preparation")?,
+                BTreeMap::new(),
+                "show scan preparation",
+                "scan.preflight_preparing",
+            ),
+            PersistedPreDispatchTransition::ApplyOutcome { task_outcomes } => {
+                if task_outcomes.is_empty() {
+                    return Err(AppError::InvalidRequest(
+                        "preflight outcome requires at least one task".into(),
+                    ));
+                }
+                let mut by_id = BTreeMap::new();
+                for outcome in task_outcomes {
+                    if by_id
+                        .insert(outcome.engine_run_id().to_owned(), outcome.clone())
+                        .is_some()
+                    {
+                        return Err(AppError::InvalidRequest(
+                            "preflight outcome contains a duplicate engine run".into(),
+                        ));
+                    }
+                }
+                (
+                    by_id.keys().cloned().collect(),
+                    by_id,
+                    "record scan preparation outcome",
+                    "scan.preflight_outcome",
+                )
+            }
+            PersistedPreDispatchTransition::FailActivated { task_failures } => {
+                if task_failures.is_empty()
+                    || task_failures.iter().any(|outcome| {
+                        !matches!(outcome, PersistedPreDispatchTaskOutcome::Failed { .. })
+                    })
+                {
+                    return Err(AppError::InvalidRequest(
+                        "activated failure transition requires typed failed tasks".into(),
+                    ));
+                }
+                let mut by_id = BTreeMap::new();
+                for outcome in task_failures {
+                    if by_id
+                        .insert(outcome.engine_run_id().to_owned(), outcome.clone())
+                        .is_some()
+                    {
+                        return Err(AppError::InvalidRequest(
+                            "activated failure transition contains a duplicate engine run".into(),
+                        ));
+                    }
+                }
+                (
+                    by_id.keys().cloned().collect(),
+                    by_id,
+                    "record source activation failure",
+                    "scan.source_activation_failed",
+                )
+            }
+            PersistedPreDispatchTransition::Cancel { engine_run_ids } => (
+                exact_engine_run_id_set(engine_run_ids, "pre-dispatch cancellation")?,
+                BTreeMap::new(),
+                "cancel a scan before dispatch",
+                "scan.cancelled_before_dispatch",
+            ),
+        };
+        if requested_ids.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "pre-dispatch transition requires at least one engine run".into(),
+            ));
+        }
+
+        let mut case = self.mutable_case(case_id, operation)?;
+        let run_index = case
+            .scan_runs
+            .iter()
+            .position(|run| run.id == scan_run_id)
+            .ok_or_else(|| AppError::InvalidRequest("scan run not found".into()))?;
+        let run = &case.scan_runs[run_index];
+        if run.case_id != case_id {
+            return Err(AppError::NotAuthorized(
+                "pre-dispatch transition does not match its persisted run".into(),
+            ));
+        }
+        let matched_ids = run
+            .engine_runs
+            .iter()
+            .filter(|engine_run| requested_ids.contains(&engine_run.id))
+            .map(|engine_run| engine_run.id.clone())
+            .collect::<BTreeSet<_>>();
+        if matched_ids != requested_ids {
+            return Err(AppError::InvalidRequest(
+                "pre-dispatch transition refers to an unknown engine run".into(),
+            ));
+        }
+
+        if matches!(
+            transition,
+            PersistedPreDispatchTransition::ApplyOutcome { .. }
+        ) {
+            let active_ids = run
+                .engine_runs
+                .iter()
+                .filter(|engine_run| !engine_status_terminal(&engine_run.status))
+                .map(|engine_run| engine_run.id.clone())
+                .collect::<BTreeSet<_>>();
+            if active_ids != requested_ids {
+                return Err(AppError::NotAuthorized(
+                    "preflight outcome must cover every remaining prepared execution".into(),
+                ));
+            }
+        }
+
+        let mut next_tokens = BTreeMap::<Id, String>::new();
+        for engine_run in &run.engine_runs {
+            if !requested_ids.contains(&engine_run.id) || engine_status_terminal(&engine_run.status)
+            {
+                continue;
+            }
+            let allowed_status = matches!(
+                engine_run.status,
+                EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Paused
+            );
+            let allowed_phase = matches!(
+                engine_run.phase.as_str(),
+                "queued" | "queued_for_resume" | "preflight_preparing" | "dispatch_activated"
+            );
+            let adapter_only_checkpoint = adapter_only_pre_dispatch_checkpoint(
+                case_id,
+                scan_run_id,
+                engine_run,
+                "pre-dispatch transition",
+            )?;
+            let is_adapter_only = adapter_only_checkpoint.is_some();
+            if !allowed_status || !allowed_phase || engine_run.finished_at.is_some() {
+                return Err(AppError::NotAuthorized(
+                    "pre-dispatch transition found an execution outside its durable preparation phase"
+                        .into(),
+                ));
+            }
+            if adapter_only_checkpoint.is_some()
+                && matches!(
+                    transition,
+                    PersistedPreDispatchTransition::FailActivated { .. }
+                )
+            {
+                return Err(AppError::NotAuthorized(
+                    "captured adapter work cannot enter provider activation failure".into(),
+                ));
+            }
+            let mut checkpoint = match adapter_only_checkpoint {
+                Some(checkpoint) => checkpoint,
+                None => resource_free_planned_checkpoint(
+                    case_id,
+                    scan_run_id,
+                    engine_run,
+                    "pre-dispatch transition",
+                )?,
+            };
+            match outcome_by_id.get(&engine_run.id) {
+                Some(PersistedPreDispatchTaskOutcome::Failed { reason, .. }) => {
+                    if !is_adapter_only {
+                        checkpoint.stage = ExecutionStage::Failed;
+                    }
+                    checkpoint.last_error = Some(reason.diagnostic().into());
+                }
+                _ if matches!(transition, PersistedPreDispatchTransition::Cancel { .. }) => {
+                    if !is_adapter_only {
+                        checkpoint.stage = ExecutionStage::Cancelled;
+                    }
+                    checkpoint.last_error = Some(
+                        "The scan was cancelled before this attempt performed new target contact."
+                            .into(),
+                    );
+                }
+                _ => {}
+            }
+            next_tokens.insert(engine_run.id.clone(), checkpoint.resume_token()?);
+        }
+
+        let now = Utc::now();
+        let mut changed = false;
+        for engine_run in &mut case.scan_runs[run_index].engine_runs {
+            if !requested_ids.contains(&engine_run.id) || engine_status_terminal(&engine_run.status)
+            {
+                continue;
+            }
+            match transition {
+                PersistedPreDispatchTransition::Preparing { .. } => {
+                    if engine_run.phase != "preflight_preparing"
+                        || engine_run.status != EngineRunStatus::Preparing
+                    {
+                        engine_run.status = EngineRunStatus::Preparing;
+                        engine_run.progress_percent = 1;
+                        engine_run.phase = "preflight_preparing".into();
+                        engine_run.started_at.get_or_insert(now);
+                        changed = true;
+                    }
+                }
+                PersistedPreDispatchTransition::ApplyOutcome { .. } => {
+                    match outcome_by_id
+                        .get(&engine_run.id)
+                        .expect("complete preflight outcome retained every active identity")
+                    {
+                        PersistedPreDispatchTaskOutcome::Runnable { .. } => {
+                            engine_run.status = EngineRunStatus::Preparing;
+                            engine_run.progress_percent = 2;
+                            engine_run.phase = "dispatch_activated".into();
+                            engine_run.started_at.get_or_insert(now);
+                        }
+                        PersistedPreDispatchTaskOutcome::Failed { reason, .. } => {
+                            engine_run.status = EngineRunStatus::Failed;
+                            engine_run.progress_percent = 0;
+                            engine_run.phase = "preflight_failed".into();
+                            engine_run.finished_at = Some(now);
+                            engine_run.error_code = Some(reason.as_str().into());
+                            engine_run.error_message = Some(reason.diagnostic().into());
+                        }
+                    }
+                    changed = true;
+                }
+                PersistedPreDispatchTransition::FailActivated { .. } => {
+                    let PersistedPreDispatchTaskOutcome::Failed { reason, .. } = outcome_by_id
+                        .get(&engine_run.id)
+                        .expect("activated failure retained every requested identity")
+                    else {
+                        unreachable!("activated failure accepts only failed task outcomes")
+                    };
+                    if engine_run.phase != "dispatch_activated"
+                        || engine_run.status != EngineRunStatus::Preparing
+                    {
+                        return Err(AppError::NotAuthorized(
+                            "source activation failure no longer refers to authorized pre-dispatch work"
+                                .into(),
+                        ));
+                    }
+                    engine_run.status = EngineRunStatus::Failed;
+                    engine_run.progress_percent = 0;
+                    engine_run.phase = "preflight_failed".into();
+                    engine_run.finished_at = Some(now);
+                    engine_run.error_code = Some(reason.as_str().into());
+                    engine_run.error_message = Some(reason.diagnostic().into());
+                    changed = true;
+                }
+                PersistedPreDispatchTransition::Cancel { .. } => {
+                    engine_run.status = EngineRunStatus::Cancelled;
+                    engine_run.phase = "cancelled_before_dispatch".into();
+                    engine_run.finished_at = Some(now);
+                    engine_run.error_code = Some("cancelled_before_dispatch".into());
+                    engine_run.error_message = Some(
+                        "The scan was cancelled before this attempt performed target contact."
+                            .into(),
+                    );
+                    changed = true;
+                }
+            }
+            if let Some(token) = next_tokens.remove(&engine_run.id) {
+                engine_run.resume_token = Some(token);
+            }
+        }
+        if !changed {
+            return Ok(case);
+        }
+        update_run_and_case_status(&mut case, run_index, now);
+        case.touch();
+        refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
+        self.storage.save_case(&mut case, event)?;
+        Ok(case)
+    }
+
+    fn persist_no_checks_scan_request(
+        &self,
+        case: &mut AssessmentCase,
+        request: &ScanPlanRequest,
+        verification_baseline_run_id: Option<&str>,
+        effective: &[ScopeGrant],
+        code: ScanRequestOutcomeCode,
+        explanation: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<ScanPlan> {
+        let requested_asset_ids = case
+            .assets
+            .iter()
+            .filter(|asset| {
+                effective.is_empty() || effective.iter().any(|grant| grant.asset_id == asset.id)
+            })
+            .map(|asset| asset.id.clone())
+            .collect::<Vec<_>>();
+        let request_outcome = ScanRequestOutcome::no_checks_completed(
+            code,
+            requested_asset_ids,
+            request.engine_ids.clone(),
+            explanation,
+        )
+        .map_err(AppError::InvalidRequest)?;
+        let ai_system_applicable = case.assessment_intent == Some(AssessmentIntent::AiApplication);
+        let ai_system_applicability = match case.assessment_intent {
+            Some(AssessmentIntent::AiApplication) => AiSystemApplicabilityAnswer::Applicable,
+            Some(_) => AiSystemApplicabilityAnswer::NotApplicable,
+            None => AiSystemApplicabilityAnswer::Unknown,
+        };
+        let scan_run = ScanRun {
+            id: new_id(),
+            case_id: case.id.clone(),
+            sequence: case
+                .scan_runs
+                .iter()
+                .map(|run| run.sequence)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+            created_at: now,
+            completed_at: Some(now),
+            request_outcome: Some(request_outcome),
+            knowledge_cutoff: now,
+            ai_system_applicable,
+            ai_system_applicability,
+            ai_generated_artifact: case.ai_generated_artifact,
+            verification_baseline_run_id: verification_baseline_run_id.map(str::to_owned),
+            scope_grant_ids: effective.iter().map(|grant| grant.id.clone()).collect(),
+            scope_grant_snapshots: effective.to_vec(),
+            engine_runs: Vec::new(),
+        };
+        let plan = ScanPlan {
+            scan_run: scan_run.clone(),
+            executable: Vec::new(),
+            not_executed: Vec::new(),
+        };
+        case.scan_runs.push(scan_run);
+        case.knowledge_cutoff = Some(now);
+        case.status = CaseStatus::NeedsAttention;
+        case.touch();
+        refresh_coverage_ledger(case, self.engines.manifests(), now);
+        Ok(plan)
     }
 
     fn plan_scan_at(
@@ -1550,10 +2075,42 @@ impl<'a> CaseService<'a> {
         verification_baseline_run_id: Option<&str>,
         intent: ScanPlanIntent,
         now: DateTime<Utc>,
-        mut pre_persist: Option<&mut ExecutionPrePersist<'_>>,
     ) -> AppResult<ScanPlan> {
         let mut case = self.mutable_case(case_id, "plan a scan")?;
-        let readiness = scan_readiness_at(&case, self.engines, self.adapters, now);
+        let plan = self.build_scan_plan_at(
+            &mut case,
+            request,
+            verification_baseline_run_id,
+            intent,
+            None,
+            now,
+        )?;
+        if intent != ScanPlanIntent::PreviewExecution {
+            let event = if plan.scan_run.request_outcome.is_some() {
+                "scan.no_checks_completed"
+            } else if verification_baseline_run_id.is_some() {
+                "scan.rescan_planned"
+            } else {
+                "scan.planned"
+            };
+            self.storage.save_case(&mut case, event)?;
+        }
+        Ok(plan)
+    }
+
+    /// Builds and applies one scan plan to an already-loaded case without
+    /// storage I/O. Callers own the transaction boundary so combined Start can
+    /// persist refreshed grants and frozen work atomically.
+    fn build_scan_plan_at(
+        &self,
+        case: &mut AssessmentCase,
+        request: ScanPlanRequest,
+        verification_baseline_run_id: Option<&str>,
+        intent: ScanPlanIntent,
+        exact_grant_ids: Option<&BTreeSet<Id>>,
+        now: DateTime<Utc>,
+    ) -> AppResult<ScanPlan> {
+        let readiness = scan_readiness_at(case, self.engines, self.adapters, now);
         if case.scan_runs.iter().any(|run| !run_is_terminal(run)) {
             if intent.is_execution() {
                 return Err(scan_preflight_error(&readiness));
@@ -1577,8 +2134,22 @@ impl<'a> CaseService<'a> {
             }
         }
 
-        let effective = effective_grants(&case, now);
+        let effective = effective_grants(case, now)
+            .into_iter()
+            .filter(|grant| exact_grant_ids.is_none_or(|grant_ids| grant_ids.contains(&grant.id)))
+            .collect::<Vec<_>>();
         if effective.is_empty() {
+            if intent == ScanPlanIntent::PersistBeforeExecutionPreflight {
+                return self.persist_no_checks_scan_request(
+                    case,
+                    &request,
+                    verification_baseline_run_id,
+                    &[],
+                    ScanRequestOutcomeCode::NoEffectiveScopeGrants,
+                    "No checks ran because this scan has no active permission for a selected target.",
+                    now,
+                );
+            }
             if intent.is_execution() {
                 return Err(scan_preflight_error(&readiness));
             }
@@ -1596,6 +2167,21 @@ impl<'a> CaseService<'a> {
                 && asset.owner_confirmed
                 && !asset.candidate
         }) {
+            if intent == ScanPlanIntent::PersistBeforeExecutionPreflight {
+                let frozen_effective = effective
+                    .iter()
+                    .map(|grant| (*grant).clone())
+                    .collect::<Vec<_>>();
+                return self.persist_no_checks_scan_request(
+                    case,
+                    &request,
+                    verification_baseline_run_id,
+                    &frozen_effective,
+                    ScanRequestOutcomeCode::NoOwnershipConfirmedTargets,
+                    "No checks ran because none of the selected targets is confirmed as yours to scan.",
+                    now,
+                );
+            }
             if intent.is_execution() {
                 return Err(scan_preflight_error(&readiness));
             }
@@ -1604,15 +2190,30 @@ impl<'a> CaseService<'a> {
             ));
         }
 
-        let engine_ids = selected_engine_ids(self.engines, &request, &case, &effective, now)?;
+        let engine_ids = selected_engine_ids(self.engines, &request, case, &effective, now)?;
         if engine_ids.is_empty() {
-            if intent.is_execution() {
+            if intent.is_execution() && intent != ScanPlanIntent::PersistBeforeExecutionPreflight {
                 return Err(scan_preflight_error(&readiness));
             }
-            return Err(AppError::InvalidRequest(
-                "no catalog engine is applicable to the ownership-confirmed assets and effective scope grants"
-                    .into(),
-            ));
+            if intent != ScanPlanIntent::PersistBeforeExecutionPreflight {
+                return Err(AppError::InvalidRequest(
+                    "no catalog engine is applicable to the ownership-confirmed assets and effective scope grants"
+                        .into(),
+                ));
+            }
+            let frozen_effective = effective
+                .iter()
+                .map(|grant| (*grant).clone())
+                .collect::<Vec<_>>();
+            return self.persist_no_checks_scan_request(
+                case,
+                &request,
+                verification_baseline_run_id,
+                &frozen_effective,
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                "No installed check applies to the selected target and permission. Nothing contacted the target.",
+                now,
+            );
         }
         let scan_run_id = new_id();
         let ai_system_applicable = case.assessment_intent == Some(AssessmentIntent::AiApplication);
@@ -1633,6 +2234,8 @@ impl<'a> CaseService<'a> {
         let mut engine_runs = Vec::new();
         let mut executable = Vec::new();
         let mut not_executed = Vec::new();
+        let (mapping_version, mapping_provenance, mapping_warning) =
+            optional_control_mapping_identity();
 
         for engine_id in engine_ids {
             let Some(manifest) = self.engines.get(&engine_id) else {
@@ -1657,7 +2260,7 @@ impl<'a> CaseService<'a> {
                 continue;
             };
 
-            let assets = compatible_authorized_assets(&case, manifest, &effective, now);
+            let assets = compatible_authorized_assets(case, manifest, &effective, now);
             let asset_ids = assets
                 .iter()
                 .map(|asset| asset.id.clone())
@@ -1705,18 +2308,14 @@ impl<'a> CaseService<'a> {
                 continue;
             }
 
-            let execution_groups = if manifest
-                .required_permissions
-                .contains(&ScanPermission::LocalArtifactRead)
-                || !manifest.supported_providers.is_empty()
-            {
-                assets
-                    .into_iter()
-                    .map(|asset| vec![asset])
-                    .collect::<Vec<_>>()
-            } else {
-                vec![assets]
-            };
+            // Every target is independently reportable and retryable. The
+            // current manifest schema declares no atomic multi-asset contract,
+            // so batching unrelated assets would make one network/runtime
+            // failure silently suppress otherwise useful sibling results.
+            let execution_groups = assets
+                .into_iter()
+                .map(|asset| vec![asset])
+                .collect::<Vec<_>>();
             for assets in execution_groups {
                 let engine_run_id = new_id();
                 let asset_ids = assets
@@ -1734,27 +2333,67 @@ impl<'a> CaseService<'a> {
                     })
                     .cloned()
                     .collect::<Vec<_>>();
-                let planned_resume_token = ExecutionCheckpoint {
-                    case_id: case.id.clone(),
-                    scan_run_id: scan_run_id.clone(),
-                    engine_run_id: engine_run_id.clone(),
-                    engine_id: manifest.id.clone(),
-                    attempt: 1,
-                    stage: ExecutionStage::Planned,
-                    container_name: None,
-                    scope_sha256: None,
-                    artifact_ids: Vec::new(),
-                    cleanup_completed: true,
-                    last_error: None,
-                    runtime_command_provenance: None,
-                    runtime_provider: None,
-                    managed_network: None,
-                }
-                .resume_token()?;
+                let execution_contract = (|| -> AppResult<(String, String, String)> {
+                    let planned_resume_token = ExecutionCheckpoint {
+                        case_id: case.id.clone(),
+                        scan_run_id: scan_run_id.clone(),
+                        engine_run_id: engine_run_id.clone(),
+                        engine_id: manifest.id.clone(),
+                        attempt: 1,
+                        stage: ExecutionStage::Planned,
+                        container_name: None,
+                        scope_sha256: None,
+                        artifact_ids: Vec::new(),
+                        cleanup_completed: true,
+                        last_error: None,
+                        runtime_command_provenance: None,
+                        runtime_provider: None,
+                        managed_network: None,
+                    }
+                    .resume_token()?;
+                    let command_sha256 = sha256_bytes(&serde_json::to_vec(&manifest.command)?);
+                    let scope_contract_sha256 =
+                        comparable_scope_contract_sha256(manifest, &assets, &relevant_grants)?;
+                    Ok((planned_resume_token, command_sha256, scope_contract_sha256))
+                })();
+                let (planned_resume_token, command_sha256, scope_contract_sha256) =
+                    match execution_contract {
+                        Ok(contract) => contract,
+                        Err(error) => {
+                            tracing::warn!(
+                                engine_id = %manifest.id,
+                                error = %error,
+                                "engine task contract could not be planned; preserving sibling work"
+                            );
+                            let reason_code = "engine_execution_contract_invalid";
+                            let explanation = ScanReadinessBlocker::EngineExecutionContractInvalid
+                                .diagnostic()
+                                .to_owned();
+                            engine_runs.push(not_executed_run(
+                                &scan_run_id,
+                                &engine_run_id,
+                                &manifest.id,
+                                asset_ids.clone(),
+                                (reason_code, &explanation),
+                                Some(manifest),
+                                now,
+                            ));
+                            not_executed.push(NotExecutedEngine {
+                                engine_id: manifest.id.clone(),
+                                engine_run_id,
+                                asset_ids,
+                                reason_code: reason_code.into(),
+                                explanation,
+                            });
+                            continue;
+                        }
+                    };
                 let engine_run = EngineRun {
                     id: engine_run_id.clone(),
                     scan_run_id: scan_run_id.clone(),
                     engine_id: manifest.id.clone(),
+                    task_kind: EngineTaskKind::CatalogEngine,
+                    localhost_tcp_observation: None,
                     asset_ids,
                     status: EngineRunStatus::Queued,
                     progress_percent: 0,
@@ -1777,16 +2416,12 @@ impl<'a> CaseService<'a> {
                         .image
                         .as_ref()
                         .map(|image| image.repository.clone()),
-                    command_sha256: Some(sha256_bytes(&serde_json::to_vec(&manifest.command)?)),
+                    command_sha256: Some(command_sha256),
                     execution_timeout_seconds: Some(manifest.execution_timeout_seconds()),
                     knowledge_input: Some(dated_knowledge_input(manifest)),
-                    scope_contract_sha256: Some(comparable_scope_contract_sha256(
-                        manifest,
-                        &assets,
-                        &relevant_grants,
-                    )?),
-                    mapping_version: Some(control_mapping_version()?.to_owned()),
-                    mapping_provenance: Some(control_mapping_provenance()?),
+                    scope_contract_sha256: Some(scope_contract_sha256),
+                    mapping_version: mapping_version.clone(),
+                    mapping_provenance: mapping_provenance.clone(),
                     fingerprint_schema_version: Some(FINGERPRINT_SCHEMA_VERSION.to_owned()),
                     runtime_provider: None,
                     runtime_version: None,
@@ -1794,7 +2429,10 @@ impl<'a> CaseService<'a> {
                     exit_code: None,
                     cleanup_removed: None,
                     cleanup_detail: None,
-                    warnings: stale_knowledge_warning(manifest, now).into_iter().collect(),
+                    warnings: stale_knowledge_warning(manifest, now)
+                        .into_iter()
+                        .chain(mapping_warning.clone())
+                        .collect(),
                     raw_artifact_ids: Vec::new(),
                     error_code: None,
                     error_message: None,
@@ -1815,7 +2453,7 @@ impl<'a> CaseService<'a> {
             }
         }
 
-        if intent.is_execution() && executable.is_empty() {
+        if intent.requires_executable_group() && executable.is_empty() {
             return Err(scan_preflight_error(&readiness));
         }
 
@@ -1826,6 +2464,7 @@ impl<'a> CaseService<'a> {
             sequence,
             created_at: now,
             completed_at,
+            request_outcome: None,
             knowledge_cutoff: now,
             ai_system_applicable,
             ai_system_applicability,
@@ -1843,12 +2482,6 @@ impl<'a> CaseService<'a> {
         if intent == ScanPlanIntent::PreviewExecution {
             return Ok(plan);
         }
-        if intent == ScanPlanIntent::StartExecution
-            && let Some(pre_persist) = pre_persist.as_mut()
-        {
-            pre_persist(&plan)?;
-        }
-
         case.scan_runs.push(plan.scan_run.clone());
         case.knowledge_cutoff = Some(now);
         case.status = if plan.executable.is_empty() {
@@ -1859,15 +2492,7 @@ impl<'a> CaseService<'a> {
             CaseStatus::Scanning
         };
         case.touch();
-        refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-        self.storage.save_case(
-            &mut case,
-            if verification_baseline_run_id.is_some() {
-                "scan.rescan_planned"
-            } else {
-                "scan.planned"
-            },
-        )?;
+        refresh_coverage_ledger(case, self.engines.manifests(), now);
         Ok(plan)
     }
 
@@ -1883,7 +2508,6 @@ impl<'a> CaseService<'a> {
             Some(baseline_run_id),
             ScanPlanIntent::PersistAuditPlan,
             Utc::now(),
-            None,
         )?;
         Ok(RescanPlan {
             baseline_run_id: baseline_run_id.to_owned(),
@@ -1905,7 +2529,6 @@ impl<'a> CaseService<'a> {
             Some(baseline_run_id),
             ScanPlanIntent::StartExecution,
             Utc::now(),
-            None,
         )?;
         Ok(RescanPlan {
             baseline_run_id: baseline_run_id.to_owned(),
@@ -1913,23 +2536,20 @@ impl<'a> CaseService<'a> {
         })
     }
 
-    pub fn plan_rescan_for_execution_checked<F>(
+    /// Persists a verification run before any process-owned preparation, using
+    /// the same outcome-first contract as a first scan.
+    pub fn persist_rescan_before_execution_preflight(
         &self,
         case_id: &str,
         baseline_run_id: &str,
         request: ScanPlanRequest,
-        mut pre_persist: F,
-    ) -> AppResult<RescanPlan>
-    where
-        F: FnMut(&ScanPlan) -> AppResult<()>,
-    {
+    ) -> AppResult<RescanPlan> {
         let plan = self.plan_scan_at(
             case_id,
             request,
             Some(baseline_run_id),
-            ScanPlanIntent::StartExecution,
+            ScanPlanIntent::PersistBeforeExecutionPreflight,
             Utc::now(),
-            Some(&mut pre_persist),
         )?;
         Ok(RescanPlan {
             baseline_run_id: baseline_run_id.to_owned(),
@@ -1937,10 +2557,12 @@ impl<'a> CaseService<'a> {
         })
     }
 
-    /// Converts process-owned work left behind by an application restart into
-    /// an explicit paused state. No scanner is restarted automatically: the
-    /// user can inspect the interruption and choose resume or cancel, while
-    /// the last durable checkpoint remains intact.
+    /// Reconciles work left behind by an application restart. Resource-free
+    /// pre-dispatch attempts become explicit retryable terminal outcomes;
+    /// attempts with created resources preserve an exact cleanup obligation.
+    /// Cleanup is product housekeeping, not unfinished user work: a durable
+    /// pending-cleanup record therefore terminalizes the interrupted attempt
+    /// while retaining the exact identity needed for a later bounded retry.
     pub fn recover_interrupted_scans(&self) -> AppResult<usize> {
         let mut recovered_runs = 0_usize;
         for summary in self.storage.list_cases()? {
@@ -1952,14 +2574,19 @@ impl<'a> CaseService<'a> {
             for run in &mut case.scan_runs {
                 let mut run_changed = false;
                 for engine_run in &mut run.engine_runs {
-                    // A prior startup already proved these resources clean, or
-                    // deliberately retained an exact cleanup obligation. Do
-                    // not erase that durable reconciliation state on every
-                    // subsequent desktop launch.
+                    // Migrate the earlier projection that left a reconciled or
+                    // cleanup-pending interrupted attempt paused forever. The
+                    // phase and checkpoint remain the durable cleanup truth;
+                    // only the user-work lifecycle is terminalized.
                     if matches!(
                         engine_run.phase.as_str(),
                         "interrupted_restart_cleaned" | "interrupted_restart_cleanup_pending"
                     ) {
+                        if !engine_status_terminal(&engine_run.status) {
+                            engine_run.status = EngineRunStatus::Failed;
+                            engine_run.finished_at.get_or_insert_with(Utc::now);
+                            run_changed = true;
+                        }
                         continue;
                     }
                     if !matches!(
@@ -1969,6 +2596,74 @@ impl<'a> CaseService<'a> {
                             | EngineRunStatus::Running
                             | EngineRunStatus::Paused
                     ) {
+                        continue;
+                    }
+                    if matches!(
+                        &engine_run.task_kind,
+                        EngineTaskKind::BuiltInLocalhostTcp { .. }
+                    ) {
+                        // This bounded product-owned task creates no runtime
+                        // resource and has no resumable checkpoint. If the
+                        // process ends before its observation is durable, the
+                        // only truthful outcome is an interrupted failed
+                        // attempt that the user may start again.
+                        engine_run.status = EngineRunStatus::Failed;
+                        engine_run.phase = "localhost_probe_interrupted".into();
+                        engine_run.finished_at = Some(Utc::now());
+                        engine_run.resume_token = None;
+                        engine_run.localhost_tcp_observation = None;
+                        engine_run.error_code = Some("localhost_probe_interrupted".into());
+                        engine_run.error_message = Some(
+                            "The app closed before this localhost check saved a result. This attempt has no usable result; start the check again."
+                                .into(),
+                        );
+                        run_changed = true;
+                        continue;
+                    }
+                    let resource_free_pre_dispatch = matches!(
+                        engine_run.phase.as_str(),
+                        "queued"
+                            | "queued_for_resume"
+                            | "preflight_preparing"
+                            | "dispatch_activated"
+                    ) && engine_run.raw_artifact_ids.is_empty()
+                        && engine_run
+                            .resume_token
+                            .as_deref()
+                            .and_then(|token| ExecutionCheckpoint::from_resume_token(token).ok())
+                            .is_some_and(|checkpoint| {
+                                matches!(
+                                    checkpoint.stage,
+                                    ExecutionStage::Planned
+                                        | ExecutionStage::Failed
+                                        | ExecutionStage::Cancelled
+                                ) && checkpoint.container_name.is_none()
+                                    && checkpoint.scope_sha256.is_none()
+                                    && checkpoint.artifact_ids.is_empty()
+                                    && checkpoint.runtime_provider.is_none()
+                                    && checkpoint.runtime_command_provenance.is_none()
+                                    && checkpoint.managed_network.is_none()
+                                    && checkpoint.cleanup_completed
+                            });
+                    if resource_free_pre_dispatch {
+                        let mut checkpoint = ExecutionCheckpoint::from_resume_token(
+                            engine_run
+                                .resume_token
+                                .as_deref()
+                                .expect("resource-free proof parsed this resume token"),
+                        )?;
+                        checkpoint.stage = ExecutionStage::Failed;
+                        checkpoint.last_error = Some(
+                            "The app closed while preparing this check. No target was contacted; retry continues from the saved plan."
+                                .into(),
+                        );
+                        engine_run.status = EngineRunStatus::Failed;
+                        engine_run.phase = "preflight_interrupted".into();
+                        engine_run.finished_at = Some(Utc::now());
+                        engine_run.resume_token = Some(checkpoint.resume_token()?);
+                        engine_run.error_code = Some("preflight_interrupted".into());
+                        engine_run.error_message = checkpoint.last_error;
+                        run_changed = true;
                         continue;
                     }
                     if engine_run.resume_token.is_none() {
@@ -2003,7 +2698,11 @@ impl<'a> CaseService<'a> {
                     run_changed = true;
                 }
                 if run_changed {
-                    run.completed_at = None;
+                    run.completed_at = run
+                        .engine_runs
+                        .iter()
+                        .all(|engine_run| engine_status_terminal(&engine_run.status))
+                        .then(Utc::now);
                     recovered_runs = recovered_runs.saturating_add(1);
                     case_changed = true;
                 }
@@ -2019,10 +2718,12 @@ impl<'a> CaseService<'a> {
         Ok(recovered_runs)
     }
 
-    /// Records resource reconciliation for one exact execution that was
-    /// paused by `recover_interrupted_scans`. The service derives the updated
-    /// checkpoint from the stored token; callers cannot alter identity,
-    /// attempt, scope, artifacts, pinned runtime provenance, or findings.
+    /// Records resource reconciliation for one exact interrupted execution.
+    /// The service derives the updated checkpoint from the stored token;
+    /// callers cannot alter identity, attempt, scope, artifacts, pinned
+    /// runtime provenance, or findings. Cleanup completion does not rewrite
+    /// the interrupted scan as successful: that attempt remains failed and a
+    /// later retry is represented as a separate attempt.
     pub fn record_interrupted_cleanup_success(
         &self,
         case_id: &str,
@@ -2047,15 +2748,16 @@ impl<'a> CaseService<'a> {
         if engine_run.phase == "interrupted_restart_cleaned" {
             return Ok(case);
         }
-        if engine_run.status != EngineRunStatus::Paused
-            || !matches!(
-                engine_run.phase.as_str(),
-                "interrupted_restart" | "interrupted_restart_cleanup_pending"
-            )
-            || engine_run.resume_token.as_deref() != Some(result.expected_resume_token.as_str())
+        if !matches!(
+            engine_run.status,
+            EngineRunStatus::Paused | EngineRunStatus::Failed
+        ) || !matches!(
+            engine_run.phase.as_str(),
+            "interrupted_restart" | "interrupted_restart_cleanup_pending"
+        ) || engine_run.resume_token.as_deref() != Some(result.expected_resume_token.as_str())
         {
             return Err(AppError::NotAuthorized(
-                "interrupted cleanup no longer matches the exact paused execution".into(),
+                "interrupted cleanup no longer matches the exact interrupted execution".into(),
             ));
         }
         let mut checkpoint = ExecutionCheckpoint::from_resume_token(&result.expected_resume_token)?;
@@ -2076,7 +2778,9 @@ impl<'a> CaseService<'a> {
                 .into(),
         );
         engine_run.resume_token = Some(checkpoint.resume_token()?);
+        engine_run.status = EngineRunStatus::Failed;
         engine_run.phase = "interrupted_restart_cleaned".into();
+        engine_run.finished_at.get_or_insert_with(Utc::now);
         engine_run.cleanup_removed = Some(result.cleanup.removed);
         engine_run.cleanup_detail = Some(result.cleanup.detail);
         engine_run.error_code = Some("desktop_process_restarted".into());
@@ -2087,8 +2791,7 @@ impl<'a> CaseService<'a> {
                 result.orphan_credentials_removed
             ));
         }
-        case.scan_runs[run_index].completed_at = None;
-        case.status = CaseStatus::NeedsAttention;
+        update_interrupted_run_and_case_status(&mut case, run_index, Utc::now());
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
@@ -2096,9 +2799,11 @@ impl<'a> CaseService<'a> {
         Ok(case)
     }
 
-    /// Keeps an interrupted execution fail-closed when its exact runtime
-    /// resources cannot be proven clean. Cancellation and resume must retry
-    /// this obligation; neither may silently discard it.
+    /// Retains the exact cleanup obligation when product-owned runtime
+    /// resources cannot yet be proven clean, while terminalizing the affected
+    /// scan attempt truthfully. Cancellation and resume cannot discard this
+    /// obligation or claim cleanup success, but a new isolated scan is not
+    /// blocked by product housekeeping.
     pub fn record_interrupted_cleanup_failure(
         &self,
         case_id: &str,
@@ -2120,15 +2825,16 @@ impl<'a> CaseService<'a> {
             .ok_or_else(|| {
                 AppError::InvalidRequest(format!("engine run not found: {engine_run_id}"))
             })?;
-        if engine_run.status != EngineRunStatus::Paused
-            || !matches!(
-                engine_run.phase.as_str(),
-                "interrupted_restart" | "interrupted_restart_cleanup_pending"
-            )
-            || engine_run.resume_token.as_deref() != Some(expected_resume_token)
+        if !matches!(
+            engine_run.status,
+            EngineRunStatus::Paused | EngineRunStatus::Failed
+        ) || !matches!(
+            engine_run.phase.as_str(),
+            "interrupted_restart" | "interrupted_restart_cleanup_pending"
+        ) || engine_run.resume_token.as_deref() != Some(expected_resume_token)
         {
             return Err(AppError::NotAuthorized(
-                "cleanup failure no longer matches the exact paused execution".into(),
+                "cleanup failure no longer matches the exact interrupted execution".into(),
             ));
         }
         let mut checkpoint = ExecutionCheckpoint::from_resume_token(expected_resume_token)?;
@@ -2153,12 +2859,14 @@ impl<'a> CaseService<'a> {
             checkpoint.stage = ExecutionStage::CleanupPending;
         }
         engine_run.resume_token = Some(checkpoint.resume_token()?);
+        engine_run.status = EngineRunStatus::Failed;
         engine_run.phase = "interrupted_restart_cleanup_pending".into();
+        engine_run.finished_at.get_or_insert_with(Utc::now);
         engine_run.cleanup_removed = Some(false);
         engine_run.cleanup_detail = Some(explanation.clone());
         engine_run.error_code = Some("runtime_cleanup_pending".into());
         engine_run.error_message = Some(explanation);
-        case.status = CaseStatus::NeedsAttention;
+        update_interrupted_run_and_case_status(&mut case, run_index, Utc::now());
         case.touch();
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
@@ -2171,20 +2879,16 @@ impl<'a> CaseService<'a> {
     /// grant IDs are reused; newly approved or re-approved grants are refused
     /// so resume cannot silently widen the prior scan contract.
     pub fn plan_resume(&self, case_id: &str, run_id: &str) -> AppResult<ScanPlan> {
-        self.plan_resume_checked(case_id, run_id, |_| Ok(()))
+        self.persist_resume_before_execution_preflight(case_id, run_id)
     }
 
-    /// Desktop resume counterpart whose live dependency hook runs before any
-    /// queued/status transition is saved.
-    pub fn plan_resume_checked<F>(
+    /// Persists a credential-free retry plan before inspecting runtime,
+    /// provider, gateway, or local-input dependencies.
+    pub fn persist_resume_before_execution_preflight(
         &self,
         case_id: &str,
         run_id: &str,
-        mut pre_persist: F,
-    ) -> AppResult<ScanPlan>
-    where
-        F: FnMut(&ScanPlan) -> AppResult<()>,
-    {
+    ) -> AppResult<ScanPlan> {
         let now = Utc::now();
         let mut case = self.mutable_case(case_id, "resume a scan")?;
         let run_index = case
@@ -2246,6 +2950,7 @@ impl<'a> CaseService<'a> {
             engine_index: usize,
             execution: PlannedEngineExecution,
             stale_warning: Option<String>,
+            mapping_warning: Option<String>,
             captured_compatibility_warning: Option<String>,
         }
         struct ResumeBlockedByRelease {
@@ -2254,6 +2959,7 @@ impl<'a> CaseService<'a> {
         }
         let mut candidates = Vec::<ResumeCandidate>::new();
         let mut release_blocked = Vec::<ResumeBlockedByRelease>::new();
+        let (_, _, mapping_warning) = optional_control_mapping_identity();
         let run = &case.scan_runs[run_index];
         for (engine_index, engine_run) in run.engine_runs.iter().enumerate() {
             let eligible = engine_run.status == EngineRunStatus::Paused
@@ -2286,27 +2992,21 @@ impl<'a> CaseService<'a> {
                     engine_run.engine_id
                 )));
             }
-            let current_mapping_version = control_mapping_version()?;
-            let current_mapping_provenance = control_mapping_provenance()?;
             let current_execution_timeout_seconds = manifest.execution_timeout_seconds();
-            let mapping_version_differs = engine_run.mapping_version.as_deref()
-                != Some(current_mapping_version)
-                || engine_run.mapping_provenance.as_ref() != Some(&current_mapping_provenance);
             // Releases before the enforced execution-deadline contract did
             // not record a timeout and did not enforce the current limit. A
             // missing value is therefore an incompatible execution identity,
             // not an invitation to invent a historical default.
             let execution_timeout_differs =
                 engine_run.execution_timeout_seconds != Some(current_execution_timeout_seconds);
-            let release_identity_differs = mapping_version_differs || execution_timeout_differs;
+            let release_identity_differs = execution_timeout_differs;
             let allow_captured_only_drift = if release_identity_differs {
-                // Prove mapping/timeout are the *only* release-identity drift
-                // before considering the zero-record exception.
+                // Prove the execution deadline is the only release-identity
+                // drift before considering the zero-record exception.
                 validate_resume_manifest_identity(
                     engine_run,
                     manifest,
                     ResumeManifestDriftAllowance {
-                        mapping_version: mapping_version_differs,
                         execution_timeout: execution_timeout_differs,
                     },
                 )?;
@@ -2323,15 +3023,6 @@ impl<'a> CaseService<'a> {
                 false
             };
             let mut release_differences = Vec::new();
-            if mapping_version_differs {
-                release_differences.push(format!(
-                    "control mapping {} versus {current_mapping_version}",
-                    engine_run
-                        .mapping_version
-                        .as_deref()
-                        .unwrap_or("unrecorded")
-                ));
-            }
             if execution_timeout_differs {
                 release_differences.push(format!(
                     "execution deadline {} seconds versus {current_execution_timeout_seconds} seconds",
@@ -2441,6 +3132,7 @@ impl<'a> CaseService<'a> {
             candidates.push(ResumeCandidate {
                 engine_index,
                 stale_warning: stale_knowledge_warning(manifest, now),
+                mapping_warning: mapping_warning.clone(),
                 captured_compatibility_warning,
                 execution: PlannedEngineExecution {
                     case_id: case.id.clone(),
@@ -2488,22 +3180,17 @@ impl<'a> CaseService<'a> {
             ));
         }
 
-        let preview = ScanPlan {
-            scan_run: case.scan_runs[run_index].clone(),
-            executable: candidates
-                .iter()
-                .map(|candidate| candidate.execution.clone())
-                .collect(),
-            not_executed: Vec::new(),
-        };
-        pre_persist(&preview)?;
-
         for candidate in &candidates {
             let engine_run = &mut case.scan_runs[run_index].engine_runs[candidate.engine_index];
             engine_run.status = EngineRunStatus::Queued;
             engine_run.phase = "queued_for_resume".into();
             engine_run.finished_at = None;
             if let Some(warning) = candidate.stale_warning.as_ref()
+                && !engine_run.warnings.contains(warning)
+            {
+                engine_run.warnings.push(warning.clone());
+            }
+            if let Some(warning) = candidate.mapping_warning.as_ref()
                 && !engine_run.warnings.contains(warning)
             {
                 engine_run.warnings.push(warning.clone());
@@ -2737,12 +3424,22 @@ impl<'a> CaseService<'a> {
                     ) =>
                 {
                     engine_run.status = EngineRunStatus::Paused;
-                    engine_run.phase = "paused".into();
                     changed = true;
                 }
                 ScanTransition::Resume if engine_run.status == EngineRunStatus::Paused => {
-                    engine_run.status = EngineRunStatus::Queued;
-                    engine_run.phase = "queued_for_resume".into();
+                    engine_run.status = match engine_run.phase.as_str() {
+                        "preflight_preparing" | "dispatch_activated" => EngineRunStatus::Preparing,
+                        "running" | "capturing_artifacts" | "adapting_artifacts" => {
+                            EngineRunStatus::Running
+                        }
+                        _ => EngineRunStatus::Queued,
+                    };
+                    if engine_run.phase == "paused" {
+                        // Legacy records did not retain their underlying
+                        // phase. Resume them conservatively at the queued
+                        // checkpoint; new records never discard the phase.
+                        engine_run.phase = "queued_for_resume".into();
+                    }
                     engine_run.finished_at = None;
                     changed = true;
                 }
@@ -2799,8 +3496,6 @@ impl<'a> CaseService<'a> {
                 "scan run does not belong to the selected case".into(),
             ));
         }
-        ensure_finding_only_export_run_is_complete(&format, selected_run)?;
-
         let selected_finding_ids = case
             .finding_observations
             .iter()
@@ -2932,6 +3627,10 @@ impl<'a> CaseService<'a> {
             raw_artifacts_omitted,
             sensitive_raw_artifacts_omitted,
             sensitive_data_warning,
+            coverage_manifest_included: matches!(
+                format,
+                CaseExportFormat::OcsfJson | CaseExportFormat::OscalJson
+            ),
         })
     }
 
@@ -3015,7 +3714,6 @@ impl<'a> CaseService<'a> {
                 "scan run does not belong to the selected case".into(),
             ));
         }
-        ensure_finding_only_export_run_is_complete(&format, selected_run)?;
         let document_case = case_for_document_export(&case, &options);
         let bytes = match format {
             CaseExportFormat::CanonicalJson => canonical_json_bytes(&case, run_id, &options)?,
@@ -3033,7 +3731,62 @@ impl<'a> CaseService<'a> {
                 ));
             }
         };
-        let path = write_new_private_file(destination.as_ref(), &bytes)?;
+        let destination = destination.as_ref();
+        let coverage_manifest = if matches!(
+            format,
+            CaseExportFormat::OcsfJson | CaseExportFormat::OscalJson
+        ) {
+            let sidecar_destination = coverage_manifest_destination(destination)?;
+            validate_destination(destination)?;
+            validate_destination(&sidecar_destination)?;
+            let main_file_name = destination
+                .file_name()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| {
+                    AppError::InvalidRequest(
+                        "findings export filename must be valid Unicode so its coverage manifest can identify it"
+                            .into(),
+                    )
+                })?;
+            let report = build_beginner_master_report(&document_case, run_id).map_err(|error| {
+                AppError::Internal(format!(
+                    "selected-run coverage manifest could not be derived: {error}"
+                ))
+            })?;
+            let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "1.0.0",
+                "export_kind": "coverage_manifest",
+                "companion": {
+                    "format": format.as_str(),
+                    "file_name": main_file_name,
+                    "sha256": sha256_bytes(&bytes),
+                },
+                "notice": "This mandatory companion records what was tested, not tested, failed, timed out, cancelled, excluded, or unavailable. The findings document must not be interpreted without it.",
+                "report": report,
+            }))?;
+            Some((sidecar_destination, manifest_bytes))
+        } else {
+            None
+        };
+        let path = write_new_private_file(destination, &bytes)?;
+        let (coverage_manifest_path, coverage_manifest_sha256) =
+            if let Some((sidecar_destination, manifest_bytes)) = coverage_manifest {
+                match write_new_private_file(&sidecar_destination, &manifest_bytes) {
+                    Ok(sidecar_path) => (
+                        Some(sidecar_path.display().to_string()),
+                        Some(sha256_bytes(&manifest_bytes)),
+                    ),
+                    Err(error) => {
+                        // `path` was created by this call and did not exist at
+                        // preflight. Never leave a findings-only document
+                        // behind without its mandatory coverage companion.
+                        let _ = fs::remove_file(&path);
+                        return Err(error);
+                    }
+                }
+            } else {
+                (None, None)
+            };
         let export = CaseExport {
             id: new_id(),
             case_id: case.id.clone(),
@@ -3042,6 +3795,8 @@ impl<'a> CaseService<'a> {
             format: Some(format.as_str().into()),
             path: path.display().to_string(),
             sha256: sha256_bytes(&bytes),
+            coverage_manifest_path,
+            coverage_manifest_sha256,
             signature: None,
             public_key: None,
             redaction_profile: options.redaction.as_str().into(),
@@ -3067,6 +3822,25 @@ impl<'a> CaseService<'a> {
             .find(|export| export.id == export_id)
             .ok_or_else(|| AppError::InvalidRequest(format!("export not found: {export_id}")))?;
         let observed_sha256 = sha256_file(Path::new(&stored.path))?;
+        match (
+            stored.coverage_manifest_path.as_deref(),
+            stored.coverage_manifest_sha256.as_deref(),
+        ) {
+            (Some(path), Some(expected)) => {
+                let observed = sha256_file(Path::new(path))?;
+                if !observed.eq_ignore_ascii_case(expected) {
+                    return Err(AppError::InvalidRequest(format!(
+                        "coverage manifest hash mismatch: expected {expected}, observed {observed}"
+                    )));
+                }
+            }
+            (None, None) => {}
+            _ => {
+                return Err(AppError::InvalidRequest(
+                    "export record has an incomplete coverage-manifest identity".into(),
+                ));
+            }
+        }
         if stored.signature.is_some() || stored.public_key.is_some() {
             let public_key = stored.public_key.as_deref().ok_or_else(|| {
                 AppError::InvalidRequest("signed export record has no stored public key".into())
@@ -4598,10 +5372,17 @@ fn not_executed_run(
 ) -> EngineRun {
     let (reason_code, explanation) = reason;
     let image = manifest.and_then(|value| value.image.as_ref());
+    let (mapping_version, mapping_provenance, mapping_warning) = if manifest.is_some() {
+        optional_control_mapping_identity()
+    } else {
+        (None, None, None)
+    };
     EngineRun {
         id: engine_run_id.into(),
         scan_run_id: scan_run_id.into(),
         engine_id: engine_id.into(),
+        task_kind: EngineTaskKind::CatalogEngine,
+        localhost_tcp_observation: None,
         asset_ids,
         status: EngineRunStatus::NotExecuted,
         progress_percent: 0,
@@ -4628,10 +5409,8 @@ fn not_executed_run(
         execution_timeout_seconds: manifest.map(EngineManifest::execution_timeout_seconds),
         knowledge_input: manifest.map(dated_knowledge_input),
         scope_contract_sha256: None,
-        mapping_version: manifest
-            .and_then(|_| control_mapping_version().ok())
-            .map(str::to_owned),
-        mapping_provenance: manifest.and_then(|_| control_mapping_provenance().ok()),
+        mapping_version,
+        mapping_provenance,
         fingerprint_schema_version: manifest.map(|_| FINGERPRINT_SCHEMA_VERSION.to_owned()),
         runtime_provider: None,
         runtime_version: None,
@@ -4642,6 +5421,7 @@ fn not_executed_run(
         warnings: manifest
             .and_then(|value| stale_knowledge_warning(value, now))
             .into_iter()
+            .chain(mapping_warning)
             .collect(),
         raw_artifact_ids: Vec::new(),
         error_code: Some(reason_code.into()),
@@ -4823,6 +5603,30 @@ fn stale_knowledge_warning(manifest: &EngineManifest, as_of: DateTime<Utc>) -> O
     })
 }
 
+const CONTROL_MAPPING_UNAVAILABLE_WARNING: &str = "Framework mapping was unavailable while this run was planned. Scanner findings still run and remain reportable, but NIST, ISO 27001, and AIDEFEND relationships are not available for this run.";
+
+fn optional_control_mapping_identity() -> (
+    Option<String>,
+    Option<ControlMappingProvenance>,
+    Option<String>,
+) {
+    optional_control_mapping_identity_with(control_mapping_version, control_mapping_provenance)
+}
+
+fn optional_control_mapping_identity_with(
+    version: impl FnOnce() -> AppResult<&'static str>,
+    provenance: impl FnOnce() -> AppResult<ControlMappingProvenance>,
+) -> (
+    Option<String>,
+    Option<ControlMappingProvenance>,
+    Option<String>,
+) {
+    match (version(), provenance()) {
+        (Ok(version), Ok(provenance)) => (Some(version.to_owned()), Some(provenance), None),
+        _ => (None, None, Some(CONTROL_MAPPING_UNAVAILABLE_WARNING.into())),
+    }
+}
+
 fn captured_checkpoint_is_adapter_only(checkpoint: &ExecutionCheckpoint) -> bool {
     checkpoint.resume_action() == crate::orchestrator::ResumeAction::AdaptCapturedArtifacts
         && checkpoint.cleanup_completed
@@ -4913,13 +5717,11 @@ fn captured_empty_json_lines_make_release_drift_irrelevant(
 
 #[derive(Debug, Clone, Copy)]
 struct ResumeManifestDriftAllowance {
-    mapping_version: bool,
     execution_timeout: bool,
 }
 
 impl ResumeManifestDriftAllowance {
     const STRICT: Self = Self {
-        mapping_version: false,
         execution_timeout: false,
     };
 }
@@ -4931,8 +5733,6 @@ fn validate_resume_manifest_identity(
 ) -> AppResult<()> {
     let image = manifest.image.as_ref();
     let command_sha256 = sha256_bytes(&serde_json::to_vec(&manifest.command)?);
-    let mapping_version = control_mapping_version()?;
-    let mapping_provenance = control_mapping_provenance()?;
     let execution_timeout_seconds = manifest.execution_timeout_seconds();
     let execution_timeout_matches =
         engine_run.execution_timeout_seconds == Some(execution_timeout_seconds);
@@ -4949,9 +5749,6 @@ fn validate_resume_manifest_identity(
         && engine_run.command_sha256.as_deref() == Some(command_sha256.as_str())
         && (execution_timeout_matches || allowance.execution_timeout)
         && engine_run.knowledge_input.as_ref() == Some(&dated_knowledge_input(manifest))
-        && ((engine_run.mapping_version.as_deref() == Some(mapping_version)
-            && engine_run.mapping_provenance.as_ref() == Some(&mapping_provenance))
-            || allowance.mapping_version)
         && engine_run.fingerprint_schema_version.as_deref() == Some(FINGERPRINT_SCHEMA_VERSION);
     if !identity_matches {
         return Err(AppError::NotAvailable(format!(
@@ -5171,6 +5968,11 @@ fn validate_checkpoint_progress(
         ));
     }
     let existing = ExecutionCheckpoint::from_resume_token(existing_token)?;
+    if engine_status_terminal(&engine_run.status) {
+        return Err(AppError::Runtime(
+            "a durable terminal execution cannot be reactivated by a scanner report".into(),
+        ));
+    }
     if incoming.attempt < existing.attempt {
         return Err(AppError::Runtime(
             "stale execution attempt cannot replace a newer checkpoint".into(),
@@ -5453,6 +6255,125 @@ fn update_run_and_case_status(case: &mut AssessmentCase, run_index: usize, now: 
     }
 }
 
+/// Updates a historical interrupted run without letting a later independent
+/// run disappear from the case-level lifecycle. Cleanup reconciliation can
+/// legitimately finish after the user has already started newer isolated
+/// work; in that situation the newer run remains the case's visible state.
+fn update_interrupted_run_and_case_status(
+    case: &mut AssessmentCase,
+    run_index: usize,
+    now: DateTime<Utc>,
+) {
+    let interrupted_sequence = case.scan_runs[run_index].sequence;
+    let later_run_exists = case
+        .scan_runs
+        .iter()
+        .any(|run| run.sequence > interrupted_sequence);
+    let current_case_status = case.status.clone();
+    update_run_and_case_status(case, run_index, now);
+    if later_run_exists {
+        case.status = current_case_status;
+    }
+}
+
+fn resource_free_planned_checkpoint(
+    case_id: &str,
+    scan_run_id: &str,
+    engine_run: &EngineRun,
+    operation: &str,
+) -> AppResult<ExecutionCheckpoint> {
+    let checkpoint =
+        ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().ok_or_else(
+            || AppError::NotAuthorized(format!("{operation} found no durable planned checkpoint")),
+        )?)?;
+    if checkpoint.case_id != case_id
+        || checkpoint.scan_run_id != scan_run_id
+        || checkpoint.engine_run_id != engine_run.id
+        || checkpoint.engine_id != engine_run.engine_id
+        || checkpoint.attempt == 0
+        || checkpoint.stage != ExecutionStage::Planned
+        || checkpoint.container_name.is_some()
+        || checkpoint.scope_sha256.is_some()
+        || !checkpoint.artifact_ids.is_empty()
+        || !checkpoint.cleanup_completed
+        || checkpoint.runtime_command_provenance.is_some()
+        || checkpoint.runtime_provider.is_some()
+        || checkpoint.managed_network.is_some()
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "{operation} checkpoint is not the exact resource-free plan"
+        )));
+    }
+    Ok(checkpoint)
+}
+
+fn adapter_only_pre_dispatch_checkpoint(
+    case_id: &str,
+    scan_run_id: &str,
+    engine_run: &EngineRun,
+    operation: &str,
+) -> AppResult<Option<ExecutionCheckpoint>> {
+    let Some(token) = engine_run.resume_token.as_deref() else {
+        return Ok(None);
+    };
+    let checkpoint = ExecutionCheckpoint::from_resume_token(token)?;
+    if !captured_checkpoint_is_adapter_only(&checkpoint) {
+        return Ok(None);
+    }
+    let durable_ids = engine_run
+        .raw_artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let checkpoint_ids = checkpoint
+        .artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if checkpoint.case_id != case_id
+        || checkpoint.scan_run_id != scan_run_id
+        || checkpoint.engine_run_id != engine_run.id
+        || checkpoint.engine_id != engine_run.engine_id
+        || checkpoint.attempt == 0
+        || durable_ids.is_empty()
+        || durable_ids.len() != engine_run.raw_artifact_ids.len()
+        || checkpoint_ids.len() != checkpoint.artifact_ids.len()
+        || checkpoint_ids != durable_ids
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "{operation} captured adapter checkpoint does not exactly match its durable evidence"
+        )));
+    }
+    Ok(Some(checkpoint))
+}
+
+fn exact_engine_run_id_set(engine_run_ids: &[Id], operation: &str) -> AppResult<BTreeSet<Id>> {
+    if engine_run_ids.is_empty() {
+        return Err(AppError::InvalidRequest(format!(
+            "{operation} requires at least one engine run"
+        )));
+    }
+    let ids = engine_run_ids.iter().cloned().collect::<BTreeSet<_>>();
+    if ids.len() != engine_run_ids.len() {
+        return Err(AppError::InvalidRequest(format!(
+            "{operation} contains duplicate engine-run identities"
+        )));
+    }
+    Ok(ids)
+}
+
+fn retry_case_revision_conflicts<T>(mut operation: impl FnMut() -> AppResult<T>) -> AppResult<T> {
+    let mut last_conflict = None;
+    for _ in 0..3 {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error @ AppError::Conflict(_)) => last_conflict = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_conflict.expect("bounded case revision retry recorded a conflict"))
+}
+
 fn status_for_stage(stage: &ExecutionStage) -> EngineRunStatus {
     match stage {
         ExecutionStage::Planned => EngineRunStatus::Queued,
@@ -5594,34 +6515,22 @@ fn engine_status_terminal(status: &EngineRunStatus) -> bool {
 }
 
 fn run_is_terminal(run: &ScanRun) -> bool {
-    !run.engine_runs.is_empty()
-        && run
-            .engine_runs
-            .iter()
-            .all(|engine_run| engine_status_terminal(&engine_run.status))
+    run.is_terminal_no_checks()
+        || (!run.engine_runs.is_empty()
+            && run
+                .engine_runs
+                .iter()
+                .all(|engine_run| engine_status_terminal(&engine_run.status)))
 }
 
-fn ensure_finding_only_export_run_is_complete(
-    format: &CaseExportFormat,
-    run: &ScanRun,
-) -> AppResult<()> {
-    let format_name = match format {
-        CaseExportFormat::OcsfJson => "OCSF",
-        CaseExportFormat::OscalJson => "OSCAL",
-        _ => return Ok(()),
-    };
-    let fully_completed = run.completed_at.is_some()
-        && !run.engine_runs.is_empty()
-        && run
-            .engine_runs
-            .iter()
-            .all(|engine_run| engine_run.status == EngineRunStatus::Completed);
-    if fully_completed {
-        return Ok(());
-    }
-    Err(AppError::InvalidRequest(format!(
-        "{format_name} export requires a fully completed selected scan run; this findings-only format cannot represent unfinished or missing engine outcomes"
-    )))
+fn coverage_manifest_destination(destination: &Path) -> AppResult<PathBuf> {
+    validate_destination(destination)?;
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| AppError::InvalidRequest("export filename is required".into()))?;
+    let mut sidecar_name = file_name.to_os_string();
+    sidecar_name.push(".coverage.json");
+    Ok(destination.with_file_name(sidecar_name))
 }
 
 fn canonical_evidence_hashes(finding: &Finding) -> Vec<String> {
@@ -5930,21 +6839,18 @@ fn canonical_json_bytes(
     options: &ExportOptions,
 ) -> AppResult<Vec<u8>> {
     let exported = case_for_document_export(case, options);
-    let run = exported
-        .scan_runs
-        .iter()
-        .find(|run| run.id == run_id)
-        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
+    let report = build_beginner_master_report(&exported, run_id)
+        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
     serde_json::to_vec_pretty(&serde_json::json!({
-        "schema_version": "1",
+        "schema_version": "1.0.0",
         "product_name": "ai-security-scanner",
         "product_version": env!("CARGO_PKG_VERSION"),
-        "export_kind": "canonical_case_document",
-        "selected_run_id": run.id,
+        "export_kind": "beginner_master_report",
+        "selected_run_id": report.run_id.clone(),
         "redaction_profile": options.redaction.as_str(),
         "raw_artifact_bytes_included": false,
-        "notice": "Preliminary scanner evidence only. This document is not an audit, certification, attestation, compliance determination, or forensic conclusion. Related control references are navigation coordinates only. Finding groups are reversible presentation metadata and do not merge or replace canonical findings or evidence. Recommendations are non-executable guidance and require human review.",
-        "case": exported,
+        "notice": report.framework_notice.non_certification.clone(),
+        "report": report,
     }))
     .map_err(Into::into)
 }
@@ -5955,109 +6861,459 @@ fn html_report_bytes(
     options: &ExportOptions,
 ) -> AppResult<Vec<u8>> {
     let exported = case_for_document_export(case, options);
-    let run = exported
-        .scan_runs
+    let report = build_beginner_master_report(&exported, run_id)
+        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+    let display_time = |value: Option<&DateTime<Utc>>| {
+        value
+            .map(|time| time.to_rfc3339())
+            .unwrap_or_else(|| "not recorded".into())
+    };
+
+    let report_summary = match report.state.summary {
+        BeginnerReportSummary::Complete => "Complete",
+        BeginnerReportSummary::Partial => "Partial results",
+        BeginnerReportSummary::NoChecksCompleted => "No checks completed",
+    };
+    let report_lifecycle = match report.state.lifecycle {
+        ReportLifecycle::Live => "This report is still updating",
+        ReportLifecycle::Final => "Final for this run",
+    };
+    let requested_stage = report
+        .requested
+        .stage
+        .value
+        .as_ref()
+        .map(enum_key)
+        .unwrap_or_else(|| "not retained by this run".into());
+    let mut requested_targets = report
+        .requested
+        .targets
         .iter()
-        .find(|run| run.id == run_id)
-        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-    let observations = exported
-        .finding_observations
+        .map(|target| {
+            format!(
+                "<li><strong>{}</strong>{}</li>",
+                html_escape(target.label.as_deref().unwrap_or(&target.asset_id)),
+                target
+                    .asset_kind
+                    .as_ref()
+                    .map(|kind| format!(" — {}", html_escape(&enum_key(kind))))
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<String>();
+    if requested_targets.is_empty() {
+        requested_targets.push_str(
+            "<li>The saved run did not retain an exact requested target description.</li>",
+        );
+    }
+    let mut requested_limits = report
+        .requested
+        .limits
         .iter()
-        .filter(|observation| observation.run_id == run_id)
-        .collect::<Vec<_>>();
-    let observed_finding_ids = observations
+        .map(|limit| {
+            format!(
+                "<li><strong>{}:</strong> {}</li>",
+                html_escape(&limit.name),
+                html_escape(&format!("{} ({})", limit.value, enum_key(&limit.source))),
+            )
+        })
+        .collect::<String>();
+    if requested_limits.is_empty() {
+        requested_limits.push_str("<li>No exact per-run limits were retained.</li>");
+    }
+    let mut requested_checks = report
+        .requested
+        .requested_check_ids
         .iter()
-        .map(|observation| observation.finding_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let finding_by_id = exported
+        .map(|check_id| format!("<li>{}</li>", html_escape(check_id)))
+        .collect::<String>();
+    if requested_checks.is_empty() {
+        requested_checks.push_str("<li>No exact requested check list was retained.</li>");
+    }
+    let mut tested_items = report
+        .actual
+        .checks
+        .iter()
+        .map(|check| {
+            let mut dimensions = check
+                .tested_dimensions
+                .iter()
+                .map(|dimension| {
+                    format!(
+                        concat!(
+                            "<li><strong>{}:</strong> {} — {}",
+                            "<br><small>Observed: {}</small></li>"
+                        ),
+                        html_escape(&dimension.dimension),
+                        html_escape(&dimension.value),
+                        html_escape(&dimension.observation),
+                        html_escape(&display_time(dimension.observed_at.as_ref())),
+                    )
+                })
+                .collect::<String>();
+            if dimensions.is_empty() {
+                dimensions.push_str("<li>No completed dimension was retained.</li>");
+            }
+            let targets = if check.target_asset_ids.is_empty() {
+                "none retained".into()
+            } else {
+                check
+                    .target_asset_ids
+                    .iter()
+                    .map(|asset_id| html_escape(asset_id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!(
+                concat!(
+                    "<li><strong>{}</strong> — {}",
+                    "<br><small>Started: {} · Finished: {}</small>",
+                    "<br><small>Targets: {}</small><ul>{}</ul></li>"
+                ),
+                html_escape(&check.check_id),
+                html_escape(&enum_key(&check.status)),
+                html_escape(&display_time(check.started_at.as_ref())),
+                html_escape(&display_time(check.finished_at.as_ref())),
+                targets,
+                dimensions,
+            )
+        })
+        .collect::<String>();
+    if tested_items.is_empty() {
+        tested_items.push_str("<li>No completed test dimension was saved for this run.</li>");
+    }
+    let mut gap_items = report
+        .coverage_gaps
+        .iter()
+        .map(|gap| {
+            format!(
+                "<li><strong>{} — {}</strong><br>{}<br><em>Next:</em> {}</li>",
+                html_escape(&enum_key(&gap.kind)),
+                html_escape(&gap.dimension),
+                html_escape(&gap.reason),
+                html_escape(&gap.next_action),
+            )
+        })
+        .collect::<String>();
+    if gap_items.is_empty() {
+        gap_items.push_str("<li>No known coverage gap was recorded.</li>");
+    }
+    let mut next_step_items = report
+        .next_steps
+        .iter()
+        .map(|step| {
+            format!(
+                "<li><strong>{}</strong> — {}{}</li>",
+                html_escape(&step.action),
+                html_escape(&step.reason),
+                step.recommended_expert_type
+                    .as_ref()
+                    .map(|expert| format!(" <em>Suggested expert: {}</em>", html_escape(expert)))
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<String>();
+    if next_step_items.is_empty() {
+        next_step_items.push_str(
+            "<li>No additional action is required unless broader coverage is wanted.</li>",
+        );
+    }
+    let report_counts = &report.coverage_counts;
+
+    let actual_window = format!(
+        "{} to {}",
+        display_time(report.actual.observed_from.as_ref()),
+        display_time(report.actual.observed_until.as_ref())
+    );
+
+    let mut findings = String::new();
+    for (index, finding) in report.findings.iter().enumerate() {
+        let priority = finding
+            .priority
+            .map(|priority| priority.to_string())
+            .unwrap_or_else(|| "not retained".into());
+        let mut priority_reasons = finding
+            .priority_reasons
+            .iter()
+            .map(|reason| format!("<li>{}</li>", html_escape(reason)))
+            .collect::<String>();
+        if priority_reasons.is_empty() {
+            priority_reasons.push_str("<li>No separate priority reason was retained.</li>");
+        }
+        let mut evidence = finding
+            .evidence_references
+            .iter()
+            .map(|reference| {
+                format!(
+                    concat!(
+                        "<li><code>{}</code><br>",
+                        "Evidence {} · Check {} · Observed {}</li>"
+                    ),
+                    html_escape(&reference.artifact_sha256),
+                    html_escape(&reference.evidence_id),
+                    html_escape(&reference.engine_id),
+                    html_escape(&reference.observed_at.to_rfc3339()),
+                )
+            })
+            .collect::<String>();
+        if evidence.is_empty() {
+            evidence.push_str(
+                "<li>No selected-run evidence SHA-256 reference was retained for this finding.</li>",
+            );
+        }
+        let mut frameworks = finding
+            .framework_references
+            .iter()
+            .map(|reference| {
+                let provenance = reference
+                    .mapping_provenance
+                    .as_ref()
+                    .map(|provenance| {
+                        format!(
+                            " · Catalog SHA-256 {} · Reviewed {} via {}",
+                            provenance.catalog_sha256,
+                            provenance.reviewed_at,
+                            provenance.review_process,
+                        )
+                    })
+                    .unwrap_or_else(|| " · Mapping provenance unavailable".into());
+                format!(
+                    concat!(
+                        "<li><strong>{} {} / {}</strong> — {}",
+                        "<br>Relationship: {}",
+                        "<br>Why related: {}",
+                        "<br>Mapping version: {}{}</li>"
+                    ),
+                    html_escape(&reference.framework),
+                    html_escape(&reference.framework_version),
+                    html_escape(&reference.control_id),
+                    html_escape(&reference.title),
+                    html_escape(&reference.relationship),
+                    html_escape(&reference.rationale),
+                    html_escape(&reference.mapping_version),
+                    html_escape(&provenance),
+                )
+            })
+            .collect::<String>();
+        if frameworks.is_empty() {
+            frameworks.push_str("<li>No selected-run framework coordinate was retained.</li>");
+        }
+        let targets = if finding.target_asset_ids.is_empty() {
+            "none retained".into()
+        } else {
+            finding
+                .target_asset_ids
+                .iter()
+                .map(|asset_id| html_escape(asset_id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        findings.push_str(&format!(
+            concat!(
+                "<article><h3>{}</h3>",
+                "<p><span class=\"pill\">Severity: {}</span> ",
+                "<span class=\"pill\">Confidence: {}</span> ",
+                "<span class=\"pill\">Priority: {}</span> Report order #{}</p>",
+                "<p><strong>Selected-run source:</strong> {} · ",
+                "<strong>Finding ID:</strong> <code>{}</code> · ",
+                "<strong>Targets:</strong> {}</p>",
+                "<p>{}</p><h4>Possible impact</h4><p>{}</p>",
+                "<h4>Why this priority</h4><ul>{}</ul>",
+                "<h4>What to do next</h4><p>{}</p>",
+                "<p><strong>Suggested expert:</strong> {}</p>",
+                "<h4>Evidence SHA-256</h4><ul>{}</ul>",
+                "<h4>Related framework coordinates</h4><ul>{}</ul></article>"
+            ),
+            html_escape(&finding.title),
+            html_escape(&enum_key(&finding.severity)),
+            html_escape(&enum_key(&finding.confidence)),
+            html_escape(&priority),
+            index + 1,
+            html_escape(&enum_key(&finding.snapshot_source)),
+            html_escape(&finding.finding_id),
+            targets,
+            html_escape(&finding.plain_language_risk),
+            html_escape(&finding.possible_impact),
+            priority_reasons,
+            html_escape(&finding.next_step),
+            html_escape(&finding.recommended_expert_type),
+            evidence,
+            frameworks,
+        ));
+    }
+    if findings.is_empty() {
+        findings.push_str("<p>No finding was retained for this run. This does not by itself establish successful coverage.</p>");
+    }
+
+    let mut technical_tasks = String::new();
+    for task in &report.technical_details.tasks {
+        let execution = match &task.execution {
+            crate::beginner_report::TechnicalExecution::CatalogEngine {
+                engine_id,
+                engine_version,
+                image_digest,
+                command_sha256,
+                runtime_provider,
+                runtime_version,
+                runtime_security_options,
+                distribution_mode,
+                image_repository,
+                adapter_version,
+                rule_version,
+            } => {
+                let mut values = vec![
+                    format!("engine {engine_id}"),
+                    format!("adapter {adapter_version}"),
+                ];
+                if let Some(value) = engine_version {
+                    values.push(format!("engine version {value}"));
+                }
+                if let Some(value) = image_repository {
+                    values.push(format!("image repository {value}"));
+                }
+                if let Some(value) = image_digest {
+                    values.push(format!("image {value}"));
+                }
+                if let Some(value) = command_sha256 {
+                    values.push(format!("command SHA-256 {value}"));
+                }
+                if let Some(value) = runtime_provider {
+                    values.push(format!("runtime {value}"));
+                }
+                if let Some(value) = runtime_version {
+                    values.push(format!("runtime version {value}"));
+                }
+                if let Some(value) = runtime_security_options {
+                    values.push(format!("runtime security {value}"));
+                }
+                if let Some(value) = distribution_mode {
+                    values.push(format!("distribution {}", enum_key(value)));
+                }
+                if let Some(value) = rule_version {
+                    values.push(format!("rules {value}"));
+                }
+                values.join("; ")
+            }
+            crate::beginner_report::TechnicalExecution::BuiltInLocalhostTcp {
+                endpoint,
+                timeout_ms,
+                payload_bytes,
+                observation,
+                contract,
+            } => {
+                let observation = observation
+                    .as_ref()
+                    .map(|observation| {
+                        format!(
+                            "outcome {}; observed {}",
+                            enum_key(&observation.outcome),
+                            observation.observed_at.to_rfc3339()
+                        )
+                    })
+                    .unwrap_or_else(|| "observation not retained".into());
+                format!(
+                    "native endpoint {endpoint}; timeout {timeout_ms} ms; payload {payload_bytes} bytes; {observation}; {contract}"
+                )
+            }
+            crate::beginner_report::TechnicalExecution::InvalidBuiltInTask { explanation } => {
+                format!("invalid built-in task record: {explanation}")
+            }
+        };
+        let mut evidence = task
+            .evidence_sha256
+            .iter()
+            .map(|sha256| format!("<li><code>{}</code></li>", html_escape(sha256)))
+            .collect::<String>();
+        if evidence.is_empty() {
+            evidence.push_str("<li>No raw-evidence SHA-256 was retained for this task.</li>");
+        }
+        let targets = if task.target_asset_ids.is_empty() {
+            "none retained".into()
+        } else {
+            task.target_asset_ids
+                .iter()
+                .map(|asset_id| html_escape(asset_id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let diagnostic_value = task
+            .redacted_diagnostic_log
+            .value
+            .as_ref()
+            .map(|value| format!("<br><code>{}</code>", html_escape(value)))
+            .unwrap_or_default();
+        let cleanup = task
+            .cleanup_removed
+            .map(|removed| format!("removed={removed}"))
+            .unwrap_or_else(|| "not recorded".into());
+        technical_tasks.push_str(&format!(
+            concat!(
+                "<article><h3>Task <code>{}</code></h3>",
+                "<p><strong>State:</strong> {} · <strong>Phase:</strong> {} · ",
+                "<strong>Progress:</strong> {}%</p>",
+                "<p><strong>Started:</strong> {} · <strong>Finished:</strong> {} · ",
+                "<strong>Targets:</strong> {}</p>",
+                "<p><strong>Exit code:</strong> {} · <strong>Error code:</strong> {} · ",
+                "<strong>Cleanup:</strong> {}</p>",
+                "<p><strong>Execution identity:</strong> {}</p>",
+                "<h4>Evidence SHA-256</h4><ul>{}</ul>",
+                "<h4>Redacted diagnostic log</h4>",
+                "<p><strong>Availability:</strong> {}{}<br>{}</p>",
+                "<p><small>Scanner messages are not included in this readable HTML report.</small></p>",
+                "</article>"
+            ),
+            html_escape(&task.task_id),
+            html_escape(&enum_key(&task.status)),
+            html_escape(&task.phase),
+            task.progress_percent,
+            html_escape(&display_time(task.started_at.as_ref())),
+            html_escape(&display_time(task.finished_at.as_ref())),
+            targets,
+            task.exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "not recorded".into()),
+            html_escape(task.error_code.as_deref().unwrap_or("none recorded")),
+            html_escape(&cleanup),
+            html_escape(&execution),
+            evidence,
+            html_escape(&enum_key(&task.redacted_diagnostic_log.availability)),
+            diagnostic_value,
+            html_escape(&task.redacted_diagnostic_log.explanation),
+        ));
+    }
+    if technical_tasks.is_empty() {
+        technical_tasks.push_str("<p>No technical task record was retained for this run.</p>");
+    }
+
+    let mut data_quality_warnings = report
+        .data_quality_warnings
+        .iter()
+        .map(|warning| format!("<li>{}</li>", html_escape(warning)))
+        .collect::<String>();
+    if data_quality_warnings.is_empty() {
+        data_quality_warnings.push_str("<li>No report data-quality warning was recorded.</li>");
+    }
+
+    let report_finding_titles = report
         .findings
         .iter()
-        .map(|finding| (finding.id.as_str(), finding))
+        .map(|finding| (finding.finding_id.as_str(), finding.title.as_str()))
         .collect::<BTreeMap<_, _>>();
-
-    let mut coverage_rows = String::new();
-    for entry in &exported.coverage {
-        coverage_rows.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
-            html_escape(&entry.label),
-            html_escape(&enum_key(&entry.status)),
-            html_escape(&entry.explanation),
-        ));
-    }
-    if coverage_rows.is_empty() {
-        coverage_rows.push_str("<tr><td colspan=\"3\">No coverage entries recorded.</td></tr>");
-    }
-
-    let mut engine_rows = String::new();
-    for engine in &run.engine_runs {
-        let provenance = [
-            engine
-                .engine_version
-                .as_ref()
-                .map(|value| format!("engine {value}")),
-            engine
-                .source_revision
-                .as_ref()
-                .map(|value| format!("source {value}")),
-            engine
-                .image_digest
-                .as_ref()
-                .map(|value| format!("image {value}")),
-            Some(format!("adapter {}", engine.adapter_version)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("; ");
-        let runtime = [
-            engine.runtime_provider.as_ref().map(|provider| {
-                format!(
-                    "{} {}",
-                    provider,
-                    engine
-                        .runtime_version
-                        .as_deref()
-                        .unwrap_or("version unknown")
-                )
-            }),
-            engine.exit_code.map(|code| format!("exit {code}")),
-            engine
-                .cleanup_removed
-                .map(|removed| format!("cleanup removed={removed}")),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("; ");
-        let mut messages = engine.warnings.clone();
-        if let Some(error) = &engine.error_message {
-            messages.push(error.clone());
-        }
-        engine_rows.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            html_escape(&engine.engine_id),
-            html_escape(&enum_key(&engine.status)),
-            engine.progress_percent,
-            html_escape(&provenance),
-            html_escape(&runtime),
-            html_escape(&messages.join("; ")),
-        ));
-    }
-    if engine_rows.is_empty() {
-        engine_rows.push_str("<tr><td colspan=\"6\">No engine was planned.</td></tr>");
-    }
-
+    let selected_finding_ids = report_finding_titles
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
     let mut active_group_articles = String::new();
     for group in &exported.finding_groups {
         let members = group
             .finding_ids
             .iter()
             .map(|finding_id| {
-                let title = finding_by_id
+                let title = report_finding_titles
                     .get(finding_id.as_str())
-                    .map(|finding| finding.title.as_str())
-                    .unwrap_or("Canonical finding record unavailable");
-                let selected_run_note = if observed_finding_ids.contains(finding_id.as_str()) {
+                    .copied()
+                    .unwrap_or("Selected-run finding details unavailable");
+                let selected_run_note = if selected_finding_ids.contains(finding_id.as_str()) {
                     "observed in selected run"
                 } else {
                     "not observed in selected run; retained as case history"
@@ -6115,107 +7371,108 @@ fn html_report_bytes(
             .push_str("<tr><td colspan=\"7\">No grouping events are recorded.</td></tr>");
     }
 
-    let mut findings = String::new();
-    let mut run_findings = observations
-        .iter()
-        .filter_map(|observation| {
-            observation
-                .finding_snapshot
-                .as_ref()
-                .or_else(|| finding_by_id.get(observation.finding_id.as_str()).copied())
-        })
-        .collect::<Vec<_>>();
-    run_findings.sort_by(|left, right| {
-        right
-            .priority
-            .cmp(&left.priority)
-            .then_with(|| left.fingerprint.cmp(&right.fingerprint))
-    });
-    for (index, finding) in run_findings.into_iter().enumerate() {
-        let controls = finding
-            .control_references
-            .iter()
-            .map(|reference| {
-                html_escape(&format!(
-                    "{} {} {} — related coordinate only",
-                    reference.framework, reference.framework_version, reference.control_id
-                ))
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        let official_references = finding
-            .official_references
-            .iter()
-            .map(|reference| html_escape(reference))
-            .collect::<Vec<_>>()
-            .join("; ");
-        findings.push_str(&format!(
-            concat!(
-                "<article><h3>{}</h3>",
-                "<p><span class=\"pill\">{}</span> Handoff order #{}</p>",
-                "<p>{}</p><h4>Possible impact</h4><p>{}</p>",
-                "<h4>Recommendation (non-executable)</h4><p>{}</p>",
-                "<h4>Verification and rollback considerations</h4><p>{}</p><p>{}</p>",
-                "<h4>Human handoff</h4><p>{}</p>",
-                "<p><strong>Related control coordinates:</strong> {}</p>",
-                "<p><strong>Official references (display only):</strong> {}</p></article>"
-            ),
-            html_escape(&finding.title),
-            html_escape(&enum_key(&finding.severity)),
-            index + 1,
-            html_escape(&finding.plain_language_summary),
-            html_escape(&finding.possible_impact),
-            html_escape(&finding.recommendation),
-            html_escape(&finding.verification_guidance),
-            html_escape(
-                finding
-                    .rollback_considerations
-                    .as_deref()
-                    .unwrap_or("Not recorded.")
-            ),
-            html_escape(&finding.recommended_expert_type),
-            controls,
-            official_references,
-        ));
-    }
-    if findings.is_empty() {
-        findings.push_str("<p>No canonical findings were observed in this run. This does not by itself establish successful coverage.</p>");
-    }
-
-    let document = format!(
+    let mut document = format!(
         concat!(
             "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
             "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">",
-            "<title>{} — ai-security-scanner</title><style>",
-            "body{{font:16px/1.5 system-ui,sans-serif;max-width:1080px;margin:auto;padding:2rem;color:#17202a}}",
-            "h1,h2,h3{{line-height:1.2}} table{{width:100%;border-collapse:collapse}}",
-            "th,td{{border:1px solid #ccd1d1;padding:.55rem;text-align:left;vertical-align:top}}",
-            "article{{border:1px solid #ccd1d1;border-radius:.5rem;padding:1rem;margin:1rem 0}}",
-            ".notice{{background:#fff4d6;border-left:5px solid #b9770e;padding:1rem}}",
-            ".pill{{border:1px solid currentColor;border-radius:1rem;padding:.1rem .5rem}}</style></head><body>",
-            "<header><p>ai-security-scanner / local case export</p><h1>{}</h1>",
-            "<p>{} · Run {} · {}</p></header>",
-            "<section class=\"notice\"><strong>Important:</strong> Preliminary scanner evidence only. This report is not an audit, certification, attestation, compliance determination, or forensic conclusion. Related controls are navigation coordinates only. Recommendations are static, non-executable guidance and require human review.</section>",
-            "<h2>Coverage ledger</h2><table><thead><tr><th>Area or asset</th><th>State</th><th>Explanation</th></tr></thead><tbody>{}</tbody></table>",
-            "<h2>Engine execution</h2><table><thead><tr><th>Engine</th><th>State</th><th>Progress</th><th>Pinned provenance</th><th>Runtime</th><th>Warnings or reason</th></tr></thead><tbody>{}</tbody></table>",
-            "<h2>Reversible finding groups</h2><p>Groups are presentation metadata only. Every canonical finding, fingerprint, evidence record, and raw artifact remains independent; removing a group appends history and does not delete its members.</p>{}",
-            "<h3>Immutable grouping history</h3><table><thead><tr><th>Time</th><th>Action</th><th>Group ID</th><th>Title</th><th>Finding IDs</th><th>Reason</th><th>Actor</th></tr></thead><tbody>{}</tbody></table>",
-            "<h2>Findings</h2><p>Findings are ordered for human handoff. The displayed ordinal is not a risk score or compliance score.</p>{}<footer><p>Redaction profile: {}. Integrity: unsigned HTML with SHA-256 retained in the local case. No scripts, forms, remote resources, or executable remediation are included.</p></footer>",
-            "</body></html>"
+            "<title>{} — ai-security-scanner</title>"
         ),
-        html_escape(&exported.title),
-        html_escape(&exported.title),
-        html_escape(&exported.profile.organization_name),
-        run.sequence,
-        html_escape(&run.created_at.to_rfc3339()),
-        coverage_rows,
-        engine_rows,
+        html_escape(&report.project_title),
+    );
+    document.push_str(concat!(
+        "<style>body{font:16px/1.5 system-ui,sans-serif;max-width:1080px;margin:auto;padding:2rem;color:#17202a}",
+        "h1,h2,h3{line-height:1.2}table{width:100%;border-collapse:collapse}",
+        "th,td{border:1px solid #ccd1d1;padding:.55rem;text-align:left;vertical-align:top}",
+        "article{border:1px solid #ccd1d1;border-radius:.5rem;padding:1rem;margin:1rem 0}",
+        ".report-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}",
+        ".report-card{border:1px solid #ccd1d1;border-radius:.5rem;padding:1rem;background:#f8faf8}",
+        ".report-state{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;padding:1rem;border:1px solid #ccd1d1;border-radius:.5rem}",
+        "details.technical{margin-top:2rem;border-top:1px solid #ccd1d1;padding-top:1rem}",
+        "@media(max-width:760px){.report-grid{grid-template-columns:1fr}}",
+        ".notice{background:#fff4d6;border-left:5px solid #b9770e;padding:1rem}",
+        ".pill{border:1px solid currentColor;border-radius:1rem;padding:.1rem .5rem}</style></head><body>"
+    ));
+    document.push_str(&format!(
+        concat!(
+            "<header><p>ai-security-scanner / local case export</p><h1>{}</h1>",
+            "<p>Selected run <code>{}</code></p></header>",
+            "<section class=\"report-state\"><strong class=\"pill\">{}</strong>",
+            "<span>{}</span><span>{}</span><span>Last saved {}</span></section>",
+            "<p><strong>Checks completed:</strong> {} · <strong>Partly completed:</strong> {} · ",
+            "<strong>Failed:</strong> {} · <strong>Timed out:</strong> {} · ",
+            "<strong>Not tested:</strong> {} · <strong>Coverage gaps:</strong> {} · ",
+            "<strong>Problems found:</strong> {}</p>"
+        ),
+        html_escape(&report.project_title),
+        html_escape(&report.run_id),
+        report_summary,
+        report_lifecycle,
+        html_escape(&report.state.explanation),
+        html_escape(&report.state.last_durable_update.to_rfc3339()),
+        report_counts.tested_complete,
+        report_counts.tested_partial,
+        report_counts.failed,
+        report_counts.timed_out,
+        report_counts.not_tested,
+        report.coverage_gaps.len(),
+        report.findings.len(),
+    ));
+    document.push_str(&format!(
+        concat!(
+            "<section class=\"report-grid\"><div class=\"report-card\">",
+            "<h2>What you asked to scan</h2><p><strong>Scan depth:</strong> {}</p>",
+            "<h3>Targets</h3><ul>{}</ul><h3>Requested checks</h3><ul>{}</ul>",
+            "<h3>Limits</h3><ul>{}</ul></div>",
+            "<div class=\"report-card\"><h2>What was actually tested</h2>",
+            "<p><strong>Observed window:</strong> {}</p><ul>{}</ul></div>",
+            "<div class=\"report-card\"><h2>What was not tested</h2><ul>{}</ul></div></section>",
+            "<section><h2>What to do next</h2><ol>{}</ol></section>",
+            "<section class=\"notice\"><strong>Framework references:</strong> {}",
+            "<br><strong>AIDEFEND mapping:</strong> {}</section>",
+            "<h2>Problems found</h2>",
+            "<p>Problems follow the master report order. Severity describes possible impact; confidence describes evidence strength. Priority is the report's retained triage value, not a compliance score.</p>{}"
+        ),
+        html_escape(&requested_stage),
+        requested_targets,
+        requested_checks,
+        requested_limits,
+        html_escape(&actual_window),
+        tested_items,
+        gap_items,
+        next_step_items,
+        html_escape(&report.framework_notice.non_certification),
+        html_escape(&report.framework_notice.aidefend_mapping_status),
+        findings,
+    ));
+    document.push_str(&format!(
+        concat!(
+            "<details class=\"technical\"{}><summary><strong>Technical details</strong></summary>",
+            "<h2>Selected-run task details</h2>{}",
+            "<h2>Report data-quality notes</h2><ul>{}</ul>",
+            "<h2>Reversible finding groups</h2>",
+            "<p>Groups are presentation metadata only. Every canonical finding, fingerprint, evidence record, and raw artifact remains independent; removing a group appends history and does not delete its members.</p>{}",
+            "<h3>Immutable grouping history</h3>",
+            "<table><thead><tr><th>Time</th><th>Action</th><th>Group ID</th><th>Title</th><th>Finding IDs</th><th>Reason</th><th>Actor</th></tr></thead><tbody>{}</tbody></table></details>"
+        ),
+        if report.technical_details.collapsed_by_default {
+            ""
+        } else {
+            " open"
+        },
+        technical_tasks,
+        data_quality_warnings,
         active_group_articles,
         grouping_history_rows,
-        findings,
+    ));
+    document.push_str(&format!(
+        concat!(
+            "<footer><p>Redaction profile: {}. Integrity: unsigned HTML with SHA-256 retained in the local case. ",
+            "Raw evidence is excluded. No scripts, forms, remote resources, scanner messages, or executable remediation are included.</p></footer>",
+            "</body></html>"
+        ),
         html_escape(options.redaction.as_str()),
-    );
+    ));
     Ok(document.into_bytes())
 }
 
@@ -6675,6 +7932,43 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_or_changed_framework_mapping_never_blocks_scanner_execution() {
+        let (version, provenance, warning) = optional_control_mapping_identity_with(
+            || {
+                Err(AppError::NotAvailable(
+                    "fixture mapping version secret".into(),
+                ))
+            },
+            || Err(AppError::NotAvailable("fixture provenance secret".into())),
+        );
+        assert!(version.is_none());
+        assert!(provenance.is_none());
+        let warning = warning.expect("degraded mapping warning");
+        assert_eq!(warning, CONTROL_MAPPING_UNAVAILABLE_WARNING);
+        assert!(!warning.contains("secret"));
+        assert!(warning.chars().count() <= 1_000);
+
+        let manifest = comparison_scope_manifest();
+        let mut engine_run = not_executed_run(
+            "scan-1",
+            "engine-run-1",
+            &manifest.id,
+            Vec::new(),
+            ("fixture", "fixture"),
+            Some(&manifest),
+            Utc::now(),
+        );
+        engine_run.mapping_version = None;
+        engine_run.mapping_provenance = None;
+        validate_resume_manifest_identity(
+            &engine_run,
+            &manifest,
+            ResumeManifestDriftAllowance::STRICT,
+        )
+        .expect("framework mapping is a reporting overlay, not an execution identity gate");
+    }
+
+    #[test]
     fn legacy_resume_identity_without_a_recorded_deadline_is_not_reexecution_compatible() {
         let mut manifest = comparison_scope_manifest();
         let engine_run = not_executed_run(
@@ -6712,7 +8006,6 @@ mod tests {
             &legacy,
             &manifest,
             ResumeManifestDriftAllowance {
-                mapping_version: false,
                 execution_timeout: true,
             },
         )
@@ -6817,6 +8110,7 @@ mod tests {
             sequence: 1,
             created_at: time,
             completed_at: Some(time),
+            request_outcome: None,
             knowledge_cutoff: time,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -6845,11 +8139,32 @@ mod tests {
         );
 
         let document_case = case_for_document_export(&case, &options);
+        let beginner_json = canonical_json_bytes(&case, "run-redaction", &options).unwrap();
+        let beginner_document: Value = serde_json::from_slice(&beginner_json).unwrap();
+        assert_eq!(beginner_document["export_kind"], "beginner_master_report");
+        assert_eq!(
+            beginner_document["report"]["state"]["summary"],
+            "no_checks_completed"
+        );
+        assert!(beginner_document.get("case").is_none());
+        let readable_html =
+            String::from_utf8(html_report_bytes(&case, "run-redaction", &options).unwrap())
+                .unwrap();
+        for required_heading in [
+            "What you asked to scan",
+            "What was actually tested",
+            "What was not tested",
+            "What to do next",
+            "Problems found",
+            "Technical details",
+        ] {
+            assert!(
+                readable_html.contains(required_heading),
+                "readable HTML omitted {required_heading}"
+            );
+        }
         let documents = [
-            (
-                "canonical_json",
-                canonical_json_bytes(&case, "run-redaction", &options).unwrap(),
-            ),
+            ("canonical_json", beginner_json),
             (
                 "framework_report",
                 export_master_framework_report_bytes(&document_case, "run-redaction").unwrap(),
@@ -7465,40 +8780,886 @@ mod tests {
     }
 
     #[test]
-    fn live_execution_hook_failure_leaves_new_scan_case_unchanged() {
+    fn outcome_first_start_persists_exact_executions_before_desktop_preflight() {
         let fixture = Fixture::new();
         let case_id = repository_case_ready_for_execution(&fixture);
         let service = fixture.service();
-        let before = service.show_case(&case_id).unwrap();
-        let mut called = 0_u8;
 
-        let error = service
-            .plan_scan_for_execution_checked(
+        let plan = service
+            .persist_scan_before_execution_preflight(
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
                 },
-                |plan| {
-                    called = called.saturating_add(1);
-                    assert_eq!(plan.executable.len(), 1);
-                    Err(AppError::NotAvailable(
-                        "scan_preflight:runtime_unavailable: fixture".into(),
-                    ))
-                },
             )
-            .unwrap_err();
+            .unwrap();
 
-        assert_eq!(called, 1);
-        assert!(error.to_string().contains("runtime_unavailable"));
-        let after = service.show_case(&case_id).unwrap();
-        assert!(after.scan_runs.is_empty());
-        assert_eq!(after.status, before.status);
-        assert_eq!(after.updated_at, before.updated_at);
-        assert_eq!(after.storage_revision, before.storage_revision);
+        assert_eq!(plan.executable.len(), 1);
+        let stored = service.show_case(&case_id).unwrap();
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].id, plan.scan_run.id);
+        assert_eq!(stored.scan_runs[0].engine_runs.len(), 1);
+        assert_eq!(
+            stored.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Queued
+        );
+        assert!(stored.scan_runs[0].completed_at.is_none());
     }
 
     #[test]
-    fn execution_preview_is_read_only_and_successful_hook_persists_exactly_one_run() {
+    fn combined_start_commits_authorization_and_frozen_work_in_one_revision() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        let before = service.show_case(&created.id).unwrap();
+        let event_count = fixture.storage.list_case_events(&created.id).unwrap().len();
+
+        let plan = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: Some("Scan this selected source tree".into()),
+                    external_scope: None,
+                }],
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+
+        let stored = service.show_case(&created.id).unwrap();
+        assert_eq!(stored.storage_revision, before.storage_revision + 1);
+        let events = fixture.storage.list_case_events(&created.id).unwrap();
+        assert_eq!(events.len(), event_count + 1);
+        assert_eq!(events.last().unwrap().event_type, "scan.requested");
+        assert_eq!(stored.scope_grants.len(), 1);
+        assert_eq!(stored.scope_grants[0].asset_id, asset_id);
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].id, plan.scan_run.id);
+        assert_eq!(stored.scan_runs[0].scope_grant_snapshots.len(), 1);
+        let frozen_grant = &stored.scan_runs[0].scope_grant_snapshots[0];
+        let current_grant = &stored.scope_grants[0];
+        assert_eq!(frozen_grant.id, current_grant.id);
+        assert_eq!(frozen_grant.asset_id, current_grant.asset_id);
+        assert_eq!(frozen_grant.permission, current_grant.permission);
+        assert_eq!(frozen_grant.confirmed_at, current_grant.confirmed_at);
+        assert_eq!(stored.scan_runs[0].engine_runs.len(), 1);
+        assert_eq!(
+            stored.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Queued
+        );
+    }
+
+    #[test]
+    fn combined_start_without_decisions_reuses_scope_without_duplicate_consent() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let before = service.show_case(&case_id).unwrap();
+        let original_grant = before.scope_grants[0].clone();
+        let event_count = fixture.storage.list_case_events(&case_id).unwrap().len();
+
+        let plan = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &case_id,
+                vec![],
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+
+        let stored = service.show_case(&case_id).unwrap();
+        assert_eq!(stored.storage_revision, before.storage_revision + 1);
+        assert_eq!(stored.scope_grants.len(), 1);
+        assert_eq!(stored.scope_grants[0].id, original_grant.id);
+        assert_eq!(
+            stored.scope_grants[0].confirmed_at,
+            original_grant.confirmed_at
+        );
+        assert_eq!(plan.scan_run.scope_grant_snapshots.len(), 1);
+        assert_eq!(plan.scan_run.scope_grant_snapshots[0].id, original_grant.id);
+        let events = fixture.storage.list_case_events(&case_id).unwrap();
+        assert_eq!(events.len(), event_count + 1);
+        assert_eq!(events.last().unwrap().event_type, "scan.requested");
+    }
+
+    #[test]
+    fn combined_start_without_effective_scope_saves_one_terminal_outcome() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        let before = service.show_case(&created.id).unwrap();
+        let event_count = fixture.storage.list_case_events(&created.id).unwrap().len();
+
+        let plan = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![],
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+
+        assert!(plan.scan_run.is_terminal_no_checks());
+        assert!(matches!(
+            plan.scan_run.request_outcome,
+            Some(ScanRequestOutcome::NoChecksCompleted {
+                code: ScanRequestOutcomeCode::NoEffectiveScopeGrants,
+                ..
+            })
+        ));
+        let stored = service.show_case(&created.id).unwrap();
+        assert_eq!(stored.storage_revision, before.storage_revision + 1);
+        assert!(stored.scope_grants.is_empty());
+        assert_eq!(stored.scan_runs.len(), 1);
+        let events = fixture.storage.list_case_events(&created.id).unwrap();
+        assert_eq!(events.len(), event_count + 1);
+        assert_eq!(events.last().unwrap().event_type, "scan.requested");
+    }
+
+    #[test]
+    fn combined_start_invalid_decision_rolls_back_authorization_and_run() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        let before = service.show_case(&created.id).unwrap();
+        let event_count = fixture.storage.list_case_events(&created.id).unwrap().len();
+
+        let error = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![
+                    ScopeApprovalRequest {
+                        asset_id: asset_id.clone(),
+                        permissions: vec![ScanPermission::LocalArtifactRead],
+                        confirmed_by: "Repository owner".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    },
+                    ScopeApprovalRequest {
+                        asset_id: "missing-asset".into(),
+                        permissions: vec![ScanPermission::LocalArtifactRead],
+                        confirmed_by: "Repository owner".into(),
+                        expires_at: None,
+                        authorization_reference: None,
+                        notes: None,
+                        external_scope: None,
+                    },
+                ],
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, AppError::InvalidRequest(_)));
+
+        let stored = service.show_case(&created.id).unwrap();
+        assert_eq!(stored.storage_revision, before.storage_revision);
+        assert_eq!(
+            fixture.storage.list_case_events(&created.id).unwrap().len(),
+            event_count
+        );
+        assert!(stored.scope_grants.is_empty());
+        assert!(stored.scan_runs.is_empty());
+        let asset = stored
+            .assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .unwrap();
+        assert!(!asset.owner_confirmed);
+        assert!(asset.candidate);
+    }
+
+    #[test]
+    fn combined_start_storage_failure_cannot_split_grant_from_run() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        let before = service.show_case(&created.id).unwrap();
+        fixture.storage.inject_save_case_faults(
+            "scan.requested",
+            1,
+            crate::storage::SaveCaseFault::Storage,
+        );
+
+        let error = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                }],
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, AppError::Storage(_)));
+
+        let stored = service.show_case(&created.id).unwrap();
+        assert_eq!(stored.storage_revision, before.storage_revision);
+        assert!(stored.scope_grants.is_empty());
+        assert!(stored.scan_runs.is_empty());
+    }
+
+    #[test]
+    fn combined_start_keeps_unavailable_engine_as_sibling_coverage_gap() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+
+        let plan = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                }],
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into(), "missing-engine".into()],
+                },
+            )
+            .unwrap();
+
+        assert_eq!(plan.executable.len(), 1);
+        assert_eq!(plan.executable[0].manifest.id, "gitleaks");
+        assert_eq!(plan.not_executed.len(), 1);
+        assert_eq!(plan.not_executed[0].engine_id, "missing-engine");
+        assert_eq!(plan.not_executed[0].reason_code, "manifest_unavailable");
+        let stored = service.show_case(&created.id).unwrap();
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].engine_runs.len(), 2);
+        assert!(stored.scan_runs[0].completed_at.is_none());
+    }
+
+    #[test]
+    fn combined_start_never_widens_to_an_older_unselected_grant() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, older_asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let (with_other_asset, _) = fixture.discovered_asset(&created.id, AssetKind::Other);
+        let selected_asset_id = with_other_asset
+            .assets
+            .iter()
+            .find(|asset| asset.kind == AssetKind::Other)
+            .unwrap()
+            .id
+            .clone();
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &created.id,
+                ScopeApprovalRequest {
+                    asset_id: older_asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: Some("Earlier saved scope".into()),
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+
+        let plan = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id: selected_asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Repository owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: Some("Current visible selection".into()),
+                    external_scope: None,
+                }],
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+
+        assert!(plan.executable.is_empty());
+        assert_eq!(plan.not_executed.len(), 1);
+        assert_eq!(
+            plan.not_executed[0].reason_code,
+            "no_compatible_authorized_assets"
+        );
+        assert_eq!(plan.scan_run.scope_grant_snapshots.len(), 1);
+        assert_eq!(
+            plan.scan_run.scope_grant_snapshots[0].asset_id,
+            selected_asset_id
+        );
+        assert_ne!(
+            plan.scan_run.scope_grant_snapshots[0].asset_id,
+            older_asset_id
+        );
+        assert_eq!(
+            service.show_case(&created.id).unwrap().scope_grants.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn combined_start_persists_zero_runnable_result_with_its_grant() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Other);
+        let service = fixture.service();
+
+        let plan = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Asset owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                }],
+                ScanPlanRequest::default(),
+            )
+            .unwrap();
+
+        assert!(plan.executable.is_empty());
+        assert!(plan.scan_run.is_terminal_no_checks());
+        assert!(matches!(
+            plan.scan_run.request_outcome,
+            Some(ScanRequestOutcome::NoChecksCompleted {
+                code: ScanRequestOutcomeCode::NoApplicableChecks,
+                ..
+            })
+        ));
+        let stored = service.show_case(&created.id).unwrap();
+        assert_eq!(stored.scope_grants.len(), 1);
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.status, CaseStatus::NeedsAttention);
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&created.id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .event_type,
+            "scan.requested"
+        );
+    }
+
+    #[test]
+    fn outcome_first_start_terminalizes_all_three_no_check_requests() {
+        let fixture = Fixture::new();
+        let service = fixture.service();
+
+        let no_grant_case = fixture.create();
+        let (_, no_grant_asset_id) =
+            fixture.discovered_asset(&no_grant_case.id, AssetKind::Repository);
+        let no_grant = service
+            .persist_scan_before_execution_preflight(
+                &no_grant_case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert!(no_grant.executable.is_empty());
+        assert!(no_grant.scan_run.engine_runs.is_empty());
+        assert!(no_grant.scan_run.is_terminal_no_checks());
+        match no_grant.scan_run.request_outcome.as_ref().unwrap() {
+            ScanRequestOutcome::NoChecksCompleted {
+                code,
+                requested_asset_ids,
+                requested_engine_ids,
+                ..
+            } => {
+                assert_eq!(*code, ScanRequestOutcomeCode::NoEffectiveScopeGrants);
+                assert_eq!(requested_asset_ids, &[no_grant_asset_id]);
+                assert_eq!(requested_engine_ids, &["gitleaks"]);
+            }
+        }
+
+        let no_owner_case_id = repository_case_ready_for_execution(&fixture);
+        let mut no_owner_case = service.show_case(&no_owner_case_id).unwrap();
+        no_owner_case.assets[0].owner_confirmed = false;
+        no_owner_case.assets[0].candidate = true;
+        fixture
+            .storage
+            .save_case(&mut no_owner_case, "test.scope_without_owner")
+            .unwrap();
+        let no_owner = service
+            .persist_scan_before_execution_preflight(
+                &no_owner_case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert!(no_owner.scan_run.is_terminal_no_checks());
+        assert!(matches!(
+            no_owner.scan_run.request_outcome,
+            Some(ScanRequestOutcome::NoChecksCompleted {
+                code: ScanRequestOutcomeCode::NoOwnershipConfirmedTargets,
+                ..
+            })
+        ));
+
+        let no_applicable_case = fixture.create();
+        let (_, other_asset_id) =
+            fixture.discovered_asset(&no_applicable_case.id, AssetKind::Other);
+        service
+            .approve_scope(
+                &no_applicable_case.id,
+                ScopeApprovalRequest {
+                    asset_id: other_asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let no_applicable = service
+            .persist_scan_before_execution_preflight(
+                &no_applicable_case.id,
+                ScanPlanRequest { engine_ids: vec![] },
+            )
+            .unwrap();
+        assert!(no_applicable.scan_run.is_terminal_no_checks());
+        assert!(matches!(
+            no_applicable.scan_run.request_outcome,
+            Some(ScanRequestOutcome::NoChecksCompleted {
+                code: ScanRequestOutcomeCode::NoApplicableChecks,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn outcome_first_start_persists_all_not_executed_coverage_as_terminal() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["missing-engine".into()],
+                },
+            )
+            .unwrap();
+
+        assert!(plan.executable.is_empty());
+        assert_eq!(plan.not_executed.len(), 1);
+        let stored = service.show_case(&case_id).unwrap();
+        assert_eq!(stored.scan_runs.len(), 1);
+        assert_eq!(stored.scan_runs[0].id, plan.scan_run.id);
+        assert!(stored.scan_runs[0].completed_at.is_some());
+        assert_eq!(
+            stored.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::NotExecuted
+        );
+        assert_eq!(stored.status, CaseStatus::NeedsAttention);
+    }
+
+    #[test]
+    fn outcome_first_preflight_terminalization_preserves_independent_siblings() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into(), "semgrep".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 2);
+        let engine_run_ids = plan
+            .executable
+            .iter()
+            .map(|execution| execution.engine_run_id.clone())
+            .collect::<Vec<_>>();
+        let partial = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::ApplyOutcome {
+                    task_outcomes: vec![
+                        PersistedPreDispatchTaskOutcome::Failed {
+                            engine_run_id: engine_run_ids[0].clone(),
+                            reason: ScanReadinessBlocker::RuntimeUnavailable,
+                        },
+                        PersistedPreDispatchTaskOutcome::Runnable {
+                            engine_run_id: engine_run_ids[1].clone(),
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+        let partial_run = &partial.scan_runs[0];
+        assert!(partial_run.completed_at.is_none());
+        assert_eq!(partial_run.engine_runs[0].status, EngineRunStatus::Failed);
+        assert_eq!(
+            partial_run.engine_runs[1].status,
+            EngineRunStatus::Preparing
+        );
+        assert_eq!(
+            partial.scan_runs[0].engine_runs[1].phase,
+            "dispatch_activated"
+        );
+    }
+
+    #[test]
+    fn outcome_first_long_preflight_is_durably_visible_before_dispatch() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        let ids = plan
+            .executable
+            .iter()
+            .map(|execution| execution.engine_run_id.clone())
+            .collect::<Vec<_>>();
+
+        let preparing = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::Preparing {
+                    engine_run_ids: ids,
+                },
+            )
+            .unwrap();
+        let engine = &preparing.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Preparing);
+        assert_eq!(engine.phase, "preflight_preparing");
+        assert_eq!(engine.progress_percent, 1);
+        assert!(engine.started_at.is_some());
+        let checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(checkpoint.stage, ExecutionStage::Planned);
+        assert!(checkpoint.container_name.is_none());
+        assert!(checkpoint.scope_sha256.is_none());
+    }
+
+    #[test]
+    fn predispatch_pause_resume_and_cancel_preserve_the_exact_phase() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        let engine_run_id = plan.executable[0].engine_run_id.clone();
+
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::Preparing {
+                    engine_run_ids: vec![engine_run_id.clone()],
+                },
+            )
+            .unwrap();
+        let paused = service.pause_scan(&case_id, &plan.scan_run.id).unwrap();
+        let engine = &paused.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Paused);
+        assert_eq!(engine.phase, "preflight_preparing");
+
+        let resumed = service.resume_scan(&case_id, &plan.scan_run.id).unwrap();
+        let engine = &resumed.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Preparing);
+        assert_eq!(engine.phase, "preflight_preparing");
+
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::ApplyOutcome {
+                    task_outcomes: vec![PersistedPreDispatchTaskOutcome::Runnable {
+                        engine_run_id: engine_run_id.clone(),
+                    }],
+                },
+            )
+            .unwrap();
+        let paused = service.pause_scan(&case_id, &plan.scan_run.id).unwrap();
+        let engine = &paused.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Paused);
+        assert_eq!(engine.phase, "dispatch_activated");
+
+        let cancelled = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::Cancel {
+                    engine_run_ids: vec![engine_run_id],
+                },
+            )
+            .unwrap();
+        let engine = &cancelled.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Cancelled);
+        assert_eq!(engine.phase, "cancelled_before_dispatch");
+        assert!(cancelled.scan_runs[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn outcome_first_cancel_closes_only_nonterminal_resource_free_work() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        let ids = plan
+            .executable
+            .iter()
+            .map(|execution| execution.engine_run_id.clone())
+            .collect::<Vec<_>>();
+        let failed = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::ApplyOutcome {
+                    task_outcomes: vec![PersistedPreDispatchTaskOutcome::Failed {
+                        engine_run_id: ids[0].clone(),
+                        reason: ScanReadinessBlocker::RuntimeUnavailable,
+                    }],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            failed.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Failed
+        );
+
+        let cancelled = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::Cancel {
+                    engine_run_ids: ids,
+                },
+            )
+            .unwrap();
+        let engine = &cancelled.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Failed);
+        assert_eq!(engine.phase, "preflight_failed");
+        let checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(checkpoint.stage, ExecutionStage::Failed);
+        assert!(checkpoint.container_name.is_none());
+        assert!(checkpoint.scope_sha256.is_none());
+        assert!(checkpoint.artifact_ids.is_empty());
+    }
+
+    #[test]
+    fn outcome_first_later_cancel_preserves_an_earlier_preflight_failure() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into(), "semgrep".into()],
+                },
+            )
+            .unwrap();
+        let ids = plan
+            .executable
+            .iter()
+            .map(|execution| execution.engine_run_id.clone())
+            .collect::<Vec<_>>();
+        service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::ApplyOutcome {
+                    task_outcomes: vec![
+                        PersistedPreDispatchTaskOutcome::Failed {
+                            engine_run_id: ids[0].clone(),
+                            reason: ScanReadinessBlocker::WorkspaceSnapshotUnavailable,
+                        },
+                        PersistedPreDispatchTaskOutcome::Runnable {
+                            engine_run_id: ids[1].clone(),
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+
+        let cancelled = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::Cancel {
+                    engine_run_ids: ids,
+                },
+            )
+            .unwrap();
+        let run = &cancelled.scan_runs[0];
+        assert_eq!(run.engine_runs[0].status, EngineRunStatus::Failed);
+        assert_eq!(run.engine_runs[0].phase, "preflight_failed");
+        assert_eq!(run.engine_runs[1].status, EngineRunStatus::Cancelled);
+        assert_eq!(run.engine_runs[1].phase, "cancelled_before_dispatch");
+    }
+
+    #[test]
+    fn bounded_case_revision_retry_rereads_before_giving_up() {
+        let mut attempts = 0;
+        let value = retry_case_revision_conflicts(|| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(AppError::Conflict("simulated stale revision".into()))
+            } else {
+                Ok("saved")
+            }
+        })
+        .unwrap();
+        assert_eq!(value, "saved");
+        assert_eq!(attempts, 3);
+
+        let mut exhausted = 0;
+        let error = retry_case_revision_conflicts::<()>(|| {
+            exhausted += 1;
+            Err(AppError::Conflict("simulated persistent conflict".into()))
+        })
+        .unwrap_err();
+        assert!(matches!(error, AppError::Conflict(_)));
+        assert_eq!(exhausted, 3);
+    }
+
+    #[test]
+    fn outcome_first_durable_cancellation_wins_before_dispatch_activation() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        let engine_run_ids = plan
+            .executable
+            .iter()
+            .map(|execution| execution.engine_run_id.clone())
+            .collect::<Vec<_>>();
+
+        let cancelled = service
+            .transition_persisted_scan_pre_dispatch(
+                &case_id,
+                &plan.scan_run.id,
+                &PersistedPreDispatchTransition::Cancel {
+                    engine_run_ids: engine_run_ids.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            cancelled.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Cancelled
+        );
+        assert!(
+            service
+                .transition_persisted_scan_pre_dispatch(
+                    &case_id,
+                    &plan.scan_run.id,
+                    &PersistedPreDispatchTransition::ApplyOutcome {
+                        task_outcomes: engine_run_ids
+                            .iter()
+                            .cloned()
+                            .map(|engine_run_id| PersistedPreDispatchTaskOutcome::Runnable {
+                                engine_run_id,
+                            })
+                            .collect(),
+                    },
+                )
+                .is_err()
+        );
+        let mut stale_checkpoint = ExecutionCheckpoint::from_resume_token(
+            cancelled.scan_runs[0].engine_runs[0]
+                .resume_token
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        stale_checkpoint.stage = ExecutionStage::Preflight;
+        stale_checkpoint.attempt = stale_checkpoint.attempt.saturating_add(1);
+        let stale_report = DurableExecutionReport {
+            checkpoint: stale_checkpoint,
+            runtime_preflight: None,
+            cleanup: None,
+            exit_code: None,
+            raw_artifacts: Vec::new(),
+            findings: Vec::new(),
+            warnings: Vec::new(),
+        };
+        assert!(
+            service
+                .apply_execution_report(&case_id, &stale_report)
+                .is_err(),
+            "a stale worker report must not reactivate a cancelled execution"
+        );
+        let stored = service.show_case(&case_id).unwrap();
+        assert_eq!(
+            stored.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn execution_preview_is_read_only_and_outcome_first_start_persists_one_run() {
         let fixture = Fixture::new();
         let case_id = repository_case_ready_for_execution(&fixture);
         let service = fixture.service();
@@ -7514,68 +9675,45 @@ mod tests {
         assert_eq!(preview.executable.len(), 1);
         assert!(service.show_case(&case_id).unwrap().scan_runs.is_empty());
 
-        let mut called = 0_u8;
         let persisted = service
-            .plan_scan_for_execution_checked(
+            .persist_scan_before_execution_preflight(
                 &case_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
                 },
-                |plan| {
-                    called = called.saturating_add(1);
-                    assert_eq!(plan.executable.len(), 1);
-                    Ok(())
-                },
             )
             .unwrap();
-        assert_eq!(called, 1);
         let stored = service.show_case(&case_id).unwrap();
         assert_eq!(stored.scan_runs.len(), 1);
         assert_eq!(stored.scan_runs[0].id, persisted.scan_run.id);
     }
 
     #[test]
-    fn live_execution_hook_failure_leaves_rescan_baseline_unchanged() {
+    fn outcome_first_rescan_persists_before_dependency_preflight() {
         let fixture = Fixture::new();
         let (case_id, baseline_run_id) = repository_case_with_completed_baseline(&fixture);
         let service = fixture.service();
-        let before = service.show_case(&case_id).unwrap();
-        let baseline_before = before.scan_runs[0].clone();
-
-        let error = service
-            .plan_rescan_for_execution_checked(
+        let persisted = service
+            .persist_rescan_before_execution_preflight(
                 &case_id,
                 &baseline_run_id,
                 ScanPlanRequest {
                     engine_ids: vec!["gitleaks".into()],
                 },
-                |_| {
-                    Err(AppError::NotAvailable(
-                        "scan_preflight:runtime_unavailable: fixture".into(),
-                    ))
-                },
             )
-            .unwrap_err();
-
-        assert!(error.to_string().contains("runtime_unavailable"));
+            .unwrap();
         let after = service.show_case(&case_id).unwrap();
-        assert_eq!(after.scan_runs.len(), 1);
-        assert_eq!(after.scan_runs[0].id, baseline_before.id);
+        assert_eq!(after.scan_runs.len(), 2);
+        assert_eq!(after.scan_runs[1].id, persisted.plan.scan_run.id);
         assert_eq!(
-            after.scan_runs[0].completed_at,
-            baseline_before.completed_at
+            after.scan_runs[1].engine_runs[0].status,
+            EngineRunStatus::Queued
         );
-        assert_eq!(
-            after.scan_runs[0].engine_runs[0].status,
-            baseline_before.engine_runs[0].status
-        );
-        assert_eq!(after.status, before.status);
-        assert_eq!(after.updated_at, before.updated_at);
-        assert_eq!(after.storage_revision, before.storage_revision);
+        assert_eq!(after.status, CaseStatus::Verifying);
     }
 
     #[test]
-    fn live_execution_hook_failure_does_not_queue_a_retryable_run() {
+    fn outcome_first_resume_persists_retry_before_dependency_preflight() {
         let fixture = Fixture::new();
         let (case_id, baseline_run_id) = repository_case_with_completed_baseline(&fixture);
         let service = fixture.service();
@@ -7587,27 +9725,17 @@ mod tests {
             .storage
             .save_case(&mut retryable, "test.retryable_run")
             .unwrap();
-        let before = service.show_case(&case_id).unwrap();
-
-        let error = service
-            .plan_resume_checked(&case_id, &baseline_run_id, |_| {
-                Err(AppError::NotAvailable(
-                    "scan_preflight:runtime_unavailable: fixture".into(),
-                ))
-            })
-            .unwrap_err();
-
-        assert!(error.to_string().contains("runtime_unavailable"));
+        let persisted = service
+            .persist_resume_before_execution_preflight(&case_id, &baseline_run_id)
+            .unwrap();
         let after = service.show_case(&case_id).unwrap();
         assert_eq!(after.scan_runs.len(), 1);
         assert_eq!(
             after.scan_runs[0].engine_runs[0].status,
-            EngineRunStatus::Failed
+            EngineRunStatus::Queued
         );
-        assert_eq!(after.scan_runs[0].engine_runs[0].phase, "failed");
-        assert_eq!(after.status, before.status);
-        assert_eq!(after.updated_at, before.updated_at);
-        assert_eq!(after.storage_revision, before.storage_revision);
+        assert_eq!(after.scan_runs[0].engine_runs[0].phase, "queued_for_resume");
+        assert_eq!(persisted.executable.len(), 1);
     }
 
     #[test]
@@ -7698,6 +9826,44 @@ mod tests {
             entry.source_kind == SourceKind::AwsOrganization
                 && entry.status == CoverageStatus::SourceNotConnectedUnknown
         }));
+    }
+
+    #[test]
+    fn case_creation_keeps_organization_optional_without_a_placeholder() {
+        let fixture = Fixture::new();
+        let service = fixture.service();
+        let request = CreateCaseRequest {
+            title: "Personal scan".into(),
+            organization_name: "   ".into(),
+            employee_range: "Just me".into(),
+            assessment_intent: Some(AssessmentIntent::SourceCode),
+            ai_generated_artifact: Default::default(),
+            data_classes: vec![DataClass::General],
+            requested_activities: vec![],
+            source_kinds: vec![],
+            not_applicable_source_kinds: vec![],
+            declared_assets: vec![],
+            notes: None,
+        };
+
+        let created = service.create_case(&request).unwrap();
+        assert_eq!(created.profile.organization_name, "");
+        assert_eq!(
+            service
+                .show_case(&created.id)
+                .unwrap()
+                .profile
+                .organization_name,
+            ""
+        );
+
+        let mut too_long = request;
+        too_long.title = "Bounded organization".into();
+        too_long.organization_name = "x".repeat(201);
+        assert!(matches!(
+            service.create_case(&too_long),
+            Err(AppError::InvalidRequest(_))
+        ));
     }
 
     #[test]
@@ -7933,6 +10099,210 @@ mod tests {
     }
 
     #[test]
+    fn html_report_projects_master_report_timing_findings_and_redacted_technical_details() {
+        const RAW_SCANNER_SENTINEL: &str = "RAW_SCANNER_MESSAGE_MUST_NOT_APPEAR";
+        const MUTABLE_CANONICAL_SENTINEL: &str = "MUTABLE_CANONICAL_TITLE_MUST_NOT_APPEAR";
+
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &created.id,
+                ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        let run_id = plan.scan_run.id.clone();
+        let task_id = plan.scan_run.engine_runs[0].id.clone();
+        let mut case = service.show_case(&created.id).unwrap();
+        let started = plan.scan_run.created_at + Duration::seconds(1);
+        let finished = started + Duration::seconds(2);
+        {
+            let run = &mut case.scan_runs[0];
+            run.completed_at = Some(finished);
+            let task = &mut run.engine_runs[0];
+            task.status = EngineRunStatus::Completed;
+            task.phase = "completed".into();
+            task.progress_percent = 100;
+            task.started_at = Some(started);
+            task.finished_at = Some(finished);
+            task.exit_code = Some(0);
+            task.cleanup_removed = Some(true);
+            task.raw_artifact_ids = vec!["artifact-html".into()];
+            task.error_message = Some(RAW_SCANNER_SENTINEL.into());
+            task.warnings = vec![format!("warning: {RAW_SCANNER_SENTINEL}")];
+        }
+        case.status = CaseStatus::ReadyForHandoff;
+
+        let evidence_sha256 = "d".repeat(64);
+        case.raw_artifacts.push(RawArtifact {
+            id: "artifact-html".into(),
+            case_id: case.id.clone(),
+            run_id: run_id.clone(),
+            engine_run_id: task_id.clone(),
+            relative_path: "case/run/task/evidence.json".into(),
+            media_type: "application/json".into(),
+            sha256: evidence_sha256.clone(),
+            byte_length: 2,
+            created_at: finished,
+            contains_sensitive_data: false,
+        });
+
+        let frozen_finding = Finding {
+            id: "finding-html".into(),
+            case_id: case.id.clone(),
+            first_seen_run_id: run_id.clone(),
+            last_seen_run_id: run_id.clone(),
+            fingerprint: "gitleaks:html-fixture".into(),
+            title: "Frozen selected-run secret exposure".into(),
+            plain_language_summary:
+                "A secret-like value was retained in the selected-run snapshot.".into(),
+            possible_impact: "Someone with repository access may be able to reuse it.".into(),
+            severity: Severity::High,
+            confidence: Confidence::Confirmed,
+            priority: 73,
+            priority_reasons: vec![
+                "Confirmed evidence and a reusable credential pattern raise the handoff priority."
+                    .into(),
+            ],
+            asset_ids: vec![asset_id.clone()],
+            evidence: vec![Evidence {
+                id: "evidence-html".into(),
+                finding_id: "finding-html".into(),
+                run_id: run_id.clone(),
+                engine_run_id: Some(task_id.clone()),
+                kind: EvidenceKind::SourceCode,
+                engine_id: "gitleaks".into(),
+                source_rule: Some("generic-api-key".into()),
+                result_pointer_sha256: None,
+                observed_at: finished,
+                summary: "Redacted selected-run evidence".into(),
+                artifact_id: "artifact-html".into(),
+                artifact_sha256: evidence_sha256.clone(),
+                pointer: None,
+                redacted: true,
+            }],
+            control_references: vec![crate::domain::ControlReference {
+                framework: "AIDEFEND".into(),
+                framework_version: "2026.1".into(),
+                control_id: "ADF-APP-01".into(),
+                title: "Application secret handling".into(),
+                relationship: "related".into(),
+                rationale: "The finding supplies evidence relevant to this coordinate.".into(),
+                mapping_version: "map-2026-08".into(),
+                mapping_provenance: Some(crate::domain::ControlMappingProvenance {
+                    mapping_version: "map-2026-08".into(),
+                    reviewed_at: "2026-08-29".into(),
+                    review_process: "human-coordinate-review".into(),
+                    catalog_sha256: "e".repeat(64),
+                }),
+            }],
+            recommendation: "Revoke the exposed value, replace it, and remove it from history."
+                .into(),
+            verification_guidance: "Run the same check after replacement.".into(),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Application security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![],
+        };
+        let mut mutable_canonical = frozen_finding.clone();
+        mutable_canonical.title = MUTABLE_CANONICAL_SENTINEL.into();
+        case.findings.push(mutable_canonical);
+        case.finding_observations.push(FindingObservation {
+            id: "observation-html".into(),
+            run_id: run_id.clone(),
+            finding_id: frozen_finding.id.clone(),
+            fingerprint: frozen_finding.fingerprint.clone(),
+            asset_ids: vec![asset_id.clone()],
+            engine_ids: vec!["gitleaks".into()],
+            severity: Severity::High,
+            confidence: Confidence::Confirmed,
+            evidence_hashes: vec![evidence_sha256.clone()],
+            observed_at: finished,
+            finding_snapshot: Some(frozen_finding),
+        });
+        case.finding_observations.push(FindingObservation {
+            id: "observation-only-html".into(),
+            run_id: run_id.clone(),
+            finding_id: "legacy-observation-only".into(),
+            fingerprint: "legacy:observation-only".into(),
+            asset_ids: vec![asset_id],
+            engine_ids: vec!["legacy-engine".into()],
+            severity: Severity::Medium,
+            confidence: Confidence::Low,
+            evidence_hashes: vec!["f".repeat(64)],
+            observed_at: finished,
+            finding_snapshot: None,
+        });
+
+        let report = build_beginner_master_report(&case, &run_id).unwrap();
+        assert_eq!(report.findings.len(), 2);
+        assert!(report.findings.iter().any(|finding| {
+            finding.snapshot_source
+                == crate::beginner_report::FindingSnapshotSource::ObservationOnly
+        }));
+        let html = String::from_utf8(
+            html_report_bytes(
+                &case,
+                &run_id,
+                &ExportOptions {
+                    redaction: RedactionProfile::None,
+                    include_raw_artifacts: false,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        for expected in [
+            started.to_rfc3339(),
+            finished.to_rfc3339(),
+            "Frozen selected-run secret exposure".into(),
+            "Finding details unavailable for this legacy run".into(),
+            "Severity: high".into(),
+            "Confidence: confirmed".into(),
+            "Priority: 73".into(),
+            "Confirmed evidence and a reusable credential pattern raise the handoff priority."
+                .into(),
+            "Revoke the exposed value, replace it, and remove it from history.".into(),
+            evidence_sha256.clone(),
+            "AIDEFEND 2026.1 / ADF-APP-01".into(),
+            "map-2026-08".into(),
+            "Redacted diagnostic log".into(),
+            "Availability:</strong> unavailable".into(),
+            "No run-bound redacted diagnostic log is retained in the case model.".into(),
+        ] {
+            assert!(html.contains(&expected), "HTML omitted {expected}");
+        }
+        assert!(html.contains(&format!(
+            "Started: {} · Finished: {}",
+            started.to_rfc3339(),
+            finished.to_rfc3339()
+        )));
+        assert!(html.contains(&format!("Observed: {}", finished.to_rfc3339())));
+        assert!(!html.contains(RAW_SCANNER_SENTINEL));
+        assert!(!html.contains(MUTABLE_CANONICAL_SENTINEL));
+    }
+
+    #[test]
     fn finding_groups_are_reversible_and_never_replace_canonical_findings() {
         let fixture = Fixture::new();
         let mut case = fixture.create();
@@ -7943,6 +10313,7 @@ mod tests {
             sequence: 1,
             created_at: now,
             completed_at: Some(now),
+            request_outcome: None,
             knowledge_cutoff: now,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -8065,13 +10436,24 @@ mod tests {
         assert!(unredacted_html.contains(group_rationale));
         assert!(unredacted_html.contains("Independent finding-a"));
         assert!(unredacted_html.contains("Independent finding-b"));
-        assert!(unredacted_html.contains("Handoff order #1"));
+        assert!(unredacted_html.contains("Report order #1"));
+        let beginner_problem_section = unredacted_html
+            .split("<h2>Problems found</h2>")
+            .nth(1)
+            .unwrap()
+            .split("<details class=\"technical\">")
+            .next()
+            .unwrap();
         assert!(
-            unredacted_html.rfind("Independent finding-b").unwrap()
-                < unredacted_html.rfind("Independent finding-a").unwrap()
+            beginner_problem_section
+                .find("Independent finding-b")
+                .unwrap()
+                < beginner_problem_section
+                    .find("Independent finding-a")
+                    .unwrap()
         );
-        assert!(!unredacted_html.contains("Priority 80"));
-        assert!(!unredacted_html.contains("Priority 40"));
+        assert!(unredacted_html.contains("Priority: 80"));
+        assert!(unredacted_html.contains("Priority: 40"));
 
         let redacted_html = String::from_utf8(
             html_report_bytes(&grouped, "run-1", &ExportOptions::default()).unwrap(),
@@ -8161,22 +10543,16 @@ mod tests {
             assert!(!canonical_text.contains(sensitive));
         }
         let canonical: Value = serde_json::from_slice(&canonical).unwrap();
+        assert_eq!(canonical["export_kind"], "beginner_master_report");
         assert_eq!(
             canonical
-                .pointer("/case/finding_groups")
-                .and_then(Value::as_array)
-                .unwrap()
-                .len(),
-            0
-        );
-        assert_eq!(
-            canonical
-                .pointer("/case/finding_group_events")
+                .pointer("/report/findings")
                 .and_then(Value::as_array)
                 .unwrap()
                 .len(),
             2
         );
+        assert!(canonical.get("case").is_none());
     }
 
     #[test]
@@ -8563,6 +10939,7 @@ mod tests {
                 sequence: 1,
                 created_at: now,
                 completed_at: None,
+                request_outcome: None,
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),
@@ -9281,18 +11658,18 @@ mod tests {
         assert_eq!(failed.raw_artifact_ids, vec!["retained-artifact"]);
     }
 
-    struct MappingDriftResumeFixture {
+    struct ReleaseDriftResumeFixture {
         case_id: Id,
         run_id: Id,
         engine_run_id: Id,
         output_path: PathBuf,
     }
 
-    fn stage_mapping_drift_captured_resume(
+    fn stage_timeout_and_mapping_drift_captured_resume(
         fixture: &Fixture,
         engine_ids: Vec<String>,
         output_bytes: &[u8],
-    ) -> MappingDriftResumeFixture {
+    ) -> ReleaseDriftResumeFixture {
         let case = fixture.create();
         let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
         let service = fixture.service();
@@ -9394,10 +11771,10 @@ mod tests {
         stored.status = CaseStatus::NeedsAttention;
         fixture
             .storage
-            .save_case(&mut stored, "test.mapping_drift_captured_resume")
+            .save_case(&mut stored, "test.release_drift_captured_resume")
             .unwrap();
 
-        MappingDriftResumeFixture {
+        ReleaseDriftResumeFixture {
             case_id: case.id,
             run_id: plan.scan_run.id,
             engine_run_id,
@@ -9406,9 +11783,13 @@ mod tests {
     }
 
     #[test]
-    fn mapping_version_drift_allows_only_verified_empty_captured_jsonl_resume() {
+    fn execution_timeout_drift_allows_only_verified_empty_captured_jsonl_resume() {
         let fixture = Fixture::new();
-        let staged = stage_mapping_drift_captured_resume(&fixture, vec!["trufflehog".into()], b"");
+        let staged = stage_timeout_and_mapping_drift_captured_resume(
+            &fixture,
+            vec!["trufflehog".into()],
+            b"",
+        );
 
         let resumed = fixture
             .service()
@@ -9439,9 +11820,9 @@ mod tests {
     }
 
     #[test]
-    fn mapping_version_drift_rejects_nonempty_or_tampered_captured_jsonl() {
+    fn execution_timeout_drift_rejects_nonempty_or_tampered_captured_jsonl() {
         let nonempty = Fixture::new();
-        let staged = stage_mapping_drift_captured_resume(
+        let staged = stage_timeout_and_mapping_drift_captured_resume(
             &nonempty,
             vec!["trufflehog".into()],
             br#"{"DetectorName":"finding"}"#,
@@ -9459,7 +11840,11 @@ mod tests {
         assert!(error.to_string().contains("Start a new scan"));
 
         let tampered = Fixture::new();
-        let staged = stage_mapping_drift_captured_resume(&tampered, vec!["trufflehog".into()], b"");
+        let staged = stage_timeout_and_mapping_drift_captured_resume(
+            &tampered,
+            vec!["trufflehog".into()],
+            b"",
+        );
         fs::write(&staged.output_path, b"tampered").unwrap();
         let error = tampered
             .service()
@@ -9469,9 +11854,9 @@ mod tests {
     }
 
     #[test]
-    fn mapping_drift_mixed_resume_runs_only_safe_adapter_subset() {
+    fn mapping_only_drift_never_blocks_a_runnable_resume_sibling() {
         let mixed = Fixture::new();
-        let staged = stage_mapping_drift_captured_resume(
+        let staged = stage_timeout_and_mapping_drift_captured_resume(
             &mixed,
             vec!["trufflehog".into(), "semgrep".into()],
             b"",
@@ -9497,44 +11882,49 @@ mod tests {
         let frozen_scope_contract_sha256 = semgrep.scope_contract_sha256.clone();
         mixed
             .storage
-            .save_case(&mut stored, "test.mapping_drift_mixed_resume")
+            .save_case(&mut stored, "test.mapping_only_drift_mixed_resume")
             .unwrap();
 
         let resumed = mixed
             .service()
             .plan_resume(&staged.case_id, &staged.run_id)
             .expect("the verified empty adapter subset remains resumable");
-        assert_eq!(resumed.executable.len(), 1);
-        assert_eq!(resumed.executable[0].manifest.id, "trufflehog");
-        assert_eq!(resumed.executable[0].attempt, 1);
+        assert_eq!(resumed.executable.len(), 2);
+        let trufflehog = resumed
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == "trufflehog")
+            .unwrap();
+        assert_eq!(trufflehog.attempt, 1);
+        let semgrep_execution = resumed
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == "semgrep")
+            .unwrap();
+        assert_eq!(semgrep_execution.attempt, 2);
         let stored = mixed.service().show_case(&staged.case_id).unwrap();
         let semgrep = stored.scan_runs[0]
             .engine_runs
             .iter()
             .find(|engine_run| engine_run.engine_id == "semgrep")
             .unwrap();
-        assert_eq!(semgrep.status, EngineRunStatus::Failed);
-        assert_eq!(semgrep.phase, "resume_release_incompatible");
-        assert_eq!(
-            semgrep.error_code.as_deref(),
-            Some("resume_release_incompatible")
-        );
+        assert_eq!(semgrep.status, EngineRunStatus::Queued);
+        assert_eq!(semgrep.phase, "queued_for_resume");
         assert_eq!(semgrep.resume_token, frozen_resume_token);
         assert_eq!(semgrep.scope_contract_sha256, frozen_scope_contract_sha256);
-        assert!(
-            semgrep
-                .error_message
-                .as_deref()
-                .is_some_and(|message| message.contains("Start a new scan"))
-        );
+        assert_eq!(semgrep.mapping_version.as_deref(), Some("2026-08-26.1"));
+        assert!(semgrep.error_code.is_none());
     }
 
     #[test]
-    fn mapping_version_drift_is_rejected_for_reexecution_or_runtime_only_plans() {
+    fn execution_timeout_drift_is_rejected_for_reexecution_or_runtime_only_plans() {
         for stage in [ExecutionStage::Failed, ExecutionStage::CleanupPending] {
             let fixture = Fixture::new();
-            let staged =
-                stage_mapping_drift_captured_resume(&fixture, vec!["trufflehog".into()], b"");
+            let staged = stage_timeout_and_mapping_drift_captured_resume(
+                &fixture,
+                vec!["trufflehog".into()],
+                b"",
+            );
             let mut stored = fixture.service().show_case(&staged.case_id).unwrap();
             let engine_run = &mut stored.scan_runs[0].engine_runs[0];
             let mut checkpoint =
@@ -9569,17 +11959,13 @@ mod tests {
             let frozen_scope_contract_sha256 = engine_run.scope_contract_sha256.clone();
             fixture
                 .storage
-                .save_case(&mut stored, "test.mapping_drift_runtime_resume")
+                .save_case(&mut stored, "test.timeout_drift_runtime_resume")
                 .unwrap();
 
-            let pre_persist_called = std::cell::Cell::new(false);
             let error = fixture
                 .service()
-                .plan_resume_checked(&staged.case_id, &staged.run_id, |_| {
-                    pre_persist_called.set(true);
-                    Ok(())
-                })
-                .expect_err("mapping drift must not authorize tool or runtime execution");
+                .persist_resume_before_execution_preflight(&staged.case_id, &staged.run_id)
+                .expect_err("timeout drift must not authorize tool or runtime execution");
             assert!(
                 error
                     .to_string()
@@ -9591,7 +11977,6 @@ mod tests {
                     .to_string()
                     .contains("No scanner or runtime was started")
             );
-            assert!(!pre_persist_called.get());
 
             let stored = fixture.service().show_case(&staged.case_id).unwrap();
             let blocked = &stored.scan_runs[0].engine_runs[0];
@@ -9609,7 +11994,7 @@ mod tests {
     }
 
     #[test]
-    fn mapping_and_timeout_drift_allow_live_shape_empty_naabu_adapter_resume() {
+    fn timeout_drift_allows_live_shape_empty_naabu_adapter_resume() {
         let fixture = Fixture::new();
         let case = fixture.create();
         approve_direct_external_target(
@@ -9777,8 +12162,7 @@ mod tests {
         assert_eq!(engine_run.mapping_version.as_deref(), Some("2026-08-26.1"));
         assert_eq!(engine_run.execution_timeout_seconds, Some(7_200));
         assert!(engine_run.warnings.iter().any(|warning| {
-            warning.contains("control mapping 2026-08-26.1")
-                && warning.contains("execution deadline 7200 seconds versus 14400 seconds")
+            warning.contains("execution deadline 7200 seconds versus 14400 seconds")
                 && warning.contains("frozen values remain unchanged")
                 && warning.contains("no scanner or runtime will be re-executed")
         }));
@@ -9974,7 +12358,48 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_cleanup_failure_remains_durable_until_exact_retry_succeeds() {
+    fn interrupted_builtin_localhost_task_becomes_a_truthful_terminal_failure() {
+        let fixture = Fixture::new();
+        let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
+            &fixture.storage,
+            fixture.engines.manifests(),
+            9001,
+        )
+        .unwrap();
+        let mut running = fixture
+            .storage
+            .get_case(&prepared.prepared.case_id)
+            .unwrap();
+        let engine = &mut running.scan_runs[0].engine_runs[0];
+        engine.status = EngineRunStatus::Running;
+        engine.phase = "connecting".into();
+        engine.started_at = Some(Utc::now());
+        fixture
+            .storage
+            .save_case(&mut running, "test.localhost_running_before_restart")
+            .unwrap();
+
+        let service = fixture.service();
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+        let recovered = service.show_case(&prepared.prepared.case_id).unwrap();
+        let run = &recovered.scan_runs[0];
+        let engine = &run.engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Failed);
+        assert_eq!(engine.phase, "localhost_probe_interrupted");
+        assert_eq!(
+            engine.error_code.as_deref(),
+            Some("localhost_probe_interrupted")
+        );
+        assert!(engine.localhost_tcp_observation.is_none());
+        assert!(engine.resume_token.is_none());
+        assert!(engine.finished_at.is_some());
+        assert!(run.completed_at.is_some());
+        assert_eq!(recovered.status, CaseStatus::NeedsAttention);
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
+    }
+
+    #[test]
+    fn interrupted_cleanup_failure_is_final_reportable_and_does_not_lock_new_work() {
         let fixture = Fixture::new();
         let case = fixture.create();
         let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
@@ -10020,7 +12445,9 @@ mod tests {
         checkpoint.runtime_command_provenance =
             Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
         checkpoint.runtime_provider = Some(crate::container_runtime::RuntimeProvider::Podman);
+        checkpoint.artifact_ids = vec!["retained-partial-artifact".into()];
         engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine_run.raw_artifact_ids = checkpoint.artifact_ids.clone();
         fixture
             .storage
             .save_case(&mut running, "test.running_before_restart")
@@ -10054,10 +12481,59 @@ mod tests {
             .unwrap();
         let pending_engine = &pending.scan_runs[0].engine_runs[0];
         assert_eq!(pending_engine.phase, "interrupted_restart_cleanup_pending");
+        assert_eq!(pending_engine.status, EngineRunStatus::Failed);
+        assert!(pending_engine.finished_at.is_some());
+        assert!(pending.scan_runs[0].completed_at.is_some());
+        assert_eq!(pending.status, CaseStatus::NeedsAttention);
+        assert_eq!(
+            pending_engine.raw_artifact_ids,
+            vec!["retained-partial-artifact"]
+        );
         let pending_token = pending_engine.resume_token.clone().unwrap();
         let pending_checkpoint = ExecutionCheckpoint::from_resume_token(&pending_token).unwrap();
         assert_eq!(pending_checkpoint.stage, ExecutionStage::CleanupPending);
         assert!(!pending_checkpoint.cleanup_completed);
+        assert_eq!(
+            pending_checkpoint.artifact_ids,
+            vec!["retained-partial-artifact"]
+        );
+
+        // Upgrade compatibility: earlier v0.1.8 work could persist the exact
+        // same obligation as Paused. Startup must migrate only the lifecycle
+        // projection and leave its checkpoint/evidence byte-for-byte durable.
+        let mut legacy_projection = pending.clone();
+        legacy_projection.scan_runs[0].engine_runs[0].status = EngineRunStatus::Paused;
+        legacy_projection.scan_runs[0].engine_runs[0].finished_at = None;
+        legacy_projection.scan_runs[0].completed_at = None;
+        fixture
+            .storage
+            .save_case(
+                &mut legacy_projection,
+                "test.legacy_cleanup_pending_projection",
+            )
+            .unwrap();
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+        let pending = service.show_case(&case.id).unwrap();
+        assert_eq!(
+            pending.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Failed
+        );
+        assert_eq!(
+            pending.scan_runs[0].engine_runs[0].resume_token.as_deref(),
+            Some(pending_token.as_str())
+        );
+        assert_eq!(
+            pending.scan_runs[0].engine_runs[0].raw_artifact_ids,
+            vec!["retained-partial-artifact"]
+        );
+        assert!(pending.scan_runs[0].completed_at.is_some());
+
+        let report = build_beginner_master_report(&pending, &original.scan_run.id).unwrap();
+        assert_eq!(report.state.lifecycle, ReportLifecycle::Final);
+        assert_eq!(
+            report.state.summary,
+            BeginnerReportSummary::NoChecksCompleted
+        );
         assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
         assert!(matches!(
             service.plan_resume(&case.id, &original.scan_run.id),
@@ -10071,6 +12547,48 @@ mod tests {
             service.cancel_scan(&case.id, &original.scan_run.id),
             Err(AppError::NotAvailable(_))
         ));
+
+        let after_rejected_transitions = service.show_case(&case.id).unwrap();
+        let retained_engine = &after_rejected_transitions.scan_runs[0].engine_runs[0];
+        assert_eq!(retained_engine.status, EngineRunStatus::Failed);
+        assert_eq!(retained_engine.phase, "interrupted_restart_cleanup_pending");
+        assert_eq!(
+            retained_engine.resume_token.as_deref(),
+            Some(pending_token.as_str())
+        );
+        assert_eq!(retained_engine.cleanup_removed, Some(false));
+        assert_eq!(
+            retained_engine.raw_artifact_ids,
+            vec!["retained-partial-artifact"]
+        );
+
+        let independent = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert_ne!(independent.scan_run.id, original.scan_run.id);
+        assert_ne!(
+            independent.executable[0].engine_run_id,
+            original.scan_run.engine_runs[0].id
+        );
+        assert_eq!(independent.scan_run.sequence, 2);
+        assert_eq!(independent.executable.len(), 1);
+        let with_independent_work = service.show_case(&case.id).unwrap();
+        assert_eq!(with_independent_work.scan_runs.len(), 2);
+        assert_eq!(
+            with_independent_work.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Failed
+        );
+        assert_eq!(
+            with_independent_work.scan_runs[0].engine_runs[0]
+                .resume_token
+                .as_deref(),
+            Some(pending_token.as_str())
+        );
 
         let cleaned = service
             .record_interrupted_cleanup_success(
@@ -10089,8 +12607,14 @@ mod tests {
             .unwrap();
         let cleaned_engine = &cleaned.scan_runs[0].engine_runs[0];
         assert_eq!(cleaned_engine.phase, "interrupted_restart_cleaned");
-        assert_eq!(cleaned_engine.status, EngineRunStatus::Paused);
+        assert_eq!(cleaned_engine.status, EngineRunStatus::Failed);
+        assert!(cleaned.scan_runs[0].completed_at.is_some());
+        assert_eq!(cleaned.status, CaseStatus::Scanning);
         assert_eq!(cleaned_engine.cleanup_removed, Some(true));
+        assert_eq!(
+            cleaned_engine.raw_artifact_ids,
+            vec!["retained-partial-artifact"]
+        );
         assert!(cleaned_engine.warnings.iter().any(|warning| {
             warning.contains("Zeroized and removed 1 crash-left credential envelope")
         }));
@@ -10101,14 +12625,14 @@ mod tests {
         assert!(cleaned_checkpoint.cleanup_completed);
         assert_eq!(cleaned_checkpoint.attempt, 1);
         assert!(cleaned_checkpoint.managed_network.is_none());
-        assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
         assert_eq!(
-            service
-                .plan_resume(&case.id, &original.scan_run.id)
-                .unwrap()
-                .executable[0]
-                .attempt,
-            2
+            cleaned_checkpoint.artifact_ids,
+            vec!["retained-partial-artifact"]
+        );
+        let after_cleanup = service.show_case(&case.id).unwrap();
+        assert_eq!(
+            after_cleanup.scan_runs[1].engine_runs[0].status,
+            EngineRunStatus::Queued
         );
     }
 
@@ -10146,37 +12670,14 @@ mod tests {
         let interrupted = service.show_case(&case.id).unwrap();
         assert_eq!(
             interrupted.scan_runs[0].engine_runs[0].status,
-            EngineRunStatus::Paused
+            EngineRunStatus::Failed
         );
         assert_eq!(
             interrupted.scan_runs[0].engine_runs[0]
                 .error_code
                 .as_deref(),
-            Some("desktop_process_restarted")
+            Some("preflight_interrupted")
         );
-        assert!(matches!(
-            service.plan_resume(&case.id, &original.scan_run.id),
-            Err(AppError::NotAvailable(_))
-        ));
-        let interrupted_token = interrupted.scan_runs[0].engine_runs[0]
-            .resume_token
-            .clone()
-            .unwrap();
-        service
-            .record_interrupted_cleanup_success(
-                &case.id,
-                &original.scan_run.id,
-                &original.scan_run.engine_runs[0].id,
-                InterruptedCleanupSuccess {
-                    expected_resume_token: interrupted_token,
-                    cleanup: CleanupOutcome {
-                        removed: false,
-                        detail: "the planned execution had created no runtime resources".into(),
-                    },
-                    orphan_credentials_removed: 0,
-                },
-            )
-            .unwrap();
         assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
 
         let resumed = service
@@ -10191,26 +12692,16 @@ mod tests {
 
         assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
         let mut changed_scope = service.show_case(&case.id).unwrap();
-        let interrupted_token = changed_scope.scan_runs[0].engine_runs[0]
-            .resume_token
-            .clone()
-            .unwrap();
-        service
-            .record_interrupted_cleanup_success(
-                &case.id,
-                &original.scan_run.id,
-                &original.scan_run.engine_runs[0].id,
-                InterruptedCleanupSuccess {
-                    expected_resume_token: interrupted_token,
-                    cleanup: CleanupOutcome {
-                        removed: false,
-                        detail: "the queued retry had created no runtime resources".into(),
-                    },
-                    orphan_credentials_removed: 0,
-                },
-            )
-            .unwrap();
-        changed_scope = service.show_case(&case.id).unwrap();
+        assert_eq!(
+            changed_scope.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Failed
+        );
+        assert_eq!(
+            changed_scope.scan_runs[0].engine_runs[0]
+                .error_code
+                .as_deref(),
+            Some("preflight_interrupted")
+        );
         changed_scope.scope_grants[0].confirmed_at =
             original.scan_run.created_at + Duration::seconds(1);
         fixture
@@ -10619,6 +13110,7 @@ mod tests {
             sequence: 1,
             created_at: now,
             completed_at: None,
+            request_outcome: None,
             knowledge_cutoff: now,
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -10630,6 +13122,8 @@ mod tests {
                 id: "engine-run-1".into(),
                 scan_run_id: "scan-1".into(),
                 engine_id: "cloudquery".into(),
+                task_kind: EngineTaskKind::CatalogEngine,
+                localhost_tcp_observation: None,
                 asset_ids: vec!["asset-1".into()],
                 status: EngineRunStatus::Running,
                 progress_percent: 50,
@@ -10862,6 +13356,8 @@ mod tests {
             id: format!("engine-{run_id}"),
             scan_run_id: run_id.into(),
             engine_id: "cloudquery".into(),
+            task_kind: EngineTaskKind::CatalogEngine,
+            localhost_tcp_observation: None,
             asset_ids: vec!["asset-1".into()],
             status: EngineRunStatus::Completed,
             progress_percent: 100,
@@ -10916,6 +13412,7 @@ mod tests {
                 sequence,
                 created_at: now,
                 completed_at: Some(now),
+                request_outcome: None,
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),
@@ -10942,6 +13439,7 @@ mod tests {
                 sequence,
                 created_at: now,
                 completed_at,
+                request_outcome: None,
                 knowledge_cutoff: now,
                 ai_system_applicable: false,
                 ai_system_applicability: Default::default(),
@@ -10994,30 +13492,38 @@ mod tests {
         let service = fixture.service();
         for run_id in ["active", "incomplete"] {
             for format in [CaseExportFormat::OcsfJson, CaseExportFormat::OscalJson] {
-                let preview_error = service
+                let preview = service
                     .preview_export(&case.id, run_id, format.clone(), &ExportOptions::default())
-                    .unwrap_err();
-                assert!(matches!(
-                    preview_error,
-                    AppError::InvalidRequest(detail)
-                        if detail.contains("fully completed selected scan run")
-                            && detail.contains("cannot represent unfinished or missing engine outcomes")
-                ));
-                let blocked_destination = fixture
+                    .expect("partial findings-only preview");
+                assert!(preview.coverage_manifest_included);
+                assert_eq!(preview.run_id, run_id);
+                let partial_destination = fixture
                     .directory
                     .path()
-                    .join(format!("blocked-{run_id}-{}.json", format.as_str()));
-                assert!(matches!(
-                    service.export_schema(
-                        &case.id,
-                        run_id,
-                        format,
-                        &blocked_destination,
-                    ),
-                    Err(AppError::InvalidRequest(detail))
-                        if detail.contains("fully completed selected scan run")
-                ));
-                assert!(!blocked_destination.exists());
+                    .join(format!("partial-{run_id}-{}.json", format.as_str()));
+                let partial_export = service
+                    .export_schema(&case.id, run_id, format, &partial_destination)
+                    .expect("partial findings-only export");
+                assert!(partial_destination.exists());
+                let sidecar_path = PathBuf::from(
+                    partial_export
+                        .coverage_manifest_path
+                        .as_deref()
+                        .expect("mandatory coverage companion path"),
+                );
+                assert!(sidecar_path.exists());
+                assert!(partial_export.coverage_manifest_sha256.is_some());
+                let sidecar: Value =
+                    serde_json::from_slice(&fs::read(&sidecar_path).unwrap()).unwrap();
+                assert_eq!(sidecar["export_kind"], "coverage_manifest");
+                assert_eq!(sidecar["report"]["run_id"], run_id);
+                assert_eq!(sidecar["companion"]["sha256"], partial_export.sha256);
+                assert!(
+                    service
+                        .verify_stored_export(&case.id, &partial_export.id)
+                        .unwrap()
+                        .valid
+                );
             }
             let interim_preview = service
                 .preview_export(
@@ -11061,6 +13567,7 @@ mod tests {
         assert_eq!(complete_zero_finding_preview.run_id, "current");
         assert_eq!(complete_zero_finding_preview.selected_run_finding_count, 0);
         assert_eq!(complete_zero_finding_preview.incomplete_engine_run_count, 0);
+        assert!(complete_zero_finding_preview.coverage_manifest_included);
         let export = service
             .export_schema(
                 &case.id,
@@ -11105,8 +13612,8 @@ mod tests {
         let reopened = service.show_case(&case.id).unwrap();
         assert_eq!(
             reopened.exports.len(),
-            4,
-            "the two incomplete-run framework reports and two baseline exports must be persisted"
+            8,
+            "partial findings exports, framework reports, and baseline exports must be persisted"
         );
         assert_eq!(reopened.comparisons.len(), 1);
         assert!(

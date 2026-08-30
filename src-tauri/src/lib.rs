@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod adapters;
 pub mod artifact_store;
+pub mod beginner_report;
 pub mod bootstrap;
 pub mod case_service;
 #[cfg(feature = "desktop")]
@@ -22,6 +23,7 @@ pub mod external_scope;
 pub mod gateway_release;
 pub mod job_manager;
 pub mod local_tcp_probe;
+pub mod localhost_quick_scan;
 pub mod managed_network;
 pub mod managed_runtime;
 pub mod orchestrator;
@@ -99,10 +101,20 @@ pub fn run() {
             };
             let storage = Storage::open(app_data.join("casework.db"))
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
-            let engines = EngineRegistry::load_builtin()
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
-            let adapters = adapters::builtin_adapter_registry()
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            let engines = EngineRegistry::load_builtin().unwrap_or_else(|error| {
+                tracing::error!(
+                    error = %error,
+                    "built-in engine catalog is unavailable; catalog-backed checks remain unavailable"
+                );
+                EngineRegistry::empty()
+            });
+            let adapters = adapters::builtin_adapter_registry().unwrap_or_else(|error| {
+                tracing::error!(
+                    error = %error,
+                    "built-in adapter registry is unavailable; catalog-backed checks remain unavailable"
+                );
+                adapter::AdapterRegistry::default()
+            });
             let artifact_store = ArtifactStore::open(app_data.join("artifacts"))
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             let artifact_root = artifact_store.root().to_path_buf();
@@ -218,6 +230,7 @@ pub fn run() {
             commands::group_findings,
             commands::ungroup_findings,
             commands::start_scan,
+            commands::start_localhost_quick_scan,
             commands::pause_scan,
             commands::resume_scan,
             commands::cancel_scan,

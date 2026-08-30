@@ -2,6 +2,7 @@ use ai_security_scanner_lib::job_manager::{
     EngineJobStatus, JobActivationOutcome, JobCompletion, JobFailureKind, JobKey, JobManager,
     JobManagerError, JobStatus,
 };
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -135,6 +136,54 @@ fn pause_resume_and_cancel_requests_reach_each_engine_control() {
         .expect("terminal callback");
     assert_eq!(terminal.status, JobStatus::Cancelled);
     assert_eq!(terminal.engines[0].status, EngineJobStatus::Cancelled);
+    assert_eq!(manager.live_count(), 0);
+}
+
+#[test]
+fn persistence_pending_is_terminal_even_when_cancellation_was_requested() {
+    let manager = JobManager::default();
+    let key = key();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let worker_release = Arc::clone(&release);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |_| {
+                started_tx.send(()).expect("worker started");
+                let (mutex, changed) = &*worker_release;
+                let mut released = mutex.lock().expect("release lock");
+                while !*released {
+                    released = changed.wait(released).expect("release wait");
+                }
+                JobCompletion::PersistencePending
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal event"),
+        )
+        .expect("job starts");
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker started");
+    assert_eq!(
+        manager.cancel(&key).expect("cancel intent").status,
+        JobStatus::CancelRequested
+    );
+    let (mutex, changed) = &*release;
+    *mutex.lock().expect("release lock") = true;
+    changed.notify_all();
+
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("terminal callback");
+    assert_eq!(terminal.status, JobStatus::Failed);
+    assert_eq!(
+        terminal.failure_kind,
+        Some(JobFailureKind::PersistencePending)
+    );
+    assert_eq!(terminal.engines[0].status, EngineJobStatus::Failed);
     assert_eq!(manager.live_count(), 0);
 }
 
@@ -316,11 +365,162 @@ fn paused_job_defers_activation_and_cancel_wins_without_invoking_it() {
 }
 
 #[test]
-fn activation_is_serialized_before_a_concurrent_cancel_request() {
+fn cancel_returned_before_activation_deterministically_skips_activation() {
+    let manager = JobManager::default();
+    let key = key();
+    let activation_called = Arc::new(AtomicBool::new(false));
+    let worker_activation_called = Arc::clone(&activation_called);
+    let (worker_ready_tx, worker_ready_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (outcome_tx, outcome_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |context| {
+                worker_ready_tx.send(()).expect("worker ready");
+                release_rx.recv().expect("release activation");
+                let outcome = context.activate_with_transition(|| {
+                    worker_activation_called.store(true, Ordering::SeqCst);
+                    Ok::<_, ()>(())
+                });
+                outcome_tx
+                    .send(outcome.clone())
+                    .expect("activation outcome");
+                context
+                    .engine("gitleaks")
+                    .expect("engine")
+                    .mark_cancelled()
+                    .expect("cancelled");
+                JobCompletion::Cancelled
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal"),
+        )
+        .expect("job starts");
+    worker_ready_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker ready");
+
+    manager.cancel(&key).expect("cancel returns");
+    release_tx.send(()).expect("release worker");
+
+    assert_eq!(
+        outcome_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("activation outcome"),
+        JobActivationOutcome::Cancelled
+    );
+    assert!(!activation_called.load(Ordering::SeqCst));
+    assert_eq!(
+        terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("terminal")
+            .status,
+        JobStatus::Cancelled
+    );
+}
+
+#[test]
+fn cancel_returned_before_preflight_write_deterministically_skips_write() {
+    let manager = JobManager::default();
+    let key = key();
+    let write_called = Arc::new(AtomicBool::new(false));
+    let worker_write_called = Arc::clone(&write_called);
+    let (worker_ready_tx, worker_ready_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (outcome_tx, outcome_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |context| {
+                worker_ready_tx.send(()).expect("worker ready");
+                release_rx.recv().expect("release preflight");
+                let outcome = context.coordinate_durable_write_if_not_cancelled(|| {
+                    worker_write_called.store(true, Ordering::SeqCst);
+                    Ok::<_, ()>(())
+                });
+                outcome_tx.send(outcome.clone()).expect("write outcome");
+                context
+                    .engine("gitleaks")
+                    .expect("engine")
+                    .mark_cancelled()
+                    .expect("cancelled");
+                JobCompletion::Cancelled
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal"),
+        )
+        .expect("job starts");
+    worker_ready_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker ready");
+
+    manager.cancel(&key).expect("cancel returns");
+    release_tx.send(()).expect("release worker");
+
+    assert_eq!(
+        outcome_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("write outcome"),
+        JobActivationOutcome::Cancelled
+    );
+    assert!(!write_called.load(Ordering::SeqCst));
+    assert_eq!(
+        terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("terminal")
+            .status,
+        JobStatus::Cancelled
+    );
+}
+
+#[test]
+fn accepted_cancel_dominates_a_later_worker_panic() {
+    let manager = JobManager::default();
+    let key = key();
+    let (worker_ready_tx, worker_ready_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+
+    manager
+        .start_job(
+            key.clone(),
+            ["gitleaks"],
+            move |_| {
+                worker_ready_tx.send(()).expect("worker ready");
+                release_rx.recv().expect("release panic");
+                panic!("panic after accepted cancellation");
+            },
+            move |snapshot| terminal_tx.send(snapshot).expect("terminal"),
+        )
+        .expect("job starts");
+    worker_ready_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("worker ready");
+
+    manager.cancel(&key).expect("cancel returns");
+    release_tx.send(()).expect("release worker");
+
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("terminal");
+    assert_eq!(terminal.status, JobStatus::Cancelled);
+    assert_eq!(terminal.failure_kind, None);
+    assert_eq!(terminal.engines[0].status, EngineJobStatus::Cancelled);
+}
+
+#[test]
+fn cancel_intent_published_during_activation_prevents_later_target_contact() {
     let manager = JobManager::default();
     let key = key();
     let activation_release = Arc::new(Barrier::new(2));
     let activation_worker_release = Arc::clone(&activation_release);
+    let fake_contacts = Arc::new(AtomicUsize::new(0));
+    let worker_fake_contacts = Arc::clone(&fake_contacts);
     let (activation_entered_tx, activation_entered_rx) = mpsc::channel();
     let (activation_result_tx, activation_result_rx) = mpsc::channel();
     let (terminal_tx, terminal_rx) = mpsc::channel();
@@ -335,8 +535,17 @@ fn activation_is_serialized_before_a_concurrent_cancel_request() {
                     Ok::<_, ()>("activated")
                 });
                 activation_result_tx
-                    .send(activation)
+                    .send(activation.clone())
                     .expect("activation result");
+                // A successful activation owns any irreversible capacity it
+                // committed even when cancellation was published during the
+                // closure. The mandatory post-activation token check is the
+                // zero-contact boundary.
+                if matches!(activation, JobActivationOutcome::Activated(_))
+                    && !context.is_cancelled()
+                {
+                    worker_fake_contacts.fetch_add(1, Ordering::SeqCst);
+                }
                 while !context.is_cancelled() {
                     thread::yield_now();
                 }
@@ -377,6 +586,7 @@ fn activation_is_serialized_before_a_concurrent_cancel_request() {
         .expect("cancel completed")
         .expect("cancel request");
     cancel.join().expect("cancel thread");
+    assert_eq!(fake_contacts.load(Ordering::SeqCst), 0);
     assert_eq!(
         terminal_rx
             .recv_timeout(Duration::from_secs(2))

@@ -185,8 +185,9 @@ enum CaseCommand {
 struct CreateCaseArgs {
     #[arg(long)]
     title: String,
+    /// Optional company or team label. It never gates local work.
     #[arg(long)]
-    organization: String,
+    organization: Option<String>,
     #[arg(long, default_value = "unknown")]
     employee_range: String,
     /// Comma-separated values: general, pii, phi, pci, financial, secrets, other.
@@ -904,7 +905,7 @@ fn execute_case(
         CaseCommand::Create(args) => {
             let request = CreateCaseRequest {
                 title: args.title,
-                organization_name: args.organization,
+                organization_name: args.organization.unwrap_or_default(),
                 employee_range: args.employee_range,
                 assessment_intent: None,
                 ai_generated_artifact: Default::default(),

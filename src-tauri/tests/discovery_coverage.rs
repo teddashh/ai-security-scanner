@@ -420,6 +420,8 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
         id: format!("engine-{asset_id}"),
         scan_run_id: run_id.into(),
         engine_id: "inventory".into(),
+        task_kind: Default::default(),
+        localhost_tcp_observation: None,
         asset_ids: vec![asset_id.into()],
         status,
         progress_percent: 100,
@@ -502,6 +504,7 @@ fn ledger_represents_all_six_states_without_using_findings() {
         sequence: 1,
         created_at: timestamp("2026-01-04T00:00:00Z"),
         completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+        request_outcome: None,
         knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
         ai_system_applicable: false,
         ai_system_applicability: Default::default(),
@@ -592,6 +595,7 @@ fn failed_partial_cancelled_and_not_executed_never_become_green() {
             sequence: 1,
             created_at: timestamp("2026-01-04T00:00:00Z"),
             completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+            request_outcome: None,
             knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
             ai_system_applicable: false,
             ai_system_applicability: Default::default(),
@@ -612,6 +616,90 @@ fn failed_partial_cancelled_and_not_executed_never_become_green() {
 }
 
 #[test]
+fn built_in_localhost_coverage_uses_typed_outcomes_without_a_manifest() {
+    let as_of = timestamp("2026-02-01T00:00:00Z");
+    let mut case = empty_case();
+    let mut endpoint = asset("localhost", "local-source", true);
+    endpoint.kind = AssetKind::WebService;
+    endpoint.name = "127.0.0.1:9001".into();
+    endpoint.provider = None;
+    endpoint.internet_exposed = Some(false);
+    endpoint.identifiers = vec![AssetIdentifier {
+        namespace: BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE.into(),
+        value: "127.0.0.1:9001".into(),
+    }];
+    case.assets.push(endpoint);
+    let mut localhost_grant = grant("grant-localhost", "localhost");
+    localhost_grant.permission = ScanPermission::LowImpactExternalConnection;
+    localhost_grant.authorization_reference =
+        Some(BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE.into());
+    case.scope_grants.push(localhost_grant);
+    let run_scope_snapshot = case.scope_grants[0].clone();
+    let observed_at = timestamp("2026-01-04T00:00:03Z");
+    let mut completed = engine_run("run", "localhost", EngineRunStatus::Completed);
+    completed.engine_id = "built-in-localhost-tcp".into();
+    completed.task_kind = EngineTaskKind::built_in_localhost_tcp(9_001);
+    completed.localhost_tcp_observation = Some(LocalhostTcpObservation {
+        outcome: LocalhostTcpOutcome::Reachable,
+        observed_at,
+    });
+    completed.finished_at = Some(observed_at);
+    case.scan_runs.push(ScanRun {
+        id: "run".into(),
+        case_id: case.id.clone(),
+        sequence: 1,
+        created_at: timestamp("2026-01-04T00:00:00Z"),
+        completed_at: Some(observed_at),
+        request_outcome: None,
+        knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
+        ai_system_applicable: false,
+        ai_system_applicability: Default::default(),
+        ai_generated_artifact: Default::default(),
+        verification_baseline_run_id: None,
+        scope_grant_ids: vec!["grant-localhost".into()],
+        scope_grant_snapshots: vec![run_scope_snapshot],
+        engine_runs: vec![completed],
+    });
+
+    let reachable = assess_asset_coverage(&case, &case.assets[0], &[], as_of);
+    assert_eq!(
+        reachable.status,
+        CoverageStatus::DiscoveredAuthorizedScanned,
+        "the product-owned exact task must not depend on a catalog manifest"
+    );
+    assert!(reachable.explanation.contains("127.0.0.1:9001=reachable"));
+    assert!(reachable.explanation.contains("does not establish"));
+    assert!(reachable.explanation.contains("secure"));
+    assert!(!reachable.explanation.contains("manifest_missing"));
+
+    case.scan_runs[0].engine_runs[0]
+        .localhost_tcp_observation
+        .as_mut()
+        .unwrap()
+        .outcome = LocalhostTcpOutcome::Closed;
+    let closed = assess_asset_coverage(&case, &case.assets[0], &[], as_of);
+    assert_eq!(closed.status, CoverageStatus::DiscoveredAuthorizedScanned);
+    assert!(closed.explanation.contains("127.0.0.1:9001=closed"));
+    assert!(closed.explanation.contains("does not establish"));
+
+    case.scan_runs[0].engine_runs[0].status = EngineRunStatus::PartiallyCompleted;
+    case.scan_runs[0].engine_runs[0]
+        .localhost_tcp_observation
+        .as_mut()
+        .unwrap()
+        .outcome = LocalhostTcpOutcome::TimedOut;
+    let timed_out = assess_asset_coverage(&case, &case.assets[0], &[], as_of);
+    assert_eq!(timed_out.status, CoverageStatus::AuthorizedScanIncomplete);
+    assert!(timed_out.explanation.contains("timed_out"));
+
+    case.scan_runs[0].engine_runs[0].status = EngineRunStatus::Failed;
+    case.scan_runs[0].engine_runs[0].localhost_tcp_observation = None;
+    let failed = assess_asset_coverage(&case, &case.assets[0], &[], as_of);
+    assert_eq!(failed.status, CoverageStatus::AuthorizedScanIncomplete);
+    assert!(failed.explanation.contains("observation_missing(failed)"));
+}
+
+#[test]
 fn completed_provider_incompatible_run_never_becomes_green() {
     let as_of = timestamp("2026-02-01T00:00:00Z");
     let mut case = empty_case();
@@ -626,6 +714,7 @@ fn completed_provider_incompatible_run_never_becomes_green() {
         sequence: 1,
         created_at: timestamp("2026-01-04T00:00:00Z"),
         completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+        request_outcome: None,
         knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
         ai_system_applicable: false,
         ai_system_applicability: Default::default(),
@@ -706,6 +795,7 @@ fn active_low_impact_engine_uses_its_declared_permission_for_coverage() {
         sequence: 1,
         created_at: timestamp("2026-01-04T00:00:00Z"),
         completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+        request_outcome: None,
         knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
         ai_system_applicable: false,
         ai_system_applicability: Default::default(),
@@ -755,6 +845,7 @@ fn coverage_uses_frozen_run_grants_and_never_backfills_legacy_runs() {
         sequence: 1,
         created_at: timestamp("2026-01-04T00:00:00Z"),
         completed_at: Some(timestamp("2026-01-04T00:01:00Z")),
+        request_outcome: None,
         knowledge_cutoff: timestamp("2026-01-04T00:00:00Z"),
         ai_system_applicable: false,
         ai_system_applicability: Default::default(),

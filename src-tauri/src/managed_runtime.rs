@@ -42,6 +42,9 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MACHINE_INIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MACHINE_STOP_TIMEOUT: Duration = Duration::from_secs(90);
+#[cfg(any(windows, test))]
+const WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const MAX_AUTOMATIC_WINDOWS_WSL_PREREQUISITE_REPAIRS: usize = 3;
 const WINDOWS_WSL_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = MACHINE_STOP_TIMEOUT;
 const WINDOWS_WSL_VHD_RELEASE_POLL: Duration = Duration::from_millis(100);
@@ -63,6 +66,12 @@ const PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY: &str = "wsldist";
 const MANAGED_SSH_KEY_COMMENT: &str = "ai-security-scanner-managed-runtime";
 const WINDOWS_WSL_OWNERSHIP_PROOF_SCHEMA: &str = "ai-security-scanner.managed-wsl-ownership/v1";
 const WINDOWS_WSL_OWNERSHIP_DIRECTORY: &str = "wsl-ownership";
+const WINDOWS_WSL_GENERATION_SELECTION_SCHEMA: &str =
+    "ai-security-scanner.managed-wsl-generation-selection/v1";
+const WINDOWS_WSL_GENERATION_DIRECTORY: &str = "wsl-generations";
+const WINDOWS_WSL_ISOLATED_MACHINE_PREFIX: &str = "assm2-iso-";
+const WINDOWS_WSL_ISOLATED_MACHINE_DIGEST_HEX_CHARS: usize = 20;
+const MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS: u32 = 32;
 const WINDOWS_WSL_RECOVERY_DIRECTORY: &str = "wsl-recovery";
 const WINDOWS_WSL_RECOVERY_WORKSPACE_DIRECTORY: &str = "wsl-recovery-workspaces";
 const WINDOWS_WSL_RECOVERY_INTENT_SCHEMA_V1: &str =
@@ -324,6 +333,25 @@ pub struct ManagedTarget {
 enum WindowsWslOwnershipBasis {
     InitIntent,
     ProvenMachine,
+}
+
+/// Durable routing for the one current Windows runtime generation.
+///
+/// This record is deliberately not ownership evidence and can never authorize
+/// cleanup. It only makes a side-by-side choice stable across cancellation,
+/// process termination, and repeated setup attempts. Any WSL registration or
+/// provider storage that caused isolation remains byte-for-byte untouched.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WindowsWslGenerationSelection {
+    schema_version: String,
+    authorizes_cleanup: bool,
+    manifest_sha256: String,
+    machine_image_sha256: String,
+    default_machine_name: String,
+    selected_machine_name: String,
+    generation_index: u32,
+    preserved_collision_names: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -814,7 +842,6 @@ impl ManagedRuntimeSetupController {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn begin_prerequisite_repair(&self) -> AppResult<ManagedRuntimeSetupNextAction> {
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
@@ -856,7 +883,6 @@ impl ManagedRuntimeSetupController {
         Ok(action)
     }
 
-    #[cfg(test)]
     pub(crate) fn finish_prerequisite_repair(
         &self,
         result: Option<&ManagedRuntimePrerequisiteRepairResult>,
@@ -1034,6 +1060,26 @@ impl ManagedRuntimeSetupController {
     }
 }
 
+fn automatic_windows_wsl_prerequisite_action(
+    status: &ManagedRuntimeSetupStatus,
+) -> Option<ManagedRuntimeSetupNextAction> {
+    match (status.failure_reason, status.next_action) {
+        (
+            Some(ManagedRuntimeSetupFailureReason::WslNotInstalled),
+            Some(ManagedRuntimeSetupNextAction::InstallWsl),
+        ) => Some(ManagedRuntimeSetupNextAction::InstallWsl),
+        (
+            Some(ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled),
+            Some(ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures),
+        ) => Some(ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures),
+        (
+            Some(ManagedRuntimeSetupFailureReason::WslUpdateRequired),
+            Some(ManagedRuntimeSetupNextAction::UpdateWsl),
+        ) => Some(ManagedRuntimeSetupNextAction::UpdateWsl),
+        _ => None,
+    }
+}
+
 /// Keeps the serialized/Tauri status contract internally consistent while a
 /// worker is unwinding a classified failure. `record_failure` intentionally
 /// stores the recovery pair before returning its error so `finish_failed` can
@@ -1186,6 +1232,13 @@ trait WindowsNsisInstallationReader: Send + Sync {
     ) -> AppResult<()>;
 }
 
+trait WindowsWslPrerequisiteRepairer: Send + Sync {
+    fn repair(
+        &self,
+        action: ManagedRuntimeSetupNextAction,
+    ) -> AppResult<ManagedRuntimePrerequisiteRepairResult>;
+}
+
 #[derive(Debug, Default)]
 struct DirectWindowsWslRegistrationReader;
 
@@ -1226,6 +1279,18 @@ impl WindowsNsisInstallationReader for DirectWindowsNsisInstallationReader {
                 "Windows NSIS installation registration is unavailable on this host".into(),
             ))
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct DirectWindowsWslPrerequisiteRepairer;
+
+impl WindowsWslPrerequisiteRepairer for DirectWindowsWslPrerequisiteRepairer {
+    fn repair(
+        &self,
+        action: ManagedRuntimeSetupNextAction,
+    ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
+        repair_windows_wsl_prerequisite(action)
     }
 }
 
@@ -2153,6 +2218,7 @@ pub struct ManagedRuntimeManager {
     commands: Arc<dyn ManagedCommandRunner>,
     wsl_registrations: Arc<dyn WindowsWslRegistrationReader>,
     nsis_installation: Arc<dyn WindowsNsisInstallationReader>,
+    prerequisite_repairer: Arc<dyn WindowsWslPrerequisiteRepairer>,
     downloader: Arc<dyn ManagedArtifactDownloader>,
     #[cfg(test)]
     bounded_ghost_fixture_manifest: bool,
@@ -2206,6 +2272,7 @@ impl ManagedRuntimeManager {
             commands: Arc::new(DirectManagedCommandRunner),
             wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
             nsis_installation: Arc::new(DirectWindowsNsisInstallationReader),
+            prerequisite_repairer: Arc::new(DirectWindowsWslPrerequisiteRepairer),
             downloader,
             #[cfg(test)]
             bounded_ghost_fixture_manifest: false,
@@ -2304,6 +2371,7 @@ impl ManagedRuntimeManager {
             commands: Arc::new(DirectManagedCommandRunner),
             wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
             nsis_installation: Arc::new(DirectWindowsNsisInstallationReader),
+            prerequisite_repairer: Arc::new(DirectWindowsWslPrerequisiteRepairer),
             downloader,
             #[cfg(test)]
             bounded_ghost_fixture_manifest: false,
@@ -2338,6 +2406,7 @@ impl ManagedRuntimeManager {
             commands,
             wsl_registrations: Arc::new(DirectWindowsWslRegistrationReader),
             nsis_installation: Arc::new(DirectWindowsNsisInstallationReader),
+            prerequisite_repairer: Arc::new(DirectWindowsWslPrerequisiteRepairer),
             downloader,
             bounded_ghost_fixture_manifest: false,
             #[cfg(windows)]
@@ -2383,37 +2452,121 @@ impl ManagedRuntimeManager {
         &self,
         controller: &ManagedRuntimeSetupController,
     ) -> AppResult<ManagedRuntimeStatus> {
-        controller.begin()?;
-        let result: AppResult<ManagedRuntimeStatus> = (|| {
-            let _lock = self.lock()?;
-            let command = self.start_locked(Some(controller))?;
-            let target = self.loaded.target()?;
-            let version = self.server_version(&command)?;
-            Ok(self.status_value(
-                ManagedRuntimePhase::Running,
-                true,
-                Some(target),
-                format!("managed rootless Podman {version} is available"),
-            ))
-        })();
+        self.setup_with_attempt(controller, || self.run_setup_attempt(controller))
+    }
 
-        match result {
-            Ok(status) => {
-                controller.finish_completed(format!(
-                    "managed rootless runtime {} is running and verified",
-                    status.runtime_version
-                ))?;
-                Ok(status)
-            }
-            Err(_error) if controller.cancel_requested.load(Ordering::Acquire) => {
-                controller.finish_cancelled()?;
-                Err(setup_cancelled_error())
-            }
-            Err(error) => {
-                controller.finish_failed(error.to_string())?;
-                Err(error)
+    fn run_setup_attempt(
+        &self,
+        controller: &ManagedRuntimeSetupController,
+    ) -> AppResult<ManagedRuntimeStatus> {
+        let _lock = self.lock()?;
+        let command = self.start_locked(Some(controller))?;
+        let target = self.loaded.target()?;
+        let version = self.server_version(&command)?;
+        Ok(self.status_value(
+            ManagedRuntimePhase::Running,
+            true,
+            Some(target),
+            format!("managed rootless Podman {version} is available"),
+        ))
+    }
+
+    fn setup_with_attempt<F>(
+        &self,
+        controller: &ManagedRuntimeSetupController,
+        mut attempt: F,
+    ) -> AppResult<ManagedRuntimeStatus>
+    where
+        F: FnMut() -> AppResult<ManagedRuntimeStatus>,
+    {
+        let mut attempted_prerequisite_repairs = Vec::new();
+        controller.begin()?;
+        loop {
+            match attempt() {
+                Ok(status) => {
+                    controller.finish_completed(format!(
+                        "managed rootless runtime {} is running and verified",
+                        status.runtime_version
+                    ))?;
+                    return Ok(status);
+                }
+                Err(_error) if controller.cancel_requested.load(Ordering::Acquire) => {
+                    controller.finish_cancelled()?;
+                    return Err(setup_cancelled_error());
+                }
+                Err(error) => {
+                    // Publish the worker's exact typed WSL failure before
+                    // deciding whether it is one of the three actions the
+                    // product can safely perform itself.
+                    controller.finish_failed(error.to_string())?;
+                    let Some((action, repair)) = self
+                        .run_automatic_windows_wsl_prerequisite_repair(
+                            controller,
+                            &attempted_prerequisite_repairs,
+                        )?
+                    else {
+                        return Err(error);
+                    };
+                    attempted_prerequisite_repairs.push(action);
+
+                    if repair.restart_required
+                        || repair.outcome != ManagedRuntimePrerequisiteRepairOutcome::Completed
+                    {
+                        // The runtime-dependent task degrades to a retryable
+                        // failure. The workspace, saved projects, reports, and
+                        // independent tasks remain available because no
+                        // lifecycle lock is held while Windows services WSL.
+                        return Err(AppError::NotAvailable(repair.detail));
+                    }
+
+                    // A successful Windows change is reconciled through the
+                    // normal read-only checks. Never assume the requested
+                    // feature or update became usable merely from its exit
+                    // code.
+                    controller.begin()?;
+                }
             }
         }
+    }
+
+    fn run_automatic_windows_wsl_prerequisite_repair(
+        &self,
+        controller: &ManagedRuntimeSetupController,
+        attempted_actions: &[ManagedRuntimeSetupNextAction],
+    ) -> AppResult<
+        Option<(
+            ManagedRuntimeSetupNextAction,
+            ManagedRuntimePrerequisiteRepairResult,
+        )>,
+    > {
+        let status = controller.status()?;
+        let Some(action) = automatic_windows_wsl_prerequisite_action(&status) else {
+            return Ok(None);
+        };
+        if attempted_actions.len() >= MAX_AUTOMATIC_WINDOWS_WSL_PREREQUISITE_REPAIRS
+            || attempted_actions.contains(&action)
+        {
+            return Ok(None);
+        }
+
+        let active_action = controller.begin_prerequisite_repair()?;
+        if active_action != action {
+            controller.finish_prerequisite_repair(None);
+            return Err(AppError::Conflict(
+                "the Windows prerequisite changed before automatic repair began".into(),
+            ));
+        }
+        let repair = self
+            .prerequisite_repairer
+            .repair(action)
+            .unwrap_or_else(|_error| ManagedRuntimePrerequisiteRepairResult {
+                outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+                restart_required: false,
+                detail: "ai-security-scanner could not finish the automatic Windows setup. You can retry; your projects and saved results remain available."
+                    .into(),
+            });
+        controller.finish_prerequisite_repair(Some(&repair));
+        Ok(Some((action, repair)))
     }
 
     fn start_locked(
@@ -2427,17 +2580,21 @@ impl ManagedRuntimeManager {
             )?;
         }
         let target = self.loaded.target()?;
-        let machine_name = machine_name(target);
         self.install_locked()?;
-        let mut command = self.runtime_command(target)?;
+        let mut command;
         if target.operating_system == ManagedOperatingSystem::Windows {
+            let read_only_command = self.windows_wsl_read_only_command(target)?;
             if let Some(setup) = setup {
                 setup.set_phase(
                     ManagedRuntimeSetupPhase::Prerequisite,
                     "checking whether Windows has WSL 2 ready for the isolated scanner",
                 )?;
             }
-            self.require_windows_wsl_prerequisite_locked(target, &command, setup)?;
+            self.require_windows_wsl_prerequisite_locked(target, &read_only_command, setup)?;
+            self.resolve_windows_machine_generation_locked(target, &read_only_command, &[], false)?;
+            command = self.runtime_command(target)?;
+        } else {
+            command = self.runtime_command(target)?;
         }
         if let Some(setup) = setup {
             setup.set_phase(
@@ -2452,17 +2609,34 @@ impl ManagedRuntimeManager {
                 "initializing the private rootless managed runtime machine",
             )?;
         }
-        let machines = self.list_machines(&command)?;
+        let initial_machines = self.list_machines(&command)?;
+        let mut machine_name = self.resolve_windows_machine_generation_locked(
+            target,
+            &command,
+            &initial_machines,
+            true,
+        )?;
+        let machines = if target.operating_system == ManagedOperatingSystem::Windows {
+            // A collision may have selected a generation-specific provider
+            // home. Rebuild the command only after that durable choice so no
+            // file in the ambiguous provider namespace is rewritten or reused.
+            command = self.runtime_command(target)?;
+            self.list_machines(&command)?
+        } else {
+            initial_machines
+        };
         if let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) {
             self.require_existing_machine_ssh_identity_locked()?;
-            self.prove_machine(machine, target)?;
-        } else {
-            if !machines.is_empty() {
-                return Err(AppError::NotAuthorized(
-                    "managed runtime release-private provider reported an unexpected machine; refusing to initialize another one"
-                        .into(),
-                ));
+            self.prove_machine_named(machine, target, &machine_name)?;
+            if target.operating_system == ManagedOperatingSystem::Windows {
+                self.verify_current_windows_wsl_machine_registration_binding(&machine_name)?;
+                self.ensure_windows_wsl_ownership_proof_locked(
+                    target,
+                    &machine_name,
+                    WindowsWslOwnershipBasis::ProvenMachine,
+                )?;
             }
+        } else {
             let recovered = self.prove_windows_wsl_distribution_absent_locked(
                 target,
                 &command,
@@ -2470,20 +2644,22 @@ impl ManagedRuntimeManager {
                 setup,
             )?;
             if recovered {
-                // Recovery may remove the old release-private provider home.
-                // Rebuild and re-verify this release's command environment
-                // before initializing its replacement machine.
-                command = self.runtime_command(target)?;
+                return Err(AppError::Internal(
+                    "current runtime generation unexpectedly entered deprecated WSL recovery"
+                        .into(),
+                ));
             }
             self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
             self.prepare_machine_ssh_identity_locked()?;
-            self.initialize_machine_with_one_bounded_windows_retry(
+            let initialized = self.initialize_machine_with_one_bounded_windows_retry(
                 &command,
                 target,
                 &image,
                 &machine_name,
                 setup,
             )?;
+            command = initialized.0;
+            machine_name = initialized.1;
         }
         if let Some(setup) = setup {
             setup.check_cancelled()?;
@@ -2498,7 +2674,15 @@ impl ManagedRuntimeManager {
                     "managed runtime did not report the machine after initialization".into(),
                 )
             })?;
-        self.prove_machine(machine, target)?;
+        self.prove_machine_named(machine, target, &machine_name)?;
+        if target.operating_system == ManagedOperatingSystem::Windows {
+            self.verify_current_windows_wsl_machine_registration_binding(&machine_name)?;
+            self.ensure_windows_wsl_ownership_proof_locked(
+                target,
+                &machine_name,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            )?;
+        }
         if let Some(setup) = setup {
             setup.set_phase(
                 ManagedRuntimeSetupPhase::Start,
@@ -2623,8 +2807,11 @@ impl ManagedRuntimeManager {
             return self.status_locked();
         }
         let target = self.loaded.target()?;
+        if !self.provider_generation_is_selected_locked(target)? {
+            return self.status_locked();
+        }
         let command = self.runtime_command(target)?;
-        let machine_name = machine_name(target);
+        let machine_name = self.effective_machine_name_locked(target)?;
         let machines = self.list_machines(&command)?;
         let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) else {
             return Ok(self.status_value(
@@ -2635,7 +2822,8 @@ impl ManagedRuntimeManager {
                     .into(),
             ));
         };
-        self.prove_machine(machine, target)?;
+        self.prove_machine_named(machine, target, &machine_name)?;
+        self.prove_current_windows_machine_ownership_locked(target, &machine_name)?;
         if machine.running {
             if mode == ManagedStopMode::OnlyIfIdle {
                 let containers = self.running_containers(&command)?;
@@ -2686,11 +2874,50 @@ impl ManagedRuntimeManager {
     ) -> AppResult<ManagedRuntimeStatus> {
         let _lock = self.lock()?;
         let target = self.loaded.target()?;
-        let machine_name = machine_name(target);
-        self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
+        let generation_selected = self.provider_generation_is_selected_locked(target)?;
+        let machine_name = self.effective_machine_name_locked(target)?;
         let install = self.install_directory();
-        let provider_home = self.provider_home();
+        let provider_home = self.effective_provider_home_locked(target)?;
+        if target.operating_system == ManagedOperatingSystem::Windows && !generation_selected {
+            // No routing record means no provider namespace has been classified
+            // as this release's current generation. Uninstall the verified app
+            // payload while preserving every provider byte for a later bounded
+            // reconciliation; never manufacture a command environment merely
+            // to decide what may be deleted.
+            if private_entry_exists(&install)? {
+                remove_private_tree(&install, &self.versions_root())?;
+            }
+            if options.remove_machine_image_cache {
+                let image = self.machine_image_path(target);
+                if private_entry_exists(&image)? {
+                    remove_private_tree(&image, &self.image_cache_root())?;
+                }
+            }
+            return self.status_locked();
+        }
         if private_entry_exists(&install)? || private_entry_exists(&provider_home)? {
+            let windows_cleanup_proven = target.operating_system != ManagedOperatingSystem::Windows
+                || self.has_exact_windows_wsl_ownership_proof_locked(
+                    target,
+                    &machine_name,
+                    WindowsWslOwnershipBasis::ProvenMachine,
+                )?;
+            if target.operating_system == ManagedOperatingSystem::Windows && !windows_cleanup_proven
+            {
+                // A generation selection is a routing journal, not deletion
+                // authority. Preserve an interrupted/ambiguous provider home,
+                // but still allow the verified application payload to uninstall.
+                if private_entry_exists(&install)? {
+                    remove_private_tree(&install, &self.versions_root())?;
+                }
+                if options.remove_machine_image_cache {
+                    let image = self.machine_image_path(target);
+                    if private_entry_exists(&image)? {
+                        remove_private_tree(&image, &self.image_cache_root())?;
+                    }
+                }
+                return self.status_locked();
+            }
             // Repair a corrupted release payload from the verified application
             // resources before invoking it for owned-machine cleanup. This also
             // lets a retry safely prove and remove provider state left by an
@@ -2705,7 +2932,8 @@ impl ManagedRuntimeManager {
                 ));
             }
             if let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) {
-                self.prove_machine(machine, target)?;
+                self.prove_machine_named(machine, target, &machine_name)?;
+                self.prove_current_windows_machine_ownership_locked(target, &machine_name)?;
                 if machine.running {
                     if options.stop_mode == ManagedStopMode::OnlyIfIdle
                         && !self.running_containers(&command)?.is_empty()
@@ -2731,12 +2959,20 @@ impl ManagedRuntimeManager {
                 )?;
                 require_success("managed runtime machine removal", &output)?;
             }
-            self.prove_windows_wsl_distribution_absent_locked(
-                target,
-                &command,
-                &machine_name,
-                None,
-            )?;
+            if target.operating_system == ManagedOperatingSystem::Windows {
+                self.require_current_windows_wsl_distribution_absent_for_cleanup_locked(
+                    target,
+                    &command,
+                    &machine_name,
+                )?;
+            } else {
+                self.prove_windows_wsl_distribution_absent_locked(
+                    target,
+                    &command,
+                    &machine_name,
+                    None,
+                )?;
+            }
             self.remove_temporary_command_state_after_machine_removal_locked(target)?;
             if private_entry_exists(&provider_home)? {
                 remove_provider_home_after_machine_removal(
@@ -2747,6 +2983,7 @@ impl ManagedRuntimeManager {
                 )?;
             }
             remove_private_tree(&install, &self.versions_root())?;
+            self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
         }
         if options.remove_machine_image_cache {
             let image = self.machine_image_path(target);
@@ -2790,13 +3027,22 @@ impl ManagedRuntimeManager {
             return Ok(None);
         }
         let target = self.loaded.target()?;
+        if !self.provider_generation_is_selected_locked(target)? {
+            return Ok(None);
+        }
         let command = self.runtime_command(target)?;
-        let machine_name = machine_name(target);
+        let machine_name = self.effective_machine_name_locked(target)?;
         let machines = self.list_machines(&command)?;
         let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) else {
             return Ok(None);
         };
-        self.prove_machine(machine, target)?;
+        self.prove_machine_named(machine, target, &machine_name)?;
+        if self
+            .prove_current_windows_machine_ownership_locked(target, &machine_name)
+            .is_err()
+        {
+            return Ok(None);
+        }
         if !machine.running || self.server_version(&command).is_err() {
             return Ok(None);
         }
@@ -2832,9 +3078,18 @@ impl ManagedRuntimeManager {
                 error.to_string(),
             ));
         }
+        if !self.provider_generation_is_selected_locked(target)? {
+            return Ok(self.status_value(
+                ManagedRuntimePhase::Installed,
+                false,
+                Some(target),
+                "managed runtime payload is verified; automatic setup has not selected a Windows workspace yet"
+                    .into(),
+            ));
+        }
         let command = self.runtime_command(target)?;
         let machines = self.list_machines(&command)?;
-        let machine_name = machine_name(target);
+        let machine_name = self.effective_machine_name_locked(target)?;
         let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) else {
             return Ok(self.status_value(
                 ManagedRuntimePhase::Installed,
@@ -2844,7 +3099,17 @@ impl ManagedRuntimeManager {
                     .into(),
             ));
         };
-        if let Err(error) = self.prove_machine(machine, target) {
+        if let Err(error) = self.prove_machine_named(machine, target, &machine_name) {
+            return Ok(self.status_value(
+                ManagedRuntimePhase::Corrupt,
+                false,
+                Some(target),
+                error.to_string(),
+            ));
+        }
+        if let Err(error) =
+            self.prove_current_windows_machine_ownership_locked(target, &machine_name)
+        {
             return Ok(self.status_value(
                 ManagedRuntimePhase::Corrupt,
                 false,
@@ -2977,7 +3242,7 @@ impl ManagedRuntimeManager {
         verify_regular_file(&binary, "managed runtime driver")?;
         let provider_root = self.state_root.join("provider-home");
         ensure_managed_private_directory(&provider_root)?;
-        let provider_home = self.provider_home();
+        let provider_home = self.effective_provider_home_locked(target)?;
         let config = provider_home.join("config");
         let data = provider_home.join("data");
         let cache = provider_home.join("cache");
@@ -3103,6 +3368,36 @@ impl ManagedRuntimeManager {
         })
     }
 
+    /// Builds only the metadata shell needed to derive the verified
+    /// `%SystemRoot%\\System32\\wsl.exe` read-only command. It never creates or
+    /// rewrites a provider home, so generation selection can happen before an
+    /// ambiguous legacy namespace is touched.
+    fn windows_wsl_read_only_command(
+        &self,
+        target: &ManagedTarget,
+    ) -> AppResult<ManagedRuntimeCommand> {
+        if target.operating_system != ManagedOperatingSystem::Windows
+            || target.provider != ManagedMachineProvider::Wsl
+        {
+            return Err(AppError::InvalidRequest(
+                "a Windows WSL inventory command was requested for another managed target".into(),
+            ));
+        }
+        self.verify_installation()?;
+        let install =
+            canonical_real_directory(&self.install_directory(), "managed runtime install")?;
+        let binary = safe_join(&install, &self.loaded.manifest.driver_path)?;
+        verify_regular_file(&binary, "managed runtime driver")?;
+        Ok(ManagedRuntimeCommand {
+            binary,
+            environment: BTreeMap::new(),
+            working_directory: install,
+            runtime_version: self.loaded.manifest.runtime_version.clone(),
+            manifest_sha256: self.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+        })
+    }
+
     fn prove_windows_wsl_distribution_absent_locked(
         &self,
         target: &ManagedTarget,
@@ -3123,6 +3418,13 @@ impl ManagedRuntimeManager {
         let expected_present = distributions
             .iter()
             .any(|distribution| distribution.eq_ignore_ascii_case(&expected));
+        // Current-generation names are reconciled by the non-destructive
+        // side-by-side selector. Never parse or mutate an old recovery pointer
+        // here, because a malformed pointer is itself ambiguous state that must
+        // remain untouched rather than becoming a manual prerequisite.
+        if windows_machine_uses_current_compatibility_generation(machine_name) {
+            return Ok(false);
+        }
         let pending = match self.read_windows_wsl_recovery_intent_locked(machine_name) {
             Ok(pending) => pending,
             Err(AppError::NotAuthorized(_)) => {
@@ -3133,16 +3435,6 @@ impl ManagedRuntimeManager {
         if !expected_present && pending.is_none() {
             return Ok(false);
         }
-        // Every machine name produced by the current Windows compatibility
-        // generation is assm2. WSL exposes destructive management only by
-        // mutable distribution name, not by the registry GUID already proved
-        // by this process, so an assm2 collision or interrupted assm2 recovery
-        // must remain untouched and fail closed. The legacy recovery routine
-        // below remains only for deterministic transaction tests and older
-        // non-assm2 state; normal v0.1.8 startup never sends assm1 here.
-        if windows_machine_uses_current_compatibility_generation(machine_name) {
-            return fail_windows_wsl_distribution_requires_manual_action(setup, &expected);
-        }
         self.recover_windows_wsl_distribution_locked(
             managed_command,
             machine_name,
@@ -3151,6 +3443,49 @@ impl ManagedRuntimeManager {
             setup,
         )?;
         Ok(true)
+    }
+
+    /// Destructive provider cleanup has a stricter contract than setup
+    /// routing. The current generation is removable only after both Windows'
+    /// WSL inventory and its registration inventory confirm that the exact
+    /// distribution is gone. A routing selection never satisfies this proof.
+    fn require_current_windows_wsl_distribution_absent_for_cleanup_locked(
+        &self,
+        target: &ManagedTarget,
+        managed_command: &ManagedRuntimeCommand,
+        machine_name: &str,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(());
+        }
+        if target.provider != ManagedMachineProvider::Wsl {
+            return Err(AppError::NotAuthorized(
+                "managed Windows runtime target did not use the WSL provider".into(),
+            ));
+        }
+        let distribution_name = format!("podman-{machine_name}");
+        let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+        if distributions
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&distribution_name))
+        {
+            return Err(AppError::NotAuthorized(
+                "Windows still reports the selected scan workspace; its provider data was preserved"
+                    .into(),
+            ));
+        }
+        let registrations = self.wsl_registrations.registrations()?;
+        if registrations.iter().any(|registration| {
+            registration
+                .distribution_name
+                .eq_ignore_ascii_case(&distribution_name)
+        }) {
+            return Err(AppError::NotAuthorized(
+                "Windows still registers the selected scan workspace; its provider data was preserved"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     fn windows_wsl_distribution_inventory(
@@ -3166,6 +3501,348 @@ impl ManagedRuntimeManager {
         )?;
         require_success("managed Windows WSL distribution inventory", &output)?;
         parse_windows_wsl_distribution_inventory(&output.stdout)
+    }
+
+    fn windows_wsl_generation_selection_path(&self, generation_index: u32) -> PathBuf {
+        self.state_root
+            .join(WINDOWS_WSL_GENERATION_DIRECTORY)
+            .join(format!("{}.{}.json", self.loaded.sha256, generation_index))
+    }
+
+    fn isolated_windows_machine_name(
+        &self,
+        target: &ManagedTarget,
+        generation_index: u32,
+    ) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"ai-security-scanner/windows-wsl-isolated-generation/v1\0");
+        digest.update(self.state_root.as_os_str().to_string_lossy().as_bytes());
+        digest.update(b"\0");
+        digest.update(self.loaded.sha256.as_bytes());
+        digest.update(b"\0");
+        digest.update(target.machine_image.sha256.as_bytes());
+        digest.update(b"\0");
+        digest.update(generation_index.to_le_bytes());
+        let suffix = hex::encode(digest.finalize());
+        format!(
+            "{WINDOWS_WSL_ISOLATED_MACHINE_PREFIX}{}",
+            &suffix[..WINDOWS_WSL_ISOLATED_MACHINE_DIGEST_HEX_CHARS]
+        )
+    }
+
+    fn validate_windows_wsl_generation_selection(
+        &self,
+        target: &ManagedTarget,
+        selection: &WindowsWslGenerationSelection,
+    ) -> AppResult<()> {
+        let default_machine_name = machine_name(target);
+        let selected_is_expected = if selection.generation_index == 0 {
+            selection.selected_machine_name == default_machine_name
+        } else {
+            selection.selected_machine_name
+                == self.isolated_windows_machine_name(target, selection.generation_index)
+        };
+        if selection.schema_version != WINDOWS_WSL_GENERATION_SELECTION_SCHEMA
+            || selection.authorizes_cleanup
+            || selection.manifest_sha256 != self.loaded.sha256
+            || selection.machine_image_sha256 != target.machine_image.sha256
+            || selection.default_machine_name != default_machine_name
+            || selection.generation_index > MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS
+            || !selected_is_expected
+            || selection.selected_machine_name.len() > MAX_MACHINE_NAME_BYTES
+            || selection.preserved_collision_names.len()
+                > MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS as usize
+            || selection.preserved_collision_names.iter().any(|name| {
+                name.len() > MAX_MACHINE_NAME_BYTES
+                    || (!name.eq_ignore_ascii_case(&default_machine_name)
+                        && !windows_machine_uses_current_compatibility_generation(name))
+            })
+        {
+            return Err(AppError::NotAuthorized(
+                "managed Windows runtime generation selection does not match this release".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn read_windows_wsl_generation_selection_locked(
+        &self,
+        target: &ManagedTarget,
+    ) -> AppResult<Option<WindowsWslGenerationSelection>> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(None);
+        }
+        let mut selected = None;
+        for generation_index in 0..=MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS {
+            let path = self.windows_wsl_generation_selection_path(generation_index);
+            if !private_entry_exists(&path)? {
+                continue;
+            }
+            // A malformed old routing record is observation-only state. Never
+            // overwrite or delete it; a later valid append-only generation can
+            // still let setup reconcile automatically.
+            let Ok(selection) = read_bounded_private_json::<WindowsWslGenerationSelection>(
+                &path,
+                64 * 1024,
+                "managed Windows WSL generation selection",
+            ) else {
+                continue;
+            };
+            if self
+                .validate_windows_wsl_generation_selection(target, &selection)
+                .is_ok()
+                && selection.generation_index == generation_index
+            {
+                selected = Some(selection);
+            }
+        }
+        Ok(selected)
+    }
+
+    fn write_windows_wsl_generation_selection_locked(
+        &self,
+        target: &ManagedTarget,
+        selection: &WindowsWslGenerationSelection,
+    ) -> AppResult<()> {
+        self.validate_windows_wsl_generation_selection(target, selection)?;
+        let encoded = serde_json::to_vec(selection).map_err(|error| {
+            AppError::Internal(format!(
+                "managed Windows WSL generation selection could not be encoded: {error}"
+            ))
+        })?;
+        let path = self.windows_wsl_generation_selection_path(selection.generation_index);
+        write_private_atomic(&path, &encoded)?;
+        let persisted: WindowsWslGenerationSelection = read_bounded_private_json(
+            &path,
+            64 * 1024,
+            "managed Windows WSL generation selection",
+        )?;
+        if persisted != *selection {
+            return Err(AppError::Internal(
+                "managed Windows WSL generation selection changed during its durable commit".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn windows_wsl_distribution_storage_path(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        generation_index: u32,
+    ) -> PathBuf {
+        self.windows_provider_home_for_generation(target, generation_index)
+            .join("data")
+            .join("containers")
+            .join("podman")
+            .join("machine")
+            .join(target.provider.argument())
+            .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
+            .join(machine_name)
+    }
+
+    fn windows_machine_generation_is_occupied(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        generation_index: u32,
+        distributions: &[String],
+        machines: &[MachineListEntry],
+    ) -> AppResult<bool> {
+        let distribution_name = format!("podman-{machine_name}");
+        Ok(distributions
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&distribution_name))
+            || machines
+                .iter()
+                .any(|machine| machine.name.eq_ignore_ascii_case(machine_name))
+            || private_entry_exists(&self.windows_wsl_distribution_storage_path(
+                target,
+                machine_name,
+                generation_index,
+            ))?)
+    }
+
+    fn windows_generation_selection_exists(&self, generation_index: u32) -> AppResult<bool> {
+        private_entry_exists(&self.windows_wsl_generation_selection_path(generation_index))
+    }
+
+    /// Chooses one durable Windows generation without reclaiming any existing
+    /// WSL name or storage path. A collision causes a fresh release-private
+    /// name to be selected and persisted before `podman machine init` runs.
+    /// Repeated setup attempts reuse that exact selection.
+    fn resolve_windows_machine_generation_locked(
+        &self,
+        target: &ManagedTarget,
+        managed_command: &ManagedRuntimeCommand,
+        machines: &[MachineListEntry],
+        provider_inventory_complete: bool,
+    ) -> AppResult<String> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(machine_name(target));
+        }
+        if target.provider != ManagedMachineProvider::Wsl {
+            return Err(AppError::NotAuthorized(
+                "managed Windows runtime target did not use the WSL provider".into(),
+            ));
+        }
+        let mut distributions = self.windows_wsl_distribution_inventory(managed_command)?;
+        if let Ok(registrations) = self.wsl_registrations.registrations() {
+            for registration in registrations {
+                if !distributions
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&registration.distribution_name))
+                {
+                    distributions.push(registration.distribution_name);
+                }
+            }
+        }
+        self.select_windows_machine_generation_from_inventory_locked(
+            target,
+            machines,
+            &distributions,
+            provider_inventory_complete,
+        )
+    }
+
+    fn select_windows_machine_generation_from_inventory_locked(
+        &self,
+        target: &ManagedTarget,
+        machines: &[MachineListEntry],
+        distributions: &[String],
+        provider_inventory_complete: bool,
+    ) -> AppResult<String> {
+        let existing = self.read_windows_wsl_generation_selection_locked(target)?;
+        let default_machine_name = machine_name(target);
+        let selected = existing
+            .as_ref()
+            .map(|selection| selection.selected_machine_name.as_str())
+            .unwrap_or(default_machine_name.as_str());
+
+        let selected_generation_index = existing
+            .as_ref()
+            .map(|selection| selection.generation_index)
+            .unwrap_or(0);
+        let exact_product_binding = self
+            .verify_current_windows_wsl_machine_registration_binding(selected)
+            .is_ok()
+            && inspect_managed_ssh_identity(&self.machine_ssh_identity_path())?
+                == ManagedSshIdentityState::Valid
+            && self.has_exact_windows_wsl_ownership_proof_locked(
+                target,
+                selected,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            )?;
+        // A name match alone is never ownership. Reuse requires the exact
+        // frozen machine contract, product SSH identity, and WSL registration
+        // binding to this verified provider generation. Any failed proof turns
+        // the row into a preserved collision and routes setup side-by-side.
+        if let Some(machine) = machines
+            .iter()
+            .find(|machine| machine.name.eq_ignore_ascii_case(selected))
+        {
+            if self.prove_machine_named(machine, target, selected).is_ok() && exact_product_binding
+            {
+                return Ok(selected.to_owned());
+            }
+        }
+        let selected_provider_home =
+            self.windows_provider_home_for_generation(target, selected_generation_index);
+        let occupied = self.windows_machine_generation_is_occupied(
+            target,
+            selected,
+            selected_generation_index,
+            &distributions,
+            machines,
+        )? || (existing.is_none()
+            && private_entry_exists(&selected_provider_home)?
+            && !exact_product_binding)
+            || (existing.is_none()
+                && self.windows_generation_selection_exists(selected_generation_index)?);
+        if !occupied || (exact_product_binding && !provider_inventory_complete) {
+            if existing.is_none() {
+                self.write_windows_wsl_generation_selection_locked(
+                    target,
+                    &WindowsWslGenerationSelection {
+                        schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+                        authorizes_cleanup: false,
+                        manifest_sha256: self.loaded.sha256.clone(),
+                        machine_image_sha256: target.machine_image.sha256.clone(),
+                        default_machine_name: default_machine_name.clone(),
+                        selected_machine_name: default_machine_name.clone(),
+                        generation_index: 0,
+                        preserved_collision_names: Vec::new(),
+                    },
+                )?;
+            }
+            return Ok(selected.to_owned());
+        }
+
+        let mut preserved_collision_names = existing
+            .as_ref()
+            .map(|selection| selection.preserved_collision_names.clone())
+            .unwrap_or_default();
+        if !preserved_collision_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(selected))
+        {
+            preserved_collision_names.push(selected.to_owned());
+        }
+        let first_index = existing
+            .as_ref()
+            .map(|selection| selection.generation_index.saturating_add(1).max(1))
+            .unwrap_or(1);
+        for generation_index in first_index..=MAX_WINDOWS_WSL_ISOLATED_GENERATION_ATTEMPTS {
+            let candidate = self.isolated_windows_machine_name(target, generation_index);
+            if self.windows_machine_generation_is_occupied(
+                target,
+                &candidate,
+                generation_index,
+                &distributions,
+                machines,
+            )? || private_entry_exists(
+                &self.windows_provider_home_for_generation(target, generation_index),
+            )? || self.windows_generation_selection_exists(generation_index)?
+            {
+                continue;
+            }
+            let selection = WindowsWslGenerationSelection {
+                schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+                authorizes_cleanup: false,
+                manifest_sha256: self.loaded.sha256.clone(),
+                machine_image_sha256: target.machine_image.sha256.clone(),
+                default_machine_name,
+                selected_machine_name: candidate.clone(),
+                generation_index,
+                preserved_collision_names,
+            };
+            self.write_windows_wsl_generation_selection_locked(target, &selection)?;
+            return Ok(candidate);
+        }
+        Err(AppError::NotAvailable(
+            "managed Windows runtime could not allocate a fresh isolated generation within its bounded retry budget"
+                .into(),
+        ))
+    }
+
+    fn effective_machine_name_locked(&self, target: &ManagedTarget) -> AppResult<String> {
+        Ok(self
+            .read_windows_wsl_generation_selection_locked(target)?
+            .map(|selection| selection.selected_machine_name)
+            .unwrap_or_else(|| machine_name(target)))
+    }
+
+    /// Provider commands are allowed to create their private configuration
+    /// tree. On Windows that must happen only after setup has durably selected
+    /// one generation. Before selection, status and other ordinary lifecycle
+    /// reads preserve every existing provider namespace as unclassified state.
+    fn provider_generation_is_selected_locked(&self, target: &ManagedTarget) -> AppResult<bool> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(true);
+        }
+        Ok(self
+            .read_windows_wsl_generation_selection_locked(target)?
+            .is_some())
     }
 
     fn windows_wsl_recovery_root(&self) -> PathBuf {
@@ -4623,15 +5300,50 @@ impl ManagedRuntimeManager {
                     .into(),
             ));
         }
-        let (actual_base, actual_provider) = self
-            .verify_windows_wsl_registration_binding_is_product_owned(
-                machine_name,
-                &matching[0].base_path,
-            )?;
-        let expected_provider = canonical_real_directory(
-            &self.provider_home(),
-            "replacement managed runtime provider home",
-        )?;
+        let target = self.loaded.target()?;
+        let isolated_selection = self
+            .read_windows_wsl_generation_selection_locked(target)?
+            .filter(|selection| selection.generation_index > 0);
+        let (actual_base, actual_provider, expected_provider) =
+            if let Some(selection) = isolated_selection {
+                if selection.selected_machine_name != machine_name {
+                    return Err(AppError::NotAuthorized(
+                        "Windows WSL isolated generation does not match the selected scan workspace"
+                            .into(),
+                    ));
+                }
+                self.require_isolated_windows_generation_ownership_locked(
+                    target,
+                    machine_name,
+                    &selection,
+                )?;
+                let actual_base = canonical_real_directory(
+                    &matching[0].base_path,
+                    "managed Windows WSL isolated registration",
+                )?;
+                let actual_provider = windows_wsl_provider_home_from_registration_path(
+                    &self.state_root,
+                    &actual_base,
+                    machine_name,
+                )?;
+                let expected_provider = canonical_real_directory(
+                    &self.windows_provider_home_for_generation(target, selection.generation_index),
+                    "isolated managed runtime provider home",
+                )?;
+                verify_windows_wsl_product_storage_directory(&actual_provider, &actual_base)?;
+                (actual_base, actual_provider, expected_provider)
+            } else {
+                let (actual_base, actual_provider) = self
+                    .verify_windows_wsl_registration_binding_is_product_owned(
+                        machine_name,
+                        &matching[0].base_path,
+                    )?;
+                let expected_provider = canonical_real_directory(
+                    &self.provider_home(),
+                    "replacement managed runtime provider home",
+                )?;
+                (actual_base, actual_provider, expected_provider)
+            };
         let expected_base = canonical_real_directory(
             &expected_provider
                 .join("data")
@@ -4651,6 +5363,42 @@ impl ManagedRuntimeManager {
             ));
         }
         Ok(actual_base)
+    }
+
+    fn require_isolated_windows_generation_ownership_locked(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        selection: &WindowsWslGenerationSelection,
+    ) -> AppResult<()> {
+        self.validate_windows_wsl_generation_selection(target, selection)?;
+        if selection.generation_index == 0 || selection.selected_machine_name != machine_name {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL isolated generation does not match the selected scan workspace".into(),
+            ));
+        }
+        // The routing record only selects a path; it is never ownership
+        // authority. A successful init is accepted only while its exact
+        // one-shot intent exists, or after the exact proven-machine journal has
+        // been committed. The installed current manifest is independently
+        // re-verified before either proof is considered.
+        self.verify_installation()?;
+        let has_init_intent = self.has_exact_windows_wsl_ownership_proof_locked(
+            target,
+            machine_name,
+            WindowsWslOwnershipBasis::InitIntent,
+        )?;
+        let has_proven_machine = self.has_exact_windows_wsl_ownership_proof_locked(
+            target,
+            machine_name,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        )?;
+        if !has_init_intent && !has_proven_machine {
+            return Err(AppError::NotAuthorized(
+                "Windows WSL isolated generation has no exact product ownership proof".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn verify_windows_wsl_registration_binding_is_product_owned(
@@ -5518,15 +6266,11 @@ impl ManagedRuntimeManager {
         }
         let pending = self.windows_wsl_recovery_pending_path(machine_name);
         // The current assm2 generation is never recovered through WSL's
-        // mutable name-based management interface. This includes the path
-        // where Podman already reports a usable assm2 machine: an old pending
-        // pointer must fail closed before inventory, intent parsing, archive
-        // handling, terminate, export, import, unregister, or pointer removal.
+        // mutable name-based management interface. A stale or ambiguous
+        // checkpoint is preserved as observation-only state while the usable
+        // generation continues (or a fresh isolated name is selected during
+        // initialization). It never becomes a manual setup prerequisite.
         if windows_machine_uses_current_compatibility_generation(machine_name) {
-            if private_entry_exists(&pending)? {
-                let expected = format!("podman-{machine_name}");
-                return fail_windows_wsl_distribution_requires_manual_action(setup, &expected);
-            }
             return Ok(());
         }
         if private_entry_exists(&pending)? {
@@ -5715,6 +6459,53 @@ impl ManagedRuntimeManager {
         )
     }
 
+    fn has_exact_windows_wsl_ownership_proof_locked(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        ownership_basis: WindowsWslOwnershipBasis,
+    ) -> AppResult<bool> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(false);
+        }
+        let path = self.windows_wsl_ownership_proof_path(machine_name, ownership_basis);
+        if !private_entry_exists(&path)? {
+            return Ok(false);
+        }
+        let Ok(actual) = read_bounded_private_json::<WindowsWslOwnershipProof>(
+            &path,
+            64 * 1024,
+            "managed Windows WSL ownership proof",
+        ) else {
+            return Ok(false);
+        };
+        Ok(actual
+            == self.expected_windows_wsl_ownership_proof(target, machine_name, ownership_basis))
+    }
+
+    fn prove_current_windows_machine_ownership_locked(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(());
+        }
+        self.require_existing_machine_ssh_identity_locked()?;
+        if !self.has_exact_windows_wsl_ownership_proof_locked(
+            target,
+            machine_name,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        )? {
+            return Err(AppError::NotAuthorized(
+                "the selected Windows scan workspace has no exact ownership proof; it was preserved"
+                    .into(),
+            ));
+        }
+        self.verify_current_windows_wsl_machine_registration_binding(machine_name)?;
+        Ok(())
+    }
+
     fn remove_windows_wsl_ownership_proof_locked(
         &self,
         target: &ManagedTarget,
@@ -5748,10 +6539,64 @@ impl ManagedRuntimeManager {
         Ok(())
     }
 
-    fn provider_home(&self) -> PathBuf {
-        self.state_root
+    fn remove_windows_wsl_ownership_basis_proof_locked(
+        &self,
+        target: &ManagedTarget,
+        machine_name: &str,
+        ownership_basis: WindowsWslOwnershipBasis,
+    ) -> AppResult<()> {
+        if target.operating_system != ManagedOperatingSystem::Windows {
+            return Ok(());
+        }
+        let parent = self.state_root.join(WINDOWS_WSL_OWNERSHIP_DIRECTORY);
+        remove_regular_file(&self.windows_wsl_ownership_proof_path(machine_name, ownership_basis))?;
+        if private_entry_exists(&parent)? {
+            sync_directory(&parent)?;
+        }
+        Ok(())
+    }
+
+    fn windows_provider_home_for_generation(
+        &self,
+        target: &ManagedTarget,
+        generation_index: u32,
+    ) -> PathBuf {
+        let namespace = if generation_index == 0 {
+            self.loaded.sha256[..16].to_owned()
+        } else {
+            let machine_name = self.isolated_windows_machine_name(target, generation_index);
+            let suffix = machine_name
+                .strip_prefix(WINDOWS_WSL_ISOLATED_MACHINE_PREFIX)
+                .expect("isolated Windows machine name has fixed prefix");
+            format!("{}-iso-{}", &self.loaded.sha256[..8], &suffix[..12])
+        };
+        self.state_root.join("provider-home").join(namespace)
+    }
+
+    fn effective_provider_home_locked(&self, target: &ManagedTarget) -> AppResult<PathBuf> {
+        if target.operating_system == ManagedOperatingSystem::Windows {
+            let generation_index = self
+                .read_windows_wsl_generation_selection_locked(target)?
+                .map(|selection| selection.generation_index)
+                .unwrap_or(0);
+            return Ok(self.windows_provider_home_for_generation(target, generation_index));
+        }
+        Ok(self
+            .state_root
             .join("provider-home")
-            .join(&self.loaded.sha256[..16])
+            .join(&self.loaded.sha256[..16]))
+    }
+
+    fn provider_home(&self) -> PathBuf {
+        self.loaded
+            .target()
+            .ok()
+            .and_then(|target| self.effective_provider_home_locked(target).ok())
+            .unwrap_or_else(|| {
+                self.state_root
+                    .join("provider-home")
+                    .join(&self.loaded.sha256[..16])
+            })
     }
 
     fn canonical_application_data_root(&self) -> AppResult<PathBuf> {
@@ -6135,7 +6980,23 @@ impl ManagedRuntimeManager {
         )
         .map_err(MachineInitializationAttemptFailure::OwnershipJournal)?;
         let initialization = self.initialize_machine(command, target, image, machine_name);
-        let proof_cleanup = self.remove_windows_wsl_ownership_proof_locked(target, machine_name);
+        let proven_machine = if initialization.is_ok() {
+            self.verify_current_windows_wsl_machine_registration_binding(machine_name)
+                .and_then(|_| {
+                    self.ensure_windows_wsl_ownership_proof_locked(
+                        target,
+                        machine_name,
+                        WindowsWslOwnershipBasis::ProvenMachine,
+                    )
+                })
+        } else {
+            Ok(())
+        };
+        let proof_cleanup = self.remove_windows_wsl_ownership_basis_proof_locked(
+            target,
+            machine_name,
+            WindowsWslOwnershipBasis::InitIntent,
+        );
         if let Err(error) = proof_cleanup {
             return Err(MachineInitializationAttemptFailure::OwnershipJournal(
                 AppError::Runtime(format!(
@@ -6143,6 +7004,7 @@ impl ManagedRuntimeManager {
                 )),
             ));
         }
+        proven_machine.map_err(MachineInitializationAttemptFailure::OwnershipJournal)?;
         initialization.map_err(MachineInitializationAttemptFailure::Initialization)
     }
 
@@ -6151,7 +7013,8 @@ impl ManagedRuntimeManager {
     /// and only after independently proving that the failed attempt did not
     /// publish either the expected WSL registration or any provider machine
     /// state. No cleanup or unregister is attempted here: ambiguous or partial
-    /// state remains untouched and fails closed for the user to inspect.
+    /// state remains untouched while one fresh isolated generation is prepared
+    /// automatically. A returned failure never asks the user to administer WSL.
     fn initialize_machine_with_one_bounded_windows_retry(
         &self,
         command: &ManagedRuntimeCommand,
@@ -6159,14 +7022,14 @@ impl ManagedRuntimeManager {
         image: &Path,
         machine_name: &str,
         setup: Option<&ManagedRuntimeSetupController>,
-    ) -> AppResult<()> {
+    ) -> AppResult<(ManagedRuntimeCommand, String)> {
         let first_error = match self.initialize_machine_with_one_shot_wsl_intent(
             command,
             target,
             image,
             machine_name,
         ) {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok((command.clone(), machine_name.into())),
             Err(MachineInitializationAttemptFailure::Initialization(error)) => error,
             Err(MachineInitializationAttemptFailure::OwnershipJournal(error)) => {
                 return Err(error);
@@ -6184,57 +7047,69 @@ impl ManagedRuntimeManager {
         }
         self.require_windows_wsl_prerequisite_locked(target, command, setup)?;
 
-        let expected_distribution = format!("podman-{machine_name}");
         let distributions = self.windows_wsl_distribution_inventory(command)?;
-        if distributions
+        let expected_distribution = format!("podman-{machine_name}");
+        let distribution_present = distributions
             .iter()
-            .any(|distribution| distribution.eq_ignore_ascii_case(&expected_distribution))
-        {
-            return fail_windows_wsl_distribution_requires_manual_action(
-                setup,
-                &expected_distribution,
-            );
-        }
-        if self
-            .wsl_registrations
-            .registrations()?
-            .iter()
-            .any(|registration| {
-                registration
-                    .distribution_name
-                    .eq_ignore_ascii_case(&expected_distribution)
-            })
-        {
-            return fail_windows_wsl_distribution_requires_manual_action(
-                setup,
-                &expected_distribution,
-            );
-        }
+            .any(|distribution| distribution.eq_ignore_ascii_case(&expected_distribution));
+        let (registrations, registration_inventory_unknown) =
+            match self.wsl_registrations.registrations() {
+                Ok(registrations) => (registrations, false),
+                Err(_) => (Vec::new(), true),
+            };
+        let registration_present = registrations.iter().any(|registration| {
+            registration
+                .distribution_name
+                .eq_ignore_ascii_case(&expected_distribution)
+        });
 
         let machines = self.list_machines(command)?;
-        if !machines.is_empty() {
-            return Err(AppError::NotAuthorized(format!(
-                "managed Windows runtime initialization failed and left provider machine state; refusing an automatic retry: {first_error}"
-            )));
-        }
         // Podman 5.8.2 creates only the fixed `wsldist` parent before calling
         // `wsl --import`. The WSL client owns the per-machine child and removes
         // a newly created child on import failure. A surviving child therefore
         // means Windows did not complete that rollback; it is not safe to
         // reinterpret or recursively clean as an absent distribution.
-        let distribution_storage = self
-            .provider_home()
-            .join("data")
-            .join("containers")
-            .join("podman")
-            .join("machine")
-            .join(target.provider.argument())
-            .join(PODMAN_WSL_DISTRIBUTION_STORAGE_DIRECTORY)
-            .join(machine_name);
-        if private_entry_exists(&distribution_storage)? {
-            return Err(AppError::NotAuthorized(format!(
-                "managed Windows runtime initialization failed and left unregistered provider storage; refusing an automatic retry: {first_error}"
-            )));
+        let generation_index = self
+            .read_windows_wsl_generation_selection_locked(target)?
+            .map(|selection| selection.generation_index)
+            .unwrap_or(0);
+        let distribution_storage =
+            self.windows_wsl_distribution_storage_path(target, machine_name, generation_index);
+        let partial_or_ambiguous = distribution_present
+            || registration_present
+            || registration_inventory_unknown
+            || !machines.is_empty()
+            || private_entry_exists(&distribution_storage)?;
+        if partial_or_ambiguous {
+            if let Some(setup) = setup {
+                setup.set_phase(
+                    ManagedRuntimeSetupPhase::Recovery,
+                    "preserving the interrupted scan workspace and preparing a fresh isolated one",
+                )?;
+            }
+            let fresh_machine_name = self.select_windows_machine_generation_from_inventory_locked(
+                target,
+                &machines,
+                &distributions,
+                true,
+            )?;
+            if fresh_machine_name.eq_ignore_ascii_case(machine_name) {
+                return Ok((command.clone(), machine_name.into()));
+            }
+            let fresh_command = self.runtime_command(target)?;
+            self.prepare_machine_ssh_identity_locked()?;
+            self.initialize_machine_with_one_shot_wsl_intent(
+                &fresh_command,
+                target,
+                image,
+                &fresh_machine_name,
+            )
+            .map_err(|error| {
+                AppError::Runtime(format!(
+                    "managed Windows runtime preserved an interrupted workspace, but its fresh isolated initialization did not finish: {error}"
+                ))
+            })?;
+            return Ok((fresh_command, fresh_machine_name));
         }
 
         if let Some(setup) = setup {
@@ -6245,7 +7120,7 @@ impl ManagedRuntimeManager {
         }
         match self.initialize_machine_with_one_shot_wsl_intent(command, target, image, machine_name)
         {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok((command.clone(), machine_name.into())),
             Err(MachineInitializationAttemptFailure::OwnershipJournal(error)) => Err(error),
             Err(MachineInitializationAttemptFailure::Initialization(retry_error)) => {
                 Err(AppError::Runtime(format!(
@@ -6270,8 +7145,12 @@ impl ManagedRuntimeManager {
         })
     }
 
-    fn prove_machine(&self, machine: &MachineListEntry, target: &ManagedTarget) -> AppResult<()> {
-        let expected_name = machine_name(target);
+    fn prove_machine_named(
+        &self,
+        machine: &MachineListEntry,
+        target: &ManagedTarget,
+        expected_name: &str,
+    ) -> AppResult<()> {
         let expected_provider = target.provider.argument();
         if machine.name != expected_name
             || !machine.vm_type.eq_ignore_ascii_case(expected_provider)
@@ -8944,7 +9823,6 @@ fn machine_name(target: &ManagedTarget) -> String {
     name
 }
 
-#[cfg(test)]
 fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppResult<&'static str> {
     match action {
         ManagedRuntimeSetupNextAction::InstallWsl
@@ -8962,7 +9840,7 @@ fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppRe
     }
 }
 
-#[cfg(test)]
+#[cfg(any(windows, test))]
 fn windows_wsl_repair_result_from_exit_code(
     exit_code: u32,
 ) -> ManagedRuntimePrerequisiteRepairResult {
@@ -8989,10 +9867,19 @@ fn windows_wsl_repair_result_from_exit_code(
     }
 }
 
+#[cfg(any(windows, test))]
+fn windows_wsl_repair_timeout_result() -> ManagedRuntimePrerequisiteRepairResult {
+    ManagedRuntimePrerequisiteRepairResult {
+        outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
+        restart_required: false,
+        detail: "Windows is still completing the WSL change after five minutes. ai-security-scanner stopped waiting, but the Windows action may continue in the background. Retry after it finishes."
+            .into(),
+    }
+}
+
 /// Runs exactly one product-defined WSL prerequisite action through Windows'
 /// standard UAC prompt. No executable, parameter, working-directory, secret,
 /// or environment input crosses the webview boundary.
-#[cfg(test)]
 pub(crate) fn repair_windows_wsl_prerequisite(
     action: ManagedRuntimeSetupNextAction,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
@@ -9000,21 +9887,20 @@ pub(crate) fn repair_windows_wsl_prerequisite(
     repair_windows_wsl_prerequisite_platform(parameters)
 }
 
-#[cfg(all(windows, test))]
+#[cfg(windows)]
 fn repair_windows_wsl_prerequisite_platform(
     parameters: &'static str,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_CANCELLED, HANDLE, RPC_E_CHANGED_MODE, WAIT_FAILED, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
     use windows_sys::Win32::System::Com::{
         COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
     };
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, INFINITE, WaitForSingleObject,
-    };
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
     use windows_sys::Win32::UI::Shell::{
         SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
         ShellExecuteExW,
@@ -9157,8 +10043,11 @@ fn repair_windows_wsl_prerequisite_platform(
         });
     }
     let process = OwnedProcessHandle(execution.hProcess);
-    match unsafe { WaitForSingleObject(process.0, INFINITE) } {
+    let timeout_milliseconds = u32::try_from(WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT.as_millis())
+        .expect("the fixed Windows WSL prerequisite timeout fits a Win32 wait");
+    match unsafe { WaitForSingleObject(process.0, timeout_milliseconds) } {
         WAIT_OBJECT_0 => {}
+        WAIT_TIMEOUT => return Ok(windows_wsl_repair_timeout_result()),
         WAIT_FAILED => {
             return Ok(ManagedRuntimePrerequisiteRepairResult {
                 outcome: ManagedRuntimePrerequisiteRepairOutcome::Failed,
@@ -9185,7 +10074,7 @@ fn repair_windows_wsl_prerequisite_platform(
     Ok(windows_wsl_repair_result_from_exit_code(exit_code))
 }
 
-#[cfg(all(not(windows), test))]
+#[cfg(not(windows))]
 fn repair_windows_wsl_prerequisite_platform(
     _parameters: &'static str,
 ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
@@ -9552,9 +10441,7 @@ fn windows_wsl_provider_home_from_registration_path(
     ];
     let namespace = components.first().and_then(|value| value.to_str());
     let has_expected_shape = components.len() == 8
-        && namespace.is_some_and(|value| {
-            value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
+        && namespace.is_some_and(windows_wsl_provider_namespace_has_expected_shape)
         && components[1..7]
             .iter()
             .zip(fixed)
@@ -9572,6 +10459,20 @@ fn windows_wsl_provider_home_from_registration_path(
         ));
     }
     Ok(provider_root.join(&components[0]))
+}
+
+fn windows_wsl_provider_namespace_has_expected_shape(value: &str) -> bool {
+    let verified_manifest_namespace =
+        value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let isolated_generation_namespace = value.len() == 25
+        && value
+            .get(..8)
+            .is_some_and(|prefix| prefix.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        && value.get(8..13) == Some("-iso-")
+        && value
+            .get(13..)
+            .is_some_and(|suffix| suffix.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    verified_manifest_namespace || isolated_generation_namespace
 }
 
 #[cfg(windows)]
@@ -14331,10 +15232,71 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
+    enum FakeWindowsWslPrerequisiteRepairResponse {
+        Result(ManagedRuntimePrerequisiteRepairResult),
+        Error,
+    }
+
+    struct FakeWindowsWslPrerequisiteRepairer {
+        responses: Mutex<VecDeque<FakeWindowsWslPrerequisiteRepairResponse>>,
+        actions: Mutex<Vec<ManagedRuntimeSetupNextAction>>,
+        lifecycle_lock_path: Option<PathBuf>,
+    }
+
+    impl FakeWindowsWslPrerequisiteRepairer {
+        fn new(responses: Vec<FakeWindowsWslPrerequisiteRepairResponse>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                actions: Mutex::new(Vec::new()),
+                lifecycle_lock_path: None,
+            }
+        }
+
+        fn with_lifecycle_lock_probe(mut self, path: PathBuf) -> Self {
+            self.lifecycle_lock_path = Some(path);
+            self
+        }
+
+        fn actions(&self) -> Vec<ManagedRuntimeSetupNextAction> {
+            self.actions.lock().expect("repair actions").clone()
+        }
+    }
+
+    impl WindowsWslPrerequisiteRepairer for FakeWindowsWslPrerequisiteRepairer {
+        fn repair(
+            &self,
+            action: ManagedRuntimeSetupNextAction,
+        ) -> AppResult<ManagedRuntimePrerequisiteRepairResult> {
+            self.actions.lock().expect("repair actions").push(action);
+            let _lock_probe = if let Some(path) = &self.lifecycle_lock_path {
+                let file = open_nofollow_lock_file(path)?;
+                fs2::FileExt::try_lock_exclusive(&file).map_err(|_| {
+                    AppError::Runtime(
+                        "the managed runtime lifecycle lock remained held during Windows setup"
+                            .into(),
+                    )
+                })?;
+                Some(file)
+            } else {
+                None
+            };
+            match self
+                .responses
+                .lock()
+                .expect("repair responses")
+                .pop_front()
+                .expect("one repair response")
+            {
+                FakeWindowsWslPrerequisiteRepairResponse::Result(result) => Ok(result),
+                FakeWindowsWslPrerequisiteRepairResponse::Error => Err(AppError::Runtime(
+                    "injected Windows prerequisite repair failure".into(),
+                )),
+            }
+        }
+    }
+
     struct FixedWindowsWslRegistrations(Vec<WindowsWslRegistration>);
 
-    #[cfg(windows)]
     impl WindowsWslRegistrationReader for FixedWindowsWslRegistrations {
         fn registrations(&self) -> AppResult<Vec<WindowsWslRegistration>> {
             Ok(self.0.clone())
@@ -14621,6 +15583,318 @@ mod tests {
             downloader,
             image,
         }
+    }
+
+    fn modeled_windows_target(fixture: &mut Fixture) -> ManagedTarget {
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+        let mut target = fixture.manager.loaded.target().expect("target").clone();
+        target.operating_system = ManagedOperatingSystem::Windows;
+        target.provider = ManagedMachineProvider::Wsl;
+        target
+    }
+
+    #[test]
+    fn ambiguous_same_name_is_preserved_and_routes_to_one_durable_isolated_generation() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_machine = machine_name(&target);
+        let default_distribution = format!("podman-{default_machine}");
+        let ambiguous_storage =
+            fixture
+                .manager
+                .windows_wsl_distribution_storage_path(&target, &default_machine, 0);
+        fs::create_dir_all(&ambiguous_storage).expect("ambiguous storage fixture");
+        let sentinel = ambiguous_storage.join("ext4.vhdx");
+        fs::write(&sentinel, b"unproven-user-bytes").expect("ambiguous bytes");
+        let before = fs::read(&sentinel).expect("snapshot ambiguous bytes");
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &[],
+                std::slice::from_ref(&default_distribution),
+                true,
+            )
+            .expect("side-by-side selection");
+        let repeated = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &[],
+                std::slice::from_ref(&default_distribution),
+                true,
+            )
+            .expect("idempotent retry");
+
+        assert_ne!(selected, default_machine);
+        assert_eq!(selected, repeated);
+        assert!(selected.starts_with(WINDOWS_WSL_ISOLATED_MACHINE_PREFIX));
+        assert_eq!(selected.len(), MAX_MACHINE_NAME_BYTES);
+        assert_eq!(fs::read(&sentinel).unwrap(), before);
+        let durable = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("durable selection")
+            .expect("one selection");
+        assert!(!durable.authorizes_cleanup);
+        assert_eq!(durable.generation_index, 1);
+        assert_eq!(durable.selected_machine_name, selected);
+        assert_eq!(durable.preserved_collision_names, vec![default_machine]);
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn ghost_install_missing_manifest_is_left_byte_for_byte_while_current_generation_continues() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let legacy_provider = fixture
+            .manager
+            .state_root
+            .join("provider-home")
+            .join(&WINDOWS_GHOST_MIGRATION_PREVIOUS_MANIFEST_SHA256[..16]);
+        fs::create_dir_all(&legacy_provider).expect("legacy provider fixture");
+        let sentinel = legacy_provider.join("legacy-provider-state.json");
+        fs::write(&sentinel, b"missing-manifest-ghost").expect("ghost bytes");
+        let before = fs::read(&sentinel).unwrap();
+        let unrelated_legacy_distribution =
+            format!("podman-{WINDOWS_GHOST_MIGRATION_MACHINE_NAME}");
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &[],
+                &[unrelated_legacy_distribution],
+                true,
+            )
+            .expect("current generation continues");
+
+        assert_eq!(selected, machine_name(&target));
+        assert_eq!(fs::read(&sentinel).unwrap(), before);
+        assert!(legacy_provider.is_dir());
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn unrelated_wsl_distribution_does_not_change_or_block_current_generation() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &[],
+                &["Ubuntu-24.04".into(), "Debian".into()],
+                true,
+            )
+            .expect("unrelated WSL state is ignored");
+
+        assert_eq!(selected, machine_name(&target));
+        let durable = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(durable.generation_index, 0);
+        assert!(durable.preserved_collision_names.is_empty());
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn matching_provider_row_without_exact_binding_is_a_collision_not_ownership() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_machine = machine_name(&target);
+        let machine_row = MachineListEntry {
+            name: default_machine.clone(),
+            running: true,
+            vm_type: target.provider.argument().into(),
+            cpus: fixture.manager.loaded.manifest.resources.cpus as u64,
+            memory: fixture.manager.loaded.manifest.resources.memory_mb as u64 * 1024 * 1024,
+            disk_size: fixture.manager.loaded.manifest.resources.disk_size_gb as u64
+                * 1024
+                * 1024
+                * 1024,
+        };
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &[machine_row],
+                &[format!("podman-{default_machine}")],
+                true,
+            )
+            .expect("unproven row is isolated");
+
+        assert_ne!(selected, default_machine);
+        let durable = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(durable.generation_index, 1);
+        assert_eq!(durable.preserved_collision_names, vec![default_machine]);
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn isolated_generation_requires_exact_init_or_proven_machine_ownership() {
+        let mut fixture = fixture();
+        fixture.manager.install().expect("verified current payload");
+        let target = modeled_windows_target(&mut fixture);
+        let machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let selection = WindowsWslGenerationSelection {
+            schema_version: WINDOWS_WSL_GENERATION_SELECTION_SCHEMA.into(),
+            authorizes_cleanup: false,
+            manifest_sha256: fixture.manager.loaded.sha256.clone(),
+            machine_image_sha256: target.machine_image.sha256.clone(),
+            default_machine_name: machine_name(&target),
+            selected_machine_name: machine.clone(),
+            generation_index: 1,
+            preserved_collision_names: vec![machine_name(&target)],
+        };
+        fixture
+            .manager
+            .write_windows_wsl_generation_selection_locked(&target, &selection)
+            .expect("durable isolated selection");
+
+        let no_proof = fixture
+            .manager
+            .require_isolated_windows_generation_ownership_locked(&target, &machine, &selection)
+            .expect_err("routing alone is not ownership");
+        assert!(
+            no_proof
+                .to_string()
+                .contains("no exact product ownership proof")
+        );
+
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                &target,
+                &machine,
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .expect("exact init intent");
+        fixture
+            .manager
+            .require_isolated_windows_generation_ownership_locked(&target, &machine, &selection)
+            .expect("exact init intent authorizes post-init binding verification");
+
+        fixture
+            .manager
+            .remove_windows_wsl_ownership_basis_proof_locked(
+                &target,
+                &machine,
+                WindowsWslOwnershipBasis::InitIntent,
+            )
+            .unwrap();
+        fixture
+            .manager
+            .ensure_windows_wsl_ownership_proof_locked(
+                &target,
+                &machine,
+                WindowsWslOwnershipBasis::ProvenMachine,
+            )
+            .expect("exact proven-machine proof");
+        fixture
+            .manager
+            .require_isolated_windows_generation_ownership_locked(&target, &machine, &selection)
+            .expect("exact proven-machine proof authorizes later binding verification");
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn generation_allocator_preserves_unknown_candidate_home_and_routing_record() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_machine = machine_name(&target);
+        let candidate_home = fixture
+            .manager
+            .windows_provider_home_for_generation(&target, 1);
+        fs::create_dir_all(&candidate_home).expect("ambiguous candidate home");
+        let provider_sentinel = candidate_home.join("unknown-provider-state");
+        fs::write(&provider_sentinel, b"preserve-provider").unwrap();
+        let selection_path = fixture.manager.windows_wsl_generation_selection_path(1);
+        fs::create_dir_all(selection_path.parent().unwrap()).unwrap();
+        fs::write(&selection_path, b"malformed-routing-record").unwrap();
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(
+                &target,
+                &[],
+                &[format!("podman-{default_machine}")],
+                true,
+            )
+            .expect("fresh generation after preserved collision");
+
+        assert_eq!(
+            selected,
+            fixture.manager.isolated_windows_machine_name(&target, 2)
+        );
+        assert_eq!(fs::read(&provider_sentinel).unwrap(), b"preserve-provider");
+        assert_eq!(
+            fs::read(&selection_path).unwrap(),
+            b"malformed-routing-record"
+        );
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn provider_access_without_a_durable_windows_generation_is_observation_only() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_home = fixture
+            .manager
+            .windows_provider_home_for_generation(&target, 0);
+        fs::create_dir_all(&default_home).expect("ambiguous default provider");
+        let sentinel = default_home.join("unknown-provider-state");
+        fs::write(&sentinel, b"leave-untouched").unwrap();
+
+        assert!(
+            !fixture
+                .manager
+                .provider_generation_is_selected_locked(&target)
+                .unwrap()
+        );
+        assert_eq!(fs::read(&sentinel).unwrap(), b"leave-untouched");
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn clean_read_then_setup_selection_stays_on_default_generation_without_provider_mutation() {
+        let mut fixture = fixture();
+        let target = modeled_windows_target(&mut fixture);
+        let default_home = fixture
+            .manager
+            .windows_provider_home_for_generation(&target, 0);
+
+        assert!(
+            !fixture
+                .manager
+                .provider_generation_is_selected_locked(&target)
+                .unwrap()
+        );
+        assert!(!private_entry_exists(&default_home).unwrap());
+
+        let selected = fixture
+            .manager
+            .select_windows_machine_generation_from_inventory_locked(&target, &[], &[], false)
+            .expect("clean setup selection");
+
+        assert_eq!(selected, machine_name(&target));
+        assert!(
+            fixture
+                .manager
+                .provider_generation_is_selected_locked(&target)
+                .unwrap()
+        );
+        assert!(!private_entry_exists(&default_home).unwrap());
+        assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
     }
 
     fn machine_json(manager: &ManagedRuntimeManager, running: bool) -> Vec<u8> {
@@ -16256,9 +17530,24 @@ mod tests {
             provider
         );
 
+        let isolated_provider = root.join("provider-home").join("01234567-iso-89abcdef0123");
+        let isolated_machine = "assm2-iso-0123456789abcdef0123";
+        let isolated = isolated_provider
+            .join("data/containers/podman/machine/wsl/wsldist")
+            .join(isolated_machine);
+        assert_eq!(
+            windows_wsl_provider_home_from_registration_path(&root, &isolated, isolated_machine,)
+                .unwrap(),
+            isolated_provider
+        );
+
         for invalid in [
             root.join("provider-home/not-a-digest/data/containers/podman/machine/wsl/wsldist")
                 .join(machine),
+            root.join("provider-home/0123456g-iso-89abcdef0123/data/containers/podman/machine/wsl/wsldist")
+                .join(isolated_machine),
+            root.join("provider-home/01234567-iso-89abcdef012/data/containers/podman/machine/wsl/wsldist")
+                .join(isolated_machine),
             root.join("provider-home/0123456789abcdef/data/containers/podman/machine/wsl/wsldist")
                 .join("podman-user-owned"),
             root.join("provider-home/0123456789abcdef/data/containers/podman/machine/wsl/wsldist")
@@ -16493,6 +17782,254 @@ mod tests {
     }
 
     #[test]
+    fn automatic_windows_wsl_repair_retries_setup_without_holding_the_lifecycle_lock() {
+        let mut fixture = fixture();
+        let repairer = Arc::new(
+            FakeWindowsWslPrerequisiteRepairer::new(vec![
+                FakeWindowsWslPrerequisiteRepairResponse::Result(
+                    ManagedRuntimePrerequisiteRepairResult {
+                        outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                        restart_required: false,
+                        detail: "Windows completed the requested WSL change".into(),
+                    },
+                ),
+            ])
+            .with_lifecycle_lock_probe(fixture.manager.state_root.join("lifecycle.lock")),
+        );
+        fixture.manager.prerequisite_repairer = repairer.clone();
+        let controller = ManagedRuntimeSetupController::default();
+        let running = fixture.manager.status_value(
+            ManagedRuntimePhase::Running,
+            true,
+            None,
+            "modeled runtime is ready".into(),
+        );
+        let mut attempts = 0;
+
+        let status = fixture
+            .manager
+            .setup_with_attempt(&controller, || {
+                attempts += 1;
+                let _lifecycle = fixture.manager.lock()?;
+                if attempts == 1 {
+                    let error = fail_windows_wsl_prerequisite(
+                        Some(&controller),
+                        WindowsWslPrerequisiteFailure::not_installed(Some(1)),
+                    )
+                    .expect_err("first attempt requires WSL installation");
+                    Err(error)
+                } else {
+                    Ok(running.clone())
+                }
+            })
+            .expect("completed repair is reconciled by a new setup attempt");
+
+        assert!(status.available);
+        assert_eq!(attempts, 2);
+        assert_eq!(
+            repairer.actions(),
+            [ManagedRuntimeSetupNextAction::InstallWsl]
+        );
+        let setup = controller.status().expect("completed setup status");
+        assert_eq!(setup.phase, ManagedRuntimeSetupPhase::Completed);
+        assert!(!setup.active);
+        assert!(!setup.prerequisite_repair_active);
+        assert_eq!(setup.failure_reason, None);
+        assert_eq!(setup.next_action, None);
+    }
+
+    #[test]
+    fn automatic_windows_wsl_repair_cancellation_is_retryable_and_does_not_loop() {
+        let mut fixture = fixture();
+        let repairer = Arc::new(FakeWindowsWslPrerequisiteRepairer::new(vec![
+            FakeWindowsWslPrerequisiteRepairResponse::Result(
+                ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Cancelled,
+                    restart_required: false,
+                    detail: "Windows administrator confirmation was cancelled; no change was made"
+                        .into(),
+                },
+            ),
+        ]));
+        fixture.manager.prerequisite_repairer = repairer.clone();
+        let controller = ManagedRuntimeSetupController::default();
+        let mut attempts = 0;
+
+        let error = fixture
+            .manager
+            .setup_with_attempt(&controller, || {
+                attempts += 1;
+                let error = fail_windows_wsl_prerequisite(
+                    Some(&controller),
+                    WindowsWslPrerequisiteFailure::optional_feature_disabled(Some(1)),
+                )
+                .expect_err("modeled Windows feature is unavailable");
+                Err(error)
+            })
+            .expect_err("cancelled UAC affects only the runtime-dependent setup");
+
+        assert!(error.to_string().contains("confirmation was cancelled"));
+        assert_eq!(attempts, 1);
+        assert_eq!(
+            repairer.actions(),
+            [ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures]
+        );
+        let setup = controller.status().expect("retryable setup status");
+        assert_eq!(setup.phase, ManagedRuntimeSetupPhase::Failed);
+        assert!(setup.can_retry);
+        assert!(!setup.prerequisite_repair_active);
+        assert_eq!(
+            setup.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled)
+        );
+        assert_eq!(
+            setup.next_action,
+            Some(ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures)
+        );
+        assert!(setup.detail.contains("confirmation was cancelled"));
+    }
+
+    #[test]
+    fn automatic_windows_wsl_repair_failure_degrades_without_raw_backend_error() {
+        let mut fixture = fixture();
+        let repairer = Arc::new(FakeWindowsWslPrerequisiteRepairer::new(vec![
+            FakeWindowsWslPrerequisiteRepairResponse::Error,
+        ]));
+        fixture.manager.prerequisite_repairer = repairer.clone();
+        let controller = ManagedRuntimeSetupController::default();
+        let mut attempts = 0;
+
+        let error = fixture
+            .manager
+            .setup_with_attempt(&controller, || {
+                attempts += 1;
+                let error = fail_windows_wsl_prerequisite(
+                    Some(&controller),
+                    WindowsWslPrerequisiteFailure::update_required(Some(1)),
+                )
+                .expect_err("modeled WSL update is required");
+                Err(error)
+            })
+            .expect_err("repair failure leaves a retryable dependent task");
+
+        assert_eq!(attempts, 1);
+        assert_eq!(
+            repairer.actions(),
+            [ManagedRuntimeSetupNextAction::UpdateWsl]
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("projects and saved results remain available")
+        );
+        assert!(!error.to_string().contains("injected"));
+        let setup = controller.status().expect("retryable failed setup");
+        assert!(setup.can_retry);
+        assert_eq!(
+            setup.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::WslUpdateRequired)
+        );
+        assert_eq!(
+            setup.next_action,
+            Some(ManagedRuntimeSetupNextAction::UpdateWsl)
+        );
+    }
+
+    #[test]
+    fn automatic_windows_wsl_repair_preserves_restart_as_the_only_next_action() {
+        let mut fixture = fixture();
+        let repairer = Arc::new(FakeWindowsWslPrerequisiteRepairer::new(vec![
+            FakeWindowsWslPrerequisiteRepairResponse::Result(
+                ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                    restart_required: true,
+                    detail: "Windows completed the WSL change and needs a restart".into(),
+                },
+            ),
+        ]));
+        fixture.manager.prerequisite_repairer = repairer;
+        let controller = ManagedRuntimeSetupController::default();
+
+        let error = fixture
+            .manager
+            .setup_with_attempt(&controller, || {
+                let error = fail_windows_wsl_prerequisite(
+                    Some(&controller),
+                    WindowsWslPrerequisiteFailure::not_installed(Some(1)),
+                )
+                .expect_err("modeled WSL installation is required");
+                Err(error)
+            })
+            .expect_err("Windows restart is preserved for the user");
+
+        assert!(error.to_string().contains("needs a restart"));
+        let setup = controller.status().expect("restart status");
+        assert_eq!(
+            setup.failure_reason,
+            Some(ManagedRuntimeSetupFailureReason::RestartRequired)
+        );
+        assert_eq!(
+            setup.next_action,
+            Some(ManagedRuntimeSetupNextAction::RestartWindows)
+        );
+        assert!(setup.can_retry);
+        assert!(!setup.prerequisite_repair_active);
+    }
+
+    #[test]
+    fn automatic_windows_wsl_repair_never_repeats_the_same_action_in_one_setup() {
+        let mut fixture = fixture();
+        let repairer = Arc::new(FakeWindowsWslPrerequisiteRepairer::new(vec![
+            FakeWindowsWslPrerequisiteRepairResponse::Result(
+                ManagedRuntimePrerequisiteRepairResult {
+                    outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+                    restart_required: false,
+                    detail: "Windows completed the requested WSL change".into(),
+                },
+            ),
+        ]));
+        fixture.manager.prerequisite_repairer = repairer.clone();
+        let controller = ManagedRuntimeSetupController::default();
+        let mut attempts = 0;
+
+        fixture
+            .manager
+            .setup_with_attempt(&controller, || {
+                attempts += 1;
+                let error = fail_windows_wsl_prerequisite(
+                    Some(&controller),
+                    WindowsWslPrerequisiteFailure::update_required(Some(1)),
+                )
+                .expect_err("modeled update remains unavailable");
+                Err(error)
+            })
+            .expect_err("a repeated typed failure must not create a UAC loop");
+
+        assert_eq!(attempts, 2);
+        assert_eq!(
+            repairer.actions(),
+            [ManagedRuntimeSetupNextAction::UpdateWsl]
+        );
+        assert_eq!(MAX_AUTOMATIC_WINDOWS_WSL_PREREQUISITE_REPAIRS, 3);
+    }
+
+    #[test]
+    fn windows_wsl_repair_timeout_is_bounded_and_keeps_saved_work_available() {
+        assert_eq!(
+            WINDOWS_WSL_PREREQUISITE_REPAIR_TIMEOUT,
+            Duration::from_secs(5 * 60)
+        );
+        let result = windows_wsl_repair_timeout_result();
+        assert_eq!(
+            result.outcome,
+            ManagedRuntimePrerequisiteRepairOutcome::Failed
+        );
+        assert!(!result.restart_required);
+        assert!(result.detail.contains("stopped waiting"));
+        assert!(result.detail.contains("may continue in the background"));
+    }
+
+    #[test]
     fn windows_wsl_repair_is_derived_from_exact_failed_pair_and_single_flight() {
         let controller = ManagedRuntimeSetupController::default();
         {
@@ -16618,7 +18155,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_setup_checks_wsl_before_machine_image_download() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        let repairer = Arc::new(FakeWindowsWslPrerequisiteRepairer::new(vec![
+            FakeWindowsWslPrerequisiteRepairResponse::Error,
+        ]));
+        fixture.manager.prerequisite_repairer = repairer.clone();
         fixture.commands.push(failure(utf16le(
             "此應用程式需要適用於 Linux 的 Windows 子系統選用元件。\r\nError code: Wsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED\r\n",
         )));
@@ -16629,7 +18170,15 @@ mod tests {
             .setup(&setup)
             .expect_err("unavailable WSL must stop setup before download");
 
-        assert!(error.to_string().contains("Windows settings"));
+        assert!(
+            error
+                .to_string()
+                .contains("projects and saved results remain available")
+        );
+        assert_eq!(
+            repairer.actions(),
+            [ManagedRuntimeSetupNextAction::EnableWslOptionalFeatures]
+        );
         assert_eq!(*fixture.downloader.calls.lock().expect("downloads"), 0);
         assert_eq!(
             fixture.commands.calls(),
@@ -16654,7 +18203,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_setup_classifies_podmans_exact_wsl_inventory_failure_before_download() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        let repairer = Arc::new(FakeWindowsWslPrerequisiteRepairer::new(vec![
+            FakeWindowsWslPrerequisiteRepairResponse::Error,
+        ]));
+        fixture.manager.prerequisite_repairer = repairer.clone();
         fixture.commands.push(success(utf16le(
             "Default Version: 2\r\nKernel version: 6.6.87.2\r\n",
         )));
@@ -16668,7 +18221,15 @@ mod tests {
             .setup(&setup)
             .expect_err("Podman's failing WSL inventory boundary must stop setup");
 
-        assert!(error.to_string().contains("not installed"));
+        assert!(
+            error
+                .to_string()
+                .contains("projects and saved results remain available")
+        );
+        assert_eq!(
+            repairer.actions(),
+            [ManagedRuntimeSetupNextAction::InstallWsl]
+        );
         assert_eq!(*fixture.downloader.calls.lock().expect("downloads"), 0);
         assert_eq!(
             fixture.commands.calls(),
@@ -19911,55 +21472,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn start_never_unregisters_a_same_named_wsl_distribution_without_ownership_proof() {
-        let fixture = fixture();
-        fixture.manager.install().expect("install");
-        let target = fixture.manager.loaded.target().expect("target");
-        fixture
-            .manager
-            .runtime_command(target)
-            .expect("private provider home");
-        let vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        fs::create_dir(vhd.parent().expect("VHD parent")).expect("distribution storage");
-        fs::write(&vhd, b"unproven same-named distribution").expect("fixture VHD");
-        let expected_distribution = format!("podman-{}", machine_name(target));
-        push_windows_wsl_ready(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
-        let setup = ManagedRuntimeSetupController::default();
-
-        let error = fixture
-            .manager
-            .setup(&setup)
-            .expect_err("name alone must never authorize WSL deletion");
-
-        assert!(
-            error
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        assert!(private_entry_exists(&vhd).unwrap());
-        assert!(fixture.commands.calls().iter().all(|arguments| {
-            !arguments
-                .iter()
-                .any(|argument| argument == &["--", "unregister"].concat())
-        }));
-        let status = setup.status().expect("typed manual recovery status");
-        assert_eq!(
-            status.failure_reason,
-            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
-        );
-        assert_eq!(
-            status.next_action,
-            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn full_setup_with_pending_assm2_checkpoint_fails_closed_without_name_based_wsl_mutation() {
+    fn pending_assm2_checkpoint_is_preserved_without_blocking_current_generation() {
         let (mut fixture, target, distribution_root, intent, _) =
             current_verified_pending_fixture();
         let machine = machine_name(&target);
@@ -20025,36 +21538,14 @@ mod tests {
             )
         });
 
-        push_windows_wsl_ready(&fixture.commands);
-        fixture
-            .commands
-            .push(success(machine_json(&fixture.manager, true)));
-        fixture
-            .commands
-            .push(success(machine_json(&fixture.manager, true)));
-        fixture.commands.push(success(b"5.8.2".to_vec()));
-        let setup = ManagedRuntimeSetupController::default();
-
-        let error = fixture
+        let command = fixture
             .manager
-            .setup(&setup)
-            .expect_err("pending assm2 recovery must fail closed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        let status = setup.status().expect("failed assm2 setup status");
-        assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
-        assert_eq!(
-            status.failure_reason,
-            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
-        );
-        assert_eq!(
-            status.next_action,
-            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
-        );
+            .runtime_command(&target)
+            .expect("current generation command");
+        fixture
+            .manager
+            .complete_windows_wsl_recovery_locked(&target, &command, &machine, None)
+            .expect("current generation ignores the retained old checkpoint");
         for (path, expected) in preserved {
             assert_eq!(
                 fs::read(&path).unwrap(),
@@ -20070,6 +21561,7 @@ mod tests {
                 .exists()
         );
         let calls = fixture.commands.calls();
+        assert!(calls.is_empty());
         assert!(calls.iter().all(|arguments| {
             arguments.iter().all(|argument| {
                 !matches!(
@@ -20080,55 +21572,6 @@ mod tests {
         }));
         assert!(distribution_root.join("ext4.vhdx").is_file());
         assert!(quarantine_vhd.is_file());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn init_intent_without_the_release_private_vhd_never_authorizes_unregister() {
-        let fixture = fixture();
-        fixture.manager.install().expect("install");
-        let target = fixture.manager.loaded.target().expect("target");
-        fixture
-            .manager
-            .runtime_command(target)
-            .expect("private provider home");
-        let expected_machine = machine_name(target);
-        let expected_distribution = format!("podman-{expected_machine}");
-        fixture
-            .manager
-            .ensure_windows_wsl_ownership_proof_locked(
-                target,
-                &expected_machine,
-                WindowsWslOwnershipBasis::InitIntent,
-            )
-            .expect("persist interrupted init intent");
-        let intent_path = fixture.manager.windows_wsl_ownership_proof_path(
-            &expected_machine,
-            WindowsWslOwnershipBasis::InitIntent,
-        );
-        assert!(intent_path.is_file());
-        push_windows_wsl_ready(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
-
-        let error = fixture
-            .manager
-            .start()
-            .expect_err("intent without its exact VHD is not ownership proof");
-
-        assert!(
-            error
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        assert!(intent_path.is_file());
-        assert!(fixture.commands.calls().iter().all(|arguments| {
-            !arguments
-                .iter()
-                .any(|argument| argument == &["--", "unregister"].concat())
-        }));
     }
 
     #[test]
@@ -20282,7 +21725,7 @@ mod tests {
             )
         );
         assert!(source.contains(
-            "fn full_setup_with_pending_assm2_checkpoint_fails_closed_without_name_based_wsl_mutation()"
+            "fn pending_assm2_checkpoint_is_preserved_without_blocking_current_generation()"
         ));
         let absence_proof = &production[production
             .find("fn prove_windows_wsl_distribution_absent_locked")
@@ -20293,15 +21736,16 @@ mod tests {
         let absence_current_guard = absence_proof
             .find("if windows_machine_uses_current_compatibility_generation(machine_name)")
             .expect("assm2 absence-proof guard");
-        let absence_manual_failure = absence_proof[absence_current_guard..]
-            .find("return fail_windows_wsl_distribution_requires_manual_action")
+        let absence_side_by_side_return = absence_proof[absence_current_guard..]
+            .find("return Ok(false)")
             .map(|index| index + absence_current_guard)
-            .expect("assm2 absence-proof manual failure");
+            .expect("assm2 absence-proof side-by-side return");
         let legacy_recovery = absence_proof
             .find("self.recover_windows_wsl_distribution_locked")
             .expect("legacy recovery call after assm2 guard");
-        assert!(absence_current_guard < absence_manual_failure);
-        assert!(absence_manual_failure < legacy_recovery);
+        assert!(absence_current_guard < absence_side_by_side_return);
+        assert!(absence_side_by_side_return < legacy_recovery);
+        assert!(!absence_proof.contains("ResolveWslDistributionManually"));
         assert_eq!(
             production
                 .matches("self.recover_windows_wsl_distribution_locked(")
@@ -20542,26 +21986,19 @@ mod tests {
         let completion_current_guard = completion
             .find("if windows_machine_uses_current_compatibility_generation(machine_name)")
             .expect("assm2 completion guard");
-        let completion_current_pending = completion[completion_current_guard..]
-            .find("if private_entry_exists(&pending)?")
-            .map(|index| index + completion_current_guard)
-            .expect("assm2 pending checkpoint guard");
-        let completion_current_manual = completion[completion_current_pending..]
-            .find("return fail_windows_wsl_distribution_requires_manual_action")
-            .map(|index| index + completion_current_pending)
-            .expect("assm2 pending checkpoint manual failure");
-        let completion_current_ok = completion[completion_current_manual..]
+        let completion_current_ok = completion[completion_current_guard..]
             .find("return Ok(());")
-            .map(|index| index + completion_current_manual)
-            .expect("assm2 no-checkpoint completion");
+            .map(|index| index + completion_current_guard)
+            .expect("assm2 preserved-checkpoint completion");
         let completion_legacy_pending = completion[completion_current_ok + 1..]
             .find("if private_entry_exists(&pending)?")
             .map(|index| index + completion_current_ok + 1)
             .expect("legacy pending recovery branch");
-        assert!(completion_current_guard < completion_current_pending);
-        assert!(completion_current_pending < completion_current_manual);
-        assert!(completion_current_manual < completion_current_ok);
+        assert!(completion_current_guard < completion_current_ok);
         assert!(completion_current_ok < completion_legacy_pending);
+        assert!(
+            !completion[..completion_legacy_pending].contains("ResolveWslDistributionManually")
+        );
         for forbidden_operation in [
             "windows_wsl_distribution_inventory",
             "read_windows_wsl_recovery_intent_locked",

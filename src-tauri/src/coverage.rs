@@ -6,8 +6,11 @@
 //! evidence that a scan ran or that an area was covered.
 
 use crate::domain::{
-    AssessmentCase, Asset, CoverageEntry, CoverageStatus, DataSource, EngineManifest,
-    EngineRunStatus, Id, ScanPermission, ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind,
+    AssessmentCase, Asset, AssetKind, BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
+    BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
+    CoverageEntry, CoverageStatus, DataSource, EngineManifest, EngineRun, EngineRunStatus,
+    EngineTaskKind, Id, LocalhostTcpOutcome, ScanPermission, ScanRun, ScopeGrant,
+    SourceConnectionStatus, SourceKind,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
@@ -295,7 +298,19 @@ pub fn assess_asset_coverage(
     let manifests_by_id = manifest_index(manifests);
     let mut incomplete_reasons = Vec::new();
     let mut stale_knowledge = Vec::new();
+    let mut completed_localhost_attempts = Vec::new();
     for engine_run in &planned_runs {
+        if matches!(
+            &engine_run.task_kind,
+            EngineTaskKind::BuiltInLocalhostTcp { .. }
+        ) {
+            match assess_built_in_localhost_tcp_binding(run, engine_run, asset, &run_grants) {
+                Ok(completed_attempt) => completed_localhost_attempts.push(completed_attempt),
+                Err(reason) => incomplete_reasons.push(reason),
+            }
+            continue;
+        }
+
         let manifest_matches = manifests_by_id.get(engine_run.engine_id.as_str());
         let manifest = match manifest_matches {
             None => {
@@ -364,12 +379,31 @@ pub fn assess_asset_coverage(
                 stale_knowledge.join(", ")
             )
         };
+        let localhost_notice = if completed_localhost_attempts.is_empty() {
+            String::new()
+        } else {
+            completed_localhost_attempts.sort();
+            format!(
+                " Exact built-in localhost TCP attempt(s): {}. This records only those connection attempts; it does not establish that the service or computer is secure, and it does not cover other ports or hosts.",
+                completed_localhost_attempts.join(", ")
+            )
+        };
+        let completion_summary = if completed_localhost_attempts.is_empty() {
+            format!(
+                "All {} compatible engine run(s) planned for this asset completed.",
+                planned_runs.len()
+            )
+        } else {
+            format!(
+                "All {} planned task(s) for this asset completed their exact declared dimensions.",
+                planned_runs.len()
+            )
+        };
         AssetCoverageAssessment {
             status: CoverageStatus::DiscoveredAuthorizedScanned,
             explanation: format!(
-                "All {} compatible engine run(s) planned for this asset completed. This state is independent of how many findings were reported.{}",
-                planned_runs.len(),
-                freshness_notice
+                "{completion_summary} This state is independent of how many findings were reported.{}{}",
+                localhost_notice, freshness_notice
             ),
             last_run_id: Some(run.id.clone()),
             observed_at,
@@ -380,10 +414,126 @@ pub fn assess_asset_coverage(
             Some(run.id.clone()),
             observed_at,
             &format!(
-                "The authorized scan is incomplete: {}. Only completed compatible engine runs can produce scanned coverage.",
+                "The authorized scan is incomplete: {}. Only completed compatible catalog-engine runs or exact completed built-in tasks can produce scanned coverage.",
                 incomplete_reasons.join(", ")
             ),
         )
+    }
+}
+
+fn assess_built_in_localhost_tcp_binding(
+    run: &ScanRun,
+    engine_run: &EngineRun,
+    asset: &Asset,
+    run_grants: &[&ScopeGrant],
+) -> Result<String, String> {
+    let EngineTaskKind::BuiltInLocalhostTcp { port, .. } = &engine_run.task_kind else {
+        return Err("built_in_localhost_tcp=task_kind_mismatch".into());
+    };
+    let endpoint = format!("127.0.0.1:{port}");
+    if engine_run.engine_id != BUILT_IN_LOCALHOST_TCP_ENGINE_ID {
+        return Err("built_in_localhost_tcp=engine_identity_mismatch".into());
+    }
+    if run.request_outcome.is_some() || run.engine_runs.len() != 1 {
+        return Err("built_in_localhost_tcp=run_contract_expanded".into());
+    }
+    if engine_run.asset_ids.as_slice() != [asset.id.as_str()] {
+        return Err("built_in_localhost_tcp=asset_binding_mismatch".into());
+    }
+    if asset.kind != AssetKind::WebService
+        || asset.candidate
+        || !asset.owner_confirmed
+        || asset.internet_exposed != Some(false)
+        || asset.name != endpoint
+        || asset.identifiers.len() != 1
+        || asset.identifiers[0].namespace != BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE
+        || asset.identifiers[0].value != endpoint
+    {
+        return Err("built_in_localhost_tcp=loopback_asset_contract_mismatch".into());
+    }
+    if run.scope_grant_ids.len() != 1
+        || run.scope_grant_snapshots.len() != 1
+        || run_grants.len() != 1
+    {
+        return Err("built_in_localhost_tcp=scope_contract_expanded".into());
+    }
+    let grant = run_grants[0];
+    if grant.id != run.scope_grant_ids[0]
+        || grant.asset_id != asset.id
+        || grant.permission != ScanPermission::LowImpactExternalConnection
+        || grant.authorization_reference.as_deref()
+            != Some(BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE)
+        || grant.external_scope.is_some()
+    {
+        return Err("built_in_localhost_tcp=scope_binding_mismatch".into());
+    }
+    if engine_run.progress_percent != 100 {
+        return Err("built_in_localhost_tcp=terminal_progress_mismatch".into());
+    }
+    let observation = engine_run
+        .localhost_tcp_observation
+        .as_ref()
+        .ok_or_else(|| {
+            format!(
+                "built_in_localhost_tcp:{endpoint}=observation_missing({})",
+                enum_key(&engine_run.status)
+            )
+        })?;
+    if engine_run
+        .started_at
+        .is_none_or(|started_at| observation.observed_at < started_at)
+        || engine_run
+            .finished_at
+            .is_none_or(|finished_at| observation.observed_at > finished_at)
+        || observation.observed_at < run.created_at
+    {
+        return Err("built_in_localhost_tcp=observation_time_mismatch".into());
+    }
+    assess_built_in_localhost_tcp_task(engine_run)
+}
+
+fn assess_built_in_localhost_tcp_task(engine_run: &EngineRun) -> Result<String, String> {
+    let EngineTaskKind::BuiltInLocalhostTcp {
+        port,
+        timeout_ms,
+        payload_bytes,
+    } = &engine_run.task_kind
+    else {
+        return Err("built_in_localhost_tcp=task_kind_mismatch".into());
+    };
+    let task_label = format!("127.0.0.1:{port}");
+
+    if !engine_run
+        .task_kind
+        .is_exact_built_in_localhost_tcp_contract()
+    {
+        return Err(format!(
+            "built_in_localhost_tcp:{task_label}=invalid_contract(port={port},timeout_ms={timeout_ms},payload_bytes={payload_bytes})"
+        ));
+    }
+
+    let Some(observation) = engine_run.localhost_tcp_observation.as_ref() else {
+        return Err(format!(
+            "built_in_localhost_tcp:{task_label}=observation_missing({})",
+            enum_key(&engine_run.status)
+        ));
+    };
+
+    match observation.outcome {
+        LocalhostTcpOutcome::TimedOut => {
+            Err(format!("built_in_localhost_tcp:{task_label}=timed_out"))
+        }
+        LocalhostTcpOutcome::Reachable | LocalhostTcpOutcome::Closed
+            if engine_run.status != EngineRunStatus::Completed =>
+        {
+            Err(format!(
+                "built_in_localhost_tcp:{task_label}=observation_not_completed({})",
+                enum_key(&engine_run.status)
+            ))
+        }
+        LocalhostTcpOutcome::Reachable | LocalhostTcpOutcome::Closed => {
+            Ok(format!("{task_label}={}", enum_key(&observation.outcome)))
+        }
     }
 }
 
@@ -436,7 +586,16 @@ fn run_observed_at(run: &ScanRun) -> Option<DateTime<Utc>> {
         .or_else(|| {
             run.engine_runs
                 .iter()
-                .filter_map(|engine_run| engine_run.finished_at)
+                .flat_map(|engine_run| {
+                    [
+                        engine_run.finished_at,
+                        engine_run
+                            .localhost_tcp_observation
+                            .as_ref()
+                            .map(|observation| observation.observed_at),
+                    ]
+                })
+                .flatten()
                 .max()
         })
         .or(Some(run.created_at))
@@ -554,6 +713,57 @@ fn enum_key<T: Serialize>(value: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS, LocalhostTcpObservation};
+
+    fn built_in_localhost_run(
+        status: EngineRunStatus,
+        outcome: Option<LocalhostTcpOutcome>,
+    ) -> EngineRun {
+        let observed_at = Utc::now();
+        EngineRun {
+            id: "localhost-run".into(),
+            scan_run_id: "scan-run".into(),
+            engine_id: "built-in-localhost-tcp".into(),
+            task_kind: EngineTaskKind::built_in_localhost_tcp(9_001),
+            localhost_tcp_observation: outcome.map(|outcome| LocalhostTcpObservation {
+                outcome,
+                observed_at,
+            }),
+            asset_ids: vec!["localhost-asset".into()],
+            status,
+            progress_percent: 100,
+            phase: "terminal".into(),
+            started_at: Some(observed_at),
+            finished_at: Some(observed_at),
+            resume_token: None,
+            engine_version: None,
+            image_digest: None,
+            rule_version: None,
+            adapter_version: "built-in".into(),
+            manifest_schema_version: None,
+            source_revision: None,
+            repository_url: None,
+            distribution_mode: None,
+            image_repository: None,
+            command_sha256: None,
+            execution_timeout_seconds: None,
+            knowledge_input: None,
+            scope_contract_sha256: None,
+            mapping_version: None,
+            mapping_provenance: None,
+            fingerprint_schema_version: None,
+            runtime_provider: None,
+            runtime_version: None,
+            runtime_security_options: None,
+            exit_code: None,
+            cleanup_removed: None,
+            cleanup_detail: None,
+            warnings: vec![],
+            raw_artifact_ids: vec![],
+            error_code: None,
+            error_message: None,
+        }
+    }
 
     #[test]
     fn every_non_completed_status_is_non_green() {
@@ -582,5 +792,58 @@ mod tests {
         assert!(coverage_status_is_green(
             &CoverageStatus::DiscoveredAuthorizedScanned
         ));
+    }
+
+    #[test]
+    fn completed_reachable_and_closed_localhost_attempts_are_exact_completed_dimensions() {
+        for outcome in [LocalhostTcpOutcome::Reachable, LocalhostTcpOutcome::Closed] {
+            let completed = assess_built_in_localhost_tcp_task(&built_in_localhost_run(
+                EngineRunStatus::Completed,
+                Some(outcome.clone()),
+            ))
+            .unwrap();
+            assert!(completed.contains("127.0.0.1:9001"));
+            assert!(completed.contains(&enum_key(&outcome)));
+        }
+    }
+
+    #[test]
+    fn localhost_timeout_failure_and_missing_observation_remain_incomplete() {
+        let timed_out = assess_built_in_localhost_tcp_task(&built_in_localhost_run(
+            EngineRunStatus::PartiallyCompleted,
+            Some(LocalhostTcpOutcome::TimedOut),
+        ))
+        .unwrap_err();
+        assert!(timed_out.contains("timed_out"));
+
+        let failed = assess_built_in_localhost_tcp_task(&built_in_localhost_run(
+            EngineRunStatus::Failed,
+            Some(LocalhostTcpOutcome::Reachable),
+        ))
+        .unwrap_err();
+        assert!(failed.contains("observation_not_completed(failed)"));
+
+        let missing = assess_built_in_localhost_tcp_task(&built_in_localhost_run(
+            EngineRunStatus::Failed,
+            None,
+        ))
+        .unwrap_err();
+        assert!(missing.contains("observation_missing(failed)"));
+    }
+
+    #[test]
+    fn localhost_task_rejects_scope_expansion_in_its_persisted_contract() {
+        let mut expanded = built_in_localhost_run(
+            EngineRunStatus::Completed,
+            Some(LocalhostTcpOutcome::Reachable),
+        );
+        expanded.task_kind = EngineTaskKind::BuiltInLocalhostTcp {
+            port: 9_001,
+            timeout_ms: BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS + 1,
+            payload_bytes: 1,
+        };
+
+        let reason = assess_built_in_localhost_tcp_task(&expanded).unwrap_err();
+        assert!(reason.contains("invalid_contract"));
     }
 }

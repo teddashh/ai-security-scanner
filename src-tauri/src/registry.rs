@@ -40,6 +40,17 @@ pub struct EngineRegistry {
 }
 
 impl EngineRegistry {
+    /// Construct a registry with no catalog-backed engines available.
+    ///
+    /// The desktop uses this degraded state when the embedded catalog cannot
+    /// be loaded. Non-catalog product paths remain usable while readiness and
+    /// planning naturally expose no catalog-backed checks.
+    pub fn empty() -> Self {
+        Self {
+            manifests: Vec::new(),
+        }
+    }
+
     pub fn load_builtin() -> AppResult<Self> {
         let manifests: Vec<EngineManifest> = serde_json::from_str(BUILTIN_CATALOG)
             .map_err(|error| AppError::EngineRegistry(error.to_string()))?;
@@ -367,6 +378,14 @@ mod tests {
                 .execution_timeout_seconds(),
             3_600
         );
+    }
+
+    #[test]
+    fn empty_registry_exposes_no_catalog_backed_engines() {
+        let registry = EngineRegistry::empty();
+
+        assert!(registry.manifests().is_empty());
+        assert!(registry.get("naabu").is_none());
     }
 
     #[test]

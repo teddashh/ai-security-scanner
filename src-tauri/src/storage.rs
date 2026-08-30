@@ -22,9 +22,49 @@ pub struct ArtifactDeletionObligation {
     pub created_at: String,
 }
 
+/// Beginner-safe notice for one case row that remains byte-for-byte preserved
+/// but cannot be decoded by this application version. The raw document and
+/// parser error stay local; callers receive enough stable context to keep the
+/// healthy workspace usable and offer a retry/diagnostic path.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CaseRecoveryDiagnostic {
+    pub case_id: String,
+    pub title: String,
+    pub updated_at: String,
+    pub revision: i64,
+    pub document_bytes: usize,
+    pub code: String,
+    pub message: String,
+    pub preserved: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadableCaseListing {
+    pub cases: Vec<CaseSummary>,
+    pub recovery_diagnostics: Vec<CaseRecoveryDiagnostic>,
+}
+
 pub struct Storage {
     path: PathBuf,
     connection: Mutex<Connection>,
+    #[cfg(test)]
+    save_case_faults: Mutex<std::collections::VecDeque<SaveCaseFaultInjection>>,
+}
+
+const CONTRADICTORY_REQUEST_OUTCOME_WARNING: &str = "Ignored an invalid no-check marker because the saved run was not a completed zero-check run. Any saved checks remain visible.";
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SaveCaseFault {
+    Conflict,
+    Storage,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct SaveCaseFaultInjection {
+    event_type: String,
+    fault: SaveCaseFault,
 }
 
 impl Storage {
@@ -68,6 +108,8 @@ impl Storage {
         let storage = Self {
             path,
             connection: Mutex::new(connection),
+            #[cfg(test)]
+            save_case_faults: Mutex::new(std::collections::VecDeque::new()),
         };
         storage.migrate()?;
         storage.restrict_permissions()?;
@@ -190,6 +232,18 @@ impl Storage {
     /// New cases carry revision zero; every successful save advances the
     /// in-memory revision after the transaction commits.
     pub fn save_case(&self, case: &mut AssessmentCase, event_type: &str) -> AppResult<()> {
+        #[cfg(test)]
+        if let Some(fault) = self.take_save_case_fault(event_type) {
+            return Err(match fault {
+                SaveCaseFault::Conflict => {
+                    AppError::Conflict("injected save-case revision conflict".into())
+                }
+                SaveCaseFault::Storage => {
+                    AppError::Storage("injected save-case storage failure".into())
+                }
+            });
+        }
+        normalize_scan_request_outcome_invariants(case);
         if case.storage_revision < 0 {
             return Err(AppError::Storage(
                 "case storage revision cannot be negative".into(),
@@ -291,28 +345,110 @@ impl Storage {
             .optional()?;
 
         let (revision, document) = stored.ok_or_else(|| AppError::CaseNotFound(id.to_owned()))?;
-        let mut case: AssessmentCase = serde_json::from_str(&document)?;
-        case.storage_revision = revision;
-        case.apply_effective_finding_statuses(Utc::now());
-        Ok(case)
+        decode_stored_case(id, revision, &document).map_err(|detail| {
+            tracing::error!(
+                case_id = id,
+                revision,
+                detail = %detail,
+                "stored case remains preserved because it could not be decoded"
+            );
+            AppError::Storage(format!(
+                "saved project {id} could not be opened; its original data was preserved"
+            ))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_save_case_faults(
+        &self,
+        event_type: &str,
+        count: usize,
+        fault: SaveCaseFault,
+    ) {
+        let mut faults = self
+            .save_case_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        faults.extend((0..count).map(|_| SaveCaseFaultInjection {
+            event_type: event_type.to_owned(),
+            fault,
+        }));
+    }
+
+    #[cfg(test)]
+    fn take_save_case_fault(&self, event_type: &str) -> Option<SaveCaseFault> {
+        let mut faults = self
+            .save_case_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if faults
+            .front()
+            .is_some_and(|injection| injection.event_type == event_type)
+        {
+            faults.pop_front().map(|injection| injection.fault)
+        } else {
+            None
+        }
     }
 
     pub fn list_cases(&self) -> AppResult<Vec<CaseSummary>> {
+        Ok(self.list_cases_with_recovery_diagnostics()?.cases)
+    }
+
+    /// Returns every readable case while isolating only malformed or
+    /// structurally unreconcilable rows. No row is rewritten, deleted, or
+    /// replaced with demo data. Startup and healthy sibling cases can continue
+    /// while the returned diagnostics make the preserved gap observable.
+    pub fn list_cases_with_recovery_diagnostics(&self) -> AppResult<ReadableCaseListing> {
         let connection = self.connection()?;
-        let mut statement =
-            connection.prepare("SELECT document_json FROM cases ORDER BY updated_at DESC")?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT id, title, updated_at, revision, document_json
+            FROM cases
+            ORDER BY updated_at DESC
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
         let mut cases = Vec::new();
+        let mut recovery_diagnostics = Vec::new();
 
         for row in rows {
-            let document = row?;
-            let case: AssessmentCase = serde_json::from_str(&document).map_err(|error| {
-                AppError::Storage(format!("stored case could not be decoded: {error}"))
-            })?;
-            cases.push(CaseSummary::from(&case));
+            let (case_id, title, updated_at, revision, document) = row?;
+            match decode_stored_case(&case_id, revision, &document) {
+                Ok(case) => cases.push(CaseSummary::from(&case)),
+                Err(detail) => {
+                    tracing::error!(
+                        case_id = %case_id,
+                        revision,
+                        detail = %detail,
+                        "isolated unreadable case while keeping healthy cases available"
+                    );
+                    recovery_diagnostics.push(CaseRecoveryDiagnostic {
+                        case_id,
+                        title,
+                        updated_at,
+                        revision,
+                        document_bytes: document.len(),
+                        code: "stored_case_unreadable".into(),
+                        message: "This saved project could not be opened by this version. Its original data was preserved; other projects remain available. Try again after updating the app, or share the local diagnostic code with support.".into(),
+                        preserved: true,
+                    });
+                }
+            }
         }
 
-        Ok(cases)
+        Ok(ReadableCaseListing {
+            cases,
+            recovery_diagnostics,
+        })
     }
 
     pub fn set_selected_case(&self, id: Option<&str>) -> AppResult<()> {
@@ -569,6 +705,63 @@ impl Storage {
     }
 }
 
+fn decode_stored_case(
+    stored_id: &str,
+    revision: i64,
+    document: &str,
+) -> Result<AssessmentCase, String> {
+    if revision < 1 {
+        return Err("stored revision is not positive".into());
+    }
+    let mut case: AssessmentCase = serde_json::from_str(document).map_err(|error| {
+        format!(
+            "case document decode category {:?} at line {} column {}",
+            error.classify(),
+            error.line(),
+            error.column()
+        )
+    })?;
+    if case.id != stored_id {
+        return Err("document identity does not match database identity".into());
+    }
+    case.storage_revision = revision;
+    normalize_scan_request_outcome_invariants(&mut case);
+    case.apply_effective_finding_statuses(Utc::now());
+    Ok(case)
+}
+
+/// A request-level no-check outcome and concrete check records cannot both be
+/// true. Preserve the concrete records, discard only the contradictory marker,
+/// and attach one bounded diagnostic to the first check so old or partially
+/// written data cannot make real work disappear from the UI or exports.
+fn normalize_scan_request_outcome_invariants(case: &mut AssessmentCase) {
+    for run in &mut case.scan_runs {
+        if run.request_outcome.is_none()
+            || (run.completed_at.is_some() && run.engine_runs.is_empty())
+        {
+            continue;
+        }
+        tracing::warn!(
+            case_id = %case.id,
+            scan_run_id = %run.id,
+            completed = run.completed_at.is_some(),
+            saved_check_count = run.engine_runs.len(),
+            "ignored contradictory request-level no-check marker"
+        );
+        run.request_outcome = None;
+        if let Some(engine_run) = run.engine_runs.first_mut()
+            && !engine_run
+                .warnings
+                .iter()
+                .any(|warning| warning == CONTRADICTORY_REQUEST_OUTCOME_WARNING)
+        {
+            engine_run
+                .warnings
+                .push(CONTRADICTORY_REQUEST_OUTCOME_WARNING.into());
+        }
+    }
+}
+
 #[cfg(unix)]
 fn restrict_directory(path: &Path) -> AppResult<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -596,7 +789,9 @@ fn restrict_file(_path: &Path) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AssessmentCase, DataClass, OrganizationProfile};
+    use crate::domain::{
+        AssessmentCase, DataClass, OrganizationProfile, ScanRequestOutcome, ScanRequestOutcomeCode,
+    };
     use std::sync::{Arc, Barrier};
 
     fn sample_case() -> AssessmentCase {
@@ -630,6 +825,191 @@ mod tests {
             Some(case.id.clone())
         );
         assert_eq!(storage.list_case_events(&case.id).expect("events").len(), 1);
+    }
+
+    #[test]
+    fn unreadable_cases_are_preserved_and_isolated_from_healthy_siblings() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let storage = Storage::open(directory.path().join("casework.db")).expect("storage");
+        let mut healthy = sample_case();
+        healthy.id = "healthy-case".into();
+        healthy.title = "Healthy project".into();
+        let mut malformed = sample_case();
+        malformed.id = "malformed-case".into();
+        malformed.title = "Preserved malformed project".into();
+        let mut mismatched = sample_case();
+        mismatched.id = "mismatched-case".into();
+        mismatched.title = "Preserved mismatched project".into();
+        storage
+            .save_case(&mut healthy, "case.created")
+            .expect("save healthy case");
+        storage
+            .save_case(&mut malformed, "case.created")
+            .expect("save malformed fixture case");
+        storage
+            .save_case(&mut mismatched, "case.created")
+            .expect("save mismatched fixture case");
+
+        let malformed_bytes = "{preserve these malformed bytes exactly";
+        let mut mismatched_document = mismatched.clone();
+        mismatched_document.id = "different-document-identity".into();
+        let mismatched_bytes =
+            serde_json::to_string(&mismatched_document).expect("mismatched document");
+        storage
+            .connection()
+            .expect("connection")
+            .execute(
+                "UPDATE cases SET document_json = ?2 WHERE id = ?1",
+                params![malformed.id, malformed_bytes],
+            )
+            .expect("inject malformed case document");
+        storage
+            .connection()
+            .expect("connection")
+            .execute(
+                "UPDATE cases SET document_json = ?2 WHERE id = ?1",
+                params![mismatched.id, mismatched_bytes],
+            )
+            .expect("inject mismatched case document");
+
+        let listing = storage
+            .list_cases_with_recovery_diagnostics()
+            .expect("resilient case listing");
+        assert_eq!(
+            listing
+                .cases
+                .iter()
+                .map(|case| case.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![healthy.id.as_str()]
+        );
+        assert_eq!(listing.recovery_diagnostics.len(), 2);
+        for diagnostic in &listing.recovery_diagnostics {
+            assert_eq!(diagnostic.code, "stored_case_unreadable");
+            assert!(diagnostic.preserved);
+            assert!(!diagnostic.message.contains(malformed_bytes));
+        }
+        assert_eq!(storage.list_cases().expect("healthy cases").len(), 1);
+        assert!(matches!(
+            storage.get_case(&malformed.id),
+            Err(AppError::Storage(_))
+        ));
+
+        let preserved: String = storage
+            .connection()
+            .expect("connection")
+            .query_row(
+                "SELECT document_json FROM cases WHERE id = ?1",
+                [&malformed.id],
+                |row| row.get(0),
+            )
+            .expect("preserved malformed bytes");
+        assert_eq!(preserved, malformed_bytes);
+
+        let preserved_mismatch: String = storage
+            .connection()
+            .expect("connection")
+            .query_row(
+                "SELECT document_json FROM cases WHERE id = ?1",
+                [&mismatched.id],
+                |row| row.get(0),
+            )
+            .expect("preserved mismatched document");
+        assert_eq!(preserved_mismatch, mismatched_bytes);
+    }
+
+    #[test]
+    fn contradictory_no_check_marker_never_hides_saved_check_records() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let storage = Storage::open(directory.path().join("casework.db")).expect("storage");
+        let prepared =
+            crate::localhost_quick_scan::prepare_localhost_quick_scan(&storage, &[], 9_001)
+                .expect("prepared localhost case");
+        let mut contradictory = storage
+            .get_case(&prepared.case.id)
+            .expect("saved localhost case");
+        let asset_id = contradictory.assets[0].id.clone();
+        contradictory.scan_runs[0].request_outcome = Some(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                vec![asset_id],
+                vec!["requested-check".into()],
+                "No applicable checks were selected.",
+            )
+            .expect("valid marker"),
+        );
+
+        // Simulate a contradictory legacy/partially written row that predates
+        // the write-time invariant.
+        let document = serde_json::to_string(&contradictory).expect("document");
+        storage
+            .connection()
+            .expect("connection")
+            .execute(
+                "UPDATE cases SET document_json = ?2 WHERE id = ?1",
+                params![contradictory.id, document],
+            )
+            .expect("inject legacy contradiction");
+
+        let mut loaded = storage
+            .get_case(&contradictory.id)
+            .expect("normalized case");
+        assert!(loaded.scan_runs[0].request_outcome.is_none());
+        assert_eq!(loaded.scan_runs[0].engine_runs.len(), 1);
+        assert!(
+            loaded.scan_runs[0].engine_runs[0]
+                .warnings
+                .iter()
+                .any(|warning| warning == CONTRADICTORY_REQUEST_OUTCOME_WARNING)
+        );
+
+        // The same invariant is enforced before every subsequent write, so a
+        // caller cannot reintroduce the marker and hide the concrete check.
+        loaded.scan_runs[0].request_outcome = Some(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                vec![],
+                vec![],
+                "No applicable checks were selected.",
+            )
+            .expect("valid marker"),
+        );
+        storage
+            .save_case(&mut loaded, "test.contradictory_request_outcome")
+            .expect("normalized save");
+        assert!(loaded.scan_runs[0].request_outcome.is_none());
+        assert_eq!(loaded.scan_runs[0].engine_runs.len(), 1);
+
+        loaded.scan_runs[0].engine_runs.clear();
+        loaded.scan_runs[0].completed_at = None;
+        loaded.scan_runs[0].request_outcome = Some(
+            ScanRequestOutcome::no_checks_completed(
+                ScanRequestOutcomeCode::NoApplicableChecks,
+                vec![],
+                vec![],
+                "No applicable checks were selected.",
+            )
+            .expect("valid marker"),
+        );
+        let incomplete_document = serde_json::to_string(&loaded).expect("incomplete document");
+        storage
+            .connection()
+            .expect("connection")
+            .execute(
+                "UPDATE cases SET document_json = ?2 WHERE id = ?1",
+                params![loaded.id, incomplete_document],
+            )
+            .expect("inject incomplete legacy marker");
+        loaded = storage
+            .get_case(&loaded.id)
+            .expect("incomplete marker normalized on load");
+        assert!(loaded.scan_runs[0].request_outcome.is_none());
+        assert!(loaded.scan_runs[0].engine_runs.is_empty());
+        storage
+            .save_case(&mut loaded, "test.incomplete_request_outcome")
+            .expect("incomplete marker normalized");
+        assert!(loaded.scan_runs[0].request_outcome.is_none());
+        assert!(loaded.scan_runs[0].engine_runs.is_empty());
     }
 
     #[test]

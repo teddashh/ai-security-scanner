@@ -95,6 +95,10 @@ pub enum JobFailureKind {
     WorkerReported,
     WorkerPanicked,
     WorkerReturnedEarly,
+    /// The worker stopped safely before target contact, but its terminal
+    /// durable transition could not be committed within the bounded retry
+    /// budget. Startup reconciliation owns the remaining persistence work.
+    PersistencePending,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -127,6 +131,10 @@ pub enum JobCompletion {
     Completed,
     Cancelled,
     Failed,
+    /// No target contact occurred, but the requested terminal state is not yet
+    /// durable. This is an explicit terminal in-memory failure rather than an
+    /// indefinitely live `CancelRequested` job.
+    PersistencePending,
 }
 
 /// Result of the one-time transition that makes a newly persisted job
@@ -354,10 +362,27 @@ impl JobManager {
 
     pub fn cancel(&self, key: &JobKey) -> Result<JobSnapshot, JobManagerError> {
         let record = self.live_record(key)?;
+        // Publish intent before waiting on a preflight/activation transition.
+        // The worker can therefore observe a cancel invocation that began
+        // while its reversible closure was still in progress and must not
+        // contact a target afterward.
+        record.publish_cancel_intent();
         let _control = lock(&record.control_transition);
-        self.require_current_live_record(key, &record)?;
-        record.request_cancel();
-        Ok(record.snapshot())
+        match self.require_current_live_record(key, &record) {
+            Ok(()) => Ok(record.snapshot()),
+            Err(error) => {
+                // The worker may observe the published intent, finalize as
+                // cancelled, and remove the live entry before this caller gets
+                // the coordinator. That is a successful cancellation, not a
+                // missing-job error.
+                let snapshot = record.snapshot();
+                if snapshot.status == JobStatus::Cancelled {
+                    Ok(snapshot)
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     fn live_record(&self, key: &JobKey) -> Result<Arc<JobRecord>, JobManagerError> {
@@ -458,6 +483,32 @@ impl JobContext {
         write()
     }
 
+    /// Cancellation-aware counterpart for reversible before-dispatch writes.
+    /// A cancellation published before entry skips the write. If cancellation
+    /// is published while the closure is in progress, the caller receives
+    /// `Cancelled` and must apply its narrowly scoped compensation before any
+    /// target contact or failure projection is exposed.
+    pub fn coordinate_durable_write_if_not_cancelled<T, E>(
+        &self,
+        write: impl FnOnce() -> Result<T, E>,
+    ) -> JobActivationOutcome<T, E> {
+        if self.record.cancel_requested.load(Ordering::SeqCst) {
+            return JobActivationOutcome::Cancelled;
+        }
+        let _control = lock(&self.record.control_transition);
+        if self.record.cancel_requested.load(Ordering::SeqCst) {
+            return JobActivationOutcome::Cancelled;
+        }
+        let result = write();
+        if self.record.cancel_requested.load(Ordering::SeqCst) {
+            return JobActivationOutcome::Cancelled;
+        }
+        match result {
+            Ok(value) => JobActivationOutcome::Activated(value),
+            Err(error) => JobActivationOutcome::Failed(error),
+        }
+    }
+
     /// Runs the worker's one-time dispatch activation under the same
     /// coordinator used by pause, resume, cancellation, and durable writes. A
     /// pause delays activation without invoking `activate`; cancellation wins
@@ -484,7 +535,13 @@ impl JobContext {
             let activate = activate
                 .take()
                 .expect("job activation closure is consumed exactly once");
-            return match activate() {
+            let result = activate();
+            // Once a successful activation closure returns, its irreversible
+            // work belongs to a durable dispatch-authorized attempt. A cancel
+            // published during the closure is observed by the engine token
+            // before target contact; discarding the successful value here can
+            // leak committed provider checkout capacity without an owner.
+            return match result {
                 Ok(value) => JobActivationOutcome::Activated(value),
                 Err(error) => JobActivationOutcome::Failed(error),
             };
@@ -649,9 +706,9 @@ impl JobRecord {
         true
     }
 
-    fn request_cancel(&self) {
-        let _gate = lock(&self.gate);
+    fn publish_cancel_intent(&self) {
         self.cancel_requested.store(true, Ordering::SeqCst);
+        let _gate = lock(&self.gate);
         for engine in self.engines.values() {
             if !engine.base_status().is_terminal() {
                 engine.token.cancel();
@@ -732,7 +789,20 @@ impl JobRecord {
         completion: JobCompletion,
         forced_failure: Option<JobFailureKind>,
     ) -> JobSnapshot {
-        let mut failure_kind = forced_failure;
+        let cancel_won = self.cancel_requested.load(Ordering::SeqCst);
+        let persistence_pending = completion == JobCompletion::PersistencePending;
+        let completion = if cancel_won && !persistence_pending {
+            JobCompletion::Cancelled
+        } else {
+            completion
+        };
+        let mut failure_kind = if persistence_pending {
+            Some(JobFailureKind::PersistencePending)
+        } else if cancel_won {
+            None
+        } else {
+            forced_failure
+        };
         match completion {
             JobCompletion::Completed => {
                 let incomplete = self
@@ -756,6 +826,13 @@ impl JobRecord {
             }
             JobCompletion::Failed => {
                 failure_kind.get_or_insert(JobFailureKind::WorkerReported);
+                for engine in self.engines.values() {
+                    if !engine.base_status().is_terminal() {
+                        engine.force_terminal(BaseEngineStatus::Failed);
+                    }
+                }
+            }
+            JobCompletion::PersistencePending => {
                 for engine in self.engines.values() {
                     if !engine.base_status().is_terminal() {
                         engine.force_terminal(BaseEngineStatus::Failed);
