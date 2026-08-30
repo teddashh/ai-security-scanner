@@ -1550,6 +1550,7 @@ mod tests {
                 scope_contract_sha256: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
+                naabu_attempt_results: Vec::new(),
                 mapping_version: Some(mapping_provenance.mapping_version.clone()),
                 mapping_provenance: Some(mapping_provenance.clone()),
                 fingerprint_schema_version: None,

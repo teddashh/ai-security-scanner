@@ -10,6 +10,8 @@ mod container_runtime;
 mod domain;
 #[path = "../src/error.rs"]
 mod error;
+#[path = "../src/execution_coverage.rs"]
+mod execution_coverage;
 #[path = "../src/external_scope.rs"]
 mod external_scope;
 #[path = "../src/managed_network.rs"]

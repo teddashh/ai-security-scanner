@@ -1,3 +1,4 @@
+use crate::execution_coverage::ValidatedExecutionCoverage;
 use crate::external_scope::{
     DirectNetworkTargetKind, ExternalScopeGrant, ExternalScopeRequest, TransportProtocol,
 };
@@ -721,6 +722,12 @@ pub struct LocalhostTcpObservation {
 
 pub const NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION: u32 = 1;
 pub const MAX_NAABU_ATTEMPT_REQUESTS: usize = 512;
+pub const NAABU_ATTEMPT_RESULT_SCHEMA_VERSION: u32 = 1;
+pub const MAX_NAABU_ATTEMPT_RESULTS: usize = MAX_NAABU_ATTEMPT_REQUESTS;
+/// Keeps a corrupt or adversarial case from multiplying the per-attempt
+/// launcher limit into an unreasonably large in-memory history. Eight full
+/// 512-unit result sets still fit; ordinary retries consume far less.
+pub const MAX_NAABU_ATTEMPT_RESULT_WORK_UNITS: usize = 4_096;
 
 /// Immutable, target-free record of the exact launcher work requested before
 /// one Naabu attempt can contact a target. The referenced work-unit identities
@@ -732,6 +739,23 @@ pub struct NaabuAttemptRequest {
     pub execution_attempt: u32,
     pub requested_unit_ids: Vec<String>,
     pub launcher_plan_sha256: String,
+}
+
+/// Durable host binding for one already validated launcher-v2 journal.
+///
+/// The journal itself remains a raw artifact. This record contains only its
+/// durable ID and the target-free coverage derived from it; it cannot replace
+/// the immutable request that authorized the attempt. `normalization_complete`
+/// means every validated final artifact in this attempt was handed through
+/// the result adapter, not that the requested work was fully tested.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NaabuAttemptResult {
+    pub schema_version: u32,
+    pub execution_attempt: u32,
+    pub journal_raw_artifact_id: Id,
+    pub coverage: ValidatedExecutionCoverage,
+    pub normalization_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -793,6 +817,17 @@ pub struct EngineRun {
         deserialize_with = "deserialize_naabu_attempt_requests"
     )]
     pub naabu_attempt_requests: Vec<NaabuAttemptRequest>,
+    /// Target-free results for validated launcher-v2 journals. Attempt
+    /// identity and coverage are append-only; the host may only promote an
+    /// existing result's normalization flag from false to true after all exact
+    /// bindings are adapted. Legacy and dormant launcher-v1 runs deserialize
+    /// with no invented coverage.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_naabu_attempt_results"
+    )]
+    pub naabu_attempt_results: Vec<NaabuAttemptResult>,
     /// Exact project-authored control-mapping catalog used while adapting this
     /// run. Missing values identify legacy runs and fail closed during diffing.
     #[serde(default)]
@@ -839,6 +874,29 @@ where
         )));
     }
     Ok(requests)
+}
+
+fn deserialize_naabu_attempt_results<'de, D>(
+    deserializer: D,
+) -> Result<Vec<NaabuAttemptResult>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let results = Vec::<NaabuAttemptResult>::deserialize(deserializer)?;
+    if results.len() > MAX_NAABU_ATTEMPT_RESULTS {
+        return Err(serde::de::Error::custom(format!(
+            "Naabu attempt-result history exceeds {MAX_NAABU_ATTEMPT_RESULTS} entries"
+        )));
+    }
+    let work_units = results.iter().try_fold(0_usize, |total, result| {
+        total.checked_add(result.coverage.work_units.len())
+    });
+    if work_units.is_none_or(|total| total > MAX_NAABU_ATTEMPT_RESULT_WORK_UNITS) {
+        return Err(serde::de::Error::custom(format!(
+            "Naabu attempt-result history exceeds {MAX_NAABU_ATTEMPT_RESULT_WORK_UNITS} cumulative work-unit entries"
+        )));
+    }
+    Ok(results)
 }
 
 /// Closed reason codes for a scan request that reached a durable terminal
@@ -1943,6 +2001,7 @@ mod tests {
 
         assert_eq!(run.task_kind, EngineTaskKind::CatalogEngine);
         assert!(run.localhost_tcp_observation.is_none());
+        assert!(run.naabu_attempt_results.is_empty());
     }
 
     #[test]

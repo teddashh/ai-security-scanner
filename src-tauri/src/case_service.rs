@@ -2694,6 +2694,7 @@ impl<'a> CaseService<'a> {
                     scope_contract_sha256: Some(scope_contract_sha256),
                     naabu_work_plan: None,
                     naabu_attempt_requests: Vec::new(),
+                    naabu_attempt_results: Vec::new(),
                     mapping_version: mapping_version.clone(),
                     mapping_provenance: mapping_provenance.clone(),
                     fingerprint_schema_version: Some(FINGERPRINT_SCHEMA_VERSION.to_owned()),
@@ -6270,6 +6271,7 @@ fn not_executed_run(
         scope_contract_sha256: None,
         naabu_work_plan: None,
         naabu_attempt_requests: Vec::new(),
+        naabu_attempt_results: Vec::new(),
         mapping_version,
         mapping_provenance,
         fingerprint_schema_version: manifest.map(|_| FINGERPRINT_SCHEMA_VERSION.to_owned()),
@@ -12038,6 +12040,11 @@ mod tests {
                 .naabu_attempt_requests
                 .is_empty()
         );
+        assert!(
+            legacy.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .is_empty()
+        );
     }
 
     #[test]
@@ -17613,6 +17620,7 @@ mod tests {
                 scope_contract_sha256: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
+                naabu_attempt_results: Vec::new(),
                 mapping_version: None,
                 mapping_provenance: None,
                 fingerprint_schema_version: None,
@@ -17858,6 +17866,7 @@ mod tests {
             scope_contract_sha256: Some("d".repeat(64)),
             naabu_work_plan: None,
             naabu_attempt_requests: Vec::new(),
+            naabu_attempt_results: Vec::new(),
             mapping_version: Some("2026-08-24.1".into()),
             mapping_provenance: Some(crate::domain::ControlMappingProvenance {
                 mapping_version: "2026-08-24.1".into(),

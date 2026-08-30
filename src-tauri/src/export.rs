@@ -1092,6 +1092,7 @@ pub(crate) fn case_for_export(
                 // outcome, but never this execution-only target corpus.
                 engine_run.naabu_work_plan = None;
                 engine_run.naabu_attempt_requests.clear();
+                engine_run.naabu_attempt_results.clear();
                 engine_run.error_message = engine_run
                     .error_message
                     .as_ref()
@@ -2153,6 +2154,10 @@ impl<R: Read> Read for HashingReader<R> {
 mod tests {
     use super::*;
     use crate::domain::*;
+    use crate::execution_coverage::{
+        ExecutionCoverageSummary, LAUNCHER_V2_JOURNAL_SCHEMA_VERSION, ValidatedExecutionCoverage,
+        WorkUnitCoverage, WorkUnitOutcome,
+    };
     use crate::external_scope::{
         ExternalActivity, ExternalScopeGrant, RatePolicy, ResolutionSnapshot, ResolvedExternalPlan,
         TemplatePolicy, TransportProtocol,
@@ -2238,6 +2243,7 @@ mod tests {
                 scope_contract_sha256: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
+                naabu_attempt_results: Vec::new(),
                 mapping_version: None,
                 mapping_provenance: None,
                 fingerprint_schema_version: None,
@@ -2957,6 +2963,43 @@ mod tests {
             requested_unit_ids,
             launcher_plan_sha256: sha256_bytes(&serde_json::to_vec(&private_launcher).unwrap()),
         }];
+        let private_attempt_work_units = private_naabu_plan
+            .work_units
+            .iter()
+            .map(|unit| WorkUnitCoverage {
+                unit_id: unit.unit_id.clone(),
+                scope_sha256: unit.scope_sha256.clone(),
+                outcome: WorkUnitOutcome::NotTested,
+                attempts: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let private_attempt_unit_count = private_attempt_work_units.len();
+        case.scan_runs[0].engine_runs[0].naabu_attempt_results = vec![NaabuAttemptResult {
+            schema_version: NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
+            execution_attempt: 1,
+            journal_raw_artifact_id: case.raw_artifacts[0].id.clone(),
+            coverage: ValidatedExecutionCoverage {
+                schema_version: LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
+                engine_run_id: private_naabu_plan.identity.engine_run_id.clone(),
+                execution_attempt: 1,
+                recovered_trailing_record: false,
+                validated_artifact_bindings: Vec::new(),
+                unreferenced_final_artifacts: Vec::new(),
+                work_units: private_attempt_work_units,
+                summary: ExecutionCoverageSummary {
+                    requested: private_attempt_unit_count,
+                    tested_complete: 0,
+                    tested_partial: 0,
+                    failed: 0,
+                    timed_out: 0,
+                    cancelled: 0,
+                    not_tested: private_attempt_unit_count,
+                    partial: true,
+                    has_usable_results: false,
+                },
+            },
+            normalization_complete: true,
+        }];
         case.scan_runs[0].engine_runs[0].naabu_work_plan = Some(private_naabu_plan);
         case.coverage.push(CoverageEntry {
             id: "coverage-1".into(),
@@ -3081,6 +3124,12 @@ mod tests {
                 .contains(HISTORICAL_HOSTNAME),
             "historical mixed-case target fixture must be meaningful"
         );
+        assert!(
+            !case.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .is_empty(),
+            "attempt-result redaction fixture must be meaningful"
+        );
         let redacted = case_for_export(&case, RedactionProfile::Standard);
         let redacted_json = serde_json::to_string(&redacted).unwrap();
         assert!(!redacted_json.contains(SENTINEL));
@@ -3104,6 +3153,11 @@ mod tests {
         assert!(
             redacted.scan_runs[0].engine_runs[0]
                 .naabu_attempt_requests
+                .is_empty()
+        );
+        assert!(
+            redacted.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
                 .is_empty()
         );
         let ocsf = String::from_utf8(export_ocsf_finding_events_bytes(&redacted, "run-1").unwrap())

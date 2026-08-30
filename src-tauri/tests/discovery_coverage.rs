@@ -444,6 +444,7 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
         scope_contract_sha256: None,
         naabu_work_plan: None,
         naabu_attempt_requests: Vec::new(),
+        naabu_attempt_results: Vec::new(),
         mapping_version: None,
         mapping_provenance: None,
         fingerprint_schema_version: None,
