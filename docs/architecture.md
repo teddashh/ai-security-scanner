@@ -534,12 +534,16 @@ Before disposable dependency checks, a scan run freezes and durably commits:
 
 Artifact, ruleset, adapter, runtime, mapping, and explanation versions are attached when the corresponding task or optional enhancement resolves them. Failure to resolve one dependency becomes that task or enhancement's explicit outcome; it does not erase the already-persisted run.
 
-When the request does not name engines, the backend derives the set from the
-ownership-confirmed asset kinds and their unexpired grants. It records every
-applicable catalog entry: runnable engines become jobs and unavailable entries
-become explicit user-facing `not_tested` coverage (an internal engine execution may retain
-`not_executed` as its technical state). Naming exact engine IDs is an Advanced
-override, not a prerequisite for ordinary use.
+When the request does not name engines, the ordinary combined **Start** action
+atomically creates or refreshes the exact target record, the one required
+public/internal assertion, and its bounded grant before the run is frozen. The
+user is not sent through a separate ownership, consent, or setup page first.
+The backend then derives engines from that just-frozen target kind and grant and
+records every applicable catalog entry: runnable engines become jobs and
+unavailable entries become explicit user-facing `not_tested` coverage (an
+internal engine execution may retain `not_executed` as its technical state).
+Naming exact engine IDs is an Advanced override, not a prerequisite for
+ordinary use.
 
 The durable orchestrator schedules independent target-stage-engine jobs with resource limits. Quick discovery starts first and opens the report on its first durable result; full inventory and deep checks update it later. Checkpoints are persisted after state changes and bounded result batches. Completed ports, hosts, pages, repositories, or batches survive failure of later siblings, and Retry selects only unfinished work by default.
 
@@ -637,7 +641,7 @@ Prioritization may consider:
 
 The canonical internal priority uses a single direction: a higher value sorts earlier. The explanation stores the factors, not only a mysterious number. User-facing lists and HTML show a relative handoff ordinal rather than exposing the internal value as a risk or compliance score.
 
-Questionnaire context can add only bounded, named ordering factors. An internet-exposure factor requires the affected asset itself to carry source-derived `internet_exposed=true`; a sensitive-data factor requires both a source-derived `contains_sensitive_data=true` asset attribute and a matching case data context. Questionnaire answers alone never create a finding, asset attribute, scope grant, severity, confidence, or evidence claim. Applying the projection is idempotent and preserves the scanner report and observation fingerprint. Requested activities may preselect an applicable mode in the scope UI, but ownership confirmation and every backend grant check remain mandatory.
+Questionnaire context can add only bounded, named ordering factors. An internet-exposure factor requires the affected asset itself to carry source-derived `internet_exposed=true`; a sensitive-data factor requires both a source-derived `contains_sensitive_data=true` asset attribute and a matching case data context. Questionnaire answers alone never create a finding, asset attribute, scope grant, severity, confidence, or evidence claim. Applying the projection is idempotent and preserves the scanner report and observation fingerprint. Requested activities may preselect an applicable mode. Direct target contact still requires the canonical bounded assertion and backend grant check, but the ordinary combined **Start** action records them inline and atomically; it never turns them into a separate pre-scan ceremony.
 
 Grouping joins related findings under a user-facing issue while retaining all source findings and evidence. Cross-engine corroboration raises confidence or priority; it does not duplicate a control failure or erase distinct technical problems.
 
