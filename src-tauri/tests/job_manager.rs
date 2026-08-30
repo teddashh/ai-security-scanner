@@ -1,6 +1,6 @@
 use ai_security_scanner_lib::job_manager::{
     EngineJobStatus, JobActivationOutcome, JobCompletion, JobFailureKind, JobKey, JobManager,
-    JobManagerError, JobStatus,
+    JobManagerError, JobStatus, TerminalReconciliationOutcome,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
@@ -704,11 +704,11 @@ fn same_key_restart_waits_for_exact_terminal_reconciliation() {
         error,
         JobManagerError::TerminalReconciliationPending(key.clone())
     );
-    assert!(
+    assert_eq!(
         manager
             .reconcile_terminal_snapshot(&first_terminal, || Ok::<_, ()>(()))
-            .unwrap()
-            .is_some()
+            .unwrap(),
+        TerminalReconciliationOutcome::Reconciled(())
     );
 
     let (second_terminal_tx, second_terminal_rx) = mpsc::channel();
@@ -735,24 +735,24 @@ fn same_key_restart_waits_for_exact_terminal_reconciliation() {
         .recv_timeout(Duration::from_secs(2))
         .expect("second terminal callback");
     assert_eq!(second_terminal.engines[0].engine_id, "second");
-    assert!(
+    assert_eq!(
         manager
             .reconcile_terminal_snapshot(&first_terminal, || Ok::<_, ()>(()))
-            .unwrap()
-            .is_none(),
+            .unwrap(),
+        TerminalReconciliationOutcome::NotCurrent,
         "a delayed old acknowledgement cannot remove the newer generation"
     );
     assert_eq!(manager.terminal_snapshots(), vec![second_terminal.clone()]);
-    assert!(
+    assert_eq!(
         manager
             .reconcile_terminal_snapshot(&second_terminal, || Ok::<_, ()>(()))
-            .unwrap()
-            .is_some()
+            .unwrap(),
+        TerminalReconciliationOutcome::Reconciled(())
     );
 }
 
 #[test]
-fn terminal_reconciliation_serializes_same_key_restart_until_persistence_finishes() {
+fn blocked_terminal_reconciliation_refuses_same_key_but_keeps_unrelated_jobs_responsive() {
     let manager = JobManager::default();
     let key = key();
     let (terminal_tx, terminal_rx) = mpsc::channel();
@@ -792,12 +792,19 @@ fn terminal_reconciliation_serializes_same_key_restart_until_persistence_finishe
     });
     persistence_entered.wait();
 
-    let restart_manager = manager.clone();
-    let restart_key = key.clone();
-    let (restart_tx, restart_rx) = mpsc::channel();
-    let restart = thread::spawn(move || {
-        let result = restart_manager.start_job(
-            restart_key,
+    assert_eq!(
+        manager
+            .reconcile_terminal_snapshot(&terminal, || Ok::<_, ()>(()))
+            .expect("observe active exact claim"),
+        TerminalReconciliationOutcome::InProgress
+    );
+
+    let same_key_manager = manager.clone();
+    let same_key = key.clone();
+    let (same_key_tx, same_key_rx) = mpsc::channel();
+    let same_key_attempt = thread::spawn(move || {
+        let result = same_key_manager.start_job(
+            same_key,
             ["second"],
             |context| {
                 context
@@ -809,24 +816,153 @@ fn terminal_reconciliation_serializes_same_key_restart_until_persistence_finishe
             },
             |_| {},
         );
-        restart_tx.send(result.is_ok()).expect("restart result");
+        same_key_tx.send(result).expect("same-key result");
     });
-    assert!(
-        restart_rx.recv_timeout(Duration::from_millis(100)).is_err(),
-        "same-key restart must wait until the exact old outcome is persisted"
+    assert!(matches!(
+        same_key_rx
+            .recv_timeout(Duration::from_millis(250))
+            .expect("same-key attempt returns promptly"),
+        Err(JobManagerError::TerminalReconciliationPending(_))
+    ));
+    same_key_attempt.join().expect("same-key attempt thread");
+
+    let unrelated_key = JobKey::new("case-2", "scan-run-2").expect("unrelated key");
+    let (unrelated_terminal_tx, unrelated_terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            unrelated_key,
+            ["unrelated"],
+            |context| {
+                context
+                    .engine("unrelated")
+                    .expect("unrelated engine")
+                    .mark_completed()
+                    .expect("complete unrelated job");
+                JobCompletion::Completed
+            },
+            move |snapshot| {
+                unrelated_terminal_tx
+                    .send(snapshot)
+                    .expect("unrelated terminal")
+            },
+        )
+        .expect("unrelated job admission stays responsive");
+    unrelated_terminal_rx
+        .recv_timeout(Duration::from_millis(250))
+        .expect("unrelated worker stays responsive");
+    assert_eq!(
+        manager.snapshot(&key),
+        Some(terminal.clone()),
+        "the exact terminal generation remains retained during reconciliation"
     );
 
     persistence_release.wait();
     assert_eq!(
         reconciliation.join().expect("reconciliation thread"),
-        Some(())
+        TerminalReconciliationOutcome::Reconciled(())
     );
-    assert!(
-        restart_rx
+
+    manager
+        .start_job(
+            key,
+            ["after-ack"],
+            |context| {
+                context
+                    .engine("after-ack")
+                    .expect("engine")
+                    .mark_completed()
+                    .expect("complete");
+                JobCompletion::Completed
+            },
+            |_| {},
+        )
+        .expect("explicit same-key retry is admitted after acknowledgement");
+}
+
+#[test]
+fn retained_terminal_generation_is_not_a_live_cancellation_target() {
+    let manager = JobManager::default();
+    let key = key();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["engine"],
+            |context| {
+                context
+                    .engine("engine")
+                    .expect("engine")
+                    .mark_completed()
+                    .expect("complete");
+                JobCompletion::Completed
+            },
+            move |terminal| terminal_tx.send(terminal).expect("terminal event"),
+        )
+        .expect("job starts");
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("terminal snapshot");
+
+    assert!(terminal.is_terminal());
+    assert_eq!(
+        manager.cancel(&key),
+        Err(JobManagerError::LiveJobNotFound(key.clone())),
+        "Cancel signals only a live worker"
+    );
+    assert_eq!(manager.snapshot(&key), Some(terminal.clone()));
+    assert_eq!(manager.terminal_snapshots(), vec![terminal]);
+}
+
+#[test]
+fn terminal_reconciliation_error_and_panic_release_the_exact_claim_for_retry() {
+    for panic_during_reconciliation in [false, true] {
+        let manager = JobManager::default();
+        let key = key();
+        let (terminal_tx, terminal_rx) = mpsc::channel();
+        manager
+            .start_job(
+                key,
+                ["engine"],
+                |context| {
+                    context
+                        .engine("engine")
+                        .expect("engine")
+                        .mark_completed()
+                        .expect("complete");
+                    JobCompletion::Completed
+                },
+                move |snapshot| terminal_tx.send(snapshot).expect("terminal"),
+            )
+            .expect("job starts");
+        let terminal = terminal_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("restart admitted after reconciliation")
-    );
-    restart.join().expect("restart thread");
+            .expect("terminal snapshot");
+
+        if panic_during_reconciliation {
+            let panic = std::panic::catch_unwind({
+                let manager = manager.clone();
+                let terminal = terminal.clone();
+                move || {
+                    let _ = manager.reconcile_terminal_snapshot(&terminal, || -> Result<(), ()> {
+                        panic!("injected reconciliation panic")
+                    });
+                }
+            });
+            assert!(panic.is_err());
+        } else {
+            assert_eq!(
+                manager.reconcile_terminal_snapshot(&terminal, || Err::<(), _>("write failed")),
+                Err("write failed")
+            );
+        }
+
+        assert_eq!(
+            manager
+                .reconcile_terminal_snapshot(&terminal, || Ok::<_, ()>(()))
+                .expect("claim can be retried"),
+            TerminalReconciliationOutcome::Reconciled(())
+        );
+    }
 }
 
 #[test]

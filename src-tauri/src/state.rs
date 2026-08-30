@@ -8,9 +8,12 @@ use crate::domain::RuntimeHealth;
 use crate::error::{AppError, AppResult};
 use crate::job_manager::JobManager;
 use crate::managed_network::{ManagedNetworkReconciliationSummary, ManagedNetworkRegistry};
-use crate::managed_runtime::{ManagedRuntimeManager, ManagedRuntimeSetupController};
+use crate::managed_runtime::{
+    ManagedRuntimeManager, ManagedRuntimeSetupController, ManagedRuntimeStatus,
+};
 use crate::process_lease::DataDirectoryExclusiveLease;
 use crate::registry::EngineRegistry;
+use crate::runtime_health_monitor::RuntimeHealthMonitor;
 use crate::source_authorization::SourceAuthorizationBindings;
 use crate::source_authorization::discovery::ProviderDiscoveryJobs;
 use crate::source_authorization::session::ProviderAuthorizationSessions;
@@ -31,6 +34,7 @@ pub struct AppState {
     signing_key_path: PathBuf,
     managed_runtime: Option<Arc<ManagedRuntimeManager>>,
     managed_runtime_setup: Arc<ManagedRuntimeSetupController>,
+    runtime_health: RuntimeHealthMonitor,
     process_lease: Option<DataDirectoryExclusiveLease>,
 }
 
@@ -54,6 +58,7 @@ impl AppState {
             signing_key_path,
             managed_runtime: None,
             managed_runtime_setup: Arc::new(ManagedRuntimeSetupController::default()),
+            runtime_health: RuntimeHealthMonitor::new(checking_runtime_health("none")),
             process_lease: None,
         }
     }
@@ -65,6 +70,8 @@ impl AppState {
 
     pub fn with_managed_runtime(mut self, manager: ManagedRuntimeManager) -> Self {
         self.managed_runtime = Some(Arc::new(manager));
+        self.runtime_health
+            .replace_cached(checking_runtime_health("managed_local"));
         self
     }
 
@@ -143,51 +150,31 @@ impl AppState {
     }
 
     pub fn runtime_health(&self) -> RuntimeHealth {
-        if let Some(manager) = &self.managed_runtime {
-            match manager.status() {
-                Ok(status) => {
-                    return RuntimeHealth {
-                        provider: status.provider,
-                        available: status.available,
-                        phase: status.phase.as_str().into(),
-                        version: Some(status.runtime_version),
-                        prerequisite: status.prerequisite,
-                        detail: status.detail,
-                    };
-                }
-                Err(error) => {
-                    return RuntimeHealth {
-                        provider: "managed_local".into(),
-                        available: false,
-                        phase: "error".into(),
-                        version: None,
-                        prerequisite: None,
-                        detail: error.to_string(),
-                    };
-                }
-            }
-        }
-        match ProcessContainerRuntime::detect().and_then(|runtime| {
-            use crate::container_runtime::ContainerRuntime as _;
-            runtime.preflight()
-        }) {
-            Ok(preflight) => RuntimeHealth {
-                provider: format!("{:?}", preflight.provider).to_ascii_lowercase(),
-                available: true,
-                phase: "running".into(),
-                version: Some(preflight.server_version),
-                prerequisite: None,
-                detail: "compatibility container service is available".into(),
-            },
-            Err(error) => RuntimeHealth {
-                provider: "none".into(),
-                available: false,
-                phase: "unavailable".into(),
-                version: None,
-                prerequisite: None,
-                detail: error.to_string(),
-            },
-        }
+        self.runtime_health.cached()
+    }
+
+    /// Starts at most one slow WSL/container-provider probe and returns
+    /// immediately. Shell snapshots and readiness reads consume only the last
+    /// completed observation so saved work never waits on provider commands.
+    pub fn request_runtime_health_refresh(&self) -> bool {
+        let managed_runtime = self.managed_runtime.clone();
+        self.runtime_health
+            .request_refresh(move || detect_runtime_health(managed_runtime.as_deref()))
+    }
+
+    pub fn invalidate_runtime_health(&self) {
+        self.runtime_health.invalidate();
+    }
+
+    pub fn record_managed_runtime_health(&self, status: &ManagedRuntimeStatus) {
+        self.runtime_health.record_observation(RuntimeHealth {
+            provider: status.provider.clone(),
+            available: status.available,
+            phase: status.phase.as_str().into(),
+            version: Some(status.runtime_version.clone()),
+            prerequisite: status.prerequisite.clone(),
+            detail: status.detail.clone(),
+        });
     }
 
     pub fn case_service(&self) -> CaseService<'_> {
@@ -275,6 +262,62 @@ impl AppState {
     pub fn reconcile_managed_networks(&self) -> AppResult<ManagedNetworkReconciliationSummary> {
         self.managed_network_registry()?
             .reconcile_all(chrono::Utc::now())
+    }
+}
+
+fn checking_runtime_health(provider: &str) -> RuntimeHealth {
+    RuntimeHealth {
+        provider: provider.into(),
+        available: false,
+        phase: "checking".into(),
+        version: None,
+        prerequisite: None,
+        detail: "Checking local scan-tool availability in the background.".into(),
+    }
+}
+
+fn detect_runtime_health(managed_runtime: Option<&ManagedRuntimeManager>) -> RuntimeHealth {
+    if let Some(manager) = managed_runtime {
+        return match manager.status() {
+            Ok(status) => RuntimeHealth {
+                provider: status.provider,
+                available: status.available,
+                phase: status.phase.as_str().into(),
+                version: Some(status.runtime_version),
+                prerequisite: status.prerequisite,
+                detail: status.detail,
+            },
+            Err(error) => RuntimeHealth {
+                provider: "managed_local".into(),
+                available: false,
+                phase: "error".into(),
+                version: None,
+                prerequisite: None,
+                detail: error.to_string(),
+            },
+        };
+    }
+
+    match ProcessContainerRuntime::detect().and_then(|runtime| {
+        use crate::container_runtime::ContainerRuntime as _;
+        runtime.preflight()
+    }) {
+        Ok(preflight) => RuntimeHealth {
+            provider: format!("{:?}", preflight.provider).to_ascii_lowercase(),
+            available: true,
+            phase: "running".into(),
+            version: Some(preflight.server_version),
+            prerequisite: None,
+            detail: "compatibility container service is available".into(),
+        },
+        Err(error) => RuntimeHealth {
+            provider: "none".into(),
+            available: false,
+            phase: "unavailable".into(),
+            version: None,
+            prerequisite: None,
+            detail: error.to_string(),
+        },
     }
 }
 

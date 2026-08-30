@@ -151,6 +151,16 @@ pub enum JobActivationOutcome<T, E> {
     Failed(E),
 }
 
+/// Exact retained-terminal reconciliation result. `InProgress` is distinct
+/// from `NotCurrent`: callers must not mutate or restart the durable run while
+/// another owner is reconciling that same terminal generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalReconciliationOutcome<T> {
+    Reconciled(T),
+    InProgress,
+    NotCurrent,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum JobManagerError {
     #[error("invalid {field}")]
@@ -441,25 +451,69 @@ impl JobManager {
     }
 
     /// Runs one persistence acknowledgement only while this exact retained
-    /// generation is still current. The manager lock serializes a delayed
-    /// callback with same-key restart planning, so an old worker cannot derive
-    /// a terminal report from a newer attempt's checkpoint.
+    /// generation is still current. The exact generation is claimed under the
+    /// manager lock, but the caller's persistence/reconciliation closure runs
+    /// after that lock is released. The retained terminal entry continues to
+    /// refuse same-key restarts while unrelated jobs remain responsive.
     pub fn reconcile_terminal_snapshot<T, E>(
         &self,
         acknowledged: &JobSnapshot,
         reconcile: impl FnOnce() -> Result<T, E>,
-    ) -> Result<Option<T>, E> {
+    ) -> Result<TerminalReconciliationOutcome<T>, E> {
+        let claim = match self.claim_terminal_reconciliation(acknowledged) {
+            TerminalReconciliationClaimOutcome::Claimed(claim) => claim,
+            TerminalReconciliationClaimOutcome::InProgress => {
+                return Ok(TerminalReconciliationOutcome::InProgress);
+            }
+            TerminalReconciliationClaimOutcome::NotCurrent => {
+                return Ok(TerminalReconciliationOutcome::NotCurrent);
+            }
+        };
+        let reconciled = reconcile()?;
+        if claim.acknowledge() {
+            Ok(TerminalReconciliationOutcome::Reconciled(reconciled))
+        } else {
+            Ok(TerminalReconciliationOutcome::NotCurrent)
+        }
+    }
+
+    fn claim_terminal_reconciliation(
+        &self,
+        acknowledged: &JobSnapshot,
+    ) -> TerminalReconciliationClaimOutcome {
         let mut state = lock(&self.inner.state);
         if !state
             .terminal
             .get(&acknowledged.key)
             .is_some_and(|snapshot| snapshot.generation == acknowledged.generation)
         {
-            return Ok(None);
+            return TerminalReconciliationClaimOutcome::NotCurrent;
         }
-        let reconciled = reconcile()?;
-        state.terminal.remove(&acknowledged.key);
-        Ok(Some(reconciled))
+        if state
+            .terminal_reconciliation_claims
+            .get(&acknowledged.key)
+            .is_some_and(|generation| *generation == acknowledged.generation)
+        {
+            return TerminalReconciliationClaimOutcome::InProgress;
+        }
+        if state
+            .terminal_reconciliation_claims
+            .contains_key(&acknowledged.key)
+        {
+            // A different claimed generation cannot normally coexist with the
+            // exact retained snapshot, but conservatively refuse mutation if
+            // process-local state was externally corrupted.
+            return TerminalReconciliationClaimOutcome::InProgress;
+        }
+        state
+            .terminal_reconciliation_claims
+            .insert(acknowledged.key.clone(), acknowledged.generation);
+        TerminalReconciliationClaimOutcome::Claimed(TerminalReconciliationClaim {
+            inner: Arc::clone(&self.inner),
+            key: acknowledged.key.clone(),
+            generation: acknowledged.generation,
+            active: true,
+        })
     }
 
     fn finalize_job(
@@ -675,7 +729,64 @@ struct ManagerInner {
 struct ManagerState {
     live: HashMap<JobKey, Arc<JobRecord>>,
     terminal: HashMap<JobKey, JobSnapshot>,
+    terminal_reconciliation_claims: HashMap<JobKey, u64>,
     next_generation: u64,
+}
+
+/// Process-local lease for one retained terminal generation. Dropping the
+/// lease after an error or panic releases only the matching claim and leaves
+/// the terminal snapshot available for a later retry.
+struct TerminalReconciliationClaim {
+    inner: Arc<ManagerInner>,
+    key: JobKey,
+    generation: u64,
+    active: bool,
+}
+
+enum TerminalReconciliationClaimOutcome {
+    Claimed(TerminalReconciliationClaim),
+    InProgress,
+    NotCurrent,
+}
+
+impl TerminalReconciliationClaim {
+    fn acknowledge(mut self) -> bool {
+        let mut state = lock(&self.inner.state);
+        let claim_is_current = state
+            .terminal_reconciliation_claims
+            .get(&self.key)
+            .is_some_and(|generation| *generation == self.generation);
+        if !claim_is_current {
+            self.active = false;
+            return false;
+        }
+        state.terminal_reconciliation_claims.remove(&self.key);
+        let terminal_is_current = state
+            .terminal
+            .get(&self.key)
+            .is_some_and(|snapshot| snapshot.generation == self.generation);
+        if terminal_is_current {
+            state.terminal.remove(&self.key);
+        }
+        self.active = false;
+        terminal_is_current
+    }
+}
+
+impl Drop for TerminalReconciliationClaim {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let mut state = lock(&self.inner.state);
+        if state
+            .terminal_reconciliation_claims
+            .get(&self.key)
+            .is_some_and(|generation| *generation == self.generation)
+        {
+            state.terminal_reconciliation_claims.remove(&self.key);
+        }
+    }
 }
 
 struct JobRecord {

@@ -7,8 +7,8 @@ use crate::bootstrap::executor::{
 use crate::bootstrap::{BootstrapPlan, BootstrapRequest, create_bootstrap_plan};
 use crate::case_service::{
     ArtifactDeletionResult, CaseDeletionResult, CaseExportFormat, DurableExecutionReport,
-    ExportPreview, FindingGroupRequest, FindingUngroupRequest, FindingWorkflowRequest,
-    InterruptedCleanupSuccess, LiveProviderDiscoveryOutcome, PersistedPreDispatchTaskOutcome,
+    ExactRuntimeCleanupSuccess, ExportPreview, FindingGroupRequest, FindingUngroupRequest,
+    FindingWorkflowRequest, LiveProviderDiscoveryOutcome, PersistedPreDispatchTaskOutcome,
     PersistedPreDispatchTransition, PersistedScanPreflightFailureReason, PlannedEngineExecution,
     ScanPlan, ScanPlanRequest, ScanReadiness, ScanReadinessBlocker, ScanReadinessNextStep,
     ScanReadinessState, ScopeApprovalRequest, SourceMutation,
@@ -28,7 +28,7 @@ use crate::gateway_release::managed_egress_gateway_spec;
 use crate::local_tcp_probe::DesktopHostTcpConnector;
 use crate::localhost_quick_scan::{
     execute_prepared_localhost_quick_scan, prepare_localhost_quick_scan,
-    reconcile_interrupted_localhost_quick_scan,
+    reconcile_interrupted_localhost_quick_scan, run_has_in_flight_localhost_quick_scan,
 };
 use crate::managed_network::{
     GatewayContainerSpec, ManagedNetworkCleanupOutcome, ManagedNetworkController,
@@ -63,7 +63,7 @@ use crate::{
     },
     job_manager::{
         EngineJobStatus, JobActivationOutcome, JobCompletion, JobContext, JobKey, JobManagerError,
-        JobSnapshot,
+        JobSnapshot, TerminalReconciliationOutcome,
     },
     orchestrator::{
         EngineExecutionRequest, ExecutionCheckpoint, ExecutionReport, ExecutionStage, Orchestrator,
@@ -130,6 +130,7 @@ pub async fn setup_managed_runtime(state: State<'_, AppState>) -> AppResult<Inte
         )
     })?;
     let worker_setup = state.managed_runtime_setup().clone();
+    state.invalidate_runtime_health();
     let status =
         match tauri::async_runtime::spawn_blocking(move || manager.setup(worker_setup.as_ref()))
             .await
@@ -140,6 +141,7 @@ pub async fn setup_managed_runtime(state: State<'_, AppState>) -> AppResult<Inte
                 return Err(AppError::Internal(message.into()));
             }
         };
+    state.record_managed_runtime_health(&status);
     if !status.available {
         return Err(AppError::Runtime(format!(
             "managed runtime setup ended in phase {}: {}",
@@ -175,31 +177,52 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct InterruptedResourceReconciliationSummary {
+pub(crate) struct RuntimeCleanupReconciliationSummary {
     pub reconciled: usize,
     pub pending: usize,
     pub details: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct InterruptedResourceObligation {
+struct ExactRuntimeCleanupObligation {
     case_id: String,
     run_id: String,
     engine_run: EngineRun,
     resume_token: String,
 }
 
-/// Reconciles only executions explicitly paused by restart recovery. Every
-/// container removal is bound to the checkpoint's exact runtime provenance,
-/// immutable runtime object ID, ownership labels, scope hash, and pinned image.
-/// A failure is durably retained as cleanup-pending instead of being reported
-/// as a successful cancellation.
+#[derive(Debug, Clone)]
+struct UntrustedRuntimeCleanupMarker {
+    case_id: String,
+    run_id: String,
+    engine_run_id: String,
+    problem: &'static str,
+}
+
+/// Reconciles product housekeeping after startup. Interrupted attempts and
+/// ordinary terminal partial results are selected independently; every
+/// removal is bound to exact durable identity. A failure remains pending and
+/// never turns into a successful scanner outcome.
 pub(crate) fn reconcile_interrupted_scan_resources(
     state: &AppState,
     exact_case_run: Option<(&str, &str)>,
-) -> AppResult<InterruptedResourceReconciliationSummary> {
+) -> AppResult<RuntimeCleanupReconciliationSummary> {
+    reconcile_interrupted_scan_resources_with(state, exact_case_run, |obligation| {
+        reconcile_exact_runtime_cleanup(state, obligation)
+    })
+}
+
+fn reconcile_interrupted_scan_resources_with<F>(
+    state: &AppState,
+    exact_case_run: Option<(&str, &str)>,
+    mut cleanup_exact: F,
+) -> AppResult<RuntimeCleanupReconciliationSummary>
+where
+    F: FnMut(&ExactRuntimeCleanupObligation) -> AppResult<(CleanupOutcome, usize)>,
+{
     let service = state.case_service();
-    let mut obligations = Vec::<InterruptedResourceObligation>::new();
+    let mut obligations = Vec::<ExactRuntimeCleanupObligation>::new();
+    let mut untrusted_markers = Vec::<UntrustedRuntimeCleanupMarker>::new();
     for summary in service.list_cases()? {
         if exact_case_run.is_some_and(|(case_id, _)| summary.id != case_id) {
             continue;
@@ -224,9 +247,46 @@ pub(crate) fn reconcile_interrupted_scan_resources(
                     continue;
                 }
                 let Some(resume_token) = engine_run.resume_token.clone() else {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem: "The saved interrupted cleanup checkpoint is missing.",
+                    });
                     continue;
                 };
-                obligations.push(InterruptedResourceObligation {
+                let Ok(checkpoint) = ExecutionCheckpoint::from_resume_token(&resume_token) else {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem: "The saved interrupted cleanup checkpoint could not be decoded.",
+                    });
+                    continue;
+                };
+                if checkpoint.case_id != case.id
+                    || checkpoint.scan_run_id != run.id
+                    || checkpoint.engine_run_id != engine_run.id
+                    || checkpoint.engine_id != engine_run.engine_id
+                {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem: "The saved interrupted cleanup checkpoint conflicts with its durable case, run, or engine identity.",
+                    });
+                    continue;
+                };
+                if let Some(problem) = untrusted_static_cleanup_proof(engine_run, &checkpoint) {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem,
+                    });
+                    continue;
+                }
+                obligations.push(ExactRuntimeCleanupObligation {
                     case_id: case.id.clone(),
                     run_id: run.id.clone(),
                     engine_run: engine_run.clone(),
@@ -236,15 +296,46 @@ pub(crate) fn reconcile_interrupted_scan_resources(
         }
     }
 
-    let mut summary = InterruptedResourceReconciliationSummary::default();
+    let mut summary = RuntimeCleanupReconciliationSummary::default();
+    for marker in untrusted_markers {
+        match state
+            .case_service()
+            .record_interrupted_cleanup_identity_unavailable(
+                &marker.case_id,
+                &marker.run_id,
+                &marker.engine_run_id,
+                marker.problem,
+            ) {
+            Ok(_) => {
+                summary.reconciled = summary.reconciled.saturating_add(1);
+                summary.details.push(bounded_text(
+                    &format!(
+                        "{} / {}: {} No runtime resource was changed or deleted.",
+                        marker.run_id, marker.engine_run_id, marker.problem
+                    ),
+                    2_000,
+                ));
+            }
+            Err(error) => {
+                summary.pending = summary.pending.saturating_add(1);
+                summary.details.push(bounded_text(
+                    &format!(
+                        "{} / {}: untrusted interrupted cleanup state could not be terminalized durably: {error}",
+                        marker.run_id, marker.engine_run_id
+                    ),
+                    2_000,
+                ));
+            }
+        }
+    }
     for obligation in obligations {
-        match reconcile_interrupted_obligation(state, &obligation) {
+        match cleanup_exact(&obligation) {
             Ok((cleanup, orphan_credentials_removed)) => {
                 match state.case_service().record_interrupted_cleanup_success(
                     &obligation.case_id,
                     &obligation.run_id,
                     &obligation.engine_run.id,
-                    InterruptedCleanupSuccess {
+                    ExactRuntimeCleanupSuccess {
                         expected_resume_token: obligation.resume_token.clone(),
                         cleanup,
                         orphan_credentials_removed,
@@ -258,6 +349,37 @@ pub(crate) fn reconcile_interrupted_scan_resources(
                         summary.details.push(bounded_text(
                             &format!(
                                 "{} / {}: cleanup succeeded but its durable record could not be updated: {error}",
+                                obligation.run_id, obligation.engine_run.id
+                            ),
+                            2_000,
+                        ));
+                    }
+                }
+            }
+            Err(AppError::NotAuthorized(problem)) => {
+                match state
+                    .case_service()
+                    .record_interrupted_cleanup_identity_unavailable(
+                        &obligation.case_id,
+                        &obligation.run_id,
+                        &obligation.engine_run.id,
+                        &format!("Exact interrupted cleanup was skipped: {problem}"),
+                    ) {
+                    Ok(_) => {
+                        summary.reconciled = summary.reconciled.saturating_add(1);
+                        summary.details.push(bounded_text(
+                            &format!(
+                                "{} / {}: exact ownership proof was unavailable; no runtime resource was changed or deleted",
+                                obligation.run_id, obligation.engine_run.id
+                            ),
+                            2_000,
+                        ));
+                    }
+                    Err(error) => {
+                        summary.pending = summary.pending.saturating_add(1);
+                        summary.details.push(bounded_text(
+                            &format!(
+                                "{} / {}: untrusted interrupted cleanup state could not be terminalized durably: {error}",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -294,12 +416,282 @@ pub(crate) fn reconcile_interrupted_scan_resources(
             }
         }
     }
+    let ordinary = reconcile_pending_scan_cleanup(state, exact_case_run)?;
+    summary.reconciled = summary.reconciled.saturating_add(ordinary.reconciled);
+    summary.pending = summary.pending.saturating_add(ordinary.pending);
+    summary.details.extend(ordinary.details);
     Ok(summary)
 }
 
-fn reconcile_interrupted_obligation(
+/// Collects only the ordinary terminal shape produced by a durable execution
+/// report whose scanner work ended but exact product-owned cleanup did not:
+/// partial + cleanup_pending + a matching decoded CleanupPending checkpoint.
+/// It never infers an object from a runtime/container name and never executes
+/// target-facing scanner work.
+fn reconcile_pending_scan_cleanup(
     state: &AppState,
-    obligation: &InterruptedResourceObligation,
+    exact_case_run: Option<(&str, &str)>,
+) -> AppResult<RuntimeCleanupReconciliationSummary> {
+    reconcile_pending_scan_cleanup_with(state, exact_case_run, |obligation| {
+        reconcile_exact_runtime_cleanup(state, obligation)
+    })
+}
+
+fn reconcile_pending_scan_cleanup_with<F>(
+    state: &AppState,
+    exact_case_run: Option<(&str, &str)>,
+    mut cleanup_exact: F,
+) -> AppResult<RuntimeCleanupReconciliationSummary>
+where
+    F: FnMut(&ExactRuntimeCleanupObligation) -> AppResult<(CleanupOutcome, usize)>,
+{
+    let service = state.case_service();
+    let mut obligations = Vec::<ExactRuntimeCleanupObligation>::new();
+    let mut untrusted_markers = Vec::<UntrustedRuntimeCleanupMarker>::new();
+    for case_summary in service.list_cases()? {
+        if exact_case_run.is_some_and(|(case_id, _)| case_summary.id != case_id) {
+            continue;
+        }
+        let case = service.show_case(&case_summary.id)?;
+        for run in &case.scan_runs {
+            if exact_case_run.is_some_and(|(_, run_id)| run.id != run_id) {
+                continue;
+            }
+            for engine_run in &run.engine_runs {
+                if engine_run.status != EngineRunStatus::PartiallyCompleted
+                    || engine_run.phase != "cleanup_pending"
+                {
+                    continue;
+                }
+                let Some(resume_token) = engine_run.resume_token.clone() else {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem: "The saved cleanup checkpoint is missing.",
+                    });
+                    continue;
+                };
+                let Ok(checkpoint) = ExecutionCheckpoint::from_resume_token(&resume_token) else {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem: "The saved cleanup checkpoint could not be decoded.",
+                    });
+                    continue;
+                };
+                if checkpoint.case_id != case.id
+                    || checkpoint.scan_run_id != run.id
+                    || checkpoint.engine_run_id != engine_run.id
+                    || checkpoint.engine_id != engine_run.engine_id
+                {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem: "The saved cleanup checkpoint conflicts with its durable case, run, or engine identity.",
+                    });
+                    continue;
+                }
+                if checkpoint.stage != ExecutionStage::CleanupPending
+                    || checkpoint.cleanup_completed
+                {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem: "The saved checkpoint does not describe an unfinished cleanup obligation.",
+                    });
+                    continue;
+                }
+                if let Some(problem) = untrusted_static_cleanup_proof(engine_run, &checkpoint) {
+                    untrusted_markers.push(UntrustedRuntimeCleanupMarker {
+                        case_id: case.id.clone(),
+                        run_id: run.id.clone(),
+                        engine_run_id: engine_run.id.clone(),
+                        problem,
+                    });
+                    continue;
+                }
+                obligations.push(ExactRuntimeCleanupObligation {
+                    case_id: case.id.clone(),
+                    run_id: run.id.clone(),
+                    engine_run: engine_run.clone(),
+                    resume_token,
+                });
+            }
+        }
+    }
+
+    let mut summary = RuntimeCleanupReconciliationSummary::default();
+    for marker in untrusted_markers {
+        match state.case_service().record_cleanup_identity_unavailable(
+            &marker.case_id,
+            &marker.run_id,
+            &marker.engine_run_id,
+            marker.problem,
+        ) {
+            Ok(_) => {
+                summary.reconciled = summary.reconciled.saturating_add(1);
+                summary.details.push(bounded_text(
+                    &format!(
+                        "{} / {}: {} No runtime resource was changed or deleted.",
+                        marker.run_id, marker.engine_run_id, marker.problem
+                    ),
+                    2_000,
+                ));
+            }
+            Err(error) => {
+                summary.pending = summary.pending.saturating_add(1);
+                summary.details.push(bounded_text(
+                    &format!(
+                        "{} / {}: untrusted cleanup state could not be terminalized durably: {error}",
+                        marker.run_id, marker.engine_run_id
+                    ),
+                    2_000,
+                ));
+            }
+        }
+    }
+    for obligation in obligations {
+        match cleanup_exact(&obligation) {
+            Ok((cleanup, orphan_credentials_removed)) => {
+                let result = ExactRuntimeCleanupSuccess {
+                    expected_resume_token: obligation.resume_token.clone(),
+                    cleanup,
+                    orphan_credentials_removed,
+                };
+                match state.case_service().record_cleanup_pending_success(
+                    &obligation.case_id,
+                    &obligation.run_id,
+                    &obligation.engine_run.id,
+                    result,
+                ) {
+                    Ok(_) => summary.reconciled = summary.reconciled.saturating_add(1),
+                    Err(error) => {
+                        summary.pending = summary.pending.saturating_add(1);
+                        summary.details.push(bounded_text(
+                            &format!(
+                                "{} / {}: exact cleanup succeeded but its durable state could not be updated: {error}",
+                                obligation.run_id, obligation.engine_run.id
+                            ),
+                            2_000,
+                        ));
+                    }
+                }
+            }
+            Err(AppError::NotAuthorized(problem)) => {
+                match state.case_service().record_cleanup_identity_unavailable(
+                    &obligation.case_id,
+                    &obligation.run_id,
+                    &obligation.engine_run.id,
+                    &format!("Exact runtime cleanup was skipped: {problem}"),
+                ) {
+                    Ok(_) => {
+                        summary.reconciled = summary.reconciled.saturating_add(1);
+                        summary.details.push(bounded_text(
+                            &format!(
+                                "{} / {}: exact ownership proof was unavailable; no runtime resource was changed or deleted",
+                                obligation.run_id, obligation.engine_run.id
+                            ),
+                            2_000,
+                        ));
+                    }
+                    Err(error) => {
+                        summary.pending = summary.pending.saturating_add(1);
+                        summary.details.push(bounded_text(
+                            &format!(
+                                "{} / {}: untrusted cleanup state could not be terminalized durably: {error}",
+                                obligation.run_id, obligation.engine_run.id
+                            ),
+                            2_000,
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                let explanation = bounded_text(
+                    &format!("Automatic exact runtime cleanup is still pending: {error}"),
+                    2_000,
+                );
+                let persisted = state.case_service().record_cleanup_pending_failure(
+                    &obligation.case_id,
+                    &obligation.run_id,
+                    &obligation.engine_run.id,
+                    &obligation.resume_token,
+                    &explanation,
+                );
+                summary.pending = summary.pending.saturating_add(1);
+                summary.details.push(bounded_text(
+                    &match persisted {
+                        Ok(_) => format!(
+                            "{} / {}: {explanation}",
+                            obligation.run_id, obligation.engine_run.id
+                        ),
+                        Err(record_error) => format!(
+                            "{} / {}: {explanation}; durable pending-state update also failed: {record_error}",
+                            obligation.run_id, obligation.engine_run.id
+                        ),
+                    },
+                    2_000,
+                ));
+            }
+        }
+    }
+    Ok(summary)
+}
+
+fn untrusted_static_cleanup_proof(
+    engine_run: &EngineRun,
+    checkpoint: &ExecutionCheckpoint,
+) -> Option<&'static str> {
+    let resource_free_plan = checkpoint.stage == ExecutionStage::Planned
+        && checkpoint.cleanup_completed
+        && checkpoint.container_name.is_none()
+        && checkpoint.managed_network.is_none()
+        && checkpoint.runtime_provider.is_none()
+        && checkpoint.runtime_command_provenance.is_none();
+    if resource_free_plan {
+        return None;
+    }
+    let (Some(repository), Some(digest)) = (
+        engine_run.image_repository.as_deref(),
+        engine_run.image_digest.as_deref(),
+    ) else {
+        return Some("The saved cleanup record has no complete pinned image identity.");
+    };
+    if PinnedImage::new(repository, digest).is_err() {
+        return Some("The saved cleanup record has an invalid pinned image identity.");
+    }
+    if checkpoint.scope_sha256.is_none() {
+        return Some("The saved cleanup record has no frozen scope identity.");
+    }
+    if checkpoint.runtime_provider.is_none() || checkpoint.runtime_command_provenance.is_none() {
+        return Some("The saved cleanup record has no exact runtime provenance.");
+    }
+    if let Some(container_name) = checkpoint.container_name.as_deref() {
+        let Ok(expected) = crate::container_runtime::planned_container_name(
+            &checkpoint.engine_id,
+            &checkpoint.engine_run_id,
+            checkpoint.attempt,
+        ) else {
+            return Some(
+                "The saved cleanup record has an invalid deterministic container identity.",
+            );
+        };
+        if expected != container_name {
+            return Some(
+                "The saved cleanup record conflicts with its deterministic container identity.",
+            );
+        }
+    }
+    None
+}
+
+fn reconcile_exact_runtime_cleanup(
+    state: &AppState,
+    obligation: &ExactRuntimeCleanupObligation,
 ) -> AppResult<(CleanupOutcome, usize)> {
     let checkpoint = ExecutionCheckpoint::from_resume_token(&obligation.resume_token)?;
     if checkpoint.case_id != obligation.case_id
@@ -308,7 +700,7 @@ fn reconcile_interrupted_obligation(
         || checkpoint.engine_id != obligation.engine_run.engine_id
     {
         return Err(AppError::NotAuthorized(
-            "interrupted checkpoint does not match its exact durable execution".into(),
+            "cleanup checkpoint does not match its exact durable execution".into(),
         ));
     }
 
@@ -337,18 +729,19 @@ fn reconcile_interrupted_obligation(
             .image_repository
             .as_deref()
             .ok_or_else(|| {
-                AppError::NotAuthorized(
-                    "interrupted engine run has no pinned image repository".into(),
-                )
+                AppError::NotAuthorized("cleanup execution has no pinned image repository".into())
             })?,
         obligation
             .engine_run
             .image_digest
             .as_deref()
             .ok_or_else(|| {
-                AppError::NotAuthorized("interrupted engine run has no image digest".into())
+                AppError::NotAuthorized("cleanup execution has no image digest".into())
             })?,
-    )?;
+    )
+    .map_err(|_| {
+        AppError::NotAuthorized("cleanup execution has an invalid pinned image identity".into())
+    })?;
     let owned = OwnedContainerCleanupRequest {
         case_id: obligation.case_id.clone(),
         scan_run_id: obligation.run_id.clone(),
@@ -356,7 +749,7 @@ fn reconcile_interrupted_obligation(
         engine_id: obligation.engine_run.engine_id.clone(),
         attempt: checkpoint.attempt,
         scope_sha256: checkpoint.scope_sha256.clone().ok_or_else(|| {
-            AppError::NotAuthorized("interrupted checkpoint has no frozen scope digest".into())
+            AppError::NotAuthorized("cleanup checkpoint has no frozen scope digest".into())
         })?,
         image,
     };
@@ -364,17 +757,17 @@ fn reconcile_interrupted_obligation(
         && owned.container_name()? != container_name
     {
         return Err(AppError::NotAuthorized(
-            "interrupted container name conflicts with its deterministic execution identity".into(),
+            "cleanup container name conflicts with its deterministic execution identity".into(),
         ));
     }
     let provider = checkpoint.runtime_provider.ok_or_else(|| {
-        AppError::NotAuthorized("interrupted checkpoint has no exact runtime provider".into())
+        AppError::NotAuthorized("cleanup checkpoint has no exact runtime provider".into())
     })?;
     let provenance = checkpoint
         .runtime_command_provenance
         .as_ref()
         .ok_or_else(|| {
-            AppError::NotAuthorized("interrupted checkpoint has no exact runtime provenance".into())
+            AppError::NotAuthorized("cleanup checkpoint has no exact runtime provenance".into())
         })?;
     let runtime = state.runtime_for_recorded_execution(provider, provenance)?;
     let container = match checkpoint.container_name.as_ref() {
@@ -398,8 +791,10 @@ fn reconcile_interrupted_obligation(
                 .managed_network_registry_with_context(runtime.command_context())?
                 .reconcile_identity(&owner, identity, Utc::now())
         })
-        .transpose()?;
-    let orphan_credentials_removed = cleanup_orphaned_credentials(state.artifact_root(), &owned)?;
+        .transpose()
+        .map_err(retryable_error_after_cleanup_started)?;
+    let orphan_credentials_removed = cleanup_orphaned_credentials(state.artifact_root(), &owned)
+        .map_err(retryable_error_after_cleanup_started)?;
     let detail = bounded_text(
         &match managed {
             Some(managed) => format!(
@@ -420,6 +815,15 @@ fn reconcile_interrupted_obligation(
         },
         orphan_credentials_removed,
     ))
+}
+
+fn retryable_error_after_cleanup_started(error: AppError) -> AppError {
+    match error {
+        AppError::NotAuthorized(message) => AppError::Runtime(format!(
+            "cleanup made bounded progress but a later ownership check could not finish: {message}"
+        )),
+        other => other,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -460,10 +864,13 @@ fn reconcile_retained_terminal_jobs(state: &AppState) -> RetainedTerminalReconci
         match state.jobs.reconcile_terminal_snapshot(&snapshot, || {
             persist_terminal_job_reconciliation(state, &snapshot.key, &snapshot)
         }) {
-            Ok(Some(_)) => {
+            Ok(TerminalReconciliationOutcome::Reconciled(_)) => {
                 summary.reconciled = summary.reconciled.saturating_add(1);
             }
-            Ok(None) => {}
+            Ok(TerminalReconciliationOutcome::InProgress) => {
+                summary.pending = summary.pending.saturating_add(1);
+            }
+            Ok(TerminalReconciliationOutcome::NotCurrent) => {}
             Err(error) => {
                 summary.pending = summary.pending.saturating_add(1);
                 tracing::warn!(
@@ -476,6 +883,70 @@ fn reconcile_retained_terminal_jobs(state: &AppState) -> RetainedTerminalReconci
         }
     }
     summary
+}
+
+/// Snapshot reads must never wait for container/provider cleanup. The exact
+/// generation claim in `JobManager` makes overlapping poll-triggered tasks
+/// harmless while retaining same-process eventual convergence.
+fn schedule_retained_terminal_reconciliation(app: &AppHandle) {
+    let background_app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let state = background_app.state::<AppState>();
+        let summary = reconcile_retained_terminal_jobs(&state);
+        if summary.reconciled > 0 || summary.pending > 0 {
+            tracing::info!(
+                reconciled = summary.reconciled,
+                pending = summary.pending,
+                "retained terminal scan outcomes were reconciled in the background"
+            );
+        }
+    });
+}
+
+/// Reconciles one exact retained terminal generation without making the UI
+/// wait for report persistence or product-owned runtime cleanup. A concurrent
+/// callback may already own the exact-generation claim; in that case this
+/// detached attempt simply observes `InProgress` and leaves durable truth to
+/// that owner.
+fn schedule_exact_terminal_reconciliation(app: &AppHandle, key: JobKey, snapshot: JobSnapshot) {
+    let background_app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = reconcile_terminal_job(&background_app, &key, &snapshot) {
+            tracing::warn!(
+                error = %error,
+                case_id = %key.case_id,
+                scan_run_id = %key.scan_run_id,
+                "exact retained terminal scan outcome is still waiting for durable reconciliation"
+            );
+        }
+    });
+}
+
+/// Retries exact product-owned cleanup for one durable run off the command
+/// path. The reconciler never repeats target-facing scanner work and its
+/// ownership rules preserve any resource whose exact identity is unavailable.
+fn schedule_exact_runtime_cleanup_reconciliation(app: &AppHandle, case_id: String, run_id: String) {
+    let background_app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let state = background_app.state::<AppState>();
+        match reconcile_interrupted_scan_resources(&state, Some((&case_id, &run_id))) {
+            Ok(summary) if summary.reconciled > 0 || summary.pending > 0 => tracing::info!(
+                reconciled = summary.reconciled,
+                pending = summary.pending,
+                details = ?summary.details,
+                case_id = %case_id,
+                scan_run_id = %run_id,
+                "exact scanner runtime cleanup was reconciled in the background"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                error = %error,
+                case_id = %case_id,
+                scan_run_id = %run_id,
+                "exact scanner runtime cleanup remains pending after a background retry"
+            ),
+        }
+    });
 }
 
 fn load_readable_desktop_cases(state: &AppState) -> AppResult<ReadableDesktopCases> {
@@ -524,15 +995,12 @@ fn load_readable_desktop_cases(state: &AppState) -> AppResult<ReadableDesktopCas
 }
 
 #[tauri::command]
-pub async fn get_app_snapshot(state: State<'_, AppState>) -> AppResult<DesktopAppSnapshot> {
-    let terminal_reconciliation = reconcile_retained_terminal_jobs(&state);
-    if terminal_reconciliation.reconciled > 0 || terminal_reconciliation.pending > 0 {
-        tracing::info!(
-            reconciled = terminal_reconciliation.reconciled,
-            pending = terminal_reconciliation.pending,
-            "retained terminal scan outcomes were reconciled during snapshot refresh"
-        );
-    }
+pub async fn get_app_snapshot(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<DesktopAppSnapshot> {
+    let _ = state.request_runtime_health_refresh();
+    schedule_retained_terminal_reconciliation(&app);
     let service = state.case_service();
     let readable = load_readable_desktop_cases(&state)?;
     let selected_case = readable.selected_case;
@@ -1124,6 +1592,7 @@ fn captured_resume_is_runtime_independent(execution: &PlannedEngineExecution) ->
 
 #[tauri::command]
 pub fn get_scan_readiness(case_id: String, state: State<'_, AppState>) -> AppResult<ScanReadiness> {
+    let _ = state.request_runtime_health_refresh();
     let service = state.case_service();
     let mut readiness = service.scan_readiness(&case_id)?;
     if !readiness.ready {
@@ -1138,10 +1607,12 @@ pub fn get_scan_readiness(case_id: String, state: State<'_, AppState>) -> AppRes
         block_scan_readiness(&mut readiness, blocker);
         return Ok(readiness);
     }
-    if !state.runtime_health().available {
-        block_scan_readiness(&mut readiness, DesktopExecutionBlocker::RuntimeUnavailable);
-        return Ok(readiness);
-    }
+    // Runtime health is a nonblocking, cached shell observation. In
+    // particular, the first observation is deliberately `checking` and must
+    // not turn an otherwise valid Start action into a gate. Execution first
+    // persists the requested work and then performs authoritative per-task
+    // runtime preparation; unavailable engines report an honest partial or
+    // failed outcome without erasing work that can still run.
     Ok(readiness)
 }
 
@@ -2778,6 +3249,72 @@ fn requested_or_latest_run(
         .ok_or_else(|| AppError::InvalidRequest("case has no scan run".into()))
 }
 
+fn durable_run_has_final_outcome(run: &ScanRun) -> bool {
+    run.is_terminal_no_checks()
+        || (!run.engine_runs.is_empty()
+            && run.engine_runs.iter().all(|engine_run| {
+                matches!(
+                    engine_run.status,
+                    EngineRunStatus::NotExecuted
+                        | EngineRunStatus::Completed
+                        | EngineRunStatus::PartiallyCompleted
+                        | EngineRunStatus::Failed
+                        | EngineRunStatus::Cancelled
+                )
+            }))
+}
+
+fn durable_run_needs_background_cleanup(run: &ScanRun) -> bool {
+    run.engine_runs.iter().any(|engine_run| {
+        matches!(
+            engine_run.phase.as_str(),
+            "cleanup_pending" | "interrupted_restart" | "interrupted_restart_cleanup_pending"
+        )
+    })
+}
+
+enum NoWorkerCancelAdmission {
+    LiveAppeared,
+    TerminalAppeared(JobSnapshot),
+    UnmanagedBoundedTask(AssessmentCase),
+    CleanupPending(AssessmentCase),
+    DurableFinal(AssessmentCase),
+    Cancelled(AssessmentCase),
+}
+
+fn signal_live_cancel_or_preserve_terminal(
+    app: &AppHandle,
+    state: &AppState,
+    key: &JobKey,
+) -> AppResult<AssessmentCase> {
+    match state.jobs.cancel(key) {
+        Ok(_) | Err(JobManagerError::CancellationPending(_)) => {}
+        Err(JobManagerError::LiveJobNotFound(_)) => {
+            // The worker crossed its terminal boundary after the caller's
+            // live snapshot. Never let a late Cancel overwrite that report or
+            // checkpoint. Reconcile the retained exact generation when it is
+            // still visible; otherwise its callback has already saved and
+            // acknowledged it.
+            if let Some(snapshot) = state.jobs.snapshot(key)
+                && snapshot.is_terminal()
+            {
+                schedule_exact_terminal_reconciliation(app, key.clone(), snapshot);
+            }
+        }
+        Err(error) => {
+            return Err(AppError::Runtime(format!(
+                "live scan cancellation could not be signalled: {error}"
+            )));
+        }
+    }
+    // The live worker owns stop, capture closure, credential zeroization,
+    // container removal, and managed-egress cleanup. Do not mark the durable
+    // run cancelled before that worker reports the real terminal result.
+    let case = state.case_service().show_case(&key.case_id)?;
+    let _ = emit(app, RUN_PROGRESS_EVENT, &case);
+    Ok(case)
+}
+
 #[tauri::command]
 pub fn pause_scan(
     case_id: String,
@@ -2808,10 +3345,23 @@ pub async fn resume_scan(
     app: AppHandle,
 ) -> AppResult<AssessmentCase> {
     let state = app.state::<AppState>();
+    let run_id = requested_or_latest_run(&state.case_service(), &case_id, run_id.as_deref())?;
+    let key = JobKey::new(case_id.clone(), run_id.clone())
+        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+
+    // Exact terminal persistence can include bounded provider cleanup. Keep
+    // that work detached from Resume: the retained generation itself prevents
+    // a same-key retry until its callback/background owner saves the report.
+    if let Some(snapshot) = state.jobs.snapshot(&key)
+        && snapshot.is_terminal()
+    {
+        schedule_exact_terminal_reconciliation(&app, key.clone(), snapshot);
+        let case = state.case_service().show_case(&case_id)?;
+        let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+        return Ok(case);
+    }
+
     state.jobs.coordinate_admission(|| {
-        let run_id = requested_or_latest_run(&state.case_service(), &case_id, run_id.as_deref())?;
-        let key = JobKey::new(case_id.clone(), run_id.clone())
-            .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
         if let Some(snapshot) = state.jobs.snapshot(&key) {
             if !snapshot.is_terminal() {
                 let service = state.case_service();
@@ -2826,10 +3376,14 @@ pub async fn resume_scan(
                 emit(&app, RUN_PROGRESS_EVENT, &case)?;
                 return Ok(case);
             }
-            // The terminal callback is best-effort and may still be waiting
-            // to persist. Reconcile the exact retained generation before a
-            // retry changes its checkpoint; this never reruns target work.
-            reconcile_terminal_job(&app, &key, &snapshot)?;
+            // The worker became terminal after the out-of-lock check. Keep
+            // its current durable truth and let the callback/background owner
+            // finish reconciliation; never queue a retry while the retained
+            // exact generation still closes same-key admission.
+            schedule_exact_terminal_reconciliation(&app, key.clone(), snapshot);
+            let case = state.case_service().show_case(&case_id)?;
+            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+            return Ok(case);
         }
         let plan = state
             .case_service()
@@ -2849,34 +3403,88 @@ pub fn cancel_scan(
     let run_id = requested_or_latest_run(&service, &case_id, run_id.as_deref())?;
     let key = JobKey::new(case_id.clone(), run_id.clone())
         .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
-    let live = state
-        .jobs
-        .snapshot(&key)
-        .is_some_and(|snapshot| !snapshot.is_terminal());
-    if live {
-        state.jobs.cancel(&key).map_err(|error| {
-            AppError::Runtime(format!(
-                "live scan cancellation could not be signalled: {error}"
-            ))
-        })?;
-        // The worker owns stop, capture closure, credential zeroization,
-        // container removal, and managed-egress cleanup. Do not mark the run
-        // cancelled before its durable terminal report proves those steps.
-        let case = service.show_case(&case_id)?;
-        emit(&app, RUN_PROGRESS_EVENT, &case)?;
-        return Ok(case);
+    match state.jobs.snapshot(&key) {
+        Some(snapshot) if snapshot.is_terminal() => {
+            // The worker has already produced the authoritative outcome. Its
+            // exact retained generation must be persisted before any user
+            // transition; scheduling that work also keeps cleanup off this
+            // latency-sensitive command path.
+            schedule_exact_terminal_reconciliation(&app, key, snapshot);
+            let case = service.show_case(&case_id)?;
+            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+            return Ok(case);
+        }
+        Some(_) => {
+            return signal_live_cancel_or_preserve_terminal(&app, &state, &key);
+        }
+        None => {}
     }
-    let reconciliation = reconcile_interrupted_scan_resources(&state, Some((&case_id, &run_id)))?;
-    if reconciliation.pending > 0 {
-        return Err(AppError::NotAvailable(format!(
-            "cancellation remains fail-closed because {} exact runtime cleanup obligation(s) are pending: {}",
-            reconciliation.pending,
-            reconciliation.details.join("; ")
-        )));
+
+    // A concurrent Resume/Start uses this same short admission boundary. The
+    // exact second snapshot prevents a local durable Cancel from racing a
+    // newly registered worker after the optimistic no-worker observation.
+    let admission = state.jobs.coordinate_admission(|| {
+        match state.jobs.snapshot(&key) {
+            Some(snapshot) if snapshot.is_terminal() => {
+                return Ok(NoWorkerCancelAdmission::TerminalAppeared(snapshot));
+            }
+            Some(_) => return Ok(NoWorkerCancelAdmission::LiveAppeared),
+            None => {}
+        }
+
+        let durable = service.show_case(&case_id)?;
+        let run = durable
+            .scan_runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
+        if run_has_in_flight_localhost_quick_scan(run) {
+            return Ok(NoWorkerCancelAdmission::UnmanagedBoundedTask(durable));
+        }
+        if durable_run_needs_background_cleanup(run) {
+            return Ok(NoWorkerCancelAdmission::CleanupPending(durable));
+        }
+        if durable_run_has_final_outcome(run) {
+            return Ok(NoWorkerCancelAdmission::DurableFinal(durable));
+        }
+
+        // A durable queued/paused run with no in-process worker and no exact
+        // cleanup obligation can be closed locally. This transition does not
+        // contact a target or mutate runtime resources.
+        service
+            .cancel_scan(&case_id, &run_id)
+            .map(NoWorkerCancelAdmission::Cancelled)
+    })?;
+
+    match admission {
+        NoWorkerCancelAdmission::LiveAppeared => {
+            signal_live_cancel_or_preserve_terminal(&app, &state, &key)
+        }
+        NoWorkerCancelAdmission::TerminalAppeared(snapshot) => {
+            schedule_exact_terminal_reconciliation(&app, key, snapshot);
+            let case = service.show_case(&case_id)?;
+            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+            Ok(case)
+        }
+        NoWorkerCancelAdmission::UnmanagedBoundedTask(case) => {
+            // This product-owned connector is bounded to three seconds but is
+            // not yet registered in JobManager. Preserve its queued/running
+            // truth instead of racing its observation with a false durable
+            // Cancel. The next integration batch moves it behind the same
+            // exact live-worker coordinator as catalog engines.
+            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+            Ok(case)
+        }
+        NoWorkerCancelAdmission::CleanupPending(case) => {
+            schedule_exact_runtime_cleanup_reconciliation(&app, case_id, run_id);
+            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+            Ok(case)
+        }
+        NoWorkerCancelAdmission::DurableFinal(case) | NoWorkerCancelAdmission::Cancelled(case) => {
+            let _ = emit(&app, RUN_FINISHED_EVENT, &case);
+            Ok(case)
+        }
     }
-    let case = service.cancel_scan(&case_id, &run_id)?;
-    emit(&app, RUN_FINISHED_EVENT, &case)?;
-    Ok(case)
 }
 
 #[tauri::command]
@@ -5159,17 +5767,28 @@ fn merge_reconciled_managed_cleanup(
     });
 }
 
+enum TerminalJobReconciliation {
+    Reconciled,
+    InProgress,
+    NotCurrent,
+}
+
 fn reconcile_terminal_job(
     app: &AppHandle,
     key: &JobKey,
     snapshot: &JobSnapshot,
-) -> AppResult<Option<AssessmentCase>> {
+) -> AppResult<TerminalJobReconciliation> {
     let state = app.state::<AppState>();
-    let Some(case) = state.jobs.reconcile_terminal_snapshot(snapshot, || {
+    let case = match state.jobs.reconcile_terminal_snapshot(snapshot, || {
         persist_terminal_job_reconciliation(&state, key, snapshot)
-    })?
-    else {
-        return Ok(None);
+    })? {
+        TerminalReconciliationOutcome::Reconciled(case) => case,
+        TerminalReconciliationOutcome::InProgress => {
+            return Ok(TerminalJobReconciliation::InProgress);
+        }
+        TerminalReconciliationOutcome::NotCurrent => {
+            return Ok(TerminalJobReconciliation::NotCurrent);
+        }
     };
     if let Err(error) = emit(app, RUN_FINISHED_EVENT, &case) {
         tracing::warn!(
@@ -5179,7 +5798,7 @@ fn reconcile_terminal_job(
             "terminal scan was persisted but its finished event was not emitted"
         );
     }
-    Ok(Some(case))
+    Ok(TerminalJobReconciliation::Reconciled)
 }
 
 fn persist_terminal_job_reconciliation(
@@ -5297,6 +5916,19 @@ fn persist_terminal_job_reconciliation(
             warnings: vec![],
         };
         service.apply_execution_report(&key.case_id, &report)?;
+    }
+    let cleanup = reconcile_pending_scan_cleanup(
+        state,
+        Some((key.case_id.as_str(), key.scan_run_id.as_str())),
+    )?;
+    if cleanup.reconciled > 0 || cleanup.pending > 0 {
+        tracing::info!(
+            reconciled = cleanup.reconciled,
+            pending = cleanup.pending,
+            case_id = %key.case_id,
+            scan_run_id = %key.scan_run_id,
+            "ordinary terminal runtime cleanup was reconciled after the scan worker stopped"
+        );
     }
     service.finalize_verification_if_terminal(&key.case_id, &key.scan_run_id)?;
     service.show_case(&key.case_id)
@@ -5954,6 +6586,70 @@ mod tests {
         (directory, state, case_id, plan.scan_run.id)
     }
 
+    fn ordinary_cleanup_pending_state() -> (tempfile::TempDir, AppState, Id, Id, Id) {
+        let (directory, state, case_id) = ready_repository_state();
+        let service = state.case_service();
+        let plan = service
+            .plan_scan(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        let run_id = plan.scan_run.id.clone();
+        let engine_run_id = plan.executable[0].engine_run_id.clone();
+        let mut stored = service.show_case(&case_id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == run_id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine| engine.id == engine_run_id)
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.stage = ExecutionStage::CleanupPending;
+        checkpoint.cleanup_completed = false;
+        checkpoint.container_name = Some(
+            crate::container_runtime::planned_container_name(
+                &checkpoint.engine_id,
+                &checkpoint.engine_run_id,
+                checkpoint.attempt,
+            )
+            .unwrap(),
+        );
+        checkpoint.scope_sha256 = Some("a".repeat(64));
+        checkpoint.runtime_provider = Some(RuntimeProvider::Podman);
+        checkpoint.runtime_command_provenance = Some(RuntimeCommandProvenance::Compatibility);
+        checkpoint.artifact_ids = vec!["retained-ordinary-evidence".into()];
+        checkpoint.last_error = Some("managed egress cleanup did not finish".into());
+        engine_run.status = EngineRunStatus::PartiallyCompleted;
+        engine_run.phase = "cleanup_pending".into();
+        engine_run.progress_percent = 95;
+        engine_run.finished_at = Some(Utc::now());
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine_run.raw_artifact_ids = checkpoint.artifact_ids.clone();
+        engine_run.cleanup_removed = Some(false);
+        engine_run.cleanup_detail = checkpoint.last_error.clone();
+        engine_run.error_code = Some("runtime_cleanup_pending".into());
+        engine_run.error_message = checkpoint.last_error.clone();
+        engine_run
+            .warnings
+            .push("scanner output was saved before cleanup stopped".into());
+        run.completed_at = Some(Utc::now());
+        stored.status = CaseStatus::NeedsAttention;
+        state
+            .storage
+            .save_case(&mut stored, "test.ordinary_cleanup_pending")
+            .unwrap();
+        (directory, state, case_id, run_id, engine_run_id)
+    }
+
     #[test]
     fn startup_recovery_terminalizes_a_resource_free_planned_checkpoint_once() {
         let (_directory, state, case_id, run_id) =
@@ -5994,27 +6690,445 @@ mod tests {
             interrupted_repository_state(ExecutionStage::Preflight);
         let first =
             reconcile_interrupted_scan_resources(&state, Some((&case_id, &run_id))).unwrap();
-        assert_eq!(first.reconciled, 0);
-        assert_eq!(first.pending, 1);
+        assert_eq!(first.reconciled, 1);
+        assert_eq!(first.pending, 0);
         let stored = state.case_service().show_case(&case_id).unwrap();
         assert_eq!(
             stored.scan_runs[0].engine_runs[0].phase,
-            "interrupted_restart_cleanup_pending"
+            "interrupted_restart_cleanup_identity_unavailable"
         );
         assert_eq!(
             stored.scan_runs[0].engine_runs[0].status,
             EngineRunStatus::Failed
         );
         assert!(stored.scan_runs[0].completed_at.is_some());
-        assert!(matches!(
-            state.case_service().plan_resume(&case_id, &run_id),
-            Err(AppError::NotAvailable(_))
-        ));
         assert_eq!(state.case_service().recover_interrupted_scans().unwrap(), 0);
         let retry =
             reconcile_interrupted_scan_resources(&state, Some((&case_id, &run_id))).unwrap();
         assert_eq!(retry.reconciled, 0);
-        assert_eq!(retry.pending, 1);
+        assert_eq!(retry.pending, 0);
+        state
+            .case_service()
+            .plan_scan(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .expect("untrusted preflight state must not block a new isolated scan");
+    }
+
+    #[test]
+    fn interrupted_cleanup_preserves_untrusted_markers_without_runtime_cleanup() {
+        enum UntrustedShape {
+            Missing,
+            Corrupt,
+            IdentityMismatch,
+        }
+
+        for shape in [
+            UntrustedShape::Missing,
+            UntrustedShape::Corrupt,
+            UntrustedShape::IdentityMismatch,
+        ] {
+            let (_directory, state, case_id, run_id) =
+                interrupted_repository_state(ExecutionStage::Preflight);
+            let mut stored = state.case_service().show_case(&case_id).unwrap();
+            let engine = &mut stored.scan_runs[0].engine_runs[0];
+            let engine_run_id = engine.id.clone();
+            match shape {
+                UntrustedShape::Missing => engine.resume_token = None,
+                UntrustedShape::Corrupt => {
+                    engine.resume_token = Some("{preserved-corrupt-interrupted-token".into())
+                }
+                UntrustedShape::IdentityMismatch => {
+                    let mut checkpoint = ExecutionCheckpoint::from_resume_token(
+                        engine.resume_token.as_deref().unwrap(),
+                    )
+                    .unwrap();
+                    checkpoint.engine_run_id = "different-engine-run".into();
+                    engine.resume_token = Some(checkpoint.resume_token().unwrap());
+                }
+            }
+            let preserved_token = engine.resume_token.clone();
+            let preserved_artifacts = engine.raw_artifact_ids.clone();
+            state
+                .storage
+                .save_case(&mut stored, "test.untrusted_interrupted_cleanup_marker")
+                .unwrap();
+
+            let mut cleanup_calls = 0_usize;
+            let summary = reconcile_interrupted_scan_resources_with(
+                &state,
+                Some((&case_id, &run_id)),
+                |_| -> AppResult<(CleanupOutcome, usize)> {
+                    cleanup_calls = cleanup_calls.saturating_add(1);
+                    panic!("untrusted interrupted marker must not invoke runtime cleanup")
+                },
+            )
+            .unwrap();
+            assert_eq!(cleanup_calls, 0);
+            assert_eq!(summary.reconciled, 1);
+            assert_eq!(summary.pending, 0);
+            assert!(
+                summary.details.iter().any(|detail| {
+                    detail.contains("No runtime resource was changed or deleted")
+                })
+            );
+
+            let after = state.case_service().show_case(&case_id).unwrap();
+            let engine = after.scan_runs[0]
+                .engine_runs
+                .iter()
+                .find(|engine| engine.id == engine_run_id)
+                .unwrap();
+            assert_eq!(engine.status, EngineRunStatus::Failed);
+            assert_eq!(
+                engine.phase,
+                "interrupted_restart_cleanup_identity_unavailable"
+            );
+            assert_eq!(
+                engine.error_code.as_deref(),
+                Some("runtime_cleanup_identity_unavailable")
+            );
+            assert_eq!(engine.resume_token, preserved_token);
+            assert_eq!(engine.raw_artifact_ids, preserved_artifacts);
+            assert_eq!(engine.cleanup_removed, Some(false));
+
+            let new_run = state
+                .case_service()
+                .plan_scan(
+                    &case_id,
+                    ScanPlanRequest {
+                        engine_ids: vec!["gitleaks".into()],
+                    },
+                )
+                .expect("untrusted old state must not block a new isolated scan");
+            assert_ne!(new_run.scan_run.id, run_id);
+        }
+    }
+
+    #[test]
+    fn ordinary_cleanup_reconciliation_preserves_partial_output_and_later_run_state() {
+        let (_directory, state, case_id, run_id, engine_run_id) = ordinary_cleanup_pending_state();
+        let later = state
+            .case_service()
+            .plan_scan(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .expect("start a later independent run");
+        let before = state.case_service().show_case(&case_id).unwrap();
+        let visible_status = before.status.clone();
+        let original = before
+            .scan_runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine| engine.id == engine_run_id)
+            .unwrap();
+        let retained_artifacts = original.raw_artifact_ids.clone();
+        let retained_warnings = original.warnings.clone();
+        let retained_findings = serde_json::to_value(&before.findings).unwrap();
+
+        let summary =
+            reconcile_pending_scan_cleanup_with(&state, Some((&case_id, &run_id)), |obligation| {
+                let checkpoint =
+                    ExecutionCheckpoint::from_resume_token(&obligation.resume_token).unwrap();
+                assert_eq!(checkpoint.case_id, case_id);
+                assert_eq!(checkpoint.scan_run_id, run_id);
+                assert_eq!(checkpoint.engine_run_id, engine_run_id);
+                assert_eq!(checkpoint.stage, ExecutionStage::CleanupPending);
+                assert!(!checkpoint.cleanup_completed);
+                Ok((
+                    CleanupOutcome {
+                        removed: true,
+                        detail: "removed only the exact product-owned runtime resources".into(),
+                    },
+                    0,
+                ))
+            })
+            .unwrap();
+        assert_eq!(summary.reconciled, 1);
+        assert_eq!(summary.pending, 0);
+
+        let after = state.case_service().show_case(&case_id).unwrap();
+        assert_eq!(after.status, visible_status);
+        assert_eq!(
+            serde_json::to_value(&after.findings).unwrap(),
+            retained_findings
+        );
+        let cleaned = after
+            .scan_runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine| engine.id == engine_run_id)
+            .unwrap();
+        assert_eq!(cleaned.status, EngineRunStatus::PartiallyCompleted);
+        assert_eq!(cleaned.phase, "cleanup_reconciled");
+        assert_eq!(cleaned.raw_artifact_ids, retained_artifacts);
+        assert_eq!(cleaned.warnings, retained_warnings);
+        assert_eq!(cleaned.cleanup_removed, Some(true));
+        let checkpoint =
+            ExecutionCheckpoint::from_resume_token(cleaned.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(checkpoint.stage, ExecutionStage::Failed);
+        assert!(checkpoint.cleanup_completed);
+        assert_eq!(checkpoint.artifact_ids, retained_artifacts);
+        assert!(checkpoint.managed_network.is_none());
+        assert!(
+            checkpoint
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("does not prove that the scanner completed")
+        );
+        let later_engine = after
+            .scan_runs
+            .iter()
+            .find(|run| run.id == later.scan_run.id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine| engine.id == later.executable[0].engine_run_id)
+            .unwrap();
+        assert_eq!(later_engine.status, EngineRunStatus::Queued);
+
+        let replay = reconcile_pending_scan_cleanup_with(
+            &state,
+            Some((&case_id, &run_id)),
+            |_| -> AppResult<(CleanupOutcome, usize)> {
+                panic!("a cleared cleanup obligation must not execute twice")
+            },
+        )
+        .unwrap();
+        assert_eq!(replay.reconciled, 0);
+        assert_eq!(replay.pending, 0);
+    }
+
+    #[test]
+    fn ordinary_cleanup_failure_remains_exact_pending_with_a_bounded_reason() {
+        let (_directory, state, case_id, run_id, engine_run_id) = ordinary_cleanup_pending_state();
+        let summary =
+            reconcile_pending_scan_cleanup_with(&state, Some((&case_id, &run_id)), |_| {
+                Err(AppError::Runtime(format!(
+                    "cleanup probe: {}",
+                    "x".repeat(3_000)
+                )))
+            })
+            .unwrap();
+        assert_eq!(summary.reconciled, 0);
+        assert_eq!(summary.pending, 1);
+
+        let stored = state.case_service().show_case(&case_id).unwrap();
+        let engine = stored
+            .scan_runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine| engine.id == engine_run_id)
+            .unwrap();
+        assert_eq!(engine.status, EngineRunStatus::PartiallyCompleted);
+        assert_eq!(engine.phase, "cleanup_pending");
+        assert_eq!(engine.cleanup_removed, Some(false));
+        let reason = engine.error_message.as_deref().unwrap();
+        assert!(reason.contains("Automatic exact runtime cleanup is still pending"));
+        assert!(reason.chars().count() <= 2_000);
+        let checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(checkpoint.stage, ExecutionStage::CleanupPending);
+        assert!(!checkpoint.cleanup_completed);
+        assert_eq!(checkpoint.last_error.as_deref(), Some(reason));
+    }
+
+    #[test]
+    fn ordinary_cleanup_collector_ignores_non_partial_status() {
+        let (_directory, state, case_id, run_id, engine_run_id) = ordinary_cleanup_pending_state();
+        let mut stored = state.case_service().show_case(&case_id).unwrap();
+        let engine = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == run_id)
+            .unwrap()
+            .engine_runs
+            .iter_mut()
+            .find(|engine| engine.id == engine_run_id)
+            .unwrap();
+        engine.status = EngineRunStatus::Failed;
+        state
+            .storage
+            .save_case(&mut stored, "test.non_partial_cleanup_shape")
+            .unwrap();
+        let rejected_status = reconcile_pending_scan_cleanup_with(
+            &state,
+            Some((&case_id, &run_id)),
+            |_| -> AppResult<(CleanupOutcome, usize)> { panic!("non-partial status was accepted") },
+        )
+        .unwrap();
+        assert_eq!(rejected_status.reconciled, 0);
+        assert_eq!(rejected_status.pending, 0);
+    }
+
+    #[test]
+    fn ordinary_cleanup_collector_preserves_untrusted_markers_without_runtime_cleanup() {
+        #[derive(Clone, Copy)]
+        enum UntrustedShape {
+            Missing,
+            Corrupt,
+            IdentityMismatch,
+            WrongStage,
+            MissingImage,
+            MissingScope,
+            OwnershipLabelMismatch,
+        }
+
+        for shape in [
+            UntrustedShape::Missing,
+            UntrustedShape::Corrupt,
+            UntrustedShape::IdentityMismatch,
+            UntrustedShape::WrongStage,
+            UntrustedShape::MissingImage,
+            UntrustedShape::MissingScope,
+            UntrustedShape::OwnershipLabelMismatch,
+        ] {
+            let (_directory, state, case_id, run_id, engine_run_id) =
+                ordinary_cleanup_pending_state();
+            let mut stored = state.case_service().show_case(&case_id).unwrap();
+            let engine = stored
+                .scan_runs
+                .iter_mut()
+                .find(|run| run.id == run_id)
+                .unwrap()
+                .engine_runs
+                .iter_mut()
+                .find(|engine| engine.id == engine_run_id)
+                .unwrap();
+            let original_artifacts = engine.raw_artifact_ids.clone();
+            let original_warning = engine.warnings[0].clone();
+            match shape {
+                UntrustedShape::Missing => engine.resume_token = None,
+                UntrustedShape::Corrupt => {
+                    engine.resume_token = Some("{preserved-corrupt-checkpoint".into())
+                }
+                UntrustedShape::IdentityMismatch => {
+                    let mut checkpoint = ExecutionCheckpoint::from_resume_token(
+                        engine.resume_token.as_deref().unwrap(),
+                    )
+                    .unwrap();
+                    checkpoint.case_id = "different-case".into();
+                    engine.resume_token = Some(checkpoint.resume_token().unwrap());
+                }
+                UntrustedShape::WrongStage => {
+                    let mut checkpoint = ExecutionCheckpoint::from_resume_token(
+                        engine.resume_token.as_deref().unwrap(),
+                    )
+                    .unwrap();
+                    checkpoint.stage = ExecutionStage::Failed;
+                    engine.resume_token = Some(checkpoint.resume_token().unwrap());
+                }
+                UntrustedShape::MissingImage => engine.image_digest = None,
+                UntrustedShape::MissingScope => {
+                    let mut checkpoint = ExecutionCheckpoint::from_resume_token(
+                        engine.resume_token.as_deref().unwrap(),
+                    )
+                    .unwrap();
+                    checkpoint.scope_sha256 = None;
+                    engine.resume_token = Some(checkpoint.resume_token().unwrap());
+                }
+                UntrustedShape::OwnershipLabelMismatch => {}
+            }
+            let preserved_token = engine.resume_token.clone();
+            state
+                .storage
+                .save_case(&mut stored, "test.untrusted_cleanup_marker")
+                .unwrap();
+
+            let mut cleanup_calls = 0_usize;
+            let ownership_label_mismatch = matches!(shape, UntrustedShape::OwnershipLabelMismatch);
+            let summary = reconcile_pending_scan_cleanup_with(
+                &state,
+                Some((&case_id, &run_id)),
+                |_| -> AppResult<(CleanupOutcome, usize)> {
+                    cleanup_calls = cleanup_calls.saturating_add(1);
+                    if ownership_label_mismatch {
+                        return Err(AppError::NotAuthorized(
+                            "container ownership labels do not match the exact execution".into(),
+                        ));
+                    }
+                    panic!("untrusted marker must not invoke runtime cleanup")
+                },
+            )
+            .unwrap();
+            assert_eq!(cleanup_calls, if ownership_label_mismatch { 1 } else { 0 });
+            assert_eq!(summary.reconciled, 1);
+            assert_eq!(summary.pending, 0);
+            assert!(
+                summary
+                    .details
+                    .iter()
+                    .any(|detail| detail.contains("No runtime resource was changed or deleted"))
+            );
+
+            let after = state.case_service().show_case(&case_id).unwrap();
+            let engine = after
+                .scan_runs
+                .iter()
+                .find(|run| run.id == run_id)
+                .unwrap()
+                .engine_runs
+                .iter()
+                .find(|engine| engine.id == engine_run_id)
+                .unwrap();
+            assert_eq!(engine.status, EngineRunStatus::PartiallyCompleted);
+            assert_eq!(engine.phase, "cleanup_identity_unavailable");
+            assert_eq!(
+                engine.error_code.as_deref(),
+                Some("runtime_cleanup_identity_unavailable")
+            );
+            assert_eq!(engine.cleanup_removed, Some(false));
+            assert_eq!(engine.resume_token, preserved_token);
+            assert_eq!(engine.raw_artifact_ids, original_artifacts);
+            assert!(engine.warnings.contains(&original_warning));
+            assert!(
+                engine
+                    .error_message
+                    .as_deref()
+                    .unwrap()
+                    .contains("new isolated scan can still be started")
+            );
+
+            let new_run = state
+                .case_service()
+                .plan_scan(
+                    &case_id,
+                    ScanPlanRequest {
+                        engine_ids: vec!["gitleaks".into()],
+                    },
+                )
+                .expect("untrusted cleanup proof must not block a new isolated scan");
+            assert_ne!(new_run.scan_run.id, run_id);
+
+            let replay = reconcile_pending_scan_cleanup_with(
+                &state,
+                Some((&case_id, &run_id)),
+                |_| -> AppResult<(CleanupOutcome, usize)> {
+                    panic!("terminalized untrusted marker must not run again")
+                },
+            )
+            .unwrap();
+            assert_eq!(replay.reconciled, 0);
+            assert_eq!(replay.pending, 0);
+        }
     }
 
     #[test]

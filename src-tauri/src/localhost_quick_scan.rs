@@ -46,6 +46,21 @@ pub struct PreparedLocalhostQuickScanResult {
     pub prepared: PreparedLocalhostQuickScan,
 }
 
+/// Until the bounded localhost connector participates in `JobManager`, its
+/// durable task shape is the exact guard that prevents a concurrent generic
+/// Cancel command from overwriting the connector's eventual observation.
+pub fn run_has_in_flight_localhost_quick_scan(run: &ScanRun) -> bool {
+    run.engine_runs.iter().any(|engine_run| {
+        matches!(
+            engine_run.task_kind,
+            EngineTaskKind::BuiltInLocalhostTcp { .. }
+        ) && matches!(
+            engine_run.status,
+            EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Running
+        )
+    })
+}
+
 /// Create and select a complete minimal case, including its exact task and
 /// permission snapshot. This function never contacts the target.
 pub fn prepare_localhost_quick_scan(
@@ -533,13 +548,15 @@ fn exact_prepared_task_mut<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::case_service::CaseService;
     use crate::coverage::compute_coverage_ledger;
     use crate::domain::CoverageStatus;
     use crate::local_tcp_probe::LOCAL_TCP_CONNECT_TIMEOUT;
     use crate::storage::SaveCaseFault;
     use std::io;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::thread;
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -568,6 +585,19 @@ mod tests {
                 Ok(()) => Ok(()),
                 Err(error) => Err(io::Error::new(error.kind(), "test connector result")),
             }
+        }
+    }
+
+    struct BlockingConnector {
+        entered: Arc<Barrier>,
+        release: Arc<Barrier>,
+    }
+
+    impl LocalTcpConnector for BlockingConnector {
+        fn connect(&self, _endpoint: SocketAddr, _timeout: std::time::Duration) -> io::Result<()> {
+            self.entered.wait();
+            self.release.wait();
+            Ok(())
         }
     }
 
@@ -613,6 +643,76 @@ mod tests {
         assert_eq!(
             storage.selected_case_id().expect("selected"),
             Some(persisted.id)
+        );
+    }
+
+    #[test]
+    fn in_flight_guard_covers_the_exact_queued_and_running_connector_window() {
+        let (directory, storage) = storage();
+        let storage = Arc::new(storage);
+        let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("prepare")
+            .prepared;
+        let queued = storage.get_case(&prepared.case_id).expect("queued case");
+        assert!(run_has_in_flight_localhost_quick_scan(&queued.scan_runs[0]));
+
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let worker_storage = Arc::clone(&storage);
+        let worker_prepared = prepared.clone();
+        let worker_entered = Arc::clone(&entered);
+        let worker_release = Arc::clone(&release);
+        let worker = thread::spawn(move || {
+            execute_prepared_localhost_quick_scan(
+                &worker_storage,
+                &[],
+                &worker_prepared,
+                &BlockingConnector {
+                    entered: worker_entered,
+                    release: worker_release,
+                },
+            )
+            .expect("execute")
+        });
+
+        entered.wait();
+        let running = storage.get_case(&prepared.case_id).expect("running case");
+        assert_eq!(
+            running.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Running
+        );
+        assert!(run_has_in_flight_localhost_quick_scan(
+            &running.scan_runs[0]
+        ));
+        let engines = crate::registry::EngineRegistry::load_builtin().expect("engine registry");
+        let adapters = crate::adapters::builtin_adapter_registry().expect("adapter registry");
+        let service = CaseService::new(
+            &storage,
+            &engines,
+            &adapters,
+            directory.path().join("artifacts"),
+            directory.path().join("signing.key"),
+        );
+        let cancel_error = service
+            .cancel_scan(&prepared.case_id, &prepared.scan_run_id)
+            .expect_err("generic cancel must not race the unmanaged connector");
+        assert!(matches!(cancel_error, AppError::NotAvailable(_)));
+        let preserved = storage
+            .get_case(&prepared.case_id)
+            .expect("preserved running case");
+        assert_eq!(
+            preserved.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Running
+        );
+
+        release.wait();
+        let completed = worker.join().expect("connector worker");
+        assert!(!run_has_in_flight_localhost_quick_scan(
+            &completed.scan_runs[0]
+        ));
+        assert_eq!(
+            completed.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Completed
         );
     }
 
