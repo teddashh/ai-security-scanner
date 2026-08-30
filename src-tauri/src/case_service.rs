@@ -14101,7 +14101,7 @@ mod tests {
     }
 
     #[test]
-    fn microsoft365_provider_engine_keeps_exactly_one_tenant_per_execution() {
+    fn microsoft365_provider_engine_keeps_exact_tenants_in_an_unavailable_outcome() {
         let fixture = Fixture::new();
         let case = fixture.create();
         let service = fixture.service();
@@ -14192,11 +14192,14 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(plan.executable.len(), 2);
-        assert!(
-            plan.executable
-                .iter()
-                .all(|execution| execution.assets.len() == 1)
+        assert!(plan.executable.is_empty());
+        assert_eq!(plan.not_executed.len(), 1);
+        let unavailable = &plan.not_executed[0];
+        assert_eq!(unavailable.engine_id, "scubagear");
+        assert_eq!(unavailable.reason_code, "engine_release_unavailable");
+        assert_eq!(
+            unavailable.asset_ids.iter().collect::<BTreeSet<_>>(),
+            tenant_asset_ids.iter().collect::<BTreeSet<_>>()
         );
     }
 
