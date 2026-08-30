@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 
-import { displaySafeTechnicalDetail } from "../technicalDetails";
 import type { ScannerSetupBlocker } from "../scanReadiness";
 import { resolveRuntimeSetupPresentation } from "../runtimeSetupPresentation";
 import type {
@@ -30,7 +29,6 @@ interface RuntimeSetupAssistantProps {
 interface RuntimeActionCopy {
   title: string;
   description: string;
-  steps: readonly string[];
 }
 
 interface RuntimeAssistantCopy {
@@ -49,13 +47,10 @@ interface RuntimeAssistantCopy {
   cancelledDescription: string;
   start: string;
   continue: string;
-  recheck: string;
   retry: string;
   starting: string;
   cancel: string;
   cancelling: string;
-  docs: string;
-  distributionDocs: string;
   technical: string;
   downloaded: string;
   resumed: string;
@@ -71,8 +66,6 @@ interface RuntimeAssistantCopy {
   actions: Record<ManagedRuntimeSetupNextAction, RuntimeActionCopy>;
 }
 
-const MICROSOFT_WSL_HELP = "https://learn.microsoft.com/windows/wsl/install";
-const MICROSOFT_WSL_DISTRIBUTION_HELP = "https://learn.microsoft.com/windows/wsl/basic-commands#export-a-distribution";
 const PRODUCT_RELEASES = "https://github.com/teddashh/ai-security-scanner/releases";
 
 const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
@@ -80,7 +73,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     eyebrow: "ONE QUICK SETUP",
     title: "Get your local scan tools ready",
     description:
-      "Click once and ai-security-scanner will check this computer and automatically prepare the local scan tools. If Windows needs one change, you will get one clear next step.",
+      "Click once and ai-security-scanner will automatically prepare the local scan tools. If one tool is unavailable, your workspace stays open and explains what was not checked.",
     readyTitle: "Your local scan tools are ready",
     readyDescription: "Choose what you want to scan and get started.",
     demoTitle: "Explore a scan with sample results",
@@ -88,18 +81,15 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     progressTitle: "Getting your scan tools ready",
     progressDescription: "We are downloading and setting up everything automatically. First-time setup may take a few minutes.",
     recoveryTitle: "Finishing a previous setup",
-    recoveryDescription: "We found scan-tool files left by an earlier setup. ai-security-scanner is saving a recovery copy, replacing that workspace, and continuing automatically.",
+    recoveryDescription: "ai-security-scanner is reconciling product-owned scan-tool files automatically. Your saved projects remain available while it finishes.",
     cancelledTitle: "Setup paused",
     cancelledDescription: "The download was kept on this computer. Continue when you are ready; your scan projects are unchanged.",
     start: "Set up automatically",
     continue: "Continue setup",
-    recheck: "I’m done — check again",
     retry: "Try setup again",
     starting: "Starting setup…",
     cancel: "Stop setup and keep the download",
     cancelling: "Stopping…",
-    docs: "Open Microsoft’s WSL setup",
-    distributionDocs: "Open Microsoft’s official WSL backup and removal guide",
     technical: "Technical details",
     downloaded: "downloaded",
     resumed: "Existing download reused",
@@ -140,55 +130,28 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     },
     actions: {
       install_wsl: {
-        title: "Set up WSL 2 once",
-        description: "WSL 2 is not ready on this PC yet. Follow Microsoft’s setup, then reopen ai-security-scanner; the scan tools will continue automatically.",
-        steps: [
-          "Open Microsoft’s official WSL setup.",
-          "Complete the Windows steps and restart only if Windows asks.",
-          "Reopen ai-security-scanner. It will check again and continue automatically.",
-        ],
+        title: "One local scan tool is unavailable",
+        description: "Automatic setup could not finish. Your saved scans are unchanged, and checks that do not need this tool remain available. Try automatic setup again.",
       },
       enable_wsl_optional_features: {
-        title: "Finish setting up WSL 2",
-        description: "Windows reports that WSL 2 is not ready. Follow Microsoft’s setup, then reopen ai-security-scanner; the scan tools will continue automatically.",
-        steps: [
-          "Open Microsoft’s official WSL setup.",
-          "Complete the Windows steps and restart only if Windows asks.",
-          "Reopen ai-security-scanner. It will check again and continue automatically.",
-        ],
+        title: "One local scan tool is unavailable",
+        description: "Automatic setup could not finish. Your saved scans are unchanged, and checks that do not need this tool remain available. Try automatic setup again.",
       },
       update_wsl: {
-        title: "Update WSL 2 once",
-        description: "This PC’s WSL version needs an update. Follow Microsoft’s setup, then return here; ai-security-scanner will continue automatically.",
-        steps: [
-          "Open Microsoft’s official WSL setup.",
-          "Complete the update and restart only if Windows asks.",
-          "Reopen ai-security-scanner. It will check again and continue automatically.",
-        ],
+        title: "One local scan tool is unavailable",
+        description: "Automatic setup could not finish. Your saved scans are unchanged, and checks that do not need this tool remain available. Try automatic setup again.",
       },
       restart_windows: {
-        title: "Restart Windows once",
-        description: "Windows has a pending WSL change. The scan tools can finish setup after the restart.",
-        steps: [
-          "Save your work and restart Windows.",
-          "Reopen ai-security-scanner.",
-          "Return here and check again.",
-        ],
+        title: "One local scan tool is unavailable right now",
+        description: "Windows requires a restart to finish its change. After Windows restarts, reopen ai-security-scanner and automatic setup will resume. Your saved scans are unchanged.",
       },
       retry_wsl_check: {
-        title: "Windows could not report the WSL status",
-        description: "No scan tool changes were made. Retry the check; if it still fails, use Microsoft's WSL troubleshooting instructions.",
-        steps: ["Close any Windows update or WSL setup window that is still running.", "Return here and check again."],
+        title: "One local scan tool is unavailable",
+        description: "The automatic check did not finish, and no saved scan was changed. Try automatic setup again; other available checks can still run.",
       },
       resolve_wsl_distribution_manually: {
-        title: "An old scan-tool workspace needs your decision",
-        description: "Windows still has a WSL workspace from an earlier setup. ai-security-scanner could not verify that it owns this workspace, so nothing was removed. Follow Microsoft’s official backup and removal process, then check again.",
-        steps: [
-          "Open Technical details below and note the exact distribution name.",
-          "Open Windows Terminal and run `wsl.exe --list --verbose` to confirm that exact name.",
-          "Use Microsoft’s official guide to back up the exact distribution if needed, then remove only that distribution.",
-          "Return here and check again.",
-        ],
+        title: "Older scan-tool data was preserved",
+        description: "The app could not confirm ownership of an older workspace, so it left that data untouched. This scan tool is unavailable in this session; saved scans remain usable.",
       },
     },
   },
@@ -196,7 +159,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     eyebrow: "快速設定一次即可",
     title: "準備本機掃描工具",
     description:
-      "按一下，ai-security-scanner 就會檢查這台電腦並自動準備本機掃描工具；如果 Windows 還差一項設定，你只會看到一個清楚的下一步。",
+      "按一下，ai-security-scanner 就會自動準備本機掃描工具。如果其中一項工具無法使用，工作畫面仍會保持開啟，並清楚說明哪些項目沒有檢查。",
     readyTitle: "本機掃描工具準備好了",
     readyDescription: "選擇你想掃描的項目，就能直接開始。",
     demoTitle: "先用範例結果看看掃描怎麼運作",
@@ -204,18 +167,15 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     progressTitle: "正在準備掃描工具",
     progressDescription: "系統會自動下載並完成設定；第一次可能需要幾分鐘。",
     recoveryTitle: "正在完成先前未完成的設定",
-    recoveryDescription: "程式找到上次設定留下的掃描工具工作區，會先保留一份復原備份，再換成乾淨的工作區並自動繼續。",
+    recoveryDescription: "程式正在自動整理可確認屬於本產品的掃描工具檔案；處理期間，已保存的專案仍可使用。",
     cancelledTitle: "設定已暫停",
     cancelledDescription: "下載進度已保留在這台電腦上。準備好時可繼續；你的掃描專案沒有變更。",
     start: "自動完成設定",
     continue: "繼續設定",
-    recheck: "我完成了，重新檢查",
     retry: "再試一次設定",
     starting: "正在開始設定…",
     cancel: "停止設定並保留下載進度",
     cancelling: "正在停止…",
-    docs: "開啟 Microsoft 的 WSL 設定",
-    distributionDocs: "開啟 Microsoft 官方 WSL 備份與移除說明",
     technical: "技術細節",
     downloaded: "已下載",
     resumed: "已沿用先前下載進度",
@@ -256,51 +216,28 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     },
     actions: {
       install_wsl: {
-        title: "設定一次 WSL 2",
-        description: "這台電腦的 WSL 2 尚未就緒。照著 Microsoft 的設定完成，再打開 ai-security-scanner，掃描工具就會自動接著準備。",
-        steps: [
-          "開啟 Microsoft 官方的 WSL 設定。",
-          "照著 Windows 的步驟完成；只有 Windows 要求時才重新開機。",
-          "重新打開 ai-security-scanner，程式會自動檢查並接著完成。",
-        ],
+        title: "一項本機掃描工具目前無法使用",
+        description: "自動設定未能完成。已保存的掃描沒有變更，不需要這項工具的檢查仍可使用；請再試一次自動設定。",
       },
       enable_wsl_optional_features: {
-        title: "完成 WSL 2 設定",
-        description: "Windows 顯示 WSL 2 尚未就緒。照著 Microsoft 的設定完成，再打開 ai-security-scanner，掃描工具就會自動接著準備。",
-        steps: [
-          "開啟 Microsoft 官方的 WSL 設定。",
-          "照著 Windows 的步驟完成；只有 Windows 要求時才重新開機。",
-          "重新打開 ai-security-scanner，程式會自動檢查並接著完成。",
-        ],
+        title: "一項本機掃描工具目前無法使用",
+        description: "自動設定未能完成。已保存的掃描沒有變更，不需要這項工具的檢查仍可使用；請再試一次自動設定。",
       },
       update_wsl: {
-        title: "更新一次 WSL 2",
-        description: "這台電腦的 WSL 版本需要更新。照著 Microsoft 的設定完成，再回到這裡，ai-security-scanner 就會自動接著準備。",
-        steps: [
-          "開啟 Microsoft 官方的 WSL 設定。",
-          "完成更新；只有 Windows 要求時才重新開機。",
-          "重新打開 ai-security-scanner，程式會自動檢查並接著完成。",
-        ],
+        title: "一項本機掃描工具目前無法使用",
+        description: "自動設定未能完成。已保存的掃描沒有變更，不需要這項工具的檢查仍可使用；請再試一次自動設定。",
       },
       restart_windows: {
-        title: "重新啟動 Windows 一次",
-        description: "Windows 還有尚未套用的 WSL 變更；重新開機後，掃描工具就能完成設定。",
-        steps: ["儲存目前工作並重新啟動 Windows。", "重新開啟 ai-security-scanner。", "回到這裡重新檢查。"],
+        title: "一項本機掃描工具目前暫時無法使用",
+        description: "Windows 必須重新啟動才能完成變更。Windows 重新啟動後，再開啟 ai-security-scanner，自動設定就會繼續；已保存的掃描沒有變更。",
       },
       retry_wsl_check: {
-        title: "Windows 暫時無法回報 WSL 狀態",
-        description: "這次沒有改動掃描工具。請重新檢查；如果仍失敗，再依 Microsoft 的 WSL 說明排除問題。",
-        steps: ["關閉仍在執行的 Windows Update 或 WSL 設定視窗。", "回到這裡重新檢查。"],
+        title: "一項本機掃描工具目前無法使用",
+        description: "自動檢查未能完成，而且沒有更動任何已保存的掃描。請再試一次自動設定；其他可用檢查仍可執行。",
       },
       resolve_wsl_distribution_manually: {
-        title: "請確認一個舊的掃描工具工作區",
-        description: "Windows 還留著先前設定建立的 WSL 工作區。ai-security-scanner 無法確認這個工作區屬於本產品，因此沒有移除任何內容。請依 Microsoft 官方流程備份並移除，再重新檢查。",
-        steps: [
-          "展開下方「技術細節」，記下完整的發行版名稱。",
-          "開啟 Windows 終端機，執行 `wsl.exe --list --verbose`，確認完全相同的名稱。",
-          "如需保留資料，請依 Microsoft 官方說明備份；再只移除這個發行版。",
-          "回到這裡重新檢查。",
-        ],
+        title: "舊的掃描工具資料已保留",
+        description: "程式無法確認舊工作區的歸屬，因此沒有更動其中資料。這個掃描工具目前無法使用；已保存的掃描仍可開啟。",
       },
     },
   },
@@ -308,13 +245,6 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
 
 const byteCount = (value: number, locale: RuntimeSetupLocale): string =>
   `${new Intl.NumberFormat(locale).format(value)} ${locale === "en" ? (value === 1 ? "byte" : "bytes") : "位元組"}`;
-
-const needsMicrosoftWslSetup = (
-  action: ManagedRuntimeSetupNextAction | undefined,
-): action is "install_wsl" | "enable_wsl_optional_features" | "update_wsl" =>
-  action === "install_wsl"
-  || action === "enable_wsl_optional_features"
-  || action === "update_wsl";
 
 export function RuntimeSetupAssistant({
   locale,
@@ -346,13 +276,12 @@ export function RuntimeSetupAssistant({
     setupCancelled,
   } = presentation;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
-  const showMicrosoftSetup = needsMicrosoftWslSetup(status?.nextAction);
-  const recoveryHelp = status?.nextAction === "resolve_wsl_distribution_manually"
-    ? { href: MICROSOFT_WSL_DISTRIBUTION_HELP, label: text.distributionDocs }
-    : status?.nextAction !== "restart_windows"
-      ? { href: MICROSOFT_WSL_HELP, label: text.docs }
-      : undefined;
-  const technicalDetail = displaySafeTechnicalDetail(status?.detail);
+  const preservedUnknownWorkspace = status?.nextAction === "resolve_wsl_distribution_manually";
+  const technicalDetail = setupFailed
+    ? preservedUnknownWorkspace
+      ? "older_workspace_ownership_unconfirmed"
+      : "local_scan_tool_unavailable"
+    : undefined;
   const progress = useMemo(() => {
     if (!status?.totalBytes || status.totalBytes <= 0) return undefined;
     return Math.min(status.receivedBytes, status.totalBytes);
@@ -441,19 +370,6 @@ export function RuntimeSetupAssistant({
         </div>
       )}
 
-      {setupFailed && nextAction && (
-        <div className="runtime-assistant__recovery">
-          <ol>
-            {nextAction.steps.map((step) => <li key={step}>{step}</li>)}
-          </ol>
-          {recoveryHelp && (
-            <a href={recoveryHelp.href} target="_blank" rel="noreferrer">
-              {recoveryHelp.label} <Icon name="external" size={14} />
-            </a>
-          )}
-        </div>
-      )}
-
       <div className="runtime-assistant__actions">
         {scannerIssue ? (
           <a
@@ -480,26 +396,12 @@ export function RuntimeSetupAssistant({
             <Icon name="close" size={16} />
             {status?.cancelRequested ? text.cancelling : text.cancel}
           </button>
-        ) : setupFailed && showMicrosoftSetup ? (
-          <>
-            <a
-              className="button button--primary"
-              href={MICROSOFT_WSL_HELP}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Icon name="external" size={17} />
-              {text.docs}
-            </a>
-            <button className="button button--secondary" type="button" disabled={busy} onClick={onSetup}>
-              <Icon name="refresh" size={17} />
-              {text.recheck}
-            </button>
-          </>
+        ) : setupFailed && preservedUnknownWorkspace ? (
+          null
         ) : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
-            {setupFailed ? (nextAction ? text.recheck : text.retry) : setupCancelled ? text.continue : text.start}
+            {setupFailed ? text.retry : setupCancelled ? text.continue : text.start}
           </button>
         )}
       </div>

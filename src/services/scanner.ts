@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -120,9 +120,31 @@ export interface ScannerEventEnvelope<T = unknown> {
   payload: T;
 }
 
-const hasTauriRuntime = (): boolean =>
+const packagedTauriPlatform = import.meta.env?.TAURI_ENV_PLATFORM?.trim();
+
+const hasLiveTauriBridge = (): boolean =>
   typeof window !== "undefined" &&
-  "__TAURI_INTERNALS__" in (window as Window & { __TAURI_INTERNALS__?: unknown });
+  typeof (window as Window & {
+    __TAURI_INTERNALS__?: { invoke?: unknown };
+  }).__TAURI_INTERNALS__?.invoke === "function";
+
+/**
+ * Demo data belongs only to the explicit browser-development surface. A
+ * packaged desktop build stays native even while its bridge is starting or
+ * unavailable, so a bridge failure can never silently change real projects
+ * into sample data.
+ */
+const isNativeSurface = (): boolean => Boolean(packagedTauriPlatform) || hasLiveTauriBridge();
+
+const invoke = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+  if (!hasLiveTauriBridge()) {
+    throw new Error(serviceText(
+      "The desktop service is not ready. No sample data was substituted. Keep the app open and try again.",
+      "桌面服務尚未就緒；程式沒有改用範例資料。請讓程式保持開啟並再試一次。",
+    ));
+  }
+  return tauriInvoke<T>(command, args);
+};
 
 const errorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
@@ -201,7 +223,7 @@ const actionResult = async (
   demoMessage: string,
   returnWorkspace = false,
 ): Promise<ServiceResult<ActionResponse>> => {
-  if (!hasTauriRuntime()) {
+  if (!isNativeSurface()) {
     return demoResult({ accepted: false, message: demoMessage });
   }
   try {
@@ -308,21 +330,17 @@ interface NativeCaseArtifactCleanupResult {
 }
 
 export const scannerService = {
-  isNative: hasTauriRuntime,
+  isNative: isNativeSurface,
 
   async getSnapshot(caseId?: string): Promise<ServiceResult<AppSnapshot>> {
-    if (!hasTauriRuntime()) return demoResult(getDemoSnapshot(caseId));
-    try {
-      const nativeSnapshot = await invoke<NativeAppSnapshot>(COMMANDS.getSnapshot);
-      const manifests = await getNativeManifests();
-      return nativeResult(adaptNativeSnapshot(nativeSnapshot, manifests));
-    } catch (error) {
-      return demoResult(getDemoSnapshot(caseId), errorMessage(error));
-    }
+    if (!isNativeSurface()) return demoResult(getDemoSnapshot(caseId));
+    const nativeSnapshot = await invoke<NativeAppSnapshot>(COMMANDS.getSnapshot);
+    const manifests = await getNativeManifests();
+    return nativeResult(adaptNativeSnapshot(nativeSnapshot, manifests));
   },
 
   async setupManagedRuntime(): Promise<ServiceResult<ActionResponse>> {
-    if (!hasTauriRuntime()) return demoResult({
+    if (!isNativeSurface()) return demoResult({
       accepted: false,
       message: serviceText(
         "Demo mode does not install or start a scan environment.",
@@ -338,19 +356,19 @@ export const scannerService = {
   },
 
   async getManagedRuntimeSetupStatus(): Promise<ServiceResult<ManagedRuntimeSetupStatus>> {
-    if (!hasTauriRuntime()) return demoResult(demoRuntimeSetupStatus());
+    if (!isNativeSurface()) return demoResult(demoRuntimeSetupStatus());
     const status = await invoke<NativeManagedRuntimeSetupStatus>(COMMANDS.getManagedRuntimeSetupStatus);
     return nativeResult(adaptManagedRuntimeSetupStatus(status));
   },
 
   async cancelManagedRuntimeSetup(): Promise<ServiceResult<ManagedRuntimeSetupStatus>> {
-    if (!hasTauriRuntime()) return demoResult(demoRuntimeSetupStatus());
+    if (!isNativeSurface()) return demoResult(demoRuntimeSetupStatus());
     const status = await invoke<NativeManagedRuntimeSetupStatus>(COMMANDS.cancelManagedRuntimeSetup);
     return nativeResult(adaptManagedRuntimeSetupStatus(status));
   },
 
   async createCase(input: CreateCaseInput): Promise<ServiceResult<AssessmentCase>> {
-    if (!hasTauriRuntime()) return demoResult(createStoredDemoCase(input));
+    if (!isNativeSurface()) return demoResult(createStoredDemoCase(input));
     const nativeCase = await invoke<NativeAssessmentCase>(COMMANDS.createCase, {
       request: {
         title: input.name,
@@ -382,7 +400,7 @@ export const scannerService = {
   },
 
   async selectCase(caseId: string): Promise<ServiceResult<CaseWorkspace>> {
-    if (!hasTauriRuntime()) return demoResult(getDemoWorkspace(caseId));
+    if (!isNativeSurface()) return demoResult(getDemoWorkspace(caseId));
     const nativeCase = await invoke<NativeAssessmentCase>(COMMANDS.selectCase, { caseId });
     const manifests = (await getNativeManifests()).map(adaptNativeManifest);
     return nativeResult(adaptNativeCase(nativeCase, manifests));
@@ -390,20 +408,16 @@ export const scannerService = {
 
   async listEngineManifests(): Promise<ServiceResult<EngineManifest[]>> {
     const demo = getDemoSnapshot().engineManifests;
-    if (!hasTauriRuntime()) return demoResult(demo);
-    try {
-      return nativeResult((await getNativeManifests()).map(adaptNativeManifest));
-    } catch (error) {
-      return demoResult(demo, errorMessage(error));
-    }
+    if (!isNativeSurface()) return demoResult(demo);
+    return nativeResult((await getNativeManifests()).map(adaptNativeManifest));
   },
 
   async detectLocalPrivateSubnets(): Promise<ServiceResult<LocalNetworkCandidateInventory>> {
     const fallback: LocalNetworkCandidateInventory = {
-      status: hasTauriRuntime() ? "unavailable" : "unsupported",
+      status: isNativeSurface() ? "unavailable" : "unsupported",
       candidates: [],
     };
-    if (!hasTauriRuntime()) return demoResult(fallback);
+    if (!isNativeSurface()) return demoResult(fallback);
     try {
       const inventory = await invoke<unknown>(COMMANDS.detectLocalPrivateSubnets);
       return nativeResult(adaptLocalNetworkCandidateInventory(inventory));
@@ -415,7 +429,7 @@ export const scannerService = {
   },
 
   async getScanReadiness(caseId: string): Promise<ServiceResult<ScanReadiness>> {
-    if (!hasTauriRuntime()) return demoResult({
+    if (!isNativeSurface()) return demoResult({
       caseId,
       checkedAt: new Date().toISOString(),
       ready: false,
@@ -436,19 +450,19 @@ export const scannerService = {
   async beginProviderAuthorization(
     request: BeginProviderAuthorizationInput,
   ): Promise<ServiceResult<ProviderAuthorizationPrompt>> {
-    if (!hasTauriRuntime()) throw new Error("Provider authorization requires the native app.");
+    if (!isNativeSurface()) throw new Error("Provider authorization requires the native app.");
     return nativeResult(await invoke<ProviderAuthorizationPrompt>(COMMANDS.beginProviderAuthorization, { request }));
   },
 
   async pollProviderAuthorization(
     sessionId: string,
   ): Promise<ServiceResult<ProviderAuthorizationProgress>> {
-    if (!hasTauriRuntime()) throw new Error("Provider authorization requires the native app.");
+    if (!isNativeSurface()) throw new Error("Provider authorization requires the native app.");
     return nativeResult(await invoke<ProviderAuthorizationProgress>(COMMANDS.pollProviderAuthorization, { sessionId }));
   },
 
   async cancelProviderAuthorization(sessionId: string): Promise<ServiceResult<boolean>> {
-    if (!hasTauriRuntime()) return demoResult(false);
+    if (!isNativeSurface()) return demoResult(false);
     return nativeResult(await invoke<boolean>(COMMANDS.cancelProviderAuthorization, { sessionId }));
   },
 
@@ -456,7 +470,7 @@ export const scannerService = {
     caseId: string,
     sourceId: string,
   ): Promise<ServiceResult<InstalledProviderAuthorization | null>> {
-    if (!hasTauriRuntime()) return demoResult(null);
+    if (!isNativeSurface()) return demoResult(null);
     return nativeResult(await invoke<InstalledProviderAuthorization | null>(COMMANDS.providerAuthorizationStatus, {
       caseId,
       sourceId,
@@ -467,7 +481,7 @@ export const scannerService = {
     caseId: string,
     sourceId: string,
   ): Promise<ServiceResult<Record<string, unknown>>> {
-    if (!hasTauriRuntime()) throw new Error("Provider authorization requires the native app.");
+    if (!isNativeSurface()) throw new Error("Provider authorization requires the native app.");
     return nativeResult(await invoke<Record<string, unknown>>(COMMANDS.revokeProviderAuthorization, {
       caseId,
       sourceId,
@@ -475,14 +489,14 @@ export const scannerService = {
   },
 
   async planProviderBootstrap(request: BootstrapRequest): Promise<ServiceResult<ProviderBootstrapPlan>> {
-    if (!hasTauriRuntime()) throw new Error("Provider bootstrap requires the native app.");
+    if (!isNativeSurface()) throw new Error("Provider bootstrap requires the native app.");
     return nativeResult(await invoke<ProviderBootstrapPlan>(COMMANDS.planProviderBootstrap, { request }));
   },
 
   async executeProviderBootstrap(
     input: ExecuteProviderBootstrapInput,
   ): Promise<ServiceResult<ProviderBootstrapInstalled>> {
-    if (!hasTauriRuntime()) throw new Error("Provider bootstrap requires the native app.");
+    if (!isNativeSurface()) throw new Error("Provider bootstrap requires the native app.");
     return nativeResult(await invoke<ProviderBootstrapInstalled>(COMMANDS.executeProviderBootstrap, { input }));
   },
 
@@ -491,7 +505,7 @@ export const scannerService = {
     operationId: string,
     operator: BootstrapOperatorConfig,
   ): Promise<ServiceResult<Record<string, unknown>>> {
-    if (!hasTauriRuntime()) throw new Error("Provider cleanup requires the native app.");
+    if (!isNativeSurface()) throw new Error("Provider cleanup requires the native app.");
     return nativeResult(await invoke<Record<string, unknown>>(COMMANDS.cleanupProviderBootstrap, {
       caseId,
       operationId,
@@ -502,7 +516,7 @@ export const scannerService = {
   async listProviderBootstrapCleanup(
     caseId: string,
   ): Promise<ServiceResult<BootstrapCleanupObligationSummary[]>> {
-    if (!hasTauriRuntime()) return demoResult([]);
+    if (!isNativeSurface()) return demoResult([]);
     return nativeResult(await invoke<BootstrapCleanupObligationSummary[]>(
       COMMANDS.listProviderBootstrapCleanup,
       { caseId },
@@ -519,7 +533,7 @@ export const scannerService = {
   },
 
   async cancelDiscovery(caseId: string): Promise<ServiceResult<boolean>> {
-    if (!hasTauriRuntime()) return demoResult(false, serviceText(
+    if (!isNativeSurface()) return demoResult(false, serviceText(
       "Demo mode has no real inventory work to cancel.",
       "展示模式沒有執行中的真實盤點工作。",
     ));
@@ -527,7 +541,7 @@ export const scannerService = {
   },
 
   async chooseSourceSnapshot(): Promise<string | null> {
-    if (!hasTauriRuntime()) return null;
+    if (!isNativeSurface()) return null;
     const selected = await open({
       title: serviceText("Choose a source JSON snapshot", "選擇一份來源 JSON 快照"),
       multiple: false,
@@ -553,7 +567,7 @@ export const scannerService = {
   },
 
   async chooseWorkspaceDirectory(): Promise<string | null> {
-    if (!hasTauriRuntime()) return null;
+    if (!isNativeSurface()) return null;
     const selected = await open({
       title: serviceText(
         "Choose the folder to copy into a read-only scan snapshot",
@@ -778,7 +792,7 @@ export const scannerService = {
   },
 
   async deleteCase(caseId: string, confirmation: string): Promise<ServiceResult<CaseDeletionResponse>> {
-    if (!hasTauriRuntime()) {
+    if (!isNativeSurface()) {
       return demoResult({
         accepted: false,
         message: serviceText(
@@ -833,7 +847,7 @@ export const scannerService = {
   },
 
   async deleteCaseArtifacts(input: CaseArtifactCleanupInput): Promise<ServiceResult<CaseArtifactCleanupResult>> {
-    if (!hasTauriRuntime()) {
+    if (!isNativeSurface()) {
       return demoResult({ removed: false, exactPath: input.exactPath, recoverable: false });
     }
     const response = await invoke<NativeCaseArtifactCleanupResult>(COMMANDS.deleteCaseArtifacts, { ...input });
@@ -854,7 +868,7 @@ export const scannerService = {
     input: ExportCaseInput,
     workspace: CaseWorkspace,
   ): Promise<ServiceResult<ExportPreview>> {
-    if (hasTauriRuntime()) {
+    if (isNativeSurface()) {
       const preview = await invoke<NativeExportPreview>(COMMANDS.previewExport, { input });
       return nativeResult(adaptNativeExportPreview(preview));
     }
@@ -903,7 +917,7 @@ export const scannerService = {
   },
 
   async exportCase(input: ExportCaseInput, workspace: CaseWorkspace): Promise<ServiceResult<CaseExport | null>> {
-    if (hasTauriRuntime()) {
+    if (isNativeSurface()) {
       const fileType = exportFileTypes[input.format];
       const safeName = workspace.case.name
         .normalize("NFKC")
@@ -929,7 +943,7 @@ export const scannerService = {
   },
 
   async verifyCaseExport(path: string): Promise<ServiceResult<CaseExportVerificationResult>> {
-    if (!hasTauriRuntime()) return demoResult({
+    if (!isNativeSurface()) return demoResult({
       outcome: "demo_unavailable",
       message: serviceText(
         "A demo file has no real local signature and cannot produce an integrity result.",
@@ -953,7 +967,7 @@ export const scannerService = {
   },
 
   async chooseCaseBundle(): Promise<string | null> {
-    if (!hasTauriRuntime()) return null;
+    if (!isNativeSurface()) return null;
     const selected = await open({
       title: serviceText(
         "Choose an ai-security-scanner case package to verify",
@@ -969,7 +983,7 @@ export const scannerService = {
   async subscribeScanWorkspace(
     handler: (workspace: CaseWorkspace, eventName: ScannerEventName) => void,
   ): Promise<UnlistenFn> {
-    if (!hasTauriRuntime()) return () => undefined;
+    if (!isNativeSurface()) return () => undefined;
     return subscribeBufferedEvents({
       eventNames: [EVENTS.runProgress, EVENTS.runFinished],
       loadContext: async () => (await getNativeManifests()).map(adaptNativeManifest),
@@ -987,7 +1001,7 @@ export const scannerService = {
     eventName: ScannerEventName,
     handler: (event: ScannerEventEnvelope) => void,
   ): Promise<UnlistenFn> {
-    if (!hasTauriRuntime()) return () => undefined;
+    if (!isNativeSurface()) return () => undefined;
     return listen<ScannerEventEnvelope>(eventName, (event) => handler(event.payload));
   },
 };

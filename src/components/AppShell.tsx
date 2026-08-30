@@ -65,7 +65,7 @@ const runtimeSetupDetailKeys = {
 } as const satisfies Record<ManagedRuntimeSetupPhase, TranslationKey>;
 
 const runtimeIssueKeys = {
-  wsl: "runtime.prerequisite.wsl",
+  wsl: "runtime.prerequisite.localSupport",
   virtualization: "runtime.prerequisite.virtualization",
   permission: "runtime.prerequisite.permission",
   network: "runtime.prerequisite.network",
@@ -74,12 +74,12 @@ const runtimeIssueKeys = {
 } as const satisfies Record<RuntimeIssue, TranslationKey>;
 
 const runtimeRecoveryKeys = {
-  install_wsl: "runtime.recovery.installWsl",
-  enable_wsl_optional_features: "runtime.recovery.enableWsl",
-  update_wsl: "runtime.recovery.updateWsl",
-  restart_windows: "runtime.recovery.restartWindows",
-  retry_wsl_check: "runtime.recovery.retryWsl",
-  resolve_wsl_distribution_manually: "runtime.recovery.resolveWslDistribution",
+  install_wsl: "runtime.recovery.retryAutomatic",
+  enable_wsl_optional_features: "runtime.recovery.retryAutomatic",
+  update_wsl: "runtime.recovery.retryAutomatic",
+  restart_windows: "runtime.recovery.windowsPending",
+  retry_wsl_check: "runtime.recovery.retryAutomatic",
+  resolve_wsl_distribution_manually: "runtime.recovery.preservedUnknown",
 } as const satisfies Record<ManagedRuntimeSetupNextAction, TranslationKey>;
 
 const casePhaseLabelKeys = {
@@ -103,16 +103,20 @@ interface AppShellProps {
   cases: AssessmentCase[];
   selectedCase?: AssessmentCase;
   loading?: boolean;
+  dataUnavailable?: boolean;
+  dataRetrying?: boolean;
+  onRetryData: () => void;
+  caseSelectionUnavailable?: boolean;
+  caseSelectionRetrying?: boolean;
+  onRetryCaseSelection: () => void;
   onNavigate: (page: PageId) => void;
   onSelectCase: (caseId: string) => void;
-  demoNotice?: string;
   appUpdate: AppUpdateState;
   onCheckForUpdate: () => void;
   onInstallUpdate: (version: string) => void;
   runtime?: AppSnapshot["runtime"];
   runtimeSetup?: ManagedRuntimeSetupStatus;
   runtimeBusy?: boolean;
-  onOpenRuntimeSetup: () => void;
   onSetupRuntime: () => void;
   onCancelRuntime: () => void;
 }
@@ -124,6 +128,12 @@ export function AppShell({
   cases,
   selectedCase,
   loading,
+  dataUnavailable,
+  dataRetrying,
+  onRetryData,
+  caseSelectionUnavailable,
+  caseSelectionRetrying,
+  onRetryCaseSelection,
   onNavigate,
   onSelectCase,
   appUpdate,
@@ -132,7 +142,6 @@ export function AppShell({
   runtime,
   runtimeSetup,
   runtimeBusy,
-  onOpenRuntimeSetup,
   onSetupRuntime,
   onCancelRuntime,
 }: AppShellProps) {
@@ -167,13 +176,9 @@ export function AppShell({
       ? "runtime.phase.failed.generic.detail"
       : runtimeSetupDetailKeys[displayedRuntimeSetupPhase]
     : undefined;
-  const needsManualWslRecovery = runtimeSetup?.nextAction === "resolve_wsl_distribution_manually";
+  const preservedUnknownWorkspace = runtimeSetup?.nextAction === "resolve_wsl_distribution_manually";
   const runtimeSetupAction: TranslationKey = runtimeSetup?.phase === "failed"
-    ? needsManualWslRecovery
-      ? "runtime.setup.reviewManualRecovery"
-      : runtimeSetup.nextAction
-        ? "runtime.setup.recheck"
-        : "runtime.setup.retry"
+    ? "runtime.setup.retry"
     : runtimeSetup?.phase === "cancelled"
       ? "runtime.setup.continue"
       : "runtime.setup.action";
@@ -328,14 +333,14 @@ export function AppShell({
                   <Icon name="progress" size={15} />
                   {t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase ?? "install"])}
                 </button>
-              ) : (
+              ) : preservedUnknownWorkspace ? null : (
                 <button
                   className="button button--small"
                   type="button"
                   disabled={runtimeBusy}
-                  onClick={needsManualWslRecovery ? onOpenRuntimeSetup : onSetupRuntime}
+                  onClick={onSetupRuntime}
                 >
-                  <Icon name={needsManualWslRecovery ? "arrow" : "progress"} size={15} />
+                  <Icon name="progress" size={15} />
                   {t(runtimeSetupAction)}
                 </button>
               )}
@@ -383,6 +388,46 @@ export function AppShell({
               <strong>{selectedCase?.isDemo ? t("shell.demo.selectedTitle") : t("shell.demo.title")}</strong>
               <span>{t("shell.demo.fallback")}</span>
             </div>
+          </div>
+        )}
+
+        {dataUnavailable && (
+          <div className="data-status-banner" role="alert">
+            <Icon name="warning" size={19} />
+            <div className="data-status-banner__copy">
+              <strong>{t("shell.data.refreshErrorTitle")}</strong>
+              <span>{t("shell.data.refreshErrorDetail")}</span>
+            </div>
+            <button
+              className="button button--small"
+              type="button"
+              disabled={dataRetrying}
+              aria-busy={dataRetrying || undefined}
+              onClick={onRetryData}
+            >
+              <Icon name="refresh" size={15} />
+              {t(dataRetrying ? "shell.data.retrying" : "shell.data.retry")}
+            </button>
+          </div>
+        )}
+
+        {caseSelectionUnavailable && (
+          <div className="data-status-banner" role="alert">
+            <Icon name="warning" size={19} />
+            <div className="data-status-banner__copy">
+              <strong>{t("shell.data.selectionErrorTitle")}</strong>
+              <span>{t("shell.data.selectionErrorDetail")}</span>
+            </div>
+            <button
+              className="button button--small"
+              type="button"
+              disabled={caseSelectionRetrying}
+              aria-busy={caseSelectionRetrying || undefined}
+              onClick={onRetryCaseSelection}
+            >
+              <Icon name="refresh" size={15} />
+              {t(caseSelectionRetrying ? "shell.data.retrying" : "shell.data.retry")}
+            </button>
           </div>
         )}
 

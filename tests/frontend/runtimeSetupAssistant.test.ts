@@ -25,46 +25,42 @@ const tauriSource = readFileSync(
   "utf8",
 );
 
-test("missing WSL gets one bilingual Microsoft setup path and one safe recheck", () => {
+test("backend prerequisite states stay inside one automatic, plain-language setup path", () => {
   for (const phrase of [
-    "Open Microsoft’s WSL setup",
-    "開啟 Microsoft 的 WSL 設定",
-    "I’m done — check again",
-    "我完成了，重新檢查",
-    "continue automatically",
-    "自動接著準備",
+    "One local scan tool is unavailable",
+    "Automatic setup could not finish",
+    "Try setup again",
+    "一項本機掃描工具目前無法使用",
+    "自動設定未能完成",
+    "再試一次設定",
   ]) assert.ok(source.includes(phrase), phrase);
 
-  assert.match(source, /href=\{MICROSOFT_WSL_HELP\}/u);
-  assert.match(source, /setupFailed && showMicrosoftSetup/u);
   assert.match(source, /onClick=\{onSetup\}/u);
+  for (const candidate of [source, shellSource]) {
+    assert.doesNotMatch(candidate, /learn\.microsoft\.com|Windows Terminal|wsl\.exe|distribution name|發行版名稱|Windows 終端機/u);
+    assert.doesNotMatch(candidate, /MICROSOFT_WSL_|needsMicrosoftWslSetup|showMicrosoftSetup|recoveryHelp|nextAction\.steps|text\.docs|text\.recheck/u);
+  }
 });
 
-test("an unproven WSL distribution keeps a bilingual official backup and removal fallback", () => {
+test("an unproven older workspace is preserved without a manual action or retry loop", () => {
   for (const phrase of [
-    "An old scan-tool workspace needs your decision",
-    "could not verify that it owns this workspace",
-    "Open Technical details below and note the exact distribution name.",
-    "Microsoft’s official backup and removal process",
-    "remove only that distribution",
-    "請確認一個舊的掃描工具工作區",
-    "無法確認這個工作區屬於本產品",
-    "記下完整的發行版名稱",
-    "Microsoft 官方流程備份並移除",
-    "再只移除這個發行版",
+    "Older scan-tool data was preserved",
+    "left that data untouched",
+    "This scan tool is unavailable in this session",
+    "舊的掃描工具資料已保留",
+    "沒有更動其中資料",
+    "這個掃描工具目前無法使用",
   ]) assert.ok(source.includes(phrase), phrase);
 
-  assert.doesNotMatch(source, /\brename\b|重新命名/iu);
-  assert.match(source, /resolve_wsl_distribution_manually/u);
-  assert.match(source, /MICROSOFT_WSL_DISTRIBUTION_HELP/u);
-  assert.match(source, /basic-commands#export-a-distribution/u);
-  assert.match(shellSource, /resolve_wsl_distribution_manually:\s*"runtime\.recovery\.resolveWslDistribution"/u);
-  assert.match(shellSource, /needsManualWslRecovery[\s\S]*onOpenRuntimeSetup/u);
-  assert.match(shellSource, /"runtime\.setup\.reviewManualRecovery"/u);
-  assert.match(appSource, /onOpenRuntimeSetup=\{\(\) => \{[\s\S]*setRuntimeSetupFocusKey[\s\S]*navigate\("start"\)/u);
+  assert.match(source, /preservedUnknownWorkspace = status\?\.nextAction === "resolve_wsl_distribution_manually"/u);
+  assert.match(source, /setupFailed && preservedUnknownWorkspace \? \([\s\S]*null/u);
+  assert.match(shellSource, /preservedUnknownWorkspace = runtimeSetup\?\.nextAction === "resolve_wsl_distribution_manually"/u);
+  assert.match(shellSource, /runtimeSetupWorking \? \([\s\S]*preservedUnknownWorkspace \? null/u);
+  assert.doesNotMatch(appSource, /onOpenRuntimeSetup/u);
+  assert.doesNotMatch(source, /backup|remov(?:e|al)|rename|備份|移除|重新命名/iu);
 });
 
-test("active recovery explains automatic preservation without showing the manual Terminal fallback", () => {
+test("active reconciliation stays automatic without claiming a replacement already happened", () => {
   const state = resolveRuntimeSetupPresentation({
     mode: "native",
     runtimeAvailable: false,
@@ -76,16 +72,16 @@ test("active recovery explains automatic preservation without showing the manual
   assert.equal(state.setupFailed, false);
   for (const phrase of [
     "Finishing a previous setup",
-    "We found scan-tool files left by an earlier setup. ai-security-scanner is saving a recovery copy, replacing that workspace, and continuing automatically.",
+    "reconciling product-owned scan-tool files automatically",
     "Safely recovering the previous workspace",
     "正在完成先前未完成的設定",
-    "程式找到上次設定留下的掃描工具工作區，會先保留一份復原備份，再換成乾淨的工作區並自動繼續。",
+    "自動整理可確認屬於本產品的掃描工具檔案",
     "正在安全復原先前的工作區",
   ]) assert.ok(source.includes(phrase), phrase);
 
   assert.match(source, /setupRecovering[\s\S]*text\.recoveryTitle/u);
   assert.match(source, /setupRecovering[\s\S]*text\.recoveryDescription/u);
-  assert.match(source, /\{setupFailed && nextAction && \([\s\S]*runtime-assistant__recovery/u);
+  assert.doesNotMatch(source, /saving a recovery copy|replacing that workspace|保留一份復原備份|換成乾淨的工作區/u);
 });
 
 test("a generic setup failure offers a retry without inventing an external action", () => {
@@ -100,10 +96,27 @@ test("a generic setup failure offers a retry without inventing an external actio
   assert.doesNotMatch(source, /照著下方唯一的操作/u);
   assert.match(
     source,
-    /setupFailed \? \(nextAction \? text\.recheck : text\.retry\) : setupCancelled \? text\.continue : text\.start/u,
+    /setupFailed \? text\.retry : setupCancelled \? text\.continue : text\.start/u,
   );
   assert.match(shellSource, /genericSetupFailure = !runtimeSetupWorking[\s\S]*runtimeSetup\?\.phase === "failed"[\s\S]*!runtimeSetup\.nextAction/u);
-  assert.match(shellSource, /runtimeSetup\.nextAction[\s\S]*"runtime\.setup\.recheck"[\s\S]*"runtime\.setup\.retry"/u);
+  assert.match(shellSource, /runtimeSetup\?\.phase === "failed"[\s\S]*"runtime\.setup\.retry"/u);
+});
+
+test("a required Windows restart is explicit without exposing platform administration", () => {
+  for (const phrase of [
+    "Windows requires a restart to finish its change",
+    "reopen ai-security-scanner and automatic setup will resume",
+    "Windows 必須重新啟動才能完成變更",
+    "自動設定就會繼續",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.doesNotMatch(source, /PowerShell|Windows Terminal|wsl\.exe|optional feature|系統管理員|終端機/u);
+});
+
+test("technical details expose only a bounded failure category", () => {
+  assert.match(source, /technicalDetail = setupFailed[\s\S]*"older_workspace_ownership_unconfirmed"[\s\S]*"local_scan_tool_unavailable"/u);
+  assert.match(source, /<code>\{technicalDetail\}<\/code>/u);
+  assert.doesNotMatch(source, /displaySafeTechnicalDetail\(status\?\.detail\)|<code>\{status\?\.detail\}<\/code>/u);
 });
 
 test("cancelled setup offers an honest continuation", () => {

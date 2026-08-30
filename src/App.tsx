@@ -2,10 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
 import { Icon } from "./components/Icon";
-import { RuntimeFirstLaunch } from "./components/RuntimeFirstLaunch";
 import { RuntimeSetupAssistant } from "./components/RuntimeSetupAssistant";
 import { EmptyState } from "./components/Shared";
-import { getDemoNotice } from "./data/demo";
 import { useI18n, type BilingualText } from "./i18n";
 import { CasesPage } from "./pages/CasesPage";
 import { CoveragePage } from "./pages/CoveragePage";
@@ -24,10 +22,7 @@ import {
   isCurrentScanReadinessRequest,
   isCurrentScanReadinessResponse,
 } from "./scanReadinessRequest";
-import {
-  shouldAutomaticallyPrepareRuntime,
-  shouldShowRuntimeFirstLaunch,
-} from "./runtimeFirstLaunch";
+import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
 import {
   checkForAppUpdate,
   installAppUpdate,
@@ -265,12 +260,13 @@ const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
 
 export default function App() {
-  const { locale, setLocale, text, formatNumber } = useI18n();
+  const { locale, t, text, formatNumber } = useI18n();
   const [page, setPage] = useState<PageId>(pageFromHash);
   const [snapshot, setSnapshot] = useState<AppSnapshot>();
   const [mode, setMode] = useState<AppMode>(scannerService.isNative() ? "native" : "demo");
-  const [notice, setNotice] = useState<string | undefined>(scannerService.isNative() ? undefined : getDemoNotice());
   const [loading, setLoading] = useState(true);
+  const [snapshotRefreshUnavailable, setSnapshotRefreshUnavailable] = useState(false);
+  const [caseSelectionUnavailableId, setCaseSelectionUnavailableId] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
   const [startingScanCaseId, setStartingScanCaseId] = useState<string>();
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -278,7 +274,6 @@ export default function App() {
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
   const [runtimeSetupStatusLoaded, setRuntimeSetupStatusLoaded] = useState(!scannerService.isNative());
-  const [runtimeAutomaticAttemptFailed, setRuntimeAutomaticAttemptFailed] = useState(false);
   const [scanReadiness, setScanReadiness] = useState<ScanReadiness>();
   const [scanReadinessErrorCaseId, setScanReadinessErrorCaseId] = useState<string>();
   const [runtimeSetupFocusKey, setRuntimeSetupFocusKey] = useState(0);
@@ -311,7 +306,6 @@ export default function App() {
 
   const applyServiceMeta = useCallback(<T,>(result: ServiceResult<T>) => {
     setMode(result.mode);
-    setNotice(result.notice);
   }, []);
 
   const applyScanWorkspaceEvent = useCallback((workspace: CaseWorkspace) => {
@@ -332,6 +326,7 @@ export default function App() {
       const result = await scannerService.getSnapshot(caseId);
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
+      setSnapshotRefreshUnavailable(false);
       selectedCaseIdRef.current = result.data.selectedCaseId;
       setSnapshot((current) => reconcileAuthoritativeSnapshot(
         current,
@@ -372,6 +367,7 @@ export default function App() {
     } catch (error) {
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       recordTechnicalError("load local cases", error);
+      setSnapshotRefreshUnavailable(true);
       if (!quiet) {
         pushToast({
           tone: "danger",
@@ -470,20 +466,16 @@ export default function App() {
   }, [pushToast, text]);
 
   const setupManagedRuntime = async ({ automatic = false }: { automatic?: boolean } = {}) => {
-    setRuntimeAutomaticAttemptFailed(false);
     setBusyAction("runtime-setup");
     try {
       const result = await scannerService.setupManagedRuntime();
       applyServiceMeta(result);
       const setupResult = await scannerService.getManagedRuntimeSetupStatus();
       setRuntimeSetup(setupResult.data);
-      if (!result.data.accepted && setupResult.data.phase === "idle") {
-        setRuntimeAutomaticAttemptFailed(true);
-      }
       await loadSnapshot(snapshot?.selectedCaseId, true);
       const cancelled = setupResult.data.phase === "cancelled";
-      const requiresExternalAction = setupResult.data.phase === "failed"
-        && setupResult.data.nextAction !== undefined;
+      const preservedUnknownWorkspace = setupResult.data.phase === "failed"
+        && setupResult.data.nextAction === "resolve_wsl_distribution_manually";
       if (!automatic && !result.data.accepted && !cancelled) {
         window.location.hash = "start";
         setPage("start");
@@ -494,8 +486,8 @@ export default function App() {
           ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
           : cancelled
             ? text({ en: "Scan-tool setup paused", zhTW: "掃描工具設定已暫停" })
-            : requiresExternalAction
-              ? text({ en: "One Windows setup step needs attention", zhTW: "還需要完成一個 Windows 設定步驟" })
+            : preservedUnknownWorkspace
+              ? text({ en: "Older scan-tool data was preserved", zhTW: "舊的掃描工具資料已保留" })
               : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
         detail: result.data.accepted
           ? automatic
@@ -512,10 +504,10 @@ export default function App() {
               en: "The completed part of the download was kept. Continue setup whenever you are ready.",
               zhTW: "已完成的下載進度已保留；準備好時可繼續設定。",
             })
-            : requiresExternalAction
+            : preservedUnknownWorkspace
               ? text({
-                en: "Complete the action shown on the setup card, then check again. Your existing results are unchanged.",
-                zhTW: "請完成設定卡片顯示的操作，再重新檢查；既有結果沒有變更。",
+                en: "The app could not confirm ownership of an older workspace, so it left that data untouched. This scan tool is unavailable in this session; saved scans remain usable.",
+                zhTW: "程式無法確認舊工作區的歸屬，因此沒有更動其中資料。這個掃描工具目前無法使用；已保存的掃描仍可開啟。",
               })
               : text({
                 en: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
@@ -523,7 +515,6 @@ export default function App() {
               }),
       });
     } catch (error) {
-      setRuntimeAutomaticAttemptFailed(true);
       recordTechnicalError("prepare managed runtime", error);
       pushToast({
         tone: "danger",
@@ -548,7 +539,6 @@ export default function App() {
       // episode later. Reset only after authoritative runtime health is ready,
       // never merely because setup reported a terminal phase.
       automaticRuntimeSetupAttempted.current = false;
-      setRuntimeAutomaticAttemptFailed(false);
     }
   }, [mode, snapshot?.runtime?.available, snapshot?.runtime?.provider]);
 
@@ -697,6 +687,7 @@ export default function App() {
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
       selectedCaseIdRef.current = caseId;
+      setCaseSelectionUnavailableId(undefined);
       setSnapshot((current) => current ? { ...current, selectedCaseId: caseId, workspace: result.data } : current);
       const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
       try {
@@ -723,6 +714,7 @@ export default function App() {
     } catch (error) {
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       recordTechnicalError("select case", error);
+      setCaseSelectionUnavailableId(caseId);
       pushToast({
         tone: "danger",
         title: text({ en: "This scan project could not be opened", zhTW: "目前無法開啟這個掃描專案" }),
@@ -1078,11 +1070,21 @@ export default function App() {
       return (
         <div className="loading-state" role="status">
           <span className="loading-spinner" aria-hidden="true" />
-          <strong>{text({ en: "Loading scan projects from this device…", zhTW: "正在讀取這台電腦上的掃描專案…" })}</strong>
-          <span>{text({
-            en: "If the desktop service is unavailable, the app will clearly switch to demo data.",
-            zhTW: "如果桌面服務無法使用，產品會清楚切換成展示資料。",
-          })}</span>
+          <strong>{t("shell.data.loadingTitle")}</strong>
+          <span>{t("shell.data.loadingDetail")}</span>
+        </div>
+      );
+    }
+
+    if (snapshotRefreshUnavailable && !snapshot) {
+      return (
+        <div className="loading-state loading-state--error" role="alert">
+          <span className="loading-state__icon" aria-hidden="true"><Icon name="warning" size={24} /></span>
+          <strong>{t("shell.data.initialErrorTitle")}</strong>
+          <span>{t("shell.data.initialErrorDetail")}</span>
+          <button className="button button--primary" type="button" onClick={() => void loadSnapshot()}>
+            <Icon name="refresh" size={16} /> {t("shell.data.retry")}
+          </button>
         </div>
       );
     }
@@ -1324,58 +1326,37 @@ export default function App() {
     }
   })();
 
-  const showRuntimeFirstLaunch = mode === "native"
-    && snapshot !== undefined
-    && shouldShowRuntimeFirstLaunch(
-      mode,
-      snapshot.runtime,
-      snapshot.cases.length > 0,
-    );
-
   return (
     <>
-      {showRuntimeFirstLaunch ? (
-        <RuntimeFirstLaunch
-          locale={locale}
-          setLocale={setLocale}
-          runtime={snapshot?.runtime}
-          status={runtimeSetup}
-          statusLoaded={runtimeSetupStatusLoaded}
-          busy={busyAction === "runtime-setup"
-            || runtimeSetup?.active === true
-            || runtimeSetup?.prerequisiteRepairActive === true}
-          automaticAttemptFailed={runtimeAutomaticAttemptFailed}
-          onSetup={() => void setupManagedRuntime()}
-          onCancel={() => void cancelManagedRuntimeSetup()}
-        />
-      ) : (
-        <AppShell
-          page={page}
-          mode={mode}
-          cases={snapshot?.cases ?? []}
-          selectedCase={selectedCase}
-          loading={loading}
-          onNavigate={navigate}
-          onSelectCase={(caseId) => void selectCase(caseId)}
-          demoNotice={notice ?? getDemoNotice()}
-          appUpdate={appUpdate}
-          onCheckForUpdate={() => void checkAppUpdate()}
-          onInstallUpdate={(version) => void installUpdate(version)}
-          runtime={snapshot?.runtime}
-          runtimeSetup={runtimeSetup}
-          runtimeBusy={busyAction === "runtime-setup"
-            || runtimeSetup?.active
-            || runtimeSetup?.prerequisiteRepairActive}
-          onOpenRuntimeSetup={() => {
-            setRuntimeSetupFocusKey((key) => key + 1);
-            navigate("start");
-          }}
-          onSetupRuntime={() => void setupManagedRuntime()}
-          onCancelRuntime={() => void cancelManagedRuntimeSetup()}
-        >
-          {content}
-        </AppShell>
-      )}
+      <AppShell
+        page={page}
+        mode={mode}
+        cases={snapshot?.cases ?? []}
+        selectedCase={selectedCase}
+        loading={loading}
+        dataUnavailable={snapshotRefreshUnavailable && snapshot !== undefined}
+        dataRetrying={snapshotRefreshUnavailable && loading}
+        onRetryData={() => void loadSnapshot(snapshot?.selectedCaseId)}
+        caseSelectionUnavailable={caseSelectionUnavailableId !== undefined}
+        caseSelectionRetrying={caseSelectionUnavailableId !== undefined && loading}
+        onRetryCaseSelection={() => {
+          if (caseSelectionUnavailableId) void selectCase(caseSelectionUnavailableId);
+        }}
+        onNavigate={navigate}
+        onSelectCase={(caseId) => void selectCase(caseId)}
+        appUpdate={appUpdate}
+        onCheckForUpdate={() => void checkAppUpdate()}
+        onInstallUpdate={(version) => void installUpdate(version)}
+        runtime={snapshot?.runtime}
+        runtimeSetup={runtimeSetup}
+        runtimeBusy={busyAction === "runtime-setup"
+          || runtimeSetup?.active
+          || runtimeSetup?.prerequisiteRepairActive}
+        onSetupRuntime={() => void setupManagedRuntime()}
+        onCancelRuntime={() => void cancelManagedRuntimeSetup()}
+      >
+        {content}
+      </AppShell>
 
       <div
         className="toast-region"

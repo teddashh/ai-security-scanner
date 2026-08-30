@@ -136,7 +136,8 @@ test("runtime failures become plain-language guidance without echoing backend ou
   const issue = i18n.classifyRuntimeIssue(raw);
   assert.equal(issue, "wsl");
 
-  const guidance = i18n.translate("en", `runtime.prerequisite.${issue}`);
-  assert.match(guidance, /WSL 2 is not ready/u);
+  const guidance = i18n.translate("en", "runtime.prerequisite.localSupport");
+  assert.match(guidance, /one local scan tool/u);
   assert.doesNotMatch(guidance, /exit status|System32|runtime error/u);
+  assert.doesNotMatch(guidance, /WSL|Terminal|PowerShell/u);
 });
