@@ -1245,6 +1245,12 @@ export interface ManagedRuntimeSetupStatus {
   phase: ManagedRuntimeSetupPhase;
   active: boolean;
   prerequisiteRepairActive: boolean;
+  /** Backend identity for the current or most recently completed operation. */
+  operationId?: string;
+  startedAt?: string;
+  lastHeartbeatAt?: string;
+  /** Computed by the backend after authoritative reconciliation, never by a UI timer. */
+  stale?: boolean;
   cancelRequested: boolean;
   receivedBytes: number;
   totalBytes?: number;

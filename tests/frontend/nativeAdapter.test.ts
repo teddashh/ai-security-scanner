@@ -263,6 +263,35 @@ test("managed runtime setup adapter preserves active automatic workspace recover
   assert.equal(adapted.nextAction, undefined);
 });
 
+test("managed runtime setup adapter preserves bounded backend operation authority", () => {
+  const adapted = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
+    phase: "start",
+    active: true,
+    operation_id: "runtime-operation-42",
+    started_at: "2026-08-30T12:00:00Z",
+    last_heartbeat_at: "2026-08-30T12:00:05Z",
+    stale: false,
+    failure_reason: null,
+    next_action: null,
+  }));
+
+  assert.equal(adapted.operationId, "runtime-operation-42");
+  assert.equal(adapted.startedAt, "2026-08-30T12:00:00Z");
+  assert.equal(adapted.lastHeartbeatAt, "2026-08-30T12:00:05Z");
+  assert.equal(adapted.stale, false);
+
+  const malformed = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
+    operation_id: `bad\0${"x".repeat(200)}`,
+    started_at: "x".repeat(65),
+    last_heartbeat_at: "",
+    stale: "yes",
+  }));
+  assert.equal(malformed.operationId, undefined);
+  assert.equal(malformed.startedAt, undefined);
+  assert.equal(malformed.lastHeartbeatAt, undefined);
+  assert.equal(malformed.stale, false);
+});
+
 test("managed runtime setup adapter hides recovery fields outside failed or when mismatched", () => {
   const unwinding = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
     phase: "prerequisite",

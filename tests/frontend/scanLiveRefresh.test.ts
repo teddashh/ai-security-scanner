@@ -212,12 +212,12 @@ test("scan lifecycle actions and events carry the authoritative workspace into A
   assert.match(finishedRefresh, /workspace\.case\.id === selectedCaseIdRef\.current/u);
   assert.match(finishedRefresh, /const readinessRequestGeneration = scanReadinessRequestGeneration\.current/u);
   assert.match(finishedRefresh, /const readinessResponseGeneration = \+\+scanReadinessResponseGeneration\.current/u);
-  assert.match(finishedRefresh, /scannerService\.getScanReadiness\(workspace\.case\.id\)/u);
+  assert.match(finishedRefresh, /readScanReadinessWithin\(workspace\.case\.id, acceptReadiness\)/u);
   assert.match(finishedRefresh, /selectedCaseIdRef\.current !== workspace\.case\.id/u);
   assert.match(finishedRefresh, /isCurrentScanReadinessResponse/u);
   assert.doesNotMatch(finishedRefresh, /loadSnapshot/u);
   assert.equal(
-    [...finishedRefresh.matchAll(/scannerService\.getScanReadiness\(workspace\.case\.id\)/gu)].length,
+    [...finishedRefresh.matchAll(/readScanReadinessWithin\(workspace\.case\.id, acceptReadiness\)/gu)].length,
     1,
   );
   assert.match(appSource, /selectedCaseIdRef\.current = caseId;[\s\S]*?setSnapshot\(\(current\)/u);

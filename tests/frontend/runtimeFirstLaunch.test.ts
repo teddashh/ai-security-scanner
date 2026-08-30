@@ -58,7 +58,7 @@ test("the native workspace stays available while product-owned scan tools prepar
 test("automatic runtime preparation is single-flight and does not loop after a failed action", () => {
   const missing = runtime("not_installed");
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, undefined, false, false), false);
-  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, undefined, true, false), true);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, undefined, true, false), false);
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("idle"), true, true), false);
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("prerequisite"), true, false), false);
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("failed"), true, false), false);
@@ -89,7 +89,34 @@ test("App keeps automatic preparation behind the visible shell", () => {
   assert.match(source, /shouldAutomaticallyPrepareRuntime\([\s\S]*runtimeSetupStatusLoaded[\s\S]*automaticRuntimeSetupAttempted\.current/u);
   assert.match(source, /automaticRuntimeSetupAttempted\.current = true;[\s\S]*setupManagedRuntime\(\{ automatic: true \}\)/u);
   assert.match(source, /snapshot\.runtime\.available === true[\s\S]*automaticRuntimeSetupAttempted\.current = false/u);
-  assert.match(source, /getManagedRuntimeSetupStatus\(\)[\s\S]*setRuntimeSetupStatusLoaded\(true\)/u);
+  assert.match(source, /const applyStatusResult[\s\S]*setRuntimeSetupStatusLoaded\(true\)/u);
+  assert.match(source, /runtimeSetupStatusReadCoalescer\.read\([\s\S]*getManagedRuntimeSetupStatus\(\)/u);
+  assert.doesNotMatch(
+    source,
+    /catch[\s\S]{0,400}setRuntimeSetupStatusLoaded\(true\)/u,
+    "a failed status read must not authorize an automatic setup attempt",
+  );
   assert.doesNotMatch(source, /runtimeAutomaticAttemptFailed/u);
   assert.doesNotMatch(source, /repairManagedRuntimePrerequisite|runtime-repair/u);
+});
+
+test("runtime truth refreshes on focus and visibility even when no scan is active", () => {
+  const source = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
+  const runtimeFocusEffect = source.slice(
+    source.indexOf("const reconcileRuntime = () =>"),
+    source.indexOf("const reconcileActiveScan = () =>"),
+  );
+
+  assert.match(runtimeFocusEffect, /refreshManagedRuntimeSetupStatus\(\)/u);
+  assert.match(runtimeFocusEffect, /if \(!activeScanCaseId\) void refreshRuntimeSnapshot\(\)/u);
+  assert.match(runtimeFocusEffect, /window\.setInterval\(reconcileRuntime, RUNTIME_TRUTH_REFRESH_INTERVAL_MS\)/u);
+  assert.match(runtimeFocusEffect, /window\.addEventListener\("focus", onWindowFocus\)/u);
+  assert.match(runtimeFocusEffect, /document\.visibilityState === "visible"[\s\S]*reconcileRuntime\(\)/u);
+  assert.match(runtimeFocusEffect, /window\.removeEventListener\("focus", onWindowFocus\)/u);
+  assert.match(runtimeFocusEffect, /document\.removeEventListener\("visibilitychange", onVisibilityChange\)/u);
+  assert.match(runtimeFocusEffect, /window\.clearInterval\(watchdog\)/u);
+  assert.match(source, /if \(runtimeSetupStatusRefreshInFlight\.current\) return runtimeSetupStatusRefreshInFlight\.current/u);
+  assert.match(source, /runtimeSetupStatusRefreshInFlight\.current === refresh/u);
+  assert.match(source, /if \(runtimeSnapshotRefreshInFlight\.current\) return runtimeSnapshotRefreshInFlight\.current/u);
+  assert.match(source, /runtimeSnapshotRefreshInFlight\.current === refresh/u);
 });

@@ -410,12 +410,8 @@ export const scannerService = {
         "展示模式不會安裝或啟動掃描環境。",
       ),
     });
-    try {
-      const response = await invoke<{ accepted: boolean; message: string }>(COMMANDS.setupManagedRuntime);
-      return nativeResult(response);
-    } catch (error) {
-      return nativeResult({ accepted: false, message: errorMessage(error) });
-    }
+    const response = await invoke<{ accepted: boolean; message: string }>(COMMANDS.setupManagedRuntime);
+    return nativeResult(response);
   },
 
   async getManagedRuntimeSetupStatus(): Promise<ServiceResult<ManagedRuntimeSetupStatus>> {

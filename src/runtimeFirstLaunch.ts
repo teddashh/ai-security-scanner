@@ -28,7 +28,8 @@ export const shouldAutomaticallyPrepareRuntime = (
   statusLoaded: boolean,
   alreadyAttempted: boolean,
 ): boolean => statusLoaded
+  && status !== undefined
   && !alreadyAttempted
   && isUnavailableManagedRuntime(mode, runtime)
-  && (status === undefined || status.phase === "idle" || status.phase === "completed")
+  && (status.phase === "idle" || status.phase === "completed")
   && automaticallyRecoverablePhases.has(runtime?.phase ?? "");

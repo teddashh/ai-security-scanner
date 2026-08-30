@@ -25,10 +25,20 @@ import {
 import { findRunCreatedAfterStart, hasActiveScanWork } from "./freshScanSelection";
 import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
 import {
+  hasManagedRuntimeSetupRequestStarted,
+  isManagedRuntimeSetupTerminal,
+  type ManagedRuntimeSetupRequestBaseline,
+} from "./runtimeSetupPresentation";
+import {
   checkForAppUpdate,
   installAppUpdate,
   type AppUpdateState,
 } from "./services/appUpdater";
+import {
+  createInFlightReadCoalescer,
+  observePromiseWithin,
+  settleReadOnlyWithin,
+} from "./services/boundedReadOnly";
 import {
   EVENTS,
   scannerService,
@@ -263,6 +273,11 @@ const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
 
 const ACTIVE_SCAN_REFRESH_INTERVAL_MS = 5_000;
+const RUNTIME_TRUTH_REFRESH_INTERVAL_MS = 10_000;
+const RUNTIME_TRUTH_READ_TIMEOUT_MS = 8_000;
+const RUNTIME_SETUP_COMMAND_UI_TIMEOUT_MS = 8_000;
+const SELECTED_SNAPSHOT_READ_KEY = "__currently_selected_case__";
+const MANAGED_RUNTIME_STATUS_READ_KEY = "__managed_runtime_setup_status__";
 
 export default function App() {
   const { locale, t, text, formatNumber } = useI18n();
@@ -279,6 +294,8 @@ export default function App() {
   const [artifactCleanupResult, setArtifactCleanupResult] = useState<CaseArtifactCleanupResult>();
   const [runtimeSetup, setRuntimeSetup] = useState<ManagedRuntimeSetupStatus>();
   const [runtimeSetupStatusLoaded, setRuntimeSetupStatusLoaded] = useState(!scannerService.isNative());
+  const [runtimeSetupCommandPolling, setRuntimeSetupCommandPolling] = useState(false);
+  const [runtimeSetupAdmissionPending, setRuntimeSetupAdmissionPending] = useState(false);
   const [scanReadiness, setScanReadiness] = useState<ScanReadiness>();
   const [scanReadinessErrorCaseId, setScanReadinessErrorCaseId] = useState<string>();
   const [runtimeSetupFocusKey, setRuntimeSetupFocusKey] = useState(0);
@@ -303,6 +320,25 @@ export default function App() {
     workspace: CaseWorkspace;
   }>());
   const automaticRuntimeSetupAttempted = useRef(false);
+  const runtimeSetupStatusRequestGeneration = useRef(0);
+  const runtimeSetupStatusRefreshInFlight = useRef<Promise<ManagedRuntimeSetupStatus | undefined> | undefined>(undefined);
+  const runtimeSetupStatusReadCoalescer = useRef(
+    createInFlightReadCoalescer<string, ServiceResult<ManagedRuntimeSetupStatus>>(),
+  ).current;
+  const runtimeSnapshotRefreshInFlight = useRef<Promise<void> | undefined>(undefined);
+  const snapshotReadCoalescer = useRef(
+    createInFlightReadCoalescer<string, ServiceResult<AppSnapshot>>(),
+  ).current;
+  const scanReadinessReadCoalescer = useRef(
+    createInFlightReadCoalescer<string, ServiceResult<ScanReadiness>>(),
+  ).current;
+  const runtimeSetupCommandGeneration = useRef(0);
+  const runtimeSetupRequestAdmission = useRef<{
+    baseline: ManagedRuntimeSetupRequestBaseline;
+    minimumStatusRequestGeneration: number;
+    observed: boolean;
+  } | undefined>(undefined);
+  const reconciledRuntimeTerminalKey = useRef<string | undefined>(undefined);
 
   const pushToast = useCallback((toast: Omit<ToastMessage, "id">) => {
     const id = ++toastId.current;
@@ -324,12 +360,37 @@ export default function App() {
     setSnapshot((current) => mergeWorkspaceIntoSnapshot(current, workspace));
   }, []);
 
-  const loadSnapshot = useCallback(async (caseId?: string, quiet = false) => {
+  const readScanReadinessWithin = useCallback(async (
+    caseId: string,
+    onLateResult: (result: ServiceResult<ScanReadiness>) => void,
+    timeoutMs = RUNTIME_TRUTH_READ_TIMEOUT_MS,
+  ): Promise<ServiceResult<ScanReadiness>> => {
+    const readinessRead = scanReadinessReadCoalescer.read(
+      caseId,
+      () => scannerService.getScanReadiness(caseId),
+    );
+    const observation = await settleReadOnlyWithin(readinessRead, timeoutMs);
+    if (observation.outcome === "timed_out") {
+      // The UI may show Retry now, but the same uncancelled read remains the
+      // authority. A Retry reuses it, and its late result can still reconcile.
+      void readinessRead.then(onLateResult).catch((error: unknown) => {
+        recordTechnicalError("apply late scan-readiness result", error);
+      });
+      throw new Error("read-only scan-readiness refresh timed out");
+    }
+    if (observation.outcome === "failed") throw observation.error;
+    return observation.value;
+  }, [scanReadinessReadCoalescer]);
+
+  const loadSnapshot = useCallback(async (
+    caseId?: string,
+    quiet = false,
+    readTimeoutMs = RUNTIME_TRUTH_READ_TIMEOUT_MS,
+  ) => {
     const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
     const workspaceEventGenerationAtRequest = scanWorkspaceEventGeneration.current;
-    if (!quiet) setLoading(true);
-    try {
-      const result = await scannerService.getSnapshot(caseId);
+
+    const applySnapshotResult = async (result: ServiceResult<AppSnapshot>) => {
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       applyServiceMeta(result);
       setSnapshotRefreshUnavailable(false);
@@ -344,18 +405,7 @@ export default function App() {
       const readinessCaseId = result.data.workspace?.case.id;
       const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
       if (readinessCaseId) {
-        try {
-          const readiness = await scannerService.getScanReadiness(readinessCaseId);
-          if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
-          if (!isCurrentScanReadinessResponse(
-            scanReadinessResponseGeneration.current,
-            readinessResponseGeneration,
-            readinessCaseId,
-            readiness.data.caseId,
-          )) throw new Error("scan readiness response did not match the requested case");
-          setScanReadiness(readiness.data);
-          setScanReadinessErrorCaseId(undefined);
-        } catch (error) {
+        const handleReadinessError = (error: unknown) => {
           if (
             isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)
             && isCurrentScanReadinessRequest(scanReadinessResponseGeneration.current, readinessResponseGeneration)
@@ -364,12 +414,65 @@ export default function App() {
             setScanReadinessErrorCaseId(readinessCaseId);
             recordTechnicalError("check scan readiness", error);
           }
+        };
+        const acceptReadiness = (readiness: ServiceResult<ScanReadiness>) => {
+          if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+          if (!isCurrentScanReadinessResponse(
+            scanReadinessResponseGeneration.current,
+            readinessResponseGeneration,
+            readinessCaseId,
+            readiness.data.caseId,
+          )) {
+            handleReadinessError(new Error("scan readiness response did not match the requested case"));
+            return;
+          }
+          setScanReadiness(readiness.data);
+          setScanReadinessErrorCaseId(undefined);
+        };
+        try {
+          const readiness = await readScanReadinessWithin(
+            readinessCaseId,
+            acceptReadiness,
+            readTimeoutMs,
+          );
+          acceptReadiness(readiness);
+        } catch (error) {
+          handleReadinessError(error);
         }
       } else if (isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) {
         setScanReadiness(undefined);
         setScanReadinessErrorCaseId(undefined);
       }
       setArtifactCleanupPlan((current) => current ?? result.data.artifactCleanupObligations?.[0]);
+    };
+
+    if (!quiet) setLoading(true);
+    try {
+      const snapshotRead = snapshotReadCoalescer.read(
+        caseId ?? SELECTED_SNAPSHOT_READ_KEY,
+        () => scannerService.getSnapshot(caseId),
+      );
+      const boundedSnapshotRead = await settleReadOnlyWithin(snapshotRead, readTimeoutMs);
+      if (boundedSnapshotRead.outcome === "timed_out") {
+        // Keep accepting the one underlying authoritative read. Repeated
+        // focus/watchdog/Retry observations reuse it instead of queuing IPC.
+        void snapshotRead.then((lateResult) => {
+          void applySnapshotResult(lateResult).catch((error: unknown) => {
+            if (isCurrentScanReadinessRequest(
+              scanReadinessRequestGeneration.current,
+              readinessRequestGeneration,
+            )) recordTechnicalError("apply late snapshot result", error);
+          });
+        }).catch((error: unknown) => {
+          if (isCurrentScanReadinessRequest(
+            scanReadinessRequestGeneration.current,
+            readinessRequestGeneration,
+          )) recordTechnicalError("complete late snapshot read", error);
+        });
+        throw new Error("read-only snapshot refresh timed out");
+      }
+      if (boundedSnapshotRead.outcome === "failed") throw boundedSnapshotRead.error;
+      await applySnapshotResult(boundedSnapshotRead.value);
     } catch (error) {
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
       recordTechnicalError("load local cases", error);
@@ -387,7 +490,19 @@ export default function App() {
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [applyServiceMeta, pushToast, text]);
+  }, [applyServiceMeta, pushToast, readScanReadinessWithin, snapshotReadCoalescer, text]);
+
+  const refreshRuntimeSnapshot = useCallback(() => {
+    if (runtimeSnapshotRefreshInFlight.current) return runtimeSnapshotRefreshInFlight.current;
+    const refresh = loadSnapshot(selectedCaseIdRef.current, true, RUNTIME_TRUTH_READ_TIMEOUT_MS);
+    runtimeSnapshotRefreshInFlight.current = refresh;
+    void refresh.finally(() => {
+      if (runtimeSnapshotRefreshInFlight.current === refresh) {
+        runtimeSnapshotRefreshInFlight.current = undefined;
+      }
+    });
+    return refresh;
+  }, [loadSnapshot]);
 
   useEffect(() => {
     void loadSnapshot();
@@ -403,22 +518,88 @@ export default function App() {
     selectedCaseIdRef.current = snapshot?.selectedCaseId;
   }, [snapshot?.selectedCaseId]);
 
-  useEffect(() => {
-    if (!scannerService.isNative()) return;
-    let disposed = false;
-    void scannerService.getManagedRuntimeSetupStatus().then((result) => {
-      if (!disposed) setRuntimeSetup(result.data);
-    }).catch((error) => {
-      recordTechnicalError("check managed runtime setup status", error);
-    }).finally(() => {
-      if (!disposed) setRuntimeSetupStatusLoaded(true);
-    });
-    return () => {
-      disposed = true;
-    };
-  }, []);
+  const refreshManagedRuntimeSetupStatus = useCallback(() => {
+    if (!scannerService.isNative()) return undefined;
+    if (runtimeSetupStatusRefreshInFlight.current) return runtimeSetupStatusRefreshInFlight.current;
+    const requestGeneration = ++runtimeSetupStatusRequestGeneration.current;
+    const refresh = (async () => {
+      const applyStatusResult = (result: ServiceResult<ManagedRuntimeSetupStatus>) => {
+        if (requestGeneration !== runtimeSetupStatusRequestGeneration.current) return undefined;
+        setRuntimeSetup(result.data);
+        const admission = runtimeSetupRequestAdmission.current;
+        if (admission && requestGeneration >= admission.minimumStatusRequestGeneration) {
+          const requestStarted = admission.observed
+            || hasManagedRuntimeSetupRequestStarted(admission.baseline, result.data);
+          if (requestStarted && !admission.observed) {
+            admission.observed = true;
+            setRuntimeSetupAdmissionPending(false);
+          }
+          if (requestStarted && isManagedRuntimeSetupTerminal(result.data)) {
+            runtimeSetupRequestAdmission.current = undefined;
+            setRuntimeSetupAdmissionPending(false);
+            setRuntimeSetupCommandPolling(false);
+            setBusyAction((current) => current === "runtime-setup" ? undefined : current);
+          }
+        }
+        // A failed read is not authoritative permission to launch another
+        // lifecycle operation. Only a successful status response unlocks the
+        // one automatic preparation attempt.
+        setRuntimeSetupStatusLoaded(true);
+        return result.data;
+      };
 
-  const runtimeSetupPolling = busyAction === "runtime-setup"
+      try {
+        const statusRead = runtimeSetupStatusReadCoalescer.read(
+          MANAGED_RUNTIME_STATUS_READ_KEY,
+          () => scannerService.getManagedRuntimeSetupStatus(),
+        );
+        const boundedStatusRead = await settleReadOnlyWithin(
+          statusRead,
+          RUNTIME_TRUTH_READ_TIMEOUT_MS,
+        );
+        if (boundedStatusRead.outcome === "timed_out") {
+          // Keep the one raw IPC read alive. Later observers reuse it, and the
+          // newest request generation may still accept its late truth.
+          void statusRead.then((lateResult) => {
+            applyStatusResult(lateResult);
+          }).catch((error: unknown) => {
+            if (requestGeneration === runtimeSetupStatusRequestGeneration.current) {
+              recordTechnicalError("apply late runtime-status result", error);
+            }
+          });
+          if (requestGeneration === runtimeSetupStatusRequestGeneration.current) {
+            recordTechnicalError(
+              "check managed runtime setup status",
+              new Error("read-only runtime-status refresh timed out"),
+            );
+          }
+          return undefined;
+        }
+        if (boundedStatusRead.outcome === "failed") throw boundedStatusRead.error;
+        return applyStatusResult(boundedStatusRead.value);
+      } catch (error) {
+        if (requestGeneration === runtimeSetupStatusRequestGeneration.current) {
+          recordTechnicalError("check managed runtime setup status", error);
+        }
+        return undefined;
+      }
+    })();
+    runtimeSetupStatusRefreshInFlight.current = refresh;
+    void refresh.finally(() => {
+      if (runtimeSetupStatusRefreshInFlight.current === refresh) {
+        runtimeSetupStatusRefreshInFlight.current = undefined;
+      }
+    });
+    return refresh;
+  }, [runtimeSetupStatusReadCoalescer]);
+
+  useEffect(() => {
+    void refreshManagedRuntimeSetupStatus();
+  }, [refreshManagedRuntimeSetupStatus]);
+
+  const runtimeSetupTerminal = isManagedRuntimeSetupTerminal(runtimeSetup);
+  const runtimeSetupRequestPending = runtimeSetupAdmissionPending;
+  const runtimeSetupPolling = runtimeSetupCommandPolling
     || runtimeSetup?.active === true
     || runtimeSetup?.prerequisiteRepairActive === true;
 
@@ -428,14 +609,13 @@ export default function App() {
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const result = await scannerService.getManagedRuntimeSetupStatus();
+        await refreshManagedRuntimeSetupStatus();
         if (disposed) return;
-        setRuntimeSetup(result.data);
       } catch {
-        // The authoritative runtime status remains available through the next
-        // bounded poll; a transient IPC failure must not abandon setup UI.
+        // The shared authoritative refresh records a bounded diagnostic and a
+        // later poll/focus read remains able to supersede this request.
       } finally {
-        if (!disposed) timer = window.setTimeout(() => void poll(), 250);
+        if (!disposed) timer = window.setTimeout(() => void poll(), 1_000);
       }
     };
     void poll();
@@ -443,7 +623,23 @@ export default function App() {
       disposed = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [runtimeSetupPolling]);
+  }, [refreshManagedRuntimeSetupStatus, runtimeSetupPolling]);
+
+  useEffect(() => {
+    if (!runtimeSetup) return;
+    if (!runtimeSetupTerminal) {
+      reconciledRuntimeTerminalKey.current = undefined;
+      return;
+    }
+    const terminalKey = [
+      runtimeSetup.operationId ?? "legacy",
+      runtimeSetup.phase,
+      runtimeSetup.lastHeartbeatAt ?? "",
+    ].join(":");
+    if (reconciledRuntimeTerminalKey.current === terminalKey) return;
+    reconciledRuntimeTerminalKey.current = terminalKey;
+    void refreshRuntimeSnapshot();
+  }, [refreshRuntimeSnapshot, runtimeSetup, runtimeSetupTerminal]);
 
   const checkAppUpdate = useCallback(async () => {
     if (!scannerService.isNative()) return;
@@ -472,30 +668,104 @@ export default function App() {
   }, [pushToast, text]);
 
   const setupManagedRuntime = async ({ automatic = false }: { automatic?: boolean } = {}) => {
+    const commandGeneration = ++runtimeSetupCommandGeneration.current;
+    const requestBaseline: ManagedRuntimeSetupRequestBaseline = {
+      operationId: runtimeSetup?.operationId,
+    };
+    runtimeSetupRequestAdmission.current = {
+      baseline: requestBaseline,
+      // Ignore a status response that was already in flight before this click.
+      minimumStatusRequestGeneration: runtimeSetupStatusRequestGeneration.current + 1,
+      observed: false,
+    };
+    setRuntimeSetupAdmissionPending(true);
     setBusyAction("runtime-setup");
+    setRuntimeSetupCommandPolling(true);
+    let commandReplyReceived = false;
+    let keepFollowingAuthoritativeOperation = false;
+
+    const readFreshSetupStatus = async () => {
+      // A shared read that began before the click cannot acknowledge this
+      // request. Let its bounded slot clear, then issue one fresh read.
+      const priorStatusRefresh = runtimeSetupStatusRefreshInFlight.current;
+      if (priorStatusRefresh) await priorStatusRefresh;
+      return refreshManagedRuntimeSetupStatus();
+    };
+
+    const retainActiveSetup = () => {
+      const admission = runtimeSetupRequestAdmission.current;
+      if (admission) admission.observed = true;
+      setRuntimeSetupAdmissionPending(false);
+      keepFollowingAuthoritativeOperation = true;
+    };
+
+    const reconcileUnknownSetupOutcome = async (): Promise<"active" | "terminal" | "unconfirmed"> => {
+      const requestWasAlreadyObserved = runtimeSetupRequestAdmission.current?.observed === true;
+      const setupStatus = await readFreshSetupStatus();
+      if (commandGeneration !== runtimeSetupCommandGeneration.current || !setupStatus) {
+        return "unconfirmed";
+      }
+      const setupActive = setupStatus.active === true
+        || setupStatus.prerequisiteRepairActive === true;
+      const currentRequestWasObserved = requestWasAlreadyObserved
+        || hasManagedRuntimeSetupRequestStarted(requestBaseline, setupStatus);
+      if (setupActive) {
+        // The command reply is unknown, but the authoritative operation is
+        // alive. Keep polling it instead of reporting a false failure.
+        retainActiveSetup();
+        return "active";
+      }
+      if (currentRequestWasObserved && isManagedRuntimeSetupTerminal(setupStatus)) {
+        // The reply was lost after the operation reached a real terminal
+        // state. The assistant now presents that backend truth.
+        await refreshRuntimeSnapshot();
+        return "terminal";
+      }
+      return "unconfirmed";
+    };
+
     try {
-      const result = await scannerService.setupManagedRuntime();
+      const commandObservation = await observePromiseWithin(
+        scannerService.setupManagedRuntime(),
+        RUNTIME_SETUP_COMMAND_UI_TIMEOUT_MS,
+      );
+      if (commandGeneration !== runtimeSetupCommandGeneration.current) return;
+      if (commandObservation.outcome === "timed_out") {
+        // This is an unknown command outcome, not a setup failure. A bounded
+        // status read decides whether to follow an operation or return to Retry.
+        await reconcileUnknownSetupOutcome();
+        return;
+      }
+      if (commandObservation.outcome === "failed") throw commandObservation.error;
+      const result = commandObservation.value;
+      commandReplyReceived = true;
       applyServiceMeta(result);
-      const setupResult = await scannerService.getManagedRuntimeSetupStatus();
-      setRuntimeSetup(setupResult.data);
-      await loadSnapshot(snapshot?.selectedCaseId, true);
-      const cancelled = setupResult.data.phase === "cancelled";
-      const preservedUnknownWorkspace = setupResult.data.phase === "failed"
-        && setupResult.data.nextAction === "resolve_wsl_distribution_manually";
-      if (!automatic && !result.data.accepted && !cancelled) {
+      const setupStatus = await readFreshSetupStatus();
+      if (commandGeneration !== runtimeSetupCommandGeneration.current) return;
+      if (!setupStatus) throw new Error("managed runtime setup status was unavailable after setup");
+      if (setupStatus.active || setupStatus.prerequisiteRepairActive) {
+        retainActiveSetup();
+        return;
+      }
+      await refreshRuntimeSnapshot();
+      const completed = setupStatus.phase === "completed";
+      const cancelled = setupStatus.phase === "cancelled";
+      const preservedUnknownWorkspace = setupStatus.phase === "failed"
+        && setupStatus.nextAction === "resolve_wsl_distribution_manually";
+      if (!automatic && !completed && !cancelled) {
         window.location.hash = "start";
         setPage("start");
       }
       pushToast({
-        tone: result.data.accepted ? "success" : "warning",
-        title: result.data.accepted
+        tone: completed ? "success" : "warning",
+        title: completed
           ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
           : cancelled
             ? text({ en: "Scan-tool setup paused", zhTW: "掃描工具設定已暫停" })
             : preservedUnknownWorkspace
               ? text({ en: "Older scan-tool data was preserved", zhTW: "舊的掃描工具資料已保留" })
               : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
-        detail: result.data.accepted
+        detail: completed
           ? automatic
             ? text({
               en: "Setup is complete. You can start using ai-security-scanner.",
@@ -521,7 +791,13 @@ export default function App() {
               }),
       });
     } catch (error) {
+      if (commandGeneration !== runtimeSetupCommandGeneration.current) return;
       recordTechnicalError("prepare managed runtime", error);
+      if (!commandReplyReceived) {
+        const reconciliation = await reconcileUnknownSetupOutcome();
+        if (commandGeneration !== runtimeSetupCommandGeneration.current) return;
+        if (reconciliation !== "unconfirmed") return;
+      }
       pushToast({
         tone: "danger",
         title: text({ en: "One local check is unavailable", zhTW: "一項本機檢查目前無法使用" }),
@@ -531,7 +807,15 @@ export default function App() {
         }),
       });
     } finally {
-      setBusyAction(undefined);
+      if (
+        commandGeneration === runtimeSetupCommandGeneration.current
+        && !keepFollowingAuthoritativeOperation
+      ) {
+        runtimeSetupRequestAdmission.current = undefined;
+        setRuntimeSetupAdmissionPending(false);
+        setRuntimeSetupCommandPolling(false);
+        setBusyAction((current) => current === "runtime-setup" ? undefined : current);
+      }
     }
   };
 
@@ -608,7 +892,7 @@ export default function App() {
           if (eventName === EVENTS.runFinished && workspace.case.id === selectedCaseIdRef.current) {
             const readinessRequestGeneration = scanReadinessRequestGeneration.current;
             const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
-            void scannerService.getScanReadiness(workspace.case.id).then((result) => {
+            const acceptReadiness = (result: ServiceResult<ScanReadiness>) => {
               if (
                 disposed
                 || selectedCaseIdRef.current !== workspace.case.id
@@ -626,7 +910,8 @@ export default function App() {
               applyServiceMeta(result);
               setScanReadiness(result.data);
               setScanReadinessErrorCaseId(undefined);
-            }).catch((error: unknown) => {
+            };
+            void readScanReadinessWithin(workspace.case.id, acceptReadiness).then(acceptReadiness).catch((error: unknown) => {
               if (
                 disposed
                 || selectedCaseIdRef.current !== workspace.case.id
@@ -676,7 +961,7 @@ export default function App() {
       disposed = true;
       subscriptions.close();
     };
-  }, [applyScanWorkspaceEvent, applyServiceMeta, loadSnapshot, pushToast, text]);
+  }, [applyScanWorkspaceEvent, applyServiceMeta, loadSnapshot, pushToast, readScanReadinessWithin, text]);
 
   const navigate = (target: PageId) => {
     if (target !== "findings") setFocusedFindingId(undefined);
@@ -696,18 +981,7 @@ export default function App() {
       setCaseSelectionUnavailableId(undefined);
       setSnapshot((current) => current ? { ...current, selectedCaseId: caseId, workspace: result.data } : current);
       const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
-      try {
-        const readiness = await scannerService.getScanReadiness(caseId);
-        if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
-        if (!isCurrentScanReadinessResponse(
-          scanReadinessResponseGeneration.current,
-          readinessResponseGeneration,
-          caseId,
-          readiness.data.caseId,
-        )) throw new Error("scan readiness response did not match the selected case");
-        setScanReadiness(readiness.data);
-        setScanReadinessErrorCaseId(undefined);
-      } catch (error) {
+      const handleReadinessError = (error: unknown) => {
         if (
           isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)
           && isCurrentScanReadinessRequest(scanReadinessResponseGeneration.current, readinessResponseGeneration)
@@ -716,6 +990,26 @@ export default function App() {
           setScanReadinessErrorCaseId(caseId);
           recordTechnicalError("check selected case scan readiness", error);
         }
+      };
+      const acceptReadiness = (readiness: ServiceResult<ScanReadiness>) => {
+        if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+        if (!isCurrentScanReadinessResponse(
+          scanReadinessResponseGeneration.current,
+          readinessResponseGeneration,
+          caseId,
+          readiness.data.caseId,
+        )) {
+          handleReadinessError(new Error("scan readiness response did not match the selected case"));
+          return;
+        }
+        setScanReadiness(readiness.data);
+        setScanReadinessErrorCaseId(undefined);
+      };
+      try {
+        const readiness = await readScanReadinessWithin(caseId, acceptReadiness);
+        acceptReadiness(readiness);
+      } catch (error) {
+        handleReadinessError(error);
       }
     } catch (error) {
       if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
@@ -738,19 +1032,7 @@ export default function App() {
     const readinessRequestGeneration = ++scanReadinessRequestGeneration.current;
     const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
     setBusyAction("scan-readiness");
-    try {
-      const result = await scannerService.getScanReadiness(caseId);
-      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
-      if (!isCurrentScanReadinessResponse(
-        scanReadinessResponseGeneration.current,
-        readinessResponseGeneration,
-        caseId,
-        result.data.caseId,
-      )) throw new Error("scan readiness response did not match the requested case");
-      applyServiceMeta(result);
-      setScanReadiness(result.data);
-      setScanReadinessErrorCaseId(undefined);
-    } catch (error) {
+    const handleReadinessError = (error: unknown) => {
       if (
         isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)
         && isCurrentScanReadinessRequest(scanReadinessResponseGeneration.current, readinessResponseGeneration)
@@ -766,6 +1048,27 @@ export default function App() {
           }),
         });
       }
+    };
+    const acceptReadiness = (result: ServiceResult<ScanReadiness>) => {
+      if (!isCurrentScanReadinessRequest(scanReadinessRequestGeneration.current, readinessRequestGeneration)) return;
+      if (!isCurrentScanReadinessResponse(
+        scanReadinessResponseGeneration.current,
+        readinessResponseGeneration,
+        caseId,
+        result.data.caseId,
+      )) {
+        handleReadinessError(new Error("scan readiness response did not match the requested case"));
+        return;
+      }
+      applyServiceMeta(result);
+      setScanReadiness(result.data);
+      setScanReadinessErrorCaseId(undefined);
+    };
+    try {
+      const result = await readScanReadinessWithin(caseId, acceptReadiness);
+      acceptReadiness(result);
+    } catch (error) {
+      handleReadinessError(error);
     } finally {
       setBusyAction(undefined);
     }
@@ -1047,6 +1350,30 @@ export default function App() {
     : undefined;
 
   useEffect(() => {
+    if (!scannerService.isNative()) return undefined;
+    const reconcileRuntime = () => {
+      void refreshManagedRuntimeSetupStatus();
+      // Active-scan focus reconciliation below already reloads the same
+      // snapshot. With no active scan, runtime truth must still refresh so the
+      // sidebar cannot stay falsely Ready or Preparing after sleep/resume.
+      if (!activeScanCaseId) void refreshRuntimeSnapshot();
+    };
+    const onWindowFocus = () => reconcileRuntime();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcileRuntime();
+    };
+
+    const watchdog = window.setInterval(reconcileRuntime, RUNTIME_TRUTH_REFRESH_INTERVAL_MS);
+    window.addEventListener("focus", onWindowFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(watchdog);
+      window.removeEventListener("focus", onWindowFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [activeScanCaseId, refreshManagedRuntimeSetupStatus, refreshRuntimeSnapshot]);
+
+  useEffect(() => {
     if (!activeScanCaseId) return undefined;
     let disposed = false;
     let refreshInFlight = false;
@@ -1247,13 +1574,17 @@ export default function App() {
               mode={mode}
               runtime={snapshot?.runtime}
               status={runtimeSetup}
-              busy={busyAction === "runtime-setup"
+              busy={runtimeSetupRequestPending
                 || runtimeSetup?.active
                 || runtimeSetup?.prerequisiteRepairActive}
+              scannerIssueBusy={busyAction === "scan-readiness"}
               scannerSetupBlocker={scanReadiness && scanReadiness.caseId === currentCaseId && isScannerSetupBlocker(scanReadiness.blockerCode)
                 ? scanReadiness.blockerCode
                 : undefined}
               onSetup={() => void setupManagedRuntime()}
+              onCheckScannerAvailability={() => {
+                if (currentCaseId) void retryScanReadiness(currentCaseId);
+              }}
               onCancel={() => void cancelManagedRuntimeSetup()}
             />
           }
@@ -1502,7 +1833,7 @@ export default function App() {
         onInstallUpdate={(version) => void installUpdate(version)}
         runtime={snapshot?.runtime}
         runtimeSetup={runtimeSetup}
-        runtimeBusy={busyAction === "runtime-setup"
+        runtimeBusy={runtimeSetupRequestPending
           || runtimeSetup?.active
           || runtimeSetup?.prerequisiteRepairActive}
         onSetupRuntime={() => void setupManagedRuntime()}

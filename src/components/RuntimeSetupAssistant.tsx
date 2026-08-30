@@ -21,8 +21,10 @@ interface RuntimeSetupAssistantProps {
   runtime?: AppSnapshot["runtime"];
   status?: ManagedRuntimeSetupStatus;
   busy?: boolean;
+  scannerIssueBusy?: boolean;
   scannerSetupBlocker?: ScannerSetupBlocker;
   onSetup: () => void;
+  onCheckScannerAvailability: () => void;
   onCancel: () => void;
 }
 
@@ -37,10 +39,14 @@ interface RuntimeAssistantCopy {
   description: string;
   readyTitle: string;
   readyDescription: string;
+  idleTitle: string;
+  idleDescription: string;
   demoTitle: string;
   demoDescription: string;
   progressTitle: string;
   progressDescription: string;
+  staleTitle: string;
+  staleDescription: string;
   recoveryTitle: string;
   recoveryDescription: string;
   cancelledTitle: string;
@@ -73,10 +79,14 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       "Keep using the app while ai-security-scanner prepares what it can. No separate setup is required.",
     readyTitle: "Your local scan tools are ready",
     readyDescription: "Choose what you want to scan and get started.",
+    idleTitle: "One local check is not ready yet",
+    idleDescription: "Try again and the app will safely continue or restart its automatic preparation. Your saved projects are unchanged.",
     demoTitle: "Explore a scan with sample results",
     demoDescription: "Open the desktop app when you are ready to scan a real website, cloud account, network, or codebase.",
     progressTitle: "Preparing local checks in the background",
     progressDescription: "The app is downloading and preparing available checks automatically. You can keep using saved projects and reports.",
+    staleTitle: "Preparation took longer than expected",
+    staleDescription: "The app is stopping that exact attempt safely and will offer Retry when it has stopped. Your projects and reports remain available.",
     recoveryTitle: "Preparing a fresh scan workspace",
     recoveryDescription: "Older or unfinished tool data is being preserved while the app prepares an isolated replacement automatically.",
     cancelledTitle: "Setup paused",
@@ -95,18 +105,18 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "This check is unavailable in the installed version",
-        description: "Other available checks can continue and the report will name this coverage gap. Retry after updating the app when convenient.",
-        action: "Try automatic preparation",
+        description: "Other available checks can continue and the report will name this coverage gap. Update the app when convenient, then check again.",
+        action: "Check availability again",
       },
       egress_gateway_unavailable: {
         title: "One installed scan component is unavailable",
-        description: "The app will not use the unverified component. Other checks and reports stay available while automatic repair is retried.",
-        action: "Try automatic repair",
+        description: "This installed component cannot run this check right now. Other checks and reports remain available. Update the app if offered, then check again.",
+        action: "Check availability again",
       },
       engine_execution_contract_invalid: {
         title: "One installed scan component is unavailable",
-        description: "The app will not use the missing or outdated component. Other checks and reports stay available while automatic repair is retried.",
-        action: "Try automatic repair",
+        description: "This installed component cannot run this check right now. Other checks and reports remain available. Update the app if offered, then check again.",
+        action: "Check availability again",
       },
     },
     phases: {
@@ -156,10 +166,14 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       "你可以繼續使用程式；ai-security-scanner 會在背景準備可用的檢查，不需要另外完成設定。",
     readyTitle: "本機掃描工具準備好了",
     readyDescription: "選擇你想掃描的項目，就能直接開始。",
+    idleTitle: "一項本機檢查尚未準備好",
+    idleDescription: "請再試一次，程式會安全地繼續或重新開始自動準備；已保存的專案不會變更。",
     demoTitle: "先用範例結果看看掃描怎麼運作",
     demoDescription: "準備掃描真實網站、雲端帳號、網路或程式碼時，再開啟桌面版即可。",
     progressTitle: "正在背景準備本機檢查",
     progressDescription: "程式會自動下載並準備可用檢查；你仍可使用已保存的專案與報告。",
+    staleTitle: "準備時間超過預期",
+    staleDescription: "程式正在安全停止這次作業；停止後會提供「重試」。你的專案與報告仍可使用。",
     recoveryTitle: "正在準備新的隔離掃描空間",
     recoveryDescription: "程式會保留舊的或未完成的工具資料，並自動準備隔離的新工作空間。",
     cancelledTitle: "設定已暫停",
@@ -178,18 +192,18 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "目前安裝版本無法執行這項檢查",
-        description: "其他可用檢查可以繼續，報告也會列出這個涵蓋缺口；方便時更新程式後再試即可。",
-        action: "再試一次自動準備",
+        description: "其他可用檢查可以繼續，報告也會列出這個涵蓋缺口；方便時更新程式，再重新檢查。",
+        action: "重新檢查可用性",
       },
       egress_gateway_unavailable: {
         title: "一項隨附掃描元件目前無法使用",
-        description: "程式不會執行無法驗證的元件；其他檢查與報告仍可使用，並可重試自動修復。",
-        action: "再試一次自動修復",
+        description: "這個隨附元件目前無法執行此項檢查；其他檢查與報告仍可使用。若有更新可先更新，再重新檢查。",
+        action: "重新檢查可用性",
       },
       engine_execution_contract_invalid: {
         title: "一項隨附掃描元件目前無法使用",
-        description: "程式不會執行缺少或過期的元件；其他檢查與報告仍可使用，並可重試自動修復。",
-        action: "再試一次自動修復",
+        description: "這個隨附元件目前無法執行此項檢查；其他檢查與報告仍可使用。若有更新可先更新，再重新檢查。",
+        action: "重新檢查可用性",
       },
     },
     phases: {
@@ -243,8 +257,10 @@ export function RuntimeSetupAssistant({
   runtime,
   status,
   busy,
+  scannerIssueBusy,
   scannerSetupBlocker,
   onSetup,
+  onCheckScannerAvailability,
   onCancel,
 }: RuntimeSetupAssistantProps) {
   const text = copy[locale];
@@ -263,8 +279,10 @@ export function RuntimeSetupAssistant({
     setupStarting,
     setupActive,
     setupRecovering,
+    setupStale,
     setupFailed,
     setupCancelled,
+    setupIdleUnavailable,
   } = presentation;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
   const preservedUnknownWorkspace = status?.nextAction === "resolve_wsl_distribution_manually";
@@ -306,10 +324,14 @@ export function RuntimeSetupAssistant({
     ? nextAction?.title ?? text.failedTitle
     : setupCancelled
       ? text.cancelledTitle
+    : setupStale
+      ? text.staleTitle
     : setupRecovering
       ? text.recoveryTitle
     : setupActive
       ? text.progressTitle
+    : setupIdleUnavailable
+      ? text.idleTitle
       : text.title);
   const description = scannerIssue?.description ?? (setupFailed && nextAction
     ? nextAction.description
@@ -317,10 +339,14 @@ export function RuntimeSetupAssistant({
       ? text.failedDescription
       : setupCancelled
         ? text.cancelledDescription
+      : setupStale
+        ? text.staleDescription
       : setupRecovering
         ? text.recoveryDescription
       : setupActive
         ? text.progressDescription
+      : setupIdleUnavailable
+        ? text.idleDescription
         : text.description);
 
   return (
@@ -363,7 +389,12 @@ export function RuntimeSetupAssistant({
 
       <div className="runtime-assistant__actions">
         {scannerIssue ? (
-          <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
+          <button
+            className="button button--primary"
+            type="button"
+            disabled={scannerIssueBusy}
+            onClick={onCheckScannerAvailability}
+          >
             <Icon name="refresh" size={17} />
             {scannerIssue.action}
           </button>
@@ -382,7 +413,7 @@ export function RuntimeSetupAssistant({
             <Icon name="close" size={16} />
             {status?.cancelRequested ? text.cancelling : text.cancel}
           </button>
-        ) : !setupFailed && !setupCancelled ? null : (
+        ) : !setupFailed && !setupCancelled && !setupIdleUnavailable ? null : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
             {setupFailed ? text.retry : setupCancelled ? text.continue : text.start}

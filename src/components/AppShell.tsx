@@ -340,7 +340,7 @@ export function AppShell({
                   <Icon name="progress" size={15} />
                   {t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase ?? "install"])}
                 </button>
-              ) : runtimeSetup?.phase === "failed" || runtimeSetup?.phase === "cancelled" ? (
+              ) : !runtimeSetupWorking ? (
                 <button
                   className="button button--small"
                   type="button"

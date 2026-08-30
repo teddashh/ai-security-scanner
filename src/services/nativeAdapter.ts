@@ -624,6 +624,10 @@ export interface NativeManagedRuntimeSetupStatus {
   phase: ManagedRuntimeSetupPhase;
   active: boolean;
   prerequisite_repair_active: boolean;
+  operation_id?: string | null;
+  started_at?: string | null;
+  last_heartbeat_at?: string | null;
+  stale?: boolean;
   cancel_requested: boolean;
   received_bytes: number;
   total_bytes: number | null;
@@ -691,6 +695,21 @@ const managedRuntimeSetupPhases = new Set<ManagedRuntimeSetupPhase>([
   "cancelled",
 ]);
 
+const boundedRuntimeOperationField = (
+  value: string | null | undefined,
+  maximumLength: number,
+): string | undefined => typeof value === "string"
+  && value.length > 0
+  && value.length <= maximumLength
+  && !/[\0\u2028\u2029]/u.test(value)
+  ? value
+  : undefined;
+
+const boundedRuntimeTimestamp = (value: string | null | undefined): string | undefined => {
+  const bounded = boundedRuntimeOperationField(value, 64);
+  return bounded && Number.isFinite(Date.parse(bounded)) ? bounded : undefined;
+};
+
 /**
  * Adapts the snake-case Tauri DTO and enforces its terminal-failure contract.
  * A stale or partially mismatched recovery pair is deliberately hidden rather
@@ -703,10 +722,17 @@ export const adaptManagedRuntimeSetupStatus = (
   const hasValidRecovery = phase === "failed"
     && status.failure_reason !== null
     && managedRuntimeRecoveryActions[status.failure_reason] === status.next_action;
+  const operationId = boundedRuntimeOperationField(status.operation_id, 128);
+  const startedAt = boundedRuntimeTimestamp(status.started_at);
+  const lastHeartbeatAt = boundedRuntimeTimestamp(status.last_heartbeat_at);
   return {
     phase,
     active: status.active,
     prerequisiteRepairActive: status.prerequisite_repair_active,
+    ...(operationId ? { operationId } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(lastHeartbeatAt ? { lastHeartbeatAt } : {}),
+    ...(status.stale !== undefined ? { stale: status.stale === true } : {}),
     cancelRequested: status.cancel_requested,
     receivedBytes: status.received_bytes,
     totalBytes: status.total_bytes ?? undefined,
