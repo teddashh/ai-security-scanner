@@ -33,15 +33,23 @@ use ai_security_scanner_lib::managed_runtime::{
 };
 use ai_security_scanner_lib::orchestrator::{ExecutionCheckpoint, ExecutionStage};
 use ai_security_scanner_lib::process_lease::DataDirectoryExclusiveLease;
+#[cfg(test)]
+use ai_security_scanner_lib::product_uninstall::ALL_DATA_CONFIRMATION;
+use ai_security_scanner_lib::product_uninstall::{
+    LocalProductUninstallBackend, PRODUCT_DATA_DIRECTORY_NAME, ProductUninstallMode,
+    ProductUninstallRequest, ProductUninstallResultClass, coordinate_product_uninstall,
+    finalize_all_data_root, prepare_fixed_product_data_root, stage_all_data_root_for_finalization,
+};
 use ai_security_scanner_lib::registry::EngineRegistry;
 use ai_security_scanner_lib::runtime::detect_runtime;
 use ai_security_scanner_lib::storage::Storage;
 use chrono::{DateTime, Utc};
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use directories::ProjectDirs;
+use clap::parser::ValueSource;
+use clap::{ArgAction, Args, CommandFactory, FromArgMatches, Subcommand, ValueEnum};
+use directories::{BaseDirs, ProjectDirs};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -60,7 +68,7 @@ const MANAGED_RUNTIME_QUALIFICATION_IMAGE: &str = concat!(
 const MANAGED_RUNTIME_QUALIFICATION_REPORT: &str = "gitleaks.json";
 const MAX_MANAGED_RUNTIME_QUALIFICATION_REPORT_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Parser)]
+#[derive(Debug, clap::Parser)]
 #[command(name = "ai-security-scanner")]
 #[command(about = "Local-first security assessment casework CLI")]
 #[command(version)]
@@ -87,6 +95,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Coordinate one exact installed-product uninstall choice before opening
+    /// the case database or engine catalog. Intended for the package uninstaller.
+    ProductUninstall(ProductUninstallArgs),
     /// Manage long-lived assessment cases.
     Case {
         #[command(subcommand)]
@@ -136,6 +147,42 @@ enum Command {
     },
     /// Check local storage, catalog, and container runtime readiness.
     Doctor,
+}
+
+#[derive(Debug, Args)]
+struct ProductUninstallArgs {
+    #[arg(long, value_enum)]
+    mode: ProductUninstallModeArg,
+    /// Confirms that the package uninstaller, rather than this CLI, owns the
+    /// visible choice and any data-loss prompt.
+    #[arg(long)]
+    non_interactive: bool,
+    /// Required only for all-data and compared byte-for-byte with the fixed
+    /// confirmation phrase printed by the package uninstaller.
+    #[arg(long)]
+    confirmation: Option<String>,
+    /// Emit the fixed, privacy-safe package-coordinator envelope instead of
+    /// the detailed retained-item record.
+    #[arg(long, hide = true)]
+    coordinator_envelope: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ProductUninstallModeArg {
+    AppOnly,
+    #[value(alias = "verified-scan-tools")]
+    ScanTools,
+    AllData,
+}
+
+impl From<ProductUninstallModeArg> for ProductUninstallMode {
+    fn from(value: ProductUninstallModeArg) -> Self {
+        match value {
+            ProductUninstallModeArg::AppOnly => Self::AppOnly,
+            ProductUninstallModeArg::ScanTools => Self::ScanTools,
+            ProductUninstallModeArg::AllData => Self::AllData,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -752,19 +799,59 @@ struct ExactRuntimeCleanupFailure {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let option_sources = GlobalOptionSources {
+        data_dir: matches.value_source("data_dir"),
+        managed_runtime_bundle: matches.value_source("managed_runtime_bundle"),
+    };
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     let json_errors = cli.json;
-    if let Err(error) = execute(cli).await {
-        if json_errors {
-            eprintln!("{}", json!({ "error": error.to_string() }));
-        } else {
-            eprintln!("error: {error}");
+    match execute(cli, option_sources).await {
+        Ok(0) => {}
+        Ok(exit_code) => std::process::exit(i32::from(exit_code)),
+        Err(error) => {
+            if json_errors {
+                eprintln!("{}", json!({ "error": error.to_string() }));
+            } else {
+                eprintln!("error: {error}");
+            }
+            std::process::exit(1);
         }
-        std::process::exit(1);
     }
 }
 
-async fn execute(cli: Cli) -> AppResult<()> {
+#[derive(Debug, Clone, Copy, Default)]
+struct GlobalOptionSources {
+    data_dir: Option<ValueSource>,
+    managed_runtime_bundle: Option<ValueSource>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProductUninstallCoordinatorEnvelope {
+    schema_version: &'static str,
+    mode: ProductUninstallMode,
+    result_class: ProductUninstallResultClass,
+    exit_code: u8,
+    retained_item_count: usize,
+    retained_classes: Vec<&'static str>,
+    terminal: &'static str,
+}
+
+impl GlobalOptionSources {
+    fn data_dir_was_explicit(self) -> bool {
+        self.data_dir == Some(ValueSource::CommandLine)
+    }
+
+    fn managed_runtime_bundle_was_explicit(self) -> bool {
+        self.managed_runtime_bundle == Some(ValueSource::CommandLine)
+    }
+}
+
+async fn execute(cli: Cli, option_sources: GlobalOptionSources) -> AppResult<u8> {
+    if let Command::ProductUninstall(args) = &cli.command {
+        return execute_product_uninstall_early(&cli, args, option_sources);
+    }
+
     let managed_runtime_bundle = cli.managed_runtime_bundle;
     let data_dir = resolve_data_dir(cli.data_dir)?;
     fs::create_dir_all(&data_dir)?;
@@ -786,6 +873,7 @@ async fn execute(cli: Cli) -> AppResult<()> {
     );
 
     match cli.command {
+        Command::ProductUninstall(_) => unreachable!("product uninstall is early-dispatched"),
         Command::Case { command } => {
             execute_case(command, &storage, &service, cli.json)?;
         }
@@ -874,11 +962,128 @@ async fn execute(cli: Cli) -> AppResult<()> {
         }
     }
 
+    Ok(0)
+}
+
+fn validate_product_uninstall_option_sources(option_sources: GlobalOptionSources) -> AppResult<()> {
+    if option_sources.data_dir_was_explicit() {
+        return Err(AppError::NotAuthorized(
+            "product-uninstall refuses an explicit global --data-dir override".into(),
+        ));
+    }
+    if option_sources.managed_runtime_bundle_was_explicit() {
+        return Err(AppError::NotAuthorized(
+            "product-uninstall refuses an explicit managed-runtime bundle override".into(),
+        ));
+    }
     Ok(())
+}
+
+fn execute_product_uninstall_early(
+    cli: &Cli,
+    args: &ProductUninstallArgs,
+    option_sources: GlobalOptionSources,
+) -> AppResult<u8> {
+    // Environment-backed overrides are intentionally ignored for this one
+    // installed-product command. They are useful for ordinary CLI casework,
+    // but must not redirect or block the package uninstaller. Explicit command
+    // line overrides remain a contract error.
+    validate_product_uninstall_option_sources(option_sources)?;
+    if args.coordinator_envelope && !cli.json {
+        return Err(AppError::InvalidRequest(
+            "--coordinator-envelope requires --json".into(),
+        ));
+    }
+    let request = ProductUninstallRequest {
+        mode: args.mode.into(),
+        non_interactive: args.non_interactive,
+        confirmation: args.confirmation.clone(),
+    };
+    // Confirmation and mode validation happen before a lock file is created or
+    // any runtime inventory can issue a command.
+    request.validate()?;
+
+    let local_data_root = BaseDirs::new()
+        .map(|directories| directories.data_local_dir().to_path_buf())
+        .ok_or_else(|| {
+            AppError::Internal("could not determine the platform local-data directory".into())
+        })?;
+    let data_root = local_data_root.join(PRODUCT_DATA_DIRECTORY_NAME);
+    let (data_existed_before, data_root_guard) =
+        prepare_fixed_product_data_root(&data_root, &local_data_root)?;
+    // Always lease the canonical root, including the absent-root case. A
+    // desktop that races to create or acquire it wins or loses the same exact
+    // lease before runtime inventory begins; absence is never treated as a
+    // concurrency exemption.
+    let exclusive_lease = DataDirectoryExclusiveLease::acquire(&data_root)?;
+    let mut backend = LocalProductUninstallBackend::new(data_root.clone());
+    let mut result = coordinate_product_uninstall(&request, &mut backend)?;
+    drop(backend);
+    drop(data_root_guard);
+    let may_finalize = result.result_class != ProductUninstallResultClass::ContactNotStopped
+        && (request.mode == ProductUninstallMode::AllData || !data_existed_before);
+    let staged_data_root = if may_finalize {
+        if !result.canonical_data_root_can_be_staged() {
+            result.record_finalization_retained(
+                "product_data",
+                "ambiguous_or_unremoved_product_state_preserved",
+            );
+            None
+        } else {
+            match stage_all_data_root_for_finalization(&data_root, &exclusive_lease) {
+                Ok(staged) => Some(staged),
+                Err(_) => {
+                    result.record_finalization_retained(
+                        "product_data",
+                        "product_data_root_staging_incomplete",
+                    );
+                    None
+                }
+            }
+        }
+    } else {
+        None
+    };
+    drop(exclusive_lease);
+
+    if let Some(staged_data_root) = staged_data_root {
+        for retained in finalize_all_data_root(&staged_data_root) {
+            result.record_finalization_retained(retained.item_class, retained.reason_code);
+        }
+    }
+    if args.coordinator_envelope {
+        let retained_classes = result
+            .retained_items
+            .iter()
+            .map(|item| item.item_class)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let envelope = ProductUninstallCoordinatorEnvelope {
+            schema_version: result.schema_version,
+            mode: result.mode,
+            result_class: result.result_class,
+            exit_code: result.exit_code,
+            retained_item_count: result.retained_items.len(),
+            retained_classes,
+            terminal: "complete",
+        };
+        // Deliberately no trailing newline: NSIS compares the complete bounded
+        // envelope and never mistakes a truncated detailed record for success.
+        print!("{}", serde_json::to_string(&envelope)?);
+    } else if cli.json {
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
+    Ok(result.exit_code)
 }
 
 fn command_requires_exclusive_data_directory(command: &Command) -> bool {
     match command {
+        // ProductUninstall is early-dispatched and acquires the same lease
+        // before database/catalog initialization.
+        Command::ProductUninstall(_) => false,
         Command::Case {
             command: CaseCommand::Delete { .. } | CaseCommand::DeleteArtifacts { .. },
         } => true,
@@ -2765,7 +2970,7 @@ mod tests {
     use ai_security_scanner_lib::container_runtime::{
         FakeContainerRuntime, FakeRunBehavior, RuntimeCall,
     };
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
 
     fn managed_qualification_preflight() -> RuntimePreflight {
         RuntimePreflight {
@@ -2792,6 +2997,122 @@ mod tests {
     #[test]
     fn complete_command_tree_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn product_uninstall_cli_has_three_fixed_modes_and_a_legacy_scan_tools_alias() {
+        for mode in ["app-only", "scan-tools", "verified-scan-tools", "all-data"] {
+            let mut arguments = vec![
+                "ai-security-scanner",
+                "product-uninstall",
+                "--mode",
+                mode,
+                "--non-interactive",
+            ];
+            if mode == "all-data" {
+                arguments.extend(["--confirmation", ALL_DATA_CONFIRMATION]);
+            }
+            let parsed = Cli::try_parse_from(arguments).expect("fixed uninstall CLI mode");
+            assert!(matches!(parsed.command, Command::ProductUninstall(_)));
+        }
+    }
+
+    #[test]
+    fn product_uninstall_accepts_the_hidden_bounded_coordinator_envelope() {
+        let parsed = Cli::try_parse_from([
+            "ai-security-scanner",
+            "--json",
+            "product-uninstall",
+            "--mode",
+            "app-only",
+            "--non-interactive",
+            "--coordinator-envelope",
+        ])
+        .expect("installed package coordinator invocation");
+        let Command::ProductUninstall(args) = parsed.command else {
+            panic!("product uninstall command");
+        };
+        assert!(args.coordinator_envelope);
+    }
+
+    #[test]
+    fn product_uninstall_coordinator_envelope_is_complete_redacted_and_bounded() {
+        let envelope = ProductUninstallCoordinatorEnvelope {
+            schema_version: "ai-security-scanner.product-uninstall/v1",
+            mode: ProductUninstallMode::AllData,
+            result_class: ProductUninstallResultClass::CompletedWithRetainedState,
+            exit_code: 10,
+            retained_item_count: 129,
+            retained_classes: vec![
+                "compatibility_provider_image",
+                "managed_runtime_state",
+                "product_data",
+            ],
+            terminal: "complete",
+        };
+        let encoded = serde_json::to_string(&envelope).unwrap();
+
+        assert!(encoded.len() < 512);
+        assert!(
+            encoded.starts_with("{\"schema_version\":\"ai-security-scanner.product-uninstall/v1\"")
+        );
+        assert!(encoded.ends_with("\"terminal\":\"complete\"}"));
+        assert!(encoded.contains(
+            "\"retained_classes\":[\"compatibility_provider_image\",\"managed_runtime_state\",\"product_data\"]"
+        ));
+        for forbidden in [
+            "target",
+            "path",
+            "case_id",
+            "runtime_name",
+            "scanner_message",
+        ] {
+            assert!(!encoded.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn product_uninstall_rejects_an_arbitrary_data_directory_before_dispatch() {
+        let parsed = Cli::try_parse_from([
+            "ai-security-scanner",
+            "--data-dir",
+            "/tmp/not-the-installed-product-root",
+            "product-uninstall",
+            "--mode",
+            "scan-tools",
+            "--non-interactive",
+        ])
+        .unwrap();
+        let Command::ProductUninstall(args) = &parsed.command else {
+            panic!("product uninstall command");
+        };
+        let error = execute_product_uninstall_early(
+            &parsed,
+            args,
+            GlobalOptionSources {
+                data_dir: Some(ValueSource::CommandLine),
+                managed_runtime_bundle: None,
+            },
+        )
+        .expect_err("arbitrary destructive root must fail before mutation");
+        assert!(error.to_string().contains("explicit global --data-dir"));
+    }
+
+    #[test]
+    fn product_uninstall_ignores_inherited_global_overrides_but_not_explicit_ones() {
+        validate_product_uninstall_option_sources(GlobalOptionSources {
+            data_dir: Some(ValueSource::EnvVariable),
+            managed_runtime_bundle: Some(ValueSource::EnvVariable),
+        })
+        .expect("inherited development overrides cannot redirect or block package uninstall");
+
+        assert!(
+            validate_product_uninstall_option_sources(GlobalOptionSources {
+                data_dir: None,
+                managed_runtime_bundle: Some(ValueSource::CommandLine),
+            })
+            .is_err()
+        );
     }
 
     #[test]

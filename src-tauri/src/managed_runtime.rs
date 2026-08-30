@@ -2291,6 +2291,33 @@ impl ManagedRuntimeManager {
         app_local_data_directory: &Path,
         expected_manifest_sha256: Option<&str>,
     ) -> AppResult<Self> {
+        Self::open_installed_with_sibling_policy(
+            app_local_data_directory,
+            expected_manifest_sha256,
+            false,
+        )
+    }
+
+    /// Opens one exact verified installation for product uninstall while
+    /// treating unrelated malformed siblings as preserved ambiguity. A broken
+    /// or symlinked sibling must not prevent a separately verified runtime from
+    /// receiving its bounded stop, and is never traversed or deleted here.
+    pub fn open_installed_for_product_uninstall(
+        app_local_data_directory: &Path,
+        expected_manifest_sha256: &str,
+    ) -> AppResult<Self> {
+        Self::open_installed_with_sibling_policy(
+            app_local_data_directory,
+            Some(expected_manifest_sha256),
+            true,
+        )
+    }
+
+    fn open_installed_with_sibling_policy(
+        app_local_data_directory: &Path,
+        expected_manifest_sha256: Option<&str>,
+        preserve_ambiguous_siblings: bool,
+    ) -> AppResult<Self> {
         if let Some(expected) = expected_manifest_sha256 {
             validate_sha256(expected, "managed runtime expected manifest digest")?;
         }
@@ -2313,8 +2340,15 @@ impl ManagedRuntimeManager {
         let mut candidates = Vec::new();
         for entry in entries {
             let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)?;
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) if preserve_ambiguous_siblings => continue,
+                Err(error) => return Err(error.into()),
+            };
             if metadata.file_type().is_symlink() {
+                if preserve_ambiguous_siblings {
+                    continue;
+                }
                 return Err(AppError::NotAuthorized(
                     "managed runtime versions directory contains a symlink".into(),
                 ));
@@ -2331,16 +2365,26 @@ impl ManagedRuntimeManager {
             }
             let manifest_path = path.join("manifest.json");
             if !manifest_path.exists() {
+                if preserve_ambiguous_siblings {
+                    continue;
+                }
                 return Err(AppError::NotAuthorized(
                     "managed runtime installation has no release manifest".into(),
                 ));
             }
-            let loaded = LoadedManagedRuntimeManifest::read(&manifest_path)?;
+            let loaded = match LoadedManagedRuntimeManifest::read(&manifest_path) {
+                Ok(loaded) => loaded,
+                Err(_) if preserve_ambiguous_siblings => continue,
+                Err(error) => return Err(error),
+            };
             if expected_manifest_sha256.is_some_and(|expected| expected != loaded.sha256()) {
                 continue;
             }
             let expected_name = installation_directory_name(&loaded);
             if entry.file_name() != OsStr::new(&expected_name) {
+                if preserve_ambiguous_siblings {
+                    continue;
+                }
                 return Err(AppError::NotAuthorized(
                     "managed runtime installation directory does not match its manifest identity"
                         .into(),
@@ -2848,6 +2892,84 @@ impl ManagedRuntimeManager {
             false,
             Some(target),
             "managed runtime machine is stopped".into(),
+        ))
+    }
+
+    /// Proves target contact stopped for product uninstall without treating a
+    /// no-op lifecycle status as success.
+    ///
+    /// Ordinary `stop` is intentionally tolerant when setup has not selected a
+    /// generation. Uninstall has a stricter contract: nonempty unclassified
+    /// provider state or an unexpected running private-provider machine means
+    /// contact cannot be proven stopped. The exact selected machine is still
+    /// stopped first when possible, but the caller receives an error and does
+    /// not begin deletion while another running machine remains.
+    pub fn stop_for_product_uninstall(&self) -> AppResult<ManagedRuntimeStatus> {
+        let _lock = self.lock()?;
+        if !self.install_directory().exists() {
+            return self.status_locked();
+        }
+        self.verify_installation()?;
+        let target = self.loaded.target()?;
+        if !self.provider_generation_is_selected_locked(target)? {
+            let provider_root = self.state_root.join("provider-home");
+            match fs::symlink_metadata(&provider_root) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                    if fs::read_dir(&provider_root)?.next().transpose()?.is_some() {
+                        return Err(AppError::NotAuthorized(
+                            "managed runtime has unclassified provider state; target contact cannot be proven stopped"
+                                .into(),
+                        ));
+                    }
+                }
+                Ok(_) => {
+                    return Err(AppError::NotAuthorized(
+                        "managed runtime provider state is ambiguous; target contact cannot be proven stopped"
+                            .into(),
+                    ));
+                }
+                Err(error) => return Err(error.into()),
+            }
+            return Ok(self.status_value(
+                ManagedRuntimePhase::Stopped,
+                false,
+                Some(target),
+                "no classified managed runtime can contact a target".into(),
+            ));
+        }
+
+        let command = self.runtime_command(target)?;
+        let machine_name = self.effective_machine_name_locked(target)?;
+        let machines = self.list_machines(&command)?;
+        let unexpected_running = machines
+            .iter()
+            .any(|machine| machine.name != machine_name && machine.running);
+        if let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) {
+            self.prove_machine_named(machine, target, &machine_name)?;
+            self.prove_current_windows_machine_ownership_locked(target, &machine_name)?;
+            if machine.running {
+                let output = self.run_command(
+                    ManagedCommandOperation::MachineStop,
+                    &command,
+                    ["machine", "stop", machine_name.as_str()],
+                    MACHINE_STOP_TIMEOUT,
+                )?;
+                require_success("managed runtime machine stop", &output)?;
+                self.wait_for_machine_stopped(&command, &machine_name, MACHINE_STOP_TIMEOUT)?;
+            }
+        }
+        if unexpected_running {
+            return Err(AppError::NotAuthorized(
+                "managed runtime private provider reported another running machine; target contact cannot be proven stopped"
+                    .into(),
+            ));
+        }
+        Ok(self.status_value(
+            ManagedRuntimePhase::Stopped,
+            false,
+            Some(target),
+            "managed runtime target contact is stopped".into(),
         ))
     }
 
@@ -19283,6 +19405,41 @@ mod tests {
     }
 
     #[test]
+    fn product_uninstall_opens_an_exact_runtime_despite_a_malformed_sibling() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let expected_digest = fixture.manager.manifest_sha256().to_owned();
+        let app_data = fixture
+            .manager
+            .state_root
+            .parent()
+            .expect("app data parent")
+            .to_path_buf();
+        let malformed = fixture
+            .manager
+            .versions_root()
+            .join("unknown-provider-state");
+        fs::create_dir(&malformed).expect("malformed sibling");
+        fs::write(malformed.join("must-remain"), b"ambiguous state").expect("ambiguous marker");
+
+        assert!(
+            ManagedRuntimeManager::open_installed(&app_data, Some(&expected_digest)).is_err(),
+            "ordinary exact open retains its strict sibling policy"
+        );
+        let exact = ManagedRuntimeManager::open_installed_for_product_uninstall(
+            &app_data,
+            &expected_digest,
+        )
+        .expect("uninstall must still stop the separately verified runtime");
+
+        assert_eq!(exact.manifest_sha256(), expected_digest);
+        assert_eq!(
+            fs::read(malformed.join("must-remain")).unwrap(),
+            b"ambiguous state"
+        );
+    }
+
+    #[test]
     fn exact_legacy_v2_installation_reopens_without_weakening_current_bundle_rules() {
         let mut fixture = fixture();
         let mut legacy_manifest = fixture.manager.loaded.manifest.clone();
@@ -22521,6 +22678,50 @@ mod tests {
             .stop(ManagedStopMode::Force)
             .expect("force stop");
         assert_eq!(status.phase, ManagedRuntimePhase::Stopped);
+    }
+
+    #[test]
+    fn product_uninstall_stop_stops_the_expected_machine_but_rejects_another_running_machine() {
+        let fixture = fixture();
+        fixture.manager.install().expect("install");
+        let target = fixture.manager.loaded.target().expect("target");
+        let expected = machine_name(target);
+        let inventory = |expected_running| {
+            serde_json::to_vec(&serde_json::json!([
+                {
+                    "Name": expected,
+                    "Running": expected_running,
+                    "VMType": target.provider.argument(),
+                    "CPUs": 2,
+                    "Memory": (4096_u64 * 1024 * 1024).to_string(),
+                    "DiskSize": (40_u64 * 1024 * 1024 * 1024).to_string()
+                },
+                {
+                    "Name": "unexpected-private-machine",
+                    "Running": true,
+                    "VMType": target.provider.argument(),
+                    "CPUs": 2,
+                    "Memory": (4096_u64 * 1024 * 1024).to_string(),
+                    "DiskSize": (40_u64 * 1024 * 1024 * 1024).to_string()
+                }
+            ]))
+            .unwrap()
+        };
+        fixture.commands.push(success(inventory(true)));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(inventory(false)));
+
+        let error = fixture
+            .manager
+            .stop_for_product_uninstall()
+            .expect_err("another running private-provider machine is unresolved contact");
+
+        assert!(error.to_string().contains("another running machine"));
+        assert!(
+            fixture.commands.calls().iter().any(|call| {
+                call == &["machine".to_owned(), "stop".to_owned(), expected.clone()]
+            })
+        );
     }
 
     #[test]

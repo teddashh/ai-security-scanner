@@ -29,6 +29,7 @@ pub mod managed_runtime;
 pub mod orchestrator;
 pub mod prioritization;
 pub mod process_lease;
+pub mod product_uninstall;
 pub mod registry;
 pub mod runtime;
 pub mod source_authorization;

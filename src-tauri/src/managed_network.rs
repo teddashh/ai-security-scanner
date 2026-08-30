@@ -31,6 +31,7 @@ const MAX_INSPECT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_GATEWAY_STATUS_BYTES: usize = 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = 4 * 1024;
 const RUNTIME_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const PRODUCT_UNINSTALL_GATEWAY_STOP_DEADLINE: Duration = Duration::from_secs(7 * 60);
 const GATEWAY_IMAGE_PULL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_DESTINATIONS: usize = 10_000;
 const MAX_EXTERNAL_PLANS_PER_LEASE: usize = 128;
@@ -307,6 +308,25 @@ pub struct ManagedNetworkReconciliationSummary {
     pub reconciled: usize,
     pub incomplete: usize,
     pub details: Vec<String>,
+}
+
+/// Bounded uninstall-time result for disposable compatibility gateways.
+///
+/// `exact_stop_failures` means a Docker/Podman gateway named by a complete,
+/// durable container identity could not be proven stopped. In contrast,
+/// `retained_ambiguities` covers malformed, replaced, or otherwise
+/// non-authoritative registry state that was left untouched.
+/// `contact_inventory_incomplete` means the bounded registry itself could not
+/// be completely enumerated, so an otherwise exact active gateway could be
+/// hidden beyond the observed records. Callers must retain the application
+/// controller for both an exact stop failure and incomplete contact inventory.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ManagedCompatibilityGatewayStopSummary {
+    pub exact_gateways_found: usize,
+    pub exact_gateways_stopped: usize,
+    pub exact_stop_failures: usize,
+    pub retained_ambiguities: usize,
+    pub contact_inventory_incomplete: bool,
 }
 
 /// The file consumed by the isolated host-side SOCKS gateway.
@@ -2398,6 +2418,166 @@ impl ManagedNetworkRegistry {
         Ok(summary)
     }
 
+    /// Stops only compatibility gateways named by a complete durable container
+    /// identity, without reconciling any network, policy, status, or registry
+    /// state.
+    ///
+    /// Intent/network/uplink/policy phases have no exact gateway container ID,
+    /// so they issue no runtime command. Managed-local records are owned by the
+    /// separately verified managed-machine stop path and are skipped here.
+    /// Malformed or inconsistent records remain byte-for-byte intact and are
+    /// reported as retained ambiguity; no name or prefix is ever promoted to
+    /// mutation authority. Absence from the current provider context is not
+    /// absence proof for a container created through an earlier context.
+    pub fn stop_verified_compatibility_gateways(
+        &self,
+        now: DateTime<Utc>,
+    ) -> ManagedCompatibilityGatewayStopSummary {
+        let mut result = ManagedCompatibilityGatewayStopSummary::default();
+        // One exact stop can consume at most three fixed 30-second runtime
+        // calls. Stop admitting new calls at seven minutes so the current call
+        // still returns within the package coordinator's ten-minute envelope.
+        let stop_deadline = Instant::now() + PRODUCT_UNINSTALL_GATEWAY_STOP_DEADLINE;
+        let mut load_summary = ManagedNetworkReconciliationSummary::default();
+        let groups = match self.load_groups(now, &mut load_summary) {
+            Ok(groups) => groups,
+            Err(_) => {
+                result.retained_ambiguities = load_summary.incomplete.saturating_add(1);
+                result.contact_inventory_incomplete = true;
+                return result;
+            }
+        };
+        result.retained_ambiguities = load_summary.incomplete;
+
+        for entries in groups.values() {
+            let latest = match latest_record(entries) {
+                Ok(latest) => latest,
+                Err(_) => {
+                    result.retained_ambiguities = result.retained_ambiguities.saturating_add(1);
+                    continue;
+                }
+            };
+            if latest.provider == RuntimeProvider::ManagedLocal {
+                continue;
+            }
+            if latest.gateway_container_id.is_none() {
+                // `Ready` is the terminal phase written by the legacy native
+                // host gateway. It has no durable process/container identity,
+                // so uninstall cannot prove target contact stopped and must
+                // preserve/disclose it without inventing PID or name authority.
+                if latest.phase == RegistryPhase::Ready {
+                    result.retained_ambiguities = result.retained_ambiguities.saturating_add(1);
+                }
+                continue;
+            }
+
+            let identity = match gateway_container_identity_from_record(latest) {
+                Ok(Some(identity)) => identity,
+                // A malformed or incomplete record is not authority to assert
+                // that one exact product gateway exists. Preserve it as
+                // ambiguity instead of turning uncertainty into a hard block.
+                Ok(None) | Err(_) => {
+                    result.retained_ambiguities = result.retained_ambiguities.saturating_add(1);
+                    continue;
+                }
+            };
+            result.exact_gateways_found = result.exact_gateways_found.saturating_add(1);
+            if Instant::now() >= stop_deadline {
+                result.exact_stop_failures = result.exact_stop_failures.saturating_add(1);
+                continue;
+            }
+            match stop_gateway_container_for_product_uninstall(
+                self.runtime.as_ref(),
+                latest.provider,
+                &identity,
+                &latest.policy_id,
+            ) {
+                Ok(()) => {
+                    // The exact container was observed in this provider
+                    // context and is now stopped. The registry is intentionally
+                    // retained for the later bounded cleanup phase.
+                    result.exact_gateways_stopped = result.exact_gateways_stopped.saturating_add(1);
+                }
+                // An identity mismatch proves only that the live object is not
+                // the exact disposable gateway described by this record. It is
+                // preserved as unrelated/ambiguous state. Runtime I/O or an
+                // exact removal that fails remains a real contact-stop failure.
+                Err(AppError::NotAuthorized(_)) => {
+                    result.retained_ambiguities = result.retained_ambiguities.saturating_add(1);
+                }
+                Err(_) => {
+                    result.exact_stop_failures = result.exact_stop_failures.saturating_add(1);
+                }
+            }
+        }
+        result
+    }
+
+    /// Reconciles only validated Docker/Podman records for the disposable
+    /// gateway-container backend after the uninstall coordinator has proven
+    /// target contact stopped.
+    ///
+    /// This is intentionally narrower than [`Self::reconcile_all`]. It skips
+    /// managed-local records (owned by the managed-machine lifecycle) and all
+    /// legacy direct-host records (which have no durable process identity).
+    /// Incomplete or malformed state remains recorded in `incomplete` and is
+    /// never selected by a name or prefix.
+    pub fn reconcile_verified_compatibility_gateway_records(
+        &self,
+        now: DateTime<Utc>,
+    ) -> ManagedNetworkReconciliationSummary {
+        let mut summary = ManagedNetworkReconciliationSummary::default();
+        let groups = match self.load_groups(now, &mut summary) {
+            Ok(groups) => groups,
+            Err(error) => {
+                summary.incomplete = summary.incomplete.saturating_add(1);
+                push_summary_detail(
+                    &mut summary,
+                    bounded_cleanup_detail(&format!(
+                        "compatibility gateway cleanup was safely retained: {error}"
+                    )),
+                );
+                return summary;
+            }
+        };
+        for entries in groups.values() {
+            let latest = match latest_record(entries) {
+                Ok(latest) => latest,
+                Err(error) => {
+                    summary.incomplete = summary.incomplete.saturating_add(1);
+                    push_summary_detail(
+                        &mut summary,
+                        bounded_cleanup_detail(&format!(
+                            "compatibility gateway cleanup was safely retained: {error}"
+                        )),
+                    );
+                    continue;
+                }
+            };
+            if latest.provider == RuntimeProvider::ManagedLocal
+                || latest.gateway_container_name.is_none()
+            {
+                continue;
+            }
+            match self.reconcile_record_group(entries) {
+                Ok(outcome) => {
+                    summary.reconciled = summary.reconciled.saturating_add(1);
+                    push_summary_detail(&mut summary, outcome.detail);
+                }
+                Err(error) => {
+                    summary.incomplete = summary.incomplete.saturating_add(1);
+                    push_summary_detail(
+                        &mut summary,
+                        bounded_cleanup_detail(&format!(
+                            "compatibility gateway cleanup was safely retained: {error}"
+                        )),
+                    );
+                }
+            }
+        }
+        summary
+    }
+
     pub fn reconcile_identity(
         &self,
         owner: &ManagedNetworkOwner,
@@ -4328,6 +4508,52 @@ fn remove_gateway_container(
     Ok(())
 }
 
+fn stop_gateway_container_for_product_uninstall(
+    runtime: &dyn RuntimeCommands,
+    provider: RuntimeProvider,
+    container: &GatewayContainerRuntimeIdentity,
+    policy_id: &str,
+) -> AppResult<()> {
+    let Some(inspected) =
+        inspect_optional_gateway_container(runtime, provider, container, policy_id)?
+    else {
+        // Provider alone does not identify a Docker context or Podman
+        // connection. Absence from today's context cannot prove that the exact
+        // gateway recorded in an earlier context has stopped.
+        return Err(AppError::NotAvailable(
+            "exact compatibility gateway is absent from the current provider context; target contact cannot be proven stopped"
+                .into(),
+        ));
+    };
+    if !inspected.running {
+        return Ok(());
+    }
+    let output = runtime_output(
+        runtime,
+        provider,
+        &[
+            "container".into(),
+            "stop".into(),
+            "--time".into(),
+            "10".into(),
+            inspected.id.clone().into(),
+        ],
+    )?;
+    if !output.success && !runtime_reports_container_absent(&output.stderr) {
+        return Err(runtime_failure("egress gateway container stop", &output));
+    }
+    let mut exact = container.clone();
+    exact.id = Some(inspected.id);
+    if inspect_optional_gateway_container(runtime, provider, &exact, policy_id)?
+        .is_some_and(|remaining| remaining.running)
+    {
+        return Err(AppError::Runtime(
+            "egress gateway container remained running after exact stop".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn gateway_container_identity_from_record(
     record: &ManagedNetworkRecord,
 ) -> AppResult<Option<GatewayContainerRuntimeIdentity>> {
@@ -6087,6 +6313,7 @@ mod tests {
         networks: BTreeMap<String, FakeContainerNetwork>,
         container: Option<FakeGatewayContainer>,
         probe: Option<FakeGatewayContainer>,
+        container_stop_failures_remaining: usize,
     }
 
     struct FakeContainerRuntime {
@@ -6372,6 +6599,21 @@ mod tests {
                     container.running = true;
                     Ok(success_output(Vec::new()))
                 }
+                Some([container, stop]) if container == "container" && stop == "stop" => {
+                    if state.container_stop_failures_remaining > 0 {
+                        state.container_stop_failures_remaining -= 1;
+                        return Ok(failure_output("runtime refused exact container stop"));
+                    }
+                    let selector = args.get(4).expect("container stop selector");
+                    let Some(container) = state.container.as_mut() else {
+                        return Ok(failure_output("no such container"));
+                    };
+                    if &container.id != selector || container.removed {
+                        return Ok(failure_output("no such container"));
+                    }
+                    container.running = false;
+                    Ok(success_output(Vec::new()))
+                }
                 Some([container, remove]) if container == "container" && remove == "rm" => {
                     let selector = args.get(3).expect("container removal selector");
                     let selected =
@@ -6578,6 +6820,451 @@ mod tests {
             format!("sha256:{}", "d".repeat(64)),
         )
         .expect("gateway image spec")
+    }
+
+    fn compatibility_gateway_record(
+        now: DateTime<Utc>,
+        unique: &str,
+        provider: RuntimeProvider,
+        phase: RegistryPhase,
+        gateway_container_id: Option<String>,
+    ) -> ManagedNetworkRecord {
+        let policy_id = format!("egress-{unique}");
+        let spec = gateway_container_spec();
+        ManagedNetworkRecord {
+            schema_version: REGISTRY_SCHEMA_VERSION.into(),
+            owner: owner(),
+            provider,
+            network_name: format!("ass-egress-{unique}"),
+            policy_id,
+            created_at: now,
+            expires_at: now + ChronoDuration::hours(1),
+            phase,
+            network_id: Some("a".repeat(64)),
+            uplink_network_name: Some(format!("ass-uplink-{unique}")),
+            uplink_network_id: Some("b".repeat(64)),
+            gateway_container_name: Some(format!("ass-gateway-{unique}")),
+            gateway_container_id,
+            gateway_listener_ip: Some("172.29.0.2".parse().expect("listener IP")),
+            gateway_image_repository: Some(spec.repository().into()),
+            gateway_image_digest: Some(spec.digest().into()),
+            policy_sha256: Some("f".repeat(64)),
+        }
+    }
+
+    fn install_fake_gateway(
+        state: &Arc<Mutex<FakeContainerRuntimeState>>,
+        record: &ManagedNetworkRecord,
+    ) {
+        let internal = record.network_name.clone();
+        let uplink = record
+            .uplink_network_name
+            .clone()
+            .expect("gateway uplink name");
+        let listener = record.gateway_listener_ip.expect("gateway listener");
+        let mut state = state.lock().expect("fake container runtime");
+        state.networks.insert(
+            internal.clone(),
+            FakeContainerNetwork {
+                id: record.network_id.clone().expect("internal network ID"),
+                internal: true,
+                labels: expected_labels(&record.policy_id),
+                subnet: "172.29.0.0/24".into(),
+                gateway: "172.29.0.1".into(),
+                ipv6_subnet: None,
+                ipv6_gateway: None,
+                removed: false,
+            },
+        );
+        state.networks.insert(
+            uplink.clone(),
+            FakeContainerNetwork {
+                id: record.uplink_network_id.clone().expect("uplink network ID"),
+                internal: false,
+                labels: expected_uplink_labels(&record.policy_id),
+                subnet: "172.30.0.0/24".into(),
+                gateway: "172.30.0.1".into(),
+                ipv6_subnet: Some("fd00:30::/64".into()),
+                ipv6_gateway: Some("fd00:30::1".into()),
+                removed: false,
+            },
+        );
+        state.container = Some(FakeGatewayContainer {
+            id: record
+                .gateway_container_id
+                .clone()
+                .expect("gateway container ID"),
+            name: record
+                .gateway_container_name
+                .clone()
+                .expect("gateway container name"),
+            image: gateway_container_spec().reference(),
+            labels: expected_gateway_container_labels(&record.policy_id),
+            uplink,
+            internal: Some((internal, listener.to_string())),
+            running: true,
+            removed: false,
+        });
+    }
+
+    #[test]
+    fn uninstall_contact_stop_removes_only_an_exact_compatibility_gateway() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let runtime = Arc::new(runtime);
+        let now = Utc::now();
+        let record = compatibility_gateway_record(
+            now,
+            &"1".repeat(32),
+            RuntimeProvider::Docker,
+            RegistryPhase::GatewayContainerVerified,
+            Some("c".repeat(64)),
+        );
+        install_fake_gateway(&state, &record);
+        write_registry_snapshot(&registry_root, &record).expect("gateway registry record");
+        let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
+            .expect("registry");
+
+        let summary = registry.stop_verified_compatibility_gateways(now);
+
+        assert_eq!(summary.exact_gateways_found, 1);
+        assert_eq!(summary.exact_gateways_stopped, 1);
+        assert_eq!(summary.exact_stop_failures, 0);
+        assert_eq!(summary.retained_ambiguities, 0);
+        let state = state.lock().expect("fake container runtime");
+        assert!(
+            state
+                .container
+                .as_ref()
+                .is_some_and(|item| !item.running && !item.removed)
+        );
+        assert!(state.calls.iter().any(|call| {
+            call.get(0..4)
+                == Some(&[
+                    "container".into(),
+                    "stop".into(),
+                    "--time".into(),
+                    "10".into(),
+                ])
+        }));
+        assert!(
+            !state
+                .calls
+                .iter()
+                .any(|call| call.first().is_some_and(|value| value == "network"))
+        );
+        assert!(
+            fs::read_dir(&registry_root)
+                .expect("registry")
+                .next()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn uninstall_contact_stop_does_not_treat_an_absent_current_context_as_stopped() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let now = Utc::now();
+        let record = compatibility_gateway_record(
+            now,
+            &"2".repeat(32),
+            RuntimeProvider::Podman,
+            RegistryPhase::ContainerReady,
+            Some("d".repeat(64)),
+        );
+        write_registry_snapshot(&registry_root, &record).expect("gateway registry record");
+        let registry =
+            ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, Arc::new(runtime))
+                .expect("registry");
+
+        let summary = registry.stop_verified_compatibility_gateways(now);
+
+        assert_eq!(summary.exact_gateways_found, 1);
+        assert_eq!(summary.exact_gateways_stopped, 0);
+        assert_eq!(summary.exact_stop_failures, 1);
+        let state = state.lock().expect("fake container runtime");
+        assert_eq!(state.calls.len(), 1);
+        assert_eq!(state.calls[0][0], "container");
+        assert_eq!(state.calls[0][1], "inspect");
+    }
+
+    #[test]
+    fn uninstall_contact_stop_marks_an_over_limit_registry_incomplete() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        for index in 0..=MAX_REGISTRY_RECORDS {
+            fs::write(
+                registry_root.join(format!("bounded-record-{index:04}")),
+                b"retained",
+            )
+            .expect("bounded registry fixture");
+        }
+        let registry =
+            ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, Arc::new(runtime))
+                .expect("registry");
+
+        let summary = registry.stop_verified_compatibility_gateways(Utc::now());
+
+        assert!(summary.contact_inventory_incomplete);
+        assert_eq!(summary.exact_gateways_stopped, 0);
+        assert_eq!(summary.exact_stop_failures, 0);
+        assert_eq!(summary.retained_ambiguities, 1);
+        assert!(
+            state
+                .lock()
+                .expect("fake container runtime")
+                .calls
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn uninstall_cleanup_reconciles_only_compatibility_container_records_after_stop() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let runtime = Arc::new(runtime);
+        let now = Utc::now();
+        let compatibility = compatibility_gateway_record(
+            now,
+            &"8".repeat(32),
+            RuntimeProvider::Podman,
+            RegistryPhase::ContainerReady,
+            Some("c".repeat(64)),
+        );
+        let managed = compatibility_gateway_record(
+            now,
+            &"9".repeat(32),
+            RuntimeProvider::ManagedLocal,
+            RegistryPhase::ContainerReady,
+            Some("e".repeat(64)),
+        );
+        let direct_unique = "a".repeat(32);
+        let direct = ManagedNetworkRecord {
+            schema_version: REGISTRY_SCHEMA_VERSION.into(),
+            owner: owner(),
+            provider: RuntimeProvider::Docker,
+            network_name: format!("ass-egress-{direct_unique}"),
+            policy_id: format!("egress-{direct_unique}"),
+            created_at: now,
+            expires_at: now + ChronoDuration::hours(1),
+            phase: RegistryPhase::Ready,
+            network_id: Some("1".repeat(64)),
+            uplink_network_name: None,
+            uplink_network_id: None,
+            gateway_container_name: None,
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: None,
+            gateway_image_digest: None,
+            policy_sha256: Some("f".repeat(64)),
+        };
+        install_fake_gateway(&state, &compatibility);
+        write_registry_snapshot(&registry_root, &compatibility)
+            .expect("compatibility registry record");
+        write_registry_snapshot(&registry_root, &managed).expect("managed registry record");
+        write_registry_snapshot(&registry_root, &direct).expect("direct registry record");
+        let registry = ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, runtime)
+            .expect("registry");
+        let stopped = registry.stop_verified_compatibility_gateways(now);
+        assert_eq!(stopped.exact_gateways_stopped, 1);
+
+        let cleanup = registry.reconcile_verified_compatibility_gateway_records(now);
+
+        assert_eq!(cleanup.reconciled, 1);
+        assert_eq!(cleanup.incomplete, 0);
+        let state = state.lock().expect("fake container runtime");
+        assert!(state.networks.values().all(|network| network.removed));
+        assert!(!state.calls.iter().any(|call| {
+            call.get(0..2) == Some(&["network".into(), "inspect".into()])
+                && call.get(2) == Some(&direct.network_name)
+        }));
+        assert_eq!(fs::read_dir(&registry_root).expect("registry").count(), 2);
+    }
+
+    #[test]
+    fn uninstall_contact_stop_issues_no_command_for_early_or_managed_local_state() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let now = Utc::now();
+        let early = compatibility_gateway_record(
+            now,
+            &"3".repeat(32),
+            RuntimeProvider::Docker,
+            RegistryPhase::PolicyReady,
+            None,
+        );
+        let managed = compatibility_gateway_record(
+            now,
+            &"4".repeat(32),
+            RuntimeProvider::ManagedLocal,
+            RegistryPhase::GatewayContainerVerified,
+            Some("e".repeat(64)),
+        );
+        write_registry_snapshot(&registry_root, &early).expect("early registry record");
+        write_registry_snapshot(&registry_root, &managed).expect("managed registry record");
+        let registry =
+            ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, Arc::new(runtime))
+                .expect("registry");
+
+        let summary = registry.stop_verified_compatibility_gateways(now);
+
+        assert_eq!(summary, ManagedCompatibilityGatewayStopSummary::default());
+        assert!(
+            state
+                .lock()
+                .expect("fake container runtime")
+                .calls
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn uninstall_contact_stop_retains_legacy_direct_host_gateway_without_pid_authority() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let now = Utc::now();
+        let unique = "6".repeat(32);
+        let record = ManagedNetworkRecord {
+            schema_version: REGISTRY_SCHEMA_VERSION.into(),
+            owner: owner(),
+            provider: RuntimeProvider::Docker,
+            network_name: format!("ass-egress-{unique}"),
+            policy_id: format!("egress-{unique}"),
+            created_at: now,
+            expires_at: now + ChronoDuration::hours(1),
+            phase: RegistryPhase::Ready,
+            network_id: Some("a".repeat(64)),
+            uplink_network_name: None,
+            uplink_network_id: None,
+            gateway_container_name: None,
+            gateway_container_id: None,
+            gateway_listener_ip: None,
+            gateway_image_repository: None,
+            gateway_image_digest: None,
+            policy_sha256: Some("f".repeat(64)),
+        };
+        write_registry_snapshot(&registry_root, &record).expect("legacy registry record");
+        let registry =
+            ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, Arc::new(runtime))
+                .expect("registry");
+
+        let summary = registry.stop_verified_compatibility_gateways(now);
+
+        assert_eq!(summary.exact_gateways_found, 0);
+        assert_eq!(summary.exact_stop_failures, 0);
+        assert_eq!(summary.retained_ambiguities, 1);
+        assert!(
+            state
+                .lock()
+                .expect("fake container runtime")
+                .calls
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn uninstall_contact_stop_separates_replaced_identity_from_context_absence() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let now = Utc::now();
+        let record = compatibility_gateway_record(
+            now,
+            &"5".repeat(32),
+            RuntimeProvider::Docker,
+            RegistryPhase::ContainerReady,
+            Some("f".repeat(64)),
+        );
+        let absent_sibling = compatibility_gateway_record(
+            now,
+            &"7".repeat(32),
+            RuntimeProvider::Podman,
+            RegistryPhase::ContainerReady,
+            Some("d".repeat(64)),
+        );
+        install_fake_gateway(&state, &record);
+        state
+            .lock()
+            .expect("fake container runtime")
+            .container
+            .as_mut()
+            .expect("gateway container")
+            .labels
+            .insert(POLICY_LABEL_KEY.into(), "replaced-policy".into());
+        write_registry_snapshot(&registry_root, &record).expect("gateway registry record");
+        write_registry_snapshot(&registry_root, &absent_sibling)
+            .expect("sibling gateway registry record");
+        fs::write(
+            registry_root.join("unrecognized-record"),
+            b"not a registry record",
+        )
+        .expect("malformed retained record");
+        let registry =
+            ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, Arc::new(runtime))
+                .expect("registry");
+
+        let summary = registry.stop_verified_compatibility_gateways(now);
+
+        assert_eq!(summary.exact_gateways_found, 2);
+        assert_eq!(summary.exact_gateways_stopped, 0);
+        assert_eq!(summary.exact_stop_failures, 1);
+        assert_eq!(summary.retained_ambiguities, 2);
+        let state = state.lock().expect("fake container runtime");
+        assert!(!state.container.as_ref().is_some_and(|item| item.removed));
+        assert!(!state.calls.iter().any(|call| {
+            call.get(0..3) == Some(&["container".into(), "rm".into(), "--force".into()])
+        }));
+        assert!(
+            state
+                .calls
+                .iter()
+                .any(|call| call.get(2) == Some(&"f".repeat(64)))
+        );
+        assert!(
+            state
+                .calls
+                .iter()
+                .any(|call| call.get(2) == Some(&"d".repeat(64)))
+        );
+        assert!(registry_root.join("unrecognized-record").exists());
+    }
+
+    #[test]
+    fn uninstall_contact_stop_reports_an_exact_runtime_stop_failure() {
+        let (_temporary, _gateway, artifacts, _policies, registry_root) = recovery_paths();
+        let (runtime, state) = FakeContainerRuntime::new();
+        let now = Utc::now();
+        let record = compatibility_gateway_record(
+            now,
+            &"b".repeat(32),
+            RuntimeProvider::Docker,
+            RegistryPhase::ContainerReady,
+            Some("c".repeat(64)),
+        );
+        install_fake_gateway(&state, &record);
+        state
+            .lock()
+            .expect("fake container runtime")
+            .container_stop_failures_remaining = 1;
+        write_registry_snapshot(&registry_root, &record).expect("gateway registry record");
+        let registry =
+            ManagedNetworkRegistry::with_runtime(&registry_root, &artifacts, Arc::new(runtime))
+                .expect("registry");
+
+        let summary = registry.stop_verified_compatibility_gateways(now);
+
+        assert_eq!(summary.exact_gateways_found, 1);
+        assert_eq!(summary.exact_gateways_stopped, 0);
+        assert_eq!(summary.exact_stop_failures, 1);
+        assert_eq!(summary.retained_ambiguities, 0);
+        assert!(
+            !state
+                .lock()
+                .expect("fake container runtime")
+                .container
+                .as_ref()
+                .is_some_and(|item| item.removed)
+        );
     }
 
     #[test]
