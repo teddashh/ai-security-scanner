@@ -22,7 +22,7 @@ import {
   isCurrentScanReadinessRequest,
   isCurrentScanReadinessResponse,
 } from "./scanReadinessRequest";
-import { hasActiveScanWork } from "./freshScanSelection";
+import { findRunCreatedAfterStart, hasActiveScanWork } from "./freshScanSelection";
 import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
 import {
   checkForAppUpdate,
@@ -868,12 +868,14 @@ export default function App() {
   const executeAction = async (
     key: string,
     action: () => Promise<ServiceResult<ActionResponse>>,
+    onResult?: (response: ActionResponse) => void,
   ): Promise<boolean> => {
     setBusyAction(key);
     const nonExecutionCopy = nonExecutionActionToastCopy[key as keyof typeof nonExecutionActionToastCopy];
     try {
       const result = await action();
       applyServiceMeta(result);
+      onResult?.(result.data);
       if (!result.data.accepted) recordTechnicalError(`action ${key} did not start`, result.data.message);
       const preflightCode = Object.keys(scanStartIssueCopy).find((code) => result.data.message.includes(`scan_preflight:${code}`)) as keyof typeof scanStartIssueCopy | undefined;
       pushToast({
@@ -920,9 +922,24 @@ export default function App() {
   };
 
   const startScan = async (input: StartScanInput): Promise<boolean> => {
+    const existingRunIds = new Set(
+      snapshot?.workspace?.case.id === input.caseId
+        ? snapshot.workspace.runs.map((run) => run.id)
+        : [],
+    );
     setStartingScanCaseId(input.caseId);
     try {
-      const accepted = await executeAction("start-scan", () => scannerService.startScan(input));
+      const accepted = await executeAction(
+        "start-scan",
+        () => scannerService.startScan(input),
+        (response) => {
+          if (!response.accepted) return;
+          const returnedWorkspace = response.workspace ?? response.snapshot?.workspace;
+          if (!returnedWorkspace || returnedWorkspace.case.id !== input.caseId) return;
+          const createdRunId = findRunCreatedAfterStart(returnedWorkspace.runs, existingRunIds);
+          if (createdRunId) setSelectedReportRunId(createdRunId);
+        },
+      );
       if (accepted) navigate("progress");
       return accepted;
     } finally {
@@ -1418,6 +1435,7 @@ export default function App() {
             }))}
             onOpenCoverage={() => navigate("coverage")}
             onOpenProgress={() => navigate("progress")}
+            onOpenExport={() => navigate("export")}
             onSelectRun={setSelectedReportRunId}
           />
         );

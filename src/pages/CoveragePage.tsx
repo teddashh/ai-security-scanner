@@ -600,6 +600,9 @@ const pageCopy = {
   noteHelp: bilingual("Never enter a secret or credential here.", "不要在這裡填入秘密值或憑證。"),
   activeAuthorityLength: bilingual("An active-test permission reference needs at least 8 characters.", "主動測試的授權參考至少需要 8 個字元。"),
   grantBoundaryHelp: bilingual("This saves the exact target and limits, then starts the scan. Unavailable checks will be listed without stopping the others.", "這會保存精確目標與限制並開始掃描；無法執行的檢查會列出，不會阻止其他檢查。"),
+  publicRecordsGrantDescription: bilingual("Review public DNS, certificate, and similar records without connecting to the selected system.", "只查看公開 DNS、憑證等紀錄，不會連線到所選系統。"),
+  publicRecordsBoundaryHelp: bilingual("This starts a public-record review. The selected system itself will not be contacted.", "這會開始查看公開紀錄，不會直接連線到所選系統。"),
+  publicRecordsStart: bilingual("Review public records", "查看公開紀錄"),
   startScan: bilingual("Start scan", "開始掃描"),
   confirmAndStart: bilingual("Confirm and start scan", "確認並開始掃描"),
   scanSignedInCloud: bilingual("Scan this signed-in account", "掃描這個已登入帳號"),
@@ -608,6 +611,7 @@ const pageCopy = {
   guidedNetworkConfirmation: bilingual("The user explicitly confirmed this exact low-impact network target in the guided local interface.", "使用者已在本機引導介面明確確認這個精確的低影響網路目標。"),
   guidedLocalConfirmation: bilingual("The user explicitly selected this saved local copy and confirmed the recommended read-only checks.", "使用者已明確選擇這份已保存的本機副本，並確認建議的唯讀檢查。"),
   guidedCloudConfirmation: bilingual("The user signed in through the provider and explicitly added this exact account with the displayed read-only checks.", "使用者已透過雲端服務商登入，並明確以畫面所列唯讀檢查加入這個精確帳號。"),
+  publicRecordsConfirmation: bilingual("Public records only; the selected system itself will not be contacted.", "只查看公開紀錄；不會直接連線到所選系統。"),
   advancedLocalInputSummary: bilingual("Use a different kind of local input", "改用其他本機輸入類型"),
   advancedLocalInputHelp: bilingual("The route you chose is already selected. Change this only when you meant to attach a different kind of project or export.", "你選擇的路線已經設定完成；只有要改附加其他類型的專案或匯出檔時才需要變更。"),
 
@@ -901,10 +905,13 @@ export function CoveragePage({
   );
   const guidedCloudConsent = guidedCloudRoute
     && hasExactGuidedCloudConsent(selectedScopeAssets, providerConnection);
-  const simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent;
-  const requiresAuthorizationReference = Boolean(externalActivity) && !guidedLowImpactNetwork;
+  const passivePublicConsent = externalActivity === "passive_public_discovery";
+  const simpleGuidedConsent = passivePublicConsent || guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent;
+  const requiresAuthorizationReference = externalActivity === "active_external";
   const effectiveScopeConfirmation = scopeConfirmation.trim()
-    || (guidedLowImpactNetwork
+    || (passivePublicConsent
+      ? text(pageCopy.publicRecordsConfirmation)
+      : guidedLowImpactNetwork
       ? text(pageCopy.guidedNetworkConfirmation)
       : guidedLocalConsent
         ? text(pageCopy.guidedLocalConfirmation)
@@ -1720,6 +1727,8 @@ export function CoveragePage({
                 <h3>{text(pageCopy.grantTitle, { count: formatNumber(selectedAssets.length) })}</h3>
                 <p>{text(guidedLowImpactNetwork
                   ? pageCopy.guidedNetworkGrantDescription
+                  : passivePublicConsent
+                    ? pageCopy.publicRecordsGrantDescription
                   : guidedLocalConsent
                     ? pageCopy.guidedLocalGrantDescription
                     : guidedCloudConsent
@@ -1752,7 +1761,7 @@ export function CoveragePage({
               </details>
             ) : !guidedLocalConsent ? scopeModeChooser : null}
 
-            {externalActivity && selectedExternalAsset && limits && (
+            {isDirectExternal && selectedExternalAsset && limits && (
               <section className="external-scope-builder" aria-labelledby="external-scope-title">
                 <div className="external-scope-builder__heading">
                   <div>
@@ -1958,11 +1967,13 @@ export function CoveragePage({
             )}
 
             <div className="form-actions">
-              <p><Icon name="lock" size={16} /> {text(pageCopy.grantBoundaryHelp)}</p>
+              <p><Icon name={passivePublicConsent ? "search" : "lock"} size={16} /> {text(passivePublicConsent ? pageCopy.publicRecordsBoundaryHelp : pageCopy.grantBoundaryHelp)}</p>
               <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed) || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
-                <Icon name="lock" size={16} />{busy
+                <Icon name={passivePublicConsent ? "search" : "lock"} size={16} />{busy
                   ? text(pageCopy.startingScan)
-                  : text(guidedCloudConsent
+                  : text(passivePublicConsent
+                    ? pageCopy.publicRecordsStart
+                    : guidedCloudConsent
                     ? pageCopy.scanSignedInCloud
                     : simpleGuidedConsent
                       ? pageCopy.confirmAndStart

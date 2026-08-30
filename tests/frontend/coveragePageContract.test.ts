@@ -182,7 +182,7 @@ test("a readiness fix opens the exact cloud, workspace, or read-only source step
 });
 
 test("guided network, local, and signed-in cloud setup combine confirmation and Start", () => {
-  assert.ok(source.includes("simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
+  assert.ok(source.includes("simpleGuidedConsent = passivePublicConsent || guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
   assert.ok(source.includes("pageCopy.confirmAndStart"));
   assert.ok(source.includes("pageCopy.scanSignedInCloud"));
   assert.ok(source.includes("pageCopy.guidedCloudConfirmation"));
@@ -199,6 +199,21 @@ test("guided network, local, and signed-in cloud setup combine confirmation and 
   assert.ok(source.includes("這會保存精確目標與限制並開始掃描"));
 });
 
+test("public-record review starts without an ownership or approval ceremony", () => {
+  assert.match(source, /passivePublicConsent = externalActivity === "passive_public_discovery"/u);
+  assert.match(source, /requiresAuthorizationReference = externalActivity === "active_external"/u);
+  assert.match(source, /!simpleGuidedConsent && \([\s\S]*ownershipConfirmed/u);
+  assert.match(source, /passivePublicConsent[\s\S]*pageCopy\.publicRecordsConfirmation/u);
+  assert.match(source, /passivePublicConsent[\s\S]*pageCopy\.publicRecordsStart/u);
+  assert.match(source, /isDirectExternal && selectedExternalAsset && limits/u);
+  for (const phrase of [
+    "Review public records",
+    "查看公開紀錄",
+    "The selected system itself will not be contacted.",
+    "不會直接連線到所選系統。",
+  ]) assert.ok(source.includes(phrase), phrase);
+});
+
 test("the desktop submits authorization and Start through one native command", () => {
   const coverageStart = appSource.indexOf("case \"coverage\"");
   const progressStart = appSource.indexOf("case \"progress\"", coverageStart);
@@ -212,6 +227,14 @@ test("the desktop submits authorization and Start through one native command", (
   assert.match(service, /COMMANDS\.startScan/u);
   assert.match(service, /caseId: input\.caseId,[\s\S]*decisions,[\s\S]*engineIds:/u);
   assert.doesNotMatch(service, /COMMANDS\.approveScope/u);
+
+  const appStart = appSource.indexOf("const startScan = async (input: StartScanInput)");
+  const appStartEnd = appSource.indexOf("const deleteCase", appStart);
+  const appStartFlow = appSource.slice(appStart, appStartEnd);
+  assert.match(appStartFlow, /existingRunIds = new Set\(/u);
+  assert.match(appStartFlow, /response\.workspace \?\? response\.snapshot\?\.workspace/u);
+  assert.match(appStartFlow, /findRunCreatedAfterStart\(returnedWorkspace\.runs, existingRunIds\)/u);
+  assert.match(appStartFlow, /setSelectedReportRunId\(createdRunId\)[\s\S]*navigate\("progress"\)/u);
 });
 
 test("cloud sign-in leads to one exact read-only scan confirmation instead of another ownership form", () => {

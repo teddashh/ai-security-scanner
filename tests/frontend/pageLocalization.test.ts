@@ -422,6 +422,15 @@ test("pre-scanner failures separate frozen authorization from runtime scope and 
 });
 
 test("export preview, export, and both verification paths remain wired", async () => {
+  const [app, findings] = await Promise.all([
+    readFile(new URL("../../src/App.tsx", import.meta.url), "utf8"),
+    readPage("FindingsPage.tsx"),
+  ]);
+  assert.match(app, /<FindingsPage[\s\S]*onOpenExport=\{\(\) => navigate\("export"\)\}/u);
+  assert.match(findings, /onClick=\{onOpenExport\}/u);
+  assert.match(findings, /Save or share report/u);
+  assert.match(findings, /保存或分享報告/u);
+
   const source = await readPage("ExportPage.tsx");
   for (const callback of ["onPreview", "onExport", "onVerify", "onVerifyReceived"]) {
     assert.match(source, new RegExp(`${callback}\\(`, "u"));

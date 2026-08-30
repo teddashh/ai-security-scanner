@@ -48,6 +48,7 @@ interface FindingsPageProps {
   onUngroupFindings: (groupId: string) => Promise<void>;
   onOpenCoverage: () => void;
   onOpenProgress: () => void;
+  onOpenExport: () => void;
   onSelectRun?: (runId: string) => void;
 }
 
@@ -129,6 +130,7 @@ const copy = {
   },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
   openProgress: { en: "Review scanner status", zhTW: "查看掃描器狀態" },
+  openExport: { en: "Save or share report", zhTW: "保存或分享報告" },
   summaryAria: { en: "Problem summary", zhTW: "問題摘要" },
   critical: { en: "Critical", zhTW: "嚴重" },
   criticalDetail: { en: "Ask the appropriate specialist to confirm these first", zhTW: "優先請對應專家確認" },
@@ -813,6 +815,7 @@ export function FindingsPage({
   onUngroupFindings,
   onOpenCoverage,
   onOpenProgress,
+  onOpenExport,
   onSelectRun,
 }: FindingsPageProps) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
@@ -935,6 +938,16 @@ export function FindingsPage({
       </select>
     </label>
   ) : undefined;
+  const reportActions = (
+    <div className="button-group">
+      {reportRunPicker}
+      {latestRun && (
+        <button className="button button--primary button--small" type="button" onClick={onOpenExport}>
+          <Icon name="export" size={16} />{text(copy.openExport)}
+        </button>
+      )}
+    </div>
+  );
 
   if (findings.length === 0) {
     const unknownSources = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
@@ -977,7 +990,7 @@ export function FindingsPage({
                 : text(copy.emptyCompletedDescription, { count: formatNumber(connectedWithoutAssets) });
     return (
       <div className="page">
-        <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} actions={reportRunPicker} />
+        <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} actions={reportActions} />
         {report && <BeginnerReportOverview report={report} />}
         {reportUnavailable && <InlineNotice tone="warning" title={text(copy.reportUnavailableTitle)}><p>{text(copy.reportUnavailableBody)}</p></InlineNotice>}
         <EmptyState
@@ -1057,7 +1070,7 @@ export function FindingsPage({
         eyebrow={text(copy.eyebrow)}
         title={text(copy.title)}
         description={text(copy.description)}
-        actions={reportRunPicker}
+        actions={reportActions}
       />
 
       {report && <BeginnerReportOverview report={report} />}
