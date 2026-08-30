@@ -1,5 +1,7 @@
 # Security policy
 
+Normative status: this file governs vulnerability reporting and summarizes security invariants. The [canonical product specification](docs/product-spec.md) controls product behavior, recovery, and warning-versus-hard-block decisions. A control here may stop the exact destructive, untrusted-code, prohibited-contact, or signed-output operation; it must not turn an optional engine or disposable-runtime problem into a product-wide gate.
+
 ## Reporting a vulnerability
 
 Do not open a public issue for a vulnerability that could expose credentials, case evidence, scan authorization, a user's host, or a third-party target.
@@ -21,7 +23,7 @@ The project is currently pre-release. Security fixes are applied to the active d
 ## Sensitive design invariants
 
 - Administrative bootstrap material must never enter a third-party engine, adapter, log, crash report, command line, environment variable, or Docker metadata.
-- External active scanning must fail closed without a matching, unexpired asset scope grant.
+- External active contact must not start without a matching, unexpired asset scope grant. That operation-scoped refusal must leave unrelated targets, local checks, saved reports, and exports available.
 - Raw evidence must be treated as sensitive even when scanning is read-only.
 - Export signatures attest only to package integrity after export, not scan correctness, completeness, identity, compliance, or forensic chain of custody.
 - “Unknown” and “not connected” must never be converted into “passed.”

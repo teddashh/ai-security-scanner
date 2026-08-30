@@ -1,296 +1,195 @@
-# Release pipeline
+# Release, qualification, and publication policy
 
-Normative status: this is a subordinate publication/qualification reference. The [canonical product specification](../product-spec.md) controls product acceptance and warning-versus-hard-block policy. Publication, signing, engine-admission, and platform-artifact rules here cannot become local scan/report gates or block an independently qualified platform.
+Normative status: subordinate to the [canonical product specification](../product-spec.md), especially sections 3, 15, and 16. This document may describe how release work is organized, but it cannot add a product-wide gate, turn publication evidence into scan readiness, or block an independently qualified platform, channel, feature, or engine.
 
-The release workflow builds native Tauri installers from either a manual `main` preflight or an
-exact numeric SemVer tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`, receives
-no publication privileges, creates no tag or GitHub Release, and preserves the finalized candidate
-as the `release-finalized` workflow artifact. Only an exact tag push can publish. A tag such as
-`v0.1.8` must exactly match the versions in `package.json`, `package-lock.json`,
-`src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; a mismatch stops before packaging.
-For the current `v0.1.8` candidate, the tag path is additionally fail-closed before any downstream
-job because Windows Authenticode signing and verification are not configured. The manual
-main-branch path remains available for a commit-bound QC artifact only.
+Implementation status: this is the target release policy. The current workflows still contain coupling identified in [audit findings A24–A26](../product-audit.md#a24--frameworkprovenance-and-release-validation-are-coupled-to-ordinary-product-work). Until that code is simplified, a workflow's global dependency graph is an implementation limitation—not a product requirement or proof that the coupling should remain.
 
-`package.json` declares whether that exact build uses the `prerelease` or `stable` publication
-channel. Preview builds publish with GitHub's pre-release flag and `make_latest: false`; stable
-builds publish as normal releases and become latest only after the same build, qualification,
-checksum, signature, and attestation path succeeds. Preview product versions remain numerically
-below their declared stable target so MSI, Debian, RPM, macOS, and the app updater can all upgrade
-forward without platform-specific version aliases.
+## Release rule in one sentence
 
-## Produced installers
+Qualify the exact thing being offered, block only the unsafe or unqualified thing, and keep unrelated development, installed features, platforms, engines, and channels moving.
 
-| Release target | GitHub runner | Tauri bundles |
-|---|---|---|
-| Linux x86-64 | Ubuntu 24.04 | AppImage, Debian package, RPM |
-| macOS universal | macOS 14 | DMG containing Intel and Apple-silicon code |
-| Windows x86-64 | Windows Server 2022 | MSI and NSIS executable |
+Release work has four independent layers:
 
-Every installer includes three first-party Tauri external binaries:
-`ai-security-scanner-egress-gateway`, which enforces managed engine egress, and
-`ai-security-scanner-bootstrap-broker`, which performs isolated one-shot administrative
-bootstrap work without exposing administrator material to the desktop or scanner containers, plus
-`ai-security-scanner-cli`, the local casework, status, export, and exact-cleanup interface used by
-the checked-in Codex and Claude skills. Live scan control remains capability-mediated in the desktop.
-Tauri strips each compilation target suffix and installs all three beside the main desktop executable
-with exactly those basenames (`.exe` on Windows), matching their runtime locator contracts.
+| Layer | Question it answers | What failure may block | What it must not block |
+| --- | --- | --- | --- |
+| Product CI | Does the changed source satisfy fast shared code and document checks? | Merging the affected broken change | Local use of an already installed build; unrelated publication evidence |
+| Engine admission | Is this exact engine package allowed to execute? | Admission or execution of that engine package | Other admitted engines, projects, reports, and partial exports |
+| Platform qualification | Does this exact installer work on this platform and preserve its data? | That platform/installer artifact | Another independently qualified platform or installer |
+| Publication/channel policy | May this exact artifact be offered through this channel? | That artifact in that channel | Source work, local scans, existing safe installs, or another channel |
 
-The build emits a Tauri v2 updater payload and minisign signature for every supported installed
-bundle type: Linux AppImage, Debian package, RPM package, universal macOS app, Windows NSIS, and
-Windows MSI. Tauri produces the AppImage, macOS, NSIS, and MSI signatures during bundling; the
-release workflow signs the already-built `.deb` and `.rpm` bytes with the same updater identity.
-`latest.json` contains base fallback keys plus the installer-specific keys used by updater plugin
-2.10.x. Each installed bundle therefore downloads a payload its updater can actually install.
-Both macOS architecture keys intentionally reference the same signed universal app payload.
-Tauri names the source macOS updater archive `ai-security-scanner.app.tar.gz`; collection renames
-that already-signed byte stream and its matching signature to the versioned public asset name so
-the release index stays unambiguous without invalidating the signature.
+No layer may be used as a substitute for the installed human path. No global “release ready” bit may erase the narrower outcome of a qualified platform or admitted engine.
 
-Before any build artifact can reach the publish job, the platform runner performs an installed
-startup observation against a freshly produced package: Ubuntu installs the Debian package and
-starts it under a temporary X server, macOS mounts the DMG, copies its app, and starts the copied
-executable, and Windows silently installs the MSI, starts the installed executable, then removes
-the package. Each runner also proves that all three companion executables were installed and that
-the local casework CLI can render its help without starting a scan. An app that exits during the
-observation window fails that platform build. This is
-separate from source compilation and provides release-specific install/start evidence; it is not
-a claim that every end-user machine or every security assessment will behave identically.
+## 1. Product CI
 
-The build-runner observation is preserved, then a separate qualification matrix starts on fresh
-GitHub-hosted `ubuntu-24.04`, `macos-15-intel`, and `windows-2025` machines. Each job downloads only its
-named `release-<platform>` artifact and independently installs the Debian package, DMG, Windows MSI,
-or Windows NSIS Setup executable. MSI and NSIS run in separate fresh Windows jobs with separate
-install and private-data roots; a pass from one installer cannot stand in for the other. Each job
-locates the installed desktop, all three companion executables, and the packaged managed-runtime
-manifest; the installed manifest must byte-hash to the release copy. Every CLI operation uses a
-new private data directory. Linux and Windows must prove this exact sequence:
+Product CI gives fast feedback on ordinary source changes. It covers the checks relevant to the changed product surface, such as formatting, type checking, focused frontend/Rust tests, document links, schemas, and low-cost static validation.
 
-1. initial `not_installed` status;
-2. managed payload install and independent `installed` status;
-3. real managed machine start and `running` status;
-4. a fixed managed-egress qualification that creates the production internal scanner network and
-   dual-network pinned gateway container, observes its ready status, and runs a second internal-only
-   container from that same pinned image. The probe exchanges only a SOCKS greeting, sends no CONNECT request,
-   and exact-removes both containers, both networks, the policy, status directory, and recovery record;
-5. the built-in fixed Gitleaks container qualification (project-managed 8.30.1 source build at the
-   immutable catalog digest, scanner-owned configuration, no network, read-only workspace and root,
-   all capabilities dropped, no-new-privileges, zero credentials, fully redacted results, and exact
-   container cleanup);
-6. real machine stop and `stopped` status; and
-7. forced uninstall with the exact machine-image cache purged, final `not_installed` status,
-   package removal, and private-directory removal. Windows additionally inventories WSL through
-   the real absolute System32 executable resolved from the operating-system directory API, captures
-   its output as bounded raw bytes, strictly decodes UTF-8 or UTF-16LE, and proves the deterministic
-   exact managed distribution is no longer registered after uninstall. Malformed inventory is a
-   qualification failure, never evidence of absence.
+Product CI follows these rules:
 
-The Linux qualification separately resolves `bin/qemu-img` from the installed managed-runtime
-manifest, proves its regular executable file size and SHA-256, binds it to the exact QEMU component
-and version, and runs create/resize/JSON-info against a disposable qcow2 file by that absolute path.
-It independently binds `bin/qemu-system-x86_64.real` to the same component and manifest, then
-requires its exact device inventory to contain `vhost-user-fs-pci`, which Podman's explicit
-application-data VirtioFS mount needs.
-It also resolves `bin/virtiofsd` from that manifest, binds its digest to the exact component and
-version, rejects a non-x86-64 ELF or any host interpreter dependency, and executes its version probe
-by absolute path. It does not install or resolve host QEMU or VirtioFS packages. Linux and Windows
-qualification also prove after start that the exact private-XDG `machine{,.pub}` Ed25519 identity
-exists with bounded single-link current-user protection and that both fixed staging names are absent.
-After uninstall, the exact release-digest provider-home directory itself must be absent; an existing
-but empty directory does not satisfy this check.
+- A documentation-only change does not build Windows, macOS, and Linux installers.
+- A UI change does not wait for every engine image to be published.
+- A framework-mapping failure affects mapping output, not findings, scanning, or unrelated UI work.
+- Source-text and modeled tests may guard contracts, but they do not claim that an installer, runtime, recovery path, or novice journey worked.
+- A release-only check belongs in platform qualification, engine admission, or publication—not in the default product feedback loop merely because it is strict.
 
-Before Windows starts the machine, qualification also proves that the fixed Podman runtime,
-configuration, WSL data, SSH-identity-parent, and image-cache directories already have protected,
-current-user-only inheritable DACLs. Podman therefore never gets an opportunity to create those
-security-sensitive namespace ancestors with the administrator token's ambient default owner.
+Shared-code failures may affect more than one platform when concrete evidence shows the same code path is broken. Scope follows the demonstrated impact, not a default all-platform fate share.
 
-The separate registered-WSL ghost qualification also proves the migration is one-shot. Successful
-recovery must atomically consume the exact HKCU `InstallTransition` receipt and leave the exact
-`wsl-recovery/ghost-migration-consumed-<machine>.json` proof. That proof is a no-follow, single-link,
-current-user-owned, owner-only file bound to the immutable v0.1.7 provider manifest and the exact
-candidate runtime manifest and machine image. It must survive managed-runtime purge and NSIS
-uninstall, and is removed only by the qualification's explicit private-data cleanup.
+## 2. Engine admission
 
-The candidate Windows runtime is also byte-pinned independently of the installer. Its schema-3
-manifest must declare management contract revision `2026-08-29.1` and hash to
-`a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a`. Windows CI reconstructs the
-bundle from the unchanged upstream size/digest pins and rejects any different manifest before NSIS
-is compiled. The public v0.1.7 Windows manifest remains the strict schema-2 N-1 identity
-`8b2257ace33ecb14bb0995044a4e6d2b4e71b314741601122801fbb59e7de13f`; schema 2 cannot be used as the
-current v0.1.8 bundled resource.
+Each engine is admitted independently. Admission binds the exact executable or image, version/digest, launcher contract, license/notice data, allowed inputs and network behavior, result adapter, and a focused functional check.
 
-The universal macOS package is still built on `macos-14`, while its independent qualification runs
-the Intel slice on `macos-15-intel`. The job must mount the DMG read-only, copy and inspect the app,
-verify every installed executable, parse the packaged AppleHV runtime manifest, prove that the
-installed manifest exactly matches the release copy, render CLI help, keep the installed desktop
-alive through the startup observation window, detach the DMG, and remove both the installed app and
-its exact private test directory.
+If admission fails:
 
-The hosted macOS job deliberately does not call managed-runtime install, start, egress qualify, container qualify,
-stop, or uninstall. GitHub documents that nested virtualization on GitHub-hosted runners is not
-officially supported, while the packaged AppleHV machine requires that capability. The evidence
-therefore records every managed-runtime operation, the egress gateway probe, and the container probe as `not_observed` with the
-fixed reason code `github_hosted_macos_nested_virtualization_unsupported`; it never emits a passing
-runtime status, gateway result, or container result. See GitHub's
-[hosted-runner documentation](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners).
-This limited macOS contract can publish only a `prerelease`. A stable release must replace it with
-real managed-runtime lifecycle evidence from a suitable Mac execution surface.
+- that engine remains unavailable or at its last admitted version;
+- the planner/report must show the resulting coverage gap;
+- other engines continue;
+- existing cases and historical evidence remain readable; and
+- an installed safe version of the application remains usable.
 
-Each installer job emits one strict `platform-qualification-<platform>-<installer>.json`. The record is bound to the
-exact version, candidate tag, 40-character source commit, source artifact name, installer bytes and
-SHA-256, hosted runner label and machine-image version, installed/release runtime-manifest SHA-256,
-all released managed machine-image URLs/digests/sizes, desktop startup, and cleanup results. Linux
-and Windows additionally contain ordered raw CLI status documents, the fixed no-upstream managed
-egress result, and the fixed container result;
-macOS instead contains the exact ordered `not_observed` records and fixed hosted-runner limitation
-code. Unknown fields, missing operations, caller-selected commands/images, inconsistent status
-phases, digest changes, a fabricated runtime pass, and a false cleanup claim fail closed.
-Finalization requires all four records (DEB, DMG, MSI, and NSIS). The global checksum index covers
-them in both modes. A public GitHub provenance attestation covers them only when the tag-driven
-public-release path is enabled and succeeds; a manual commit-bound QC workflow artifact does not
-have a public GitHub artifact attestation.
+Engine provenance, signatures, SBOMs, and immutable digests are execution/publication controls for that engine. They are not prerequisites for opening the desktop, creating a project, running an unrelated admitted engine, or exporting already saved results.
 
-The workflow compiles all three real companion executables before every desktop build; no placeholder binary is kept
-in Git. For a local native desktop check, run:
+Detailed engine-image evidence belongs in [engine-image-supply-chain.md](engine-image-supply-chain.md). The machine-readable catalog remains the implementation record of what is currently admitted; it does not override the product's graceful-degradation rule.
 
-```sh
-npm ci
-npm run desktop:check
-```
+## 3. Platform installer qualification
 
-For an explicit target (including a Linux-hosted Windows GNU cross-check), run:
+Qualification is bound to one exact source commit, installer bytes, platform, architecture, installer format, and channel. Evidence from MSI cannot stand in for NSIS, and a Linux result cannot stand in for Windows.
 
-```sh
-npm run desktop:prepare-sidecar -- --target x86_64-pc-windows-gnu
-cargo check --locked --package ai-security-scanner --features desktop --target x86_64-pc-windows-gnu
-```
+Every platform qualification must verify only claims made for that artifact, including as applicable:
 
-Generated target-suffixed sidecars live under the ignored `src-tauri/binaries/` directory.
+- installation, application launch, and application-only removal;
+- preservation of projects and user data across Repair/upgrade/uninstall choices;
+- installed file identity and the expected helper/runtime resources;
+- a real supported product task rather than only CLI help or process survival;
+- reopen and readable export from the installed application; and
+- cleanup claims for exact product-owned disposable state.
 
-## Supply-chain evidence
+### Windows beginner qualification
 
-Each GitHub Release contains:
+Every Windows artifact promoted as a beginner prerelease or stable release requires the exact-candidate human record defined by the canonical specification:
 
-- installer files and separately downloadable platform copies of all three first-party companion executables;
-- `SHA256SUMS.txt` covering every published file except itself, plus platform checksum files;
-- a CycloneDX JSON SBOM and an SPDX JSON SBOM generated from the locked source dependency graph;
-- explicit SBOM entries with the digest and role of each platform companion executable;
-- `THIRD_PARTY_NOTICES.txt`, `ENGINE_NOTICES.md`, and machine-readable engine notices;
-- `release-metadata.json` and `release-assets.json` for automated consumers;
-- strict `platform-qualification-<platform>-<installer>.json` evidence for DEB, DMG, MSI, and NSIS;
-- the signed updater payloads, their detached `.sig` files, and `latest.json`;
-- the project license and release notes; and
-- a GitHub build-provenance attestation over every published file.
+1. install the candidate;
+2. enter the main screen;
+3. use the combined `127.0.0.1:9001` Start action;
+4. receive a saved master report from at least one executed quick task;
+5. reopen the project; and
+6. export a readable report.
 
-Release-line details are recorded in the source tree. See the
-[`v0.1.2` initial public testing notes](v0.1.2.md),
-[`v0.1.3` one-click Windows setup notes](v0.1.3.md),
-[`v0.1.4` actionable scan-flow notes](v0.1.4.md),
-[`v0.1.5` Windows launch and scan-activity notes](v0.1.5.md),
-[`v0.1.6` managed scan connection repair notes](v0.1.6.md),
-[`v0.1.7` hands-on Windows reliability notes](v0.1.7.md),
-[`v0.1.8` automatic Windows workspace recovery notes](v0.1.8.md), the planned
-[`v0.2.0` stable completion notes](v0.2.0.md), and the historical
-[`v0.1.1` security and consistency repair notes](v0.1.1.md).
+The participant must be a qualifying beginner and the facilitator may observe but not take over. Modeled records, contributor walkthroughs, source checkouts, CLI-created cases, and a process that merely remains open do not pass this path.
 
-All third-party engines remain separately acquired artifacts. No engine image, ruleset, feed,
-provider plugin, or vulnerability database is embedded in these desktop installers. A runnable
-catalog entry is not a redistribution claim.
+Separate real-Windows integration/operator fixtures cover WSL absent/restart, unrelated WSL, healthy/damaged/ambiguous/ghost/interrupted runtime, Repair, N-1 upgrade, supported downgrade behavior, and the three uninstall choices. Those fixtures do not require a new novice session unless they change a user decision in the core path.
 
-GitHub Actions are pinned to full commit SHAs. The release uses only the repository-scoped token,
-with read-only permissions by default. The assemble job verifies updater signatures, creates the
-release index and checksums, independently reverifies both, then uploads the finalized candidate
-without publication privileges. Only the exact-tag publish job receives `contents: write`,
-`attestations: write`, and `id-token: write`; it downloads that single candidate and reverifies its
-complete `SHA256SUMS.txt` and `release-assets.json` coverage before attesting or publishing.
+### Feature-specific qualification
 
-## Signing and updater status
+Cloud, deep AI, Kubernetes, specialist exports, or another Advanced feature has its own qualification. A failed or unfinished AWS/IAM usability study blocks only the AWS feature claim or the artifact/channel that explicitly promises it. It cannot block localhost, website, internal-network, source-code, reporting, or another platform.
 
-The pipeline deliberately reports the current state without implying controls that are absent:
+The existing [IAM-naive study](../usability/iam-naive-first-run.md) is therefore an Advanced AWS protocol, not universal first-run or product-completion evidence.
 
-- Apple Developer ID signing is not configured.
-- Apple notarization is not configured.
-- Windows Authenticode signing is not configured.
-- Tauri updater artifacts are generated and signed with a dedicated updater key held only in the
-  repository Actions secret `TAURI_SIGNING_PRIVATE_KEY`.
+### Honest unsupported observations
 
-Consequently, the current manual QC artifact can still show an unidentified-developer warning,
-has no public GitHub artifact attestation, and must be verified with its commit identity and
-`SHA256SUMS.txt`. Public tag publication remains blocked. The updater signature proves that an update payload
-matches the public key embedded in the installed app; it does not provide Apple Developer ID,
-notarization, or Windows Authenticode trust. Release metadata and notes preserve that distinction.
+If a runner cannot exercise a capability—for example, because its hosted environment lacks required virtualization—the record says `not_observed` or `not_tested`. It may limit that platform's published capability statement, but it is never converted to a pass and never blocks an independently qualified artifact.
 
-The desktop checks the fixed HTTPS GitHub Release endpoint. It never accepts a downgrade, an
-unsigned payload, a caller-supplied endpoint, or a caller-supplied public key. Installation starts
-only after a user selects the visible update action. A successful installation relaunches the app;
-historical cases retain their exact engine, adapter, ruleset, and runtime provenance.
+## 4. Publication and channel policy
 
-## Creating a release
+Publication answers whether a particular artifact may be offered through a particular channel. It does not redefine product behavior.
 
-First run the local metadata validator and normal implementation checks. Dispatch the release
-workflow from `main` before creating a tag:
+For each artifact, the publication record identifies:
+
+- version, source commit, platform, architecture, installer format, and channel;
+- installer filename, byte length, and checksum;
+- qualification result and exactly which user path was observed;
+- available OS signing/notarization, updater signature, provenance, SBOM, and notices;
+- supported and untested capabilities; and
+- known limitations that affect that artifact.
+
+Rules are scoped:
+
+- A missing or invalid Windows Authenticode signature may withhold that Windows artifact from a channel that requires Authenticode. It does not block Linux/macOS artifacts, source work, or an already installed trusted build.
+- Missing Apple signing/notarization affects only the applicable macOS channel.
+- An invalid updater signature blocks applying that update. The current installed version continues to open, scan with admitted engines, show reports, and export readable data.
+- A missing platform artifact is marked unavailable in the support matrix. It does not prevent publication of another independently qualified platform.
+- A checksum, signature, or provenance failure blocks only the affected bytes and claims. It does not become managed-runtime readiness.
+- Stable and prerelease channels may have different per-artifact requirements, but neither may waive honest coverage or data-preservation evidence for the claims it makes.
+
+A release index may list several platform artifacts for convenience. The index represents independent outcomes; it must not require an unrelated absent platform entry merely to validate or update the current platform.
+
+## 5. Warning and blocking matrix
+
+| Condition | Required outcome | Scope of any block |
+| --- | --- | --- |
+| One engine package fails admission | Keep it unavailable; report coverage gap | That engine package only |
+| Optional framework mapping is missing or stale | Findings/report remain; mapping unavailable warning | No scan or report block |
+| Signing identity for an export is unavailable | Offer unsigned readable export | Requested signed export only |
+| One platform installer fails its human/integration path | Do not promote that artifact | That platform/installer/channel only |
+| One platform artifact is not built | Mark platform unavailable | Missing platform only |
+| AWS/IAM study is missing or fails | Do not claim the Advanced AWS path is qualified | AWS feature claim only |
+| Update signature/digest is invalid | Keep current installed version | That update payload only |
+| OS publisher signing required by a channel is absent | Do not publish the affected artifact there | That artifact/channel only |
+| Proven shared-core data-loss defect | Stop every artifact demonstrated to contain the defect | Evidence-based affected artifacts |
+| Documentation-only change | Run low-cost document/static checks | No installer/release qualification |
+
+Only an imminent irreversible change to user/unrelated data, execution of untrusted bytes, prohibited target contact, or a false cryptographic claim permits a hard block at the corresponding operation boundary.
+
+## 6. Candidate and release flow
+
+The intended sequence is:
+
+1. identify the exact source commit and requested platform/channel artifacts;
+2. run ordinary product CI appropriate to the change;
+3. admit only the engines claimed by those artifacts;
+4. build each platform artifact independently;
+5. qualify each exact installer on its real platform;
+6. retain the exact-candidate human record when promoting a Windows beginner artifact;
+7. apply that channel's signing, integrity, notices, and provenance policy to each artifact; and
+8. publish only the artifacts that passed, with an explicit support/coverage matrix.
+
+An artifact is never described as qualified merely because another artifact, a source build, or a synthetic CLI fixture passed. A failed artifact remains absent or clearly unavailable; it does not force qualified siblings to fail.
+
+Numeric release tags and package versions must agree. Manual `main` dispatches may create commit-bound QC artifacts but do not themselves create a public release. Publication privileges belong only to the narrowly scoped publication step after the exact artifact has been reverified.
+
+### Current automation gap
+
+The checked-in workflows currently rebuild and fate-share more platforms, engine/release validators, and qualification records than this policy permits. They must be separated during implementation. Until then:
+
+- do not describe a global workflow pass as a human-path pass;
+- do not describe a global workflow failure as evidence that every artifact or local feature is unsafe;
+- do not publish a candidate that lacks its required artifact-scoped evidence; and
+- do not add more predecessor-specific or global qualification machinery to preserve the current coupling.
+
+The `v0.1.8` source line is not currently a recommended beginner installer. This status is an honest implementation gap, not a new permanent global gate.
+
+## 7. Release artifacts and verification
+
+Publish only evidence that was actually produced. Depending on the artifact/channel, that can include:
+
+- the installer and its checksum;
+- a readable support and qualification summary;
+- platform-scoped qualification evidence;
+- updater payload/signature when that update path is supported;
+- CycloneDX/SPDX SBOMs and third-party notices;
+- artifact-scoped build provenance; and
+- release notes and known limitations.
+
+A checksum proves only that downloaded bytes match the listed digest. A build attestation binds bytes to a workflow identity. An updater signature authorizes a payload for an installed app. OS code signing/notarization supplies the applicable publisher/platform trust signal. None proves scan completeness, finding correctness, authorization, compliance, or human usability.
+
+When `SHA256SUMS.txt` and a GitHub attestation are actually supplied, a user can verify them with the platform's checksum tool and:
 
 ```sh
-npm run test:release-evidence
-npm run release:validate -- --tag v0.1.8
-gh workflow run release.yml --ref main
+gh attestation verify ./downloaded-installer --repo teddashh/ai-security-scanner
 ```
 
-The preflight executes the same Linux, universal macOS, and Windows build matrix, preserves its
-desktop startup observations, and then runs the independent hosted qualification matrix described
-above. For a pre-release, macOS runtime/container coverage remains explicitly unobserved rather than
-being treated as passed. Wait for that dispatch to succeed, record
-its immutable `headSha`, and retain or download its `release-finalized` artifact. Tag that exact
-commit—not a later `main` tip:
+The release page must say when an attestation or OS signature is absent rather than presenting the command as universally available.
 
-```sh
-git tag -a v0.1.8 <preflight-head-sha> -m "ai-security-scanner v0.1.8"
-git push origin v0.1.8
-```
+## 8. Historical release notes
 
-The tag run rebuilds from the same commit rather than reusing preflight binaries. The GitHub Release
-is created only after all three platform builds, all four strict installer qualifications, both
-SBOMs, notices, checksum verification, signed updater-manifest assembly, finalized-candidate
-reverification, and provenance attestation succeed. A source-declared preview is published as a
-non-draft pre-release and does not replace the latest stable release; a source-declared stable build
-is published as the latest stable release. A failed preflight creates no tag or public release, and
-a failed tag prerequisite leaves no partial GitHub Release.
+Release-line files preserve what a candidate/release claimed or planned at that time. They are historical, non-normative records and cannot reintroduce current runtime, consent, recovery, or global-release requirements:
 
-## Verifying a downloaded artifact
+- [v0.1.1](v0.1.1.md)
+- [v0.1.2](v0.1.2.md)
+- [v0.1.3](v0.1.3.md)
+- [v0.1.4](v0.1.4.md)
+- [v0.1.5](v0.1.5.md)
+- [v0.1.6](v0.1.6.md)
+- [v0.1.7](v0.1.7.md)
+- [v0.1.8](v0.1.8.md)
+- [v0.2.0](v0.2.0.md)
 
-Download the desired installer and `SHA256SUMS.txt` into the same directory. On Linux or macOS:
-
-```sh
-sha256sum -c SHA256SUMS.txt --ignore-missing
-gh attestation verify ./ai-security-scanner-installer-file --repo teddashh/ai-security-scanner
-```
-
-On Windows, compare `Get-FileHash -Algorithm SHA256` with the matching checksum entry, then use
-the same `gh attestation verify` command. Checksums detect file changes; the GitHub attestation
-binds the file digest to the repository workflow identity. Neither mechanism is a substitute for
-OS code signing, whose absence remains explicit above.
-
-## Managed engine image publication
-
-The project-managed cloud, external-target, Microsoft 365, local artifact, container, Kubernetes,
-Greenbone, Gitleaks, Checkov, and Syft publication workflows build linux/amd64 plus linux/arm64 indexes,
-preserve the immutable public digest, and invoke the common signed-evidence contract documented in
-[`engine-image-supply-chain.md`](engine-image-supply-chain.md). Each published index has SLSA
-build provenance; each platform manifest has independently signed SPDX and CycloneDX SBOMs. The
-attestations remain available from GitHub and as GHCR referrers, while a 90-day workflow artifact
-provides convenient copies of the SBOMs, Sigstore bundles, hashes, and evidence manifest.
-
-KICS is the remaining explicit upstream-pinned exception: the catalog acquires its verified
-upstream image by immutable digest and the project does not republish it as a managed GHCR image.
-
-The Gitleaks release plan instead builds version 8.30.1 from pinned source and adds a dedicated
-Apache-2.0 non-shell launcher around the MIT-licensed scanner. The launcher fixes the current-tree
-directory scan, scanner-owned rules, ignored repository suppressions, `--exit-code 0`, and 100%
-redaction before evidence. Publication is not complete until the normal multi-platform image,
-smoke, SBOM, provenance, signature, and immutable-promotion workflow has succeeded; this
-source-tree description is not evidence that a final image has already been published.
-
-These workflows intentionally keep BuildKit's automatic provenance and SBOM flags disabled. The
-external attestations bind to already-final image and platform digests, so adding supply-chain
-evidence cannot silently change a digest frozen into an assessment case. Engine release plans
-must still independently record the resulting immutable digest and applicable dependency notices.
+Where a historical note conflicts with the canonical product specification, the canonical specification controls. Current implementation gaps remain in the product audit until code and real-boundary evidence close them.

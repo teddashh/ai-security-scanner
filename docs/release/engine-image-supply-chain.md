@@ -1,5 +1,9 @@
 # Managed engine image supply-chain evidence
 
+Normative status: this is a subordinate engine-publication reference. The [canonical product specification](../product-spec.md) controls product behavior and acceptance. Failure here blocks promotion/execution of the exact untrusted image only; it cannot block the installed workspace, unaffected admitted engines, the beginner master report, readable unsigned export, ordinary product/docs CI, or an unrelated platform/channel.
+
+Each engine/digest is an independent publication unit. A complete matrix may be run for maintainer convenience, but one matrix member's failure does not revoke already admitted immutable images or make another engine's successful evidence invalid. Any workflow that fate-shares these independent outcomes is a current release-automation gap, not the intended product contract.
+
 Every project-managed engine image publication uses the shared immutable-version guard and
 `.github/actions/engine-image-evidence` action. A new build is pushed only to a run-unique
 `candidate-<source-revision>-<run-id>-<attempt>` tag. The human-readable version tag is created
@@ -48,7 +52,8 @@ are validated by CI and become active on the next image-input publication or an 
 dispatch. Automatic publication path filters contain only actual image inputs (Dockerfiles,
 launchers, pinned offline build data, and equivalent recipe inputs). This prevents a guard rollout
 or evidence-only refactor from forcing unrelated immutable version bumps. Manual dispatch remains
-available and intentionally evaluates the complete configured matrix.
+available and may evaluate the complete configured matrix, while retaining an independent terminal
+result and publication decision for each image.
 
 ## Evidence contract
 
@@ -183,3 +188,9 @@ gh attestation verify "oci://${image}@${amd64_digest}" \
 To recover the signed SPDX predicate as JSON even after the workflow artifact expires, add
 `--format json` and extract
 `.[].verificationResult.statement.predicate` from the successful verification result.
+
+## Product and release boundary
+
+These receipts answer one question: whether a particular immutable engine image is admissible for publication/execution. They do not prove that scanning is complete, that a finding is correct, or that the Windows beginner path works. At runtime, an unavailable image becomes a named `not_tested` task and coverage gap after the run is persisted; independent tasks continue and the same partial/no-checks master report remains exportable.
+
+The exact-candidate installed-Windows human path remains the first product acceptance evidence. Adding another attestation, cross-platform dependency, global qualification, or publication gate requires the canonical complexity-budget record with reproduced harm and proof that independent admission, preservation, warning, or retry is insufficient.

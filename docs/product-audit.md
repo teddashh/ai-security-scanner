@@ -2,7 +2,11 @@
 
 Status: completed static product-design, UX, architecture, and specification audit
 
+Documentation follow-up: subordinate current-behavior documents were reconciled to the canonical specification on the same integration workline. Evidence that describes the pre-rewrite documents is explicitly pinned to the audit baseline below.
+
 Audit baseline: `7e0f0de548bebf64dcfdc41d9b000f9e7a16fc4b` (`origin/main` at audit start)
+
+Evidence convention: unless a reference includes another commit explicitly or is labeled as a post-audit documentation status, every unqualified `path:line` reference resolves against the audit baseline above. This keeps the report reproducible as implementation lines move.
 
 Audit branch: `codex/v0.1.8-integration`
 
@@ -71,7 +75,7 @@ Disposition is one of **Keep**, **Simplify**, **Merge**, **Automatic**, **Warnin
 | Reporting | Findings, coverage, progress, HTML, framework JSON, and expert bundle are separate centers | `src/pages/FindingsPage.tsx:71-116`; `src/pages/ExportPage.tsx:179-264,499-516`; `src-tauri/src/case_service.rs:5952-6205` | One beginner master report for complete and partial runs |
 | Export/signing | Bundle creation requires local signing identity; partial runs disable some formats | `src-tauri/src/export.rs:181-249`; `src/exportFormatEligibility.ts:9-26` | Readable unsigned export always; signing/format limitations affect only the requested enhancement |
 | CI/release | Ordinary frontend CI runs release validation; release assembly fate-shares long global qualifications | `.github/workflows/ci.yml:16-35`; `.github/workflows/release.yml:650-810` | Separate product CI, engine admission, platform qualification, and publication policy |
-| Human acceptance | Required study is unfinished and starts with nine-task AWS/IAM flow | `docs/usability/iam-naive-first-run.md:1-11,36-67,90-124` | First study is install → localhost → master report in ten minutes; cloud is feature-specific |
+| Human acceptance | At the audit baseline, the required study was unfinished and started with a nine-task AWS/IAM flow | Baseline `7e0f0de:docs/usability/iam-naive-first-run.md:1-11,36-67,90-124` | First study is install → localhost → master report in ten minutes; cloud is feature-specific |
 
 ## 4. Inventory of user-visible gates
 
@@ -120,7 +124,7 @@ This compact inventory records the current semantics for paths not all represent
 
 - **Priority / disposition:** P0 — Automatic and simplify.
 - **Problem:** NSIS prepares ordinary installer dependencies but does not prepare WSL. Runtime startup checks WSL only after installation and aborts before download; UI/manual guidance can require Terminal. A path/argument-constrained UAC flow exists but is compiled as test-only and waits forever for the servicing process, leaving duplicate “safe in tests / manual in product” behavior rather than a production-ready repair path.
-- **Evidence:** `src-tauri/windows/nsis/installer.nsi:601-691`; `src-tauri/src/managed_runtime.rs:817-886,2433-2441,2534-2617,8947-9186,9273-9296`, including unbounded wait at `9160`; `docs/managed-runtime.md:195-215`; `src/components/RuntimeSetupAssistant.tsx:183-191,295-303`.
+- **Evidence:** `src-tauri/windows/nsis/installer.nsi:601-691`; `src-tauri/src/managed_runtime.rs:817-886,2433-2441,2534-2617,8947-9186,9273-9296`, including unbounded wait at `9160`; baseline `7e0f0de:docs/managed-runtime.md:195-215`; `src/components/RuntimeSetupAssistant.tsx:183-191,295-303`.
 - **Real user impact:** A beginner believes installation finished, then meets WSL terminology, a separate repair project, restart/reopen loops, and destructive-sounding backup/removal instructions.
 - **Wrong design belief:** Avoiding any product-initiated Windows servicing action is treated as more important than completing a normal signed installation.
 - **Simpler behavior:** Use the signed installer for the exact product-defined Microsoft WSL install/update action under normal UAC, persist restart state, resume automatically, and call it “preparing scan tools.” No webview value selects executable/arguments/environment. Replace the test-only flow with a deadline, cancellation/restart outcome, and durable progress rather than reusing it unchanged.
@@ -130,7 +134,7 @@ This compact inventory records the current semantics for paths not all represent
 
 - **Priority / disposition:** P0 — Automatic; remove manual name reclamation.
 - **Problem:** Runtime names are deterministic. A matching current-generation WSL registration without the exact expected proof fails closed, and the UI asks the novice to inspect/back up/remove it manually.
-- **Evidence:** `src-tauri/src/managed_runtime.rs:8931-8945,3106-3153`; `src/components/RuntimeSetupAssistant.tsx:183-191,295-303`; `docs/managed-runtime.md:109-125`.
+- **Evidence:** `src-tauri/src/managed_runtime.rs:8931-8945,3106-3153`; `src/components/RuntimeSetupAssistant.tsx:183-191,295-303`; baseline `7e0f0de:docs/managed-runtime.md:109-125`.
 - **Real user impact:** An unrelated, copied, ghost, or interrupted distro can permanently prevent first value; following the advice can damage data the product deliberately refused to identify.
 - **Wrong design belief:** The product must reclaim one deterministic name before it can operate.
 - **Simpler behavior:** Never adopt or delete by name. Preserve the ambiguous registration and storage, allocate a unique per-install/generation name and provider home, then continue. Disclose the retained object only after service is restored.
@@ -140,7 +144,7 @@ This compact inventory records the current semantics for paths not all represent
 
 - **Priority / disposition:** P0 — Remove gate; simplify journey.
 - **Problem:** With no cases/runtime, the entire app shell is replaced by a setup screen. Product creation then requires project/company fields, coverage steps, another authorization step, and a separate progress view. There is no one-action localhost starter despite URL parsing preserving port `9001`.
-- **Evidence:** `src/runtimeFirstLaunch.ts:25-31`; `src/App.tsx:1327-1351`; `src/components/RuntimeFirstLaunch.tsx:81-100,147-165`; `src/pages/CasesPage.tsx:676-689,957-966,1120-1125`; `src/pages/CoveragePage.tsx:336-450`; `src/caseForm.ts:126-163`; README promise at `README.md:23-27`.
+- **Evidence:** `src/runtimeFirstLaunch.ts:25-31`; `src/App.tsx:1327-1351`; `src/components/RuntimeFirstLaunch.tsx:81-100,147-165`; `src/pages/CasesPage.tsx:676-689,957-966,1120-1125`; `src/pages/CoveragePage.tsx:336-450`; `src/caseForm.ts:126-163`; baseline README promise at `7e0f0de:README.md:23-27`.
 - **Real user impact:** Users cannot understand the product or preserve their chosen target while a long internal task runs; the advertised three-step flow is not the real flow.
 - **Wrong design belief:** Infrastructure must be fully ready before the user may enter the workspace.
 - **Simpler behavior:** Always open New scan/Projects/Report. Provide “Scan a service on this computer,” prefill `127.0.0.1:9001`, auto-name the project, make organization optional, and prepare tools behind the selected task.
@@ -279,8 +283,8 @@ This compact inventory records the current semantics for paths not all represent
 ### A17 — Runtime recovery code is larger and more dangerous than side-by-side isolation
 
 - **Priority / disposition:** Remove.
-- **Problem:** A large legacy transaction still exports, hashes, imports, quarantines, terminates, unregisters, and deletes WSL/provider state even though current startup already treats legacy observation as nonblocking. Commands and docs preserve two competing recovery models.
-- **Evidence:** nonblocking legacy observation at `src-tauri/src/managed_runtime.rs:2523-2530,4963-4979`; destructive transaction `src-tauri/src/managed_runtime.rs:3726-4179` including unregister at `4026-4034,4111-4119`; command surface `1131-1163`; conflicting docs `docs/managed-runtime.md:109-125`; `README.md:236-242`.
+- **Problem:** A large legacy transaction still exports, hashes, imports, quarantines, terminates, unregisters, and deletes WSL/provider state even though current startup already treats legacy observation as nonblocking. Commands and baseline documentation preserved two competing recovery models; the subordinate documentation is now aligned, but the executable recovery surface remains.
+- **Evidence:** nonblocking legacy observation at `src-tauri/src/managed_runtime.rs:2523-2530,4963-4979`; destructive transaction `src-tauri/src/managed_runtime.rs:3726-4179` including unregister at `4026-4034,4111-4119`; command surface `1131-1163`; baseline conflicts at `7e0f0de:docs/managed-runtime.md:109-125` and `7e0f0de:README.md:236-242`.
 - **Real user impact:** More data-sensitive paths, states, receipts, and tests remain available even though retaining the old object and creating a new one is safer and simpler.
 - **Wrong design belief:** A prior runtime must be migrated/reclaimed rather than preserved.
 - **Simpler behavior:** Remove export/import/quarantine/replacement and automatic legacy deletion. Retain old state, create unique current runtime, and offer optional advanced cleanup only when exact ownership exists.
@@ -310,7 +314,7 @@ This compact inventory records the current semantics for paths not all represent
 
 - **Priority / disposition:** P2 — Simplify, retaining the final-namespace hard boundary.
 - **Problem:** Runtime open verifies and holds the full ancestor chain to volume/share roots, rejecting unsupported/conditional ACEs and broad modeled grants rather than focusing on the private final product namespace.
-- **Evidence:** `src-tauri/src/managed_runtime.rs:2174-2185,11976-11985,12239-12474`; `docs/managed-runtime.md:145-160`.
+- **Evidence:** `src-tauri/src/managed_runtime.rs:2174-2185,11976-11985,12239-12474`; baseline `7e0f0de:docs/managed-runtime.md:145-160`.
 - **Real user impact:** The code rejects ACE classes commonly associated with domain, EDR, backup, or redirected-profile policy, so it may disable scanning even if a protected final directory can be safely created. This user impact is an inference pending the proposed real Windows policy fixture, not a verified field failure.
 - **Wrong design belief:** Every ancestor must match a narrow model to isolate the product directory.
 - **Simpler behavior:** Reject reparse/replacement attacks and foreign write authority at the final product namespace; treat unusual non-exploitable ancestors as diagnostics. Add a hard block only with a demonstrated path to replacing the final namespace.
@@ -340,7 +344,7 @@ This compact inventory records the current semantics for paths not all represent
 
 - **Priority / disposition:** P2 — Defer/Advanced.
 - **Problem:** Provider setup requires IT handoff JSON, official login, discovery, and manual account/role/tenant/client/subscription identifiers. Cloud cards are folded on the Start page, but they still enter the same shared Coverage journey rather than a separately supported Advanced path. The repository ships no deployer-neutral OAuth client identity.
-- **Evidence:** folded placement `src/pages/StartPage.tsx:236-239,367-378`; setup `src/components/ProviderAuthorizationPanel.tsx:103-148,1415-1627`; `docs/provider-authorization.md:3-11,88-160`.
+- **Evidence:** folded placement `src/pages/StartPage.tsx:236-239,367-378`; setup `src/components/ProviderAuthorizationPanel.tsx:103-148,1415-1627`; baseline `7e0f0de:docs/provider-authorization.md:3-11,88-160`.
 - **Real user impact:** A non-cloud user encounters enterprise IAM ceremony; a cloud beginner cannot complete setup without IT/deployer work.
 - **Wrong design belief:** A technically bounded IAM flow belongs in the universal beginner journey.
 - **Simpler behavior:** Keep cloud in Advanced. With organization configuration, show one official sign-in and automatic inventory. Without it, generate one concise IT handoff; never affect local/network/code first value.
@@ -360,7 +364,7 @@ This compact inventory records the current semantics for paths not all represent
 
 - **Priority / disposition:** P0 acceptance strategy — Replace the primary gate, retain narrow data-risk tests.
 - **Problem:** The only specified human study has no completed session and uses a nine-task AWS/IAM journey. Release does not enforce it; unit tests build a self-declared in-memory human record. Meanwhile N-1/ghost scripts silently install, seed synthetic CLI cases, manually clean runtime, and can occupy separate six-hour jobs.
-- **Evidence:** `docs/usability/iam-naive-first-run.md:1-11,36-67,90-124`; `scripts/validate-usability-evidence.mjs:423-459`; `tests/usability/evidenceValidator.test.mjs:26-117`; `.github/workflows/release.yml:123-135,650-810`; `scripts/release/qualify-windows-nsis-upgrade.ps1:736-1095`; ghost cleanup `scripts/release/qualify-windows-nsis-ghost-recovery.ps1:2648-2685`.
+- **Evidence:** baseline `7e0f0de:docs/usability/iam-naive-first-run.md:1-11,36-67,90-124`; `scripts/validate-usability-evidence.mjs:423-459`; `tests/usability/evidenceValidator.test.mjs:26-117`; `.github/workflows/release.yml:123-135,650-810`; `scripts/release/qualify-windows-nsis-upgrade.ps1:736-1095`; ghost cleanup `scripts/release/qualify-windows-nsis-ghost-recovery.ps1:2648-2685`.
 - **Real user impact:** CI can prove exact modeled artifacts while a real novice remains stuck before scan or report.
 - **Wrong design belief:** More machine-generated proof can substitute for a person completing the core job.
 - **Simpler behavior:** Primary acceptance is installed Windows → main UI → `127.0.0.1:9001` → master report → reopen/export, observed and timed. Narrow automation remains for concrete data-loss, ambiguous-runtime, lost-event, and partial-engine risks. AWS is separate feature acceptance.
@@ -396,11 +400,11 @@ This compact inventory records the current semantics for paths not all represent
 - **Simpler behavior:** Keep versioned fingerprints, upstream IDs, every evidence reference, separate severity/confidence, and expiring false-positive history. Relate cross-engine observations instead of destructively merging them unless a reviewed equivalence rule exists; show confidence source/limits; label unknown severity as unknown/review rather than low risk; replace generic advice with rule-specific bounded guidance where supported.
 - **Acceptance test:** Two exact duplicates preserve both evidence references; two related cross-engine findings remain reversible; unknown severity is not green; confidence origin is visible; an expired false-positive does not suppress changed future evidence; remediation never executes a command.
 
-### A29 — README first layers still read like release and infrastructure contracts
+### A29 — Baseline README first layers read like release and infrastructure contracts
 
 - **Priority / disposition:** P1 — Rewrite first layer; move contracts to linked detail.
-- **Problem:** Both READMEs begin with clearer benefits, but their first practical layer quickly becomes candidate/AuthentiCode status, detailed authorization contracts, managed-runtime/WSL behavior, catalog promises, and release evidence. Several statements also describe runtime-before-work and duplicate authorization that the canonical journey removes.
-- **Evidence:** `README.md:42-58,60-124,236-250`; `README.zh-TW.md:42-58,60-124,236-250`.
+- **Problem:** At the audit baseline, both READMEs began with clearer benefits, but their first practical layer quickly became candidate/AuthentiCode status, detailed authorization contracts, managed-runtime/WSL behavior, catalog promises, and release evidence. Several statements also described runtime-before-work and duplicate authorization that the canonical journey removes. The English and Traditional Chinese README bodies are now rewritten; remaining product work is to make the implemented UI and installable journey match them.
+- **Evidence:** baseline `7e0f0de:README.md:42-58,60-124,236-250`; baseline `7e0f0de:README.zh-TW.md:42-58,60-124,236-250`.
 - **Real user impact:** A prospective beginner meets internal release/runtime policy before a download and successful first scan, while the advertised flow differs from the actual UI.
 - **Wrong design belief:** Showing completeness, boundaries, and qualification machinery is the strongest first-page value proposition.
 - **Simpler behavior:** Keep first-layer English/Traditional Chinese content to outcome, plain-language use cases, current download/quick start, three-step first scan, one example report, and language link. Move authorization, WSL ownership, engine manifests/provenance, qualification, and release blockers to second-level linked docs; keep limitations near the claim they qualify.
@@ -424,7 +428,7 @@ The rewrite is not a request to remove all safeguards. These mechanisms directly
 - **Isolation defaults.** Rootless runtime, read-only inputs, no-new-privileges, bounded resources, exact egress scope, credential redaction, and no deletion by name alone remain valid.
 - **Accessibility foundations.** Skip link, focus visibility, reduced motion: `src/components/AppShell.tsx:183-187`; `src/styles.css:87-100,3068-3075`.
 - **Bilingual parity tests.** `tests/frontend/i18n.test.ts:32-44`.
-- **Visible pause/cancel/resume.** `src/pages/ProgressPage.tsx:903-918,945-972`, revised to reconcile truthfully.
+- **Visible pause/cancel/resume controls.** `src/pages/ProgressPage.tsx:903-918,945-972`; authoritative event-loss reconciliation remains an open P0 in A05.
 - **Gitleaks as an independently pinned engine.** The catalog uses a bounded Gitleaks adapter/image rather than making repository code choose arbitrary commands: `docs/engine-catalog.md:70`; `engines/catalog.json:1697-1805`.
 - **VibeScan integration decision.** The repository correctly borrows its plain-language vibe-coding journey without distributing a revision whose arbitrary plugin commands, recursive cleanup, swallowed errors, and false pass mapping conflict with the product boundary: `docs/research/vibescan-evaluation.md:1-54`. This is a concrete irreversible-data/execution risk, not a speculative gate.
 
@@ -521,7 +525,7 @@ Focused real-boundary fixtures cover no-WSL/restart; lost event; transient stopp
 7. Isolate malformed cases and qualify N-1 user-data migration/reopen/export.
 8. Align GitHub and AI use-case claims with actual end-to-end target semantics.
 9. Make severity/confidence provenance, finding identity, false-positive expiry, and rule-specific bounded remediation understandable without destructive cross-engine merging.
-10. Rewrite both README first layers and UI copy around outcomes/use cases/quick start, and move runtime/release contracts to linked detail.
+10. Keep the now-rewritten README first layers aligned while rewriting remaining UI copy around outcomes/use cases/quick start; runtime/release contracts stay in linked detail.
 11. Separate fast product/docs CI from engine admission, platform installer qualification, and publication/signing policy.
 
 ### Third batch — P2 advanced features and release hardening
@@ -548,7 +552,7 @@ The canonical specification now explicitly defines:
 - privacy, authorization, external scan, and destructive-action boundaries;
 - human-first testing, warning-versus-hard-block policy, and a complexity budget.
 
-Architecture, managed-runtime, threat-model, provider, engine-catalog, release, and cloud-usability references now identify themselves as subordinate to the canonical specification. Their contradictory descriptions remain evidence of current implementation/design gaps and must be reconciled as the corresponding behavior changes; they cannot silently reintroduce another product contract.
+Architecture, managed-runtime, threat-model, provider, engine-catalog, release, cloud-usability, README, contributing, security, third-party, mapping, and research references now state the same outcome-first contract in their substantive guidance. Historical release notes preserve what an old version claimed or did, but are labeled non-normative and must not be copied into current implementation. Baseline document contradictions remain audit evidence through commit-pinned citations; they are no longer current requirements.
 
 This audit does not assert those requirements are implemented. It makes their absence explicit and gives the next goal a bounded P0 starting set.
 

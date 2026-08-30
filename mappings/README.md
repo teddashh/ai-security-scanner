@@ -1,5 +1,7 @@
 # Evidence-to-control mappings
 
+Normative status: this is a subordinate mapping-maintenance reference. The [canonical product specification](../docs/product-spec.md) controls the beginner master report and non-certification wording. NIST, ISO 27001, and AIDEFEND are optional finding/evidence relationship layers—not scan prerequisites, coverage proof, pass/fail results, or product-wide release gates.
+
 `control-mappings.json` is the versioned, checked-in catalog used to add
 control references to normalized findings. A reference means only that the
 specific source rule is topically related to the named control. It is not a
@@ -23,13 +25,21 @@ When changing the catalog:
 5. Set a real `reviewed_at` date and the allowlisted `review_process`, then recalculate
    `provenance.canonical_sha256` over canonical JSON after removing only that digest field.
 6. Keep `control-mappings.schema.json` and the Rust bounded validator aligned. Invalid calendar
-   dates, a review date before the mapping-version date, or a digest mismatch fail closed.
+   dates, a review date before the mapping-version date, or a digest mismatch rejects that mapping
+   catalog/relationship operation; it never rejects the underlying finding, run, master report, or
+   readable unsigned export.
 
 The framework exporter revalidates every relationship that carries the current catalog identity.
 Its coordinate, title, relationship, rationale, evidence engine, and AIDEFEND applicability must
 match one exact reviewed entry. A stored historical digest remains an identifier only; without an
 authenticated copy of that historical catalog it is reported as unverified and unavailable, never
 as an exact mapping.
+
+Mapping is applied after evidence/finding preservation. Missing, stale, malformed, historically
+unavailable, or inapplicable entries produce an unavailable/omitted relationship and an optional
+coverage notice in the same beginner master report. They do not delay quick discovery, full
+inventory, deep checks, finding display, or readable export. No aggregate framework score is
+generated.
 
 The framework source links are metadata only. ISO text is not embedded or
 redistributed by this project.
@@ -68,3 +78,8 @@ The optional source check recomputes the complete file's byte length and
 SHA-256 before deriving the selected records. AIDEFEND tool recommendations or
 threat mappings are not included and must never be treated as automatic
 scanner-to-control mappings.
+
+Mapping validation and provenance tests are mapping-maintenance evidence, not substitutes for the
+exact-candidate installed-Windows human path. Any proposal to make a mapping failure block more than
+the exact relationship/export enhancement must satisfy the canonical complexity budget and show a
+reproducible harm that cannot be addressed by omission plus explicit disclosure.

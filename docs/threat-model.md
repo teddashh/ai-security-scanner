@@ -2,7 +2,7 @@
 
 Status: design-time threat model
 
-Last updated: 2026-08-26
+Last updated: 2026-08-30
 
 Normative status: this threat model is subordinate to the [canonical product specification](product-spec.md). It may require an operation-scoped safety control, but cannot turn optional-engine, mapping, signing, updater, or disposable-runtime failure into a product-wide gate unless the specification's hard-block rule permits it.
 
@@ -32,6 +32,8 @@ It considers a single human user on one workstation. Shared-workstation authoriz
 6. **Supply-chain accountability:** every executable, image, ruleset, template set, and database is traceable to a pinned artifact and a release disposition.
 7. **Safe failure:** interruption or partial cleanup is visible and recoverable.
 8. **Non-remediation:** the product cannot use scanner authority to change the assessed environment.
+9. **Outcome continuity:** product-owned reversible failure is repaired automatically, ambiguous objects are preserved beside a new isolated object, and optional failure leaves independent work plus an honest partial report available.
+10. **Operation-scoped blocking:** a control blocks only the exact destructive, untrusted-execution, prohibited-contact, or untrustworthy-signature operation that creates the concrete harm.
 
 ## 3. Protected assets
 
@@ -66,15 +68,16 @@ It considers a single human user on one workstation. Shared-workstation authoriz
 
 All UI input is untrusted. Tauri commands validate identifiers, state transitions, paths, scope grants, and target syntax in Rust. A disabled button is not an authorization control.
 
-### Boundary A2: backend to Windows WSL prerequisite checks
+### Boundary A2: signed installer to Windows WSL servicing
 
-The desktop resolves the Windows-owned `System32\wsl.exe`, rejects reparse points, and performs only
-bounded read-only status and inventory probes with fixed arguments and a cleared environment. The
-webview cannot supply an executable, arguments, verb, or servicing operation. The current product
-does not elevate itself, enable optional features, invoke Windows servicing, or expose the legacy
-repair backend as a Tauri command. A missing or outdated WSL installation leads to Microsoft's
-official setup outside the app; returning or reopening the app performs the same read-only check
-before any runtime-image download.
+The signed installer resolves the Windows-owned `System32\wsl.exe`, rejects reparse points, detects
+prerequisites, and may invoke only the fixed product-defined Microsoft WSL installation/update action
+through normal UAC with a cleared environment and a bounded deadline. The webview cannot supply an
+executable, arguments, working directory, environment, verb, or servicing operation. Restart state
+and the in-progress generation are durable so the application resumes automatically. Failure,
+cancellation, or timeout does not roll back application binaries or hide projects/reports; only
+runtime-dependent tasks wait for bounded Retry. The main workspace opens while product-owned scan
+tools prepare in the background, and a beginner is never instructed to administer WSL.
 
 ### Boundary B: backend to bootstrap broker
 
@@ -105,6 +108,11 @@ An export is an explicit disclosure boundary. Redaction creates a derived packag
 Repository skills and external models are separate trust domains. Raw findings and credentials do not automatically cross into an AI context.
 
 ## 6. Credential architecture
+
+Cloud/provider authorization is an Advanced target path. It is never a prerequisite for localhost,
+website, public/internal network, local source, saved-report, or unsigned-export work. Missing,
+expired, or rejected provider authorization affects only the exact provider target/task and appears
+as a coverage gap in the same master report as any successful sibling work.
 
 ### 6.1 Preferred authorization
 
@@ -172,11 +180,11 @@ For direct-contact levels, the backend stores:
 - the exact template or check policy;
 - approval and expiry timestamps.
 
-The planner resolves hostnames before a run and guards against DNS rebinding, redirects, cloud metadata ranges, loopback, link-local, private ranges outside the approved scope, and IPv4/IPv6 representation tricks. Redirects and newly resolved addresses do not inherit approval automatically.
+After the requested run/task is persisted but before direct target contact, task preflight resolves hostnames and guards against DNS rebinding, redirects, cloud metadata ranges, loopback, link-local, private ranges outside the approved scope, and IPv4/IPv6 representation tricks. The explicit `127.0.0.1:9001` Windows-host route is allowed only by its dedicated local-service contract. Redirects and newly resolved addresses do not inherit approval automatically. A preflight rejection affects that task and remains visible in the master report rather than aborting the run record.
 
 Shared hosting, CDNs, SaaS endpoints, and outsourced infrastructure remain residual legal and operational risks even when the user controls a domain. The product records the assertion; it cannot prove legal authority.
 
-Active template collections require policy classification. Destructive, denial-of-service, credential-stuffing, fuzzing, file-upload, headless-browser, or out-of-band callbacks are denied unless an explicit future policy reviews and enables them. Installing Nuclei does not authorize every Nuclei template.
+Active template collections require policy classification. Destructive, denial-of-service, credential-stuffing, fuzzing, file-upload, headless-browser, or out-of-band callbacks are denied unless an explicit future policy reviews and enables the exact operation. Installing Nuclei does not authorize every Nuclei template. Refusing such an operation does not block local analysis, low-impact tasks, saved reports, or other engines.
 
 ## 8. Threats and required controls
 
@@ -186,7 +194,7 @@ Active template collections require policy classification. Destructive, denial-o
 | T-02 | Administrative credential reaches a scanner container. | Full cloud or tenant compromise through a third-party engine. | Separate broker binary; scanner plan can resolve only read-only capability handles; invariant tests reject admin profiles in engine manifests. |
 | T-03 | A frontend flaw invokes privileged runtime operations. | Host takeover. | No runtime socket in UI; typed backend allowlist; capability-based job API; CSP and Tauri permission minimization. |
 | T-04 | A container mounts the daemon socket or broad host directories. | Container-to-host compromise and data theft. | Manifest validation; deny socket/privileged/host namespace flags; narrow read-only mounts; dedicated workdir; release review for exceptions. |
-| T-05 | Upstream image or binary is replaced. | Malicious code executes with scan access. | Pin cryptographic digest, verify configured signatures/provenance, approved download source, SBOM, no `latest`, compatibility manifest. |
+| T-05 | Upstream image or binary is replaced. | Malicious code executes with scan access. | Pin cryptographic digest, verify configured signatures/provenance, approved download source, SBOM, no `latest`, compatibility manifest; block only that artifact and record its task as not tested while admitted siblings continue. |
 | T-06 | Rules, templates, or vulnerability databases change independently of the engine. | Irreproducible or malicious findings. | Pin and record data artifact versions and hashes; treat feeds as separate third parties; show knowledge date. |
 | T-07 | A stale engine silently misses current issues. | False reassurance. | Support dates, update status, visible knowledge date, expired-engine warning, no claim that absence of findings means safety. |
 | T-08 | Malicious banner or repository text injects HTML, shell, SQL, path, or prompt content. | Code execution, UI compromise, or AI tool misuse. | Schema and size validation; escaping; parameterized SQL; no shell interpolation; normalized text treated as data; prompt-isolation rules. |
@@ -194,7 +202,7 @@ Active template collections require policy classification. Destructive, denial-o
 | T-10 | User scans an unauthorized target. | Legal exposure and harm to third parties. | Backend scope grants, resolved target allowlists, tiered activity, expiry, rate limits, immutable run plan, event record. |
 | T-11 | Target redirects or rebinds to a sensitive/internal service. | SSRF, metadata credential theft, unintended internal scan. | Re-resolve and compare target, deny metadata/link-local/loopback unless explicitly scoped, redirect policy, IP and protocol pinning. |
 | T-12 | Aggressive scan overloads target or local workstation. | Service outage or local denial of service. | Per-engine rate/concurrency limits, resource quotas, timeouts, backpressure, pause/cancel, active-template policy. |
-| T-13 | Engine hangs, laptop sleeps, API rate-limits, or network disconnects. | Lost progress or false completion. | Durable checkpoints, heartbeat, bounded retry, per-engine terminal states, resumability, partial coverage. |
+| T-13 | Engine hangs, laptop sleeps, API rate-limits, network disconnects, or a lifecycle event is lost. | Lost progress, permanent stale UI, or false completion. | Durable checkpoints, heartbeat/deadline, bounded retry, per-task terminal states, partial coverage; events are hints and startup/focus/resume/watchdog polling reconciles authoritative state. |
 | T-14 | Credentials or findings remain in orphaned containers or temporary files. | Post-run secret and evidence exposure. | Dedicated ephemeral volumes, termination cleanup, startup orphan reconciliation, visible cleanup failures, capability revocation, and exact typed runtime provenance in durable checkpoints. |
 | T-15 | Product or plugin silently uploads findings. | Disclosure of the user's attack map. | No default telemetry, outbound allowlists, explicit export boundary, code review of connectors, network-denied components by default. |
 | T-16 | Export recipient modifies or truncates a package. | Misleading expert handoff. | Deterministic manifest, per-file hashes, optional signature, verification command, explicit redaction/exclusion list. |
@@ -202,7 +210,7 @@ Active template collections require policy classification. Destructive, denial-o
 | T-18 | No findings, failed engine, or unknown source appears green. | False reassurance. | Independent coverage ledger; state-specific presentation; zero findings cannot set coverage; `unverifiable` comparison state. |
 | T-19 | Normalization incorrectly merges distinct findings. | A real issue is hidden. | Preserve every source finding and evidence; no automatic cross-engine merge; one active presentation group per finding; append-only create/remove events; versioned fingerprint; expert access to raw results. |
 | T-20 | Normalization double-counts corroborating evidence. | Inflated risk and unusable report. | One user-facing issue can reference multiple source findings; prioritization records corroboration separately. |
-| T-21 | Automated NIST, ISO, or AIDEFEND mapping implies audit status, control implementation, certification, or official endorsement; AIDEFEND is also attached to findings with no AI-system applicability. | Misrepresentation and bad decisions. | Relationship-only mapping enum; no pass/fail/score field; reviewed, versioned rationale; explicit AIDEFEND applicability; selected pinned framework metadata; attribution and non-endorsement notice; prohibited-claim tests in UI/export. |
+| T-21 | Automated NIST, ISO, or AIDEFEND mapping implies audit status, control implementation, certification, or official endorsement; AIDEFEND is also attached to findings with no AI-system applicability. | Misrepresentation and bad decisions. | Relationship-only mapping enum; no pass/fail/score field; reviewed, versioned rationale; explicit AIDEFEND applicability; attribution and non-endorsement notice; mapping failure removes only the relationship and never blocks findings, master report, or scanning. |
 | T-22 | AI agent follows prompt injection in a finding or widens a scan. | Data exfiltration, unauthorized scanning, or host changes. | Treat evidence as untrusted data; no secrets in model context; AI calls same backend authorization; no runtime socket; no remediation command. |
 | T-23 | Remediation advice is executed automatically or mistaken for endorsed code. | Production outage or permission escalation. | No execute/copy-run controls, no write credential in scan runtime, advisory wording, official reference and expert-role guidance. |
 | T-24 | Demo findings are mistaken for real scans. | False product or environment claims. | Persistent Demo badge and provenance, synthetic namespaces, export marker, no demo-to-real state transition. |
@@ -210,7 +218,7 @@ Active template collections require policy classification. Destructive, denial-o
 | T-26 | Export redaction omits an unknown sensitive field. | Sensitive disclosure. | Data-classification metadata, allowlisted export schemas, group title/rationale/actor redaction, preview and manifest, engine raw output excluded by default when not safely redacted. |
 | T-27 | Update rollback or registry outage makes historical cases unexplained. | Lost reproducibility. | Persist resolved manifests and provenance in the case; cache only legally allowed artifacts; distinguish unavailable artifact from resolved finding. |
 | T-28 | License-incompatible component is redistributed. | Forced takedown or license violation. | Per-artifact license disposition, release deny-by-default, notices/source offer, SBOM, manual review of feeds and multi-component stacks. |
-| T-29 | A forged update manifest redirects the desktop to attacker-controlled code. | Local code execution and case-data compromise. | Fixed HTTPS endpoint; runtime allowlist for the exact GitHub repository/tag asset path and complete platform-key set; embedded updater public key; downgrade disabled; detached signature verification before install; signed payloads and `latest.json` covered by release checksums and provenance attestations; private key stored only as an Actions secret. |
+| T-29 | A forged update manifest redirects the desktop to attacker-controlled code. | Local code execution and case-data compromise. | Fixed HTTPS endpoint; allowlist for the exact GitHub repository/tag asset path; embedded updater public key; verify the selected current-platform payload, URL, digest, and detached signature before install; invalid material blocks only that update. Cross-platform completeness is publication policy. Compatible downgrade preserves/read-opens data; incompatible downgrade refuses before mutation. |
 | T-30 | A forged provider prompt sends the user to a credential-phishing site. | Provider account compromise. | Backend provider-host allowlist; frontend URL revalidation; OS-browser opening only through a Tauri capability scoped to the exact AWS, Microsoft, and Google HTTPS host families; no general URL or path opener permission. |
 | T-31 | A later provider bootstrap overwrites an earlier cleanup journal. | Orphaned privileged resources and unrecoverable cleanup obligations. | One private ledger per validated operation ID; immutable provider/resource binding; immediate atomic journal updates; explicit retryable cleanup surface. |
 | T-32 | A provider response redirects pagination, floods records, or becomes partial after some pages. | SSRF, resource exhaustion, or falsely complete inventory. | No redirects; exact continuation allowlists; per-page/aggregate/time/record limits; one bounded safe retry; raw-page-first storage; explicit connected-empty, failed, cancelled, partial, and needs-reauthorization states. |
@@ -232,6 +240,8 @@ An engine is not trusted because it is popular or open source. Admission to a di
 
 Research checkouts under `.upstreams` are untrusted reference material. Their presence does not admit code into a release.
 
+These are engine admission/publication controls, not product-wide readiness. Missing, stale, or unverifiable evidence prevents distribution or execution of the exact affected artifact. It must not stop an already installed trusted build from opening projects, running unaffected admitted engines, producing a partial master report, or exporting readable unsigned results. A publication channel may withhold its exact untrusted artifact without fate-sharing unrelated platforms or ordinary development work.
+
 ## 10. Evidence and export security
 
 Raw evidence is more sensitive than many credentials because it can remain useful after a credential expires. The local data directory requires user-only filesystem permissions. The product should support encryption at rest with an operating-system-protected key before claiming protection on shared or lost devices; until implemented, documentation must state the local-disk exposure.
@@ -240,22 +250,15 @@ Export defaults should exclude raw engine logs unless the user selects an expert
 
 Once the user exports a package to an arbitrary location, confidentiality depends on that destination. The application cannot guarantee secure email, cloud drive, or third-party handling.
 
-The local bundle-signing private key is opened by handle and accepted only when it is a nonempty,
-bounded, single-link, non-reparse regular file owned by the current user. Windows requires a
-protected DACL with exactly one current-user full-access ACE. Migration is limited to the exact
-predecessor ACL containing one full-access ACE each for the current user, LocalSystem, and Builtin
-Administrators; any foreign principal, duplicate, malformed ACE, wrong owner, link, or reparse point
-fails closed. The corresponding public identity is self-signed and included in new bundles with a
-bounded predecessor chain. Losing the recorded private key requires explicit rotation acknowledging
-that exact key ID; it is never silently replaced while its identity remains.
-A separate owner-only continuity anchor keeps a managed key distinguishable when the public identity
-document is deleted. The exact retained managed key plus its matching anchor may restore only the
-byte-equivalent anchored public document; neither signal alone can endorse a key. Only a still-exact
-legacy key may complete an interrupted N-1 adoption.
-Rotation persists a bounded owner-only intent containing the exact candidate secret and self-signed
-identity before changing the primary key. Any unbound mismatching key, mutated intent, or candidate
-that differs from that intent fails closed; completed rotation removes the secret-bearing intent
-only after exact key, document, and anchor readback.
+The optional local bundle-signing private key is opened by handle from a private, non-reparse final
+product namespace. The implementation must demonstrate protection against a foreign writer replacing
+that final namespace or key; unusual but non-exploitable ancestor ACLs are diagnostics, not automatic
+product-wide blockers. Key identity/rotation is durable and explicit so an old identity is not
+silently replaced. Any stronger ACL shape, predecessor chain, continuity anchor, or recovery
+transaction must first satisfy the canonical complexity budget with a reproducible replacement risk.
+A key or identity mismatch hard-blocks only production of the requested signed bundle and immediately
+offers an unsigned readable export. It never blocks scanning, reopening, reports, or existing
+integrity-only verification of independently valid bundles.
 
 ## 11. AI skill security
 
@@ -281,15 +284,15 @@ They must not:
 
 - If the broker cannot confirm cleanup, the case displays unresolved credential cleanup steps and blocks those credentials from reuse.
 - If evidence normalization fails, raw evidence is retained and the result is marked unnormalized; it is not dropped.
-- If an engine cannot be verified or its license disposition is blocked, it is unavailable and coverage reflects `not_executed`.
-- If export hashing fails, no signed or “verified” package is produced.
+- If an engine cannot be verified or its license disposition is blocked, only that engine is unavailable, coverage reflects `not_tested`, and independent tasks plus the master report continue.
+- If export hashing fails, no signed or “verified” package is produced; readable unsigned export remains available when its own bounded serialization succeeds.
 - If local signing identity preparation fails during startup, scanning remains available and the
   failure is logged; a signed export still fails closed until the identity is repaired or explicitly
   rotated after confirmed key loss.
 - If an embedded bundle signing identity is missing, malformed, has an unsupported schema, or does
   not match the manifest signer, bundles that declare that identity schema do not verify.
-- If a historical observation lacks its immutable finding snapshot, the framework report records
-  that limitation and does not reconstruct mappings or prose from the mutable current finding.
+- If a historical observation lacks its immutable finding snapshot, the optional framework section records
+  that limitation and does not reconstruct mappings or prose from the mutable current finding; the underlying historical finding/report remains available.
 - If a relationship cannot resolve an exact evidence-record ID, artifact ID and hash, engine-run ID,
   and engine ID, or either the relationship or that execution lacks matching verified-current mapping
   provenance, the relationship is reported as unavailable or mismatched rather than exact. A current
@@ -301,7 +304,9 @@ They must not:
   not-applicable statement.
 - If a connected source returns no assets, framework coverage stays incomplete/unknown; zero
   returned inventory is not treated as proof that the source is empty.
-- If a runtime provider cannot enforce a manifest boundary, the engine does not run through that provider.
+- If a runtime provider cannot enforce a manifest boundary, the affected engine does not run through that provider; unaffected tasks continue and a partial/no-checks master report is saved.
+- If product-owned disposable runtime state is corrupt, bounded automatic repair or side-by-side replacement runs. If ownership is ambiguous, the old object is preserved and a uniquely named generation is created; no name-only mutation is allowed.
+- If a lifecycle event is missed, authoritative startup/focus/resume/watchdog polling reconciles the durable journal within the canonical refresh bound or exposes Retry/offline-with-last-known-data.
 - If a re-scan lacks comparable scope or engine completion, the result is `unverifiable`.
 
 ## 13. Residual risks
@@ -323,6 +328,9 @@ The product must describe these as limits, not hide them behind a disclaimer or 
 
 Implementation should eventually provide evidence for at least:
 
+- the exact-candidate installed-Windows beginner path: install, combined `127.0.0.1:9001` Start, master report, reopen, and readable export within the canonical budget, without maintainer takeover or Terminal;
+- a real-boundary optional-engine/gateway failure that preserves a successful sibling and produces an honest partial report;
+- a deliberately lost lifecycle event corrected by startup/focus/resume/watchdog reconciliation;
 - unit tests for state transitions, scope canonicalization, coverage, fingerprints, redaction, and comparison;
 - broker tests proving administrative credentials cannot enter engine plans or persisted structures;
 - runtime escape and forbidden-mount tests;
@@ -335,4 +343,4 @@ Implementation should eventually provide evidence for at least:
 - mapping tests that reject unsupported AIDEFEND coordinates, missing attribution, and relationships on non-applicable scanner results;
 - manual security review before making security or isolation claims.
 
-Listing a control or test here is not proof that it passes.
+Modeled, unit, and CI checks support but never substitute for the exact-candidate human path. Listing a control or test here is not proof that it passes. Before adding a new hard block, durable state, recovery transaction, or global qualification, the review must identify the reproducible harm, show why preservation/isolation/warning is insufficient, measure blocked user work, and meet the canonical complexity budget.

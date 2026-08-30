@@ -4,6 +4,8 @@ Status: v0.1.0 source inventory; generated release evidence is artifact-specific
 
 Last updated: 2026-08-26
 
+Normative status: this is an artifact/license inventory, not a product specification. The [canonical product specification](docs/product-spec.md) controls user-visible behavior and release acceptance. A license, provenance, or admission problem may withhold the affected artifact or engine; it does not block the installed application, unaffected engines, saved reports, or an independently qualified platform.
+
 `ai-security-scanner` orchestrates independent upstream projects. This file explains their v0.1.0 packaging relationships and also retains research projects that are not release dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that a GitHub Release or image was published.
 
 The applicable terms are those attached to each exact source revision and distributed artifact, including its dependencies, images, plugins, rules, templates, feeds, and databases. Every release generates locked dependency notices, engine notices, managed-runtime component inventories, and SPDX/CycloneDX SBOMs from the resolved artifacts. Those generated files describe the bytes in that release; this source inventory is not a substitute for them or for legal advice.

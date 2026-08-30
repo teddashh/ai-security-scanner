@@ -2,13 +2,15 @@
 
 Normative status: this is a subordinate Advanced-feature reference. The [canonical product specification](product-spec.md) controls authorization UX and guarantees that provider setup never blocks localhost, website, internal-network, or local-code first value.
 
+Product integration rule: cloud is reached through **Settings → Advanced** or an explicitly selected cloud target. Missing, expired, rejected, or interrupted provider authorization marks only the exact cloud target-stage-engine task `not_tested`/`failed`; the run is persisted first, independent tasks continue, and the beginner master report names the coverage gap. Provider setup is not a fifth primary destination and cannot gate New scan, Projects, Report, or Settings.
+
 `ai-security-scanner` supports AWS, Azure, Google Cloud, and Microsoft 365 without accepting a provider password, long-lived access key, refresh token, application secret, or administrator credential through the frontend. The preferred path uses the provider's public-client protocol. The optional bootstrap path runs in the separately packaged `ai-security-scanner-bootstrap-broker` process when a dedicated read-only identity must be created.
 
 This feature does not ship sample OAuth client IDs. Azure, Microsoft 365, and Google deployments must register their own public client. Values such as all-zero UUIDs, example Google client IDs, and unknown JSON fields are rejected.
 
-## Connection setup file
+## Advanced connection setup file
 
-The desktop UI leads with a one-file handoff instead of asking an ordinary user to transcribe cloud identifiers. The user copies the provider-specific request and JSON template from the application, an IT or cloud administrator fills in the non-secret coordinates, and the user imports that file before continuing to the provider-hosted sign-in page. Manual entry remains available as a secondary path.
+Within the Advanced cloud path, the UI leads with a one-file IT handoff instead of asking a beginner to transcribe cloud identifiers. The user copies the provider-specific request and JSON template, an IT or cloud administrator fills in the non-secret coordinates, and the user imports it before continuing to the provider-hosted sign-in page. When deployer configuration already exists, the simpler path is one official provider sign-in followed by automatic bounded inventory. Manual identifier entry is expert-only and collapsed. None of these paths appear during local/network/code first value.
 
 The file is read once in the webview, is never persisted, and is discarded after its values fill the existing non-secret authorization state. It is limited to 64 KiB, four levels, 64 JSON nodes, exact keys, and schema version `1.0.0`. Any field name containing a password, secret, token, key, credential, certificate, or private-material term is rejected recursively. The backend still performs its existing provider-specific validation and live read-only authorization checks.
 
@@ -45,15 +47,17 @@ AWS `role_arn` is derived locally from the region, account, and role. Google Clo
 - Provider HTTP requests have a fixed host allowlist, no redirects, no environment proxy, bounded responses, and short timeouts.
 - A provider credential must expire in at most one hour. A verification proof must be fresh and match the exact credential, provider, profile, resource, source, case, and engine set.
 - Tokens never enter frontend state, SQLite, case artifacts, logs, environment variables, command-line arguments, or cleanup ledgers.
-- A source is marked connected only after live provider identity and semantic permission checks succeed. A scanner gets credentials only through an exact `case_id + source_id + engine_id` checkout. The checkout is bounded and automatically expires.
+- A source is marked connected only after live provider identity and semantic permission checks succeed. Failure prevents use of that exact credential/source but does not abort the case/run or sibling tasks. A scanner gets credentials only through an exact `case_id + source_id + engine_id` checkout. The checkout is bounded and automatically expires.
 
 The scanner runtime path is:
 
 `begin/poll provider flow → live identity and permission verification → SourceAuthorizationBindings::install → resolve_execution_credentials → checkout_now(case, source, engine) → one scanner process`
 
-An engine cannot reuse a capability issued to another case, source, profile, or engine. Additional or write-capable permissions fail closed where the provider exposes them.
+An engine cannot reuse a capability issued to another case, source, profile, or engine. Additional or write-capable permissions block only installation/use of that exact provider capability where the provider exposes them; the partial master report and unrelated tasks remain available.
 
 ## Live provider discovery
+
+Provider work follows the same staged model as other targets: bounded identity/basic account confirmation produces the first durable cloud status, complete inventory continues as a background stage, and deeper configuration/identity engines remain independent tasks. A page, engine, authorization, rate-limit, or parser failure retains already captured pages, updates executed coverage, and leaves one partial master report; it never rolls back sibling evidence.
 
 The installed capability also binds the fixed backend engine ID `provider-native-discovery`. `start_discovery` checks the exact case, source, provider, profile, provider identity, verification-proof digest, engine binding, and credential expiry before checking out that engine. This engine is not a shell executable and cannot be selected by the frontend as an arbitrary scanner.
 
@@ -68,7 +72,7 @@ Every operation has fixed fields, response-size and record limits, at most eight
 
 The raw response body is synced first to a private `0600` SHA-256-addressed file. Only then may the capture client inspect a pagination token. The case stores a non-secret manifest of immutable page references, HTTP statuses, operations, hashes, and capture completeness. The ordinary source-specific snapshot connector reopens and verifies those files and performs canonical parsing and candidate-only reconciliation. There is no in-memory asset shortcut around the artifact boundary.
 
-A complete response with no supported resource records is `connected but empty`, never scanned or green. Azure still retains the exact verified `Enabled` subscription as an attributable subscription asset when its resource inventory is empty; the resource record count remains zero. Expired/missing authorization becomes `needs_reauthorization`; transport, malformed-response, unsafe-pagination, storage, cancellation, and partial-capture outcomes remain failed/unknown coverage. Already captured pages and prior assets are retained. After restart, raw evidence remains available for offline re-parsing, but the process-memory capability is absent and a new live request requires reauthorization.
+A complete response with no supported resource records is `connected but empty`, never scanned or green. Azure still retains the exact verified `Enabled` subscription as an attributable subscription asset when its resource inventory is empty; the resource record count remains zero. Expired/missing authorization becomes a target-specific `needs_reauthorization`; transport, malformed-response, unsafe-pagination, storage, cancellation, and partial-capture outcomes remain failed/unknown coverage. Already captured pages and prior assets are retained and appear in the run-bound report. After restart, raw evidence remains available for offline re-parsing, but the process-memory capability is absent and only a new live provider request requires reauthorization.
 
 ## Released source boundaries
 
@@ -155,11 +159,11 @@ The native application exposes these Tauri commands and matching methods in `src
 - `cleanup_provider_bootstrap`: reauthenticates in the isolated broker and updates every exact cleanup item durably.
 - `list_provider_bootstrap_cleanup`: returns only operation/provider/case/schema/status/count/timestamp summaries; resource IDs, endpoints, and credentials remain backend-only. The CLI exposes the same projection through `bootstrap cleanup-list CASE_ID` and `bootstrap cleanup-show CASE_ID OPERATION_ID`.
 
-The Assets and coverage view exposes both paths without accepting a password or client secret. It binds the selected case source to a fixed engine set and the provider-specific bounded checkout ceiling described above, shows only the non-secret user code or PKCE authorization URL, polls at the provider-supplied interval, and makes revocation visible. Provider links are opened by the operating-system browser through Tauri's opener capability. Both the frontend validator and the Tauri permission scope restrict those links to the AWS, Microsoft, and Google provider hosts used by these flows.
+The Advanced provider panel exposes both paths without accepting a password or client secret. The current implementation still places this panel in the shared Coverage journey; that is a tracked product gap and not the target information architecture. The target panel binds the selected case source to a fixed engine set and provider-specific bounded checkout ceiling, shows only the non-secret user code or PKCE authorization URL, polls at the provider-supplied interval, and makes revocation visible. Provider links are opened by the operating-system browser through Tauri's opener capability. Both the frontend validator and the Tauri permission scope restrict those links to the AWS, Microsoft, and Google provider hosts used by these flows.
 
-The bootstrap tab first shows the immutable operation list, provider endpoint hosts, embedded template hash, expiry, and cleanup obligations. Only a separate confirmation starts the isolated process. That confirmation is an authorization boundary for a provider mutation, not a development or release gate.
+The Advanced bootstrap disclosure first shows the immutable operation list, provider endpoint hosts, embedded template hash, expiry, and cleanup obligations. Only a separate confirmation starts the isolated process. That confirmation is an authorization boundary for an exact provider mutation, not a scan/product/development/release gate.
 
-Preferred authorization sessions and installed capabilities are intentionally process-memory-only. Restarting the desktop application requires reauthorization. A short-lived CLI process cannot persist a capability safely; automation should invoke the broker protocol from a parent process that immediately consumes the one-shot frame and performs the bound work in that same process.
+Preferred authorization sessions and installed capabilities are intentionally process-memory-only. Restarting the desktop application requires reauthorization only for unfinished/future live provider contact; captured evidence, reports, offline parsing, and unrelated work remain usable. A short-lived CLI process cannot persist a capability safely; automation should invoke the broker protocol from a parent process that immediately consumes the one-shot frame and performs the bound work in that same process.
 
 ## Isolated bootstrap broker
 
@@ -190,3 +194,7 @@ Successful execution replaces the journal with the full ledger. If bootstrap sto
 Cleanup order removes Azure/Microsoft assignments before service principals and applications; removes Google organization bindings with the current etag before deleting the service account; and deletes the AWS stack before verifying the exact role is absent. Password removal is retried safely even though the normal creation flow removes it immediately.
 
 Changing an administrator password is not cleanup by itself. Existing sessions, refresh tokens, application credentials, grants, roles, and provider identities must be handled as separate exact obligations.
+
+## Product acceptance boundary
+
+Provider security tests prove only this Advanced feature. They cannot substitute for or block the canonical exact-candidate Windows beginner path. Provider acceptance additionally proves that an unavailable/expired cloud capability leaves local work running, saves a partial master report, and returns from official reauthorization to only the unfinished cloud tasks. The broker's exact mutation and cleanup protections are retained because they prevent concrete external-account changes; proposals for another gate, ledger state, or provider-wide qualification must still satisfy the canonical complexity budget.

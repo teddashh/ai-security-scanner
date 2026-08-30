@@ -2,18 +2,18 @@
 
 Status: v0.2.0 catalog companion and research inventory; current engine artifacts released with the v0.1.3 adapter contract
 
-Last updated: 2026-08-28
+Last updated: 2026-08-30
 
 Normative status: this catalog is subordinate to the [canonical product specification](product-spec.md). Engine admission may block execution of that engine artifact only; it does not define whole-product scan readiness, reporting, or release acceptance.
 
-This document explains the v0.2.0 required-engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. This prose never upgrades a non-runnable catalog entry or proves that an image or GitHub Release has been published.
+This document explains the v0.2.0 planned engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. It is not authoritative for product-wide readiness: this prose never upgrades a non-runnable entry, proves publication, or turns that entry into a gate for sibling engines and the beginner master report.
 
 Required-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting an earlier release decision.
 
 ## 1. Catalog states
 
-- **Required:** v0.2.0 commits to this engine or engine family through the full case lifecycle.
-- **Integrated and runnable:** the catalog records `status: integrated`, `compatibility.runnable: true`, no blockers, an exact `sha256:` artifact digest, and a completed `allow` or `source_offer` disposition. Release validation rejects a Required engine that does not satisfy all of these conditions.
+- **Required:** the v0.2.0 plan intends to support this engine or engine family through the full case lifecycle. This planning label does not make its availability a global product or release gate.
+- **Integrated and runnable:** the catalog records `status: integrated`, `compatibility.runnable: true`, no blockers, an exact `sha256:` artifact digest, and a completed `allow` or `source_offer` disposition. Validation rejects execution/distribution of an exact entry that lacks those conditions; the product may still ship with an explicit support matrix and that task reports `not_tested` while independent work continues.
 - **ALLOW:** the engineering plan records `allow` for the exact project-managed artifact with its license texts, notices, and dependency obligations; this is not blanket legal advice.
 - **SOURCE_OFFER:** the engineering plan records copyleft corresponding-source material and a source-offer path for the exact project-managed artifact.
 - **UPSTREAM_PINNED:** the product retrieves an exact verified upstream image by digest rather than republishing it as a project-managed image. Its license and notices still apply.
@@ -21,6 +21,10 @@ Required-engine license identifiers and dispositions summarize the exact pinned 
 - **Blocked or non-runnable:** the catalog condition prevents release use, regardless of any friendlier wording in this document.
 
 An upstream source checkout is research material. It does not make an engine installed, integrated, safe, supported, or redistributable.
+
+### Product orchestration contract
+
+Planning persists the run and known target-stage-engine tasks before image, runtime, gateway, credential, or engine preflight. Each entry therefore resolves independently to runnable or a named `not_tested`/failed outcome. Quick discovery may open the report before inventory/deep engines finish. One missing, stale, incompatible, unlicensed, unpublished, or failed engine never erases sibling results or prevents the same complete/partial/no-checks master report and readable unsigned export. Requested and executed engines, hosts, ports, paths, and stages remain explicit; the catalog cannot silently substitute a narrower upstream profile.
 
 ### Provider applicability disclosure
 
@@ -53,7 +57,7 @@ ScoutSuite, and Cloudsplaining remain explicitly AWS-only.
 
 ## 2. Required engine families
 
-Every Required entry is admitted through the same manifest, pinned-artifact, runtime-policy, adapter, raw-output retention, canonical normalization, coverage-event, export-provenance, re-verification, and release-disposition contract. The final column below is a readable packaging summary; the current catalog record wins if source and prose ever differ.
+Every planned Required entry is admitted independently through the same manifest, pinned-artifact, runtime-policy, adapter, raw-output retention, canonical normalization, coverage-event, export-provenance, re-verification, and release-disposition contract. The final column below is a readable packaging summary; the current catalog record wins only for that engine's artifact facts if source and prose differ. The canonical product specification still controls user outcomes and release acceptance.
 
 | Domain | Engine / repository | Pinned license record | v0.2.0 integration mode | Required authorization and boundary | Release disposition |
 |---|---|---|---|---|---|
@@ -145,7 +149,7 @@ These are not scanning engines but are part of the design or implementation rese
 | Moby | [moby/moby](https://github.com/moby/moby) | Apache-2.0 | Research only; not used by the packaged runtime and does not grant Docker Desktop redistribution rights |
 | Docker CLI and Compose | [docker/cli](https://github.com/docker/cli), [docker/compose](https://github.com/docker/compose) | Apache-2.0 | Optional user-installed compatibility path; neither is bundled nor required |
 
-Docker Desktop is a separately licensed product, is not bundled, and is not required. The packaged path uses a versioned private Podman machine: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and an existing WSL 2 capability on Windows. Exact per-platform files, first-setup downloads, source revisions, license expressions, sizes, and hashes are recorded in the managed-runtime manifest and generated release evidence.
+Docker Desktop is a separately licensed product, is not bundled, and is not required. The target packaged path uses a versioned private Podman machine: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and the WSL 2 capability detected/prepared by the signed installer on Windows. Exact per-platform files, first-setup downloads, source revisions, license expressions, sizes, and hashes belong in the managed-runtime manifest and generated release evidence. Those details remain Technical details; the intended Windows preparation is automatic and never asks a beginner to administer WSL. The current Windows installer/runtime path has not yet reached that behavior; [audit finding A01](product-audit.md#a01--windows-preparation-is-a-second-product-after-installation) tracks the implementation gap.
 
 ## 5. Integration modes
 
@@ -161,7 +165,7 @@ Where upstream has no suitable image, the project may build a wrapper image from
 
 ### 5.3 On-demand retrieval
 
-If redistribution is not approved or an engine is too large for the default installer, the application may retrieve an exact pinned digest from an approved upstream location after informed user consent. It must never retrieve `latest`. Dynamic download does not eliminate license obligations.
+If redistribution is not approved or an engine is too large for the default installer, the application may retrieve an exact pinned digest from an approved upstream location as product-owned background preparation. It shows size/stage and any legally required terms, but does not add a generic technical consent or setup ceremony. It must never retrieve `latest`. Failure disables only that engine task, preserves the run, and records the coverage gap. Dynamic download does not eliminate license obligations.
 
 ### 5.4 Bundled/offline artifact
 
@@ -204,7 +208,7 @@ An engine cannot be marked supported until all items have evidence:
 - coverage records emitted without equating zero findings to success;
 - raw evidence preserved and hashed;
 - re-verification identity and adapter migrations defined;
-- NIST/ISO relationships and applicable AIDEFEND relationships versioned and reviewed rather than guessed at runtime;
+- any supplied NIST/ISO relationships and applicable AIDEFEND relationships versioned and reviewed rather than guessed at runtime; an engine may run without them and reports the mapping gap;
 - SBOM generated for distributed artifacts;
 - end-of-support and replacement behavior documented.
 
@@ -212,6 +216,8 @@ An engine cannot be marked supported until all items have evidence:
 
 Each manifest records an owner, knowledge date, support-until date, and update procedure. Upstream changes may be adopted continuously, but a case always records an exact version set.
 
-An unsupported or expired engine remains visible in historical provenance. It may be blocked from new cases or run with an explicit stale-knowledge warning according to project policy; it must not silently present current-looking green results.
+An unsupported or expired engine remains visible in historical provenance. A merely stale but still trusted engine may run only with an explicit knowledge-date warning according to product policy. A concretely untrusted/incompatible artifact may be blocked from its new task. Either way, other engines continue and the report marks exact executed/not-tested coverage; it must not silently present current-looking green results.
 
 Adding many repositories is encouraged only when each adapter enters the same case, coverage, evidence, export, and re-verification model. A clone plus a button is not an integration.
+
+Engine catalog, fixture, provenance, and affected-platform checks are engine-admission/publication evidence. They do not replace the exact-candidate installed-Windows beginner path and do not run as an unconditional blocker for an unrelated UI/docs change. Any proposal that makes one engine or its evidence a wider gate must meet the canonical complexity budget with a reproduced harm and proof that operation-scoped admission plus partial reporting is insufficient.

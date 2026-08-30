@@ -1,5 +1,7 @@
 # VibeScan integration decision
 
+Normative status: this is a pinned research decision, subordinate to the [canonical product specification](../product-spec.md). It explains why one audited VibeScan revision is not executed or distributed; it cannot block independent source-code scans, the engines already admitted by this project, reporting, or future evaluation of a different pinned revision.
+
 Decision: borrow the user-journey ideas, but do not wrap, bundle, execute, or distribute VibeScan.
 
 This static review is pinned to

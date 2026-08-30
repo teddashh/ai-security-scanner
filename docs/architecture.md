@@ -2,7 +2,7 @@
 
 Status: implementation architecture
 
-Last updated: 2026-08-26
+Last updated: 2026-08-30
 
 Normative status: this is a subordinate implementation reference. The [canonical product specification](product-spec.md) controls user-visible behavior and acceptance. Any conflict in views, gates, runtime readiness, recovery, or delivery order is a current implementation/design gap, not an additional product requirement.
 
@@ -10,12 +10,15 @@ This document describes the target architecture. Component names and interfaces 
 
 ## 1. Architectural goals
 
-The architecture must support a local, durable, repeatable assessment case across many independently maintained scanners while preserving four invariants:
+The architecture must support a beginner reaching a durable result quickly across independently maintained scanners while preserving these invariants:
 
-1. High-privilege bootstrap credentials never reach scanner engines.
-2. A failed or omitted scan never becomes a passing result.
-3. Normalization never destroys the original evidence.
-4. A later run can explain whether a difference came from the environment, scope, engine, rules, or adapter.
+1. The main workspace and saved reports remain available while disposable runtime work is prepared or repaired.
+2. A run and its known target-stage-engine tasks are persisted before runtime, gateway, image, or credential preflight.
+3. Independent work fails independently and every run produces the same complete, partial, or no-checks master-report shape.
+4. High-privilege bootstrap credentials never reach scanner engines.
+5. A failed or omitted scan never becomes a passing result, and requested scope is never silently narrowed.
+6. Normalization never destroys the original evidence.
+7. A later run can explain whether a difference came from the environment, scope, engine, rules, or adapter.
 
 ## 2. System overview
 
@@ -27,6 +30,7 @@ flowchart LR
     CORE --> DISC[Discovery + coverage ledger]
     CORE --> SCOPE[Scope authorization service]
     CORE --> ORCH[Durable orchestrator]
+    CORE --> REPORT[Beginner master report]
     CORE --> EXPORT[Export + verification service]
 
     SCOPE --> BROKER[Isolated bootstrap broker]
@@ -40,7 +44,10 @@ flowchart LR
     ADAPTERS --> NORMALIZE[Canonical normalizer]
     NORMALIZE --> DB
     NORMALIZE --> BLOBS
-    NORMALIZE --> MAP[Explanation + control mapping]
+    NORMALIZE --> MAP[Optional explanation + control mapping]
+    DB --> REPORT
+    BLOBS --> REPORT
+    REPORT --> EXPORT
     EXPORT --> DB
     EXPORT --> BLOBS
 ```
@@ -51,7 +58,7 @@ The UI never talks directly to a container runtime, credential broker, engine pr
 
 ### 3.1 Desktop UI
 
-The React application renders the six product views and submits typed commands. It is unprivileged and must not receive raw credentials or a Docker/Podman socket.
+The React application renders the four primary destinations—**New scan**, **Projects**, **Report**, and **Settings**—and contextual project states. It is unprivileged and must not receive raw credentials or a Docker/Podman socket. Setup, progress, comparison, export, engine detail, and cloud/provider configuration are contextual or Advanced surfaces, not additional primary destinations.
 
 ### 3.2 Tauri case service
 
@@ -59,7 +66,7 @@ The Rust backend owns case state, persistence, authorization decisions, orchestr
 
 ### 3.3 Bootstrap broker
 
-The broker is a separate, minimal process used only when the user cannot establish provider-native read-only authorization directly. It exchanges a high-privilege login for a dedicated short-lived read-only scan role, verifies that role, transfers only a capability handle for the read-only role, and exits.
+The broker is an Advanced cloud-only, separate minimal process used only when the user cannot establish provider-native read-only authorization directly. It exchanges a high-privilege login for a dedicated short-lived read-only scan role, verifies that role, transfers only a capability handle for the read-only role, and exits. Its absence or failure cannot appear in or block localhost, website, public/internal network, local source, project/report, or unsigned-export paths.
 
 It must not load third-party adapters, call the container runtime, accept arbitrary commands, persist secrets, write secrets to logs, or expose a general network proxy. Detailed requirements are in [threat-model.md](threat-model.md).
 
@@ -67,11 +74,13 @@ It must not load third-party adapters, call the container runtime, accept arbitr
 
 The runtime provider is the only backend component that controls engine processes or containers. It exposes a constrained job API, not a raw daemon socket.
 
-Required providers are:
+Supported provider implementations are:
 
-- `managed_local`: the zero-engine-install user experience required for supported desktop releases;
-- `docker`: compatibility and development provider for an existing Docker Engine;
-- `podman`: compatibility and development provider for an existing Podman installation.
+- `managed_local`: the background-prepared, zero-engine-install path for supported desktop releases;
+- `docker`: an Advanced compatibility and development provider for an existing Docker Engine;
+- `podman`: an Advanced compatibility and development provider for an existing Podman installation.
+
+Runtime availability is evaluated per target-stage-engine task or genuine shared dependency group. Failure of one provider disables only dependent work after bounded automatic reconciliation; it never hides the workspace, discards the run, or prevents an honest master report.
 
 The managed provider may use a legally redistributable container stack or platform VM internally. “Bundle Docker” is a user-experience requirement, not permission to redistribute Docker Desktop. The chosen implementation must be recorded per supported operating system and architecture.
 
@@ -177,7 +186,7 @@ ScopeGrant
   revoked_at?
 ```
 
-The backend resolves the selector to concrete targets before a run and stores that resolved set with the run. A later asset discovered under the same wildcard is not silently added to a completed run.
+The combined Start action records the applicable assertion together with the exact target and activity; it does not lead to a second permission screen. The backend resolves the selector to concrete targets and freezes the requested contract before contact. A later asset discovered under the same wildcard is not silently added to that run. Selecting materially deeper, more active, or wider work creates a linked child run with its own grant rather than mutating an active run.
 
 ### 5.5 CoverageRecord
 
@@ -202,7 +211,36 @@ CoverageRecord
 Coverage is stored independently from findings. Zero findings cannot manufacture a coverage record.
 Questionnaire applicability is equally explicit: selected environment families begin as unknown until a bounded source is connected, while excluded families retain a reasoned `not_applicable` record. `not_applicable` is a scoping statement and is never rendered as scanned/green. User-entered domains, addresses, repositories, IaC projects, exact image digests, and Kubernetes context names enter through an attributable `user_declared` source as untrusted candidates. Questionnaire assessment activities are persisted separately from permissions and can never create a scope grant.
 
-### 5.6 EngineManifest and EngineRun
+### 5.6 ScanRun, ScanTask, and EngineRun
+
+```text
+ScanRun
+  id
+  case_id
+  requested_coverage_contract       # frozen before target contact
+  executed_coverage                 # append-only until terminal, then immutable
+  state: queued | running | complete | partial | no_checks_completed | cancelled
+  created_at
+  terminal_at?
+
+ScanTask
+  id
+  scan_run_id
+  target_id
+  stage: quick_discovery | full_inventory | deep_check
+  engine_id
+  attempt_ids[]
+  outcome: tested_complete | tested_partial | failed | timed_out | cancelled | not_tested
+  outcome_reason?
+  last_heartbeat_at?
+  deadline_at?
+```
+
+The run and all tasks known at planning time are committed before disposable runtime, gateway, image, credential, or engine preflight. Those checks update only the affected task or genuinely shared task group. One task failure never rolls back a sibling's evidence. Per-host, port, page, repository, or batch work that can survive independently is represented as a task or append-only subtask rather than one transactional engine output file.
+
+`no_checks_completed` is an honest report outcome, not a first-value success. Every run exposes one beginner master report containing frozen requested scope, append-only executed scope, tested/not-tested/failed coverage, findings, next steps, and collapsed technical evidence.
+
+### 5.7 EngineManifest and EngineRun
 
 ```text
 EngineRun
@@ -216,7 +254,7 @@ EngineRun
   ruleset_versions{}
   vulnerability_database_versions{}
   adapter_version
-  state: pending | running | completed | partial | failed | not_executed | cancelled
+  state: pending | running | completed | partial | failed | timed_out | not_executed | cancelled
   checkpoint
   resolved_targets[]
   started_at?
@@ -224,7 +262,7 @@ EngineRun
   error?
 ```
 
-### 5.7 Finding and Evidence
+### 5.8 Finding and Evidence
 
 ```text
 Finding
@@ -293,7 +331,7 @@ FindingGroupEvent
 
 The active-group collection is a reversible presentation projection. Creating or removing a group appends an immutable event; removal only deletes the active projection. It cannot change a finding fingerprint, evidence, observation, raw artifact, workflow state, or comparison history. A finding belongs to at most one active presentation group, and automatic cross-engine merging remains out of scope.
 
-### 5.8 ControlMapping
+### 5.9 ControlMapping
 
 ```text
 ControlMapping
@@ -321,7 +359,7 @@ Non-applicable scanners receive no AIDEFEND relationship. The integration is ind
 unofficial, and a coordinate does not state implementation, effectiveness, certification, pass/fail,
 compliance, affiliation, or endorsement.
 
-### 5.9 VerificationDiff
+### 5.10 VerificationDiff
 
 ```text
 VerificationDiff
@@ -341,13 +379,15 @@ An evidence or severity change on a reproduced issue is represented as `persiste
 
 ### 6.1 Case database
 
-Use SQLite in WAL mode for case metadata, durable job state, manifests resolved for a run, coverage, assets, findings, mappings, and workflow history. Migrations are transactional and versioned.
+Use SQLite in WAL mode for case metadata, frozen requested contracts, durable target-stage-engine task/attempt state, append-only executed coverage, run-bound master reports, manifests resolved for a task, assets, findings, optional mappings, and workflow history. Migrations are transactional, restart-safe, and versioned. One malformed case is isolated with its bytes preserved; it cannot make healthy projects unavailable.
 
 SQLite write serialization is not sufficient for operations that also affect in-memory workers or
 credential capabilities. The desktop holds an exclusive, backend-created data-directory lease for
 its lifetime. Standalone CLI inspection remains available, but case/artifact deletion, exact runtime
 cleanup, and managed-runtime mutation must acquire that same lease and fail closed while the desktop
-is open. The lock file is a private regular file; Unix opens refuse symlink targets.
+is open. This is an operation-scoped concurrency control: lease failure cannot block opening the
+desktop, reading projects/reports, creating an unaffected run, or exporting readable data. The lock
+file is a private regular file; Unix opens refuse symlink targets.
 
 ### 6.2 Evidence store
 
@@ -379,19 +419,20 @@ The initial command surface is:
 | `select_case` | Select and load a case by identifier. |
 | `seed_demo_case` | Create explicitly marked synthetic data for development or demonstration. It must never look like a real scan. |
 | `list_engine_manifests` | Return installed/available engines, versions, licensing disposition, runtime needs, and implementation status. |
-| `start_discovery` | Capture bounded provider-native inventory or consume preserved snapshots, persist raw pages first, then run attributable candidate-asset discovery. |
+| `start_discovery` | Persist the run/discovery task, then capture bounded provider-native inventory or consume preserved snapshots, persist raw pages first, and run attributable candidate-asset discovery. |
 | `cancel_discovery` | Cancel the active case-bound provider capture while retaining already-preserved partial evidence. |
-| `approve_scope` | Store explicit scope grants and the resolved targets or selectors. |
+| `approve_scope` | Internal operation used by the combined Start action to store the one applicable assertion and resolved target; it is not a second user ceremony. |
 | `update_finding_workflow` | Append a human handling decision without altering scanner evidence. |
 | `group_findings` | Create one reversible presentation group for two or more case-owned canonical findings. |
 | `ungroup_findings` | Remove only the active group projection and append a removal event. |
-| `start_scan` | Validate grants, freeze a run plan, and start applicable engines. |
+| `start_scan` | Freeze and persist requested coverage plus known target-stage-engine tasks, then preflight and start independently runnable tasks. |
 | `pause_scan` | Request a safe checkpoint and pause where supported. |
 | `resume_scan` | Resume a paused or recoverable run. |
 | `cancel_scan` | Cancel remaining work and perform credential/container cleanup. |
 | `export_case` | Create an explicit, optionally redacted portable package. |
 | `verify_case_export` | Recompute package hashes and signature integrity without asserting result correctness. |
 | `start_rescan` | Create a new run from an existing case and selected baseline. |
+| `get_master_report` | Return the run-bound requested/executed coverage, task outcomes, findings, next steps, and technical-detail references for any run state. |
 
 Frontend controls call these typed backend commands and reload the persisted case. They must not simulate a successful finding, grouping, scope, or source mutation in browser-only state.
 
@@ -406,7 +447,7 @@ Long-running work emits versioned events:
 - `scan://run-finished`;
 - `export://progress`.
 
-Every event contains `case_id`, relevant run ID, a monotonic sequence number, and a timestamp. The frontend treats events as hints and refreshes from `get_app_snapshot` after reconnect; it does not treat a missing event as durable state.
+Every event contains `case_id`, relevant run ID, a monotonic sequence number, and a timestamp. Lifecycle events are hints. The frontend starts an authoritative refresh within one second of backend/UI readiness, after reconnect, on startup, focus, and resume, and when a heartbeat becomes stale. The watchdog either reconciles within ten seconds or exposes Retry/offline-with-last-known-data; a missing event can never leave Ready, Repairing, Running, or a setup screen permanent. Task-specific longer execution deadlines remain visible and durable rather than being mistaken for the refresh deadline.
 
 ## 8. Engine registry
 
@@ -444,7 +485,7 @@ support:
   support_until: string
 ```
 
-An entry without a license disposition or artifact digest may be retained for research but cannot enter a release plan as a distributable engine.
+An entry without a license disposition or artifact digest may be retained for research but cannot be executed or distributed as that engine. Admission failure is operation-scoped: it creates `not_tested` coverage for affected tasks and cannot block the installed app, unaffected engines, the master report, or readable unsigned export.
 
 `supported_providers` is a fail-closed release declaration, not a summary of upstream features.
 Provider-bound engines require an exact provider value on every target asset. Missing provider
@@ -483,31 +524,41 @@ Adapters must not:
 
 ## 10. Orchestration and recovery
 
-A scan run freezes:
+Before disposable dependency checks, a scan run freezes and durably commits:
 
 - the assessment case revision;
-- resolved asset set and grants;
-- selected engines and manifests;
-- artifact and ruleset versions;
-- runtime provider;
-- adapter versions;
-- mapping and explanation versions.
+- the requested target/scope contract and applicable assertion;
+- the resolved target set available at planning time;
+- selected stages and engines, including unavailable candidates;
+- one known target-stage-engine task per independently reportable work unit.
+
+Artifact, ruleset, adapter, runtime, mapping, and explanation versions are attached when the corresponding task or optional enhancement resolves them. Failure to resolve one dependency becomes that task or enhancement's explicit outcome; it does not erase the already-persisted run.
 
 When the request does not name engines, the backend derives the set from the
 ownership-confirmed asset kinds and their unexpired grants. It records every
 applicable catalog entry: runnable engines become jobs and unavailable entries
-become explicit `not_executed` coverage. Naming exact engine IDs is an advanced
+become explicit user-facing `not_tested` coverage (an internal engine execution may retain
+`not_executed` as its technical state). Naming exact engine IDs is an Advanced
 override, not a prerequisite for ordinary use.
 
-The durable orchestrator schedules independent engine jobs with resource limits. Checkpoints are persisted after state changes and bounded result batches.
+The durable orchestrator schedules independent target-stage-engine jobs with resource limits. Quick discovery starts first and opens the report on its first durable result; full inventory and deep checks update it later. Checkpoints are persisted after state changes and bounded result batches. Completed ports, hosts, pages, repositories, or batches survive failure of later siblings, and Retry selects only unfinished work by default.
 
-Every checkpoint that can leave a container or managed egress resource behind also persists a typed, non-secret runtime provenance record. Compatibility providers record their exact provider; the managed-local provider additionally records the verified runtime version, release-manifest SHA-256, and machine-image SHA-256. Recovery reopens that exact private installation and reconciles the exact container and network identities. It never selects a runtime by a resource-name prefix or by whichever executable happens to be on `PATH`.
+Every checkpoint that can leave a container or managed egress resource behind also persists a typed, non-secret runtime record sufficient for exact cleanup and historical explanation. Compatibility providers record their exact provider; the managed-local provider records the verified runtime generation and artifact identities actually used. Recovery first reconciles the exact product-owned container/network identity. If that exact generation is unavailable, historical results remain readable and the product may create a new attempt on a current verified generation. It never selects or deletes a runtime by a resource-name prefix or whichever executable happens to be on `PATH`, and it never makes byte-identical historical runtime recovery a prerequisite for a current attempt.
 
 Pause is cooperative. Cancel sends a graceful request, waits a bounded interval, terminates remaining engine processes, revokes capability handles, and asks the runtime provider to remove job containers and mounts. A cleanup failure becomes a visible diagnostic and retryable cleanup task.
 
 Rate-limited cloud APIs use bounded exponential backoff and provider hints. A rate limit may yield `partial`; it does not silently retry forever.
 
 ## 11. Runtime isolation
+
+Managed runtime generations are disposable infrastructure outside case/evidence storage. Each new
+generation has a unique identity and durable ownership record. Verified product-owned reversible
+state is repaired or rebuilt automatically. A name match is never ownership proof: ambiguous or
+unrelated runtime/storage is preserved unchanged while a uniquely named isolated generation is
+created. Retry/relaunch/restart reuses one durable in-progress generation unless reconciliation
+deliberately declares it unusable; it does not create endless generations. Runtime setup/recovery is
+background work with progress, deadline, heartbeat, Cancel/Retry behavior, and no beginner-facing
+WSL, Podman, gateway, VHD, manifest, or ownership administration.
 
 Default engine isolation requirements are:
 
@@ -524,30 +575,27 @@ Default engine isolation requirements are:
 - environment variables generated by the backend, not interpolated through a shell command;
 - teardown and orphan reconciliation on the next application start.
 
-An engine requiring a weaker boundary must declare the exception and remain blocked from release until reviewed.
+An engine requiring a weaker boundary must declare the exception and that engine remains unavailable until reviewed. Its absence is reported as a coverage gap and cannot block other admitted engines or the beginner product path.
 
 ## 12. Discovery and scope planning
 
-Discovery produces candidates plus provenance. It does not produce permission.
+Discovery produces candidates plus provenance; it never silently widens direct-contact scope. Selecting a local read-only snapshot is sufficient authorization for analysis of that product-created snapshot. Localhost uses the combined Start action without an ownership checkbox. Public/internal low-impact contact records the single inline assertion defined by the canonical specification; only wider, credentialed, active, or more intrusive activity requires another explicit grant.
 
 AWS, Azure, GCP, and Microsoft 365 live discovery uses the verified process-memory source capability and a fixed internal engine binding. Each response page is durably synced to the case's content-addressed connector store before pagination inspection or asset parsing. A backend-created manifest binds the exact operation, HTTP status, parser profile, observation time, and SHA-256 reference for every page. The same connector registry used for imported snapshots reopens those references, verifies their hashes, parses provider-native records, and submits the normal reconciliation batch. Credentials and continuation tokens are neither case metadata nor connector inputs.
 
 Successful empty inventory, unavailable authorization, partial capture, parser failure, and completed asset discovery remain distinct durable states. Partial results may retain candidate observations but keep source coverage unknown. A process restart preserves artifacts and case state but intentionally loses the short-lived authorization capability.
 
-The plan builder intersects:
+The planner computes applicability from:
 
 ```text
-connected source visibility
-∩ confirmed assets
-∩ active scope grants
-∩ engine capabilities
+requested targets and stage
+∩ applicable authorization
+∩ engine target capabilities
 ∩ exact released provider applicability
-∩ credential capability
-∩ platform/runtime availability
-= frozen engine run plan
+= persisted target-stage-engine task set
 ```
 
-The plan records why an engine was included or excluded. Exclusion contributes to coverage, not a pass result.
+Credential, input, image, gateway, and runtime availability are task preflight outcomes after this set is persisted. The plan records why an engine was included or excluded. Exclusion contributes to coverage, not a pass result. A missing cloud capability cannot prevent a local snapshot task; a gateway failure cannot prevent an offline source task.
 
 Provider-native discovery is independently released from scanner images. The released Prowler
 wrapper has three separate exact-scope profiles: one AWS account, one Azure subscription, or one
@@ -561,44 +609,19 @@ Public-data-only discovery and direct network contact are separate capabilities.
 
 ## 13. Normalization and schema exporters
 
-The canonical model is the source of truth because the product requires case, scope, coverage, asset relationship, evidence, workflow, and re-verification semantics that do not map losslessly to one external standard.
+The canonical model is the source of truth because the product requires requested and executed scope, task outcomes, evidence, findings, workflow, and comparison semantics that do not map losslessly to one external standard.
 
-- An OCSF exporter emits compatible finding and evidence fields where defined.
-- An OSCAL exporter emits appropriate assessment and control-related data for exchange.
-- A deterministic master framework relationship exporter groups selected-run observations under
-  NIST CSF, ISO/IEC 27001, and applicable AIDEFEND coordinates. It records selected-run completion,
-  current coverage-ledger unknowns, and historical-ledger provenance mismatches without producing a
-  compliance, implementation, score, pass, or fail conclusion. The same JSON is directly
-  downloadable and included in the signed case bundle. Recognized references accept only the exact
-  `related` relationship; each framework records its observed framework versions, observed mapping
-  versions, and explicit version-consistency states.
-  A connected source that returns no assets remains incomplete/unknown. Historical relationships
-  are emitted only from immutable selected-run finding snapshots; missing legacy snapshots are
-  recorded in an observation-provenance ledger and are never hydrated from the current finding.
-  Every relationship carries its rationale and frozen catalog provenance. A current-catalog claim is
-  accepted only when its coordinate, title, relationship, rationale, evidence engine, and AIDEFEND
-  applicability condition exactly match one validated catalog entry. Each binding preserves its
-  exact evidence-record ID, artifact ID and hash, engine-run ID, and engine ID. Version/provenance
-  state is decided per relationship before framework totals are rolled up. Executions are never pooled
-  by engine ID; legacy provenance, a historical catalog without an authenticated local snapshot, or
-  evidence spanning multiple engine runs is explicitly unavailable. AIDEFEND applicability is
-  tri-state, so legacy or unanswered context remains unknown rather than becoming not-applicable.
-  Portable source/attribution metadata accompanies each framework.
-- The raw engine artifact remains available even when neither exporter can represent a field.
+The primary result is one versioned beginner master report for every run state. Its first layer answers what was requested, what was and was not tested, what was found, what to do next, and whether the report is still changing. Engine identity, raw evidence, framework provenance, and diagnostics are collapsed Technical details.
 
-Exporters are versioned and must disclose omitted or extension fields. OCSF and OSCAL are interoperability formats, not product database schemas and not evidence that a formal audit occurred.
+- HTML/print and master-report JSON are the default readable exports and work for complete, partial, failed, timed-out, cancelled, and no-checks runs.
+- OCSF and OSCAL are optional Advanced interoperability formats. If they cannot express coverage, they ship with a mandatory coverage sidecar and limitation rather than disabling preservation of existing findings.
+- NIST CSF, ISO/IEC 27001, and applicable AIDEFEND coordinates are optional `related` links derived from findings/evidence. They never start or block a scan, finding, master report, or readable export and never produce compliance, implementation, certification, endorsement, score, pass, or fail claims.
+- Invalid, missing, stale, historically unauthenticated, or inapplicable mappings are unavailable relationship entries, not invalid findings. Historical relationships are emitted only from the selected run's immutable snapshots and retain mapping version/rationale when available.
+- The raw engine artifact remains available under its sensitivity policy even when an exporter or mapping cannot represent a field.
 
-Signed bundles embed the local signer's self-signed public identity document. The identity contains
-only public key material, its key ID, establishment event, and a bounded self-signed predecessor
-chain. The private key and identity document use strict owner-only files. Startup may report an
-identity problem without blocking scans, while bundle creation and bundle verification require an
-exact key/identity/envelope match. A second owner-only identity anchor distinguishes a managed key
-from the exact bounded legacy predecessor even if the public document is deleted. If that exact
-managed key and exact anchor still agree, the missing public document is reconstructed byte for byte
-from the anchor; a mismatch or missing private key remains an error. Explicit rotation
-uses a secret-bearing, owner-only two-phase intent that binds the acknowledged predecessor to one
-candidate key and self-signed identity; retries accept only that candidate and remove the intent
-after exact key/document/anchor readback.
+Exporters are versioned and disclose omitted or extension fields. Redaction uses stable per-export aliases so target, finding, evidence, and coverage relationships remain understandable.
+
+A locally signed bundle is an optional integrity enhancement. Exact key/identity/envelope checks may hard-block only the requested signed operation. Key preparation, rotation, mapping, or signing failure never blocks scanning, the workspace, historical reports, or an unsigned readable export. Verification reports integrity consistency only, not scan correctness, identity assurance, authorization, or compliance.
 
 ## 14. Prioritization and grouping
 
@@ -620,7 +643,7 @@ Grouping joins related findings under a user-facing issue while retaining all so
 
 ## 15. Export package
 
-A package is a deterministic archive with a versioned manifest:
+Every run first supports readable HTML/print and master-report JSON. An optional expert package is a deterministic archive with a versioned manifest:
 
 ```text
 manifest.json
@@ -640,7 +663,7 @@ integrity/signature.json     # optional local key
 licenses/
 ```
 
-The manifest lists redactions and excluded blobs. Standard redaction covers group titles, rationales, and actors while retaining technical IDs needed to link the history back to independently preserved findings. The canonical document, portable bundle, and HTML handoff disclose active groups and grouping history. Verification checks archive structure, hashes, and signature consistency. It returns `integrity_valid`, `integrity_invalid`, or `unverifiable`; it never returns “scan valid.”
+The manifest lists redactions and excluded blobs. Standard redaction assigns stable per-export aliases while covering sensitive group titles, rationales, actors, targets, and paths, retaining the relationships needed to connect independently preserved findings, evidence, and coverage. The canonical document, portable bundle, and HTML handoff disclose active groups and grouping history. Verification checks archive structure, hashes, and optional signature consistency. It returns `integrity_valid`, `integrity_invalid`, or `unverifiable`; it never returns “scan valid.” Package or signing failure leaves readable unsigned export available.
 
 ## 16. Re-verification comparability
 
@@ -660,12 +683,16 @@ Differences caused by an engine, ruleset, mapping, or adapter update are labeled
 
 Desktop releases use Tauri's signed updater artifacts and one fixed HTTPS GitHub Release endpoint.
 The updater public key is compiled into the application configuration; its private key exists only
-as a GitHub Actions secret. The release finalizer refuses partial platform coverage, embeds each
-detached signature into `latest.json`, and includes updater payloads, signatures, and the manifest
-in checksums and build-provenance attestations. The UI distinguishes an available application
-update from case validity: an older case remains readable and keeps the exact provenance captured
-when its runs were planned. Updater signing is not represented as Apple notarization, Apple
-Developer ID, or Windows Authenticode signing.
+as a GitHub Actions secret. The client validates the selected current-platform payload, URL,
+signature, and digest before applying it. Missing or invalid entries for another platform do not
+hide a valid current-platform update; cross-platform completeness belongs to publication policy.
+Invalid current-platform update material blocks only applying that update, while the installed
+version, projects, reports, unsigned exports, and admitted engines remain usable. The UI
+distinguishes an available application update from case validity: an older case remains readable
+and keeps the exact provenance captured when its runs were planned. Updater signing is not
+represented as Apple notarization, Apple Developer ID, or Windows Authenticode signing. Compatible
+downgrade preserves/reopens data read-only; an incompatible downgrade refuses before mutation
+rather than globally disabling the installed version.
 
 ## 17. Demo data
 
@@ -675,17 +702,27 @@ Synthetic cases are permitted for development and onboarding only. `seed_demo_ca
 
 Claude/Codex skills call documented application or maintenance commands. They may inspect manifests, runtime health, job state, and cleanup state. They do not receive secret values, bypass `approve_scope`, connect directly to the runtime socket, execute remediation, or turn a demo result into a real result.
 
+Here `approve_scope` is the backend record produced by the canonical combined Start interaction. Skills cannot supply the user's public/internal assertion, widen an existing contract, or enable a deeper/active activity on the user's behalf.
+
 ## 19. Architectural acceptance conditions
 
 The architecture is implemented only when evidence demonstrates:
 
+- an installed Windows beginner reaches the exact `127.0.0.1:9001` master report within the canonical ten-minute and interaction budget;
+- the workspace exposes only New scan, Projects, Report, and Settings as primary destinations and remains usable while managed tools reconcile;
 - UI-to-backend commands are typed and backend-authorized;
 - case and job state survives process restarts;
+- the run/task plan survives dependency preflight and one unavailable engine/gateway still yields sibling results plus a partial master report;
+- startup/focus/resume/watchdog polling corrects missed events within the canonical bounded refresh contract;
 - credential capability handles cannot be resolved by the UI or unrelated engines;
 - runtime providers enforce target, mount, network, and resource restrictions;
 - adapter failure cannot create green coverage;
+- requested and executed scope remain distinct and no host, port, path, stage, or engine is silently omitted;
 - raw evidence is immutable and hash-addressed;
 - exporters disclose loss or extension fields;
+- mapping, signing, updater, and supply-chain failure is limited to the exact relationship, signed export, update, or untrusted engine operation;
 - export verification distinguishes integrity from correctness;
 - re-verification does not mark an unrun check as resolved;
-- demo provenance cannot be confused with a real case.
+- demo provenance cannot be confused with a real case;
+- the exact-candidate human path passes before Windows promotion; modeled tests remain supporting evidence;
+- every added gate, durable state, or recovery transaction satisfies the canonical complexity budget with a reproducible harm and a simpler-alternative analysis.

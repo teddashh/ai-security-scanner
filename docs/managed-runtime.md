@@ -1,321 +1,225 @@
 # Release-managed local runtime
 
-Normative status: this is a subordinate current-implementation/runtime reference. The [canonical product specification](product-spec.md) controls user-visible setup, isolation, recovery, Repair, upgrade, and uninstall behavior. Deterministic-name reclamation, manual WSL action, or fail-closed wording here cannot add a product gate contrary to that specification.
+Normative status: this is the subordinate implementation contract for the managed runtime. The [canonical product specification](product-spec.md) controls every user-visible outcome. The [product audit](product-audit.md) records where the current implementation has not reached this contract. This document must not be read as a claim that an unqualified path is already implemented.
 
-`ai-security-scanner` can run containerized engines on a clean workstation without asking the
-user to install Docker, Podman, QEMU, or a system service. Docker and user-installed Podman remain
-explicit compatibility providers; they are not silently mixed with managed runs.
+Runtime implementation detail may strengthen isolation at an exact package, process, directory, or deletion boundary. It may not add a product-wide readiness gate, hide the application shell, require a beginner to administer WSL, or stop independent work. If this document conflicts with the canonical specification, the canonical specification wins and this document must be corrected.
 
-## Runtime contract
+## Product-facing runtime contract
 
-- A release carries an immutable, platform-specific Podman machine client bundle in the app
-  resources directory. Every bundled file has an exact size and SHA-256 in `manifest.json`.
-- The app verifies the resource bundle before copying it to a versioned directory under its own
-  local application-data directory. It never changes the system `PATH`, invokes a package manager,
-  requests elevation, enables Windows optional features, or runs Windows servicing commands.
-  Scanner engines and the managed runtime remain rootless.
-- A fresh installed desktop with no existing cases enters a first-launch scan-tool installation
-  phase whenever the release-managed runtime has not been prepared yet. It starts this
-  product-owned lifecycle operation automatically; an already-ready host reaches the scan workspace
-  without a setup click. Existing cases and results are never hidden by runtime setup or failure: a
-  stopped or missing runtime starts in the background while the workspace remains available. Failed
-  or cancelled attempts are never repeated automatically in the same process.
-- On Windows, first launch resolves the trusted `SystemRoot\System32\wsl.exe` boundary and runs
-  bounded, read-only `--status` and `-l --quiet` probes, matching the inventory command used by the
-  pinned Podman WSL provider. The probe requests UTF-8 output while retaining bounded UTF-16LE
-  compatibility for older inbox WSL builds. A failed prerequisite check stops
-  before any VM-image bytes are downloaded. It records one stable `failure_reason` and paired
-  `next_action`: install WSL, enable its optional components, update WSL, restart Windows, or retry
-  the check. Console output is accepted only as bounded UTF-8 or UTF-16LE; mixed or unsafe bytes are
-  never interpolated into UI errors. Install, enable, and update outcomes lead to one link to
-  Microsoft's official WSL setup and one safe recheck. No elevation or servicing action is exposed
-  through the webview. The app never restarts Windows automatically. Reopening the app after a
-  Microsoft-requested restart repeats the read-only check and continues the private runtime setup
-  automatically.
-- The VM image is downloaded from the exact HTTPS URL pinned in the release manifest. Bounded
-  resumable downloads are accepted only from approved GitHub release hosts and are committed only
-  after the locked size and SHA-256 match.
-- Desktop first-run setup exposes one authoritative operation at a time. Its `install`,
-  `prerequisite`, `download`, `init`, `start`, and `verify` phases are queryable, and the download phase reports the exact
-  received bytes, locked total bytes, and derived percentage after every bounded chunk. A separate
-  cancel command sets an atomic cancellation request without waiting for the lifecycle lock.
-- Cancellation retains the private `*.download-part` regular file. The next setup validates its
-  length, requests the exact remaining suffix with HTTP `Range`, rejects a mismatched
-  `Content-Range`, and restarts from zero if the approved server returns a complete response instead.
-  Only a size- and SHA-256-verified complete image is atomically promoted into the runtime cache.
-- Each release uses its own persistent private provider home, XDG directories, `containers.conf`,
-  machine name, image cache, and lifecycle lock. Machine names use the deterministic
-  `assm1-<host>-<architecture>-<12-hex-image-id>` form and remain within Podman's 30-byte limit on
-  every supported host and architecture. Managed commands clear the inherited environment and use
-  absolute, already-verified executable paths. On Windows they also disable current-directory
-  executable lookup, so Go helper resolution remains inside the constrained managed `PATH`.
-- On Linux only, managed commands set `XDG_RUNTIME_DIR` to a stable
-  `/tmp/assm1-<32-hex-namespace>` directory while `HOME`, configuration, identities, images, and
-  every other durable provider path remain under the release-private provider home. The namespace
-  uses a Linux-specific domain-separated hash of the canonical managed state root, exact release
-  manifest digest, and effective uid. The app creates or reopens only that exact `/tmp` child when
-  it is a real current-user directory with mode `0700`, verified through an `O_NOFOLLOW` directory
-  handle. An immutable private `storage.conf`, selected through the exact
-  `CONTAINERS_STORAGE_CONF` path, pins containers/storage's `runroot` to
-  `provider-home/run/containers` and `graphroot` to `provider-home/data/containers/storage`.
-  The pinned containers/storage and containers/common libraries resolve defaults before applying
-  those private overrides, so they may eagerly leave only empty `containers` (mode `0700`) and
-  `libpod` (mode `01700`) scaffolds beside Podman's socket-budgeted `podman` namespace. Runtime and
-  image state still remain in the persistent private provider home. A link, foreign owner,
-  permissive mode, non-canonical temporary base, or changed object fails closed. With a maximum
-  30-byte machine name, Podman 5.8.2's longest
-  `$XDG_RUNTIME_DIR/podman/*-gvproxy.sock` path is 94 bytes, below its 103-byte Unix-socket budget.
-- The Linux short runtime remains stable across start, ordinary stop, and update. After exact
-  machine removal, uninstall accepts only the pinned Podman `podman` child and the exact empty
-  `containers` and `libpod` scaffolds. Each scaffold must be a real current-user directory with
-  its exact observed mode, opened without following links and rechecked by device and inode before
-  descriptor-relative removal; a nonempty directory or any other entry fails closed. From the
-  `podman` child, cleanup may remove only the exact `virtiofschar0.pid`, `virtiofschar0`, and
-  `gvproxy.log` basenames. The pid must be a
-  current-user, single-link, mode-`0600` regular file whose exclusive `flock` becomes available
-  within a bounded wait; only that proof permits removal of a matching current-user, single-link,
-  mode-`0700` Unix socket. A socket without its exact pid-lock proof, a still-live lock, or any
-  other unsafe type fails closed. The log must likewise be a current-user, single-link,
-  non-executable regular file with an expected umask-derived mode. Cleanup then requires the Podman
-  directory and short root to be empty before removing those exact directories and syncing `/tmp`.
-- On macOS only, managed commands set `HOME`, `USERPROFILE`, and their working directory to the
-  stable `/tmp/assm1-<32-hex-namespace>` directory. The namespace hashes the canonical managed
-  state root, exact release-manifest digest, and effective uid. The app creates or reopens that
-  exact entry only when it is a real current-user directory with mode `0700`; links, foreign
-  ownership, or permissive modes fail closed. XDG configuration, identities, images, and all other
-  durable provider data remain under the persistent private provider home. Even with a maximum
-  30-byte machine name, Podman 5.8.2's longest `$HOME/.podman/*-ignition.sock` alias is 96 bytes,
-  below its 103-byte Unix-socket path ceiling.
-- The macOS short home is stable and remains present across start, ordinary stop, and update so a
-  live vfkit/gvproxy process cannot lose its socket aliases. Uninstall removes only that exact
-  owned namespace after `machine rm` succeeds or inventory proves the exact machine is absent. It
-  accepts an absent or empty real `.podman` directory, or the single exact
-  `<deterministic-machine>-ignition.sock` pathname left by pinned Podman 5.8.2's first-boot
-  ignition server. That one pathname is removed through the verified directory handle only after
-  no-follow inspection proves it is a current-user, single-link Unix socket and a second identity
-  check is unchanged. The pinned SSH client also eagerly creates `.ssh/known_hosts` before selecting
-  its machine-only host-key callback. Uninstall accepts `.ssh` only as a real current-user mode-
-  `0700` directory containing exactly one current-user, single-link, mode-`0600`, zero-byte regular
-  `known_hosts` file. Both objects are opened without following links and rechecked by device,
-  inode, ownership, mode, link count, and size as applicable before descriptor-relative removal.
-  Cleanup is not recursive: another root basename, an additional child, a nonempty or hard-linked
-  `known_hosts`, a link, foreign ownership, a wrong mode or type, or an unsafe directory replacement
-  aborts cleanup before the unsafe object is removed.
-- On Windows, Podman can leave its underlying WSL distribution behind after an interrupted setup or
-  even after reporting `machine rm` success. The app obtains the Windows root from the bounded
-  operating-system directory API, never an inherited `SystemRoot`, and runs its absolute canonical
-  `SystemRoot\System32\wsl.exe` with a cleared minimal environment, fixed provider working
-  directory, bounded deadlines/output, and strictly decoded bounded UTF-8 or UTF-16LE inventory.
-  Ordinary uninstall never treats a surviving distribution or one-shot initialization journal as
-  deletion authority: it stops and retains the provider, installation, and requested cache state.
-- First-launch replacement has a separate durable recovery transaction. It begins only when the
-  deterministic WSL name has exactly one registry registration whose canonical storage is inside a
-  release-private provider home bound to the current or another fully verified installed manifest.
-  The app records an immutable intent, checks free space without opening the running VHD, terminates
-  that exact distribution, then proves the stopped `ext4.vhdx` is a real non-reparse, one-link,
-  nonempty file. It exports a tar archive, synchronizes and atomically publishes it, records bounded
-  size and SHA-256, imports it under a generated quarantine name and isolated private directory,
-  and proves the import through both inventory and the unique registry `BasePath`.
-- Immediately before unregistering the original, the app rehashes the archive, reproves the
-  quarantine registration and storage, terminates and reproves the unchanged original, and confirms
-  both exact names in a fresh inventory. Only that transaction may run `wsl --unregister`, and only
-  for the proven original or generated quarantine name. It then proves inventory and registry
-  absence before deleting an exact provider directory. The replacement runtime must start and its
-  server must become ready before the temporary bootable quarantine is removed. The opaque archive,
-  intent, backup proof, and import proof remain; interrupted export, import, replacement, and cleanup
-  resume idempotently from those records. An ownership ambiguity fails closed to Microsoft's manual
-  backup/removal guidance. Recovery and cleanup never use the global `wsl --shutdown` operation.
-- After absence is proven, deletion of a verified provider home retries Win32 sharing violations
-  every 100 ms for at most 10 seconds so a released `ext4.vhdx` can be removed; every other deletion
-  error fails immediately.
-- Before first initialization, the app generates Podman 5.8.2's exact private-XDG
-  `data/containers/podman/machine/machine{,.pub}` identity itself as an unencrypted OpenSSH Ed25519
-  pair. It uses operating-system randomness and RustCrypto parsing/encoding, not a host
-  `ssh-keygen`, shell, inherited `PATH`, or external secret. Both halves are bounded, single-link
-  current-user files, durably staged, and atomically published. On Unix the private half must have
-  mode `0400` or `0600`; the non-secret public half may additionally use `0444` or `0644`. On
-  Windows both files have a protected current-user-only DACL from the first written byte, and
-  cleanup deletes through the already-verified handle. An interrupted hard-link publication is
-  recoverable only when the fixed staging name and its exact destination are the same regular
-  two-link file; every other hard link fails closed. A valid existing pair is reused without
-  changing its permissions; a
-  regular partial/corrupt pair can be repaired before initialization, while a non-regular entry or
-  any mismatch after a machine exists fails closed instead of silently rotating its trusted key.
-  Once uninstall removes or proves absence of the exact machine, it removes that release's exact
-  private provider home as well, so the SSH identity and provider configuration do not survive a
-  successful uninstall.
-- On Windows the app-created `managed-runtime` namespace and its provider directories use protected,
-  inheritable, current-user-only DACLs, with one narrowly scoped WSL compatibility exception. The
-  exact `data/containers/podman/machine/wsl/wsldist` directory has a protected DACL, a
-  non-defaulted current-user owner, and exactly two explicit object-and-container-inheritable full
-  control grants: the current user and LocalSystem. WSL's system service needs that access while it
-  imports and operates the distribution; no ancestor, identity, configuration, cache, or runtime
-  directory receives the LocalSystem grant. The caller-selected data-directory root is never
-  rewritten. Before creating or accepting that namespace, the app opens the canonical local
-  ancestor chain without following reparse points and rejects an untrusted owner or any
-  malformed/unsupported ACL. Untrusted namespace-replacement grants remain forbidden except for
-  capability SIDs on the exact `FOLDERID_LocalAppData` directory and its `AppData` parent. Those two
-  ordinary Windows profile layers are accepted only when the caller's canonical chain contains the
-  OS-resolved LocalAppData object. Each manager retains no-delete-share handles for that complete
-  verified chain and the non-reparse state-root object for its lifetime; the capability exception
-  never extends to the app data directory or a managed descendant. An unsafe parent or pre-existing
-  namespace is rejected rather than silently repaired.
-- Every private Windows file creation additionally pins and verifies its canonical immediate parent
-  before `CREATE_NEW`. The parent must retain that exact protected current-user-only inheritable
-  DACL; otherwise creation fails before any staging entry exists. The new child is then read back by
-  its exclusive handle and must have the exact protected, non-inheritable current-user-only DACL.
-- Command execution errors use fixed operation labels and never echo command arguments. Inventory
-  and version probes retain 30-second bounds, stop/removal retain 90-second bounds, and first-time
-  initialization plus start/readiness each receive separate 10-minute deadlines for cold AppleHV
-  boots.
-- Runtime preflight and execution checkpoints persist typed command provenance: runtime version,
-  release-manifest SHA-256, and machine-image SHA-256. Resume and cleanup can therefore reopen the
-  exact older installation after an app update instead of guessing from `PATH`.
-- Runtime preflight reads Docker's native security-options array or Podman's typed
-  `Host.Security` object according to the selected provider. Managed Podman must report both
-  rootless execution and seccomp; malformed, oversized, or incomplete security information fails
-  closed instead of being retained as an unverified display string.
-- On Linux, first initialization mounts the canonical application-data directory at the identical
-  absolute path inside the QEMU machine. All execution workspaces are immutable snapshots below
-  that directory. Podman runs each engine with the desktop user's exact non-root uid/gid and an
-  explicit `keep-id` user namespace, so private `0700` case artifacts remain traversable without
-  widening their host permissions. The release bundles the static `virtiofsd` helper required for
-  this mount; it never falls back to a host-installed helper.
+`ai-security-scanner` can run containerized engines on a clean supported Windows workstation without asking the user to install Docker, Podman, QEMU, or a system service manually. The runtime is disposable product infrastructure, not the product workspace.
 
-The current platform providers are:
+- The application shell, saved projects, existing reports, and readable unsigned exports remain available while the runtime is absent, preparing, repairing, or unavailable.
+- Runtime preparation begins automatically behind the selected user task. First launch is never replaced by a runtime administration screen.
+- WSL, Podman, VHD, provider, machine, gateway, manifest, digest, and ownership terms remain under **Technical details**. First-layer status uses language such as “Preparing scan tools” or “This network check could not start.”
+- A runtime or gateway problem affects only tasks that require it. Independent tasks continue and the run produces a partial or no-checks-completed master report with exact coverage gaps.
+- Docker and user-installed Podman are explicit compatibility providers. They are never silently mixed with a managed run, and their failure does not turn managed-runtime health into a global product gate.
+- Integrity failure blocks execution of the exact unverified package or helper. It does not block projects, reports, unaffected admitted engines, or unsigned readable exports.
 
-| Host | Provider | Release payload | Host prerequisite |
+Cases, findings, evidence, exports, settings, signing identity, and user-selected source files live outside disposable runtime generations. Rebuilding, resetting, upgrading, or removing scan tools must not migrate or delete those objects.
+
+## Windows installation and prerequisite preparation
+
+The official Windows install flow owns prerequisite detection and preparation:
+
+1. The signed installer resolves the trusted `%SystemRoot%\System32\wsl.exe` boundary and runs bounded prerequisite probes.
+2. If WSL installation or update is required, the installer invokes only a fixed product-defined Microsoft WSL servicing action through normal UAC. Executable, arguments, working directory, environment, and elevation behavior are compiled installer inputs; no webview or case value can select them.
+3. The installer records restart-required and durable resume state before it exits. It never restarts Windows without the operating system/user decision.
+4. After restart or relaunch, the application opens the main shell and resumes creation of the private runtime automatically.
+
+Servicing failure, cancellation, or timeout does not roll back otherwise valid application binaries and does not replace the product with a manual setup journey. It makes only runtime-dependent tasks temporarily unavailable, preserves the requested run/task, and offers **Retry**. A build that cannot complete the reference first-value path cannot be promoted as a passing Windows candidate, but an installed safe build still opens its projects and reports.
+
+The installer never exposes a generic elevation helper and the desktop never asks a beginner to open Terminal, type `wsl` commands, identify a distribution, or decide which runtime object is safe to remove.
+
+## Runtime bundle and download integrity
+
+- A release carries or references an immutable platform-specific managed-runtime bundle. Every bundled file has an exact size and SHA-256 in its release manifest.
+- The app verifies the bundle before copying or executing it. Managed commands use absolute verified executable paths, a cleared allowlisted environment, a fixed provider working directory, and no current-directory executable lookup.
+- A missing or corrupt installed component is never executed. Bounded automatic Repair restores it from the signed installer payload or another already verified product cache, then reinitializes the manager or relaunches into the same project.
+- When no verified repair source is available, the exact dependent tasks become `not_tested` or `failed` after bounded reconciliation. Unaffected capabilities continue.
+- VM images and other large payloads download only from manifest-approved HTTPS origins. Resumable partial files remain private and are promoted atomically only after locked size and SHA-256 verification.
+- Cancellation may retain a private partial download. Resume validates its length and range response; an invalid range restarts that download safely rather than trusting mismatched bytes.
+
+Package admission and publication evidence do not become local scan readiness. An invalid update, engine, helper, or runtime payload is not applied or executed; the current trusted installation and unrelated admitted capabilities remain usable.
+
+## Generations and ownership
+
+Every newly created runtime has:
+
+- a unique generation ID and unique OS registration/machine name;
+- a private product data directory;
+- a durable ownership record created before mutable runtime contents;
+- the exact registration identity, canonical storage path, product generation ID, and admitted manifest identity;
+- one durable lifecycle operation ID and reconciliation journal.
+
+A name match, publisher string, registry entry, prior installation record, or provider directory by itself is never ownership proof. Exact ownership proof is required before the product modifies or deletes an existing runtime. It is not required before the product creates a different isolated generation.
+
+One durable preparation operation owns one generation identity. Retry, app relaunch, and Windows restart reuse that safe in-progress identity. Polling and focus changes must not allocate new registrations. A new generation is allocated only after reconciliation determines that the prior one is unusable, or when ownership is ambiguous and the prior object must be preserved.
+
+### Runtime decision table
+
+| Observed state | Required action | Preservation and user outcome |
+| --- | --- | --- |
+| WSL ready; no product runtime | Create and start one unique generation | Unrelated WSL state is untouched; preparation stays in the background |
+| WSL absent, disabled, or outdated | Use the fixed signed-installer servicing/resume path | No Terminal; main shell and saved work remain available |
+| Unrelated WSL distributions exist | Ignore them and create the product generation | Registrations and storage remain byte-for-byte unchanged |
+| Verified current generation is healthy | Reuse it | Scan starts without a Repair ceremony |
+| Verified older generation is healthy | Create/verify the current generation side by side | Old generation remains until the new one works |
+| Verified generation is partially corrupt | Perform bounded repair or create a replacement generation | User data remains outside it; old generation remains until replacement works |
+| Name resembles the product but ownership is ambiguous | Do not adopt, edit, terminate, export, import, unregister, or delete it; choose a new unique name | Preserve the ambiguous registration/storage and continue automatically |
+| Ghost app registration or missing binaries/manifest/ownership proof | Repair application registration and create a new generation | Registry/name is not promoted into runtime ownership; no manual cleanup |
+| Creation was interrupted or Windows restarted | Reconcile the durable journal; resume safe steps or abandon the incomplete generation and replace it | No permanent Preparing state and no deletion authority inferred from interrupted intent |
+| Verified generation cannot be removed now | Mark exact cleanup pending and use another isolated generation when possible | Never claim removal; scan continues where an independent runtime/task is available |
+| No supported runtime can be created after bounded attempts | Mark only dependent tasks unavailable | Keep projects/reports/export usable and save an honest report |
+
+There is no deterministic-name reclamation flow. There is no normal recovery transaction that exports, imports, quarantines, unregisters, or deletes a legacy or ambiguous WSL distribution. Optional advanced cleanup may act only on an exact verified product-owned generation and is never required to continue scanning.
+
+The product never runs global `wsl --shutdown`, never edits an unrelated distribution, and never invokes `wsl --unregister` without exact deletion authority for the one resolved generation.
+
+## Reconciliation, progress, and Repair
+
+The durable journal and current operating-system inventory are authoritative. Frontend/runtime events are delivery hints.
+
+- Startup begins an authoritative refresh within one second of backend/UI readiness. Focus, resume, and a watchdog trigger the same refresh.
+- A refresh reconciles within ten seconds or visibly becomes Retry/offline with last-known real data. It never leaves an unbounded Ready, Repairing, Running, or Preparing projection.
+- Every long-running, restartable, or side-effecting non-terminal operation records its operation ID, generation ID, stage, completed work/bytes, deadline, heartbeat/stale threshold, last milestone, cancellation boundary, and deterministic timeout outcome.
+- Task-specific initialization, download, start, and cleanup bounds may exceed the ten-second status refresh, but their range and last durable heartbeat remain visible. No process wait is infinite.
+- A missed event, app termination, sleep, restart, or transient probe failure is recovered from authoritative state. Repeating reconciliation is idempotent.
+- Cancellation stops new work immediately. Target-contacting activity stops within the displayed task bound; non-contacting cleanup may continue without hiding saved results.
+- After a deadline, the product retries only a safe step, deliberately reuses or replaces the durable generation, or marks the affected capability unavailable. It does not allocate a new generation on every attempt.
+
+**Repair** means bounded automatic reconciliation. It verifies product-owned files, resumes or restarts downloads, repairs from an admitted payload, starts or replaces a verified disposable generation, and returns to the same project/task. Technical diagnostics are optional. Repair never redirects the beginner to WSL administration or a separate setup workflow.
+
+## Upgrade, downgrade, reset, and retention
+
+- Runtime upgrades are side by side. A new generation becomes active only after it starts and passes a functional scan-tool probe; the old active generation remains available until then.
+- Application upgrade and same-version installer Repair replace verified application binaries/resources and repair product registration without deleting runtime or user data. Missing old executables or uninstallers do not require version-specific ghost recovery.
+- Retry/restart reuses its durable generation. After replacement works, automatic cleanup may remove only obsolete generations with exact product ownership.
+- Retain at most the active generation, one verified rollback generation, and a generation referenced by a durable unfinished checkpoint. Ambiguous objects are outside automatic retention/garbage-collection accounting and remain untouched.
+- Downgrade never rewrites newer case data. It opens compatible data read-only, uses a compatible verified backup, or refuses only the incompatible downgrade operation while the prior supported installation/data remain usable.
+- **Reset scan tools** removes and rebuilds only exactly verified disposable generations, images, helpers, and caches. Ambiguous objects and all user data remain untouched.
+- Data-schema migrations are versioned, transactional, restart-safe, and backed up before a potentially destructive rewrite. Runtime replacement is not a data migration mechanism.
+
+## Uninstall contract
+
+The Windows uninstaller offers three explicit choices:
+
+1. **Remove the app only (default).** Remove application binaries and registration. Preserve projects, findings, evidence, exports, settings, signing identity, and managed data for reinstall.
+2. **Remove the app and scan tools; keep my projects.** Remove exactly verified runtime generations, images, helpers, and disposable caches. Preserve projects, findings, evidence, exports, preferences, and signing identity.
+3. **Remove the app and all ai-security-scanner data.** After explicit data-loss confirmation and a backup/export option, remove cases/evidence and only exactly verified product-owned runtime/data paths.
+
+Before any choice completes, dispatch stops and active target-contacting workloads are stopped within a bounded operation. A workload that cannot yet be stopped blocks only completion of that uninstall action and offers Retry; it does not justify deleting its controller or unrelated state. A stopped generation that cannot be removed is retained and reported accurately.
+
+Ambiguous and unrelated objects are preserved under every choice. Cleanup never uses a broad recursive application-data parent, name-only matching, or a global WSL operation. The uninstaller records what it removed and retained and never claims that a surviving runtime was removed.
+
+Reinstall after app-only removal reopens and exports the same project. Reinstall after scan-tool removal rebuilds a fresh generation and can scan, reopen, and export the preserved project. The all-data path proves exact removal rather than pretending deleted projects can be reopened.
+
+## Execution isolation
+
+Managed engines remain rootless and least-privileged:
+
+- read-only immutable input snapshots and a separate bounded output directory;
+- no-new-privileges and dropped capabilities unless one documented engine requires a narrower reviewed exception;
+- no credentials by default and only task-scoped protected credentials for an explicitly connected source;
+- exact task egress grants, rate/concurrency/time bounds, and revocation on cancel;
+- recorded runtime, manifest, machine-image, engine-image, command-contract, scope, and adapter identities attached to evidence;
+- typed rootless/seccomp security observations for the exact runtime invocation.
+
+Failure to establish an isolation property blocks execution of that exact engine/task. It does not invalidate already saved evidence or disable unrelated tasks, reports, or projects. The master report identifies the task as failed or not tested and states the coverage gap.
+
+The Windows-host loopback route is explicit: a task for `127.0.0.1:9001` means the Windows host service, not loopback inside the container or WSL guest. The gateway grants only the displayed target/port. Gateway failure affects only tasks that require that gateway.
+
+### Output exhaustion protection
+
+Every engine plan carries a bounded aggregate output budget (512 MiB by default unless a reviewed engine contract specifies a lower bounded value):
+
+- one exact per-file `RLIMIT_FSIZE` where the provider supports it;
+- disabled container runtime logs (`--log-driver=none`) where supported;
+- one in-process aggregate budget across bounded stdout, stderr, and the recursive output tree;
+- file-count, depth, symlink, and special-object limits.
+
+A breach stops only the owned container/task, preserves already committed bounded evidence, and reports incomplete coverage. The recursive monitor is not represented as an operating-system filesystem quota; the per-file kernel limit remains the hard per-file bound.
+
+## Private namespaces and platform details
+
+### All platforms
+
+- Durable provider state lives beneath the private managed-runtime root, partitioned by unique generation.
+- Paths are canonicalized and opened without following links before sensitive creation or deletion.
+- Creation pins and rechecks the immediate final product namespace. Reparse/replacement paths and foreign write authority on that final namespace are rejected.
+- Benign or unusual ancestor policy that cannot replace the final namespace is diagnostic, not a product-wide block. A hard block requires a demonstrated path to mutating the exact protected namespace.
+- Cleanup is descriptor-relative and exact. Unexpected, nonempty, linked, foreign-owned, or replaced objects are retained and reported instead of recursively removed.
+- Commands use fixed operation labels and never echo arguments, target names, credentials, or unbounded output in errors.
+
+### Windows
+
+- The runtime resolves the Windows directory through the operating-system API and uses the absolute canonical `System32\wsl.exe` with a cleared minimal environment, fixed working directory, bounded output, and strict bounded UTF-8/UTF-16LE decoding.
+- The product-managed data namespace uses protected current-user access. The exact WSL distribution-storage directory may grant the narrowly required LocalSystem access for WSL servicing; that grant does not spread to identities, cases, evidence, caches, or unrelated ancestors.
+- Product-created SSH identities are generated with operating-system randomness, stored in the private generation namespace, never passed through a host shell, and reused only when exact key/ownership validation succeeds. Corrupt product-owned pre-initialization keys may be regenerated; ambiguous or active mismatches cause replacement of the generation rather than silent key rotation.
+- A surviving WSL distribution or interrupted journal is never, by itself, deletion authority.
+
+### Linux
+
+- Rootless Podman uses a private provider home and immutable `containers.conf`/`storage.conf`. Durable graph/run state remains beneath that provider home.
+- A short per-generation runtime directory may be used under canonical `/tmp` for socket limits. It must be a current-user, mode-`0700`, no-follow directory whose identity is stable for the generation.
+- Cleanup accepts only exact known runtime socket/pid/log objects after ownership, type, link-count, mode, identity, and bounded process-liveness checks. Anything else is retained.
+- The application-data snapshot mount appears at the required canonical path inside the managed VM. Engine containers use the desktop user's non-root uid/gid and an explicit keep-id mapping so private case artifacts need not be made broadly readable.
+
+### macOS
+
+- A short per-generation private home may be used under canonical `/tmp` to meet socket limits. It remains stable while the machine is active and contains only exact provider-created socket/host-key scaffolding.
+- Cleanup follows the same no-follow, current-user, exact-object rules and retains unexpected or nonempty content.
+- Durable identities, images, configuration, and evidence remain outside the short socket namespace in the private provider/data roots appropriate to their ownership class.
+
+## Current provider payloads
+
+| Host | Managed provider | Release payload | Host prerequisite |
 | --- | --- | --- | --- |
-| Linux x86-64 | rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, `virtiofsd`, and firmware | None. `/dev/kvm` is used when available; otherwise the native launcher selects QEMU TCG, which is slower. |
-| macOS Intel/Apple silicon | rootless Podman machine + AppleHV | Universal Podman, vfkit, and gvproxy | A supported macOS release with Apple virtualization support. |
-| Windows x86-64 | rootless Podman machine + WSL | Podman, gvproxy, and win-sshproxy | WSL 2. The app checks it without elevation on first launch. If unavailable or outdated, the UI links to Microsoft's setup once and rechecks automatically on the next launch. |
+| Linux x86-64 | Rootless Podman machine + QEMU | Podman, gvproxy, static x86-64 QEMU emulator, `qemu-img`, `virtiofsd`, firmware | None; KVM when available, otherwise the bounded native launcher may use QEMU TCG |
+| macOS Intel/Apple silicon | Rootless Podman machine + AppleHV | Universal Podman, vfkit, gvproxy | Supported macOS with Apple virtualization support |
+| Windows x86-64 | Rootless Podman machine + WSL | Podman, gvproxy, win-sshproxy | WSL 2, detected/prepared by the signed installer flow |
 
-## Lifecycle
+Provider payload availability is a capability statement, not a claim that every platform path has passed human qualification. Platform promotion follows the canonical acceptance policy.
 
-The desktop starts the managed machine on demand before engine execution and prefers it over
-compatibility runtimes.
+## CLI and developer interfaces
 
-On first desktop launch, the UI reads both runtime health and setup status before automatically
-invoking `setup_managed_runtime`. The command runs in a blocking worker while the responsive window
-independently polls `get_managed_runtime_setup_status`; `cancel_managed_runtime_setup` only signals
-that worker and returns the current status immediately. The automatic path verifies product-owned
-files, performs read-only host checks, downloads pinned runtime content, and starts the private
-machine. It does not request elevation, enable Windows optional features, or run Windows servicing
-commands. A missing or outdated WSL installation therefore becomes one clear link to Microsoft's
-official setup and one safe recheck instead of a repeating in-app Repair action.
+The standalone development CLI may expose bounded lifecycle diagnostics and operations such as status, install/start/stop/update, qualification, and exact uninstall. These are maintainer/developer interfaces, not steps in the beginner desktop journey.
 
-The legacy prerequisite-repair implementation remains backend-internal for compatibility testing,
-but it is not registered as a desktop webview command and is not reachable from the current UI.
+- `status` reads and reconciles authoritative state; it does not mutate unrelated objects.
+- `install`, `start`, `update`, and `Repair` use the same durable operation/generation rules as the desktop.
+- `stop` refuses to interrupt target-contacting containers unless the exact bounded cancellation contract is invoked.
+- `uninstall` resolves exact ownership and follows the same data-preservation choices; `--force` must never widen the resolved target or turn name matching into ownership.
+- An unpackaged build may take an explicit absolute bundle override. This does not alter installed-product discovery or allow a case/webview value to choose an executable.
+- Runtime `qualify` executes a fixed no-network fixture through the admitted container path. It proves that exact runtime execution/cleanup path only; it does not prove scan coverage, first-value UX, authorization, or release readiness and is never a normal scan gate.
 
-The setup-status JSON uses `phase: "prerequisite"` while checking Windows. A failed Windows check
-returns one of `windows_wsl_not_installed`, `windows_wsl_optional_feature_disabled`,
-`windows_wsl_update_required`, `windows_restart_required`, or `windows_wsl_command_failed` in
-`failure_reason`, paired with `install_wsl`, `enable_wsl_optional_features`, `update_wsl`,
-`restart_windows`, or `retry_wsl_check` in `next_action`. Both fields are `null` outside a failed
-setup. Human-facing clients localize those stable values and keep the bounded diagnostic in an
-optional technical-details view. `prerequisite_repair_active` remains in the serialized status for
-backward compatibility; the current desktop UI never starts that operation.
+## Release staging and supply-chain boundary
 
-The standalone development CLI exposes the same durable lifecycle:
+The release workflow vendors managed-runtime payloads before application packaging. The vendor step:
 
-```text
-ai-security-scanner-cli runtime managed status
-ai-security-scanner-cli runtime managed install
-ai-security-scanner-cli runtime managed start
-ai-security-scanner-cli runtime managed stop
-ai-security-scanner-cli runtime managed update
-ai-security-scanner-cli runtime managed qualify
-ai-security-scanner-cli runtime managed uninstall
-```
+- reads `runtime/upstreams.lock.json`;
+- accepts only approved HTTPS origins;
+- verifies every source and binary by locked size and SHA-256;
+- extracts/builds without invoking untrusted archive scripts;
+- validates platform/architecture and required helper capabilities;
+- atomically publishes the completed staged directory and manifest.
 
-`stop` and `uninstall` refuse to interrupt active engine containers. `--force` is an explicit
-override. `uninstall --purge-image-cache` additionally removes only the exact managed image-cache
-file. Update proves and starts the new payload first, while retaining older verified versions so a
-durable cleanup checkpoint can still resolve its exact manifest identity.
+Manifest schema and management-contract revisions identify how the staged bytes are interpreted. A schema/revision change requires a reviewed contract change; admission or public promotion of the affected platform payload requires real-platform evidence. Neither requirement may be used to manufacture ownership of an existing runtime or block unrelated development work. An old admitted payload may be reopened only through its exact recorded manifest identity for a durable checkpoint or rollback. If identity is absent or ambiguous, preserve the old object and create a new generation.
 
-For an unpackaged CLI build, use
-`--managed-runtime-bundle /absolute/path/to/managed-runtime` or set
-`AI_SECURITY_SCANNER_MANAGED_RUNTIME_BUNDLE`. Without a bundle override, the CLI searches only its
-known packaged resource locations and then reopens a single verified private installation. Multiple
-installed versions require a durable exact manifest digest and otherwise fail closed.
+Development lock validation may verify pinned metadata without building installers. Public platform promotion additionally requires its own real installer/runtime qualification. Failure of one platform payload, provenance record, updater entry, or publication signature blocks only that package/platform/publication action; it does not block ordinary documentation/product CI or an installed trusted build.
 
-`qualify` has no image, command, network, or credential arguments. It starts the verified managed
-runtime, retrieves the release-fixed Gitleaks digest, and executes the built-in qualification
-fixture through the same container-plan path used by scans. That plan has a read-only root,
-drop-all capabilities, no-new-privileges, no credentials, and `network=none`; the image pull occurs
-before the isolated container starts. A cold pinned-image pull has a separate 10-minute deadline;
-preflight, inspection, and container-control commands retain their 30-second deadline. All direct
-command execution and deadline failures identify a fixed operation label; the local error wrapper
-never constructs those messages from the image reference, container identity, or other command
-arguments. Success is emitted only after the expected empty JSON report is hashed and the created
-container is removed by its immutable runtime ID. The machine-readable result binds the runtime
-manifest and machine-image digests, engine image, scope digest, report and capture digests, exit
-status, and cleanup outcome. This proves release-runtime execution and cleanup, not assessment
-coverage.
+Source and binary identities are updated only through the lock file. A version update replaces every affected URL, size, SHA-256, source revision, helper identity, and machine image together. No hash, signature, provenance, or qualification result may be fabricated to make a gate pass.
 
-## Engine output exhaustion protection
+## Runtime acceptance summary
 
-Every engine plan carries an aggregate output-byte limit (512 MiB by default, with bounded
-configuration). The runtime combines three controls:
+A Windows candidate containing runtime changes is promoted only after the canonical exact-candidate human path and the applicable focused real-boundary fixtures pass. Ordinary development may run narrower checks, but cannot claim candidate acceptance. Promotion evidence demonstrates:
 
-- the container receives one exact `RLIMIT_FSIZE` (`--ulimit fsize=N:N`), limiting an individual
-  regular file;
-- container runtime logs are disabled with `--log-driver=none`;
-- stdout, stderr, and the recursive bind-mounted output tree share one in-process byte budget. Pipe
-  capture is bounded, and the container is stopped and killed if bytes, file count, directory depth,
-  symlinks, or special objects violate the contract.
+- fresh Windows with WSL absent reaches the main shell and resumes after the fixed signed-installer action/restart without Terminal;
+- `127.0.0.1:9001` reaches the Windows host and produces a saved report;
+- unrelated and similarly named WSL objects remain unchanged while a unique generation continues;
+- interruption and one dropped event converge to authoritative state without an infinite wait or generation churn;
+- one unavailable runtime, gateway, or engine leaves independent work and a truthful partial report available;
+- same-version Repair and N-1 upgrade preserve projects, evidence, settings, signing identity, unrelated WSL state, and a runnable prior binary/runtime until replacement works;
+- all three uninstall choices stop target contact and prove their exact preservation/removal promises;
+- corrupt packaged bytes are never executed and trigger bounded automatic repair or task-scoped degradation;
+- exact unsafe deletion/replacement attempts remain blocked without broadening that block to the product.
 
-An aggregate breach returns an explicit error that scan coverage is incomplete. The recursive
-monitor is not an operating-system filesystem quota, so a rapidly writing process may transiently
-cross the aggregate threshold between checks; the per-file kernel limit remains in force and the
-monitor checks every 25 ms before stopping the owned container.
-
-## Release staging
-
-The release workflow runs the pinned vendor tool before Tauri packaging:
-
-```text
-node runtime/vendor-managed-runtime.mjs \
-  --target x86_64-unknown-linux-gnu \
-  --output runtime/staged/managed-runtime
-```
-
-The tool reads `runtime/upstreams.lock.json`, enforces approved HTTPS origins, verifies every
-download by locked size and SHA-256, extracts without a shell, selects client files by exact content
-identity, and publishes the completed directory atomically. Linux QEMU is built for the locked
-`linux/amd64` platform from the locked QEMU and DTC sources in the pinned container builder;
-`virtiofsd` is independently built from its locked source and Cargo graph with a digest-pinned Rust
-builder. The vendor step rejects each of the launcher, real emulator, `qemu-img`, and `virtiofsd`
-unless it is static ELF64, little-endian x86-64. It verifies both helper versions and functionally
-proves `qemu-img` create/resize/JSON-info before staging. The exact QEMU build enables vhost-user
-support and must expose `vhost-user-fs-pci` both before installation and from the staged real
-emulator; this is a lock-driven capability contract, not a host-QEMU fallback.
-The native launcher probes KVM and changes only Podman's exact `-accel kvm -cpu host` arguments to
-`tcg/max` when KVM is unusable. The locked Linux build contract retains the x86_64 SeaBIOS, OVMF,
-and device firmware while excluding eight foreign-architecture firmware images that the
-x86_64-only emulator cannot use. Tauri maps the completed directory to
-`$RESOURCE/managed-runtime/`.
-
-Manifest schema 3 records the lock-sourced `management_contract_revision` alongside the pinned
-upstream payload. This revision identifies the product-side lifecycle and ownership rules that
-interpret those bytes. Version 0.1.8 uses `2026-08-29.1`; its reviewed Windows x86-64 manifest is
-`a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a`. The current application fails
-closed on any other schema-3 contract. It can still reopen a strict schema-2 installed manifest
-only when the revision field is absent, preserving the public v0.1.7 identity for the bounded N-1
-recovery proof; a schema-2 manifest is never accepted as the current bundled v0.1.8 resource.
-
-A schema number, revision, or formatting-only edit must not be used to manufacture a provider
-identity. Changing the revision requires a reviewed change to the product-side runtime management
-contract plus release evidence from a real platform build.
-
-The cheap lock-only validation used during development is:
-
-```text
-node runtime/vendor-managed-runtime.mjs --target x86_64-unknown-linux-gnu --verify-lock-only
-node runtime/vendor-managed-runtime.mjs --target universal-apple-darwin --verify-lock-only
-node runtime/vendor-managed-runtime.mjs --target x86_64-pc-windows-msvc --verify-lock-only
-```
-
-Source and binary identities are intentionally updated only through the lock file. A version bump
-must replace all affected URLs, sizes, SHA-256 values, source revisions, helper binaries, and machine
-images together.
+Modeled tests and a runtime qualification fixture support these claims but cannot substitute for the exact installed-Windows human-path record required by the canonical specification.
