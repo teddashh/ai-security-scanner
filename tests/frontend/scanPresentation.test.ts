@@ -29,6 +29,7 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   engineId: "trivy",
   engineName: "raw implementation name",
   category: "raw category",
+  taskKind: { kind: "catalog_engine" },
   version: "1.0.0",
   digest: "sha256:redacted",
   warnings: [],
@@ -83,7 +84,7 @@ test("every check state provides an actionable bilingual next step without raw e
   }
 });
 
-test("known setup failures lead to the matching safe next step", () => {
+test("known setup failures lead to the matching automatic next step", () => {
   const target = engineNextStepFor(engine({ status: "not_executed", errorCode: "no_compatible_authorized_assets" }));
   const tools = engineNextStepFor(engine({
     status: "failed",
@@ -102,8 +103,8 @@ test("known setup failures lead to the matching safe next step", () => {
   }));
   assert.match(target.en, /scan setup/u);
   assert.match(target.zhTW, /掃描設定/u);
-  assert.match(tools.en, /scan-tool setup/u);
-  assert.match(tools.zhTW, /掃描工具設定/u);
+  assert.match(tools.en, /prepare.*automatically/u);
+  assert.match(tools.zhTW, /自動準備/u);
 });
 
 test("execution_failed only recommends tool setup with explicit pre-start evidence", () => {
@@ -160,7 +161,7 @@ test("post-start failures preserve results and cleanup guidance", () => {
   assert.doesNotMatch(cleanup.en, /scan-tool setup/u);
 });
 
-test("a gateway preparation failure says repair and retry, never resume saved progress", () => {
+test("a gateway preparation failure says automatic rebuild and retry, never resume saved progress", () => {
   const failed = engine({
     status: "failed",
     phase: "failed",
@@ -181,7 +182,7 @@ test("a gateway preparation failure says repair and retry, never resume saved pr
   const recovery = engineRecoveryLabelFor(failed);
 
   assert.match(nextStep.en, /private scan connection/u);
-  assert.match(nextStep.en, /repair.*retry/iu);
+  assert.match(nextStep.en, /rebuild.*automatically/iu);
   assert.match(nextStep.zhTW, /專用掃描連線/u);
   assert.match(recovery.en, /from the beginning/u);
   assert.match(recovery.zhTW, /從頭重試/u);
@@ -192,7 +193,7 @@ test("typed skipped reasons choose a specific bilingual next step without render
   const cases = [
     [["no_compatible_authorized_assets"], /scan setup/u, /掃描設定/u],
     [["provider_source_required"], /cloud setup/u, /雲端設定/u],
-    [["runtime_image_unavailable"], /scan-tool setup/u, /掃描工具設定/u],
+    [["runtime_image_unavailable"], /prepare.*automatically/u, /自動準備/u],
     [["engine_release_unavailable"], /not available in this version/u, /目前版本無法使用/u],
   ] as const;
   for (const [codes, english, traditionalChinese] of cases) {
@@ -203,6 +204,6 @@ test("typed skipped reasons choose a specific bilingual next step without render
   }
 
   const mixed = skippedChecksNextStepFor(["no_compatible_authorized_assets", "runtime_image_unavailable"]);
-  assert.match(mixed.en, /more than one action/u);
-  assert.match(mixed.zhTW, /還需要幾個步驟/u);
+  assert.match(mixed.en, /Finish the target or cloud step/u);
+  assert.match(mixed.zhTW, /完成畫面上的目標或雲端步驟/u);
 });

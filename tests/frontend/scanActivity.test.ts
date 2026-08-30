@@ -9,6 +9,7 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   engineId: "scanner-id-must-stay-technical",
   engineName: "Scanner name must stay technical",
   category: "network",
+  taskKind: { kind: "catalog_engine" },
   version: "1.0.0",
   digest: "sha256:redacted",
   warnings: ["target-controlled warning"],
@@ -103,6 +104,26 @@ test("paused and terminal runs show their own state and terminal timestamp", () 
   assert.equal(completed.state, "completed");
   assert.equal(completed.lastProgressAt, "2026-08-26T13:06:00Z");
   assert.ok(completed.events.some((event) => event.code === "run_completed"));
+});
+
+test("a terminal no-checks request is neither queued work nor a technical failure", () => {
+  const finishedAt = "2026-08-26T13:00:01Z";
+  const activity = buildScanActivity(run({
+    status: "no_checks_completed",
+    progress: 0,
+    finishedAt,
+    requestOutcome: {
+      status: "no_checks_completed",
+      code: "no_applicable_checks",
+      requestedAssetIds: ["asset-1"],
+      requestedEngineIds: [],
+    },
+    engineRuns: [],
+  }));
+  assert.equal(activity.active, false);
+  assert.equal(activity.state, "no_checks_completed");
+  assert.ok(activity.events.some((event) => event.code === "run_no_checks_completed"));
+  assert.ok(!activity.events.some((event) => event.code === "run_stopped"));
 });
 
 test("a gateway preparation failure is a stopped pre-scanner attempt, never a finished check", () => {

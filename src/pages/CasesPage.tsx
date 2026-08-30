@@ -77,14 +77,14 @@ const pageCopy = {
   newCaseEyebrow: { en: "New scan", zhTW: "新的檢查" },
   newCaseTitle: { en: "Let's set up your scan", zhTW: "一起設定這次檢查" },
   newCaseDescription: {
-    en: "Give it a name, tell us who it is for, and add the first thing you want checked. You can add more later.",
-    zhTW: "取一個好認的名稱、選擇所屬團隊，再加入第一個想檢查的目標；之後隨時都能再加。",
+    en: "Give it a name and add the first thing you want checked. You can add a company or team and more targets later.",
+    zhTW: "取一個好認的名稱，再加入第一個想檢查的目標；公司、團隊與更多目標之後再補也可以。",
   },
   changeUseCase: { en: "Choose a different scan", zhTW: "改選其他檢查方式" },
   caseName: { en: "Scan project name", zhTW: "掃描專案名稱" },
   caseNamePlaceholder: { en: "Example: 2026 first security check", zhTW: "例如：2026 年首次安全健檢" },
-  organizationName: { en: "Company or team name", zhTW: "公司或團隊名稱" },
-  organizationPlaceholder: { en: "Who owns the systems being checked?", zhTW: "這些系統屬於哪個公司或團隊？" },
+  organizationName: { en: "Company or team name (optional)", zhTW: "公司或團隊名稱（選填）" },
+  organizationPlaceholder: { en: "You can add this later", zhTW: "之後再補也可以" },
   selectedGoal: { en: "What are you checking?", zhTW: "這次要檢查什麼？" },
   aiGeneratedQuestion: {
     en: "Did AI generate or substantially change any code in this project?",
@@ -403,6 +403,7 @@ const runStatusKeys: Record<ScanRun["status"], StaticTranslationKey> = {
   running: "status.run.running",
   paused: "status.run.paused",
   completed: "status.run.completed",
+  no_checks_completed: "status.run.noChecksCompleted",
   partial: "status.run.partial",
   failed: "status.run.failed",
   cancelled: "status.run.cancelled",
@@ -675,7 +676,7 @@ export function CasesPage({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!name.trim() || !organizationName.trim() || platforms.length === 0 || requestedActivities.length === 0) return;
+    if (!name.trim() || platforms.length === 0 || requestedActivities.length === 0) return;
 
     const assets = buildKnownAssets({
       selectedUseCase,
@@ -961,7 +962,7 @@ export function CasesPage({
             </label>
             <label className="field">
               <span>{text(pageCopy.organizationName)}</span>
-              <input required value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder={text(pageCopy.organizationPlaceholder)} />
+              <input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder={text(pageCopy.organizationPlaceholder)} />
             </label>
           </div>
 
@@ -1119,7 +1120,7 @@ export function CasesPage({
 
           <div className="form-actions">
             <p><Icon name="lock" size={16} /> {text(pageCopy.createSafety)}</p>
-            <button className="button button--primary" type="submit" disabled={busy || !name.trim() || !organizationName.trim() || platforms.length === 0 || requestedActivities.length === 0}>
+            <button className="button button--primary" type="submit" disabled={busy || !name.trim() || platforms.length === 0 || requestedActivities.length === 0}>
               {text(busy ? pageCopy.creating : pageCopy.createLocal)}
               <Icon name="arrow" size={17} />
             </button>
@@ -1136,7 +1137,7 @@ export function CasesPage({
               {latestRun && <StatusPill label={text(pageCopy.latestRun, { status: t(runStatusKeys[latestRun.status]) })} tone={runStatusMeta[latestRun.status].tone} />}
             </div>
             <h2 id="current-case-title">{selectedCase.name}</h2>
-            <p>{selectedCase.organizationName} · {text(pageCopy.updated, { date: formatDateTime(selectedCase.updatedAt) })}</p>
+            <p>{selectedCase.organizationName ? `${selectedCase.organizationName} · ` : ""}{text(pageCopy.updated, { date: formatDateTime(selectedCase.updatedAt) })}</p>
             <div className="platform-list" aria-label={text(pageCopy.caseSystems)}>
               {selectedCase.platforms.map((platform) => <span key={platform}>{platformLabel(platform)}</span>)}
             </div>
@@ -1295,7 +1296,7 @@ export function CasesPage({
                       <span className="case-row__icon"><Icon name="cases" /></span>
                       <span className="case-row__copy">
                         <span className="case-row__title"><strong>{assessmentCase.name}</strong>{assessmentCase.isDemo && <small>{text(pageCopy.demo)}</small>}</span>
-                        <span>{assessmentCase.organizationName}</span>
+                        {assessmentCase.organizationName && <span>{assessmentCase.organizationName}</span>}
                         <span>{text(pageCopy.assetFindingCount, { assets: listedAssets, findings: listedFindings })}</span>
                         <span className="case-row__platforms">
                           {assessmentCase.platforms.slice(0, 4).map(platformLabel).join(" · ")}

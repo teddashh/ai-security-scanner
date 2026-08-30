@@ -60,31 +60,28 @@ interface RuntimeAssistantCopy {
     title: string;
     description: string;
     action: string;
-    releaseHref: string;
   }>>;
   phases: Record<ManagedRuntimeSetupPhase, string>;
   actions: Record<ManagedRuntimeSetupNextAction, RuntimeActionCopy>;
 }
 
-const PRODUCT_RELEASES = "https://github.com/teddashh/ai-security-scanner/releases";
-
 const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
   en: {
-    eyebrow: "ONE QUICK SETUP",
-    title: "Get your local scan tools ready",
+    eyebrow: "BACKGROUND PREPARATION",
+    title: "Local checks are preparing automatically",
     description:
-      "Click once and ai-security-scanner will automatically prepare the local scan tools. If one tool is unavailable, your workspace stays open and explains what was not checked.",
+      "Keep using the app while ai-security-scanner prepares what it can. No separate setup is required.",
     readyTitle: "Your local scan tools are ready",
     readyDescription: "Choose what you want to scan and get started.",
     demoTitle: "Explore a scan with sample results",
     demoDescription: "Open the desktop app when you are ready to scan a real website, cloud account, network, or codebase.",
-    progressTitle: "Getting your scan tools ready",
-    progressDescription: "We are downloading and setting up everything automatically. First-time setup may take a few minutes.",
-    recoveryTitle: "Finishing a previous setup",
-    recoveryDescription: "ai-security-scanner is reconciling product-owned scan-tool files automatically. Your saved projects remain available while it finishes.",
+    progressTitle: "Preparing local checks in the background",
+    progressDescription: "The app is downloading and preparing available checks automatically. You can keep using saved projects and reports.",
+    recoveryTitle: "Preparing a fresh scan workspace",
+    recoveryDescription: "Older or unfinished tool data is being preserved while the app prepares an isolated replacement automatically.",
     cancelledTitle: "Setup paused",
     cancelledDescription: "The download was kept on this computer. Continue when you are ready; your scan projects are unchanged.",
-    start: "Set up automatically",
+    start: "Try preparation again",
     continue: "Continue setup",
     retry: "Try setup again",
     starting: "Starting setup…",
@@ -93,26 +90,23 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     technical: "Technical details",
     downloaded: "downloaded",
     resumed: "Existing download reused",
-    failedTitle: "Scan-tool setup stopped",
-    failedDescription: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
+    failedTitle: "One local check is unavailable",
+    failedDescription: "Other checks, saved projects, reports, and readable exports remain available. Try automatic preparation again when ready.",
     scannerIssues: {
       no_runnable_authorized_targets: {
-        title: "Get the scan tools for this check",
-        description: "This target is ready, but this version has no working scan tool for it. Install the newest release; your local scan projects will stay on this device.",
-        action: "Get the latest installer",
-        releaseHref: PRODUCT_RELEASES,
+        title: "This check is unavailable in the installed version",
+        description: "Other available checks can continue and the report will name this coverage gap. Retry after updating the app when convenient.",
+        action: "Try automatic preparation",
       },
       egress_gateway_unavailable: {
-        title: "Restore one installed scan component",
-        description: "The private connection component installed with this app could not be verified. Install the newest release again; your local scan projects will stay on this device.",
-        action: "Get the latest installer",
-        releaseHref: PRODUCT_RELEASES,
+        title: "One installed scan component is unavailable",
+        description: "The app will not use the unverified component. Other checks and reports stay available while automatic repair is retried.",
+        action: "Try automatic repair",
       },
       engine_execution_contract_invalid: {
-        title: "Restore one installed scan component",
-        description: "A required part of this check is missing or out of date. Install the newest release again; your local scan projects will stay on this device.",
-        action: "Get the latest installer",
-        releaseHref: PRODUCT_RELEASES,
+        title: "One installed scan component is unavailable",
+        description: "The app will not use the missing or outdated component. Other checks and reports stay available while automatic repair is retried.",
+        action: "Try automatic repair",
       },
     },
     phases: {
@@ -151,26 +145,26 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       },
       resolve_wsl_distribution_manually: {
         title: "Older scan-tool data was preserved",
-        description: "The app could not confirm ownership of an older workspace, so it left that data untouched. This scan tool is unavailable in this session; saved scans remain usable.",
+        description: "The older workspace was left untouched. Retry and the app will prepare a new isolated workspace without deleting the old one.",
       },
     },
   },
   "zh-TW": {
-    eyebrow: "快速設定一次即可",
-    title: "準備本機掃描工具",
+    eyebrow: "背景自動準備",
+    title: "正在自動準備本機檢查",
     description:
-      "按一下，ai-security-scanner 就會自動準備本機掃描工具。如果其中一項工具無法使用，工作畫面仍會保持開啟，並清楚說明哪些項目沒有檢查。",
+      "你可以繼續使用程式；ai-security-scanner 會在背景準備可用的檢查，不需要另外完成設定。",
     readyTitle: "本機掃描工具準備好了",
     readyDescription: "選擇你想掃描的項目，就能直接開始。",
     demoTitle: "先用範例結果看看掃描怎麼運作",
     demoDescription: "準備掃描真實網站、雲端帳號、網路或程式碼時，再開啟桌面版即可。",
-    progressTitle: "正在準備掃描工具",
-    progressDescription: "系統會自動下載並完成設定；第一次可能需要幾分鐘。",
-    recoveryTitle: "正在完成先前未完成的設定",
-    recoveryDescription: "程式正在自動整理可確認屬於本產品的掃描工具檔案；處理期間，已保存的專案仍可使用。",
+    progressTitle: "正在背景準備本機檢查",
+    progressDescription: "程式會自動下載並準備可用檢查；你仍可使用已保存的專案與報告。",
+    recoveryTitle: "正在準備新的隔離掃描空間",
+    recoveryDescription: "程式會保留舊的或未完成的工具資料，並自動準備隔離的新工作空間。",
     cancelledTitle: "設定已暫停",
     cancelledDescription: "下載進度已保留在這台電腦上。準備好時可繼續；你的掃描專案沒有變更。",
-    start: "自動完成設定",
+    start: "再試一次自動準備",
     continue: "繼續設定",
     retry: "再試一次設定",
     starting: "正在開始設定…",
@@ -179,26 +173,23 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     technical: "技術細節",
     downloaded: "已下載",
     resumed: "已沿用先前下載進度",
-    failedTitle: "掃描工具設定已停止",
-    failedDescription: "掃描工具未能完成設定。你的掃描專案沒有變更；請再試一次。如果問題持續發生，可展開「技術細節」查看原因。",
+    failedTitle: "一項本機檢查目前無法使用",
+    failedDescription: "其他檢查、已保存專案、報告與好讀匯出仍可使用；準備好時可再試一次自動準備。",
     scannerIssues: {
       no_runnable_authorized_targets: {
-        title: "取得這項檢查需要的掃描工具",
-        description: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
-        action: "取得最新安裝程式",
-        releaseHref: PRODUCT_RELEASES,
+        title: "目前安裝版本無法執行這項檢查",
+        description: "其他可用檢查可以繼續，報告也會列出這個涵蓋缺口；方便時更新程式後再試即可。",
+        action: "再試一次自動準備",
       },
       egress_gateway_unavailable: {
-        title: "恢復一項安裝元件",
-        description: "程式無法確認隨附的專用連線元件。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
-        action: "取得最新安裝程式",
-        releaseHref: PRODUCT_RELEASES,
+        title: "一項隨附掃描元件目前無法使用",
+        description: "程式不會執行無法驗證的元件；其他檢查與報告仍可使用，並可重試自動修復。",
+        action: "再試一次自動修復",
       },
       engine_execution_contract_invalid: {
-        title: "恢復一項安裝元件",
-        description: "這項檢查缺少必要元件，或元件已過期。請重新安裝最新版本；這台電腦上的掃描專案會完整保留。",
-        action: "取得最新安裝程式",
-        releaseHref: PRODUCT_RELEASES,
+        title: "一項隨附掃描元件目前無法使用",
+        description: "程式不會執行缺少或過期的元件；其他檢查與報告仍可使用，並可重試自動修復。",
+        action: "再試一次自動修復",
       },
     },
     phases: {
@@ -237,7 +228,7 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
       },
       resolve_wsl_distribution_manually: {
         title: "舊的掃描工具資料已保留",
-        description: "程式無法確認舊工作區的歸屬，因此沒有更動其中資料。這個掃描工具目前無法使用；已保存的掃描仍可開啟。",
+        description: "程式沒有更動舊工作區。再次嘗試時會建立新的隔離工作空間，不需要刪除舊資料。",
       },
     },
   },
@@ -372,15 +363,10 @@ export function RuntimeSetupAssistant({
 
       <div className="runtime-assistant__actions">
         {scannerIssue ? (
-          <a
-            className="button button--primary"
-            href={scannerIssue.releaseHref}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <Icon name="external" size={17} />
+          <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
+            <Icon name="refresh" size={17} />
             {scannerIssue.action}
-          </a>
+          </button>
         ) : setupStarting ? (
           <button className="button button--primary" type="button" disabled aria-busy="true">
             <Icon name="progress" size={17} />
@@ -396,9 +382,7 @@ export function RuntimeSetupAssistant({
             <Icon name="close" size={16} />
             {status?.cancelRequested ? text.cancelling : text.cancel}
           </button>
-        ) : setupFailed && preservedUnknownWorkspace ? (
-          null
-        ) : (
+        ) : !setupFailed && !setupCancelled ? null : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
             {setupFailed ? text.retry : setupCancelled ? text.continue : text.start}

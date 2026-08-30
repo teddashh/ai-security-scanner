@@ -7,7 +7,7 @@ const bundled = await build({
   stdin: {
     contents: [
       'export * from "./src/i18n/core.ts";',
-      'export { formatDate, formatDateTime, phaseMeta, coverageMeta } from "./src/lib.ts";',
+      'export { formatDate, formatDateTime, phaseMeta, coverageMeta, runStatusMeta } from "./src/lib.ts";',
     ].join("\n"),
     loader: "ts",
     resolveDir: process.cwd(),
@@ -46,12 +46,12 @@ test("English and Traditional Chinese locales cover the exact same message contr
 
 test("typed translators interpolate central and page-local bilingual copy", () => {
   assert.equal(
-    i18n.translate("en", "runtime.badge.ready", { provider: "Podman" }),
-    "Local scan tools ready · Podman",
+    i18n.translate("en", "runtime.badge.ready"),
+    "Local checks ready",
   );
   assert.equal(
-    i18n.translate("zh-TW", "runtime.badge.ready", { provider: "Podman" }),
-    "本機掃描工具已就緒 · Podman",
+    i18n.translate("zh-TW", "runtime.badge.ready"),
+    "本機檢查已就緒",
   );
 
   const localCopy = {
@@ -118,10 +118,13 @@ test("shared status copy and legacy date helpers follow the active locale", () =
   i18n.setActiveLocale("en");
   assert.equal(i18n.phaseMeta.ready.label, "Ready to scan");
   assert.equal(i18n.coverageMeta.source_unavailable_unknown.shortLabel, "Unknown");
+  assert.equal(i18n.runStatusMeta.no_checks_completed.label, "No checks completed");
+  assert.equal(i18n.runStatusMeta.no_checks_completed.tone, "warning");
 
   i18n.setActiveLocale("zh-TW");
   assert.equal(i18n.phaseMeta.ready.label, "可以開始掃描");
   assert.equal(i18n.coverageMeta.source_unavailable_unknown.shortLabel, "未知");
+  assert.equal(i18n.runStatusMeta.no_checks_completed.label, "沒有完成任何檢查");
 
   const value = "2026-08-25T14:30:00.000Z";
   assert.equal(

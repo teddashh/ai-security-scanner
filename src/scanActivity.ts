@@ -9,6 +9,7 @@ export type ScanActivityState =
   | "closing_scanner"
   | "paused"
   | "completed"
+  | "no_checks_completed"
   | "gateway_preparation_failed"
   | "stopped";
 
@@ -23,6 +24,7 @@ export type ScanActivityEventCode =
   | "checks_not_started"
   | "gateway_preparation_failed"
   | "run_completed"
+  | "run_no_checks_completed"
   | "run_stopped"
   | "run_paused";
 
@@ -104,6 +106,7 @@ const stageFor = (engine?: EngineRun): ExecutionStage | undefined => {
 
 const activityState = (run: ScanRun): ScanActivityState => {
   if (run.status === "completed") return "completed";
+  if (run.status === "no_checks_completed") return "no_checks_completed";
   if (run.engineRuns.some((engine) => engine.failureKind === "gateway_preparation_failed")) {
     return "gateway_preparation_failed";
   }
@@ -211,7 +214,14 @@ export const buildScanActivity = (
     run.finishedAt && run.status === "completed"
       ? { id: `run_completed-${run.finishedAt}`, code: "run_completed", occurredAt: run.finishedAt }
       : undefined,
-    run.finishedAt && run.status !== "completed"
+    run.finishedAt && run.status === "no_checks_completed"
+      ? {
+          id: `run_no_checks_completed-${run.finishedAt}`,
+          code: "run_no_checks_completed",
+          occurredAt: run.finishedAt,
+        }
+      : undefined,
+    run.finishedAt && run.status !== "completed" && run.status !== "no_checks_completed"
       ? { id: `run_stopped-${run.finishedAt}`, code: "run_stopped", occurredAt: run.finishedAt }
       : undefined,
   ];

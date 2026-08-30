@@ -15,7 +15,7 @@ const scannerSource = readFileSync(
 
 const bundled = await build({
   stdin: {
-    contents: 'export { adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeSnapshot } from "./src/services/nativeAdapter.ts";',
+    contents: 'export { adaptBeginnerMasterReport, adaptDeclaredWebServiceMetadata, adaptLocalNetworkCandidateInventory, adaptManagedRuntimePrerequisiteRepairResult, adaptManagedRuntimeSetupStatus, adaptNativeCase, adaptNativeSnapshot } from "./src/services/nativeAdapter.ts";',
     loader: "ts",
     resolveDir: process.cwd(),
     sourcefile: "native-adapter-test-entry.ts",
@@ -29,6 +29,7 @@ const bundled = await build({
 const source = bundled.outputFiles[0]?.text;
 assert.ok(source, "the native adapter test bundle should contain JavaScript");
 const {
+  adaptBeginnerMasterReport,
   adaptDeclaredWebServiceMetadata,
   adaptLocalNetworkCandidateInventory,
   adaptManagedRuntimePrerequisiteRepairResult,
@@ -48,6 +49,124 @@ const localCandidate = (overrides: Record<string, unknown> = {}) => ({
   addressCount: 256,
   requiresConfirmation: true,
   ...overrides,
+});
+
+test("beginner report adapter preserves the backend's run-bound coverage semantics", () => {
+  const report = adaptBeginnerMasterReport({
+    schema_version: "1.0.0",
+    case_id: "case-1",
+    run_id: "run-1",
+    project_title: "Local check",
+    state: {
+      summary: "partial",
+      lifecycle: "final",
+      last_durable_update: "2026-08-30T12:00:03Z",
+      explanation: "Partial results are available.",
+    },
+    requested: {
+      targets: [{
+        asset_id: "asset-1",
+        label: "127.0.0.1:9001",
+        asset_kind: "web_service",
+        label_availability: "recorded",
+        asset_kind_availability: "recorded",
+      }],
+      stage: {
+        value: "quick_discovery",
+        availability: "recorded",
+        explanation: "Frozen native task.",
+      },
+      limits: [{ name: "connection timeout", value: "3000 ms", source: "frozen_task_contract" }],
+      requested_check_ids: ["localhost_tcp_endpoint"],
+      request_outcome_code: null,
+      automatic_reductions: [],
+      reductions_availability: "recorded",
+      unavailable_dimensions: [],
+    },
+    actual: {
+      observed_from: "2026-08-30T12:00:00Z",
+      observed_until: "2026-08-30T12:00:03Z",
+      checks: [{
+        task_id: "task-1",
+        check_id: "localhost_tcp_endpoint",
+        target_asset_ids: ["asset-1"],
+        status: "tested_partial",
+        started_at: "2026-08-30T12:00:00Z",
+        finished_at: "2026-08-30T12:00:03Z",
+        tested_dimensions: [{
+          dimension: "TCP reachability",
+          value: "127.0.0.1:9001",
+          observation: "The connection timed out.",
+          observed_at: "2026-08-30T12:00:03Z",
+        }],
+      }],
+      unavailable_dimensions: [],
+    },
+    coverage_gaps: [{
+      kind: "timed_out",
+      task_id: "task-1",
+      target_asset_ids: ["asset-1"],
+      dimension: "TCP reachability",
+      reason: "The bounded attempt timed out.",
+      next_action_code: "start_expected_service_and_retry",
+      next_action: "Start the service and retry.",
+    }],
+    coverage_counts: {
+      tested_complete: 0,
+      tested_partial: 1,
+      failed: 0,
+      timed_out: 1,
+      cancelled: 0,
+      not_tested: 0,
+      excluded: 0,
+      truncated: 0,
+      unavailable: 0,
+    },
+    findings: [{
+      finding_id: "finding-1",
+      fingerprint: "fp-1",
+      snapshot_source: "frozen_selected_run",
+      title: "Example problem",
+      plain_language_risk: "Risk",
+      possible_impact: "Impact",
+      severity: "high",
+      confidence: "medium",
+      priority: 1,
+      priority_reasons: ["Reachable service"],
+      target_asset_ids: ["asset-1"],
+      next_step: "Review it.",
+      recommended_expert_type: "IT administrator",
+      evidence_references: [{
+        evidence_id: "evidence-1",
+        engine_id: "native.localhost_tcp",
+        artifact_sha256: "a".repeat(64),
+        observed_at: "2026-08-30T12:00:03Z",
+      }],
+      framework_references: [],
+    }],
+    next_steps: [{
+      priority: 1,
+      code: "start_expected_service_and_retry",
+      action: "Start the service and retry.",
+      reason: "The endpoint timed out.",
+      finding_id: null,
+      task_id: "task-1",
+      recommended_expert_type: "IT administrator",
+    }],
+    technical_details: { collapsed_by_default: true, tasks: [] },
+    framework_notice: {
+      non_certification: "Not certification.",
+      aidefend_mapping_status: "Independent mapping.",
+    },
+    data_quality_warnings: [],
+  });
+
+  assert.equal(report.state.summary, "partial");
+  assert.equal(report.requested.targets[0]?.label, "127.0.0.1:9001");
+  assert.equal(report.actual.checks[0]?.status, "tested_partial");
+  assert.equal(report.coverageGaps[0]?.nextActionCode, "start_expected_service_and_retry");
+  assert.equal(report.findings[0]?.findingId, "finding-1");
+  assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
 test("local network candidate adapter accepts one canonical private range", () => {
@@ -274,6 +393,34 @@ test("case summaries display only applicable source platforms and preserve real 
 
   assert.deepEqual(snapshot.cases[0]?.platforms, ["code", "container", "kubernetes"]);
   assert.equal(snapshot.cases[0]?.aiGeneratedArtifact, "yes");
+});
+
+test("native snapshot preserves beginner-safe diagnostics for unreadable saved projects", () => {
+  const snapshot = adaptNativeSnapshot({
+    ...snapshotFixture([summaryFixture()]),
+    case_recovery_diagnostics: [{
+      case_id: "damaged-case",
+      title: "Older scan project",
+      updated_at: "2026-08-26T00:00:00Z",
+      revision: 7,
+      document_bytes: 2048,
+      code: "case_document_unreadable",
+      message: "The original local bytes were preserved.",
+      preserved: true,
+    }],
+  }, []);
+
+  assert.deepEqual(snapshot.caseRecoveryDiagnostics, [{
+    caseId: "damaged-case",
+    title: "Older scan project",
+    updatedAt: "2026-08-26T00:00:00Z",
+    revision: 7,
+    documentBytes: 2048,
+    code: "case_document_unreadable",
+    message: "The original local bytes were preserved.",
+    preserved: true,
+  }]);
+  assert.equal(snapshot.provenance, "native");
 });
 
 test("missing or malformed AI-generated answers fail closed to unknown", () => {
@@ -661,11 +808,311 @@ test("native gateway failures preserve frozen authorization but restart before r
   const workspace = adaptGatewayFailure("runtime error: egress gateway exited before becoming ready");
 
   const failed = workspace.runs[0]?.engineRuns[0];
+  assert.deepEqual(failed?.taskKind, { kind: "catalog_engine" });
   assert.equal(failed?.scopeContractBound, true);
   assert.equal(failed?.checkpoint?.scopeBound, false);
   assert.equal(failed?.failureKind, "gateway_preparation_failed");
   assert.equal(failed?.recoveryAction, "restart_check");
   assert.equal(failed?.resumable, true);
+});
+
+test("built-in localhost work exposes its exact task and observation without catalog provenance", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    data_sources: [],
+    assets: [{
+      id: "localhost-asset",
+      kind: "web_service",
+      name: "127.0.0.1:9001",
+      provider: null,
+      region: null,
+      identifiers: [{ namespace: "localhost_tcp_endpoint", value: "127.0.0.1:9001" }],
+      discovered_from: [],
+      candidate: false,
+      owner_confirmed: true,
+      internet_exposed: false,
+      metadata: {},
+    }],
+    scan_runs: [{
+      id: "localhost-run",
+      case_id: "case-platforms",
+      sequence: 1,
+      created_at: "2026-08-30T12:00:00Z",
+      completed_at: "2026-08-30T12:00:01Z",
+      knowledge_cutoff: "2026-08-30T00:00:00Z",
+      engine_runs: [{
+        id: "localhost-task",
+        engine_id: "built-in-localhost-tcp",
+        task_kind: {
+          kind: "built_in_localhost_tcp",
+          port: 9001,
+          timeout_ms: 3000,
+          payload_bytes: 0,
+        },
+        localhost_tcp_observation: {
+          outcome: "reachable",
+          observed_at: "2026-08-30T12:00:01Z",
+        },
+        asset_ids: ["localhost-asset"],
+        status: "completed",
+        progress_percent: 100,
+        phase: "completed",
+        started_at: "2026-08-30T12:00:00Z",
+        finished_at: "2026-08-30T12:00:01Z",
+        resume_token: null,
+        engine_version: "must-not-be-used",
+        image_digest: "sha256:must-not-be-used",
+        rule_version: "must-not-be-used",
+        adapter_version: "must-not-be-used",
+        manifest_schema_version: "must-not-be-used",
+        source_revision: "must-not-be-used",
+        repository_url: "https://invalid.example/must-not-be-used",
+        distribution_mode: "pull_pinned_image",
+        image_repository: "invalid.example/must-not-be-used",
+        command_sha256: "must-not-be-used",
+        knowledge_input: {
+          kind: "must-not-be-used",
+          identifier: "must-not-be-used",
+          version: "must-not-be-used",
+          acquisition_source: "must-not-be-used",
+          pin_state: "must-not-be-used",
+        },
+        runtime_provider: "must-not-be-used",
+        runtime_version: "must-not-be-used",
+        runtime_security_options: "must-not-be-used",
+        exit_code: 0,
+        cleanup_removed: true,
+        cleanup_detail: "must-not-be-used",
+        warnings: [],
+        raw_artifact_ids: [],
+        error_code: null,
+        error_message: null,
+      }],
+    }],
+  }), [{
+    id: "built-in-localhost-tcp",
+    name: "Fake catalog scanner",
+    category: "fake-category",
+    version: "fake-version",
+    imageDigest: "sha256:fake-manifest",
+  }]);
+
+  const task = workspace.runs[0]?.engineRuns[0];
+  assert.equal(workspace.runs[0]?.coveredAssetCount, 1);
+  assert.deepEqual(task?.taskKind, {
+    kind: "built_in_localhost_tcp",
+    port: 9001,
+    timeoutMs: 3000,
+    payloadBytes: 0,
+  });
+  assert.deepEqual(task?.localhostTcpObservation, {
+    outcome: "reachable",
+    observedAt: "2026-08-30T12:00:01Z",
+  });
+  assert.equal(task?.category, "built_in_localhost_tcp");
+  for (const field of [
+    "version",
+    "digest",
+    "ruleVersion",
+    "adapterVersion",
+    "manifestSchemaVersion",
+    "sourceRevision",
+    "repositoryUrl",
+    "distributionMode",
+    "imageRepository",
+    "commandSha256",
+    "knowledgeInput",
+    "runtimeProvider",
+    "runtimeVersion",
+    "runtimeSecurityOptions",
+    "exitCode",
+    "cleanupRemoved",
+    "cleanupDetail",
+  ]) {
+    assert.equal(task?.[field], undefined, `${field} must not be synthesized for a built-in task`);
+  }
+  assert.doesNotMatch(JSON.stringify(task), /Fake catalog scanner|fake-version|fake-manifest|must-not-be-used/u);
+});
+
+const adaptLocalhostCoverageFixture = (
+  engineOverrides: Record<string, unknown>,
+  assetOverrides: Record<string, unknown> = {},
+) => adaptNativeCase(platformCaseFixture({
+  data_sources: [],
+  assets: [{
+    id: "localhost-asset",
+    kind: "web_service",
+    name: "127.0.0.1:9001",
+    provider: null,
+    region: null,
+    identifiers: [{ namespace: "localhost_tcp_endpoint", value: "127.0.0.1:9001" }],
+    discovered_from: [],
+    candidate: false,
+    owner_confirmed: true,
+    internet_exposed: false,
+    metadata: {},
+    ...assetOverrides,
+  }],
+  scan_runs: [{
+    id: "localhost-coverage-run",
+    case_id: "case-platforms",
+    sequence: 1,
+    created_at: "2026-08-30T12:00:00Z",
+    completed_at: "2026-08-30T12:00:01Z",
+    knowledge_cutoff: "2026-08-30T00:00:00Z",
+    engine_runs: [{
+      id: "localhost-coverage-task",
+      engine_id: "built-in-localhost-tcp",
+      task_kind: {
+        kind: "built_in_localhost_tcp",
+        port: 9001,
+        timeout_ms: 3000,
+        payload_bytes: 0,
+      },
+      localhost_tcp_observation: null,
+      asset_ids: ["localhost-asset"],
+      status: "completed",
+      progress_percent: 100,
+      phase: "completed",
+      started_at: "2026-08-30T12:00:00Z",
+      finished_at: "2026-08-30T12:00:01Z",
+      resume_token: null,
+      engine_version: null,
+      image_digest: null,
+      rule_version: null,
+      adapter_version: "",
+      raw_artifact_ids: [],
+      error_code: null,
+      error_message: null,
+      ...engineOverrides,
+    }],
+  }],
+}));
+
+test("completed status alone never gives a built-in localhost task covered-target credit", () => {
+  assert.equal(adaptLocalhostCoverageFixture({}).runs[0]?.coveredAssetCount, 0);
+  assert.equal(adaptLocalhostCoverageFixture({
+    localhost_tcp_observation: {
+      outcome: "reachable",
+      observed_at: "2026-08-30T12:00:01Z",
+    },
+  }).runs[0]?.coveredAssetCount, 1);
+  assert.equal(adaptLocalhostCoverageFixture({
+    localhost_tcp_observation: {
+      outcome: "reachable",
+      observed_at: "2026-08-30T12:00:01Z",
+    },
+  }, {
+    identifiers: [{ namespace: "ip_address", value: "127.0.0.2" }],
+  }).runs[0]?.coveredAssetCount, 0);
+  assert.equal(adaptLocalhostCoverageFixture({
+    status: "partially_completed",
+    localhost_tcp_observation: {
+      outcome: "timed_out",
+      observed_at: "2026-08-30T12:00:01Z",
+    },
+  }).runs[0]?.coveredAssetCount, 0);
+});
+
+test("a durable no-checks request is terminal and excludes the raw backend explanation", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    assets: [],
+    data_sources: [],
+    scan_runs: [{
+      id: "no-checks-run",
+      case_id: "case-platforms",
+      sequence: 1,
+      created_at: "2026-08-30T12:00:00Z",
+      completed_at: "2026-08-30T12:00:00Z",
+      knowledge_cutoff: "2026-08-30T00:00:00Z",
+      request_outcome: {
+        status: "no_checks_completed",
+        code: "no_applicable_checks",
+        requested_asset_ids: ["private-asset-id"],
+        requested_engine_ids: [],
+        explanation: "RAW_BACKEND_EXPLANATION_MUST_NOT_REACH_FIRST_LAYER",
+      },
+      engine_runs: [],
+    }],
+  }));
+
+  const run = workspace.runs[0];
+  assert.equal(run?.status, "no_checks_completed");
+  assert.equal(run?.progress, 0);
+  assert.equal(run?.coveredAssetCount, 0);
+  assert.equal(run?.totalAssetCount, 1);
+  assert.deepEqual(run?.requestOutcome, {
+    status: "no_checks_completed",
+    code: "no_applicable_checks",
+    requestedAssetIds: ["private-asset-id"],
+    requestedEngineIds: [],
+  });
+  assert.doesNotMatch(JSON.stringify(run), /RAW_BACKEND_EXPLANATION/u);
+});
+
+test("contradictory no-check outcomes never hide actual or unfinished engine work", () => {
+  const noChecksOutcome = {
+    status: "no_checks_completed",
+    code: "no_applicable_checks",
+    requested_asset_ids: ["repository-asset"],
+    requested_engine_ids: ["engine-completed"],
+    explanation: "contradictory fixture",
+  };
+
+  const completedWork = adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "contradictory-completed-run",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-30T12:00:00Z",
+      completed_at: "2026-08-30T12:00:01Z",
+      knowledge_cutoff: "2026-08-30T00:00:00Z",
+      request_outcome: noChecksOutcome,
+      engine_runs: [engineRunFixture("engine-completed", "completed")],
+    }],
+  })).runs[0];
+  assert.equal(completedWork?.status, "completed");
+  assert.equal(completedWork?.requestOutcome, undefined);
+  assert.equal(completedWork?.engineRuns.length, 1);
+
+  const unfinishedOutcome = adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "contradictory-unfinished-run",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-30T12:00:00Z",
+      completed_at: null,
+      knowledge_cutoff: "2026-08-30T00:00:00Z",
+      request_outcome: noChecksOutcome,
+      engine_runs: [engineRunFixture("engine-failed", "failed")],
+    }],
+  })).runs[0];
+  assert.equal(unfinishedOutcome?.status, "failed");
+  assert.equal(unfinishedOutcome?.requestOutcome, undefined);
+  assert.equal(unfinishedOutcome?.engineRuns.length, 1);
+});
+
+test("an uncompleted empty run cannot claim that no checks completed", () => {
+  const run = adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "uncompleted-no-checks-run",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-30T12:00:00Z",
+      completed_at: null,
+      knowledge_cutoff: "2026-08-30T00:00:00Z",
+      request_outcome: {
+        status: "no_checks_completed",
+        code: "no_effective_scope_grants",
+        requested_asset_ids: [],
+        requested_engine_ids: [],
+        explanation: "not durable yet",
+      },
+      engine_runs: [],
+    }],
+  })).runs[0];
+
+  assert.equal(run?.status, "queued");
+  assert.equal(run?.requestOutcome, undefined);
 });
 
 test("release-incompatible saved work is static, redacted, and not resumable", () => {

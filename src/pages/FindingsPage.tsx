@@ -2,11 +2,20 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   confidenceMeta,
+  engineStatusMeta,
   severityMeta,
   workflowMeta,
 } from "../lib";
 import { useI18n } from "../i18n";
+import { localhostTcpBeginnerSummary } from "../localhostTcpPresentation";
+import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import type {
+  BeginnerCoverageGapKind,
+  BeginnerCoverageStatus,
+  BeginnerMasterReport,
+  BeginnerNextActionCode,
+  BeginnerReportStage,
+  BeginnerReportSummary,
   CoverageRecord,
   Finding,
   FindingGroup,
@@ -24,6 +33,8 @@ import { StatusPill } from "../components/StatusPill";
 import "./page-technical-details.css";
 
 interface FindingsPageProps {
+  report?: BeginnerMasterReport;
+  reportUnavailable?: boolean;
   findings: Finding[];
   findingGroups: FindingGroup[];
   findingGroupEvents: FindingGroupEvent[];
@@ -37,6 +48,7 @@ interface FindingsPageProps {
   onUngroupFindings: (groupId: string) => Promise<void>;
   onOpenCoverage: () => void;
   onOpenProgress: () => void;
+  onSelectRun?: (runId: string) => void;
 }
 
 const severityOrder: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -112,8 +124,8 @@ const copy = {
     zhTW: "還有 {count} 個來源沒有提供可用資訊。打開掃描設定即可連接或確認。",
   },
   emptyCompletedDescription: {
-    en: "Good news: the checks that finished found no issues. Sources included: {count}. Open Scan setup to review them.",
-    zhTW: "好消息：已完成的檢查沒有發現問題。打開掃描設定，即可查看這 {count} 個來源實際包含了什麼。",
+    en: "The completed checks recorded no issues in their tested scope. Sources included: {count}. Open Scan setup to review exactly what was included.",
+    zhTW: "已完成的檢查在實際測試範圍內沒有記錄問題。打開掃描設定，即可查看這 {count} 個來源實際包含了什麼。",
   },
   openCoverage: { en: "Open scan setup", zhTW: "開啟掃描設定" },
   openProgress: { en: "Review scanner status", zhTW: "查看掃描器狀態" },
@@ -264,7 +276,519 @@ const copy = {
     en: "Evidence, source details, review history, and framework navigation will appear here.",
     zhTW: "完整證據、來源細節、處理歷程與控制項導航會顯示在這裡。",
   },
+  masterEyebrow: { en: "YOUR SCAN REPORT", zhTW: "你的掃描報告" },
+  masterTitle: { en: "What was checked—and what was not", zhTW: "這次檢查了什麼，也漏了什麼" },
+  reportComplete: { en: "Complete", zhTW: "完整" },
+  reportPartial: { en: "Partial results", zhTW: "部分結果" },
+  reportNoChecks: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
+  reportLive: { en: "Still updating", zhTW: "仍在更新" },
+  reportFinal: { en: "Final for this run", zhTW: "本輪已結束" },
+  reportRun: { en: "Report run", zhTW: "報告輪次" },
+  lastSaved: { en: "Last saved {time}", zhTW: "最後保存：{time}" },
+  requestedTargets: { en: "Targets requested", zhTW: "要求檢查的目標" },
+  testedComplete: { en: "Checks completed", zhTW: "完成的檢查" },
+  testedPartialCount: { en: "Partly completed", zhTW: "部分完成" },
+  failedCount: { en: "Failed", zhTW: "失敗" },
+  timedOutCount: { en: "Timed out", zhTW: "逾時" },
+  cancelledCount: { en: "Cancelled", zhTW: "已取消" },
+  notTestedCount: { en: "Not tested", zhTW: "未測試" },
+  excludedCount: { en: "Excluded", zhTW: "排除" },
+  truncatedCount: { en: "Reduced by limits", zhTW: "受限制而縮減" },
+  unavailableCount: { en: "Detail unavailable", zhTW: "資料不足" },
+  coverageGaps: { en: "Coverage gaps", zhTW: "未涵蓋項目" },
+  reportFindings: { en: "Problems found", zhTW: "發現的問題" },
+  askedTitle: { en: "What you asked to scan", zhTW: "你要求掃描的內容" },
+  testedTitle: { en: "What was actually tested", zhTW: "實際完成的測試" },
+  gapsTitle: { en: "What was not tested", zhTW: "沒有測到的內容" },
+  nextTitle: { en: "What to do next", zhTW: "接下來怎麼做" },
+  noRequestedTarget: {
+    en: "The older run did not retain an exact target description.",
+    zhTW: "這筆舊掃描沒有保留精確的目標說明。",
+  },
+  noTestedDimension: {
+    en: "No completed test dimension was saved for this run.",
+    zhTW: "本輪沒有保存已完成的測試範圍。",
+  },
+  noGap: { en: "No known coverage gap was recorded.", zhTW: "沒有記錄到已知的涵蓋缺口。" },
+  noNextStep: {
+    en: "Review the saved results; no extra action is required unless you want broader coverage.",
+    zhTW: "先檢視已保存的結果；除非想擴大涵蓋範圍，否則不需要額外動作。",
+  },
+  stage: { en: "Scan depth", zhTW: "掃描深度" },
+  stageQuick: { en: "Quick discovery", zhTW: "快速探索" },
+  stageInventory: { en: "Full inventory", zhTW: "完整盤點" },
+  stageDeep: { en: "Deep scan", zhTW: "深度掃描" },
+  stageUnknown: { en: "Not retained by this run", zhTW: "本輪未保存" },
+  requestedLimits: { en: "Limits used", zhTW: "使用的限制" },
+  automaticReductions: { en: "Automatic reductions", zhTW: "自動縮減的範圍" },
+  reductionLine: { en: "Requested {requested}; tested {executed}", zhTW: "原要求：{requested}；實際測試：{executed}" },
+  observedWindow: { en: "Observed {from} to {until}", zhTW: "觀察時間：{from} 至 {until}" },
+  savedAt: { en: "Saved {time}", zhTW: "保存時間：{time}" },
+  currentFallback: { en: "Display name comes from the current project", zhTW: "顯示名稱來自目前專案資料" },
+  unavailableProvenance: { en: "Historical detail unavailable", zhTW: "無法取得歷史細節" },
+  coverageDetail: { en: "Coverage detail", zhTW: "涵蓋範圍細節" },
+  requestedScope: { en: "Requested scope", zhTW: "要求的範圍" },
+  localConnectionCheck: { en: "Local connection check", zhTW: "本機連線檢查" },
+  testedStatusComplete: { en: "Completed", zhTW: "完成" },
+  testedStatusPartial: { en: "Partly completed", zhTW: "部分完成" },
+  testedStatusFailed: { en: "Stopped with an error", zhTW: "因錯誤停止" },
+  testedStatusTimeout: { en: "Timed out", zhTW: "逾時" },
+  testedStatusCancelled: { en: "Cancelled", zhTW: "已取消" },
+  testedStatusNotTested: { en: "Not tested", zhTW: "未測試" },
+  testedStatusInProgress: { en: "In progress", zhTW: "進行中" },
+  gapNotTested: {
+    en: "This part was not tested because no compatible check completed.",
+    zhTW: "這部分沒有相容的檢查完成，因此尚未測到。",
+  },
+  gapFailed: {
+    en: "This part was not covered because its check stopped with an error.",
+    zhTW: "負責這部分的檢查因錯誤停止，因此沒有涵蓋。",
+  },
+  gapTimedOut: {
+    en: "The time limit was reached before this part completed.",
+    zhTW: "這部分在完成前已到達時間限制。",
+  },
+  gapCancelled: { en: "This part stopped when the scan was cancelled.", zhTW: "掃描取消時，這部分也停止了。" },
+  gapExcluded: { en: "This part was deliberately outside the requested scope.", zhTW: "這部分原本就不在要求的範圍內。" },
+  gapTruncated: { en: "A saved limit reduced this part of the scan.", zhTW: "已保存的限制縮減了這部分掃描。" },
+  gapUnavailable: {
+    en: "The run did not retain enough detail to claim this part was tested.",
+    zhTW: "本輪沒有保留足夠資料，不能宣稱這部分已測試。",
+  },
+  actionReviewFinding: { en: "Review the problem and its evidence.", zhTW: "檢視這個問題與相關證據。" },
+  actionRetry: { en: "Retry this check; saved results will remain.", zhTW: "重試這項檢查；已保存的結果會保留。" },
+  actionScope: { en: "Review the requested scope, then retry.", zhTW: "確認要求的範圍後再重試。" },
+  actionCompatible: { en: "Choose an available check for this target.", zhTW: "為這個目標選擇可用的檢查。" },
+  actionWait: { en: "Let it finish, or cancel and keep the partial report.", zhTW: "等待完成，或取消並保留部分報告。" },
+  actionStartService: { en: "Start the expected local service, then retry.", zhTW: "先啟動預期的本機服務，再重試。" },
+  actionReviewCoverage: { en: "Review the coverage gap before relying on the result.", zhTW: "採用結果前，先檢視涵蓋缺口。" },
+  actionPreserve: { en: "Keep this limitation visible when sharing the report.", zhTW: "分享報告時，請保留這項限制。" },
+  actionNoChange: { en: "No action is needed unless you change the scope.", zhTW: "除非要更改範圍，否則不需處理。" },
+  frameworkNotice: {
+    en: "NIST, ISO 27001, and AIDEFEND references are navigation aids—not certification, compliance, endorsement, or a pass/fail result.",
+    zhTW: "NIST、ISO 27001 與 AIDEFEND 僅供對照，不代表認證、合規、背書或通過／不通過。",
+  },
+  reportTechnicalDetails: { en: "Technical details", zhTW: "技術細節" },
+  taskStatus: { en: "Status", zhTW: "狀態" },
+  taskProgress: { en: "Progress", zhTW: "進度" },
+  taskEvidence: { en: "Evidence hashes", zhTW: "證據雜湊" },
+  taskErrorCode: { en: "Diagnostic code", zhTW: "診斷代碼" },
+  taskNoError: { en: "No diagnostic code", zhTW: "沒有診斷代碼" },
+  dataWarnings: { en: "Saved-data limitations: {count}", zhTW: "已保存資料的限制：{count} 項" },
+  genericExpert: { en: "Security or IT specialist", zhTW: "資安或 IT 專業人員" },
+  reportUnavailableTitle: { en: "The saved report could not be rebuilt", zhTW: "目前無法重建已保存的報告" },
+  reportUnavailableBody: {
+    en: "The original project data is still here. This page is showing the older result view; start a new scan if you need one complete run-bound report.",
+    zhTW: "原始專案資料仍完整保留。這裡暫時顯示舊版結果畫面；如果需要完整且綁定本輪的報告，請開始新的掃描。",
+  },
 } as const;
+
+const reportSummaryPresentation = (summary: BeginnerReportSummary) => {
+  switch (summary) {
+    case "complete": return { label: copy.reportComplete, tone: "positive" };
+    case "partial": return { label: copy.reportPartial, tone: "warning" };
+    case "no_checks_completed": return { label: copy.reportNoChecks, tone: "danger" };
+  }
+};
+
+const reportStageCopy = (stage?: BeginnerReportStage) => {
+  switch (stage) {
+    case "quick_discovery": return copy.stageQuick;
+    case "inventory": return copy.stageInventory;
+    case "deep": return copy.stageDeep;
+    default: return copy.stageUnknown;
+  }
+};
+
+const testedStatusCopy = (status: BeginnerCoverageStatus) => {
+  switch (status) {
+    case "tested_complete": return copy.testedStatusComplete;
+    case "tested_partial": return copy.testedStatusPartial;
+    case "failed": return copy.testedStatusFailed;
+    case "timed_out": return copy.testedStatusTimeout;
+    case "cancelled": return copy.testedStatusCancelled;
+    case "not_tested": return copy.testedStatusNotTested;
+    case "in_progress": return copy.testedStatusInProgress;
+  }
+};
+
+const gapReasonCopy = (kind: BeginnerCoverageGapKind) => {
+  switch (kind) {
+    case "not_tested": return copy.gapNotTested;
+    case "failed": return copy.gapFailed;
+    case "timed_out": return copy.gapTimedOut;
+    case "cancelled": return copy.gapCancelled;
+    case "excluded": return copy.gapExcluded;
+    case "truncated": return copy.gapTruncated;
+    case "unavailable": return copy.gapUnavailable;
+  }
+};
+
+const nextActionCopy = (code: BeginnerNextActionCode) => {
+  switch (code) {
+    case "review_finding": return copy.actionReviewFinding;
+    case "retry_check": return copy.actionRetry;
+    case "review_scope_and_retry": return copy.actionScope;
+    case "choose_compatible_check": return copy.actionCompatible;
+    case "wait_or_cancel": return copy.actionWait;
+    case "start_expected_service_and_retry": return copy.actionStartService;
+    case "review_coverage": return copy.actionReviewCoverage;
+    case "preserve_visible_limitation": return copy.actionPreserve;
+    case "no_action_unless_scope_changes": return copy.actionNoChange;
+  }
+};
+
+const localizedCheckName = (checkId: string, locale: "en" | "zh-TW"): string => {
+  const localPrefix = "native localhost TCP check on ";
+  if (checkId.startsWith(localPrefix)) {
+    const endpoint = checkId.slice(localPrefix.length);
+    return `${locale === "en" ? "Local connection check" : "本機連線檢查"} · ${endpoint}`;
+  }
+  return checkId;
+};
+
+const localizedAssetKind = (kind: string, locale: "en" | "zh-TW"): string => {
+  if (locale === "en") return kind.replaceAll("_", " ");
+  return ({
+    web_service: "網站或本機服務",
+    ip_address: "IP 位址",
+    domain: "網域",
+    repository: "程式碼儲存庫",
+    iac_project: "基礎設施程式碼",
+    container_image: "容器映像",
+    kubernetes_cluster: "Kubernetes 叢集",
+    cloud_account: "雲端帳號",
+  } as Record<string, string>)[kind] ?? "掃描目標";
+};
+
+const localizedLimitName = (name: string, locale: "en" | "zh-TW"): string => {
+  if (locale === "en") return name;
+  if (name === "endpoint") return "連線端點";
+  if (name === "connection timeout") return "連線逾時限制";
+  if (name === "application payload") return "應用資料量";
+  if (name.endsWith("approved ports")) return "允許檢查的連接埠";
+  if (name.endsWith("request rate")) return "請求速率";
+  if (name.endsWith("network timeout")) return "網路逾時限制";
+  if (name.endsWith("authorized network target")) return "已確認的網路目標";
+  if (name.endsWith("execution timeout")) return "檢查逾時限制";
+  return "本輪使用的限制";
+};
+
+const localizedDimension = (dimension: string, locale: "en" | "zh-TW"): string => {
+  if (locale === "en") return dimension;
+  const normalized = dimension.toLocaleLowerCase("en");
+  if (normalized.includes("tcp reachability")) return "TCP 連線狀態";
+  if (normalized.includes("bounded connection contract")) return "受限的連線檢查";
+  if (normalized.includes("completed check-to-target coordinate")) return "完成的目標檢查";
+  if (normalized.includes("requested scan stage")) return "要求的掃描深度";
+  if (normalized.includes("requested limits")) return "要求的掃描限制";
+  if (normalized.includes("scope reduction") || normalized.includes("truncation")) return "自動縮減的範圍";
+  if (normalized.includes("target label") || normalized.includes("target type")) return "目標的歷史顯示資料";
+  if (normalized.includes("finding presentation")) return "本輪問題顯示資料";
+  if (normalized.includes("request outcome")) return "掃描結果資料一致性";
+  return "涵蓋範圍細節";
+};
+
+const localizedExpert = (expert: string, locale: "en" | "zh-TW"): string => {
+  if (locale === "en") return expert;
+  const normalized = expert.toLocaleLowerCase("en");
+  if (normalized.includes("network")) return "網路管理人員";
+  if (normalized.includes("developer") || normalized.includes("application")) return "軟體開發或應用安全人員";
+  if (normalized.includes("cloud")) return "雲端管理人員";
+  if (normalized.includes("it") || normalized.includes("system")) return "IT 或系統管理人員";
+  if (normalized.includes("security")) return "資安專業人員";
+  return "資安或 IT 專業人員";
+};
+
+const projectReportFindings = (
+  report: BeginnerMasterReport,
+  canonicalFindings: Finding[],
+  locale: "en" | "zh-TW",
+): Finding[] => {
+  const canonicalById = new Map(canonicalFindings.map((finding) => [finding.id, finding]));
+  const targetById = new Map(report.requested.targets.map((target) => [target.assetId, target]));
+  return report.findings.map((frozen, index) => {
+    const current = canonicalById.get(frozen.findingId);
+    const currentEvidenceById = new Map(current?.evidence.map((evidence) => [evidence.id, evidence]));
+    const evidence = frozen.evidenceReferences.map((reference) => {
+      const retained = currentEvidenceById.get(reference.evidenceId);
+      return {
+        id: reference.evidenceId,
+        sourceEngine: reference.engineId,
+        observedAt: reference.observedAt,
+        summary: retained?.summary ?? (locale === "en" ? "Run-bound evidence record" : "本輪保存的證據紀錄"),
+        rawArtifactHash: reference.artifactSha256,
+        kind: retained?.kind,
+        runId: report.runId,
+        engineRunId: retained?.engineRunId,
+        artifactId: retained?.artifactId,
+        redacted: retained?.redacted ?? true,
+      };
+    });
+    const observedTimes = evidence.map((item) => item.observedAt).sort();
+    const targetLabel = frozen.targetAssetIds
+      .map((assetId) => targetById.get(assetId)?.label)
+      .find((label): label is string => Boolean(label));
+    return {
+      id: frozen.findingId,
+      caseId: report.caseId,
+      fingerprint: frozen.fingerprint,
+      assetId: frozen.targetAssetIds[0] ?? current?.assetId ?? "unknown-target",
+      assetIds: [...frozen.targetAssetIds],
+      assetName: targetLabel ?? current?.assetName ?? (locale === "en" ? "Recorded target" : "已記錄目標"),
+      title: frozen.title,
+      summary: frozen.plainLanguageRisk,
+      impact: frozen.possibleImpact,
+      recommendation: frozen.nextStep,
+      expertType: localizedExpert(frozen.recommendedExpertType, locale),
+      severity: frozen.severity,
+      confidence: frozen.confidence,
+      priority: frozen.priority ?? report.findings.length - index,
+      priorityReasons: [...frozen.priorityReasons],
+      // Workflow is intentionally current user state; scan facts above remain
+      // the frozen selected-run projection.
+      workflowState: current?.workflowState ?? "unreviewed",
+      evidence,
+      controls: frozen.frameworkReferences.map((reference) => ({
+        framework: reference.framework,
+        version: reference.frameworkVersion,
+        controlId: reference.controlId,
+        relationship: "related" as const,
+        title: reference.title,
+        rationale: reference.rationale,
+        mappingVersion: reference.mappingVersion,
+      })),
+      officialReferences: [],
+      verificationGuidance: current?.verificationGuidance,
+      rollbackConsiderations: current?.rollbackConsiderations,
+      tags: current?.tags,
+      firstSeenRunId: report.runId,
+      lastSeenRunId: report.runId,
+      firstSeenAt: observedTimes[0] ?? report.state.lastDurableUpdate,
+      lastSeenAt: observedTimes.at(-1) ?? report.state.lastDurableUpdate,
+    };
+  });
+};
+
+function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
+  const { locale, text, formatDateTime, formatNumber } = useI18n();
+  const summary = reportSummaryPresentation(report.state.summary);
+  const testedChecks = report.actual.checks.filter((check) =>
+    check.status === "tested_complete"
+    || check.status === "tested_partial"
+    || check.testedDimensions.length > 0,
+  );
+  const targetLabelById = new Map(
+    report.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]),
+  );
+  const countBreakdown = [
+    [copy.testedComplete, report.coverageCounts.testedComplete],
+    [copy.testedPartialCount, report.coverageCounts.testedPartial],
+    [copy.failedCount, report.coverageCounts.failed],
+    [copy.timedOutCount, report.coverageCounts.timedOut],
+    [copy.cancelledCount, report.coverageCounts.cancelled],
+    [copy.notTestedCount, report.coverageCounts.notTested],
+    [copy.excludedCount, report.coverageCounts.excluded],
+    [copy.truncatedCount, report.coverageCounts.truncated],
+    [copy.unavailableCount, report.coverageCounts.unavailable],
+  ] as const;
+
+  return (
+    <section className="section-block" aria-labelledby="beginner-master-report-title">
+      <div className="section-heading section-heading--row">
+        <div>
+          <p className="eyebrow">{text(copy.masterEyebrow)}</p>
+          <h2 id="beginner-master-report-title">{text(copy.masterTitle)}</h2>
+          <p role="status" aria-live="polite" aria-atomic="true">
+            {text(report.state.lifecycle === "live" ? copy.reportLive : copy.reportFinal)}
+            {" · "}
+            {text(copy.lastSaved, { time: formatDateTime(report.state.lastDurableUpdate) })}
+          </p>
+        </div>
+        <StatusPill label={text(summary.label)} tone={summary.tone} />
+      </div>
+
+      <div className="metrics-grid metrics-grid--four" aria-label={text(copy.masterTitle)}>
+        <MetricCard
+          label={text(copy.requestedTargets)}
+          value={formatNumber(report.requested.targets.length)}
+          detail={text(reportStageCopy(report.requested.stage.value))}
+          icon="coverage"
+        />
+        <MetricCard
+          label={text(copy.testedComplete)}
+          value={formatNumber(report.coverageCounts.testedComplete)}
+          detail={report.coverageCounts.testedPartial > 0
+            ? text(copy.testedStatusPartial)
+            : text(copy.testedStatusComplete)}
+          icon="check"
+          tone={report.coverageCounts.testedComplete > 0 ? "accent" : "default"}
+        />
+        <MetricCard
+          label={text(copy.coverageGaps)}
+          value={formatNumber(report.coverageGaps.length)}
+          detail={report.coverageGaps.length > 0 ? text(copy.gapsTitle) : text(copy.noGap)}
+          icon="warning"
+          tone={report.coverageGaps.length > 0 ? "warning" : "default"}
+        />
+        <MetricCard
+          label={text(copy.reportFindings)}
+          value={formatNumber(report.findings.length)}
+          detail={text(copy.priorityDescription)}
+          icon="findings"
+          tone={report.findings.length > 0 ? "warning" : "default"}
+        />
+      </div>
+
+      <div className="report-count-breakdown" aria-label={text(copy.coverageGaps)}>
+        {countBreakdown.map(([label, count]) => (
+          <span key={label.en}><strong>{formatNumber(count)}</strong> {text(label)}</span>
+        ))}
+      </div>
+
+      <div className="coverage-grid">
+        <article className="coverage-card">
+          <h3>{text(copy.askedTitle)}</h3>
+          {report.requested.targets.length > 0 ? (
+            <ul className="detail-list">
+              {report.requested.targets.map((target) => (
+                <li key={target.assetId}>
+                  <strong>{target.label ?? target.assetId}</strong>
+                  {target.assetKind && <span>{localizedAssetKind(target.assetKind, locale)}</span>}
+                  {target.labelAvailability === "current_case_fallback" && <small>{text(copy.currentFallback)}</small>}
+                  {target.labelAvailability === "unavailable" && <small>{text(copy.unavailableProvenance)}</small>}
+                </li>
+              ))}
+            </ul>
+          ) : <p>{text(copy.noRequestedTarget)}</p>}
+          <p><strong>{text(copy.stage)}:</strong> {text(reportStageCopy(report.requested.stage.value))}</p>
+          {report.requested.limits.length > 0 && (
+            <details>
+              <summary>{text(copy.requestedLimits)}</summary>
+              <ul className="detail-list">
+                {report.requested.limits.map((limit, index) => (
+                  <li key={`${limit.name}-${limit.value}-${index}`}><strong>{localizedLimitName(limit.name, locale)}</strong><span>{limit.value}</span></li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {report.requested.automaticReductions.length > 0 && (
+            <div>
+              <h4>{text(copy.automaticReductions)}</h4>
+              <ul className="detail-list">
+                {report.requested.automaticReductions.map((reduction, index) => (
+                  <li key={`${reduction.dimension}-${index}`}>
+                    <strong>{localizedDimension(reduction.dimension, locale)}</strong>
+                    <span>{text(copy.reductionLine, {
+                      requested: reduction.requested,
+                      executed: reduction.executed,
+                    })}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </article>
+
+        <article className="coverage-card">
+          <h3>{text(copy.testedTitle)}</h3>
+          {report.actual.observedFrom && report.actual.observedUntil && (
+            <p>{text(copy.observedWindow, {
+              from: formatDateTime(report.actual.observedFrom),
+              until: formatDateTime(report.actual.observedUntil),
+            })}</p>
+          )}
+          {testedChecks.length > 0 ? (
+            <ul className="detail-list">
+              {testedChecks.map((check) => (
+                <li key={check.taskId}>
+                  <strong>{localizedCheckName(check.checkId, locale)}</strong>
+                  <span>{text(testedStatusCopy(check.status))}</span>
+                  {check.testedDimensions.map((dimension, index) => (
+                    <span key={`${dimension.dimension}-${dimension.value}-${index}`}>
+                      {localizedDimension(dimension.dimension, locale)}: {dimension.value}
+                      {dimension.observedAt && ` · ${text(copy.savedAt, { time: formatDateTime(dimension.observedAt) })}`}
+                    </span>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          ) : <p>{text(copy.noTestedDimension)}</p>}
+        </article>
+
+        <article className="coverage-card">
+          <h3>{text(copy.gapsTitle)}</h3>
+          {report.coverageGaps.length > 0 ? (
+            <ul className="detail-list">
+              {report.coverageGaps.map((gap, index) => {
+                const targets = gap.targetAssetIds
+                  .map((assetId) => targetLabelById.get(assetId) ?? assetId)
+                  .join(locale === "en" ? ", " : "、");
+                return (
+                  <li key={`${gap.taskId ?? "request"}-${gap.dimension}-${index}`}>
+                    <strong>{targets || text(copy.requestedScope)}</strong>
+                    <span>{localizedDimension(gap.dimension, locale)} · {text(gapReasonCopy(gap.kind))}</span>
+                    <span>{text(nextActionCopy(gap.nextActionCode))}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : <p>{text(copy.noGap)}</p>}
+        </article>
+      </div>
+
+      <div className="section-heading">
+        <h3>{text(copy.nextTitle)}</h3>
+      </div>
+      {report.nextSteps.length > 0 ? (
+        <ol className="detail-list">
+          {[...report.nextSteps]
+            .sort((left, right) => left.priority - right.priority)
+            .map((step, index) => (
+              <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
+                <strong>{text(nextActionCopy(step.code))}</strong>
+                {step.recommendedExpertType && <span>{localizedExpert(step.recommendedExpertType, locale)}</span>}
+              </li>
+            ))}
+        </ol>
+      ) : <p>{text(copy.noNextStep)}</p>}
+
+      <details className="page-technical-details">
+        <summary>{text(copy.reportTechnicalDetails)}</summary>
+        {report.dataQualityWarnings.length > 0 && (
+          <InlineNotice tone="warning" title={text(copy.dataWarnings, { count: formatNumber(report.dataQualityWarnings.length) })}>
+            <p>{text(copy.gapUnavailable)}</p>
+          </InlineNotice>
+        )}
+        <div className="evidence-list">
+          {report.technicalDetails.tasks.map((task) => {
+            const check = report.actual.checks.find((item) => item.taskId === task.taskId);
+            return (
+              <article key={task.taskId} className="evidence-item">
+                <div>
+                  <strong>{check ? localizedCheckName(check.checkId, locale) : text(copy.coverageDetail)}</strong>
+                  <span>{engineStatusMeta[task.status].label}</span>
+                </div>
+                <dl>
+                  <div><dt>{text(copy.taskProgress)}</dt><dd>{formatNumber(task.progressPercent)}%</dd></div>
+                  <div><dt>{text(copy.taskStatus)}</dt><dd>{engineStatusMeta[task.status].label}</dd></div>
+                  <div><dt>{text(copy.taskErrorCode)}</dt><dd><code>{task.errorCode ?? text(copy.taskNoError)}</code></dd></div>
+                  <div><dt>{text(copy.taskEvidence)}</dt><dd>{formatNumber(task.evidenceSha256.length)}</dd></div>
+                  {task.startedAt && <div><dt>{text(copy.firstObserved)}</dt><dd>{formatDateTime(task.startedAt)}</dd></div>}
+                  {task.finishedAt && <div><dt>{text(copy.lastObserved)}</dt><dd>{formatDateTime(task.finishedAt)}</dd></div>}
+                </dl>
+              </article>
+            );
+          })}
+        </div>
+      </details>
+
+      <InlineNotice tone="info" title={text(copy.notCompliance)}>
+        <p>{text(copy.frameworkNotice)}</p>
+      </InlineNotice>
+    </section>
+  );
+}
 
 const workflowTone = (state: FindingWorkflowState): string => {
   if (state === "verified_resolved" || state === "confirmed") return "positive";
@@ -274,7 +798,9 @@ const workflowTone = (state: FindingWorkflowState): string => {
 };
 
 export function FindingsPage({
-  findings,
+  report,
+  reportUnavailable,
+  findings: canonicalFindings,
   findingGroups,
   findingGroupEvents,
   coverage,
@@ -287,8 +813,13 @@ export function FindingsPage({
   onUngroupFindings,
   onOpenCoverage,
   onOpenProgress,
+  onSelectRun,
 }: FindingsPageProps) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
+  const findings = useMemo(
+    () => report ? projectReportFindings(report, canonicalFindings, locale) : canonicalFindings,
+    [canonicalFindings, locale, report],
+  );
   const collationLocale = locale === "en" ? "en" : "zh-Hant";
   const [query, setQuery] = useState("");
   const [severity, setSeverity] = useState<Severity | "all">("all");
@@ -388,42 +919,76 @@ export function FindingsPage({
     setGroupFindingIds((current) => current.filter((findingId) => !groupedFindingIds.has(findingId)));
   }, [groupedFindingIds]);
 
-  const latestRun = runs[0];
+  const latestRun = report ? runs.find((run) => run.id === report.runId) ?? runs[0] : runs[0];
   const activeRun = latestRun && activeRunStatuses.has(latestRun.status) ? latestRun : undefined;
   const incompleteTerminalRun = latestRun
     && !activeRun
     && latestRun.status !== "completed"
     ? latestRun
     : undefined;
+  const latestRequestOutcomeSummary = scanRequestOutcomeBeginnerSummary(latestRun?.requestOutcome);
+  const reportRunPicker = runs.length > 1 ? (
+    <label className="select-filter">
+      <span>{text(copy.reportRun)}</span>
+      <select value={latestRun?.id ?? ""} onChange={(event) => onSelectRun?.(event.target.value)}>
+        {runs.map((run) => <option key={run.id} value={run.id}>{run.label}</option>)}
+      </select>
+    </label>
+  ) : undefined;
 
   if (findings.length === 0) {
     const unknownSources = coverage.filter((item) => item.state === "source_unavailable_unknown").length;
     const connectedWithoutAssets = coverage.filter((item) => item.state === "source_connected_none").length;
     const latestRunIsActive = Boolean(latestRun && activeRunStatuses.has(latestRun.status));
     const incompleteRun = latestRun && !latestRunIsActive && latestRun.status !== "completed";
+    const localhostSummary = latestRun?.engineRuns
+      .map((engine) => localhostTcpBeginnerSummary(engine))
+      .find((summary) => summary !== undefined);
+    const requestOutcomeSummary = latestRequestOutcomeSummary;
     const title = !latestRun
       ? text(copy.emptyNoRunTitle)
-      : latestRunIsActive
-        ? text(copy.emptyActiveTitle)
-        : incompleteRun
-        ? text(copy.emptyIncompleteTitle)
-        : unknownSources > 0
-          ? text(copy.emptyUnknownTitle)
-          : text(copy.emptyCompletedTitle);
+      : requestOutcomeSummary
+        ? text(requestOutcomeSummary.title)
+        : localhostSummary
+          ? text(localhostSummary.title)
+          : latestRunIsActive
+            ? text(copy.emptyActiveTitle)
+            : incompleteRun
+              ? text(copy.emptyIncompleteTitle)
+              : unknownSources > 0
+                ? text(copy.emptyUnknownTitle)
+                : text(copy.emptyCompletedTitle);
     const description = !latestRun
       ? text(copy.emptyNoRunDescription)
-      : latestRunIsActive
-        ? text(copy.emptyActiveDescription)
-        : incompleteRun
-        ? text(copy.emptyIncompleteDescription)
-        : unknownSources > 0
-          ? text(copy.emptyUnknownDescription, { count: formatNumber(unknownSources) })
-          : text(copy.emptyCompletedDescription, { count: formatNumber(connectedWithoutAssets) });
+      : requestOutcomeSummary
+        ? [text(requestOutcomeSummary.description), text(requestOutcomeSummary.nextStep)].join(" ")
+        : localhostSummary
+          ? [
+              text(localhostSummary.description),
+              text(localhostSummary.exclusions),
+              text(localhostSummary.nextStep),
+            ].join(" ")
+          : latestRunIsActive
+            ? text(copy.emptyActiveDescription)
+            : incompleteRun
+              ? text(copy.emptyIncompleteDescription)
+              : unknownSources > 0
+                ? text(copy.emptyUnknownDescription, { count: formatNumber(unknownSources) })
+                : text(copy.emptyCompletedDescription, { count: formatNumber(connectedWithoutAssets) });
     return (
       <div className="page">
-        <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} />
+        <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.emptyHeaderTitle)} description={text(copy.emptyHeaderDescription)} actions={reportRunPicker} />
+        {report && <BeginnerReportOverview report={report} />}
+        {reportUnavailable && <InlineNotice tone="warning" title={text(copy.reportUnavailableTitle)}><p>{text(copy.reportUnavailableBody)}</p></InlineNotice>}
         <EmptyState
-          icon={latestRunIsActive || incompleteRun || unknownSources > 0 ? "warning" : "findings"}
+          icon={latestRunIsActive
+            || incompleteRun
+            || unknownSources > 0
+            || Boolean(requestOutcomeSummary)
+            || ["closed", "timed_out", "failed", "cancelled", "missing", "inconsistent"]
+              .includes(localhostSummary?.outcome ?? "")
+            ? "warning"
+            : "findings"}
           title={title}
           description={description}
           action={
@@ -492,7 +1057,11 @@ export function FindingsPage({
         eyebrow={text(copy.eyebrow)}
         title={text(copy.title)}
         description={text(copy.description)}
+        actions={reportRunPicker}
       />
+
+      {report && <BeginnerReportOverview report={report} />}
+      {reportUnavailable && <InlineNotice tone="warning" title={text(copy.reportUnavailableTitle)}><p>{text(copy.reportUnavailableBody)}</p></InlineNotice>}
 
       {activeRun && (
         <InlineNotice tone="warning" title={text(copy.activeTitle)}>
@@ -503,7 +1072,16 @@ export function FindingsPage({
         </InlineNotice>
       )}
 
-      {incompleteTerminalRun && (
+      {latestRequestOutcomeSummary && (
+        <InlineNotice tone="warning" title={text(latestRequestOutcomeSummary.title)}>
+          <p>{[text(latestRequestOutcomeSummary.description), text(latestRequestOutcomeSummary.nextStep)].join(" ")}</p>
+          <button className="button button--secondary button--small" type="button" onClick={onOpenProgress}>
+            <Icon name="progress" size={15} /> {text(copy.openProgress)}
+          </button>
+        </InlineNotice>
+      )}
+
+      {incompleteTerminalRun && !latestRequestOutcomeSummary && (
         <InlineNotice tone="warning" title={text(copy.incompleteTitle)}>
           <p>{text(copy.incompleteDescription)}</p>
           <button className="button button--secondary button--small" type="button" onClick={onOpenProgress}>

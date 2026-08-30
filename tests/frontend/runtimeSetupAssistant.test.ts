@@ -42,20 +42,21 @@ test("backend prerequisite states stay inside one automatic, plain-language setu
   }
 });
 
-test("an unproven older workspace is preserved without a manual action or retry loop", () => {
+test("an unproven older workspace is preserved while retry prepares an isolated replacement", () => {
   for (const phrase of [
     "Older scan-tool data was preserved",
-    "left that data untouched",
-    "This scan tool is unavailable in this session",
+    "left untouched",
+    "new isolated workspace",
     "舊的掃描工具資料已保留",
-    "沒有更動其中資料",
-    "這個掃描工具目前無法使用",
+    "沒有更動舊工作區",
+    "新的隔離工作空間",
   ]) assert.ok(source.includes(phrase), phrase);
 
   assert.match(source, /preservedUnknownWorkspace = status\?\.nextAction === "resolve_wsl_distribution_manually"/u);
-  assert.match(source, /setupFailed && preservedUnknownWorkspace \? \([\s\S]*null/u);
-  assert.match(shellSource, /preservedUnknownWorkspace = runtimeSetup\?\.nextAction === "resolve_wsl_distribution_manually"/u);
-  assert.match(shellSource, /runtimeSetupWorking \? \([\s\S]*preservedUnknownWorkspace \? null/u);
+  assert.match(source, /!setupFailed && !setupCancelled \? null/u);
+  assert.match(source, /<button[^>]*onClick=\{onSetup\}/u);
+  assert.doesNotMatch(source, /unavailable in this session|這個掃描工具目前無法使用/u);
+  assert.doesNotMatch(shellSource, /preservedUnknownWorkspace \? null/u);
   assert.doesNotMatch(appSource, /onOpenRuntimeSetup/u);
   assert.doesNotMatch(source, /backup|remov(?:e|al)|rename|備份|移除|重新命名/iu);
 });
@@ -71,11 +72,11 @@ test("active reconciliation stays automatic without claiming a replacement alrea
   assert.equal(state.setupRecovering, true);
   assert.equal(state.setupFailed, false);
   for (const phrase of [
-    "Finishing a previous setup",
-    "reconciling product-owned scan-tool files automatically",
+    "Preparing a fresh scan workspace",
+    "prepares an isolated replacement automatically",
     "Safely recovering the previous workspace",
-    "正在完成先前未完成的設定",
-    "自動整理可確認屬於本產品的掃描工具檔案",
+    "正在準備新的隔離掃描空間",
+    "自動準備隔離的新工作空間",
     "正在安全復原先前的工作區",
   ]) assert.ok(source.includes(phrase), phrase);
 
@@ -86,10 +87,10 @@ test("active reconciliation stays automatic without claiming a replacement alrea
 
 test("a generic setup failure offers a retry without inventing an external action", () => {
   for (const phrase of [
-    "Scan-tool setup stopped",
-    "掃描工具設定已停止",
-    "Try setup again",
-    "再試一次設定",
+    "One local check is unavailable",
+    "一項本機檢查目前無法使用",
+    "Try preparation again",
+    "再試一次自動準備",
   ]) assert.ok(source.includes(phrase), phrase);
 
   assert.doesNotMatch(source, /Follow the single action below/u);
@@ -171,24 +172,23 @@ test("the desktop UI cannot elevate or change Windows optional features", () => 
   assert.doesNotMatch(shellSource, /runtimeRepairing|onRepairRuntime|runtime\.setup\.repair/u);
 });
 
-test("packaged-component blockers remain visible without rerunning runtime setup", () => {
+test("packaged-component blockers remain task-scoped and offer automatic repair", () => {
   for (const copy of [
-    "Get the scan tools for this check",
-    "取得這項檢查需要的掃描工具",
-    "Restore one installed scan component",
-    "恢復一項安裝元件",
-    "Get the latest installer",
-    "取得最新安裝程式",
-    "https://github.com/teddashh/ai-security-scanner/releases",
+    "This check is unavailable in the installed version",
+    "目前安裝版本無法執行這項檢查",
+    "One installed scan component is unavailable",
+    "一項隨附掃描元件目前無法使用",
+    "Try automatic repair",
+    "再試一次自動修復",
   ]) assert.ok(source.includes(copy), copy);
 
   assert.match(source, /scannerSetupBlocker\?: ScannerSetupBlocker/u);
   assert.match(source, /resolveRuntimeSetupPresentation\(\{/u);
   assert.match(source, /presentation\.showPackagedComponentIssue && scannerSetupBlocker/u);
   assert.match(source, /scannerIssue \? \(/u);
-  assert.match(source, /href=\{scannerIssue\.releaseHref\}/u);
+  assert.match(source, /onClick=\{onSetup\}/u);
   assert.match(source, /scannerIssue\.action/u);
-  assert.doesNotMatch(source, /onClick=\{onSetup\}[^]*scannerIssue\.action/u);
+  assert.doesNotMatch(source, /releaseHref|github\.com\/teddashh\/ai-security-scanner\/releases/u);
   assert.doesNotMatch(source, /egress_gateway_unavailable[^}]*title:\s*"egress/u);
   assert.doesNotMatch(source, /engine_execution_contract_invalid[^}]*title:\s*"execution/u);
 });

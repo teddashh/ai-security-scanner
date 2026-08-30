@@ -24,17 +24,23 @@ import { StatusPill } from "./StatusPill";
 const navigation = [
   { id: "start", labelKey: "nav.start.label", hintKey: "nav.start.hint", icon: "spark" },
   { id: "cases", labelKey: "nav.cases.label", hintKey: "nav.cases.hint", icon: "cases" },
-  { id: "coverage", labelKey: "nav.coverage.label", hintKey: "nav.coverage.hint", icon: "coverage" },
-  { id: "progress", labelKey: "nav.progress.label", hintKey: "nav.progress.hint", icon: "progress" },
   { id: "findings", labelKey: "nav.findings.label", hintKey: "nav.findings.hint", icon: "findings" },
-  { id: "export", labelKey: "nav.export.label", hintKey: "nav.export.hint", icon: "export" },
-  { id: "verification", labelKey: "nav.verification.label", hintKey: "nav.verification.hint", icon: "verification" },
 ] as const satisfies ReadonlyArray<{
   id: PageId;
   labelKey: TranslationKey;
   hintKey: TranslationKey;
   icon: IconName;
 }>;
+
+const pageLabelKeys = {
+  start: "nav.start.label",
+  cases: "nav.cases.label",
+  coverage: "nav.coverage.label",
+  progress: "nav.progress.label",
+  findings: "nav.findings.label",
+  export: "nav.export.label",
+  verification: "nav.verification.label",
+} as const satisfies Record<PageId, TranslationKey>;
 
 const runtimeSetupLabelKeys = {
   idle: "runtime.phase.idle.label",
@@ -106,6 +112,7 @@ interface AppShellProps {
   dataUnavailable?: boolean;
   dataRetrying?: boolean;
   onRetryData: () => void;
+  caseRecoveryDiagnostics?: AppSnapshot["caseRecoveryDiagnostics"];
   caseSelectionUnavailable?: boolean;
   caseSelectionRetrying?: boolean;
   onRetryCaseSelection: () => void;
@@ -131,6 +138,7 @@ export function AppShell({
   dataUnavailable,
   dataRetrying,
   onRetryData,
+  caseRecoveryDiagnostics,
   caseSelectionUnavailable,
   caseSelectionRetrying,
   onRetryCaseSelection,
@@ -176,7 +184,6 @@ export function AppShell({
       ? "runtime.phase.failed.generic.detail"
       : runtimeSetupDetailKeys[displayedRuntimeSetupPhase]
     : undefined;
-  const preservedUnknownWorkspace = runtimeSetup?.nextAction === "resolve_wsl_distribution_manually";
   const runtimeSetupAction: TranslationKey = runtimeSetup?.phase === "failed"
     ? "runtime.setup.retry"
     : runtimeSetup?.phase === "cancelled"
@@ -282,7 +289,7 @@ export function AppShell({
             <span aria-hidden="true" />
             {mode === "native"
               ? runtime?.available
-                ? t("runtime.badge.ready", { provider: runtime.provider })
+                ? t("runtime.badge.ready")
                 : t("runtime.badge.needsSetup")
               : t("runtime.badge.demo")}
           </span>
@@ -333,7 +340,7 @@ export function AppShell({
                   <Icon name="progress" size={15} />
                   {t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase ?? "install"])}
                 </button>
-              ) : preservedUnknownWorkspace ? null : (
+              ) : runtimeSetup?.phase === "failed" || runtimeSetup?.phase === "cancelled" ? (
                 <button
                   className="button button--small"
                   type="button"
@@ -343,7 +350,7 @@ export function AppShell({
                   <Icon name="progress" size={15} />
                   {t(runtimeSetupAction)}
                 </button>
-              )}
+              ) : null}
             </div>
           )}
         </div>
@@ -369,7 +376,7 @@ export function AppShell({
             <Icon name="menu" />
           </button>
           <div className="topbar__context">
-            <span>{t(navigation.find((item) => item.id === page)?.labelKey ?? "nav.start.label")}</span>
+            <span>{t(pageLabelKeys[page])}</span>
             {selectedCase && <strong>{selectedCase.name}</strong>}
           </div>
           <div className="topbar__right">
@@ -388,6 +395,40 @@ export function AppShell({
               <strong>{selectedCase?.isDemo ? t("shell.demo.selectedTitle") : t("shell.demo.title")}</strong>
               <span>{t("shell.demo.fallback")}</span>
             </div>
+          </div>
+        )}
+
+        {caseRecoveryDiagnostics && caseRecoveryDiagnostics.length > 0 && (
+          <div className="data-status-banner" role="status">
+            <Icon name="warning" size={19} />
+            <div className="data-status-banner__copy">
+              <strong>{t("shell.caseRecovery.title")}</strong>
+              <span>{t("shell.caseRecovery.detail")}</span>
+              <details>
+                <summary>{t("shell.caseRecovery.technical")}</summary>
+                <ul>
+                  {caseRecoveryDiagnostics.map((diagnostic) => (
+                    <li key={`${diagnostic.caseId}:${diagnostic.code}`}>
+                      <strong>{diagnostic.title}</strong>{" — "}
+                      {t(diagnostic.preserved
+                        ? "shell.caseRecovery.preserved"
+                        : "shell.caseRecovery.missing")}{" · "}
+                      <code>{diagnostic.code}</code>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+            <button
+              className="button button--small"
+              type="button"
+              disabled={dataRetrying}
+              aria-busy={dataRetrying || undefined}
+              onClick={onRetryData}
+            >
+              <Icon name="refresh" size={15} />
+              {t(dataRetrying ? "shell.data.retrying" : "shell.data.retry")}
+            </button>
           </div>
         )}
 

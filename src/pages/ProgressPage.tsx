@@ -5,6 +5,8 @@ import { EmptyState, InlineNotice, MetricCard, PageHeader, ProgressBar } from ".
 import { StatusPill } from "../components/StatusPill";
 import { useI18n, type BilingualText } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
+import { localhostTcpBeginnerSummary } from "../localhostTcpPresentation";
+import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import {
   buildScanActivity,
   type ScanActivityEvent,
@@ -44,6 +46,7 @@ import { displayTechnicalDetail } from "./pageTechnicalDetails";
 interface ProgressPageProps {
   caseId?: string;
   runs: ScanRun[];
+  selectedRunId?: string;
   readiness?: ScanReadiness;
   readinessCheckFailed?: boolean;
   diagnosticContext?: ScanDiagnosticContext;
@@ -51,10 +54,10 @@ interface ProgressPageProps {
   starting?: boolean;
   onStart: () => Promise<void>;
   onFixSetup: () => void;
-  onOpenToolSetup: () => void;
   onPause: (runId: string) => Promise<void>;
   onResume: (runId: string) => Promise<void>;
   onCancel: (runId: string) => Promise<void>;
+  onSelectRun?: (runId: string) => void;
 }
 
 const PRODUCT_RELEASES = "https://github.com/teddashh/ai-security-scanner/releases";
@@ -276,10 +279,10 @@ const copy = {
   skippedGroupTitle: { en: "Planned checks that did not start: {count}", zhTW: "{count} 項預定檢查沒有開始" },
   sharedFailureTitle: { en: "The private scan engine did not start", zhTW: "私有掃描引擎沒有啟動" },
   sharedFailureBody: {
-    en: "One scan-tool problem stopped checks before they could inspect anything. Checks stopped: {count}. Repair the scan tools, then retry them.",
-    zhTW: "同一個掃描工具問題讓 {count} 項檢查在讀取任何內容前就停止。請修復掃描工具，再重試已停止的檢查。",
+    en: "One private connection problem stopped {count} checks before they inspected anything. Try them again and the app will prepare a fresh connection automatically.",
+    zhTW: "專用連線問題讓 {count} 項檢查在讀取任何內容前停止。請再試一次，程式會自動準備新的連線。",
   },
-  openToolSetup: { en: "Open scan-tool setup", zhTW: "開啟掃描工具設定" },
+  retryStoppedChecks: { en: "Try stopped checks again", zhTW: "再試一次已停止的檢查" },
   aggregateTechnical: { en: "Technical records — checks: {count}", zhTW: "{count} 項檢查的技術紀錄" },
   diagnosticPrivacy: {
     en: "The diagnostic log excludes target names, asset IDs, raw evidence, paths, and scanner messages.",
@@ -350,11 +353,18 @@ const copy = {
       title: { en: "This scan has finished", zhTW: "這次掃描已完成" },
       body: { en: "The results are saved and ready to review.", zhTW: "結果已保存，可以開始查看。" },
     },
+    no_checks_completed: {
+      title: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
+      body: {
+        en: "No target was contacted. Review the saved reason and next step below.",
+        zhTW: "這次沒有連線到任何目標；請查看下方保存的原因與下一步。",
+      },
+    },
     gateway_preparation_failed: {
       title: { en: "The private scan connection did not start", zhTW: "專用掃描連線未能啟動" },
       body: {
-        en: "The check stopped before its scanner contacted the target. Repair the scan tools, then retry the check.",
-        zhTW: "檢查在掃描工具接觸目標前就停止了。請修復掃描工具，再重試這項檢查。",
+        en: "The check stopped before it contacted the target. Try it again and the app will prepare a fresh connection automatically.",
+        zhTW: "檢查在接觸目標前停止了。請再試一次，程式會自動準備新的連線。",
       },
     },
     stopped: {
@@ -376,6 +386,7 @@ const copy = {
       zhTW: "專用掃描連線未能啟動",
     },
     run_completed: { en: "Scan completed", zhTW: "掃描已完成" },
+    run_no_checks_completed: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
     run_stopped: { en: "Scan stopped", zhTW: "掃描已停止" },
     run_paused: { en: "Scan paused", zhTW: "掃描已暫停" },
   },
@@ -489,6 +500,17 @@ const copy = {
   rawEvidenceFiles: { en: "Raw evidence files", zhTW: "原始證據檔案" },
   technicalDetails: { en: "Technical status and errors", zhTW: "技術狀態與錯誤" },
   scannerName: { en: "Scanner name", zhTW: "掃描工具名稱" },
+  builtInCheck: { en: "Built-in localhost TCP check", zhTW: "內建本機 TCP 檢查" },
+  taskId: { en: "Check job ID", zhTW: "檢查工作 ID" },
+  endpoint: { en: "Exact endpoint", zhTW: "確切端點" },
+  timeout: { en: "Maximum wait", zhTW: "最長等待時間" },
+  payload: { en: "Application data sent", zhTW: "傳送的應用層資料" },
+  bytes: { en: "{count} bytes", zhTW: "{count} 位元組" },
+  observedOutcome: { en: "Observed outcome", zhTW: "觀察結果" },
+  savedObservation: { en: "Saved observation code", zhTW: "已保存的觀察代碼" },
+  observedAt: { en: "Observed at", zhTW: "觀察時間" },
+  notIncluded: { en: "Not included", zhTW: "未包含" },
+  taskMessage: { en: "Check message", zhTW: "檢查訊息" },
   reportedPhase: { en: "Reported phase", zhTW: "回報階段" },
   errorCode: { en: "Error code", zhTW: "錯誤代碼" },
   scannerMessage: { en: "Scanner message", zhTW: "掃描工具訊息" },
@@ -632,6 +654,7 @@ const engineIcon = (engine: EngineRun) => {
 export function ProgressPage({
   caseId,
   runs,
+  selectedRunId: controlledSelectedRunId,
   readiness,
   readinessCheckFailed,
   diagnosticContext,
@@ -639,13 +662,18 @@ export function ProgressPage({
   starting,
   onStart,
   onFixSetup,
-  onOpenToolSetup,
   onPause,
   onResume,
   onCancel,
+  onSelectRun,
 }: ProgressPageProps) {
   const { locale, text, formatDate, formatDateTime, formatNumber } = useI18n();
-  const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id);
+  const [localSelectedRunId, setLocalSelectedRunId] = useState(runs[0]?.id);
+  const selectedRunId = controlledSelectedRunId ?? localSelectedRunId;
+  const selectRun = (runId: string) => {
+    setLocalSelectedRunId(runId);
+    onSelectRun?.(runId);
+  };
   const startRunIds = useRef<{ caseId?: string; ids: Set<string> } | undefined>(undefined);
   const scanWorkActive = hasActiveScanWork(runs);
   const canStart = canStartPreparedScan(readiness, Boolean(readinessCheckFailed), runs);
@@ -695,15 +723,18 @@ export function ProgressPage({
       : copy.emptyDescription);
 
   useEffect(() => {
-    if (!runs.some((run) => run.id === selectedRunId)) setSelectedRunId(runs[0]?.id);
-  }, [runs, selectedRunId]);
+    if (runs.some((run) => run.id === selectedRunId)) return;
+    const nextRunId = runs[0]?.id;
+    setLocalSelectedRunId(nextRunId);
+    if (nextRunId) onSelectRun?.(nextRunId);
+  }, [onSelectRun, runs, selectedRunId]);
 
   useEffect(() => {
     const baseline = startRunIds.current;
     if (!baseline || baseline.caseId !== caseId) return;
     const createdRunId = findRunCreatedAfterStart(runs, baseline.ids);
     if (createdRunId) {
-      setSelectedRunId(createdRunId);
+      selectRun(createdRunId);
       startRunIds.current = undefined;
     } else if (!starting) {
       startRunIds.current = undefined;
@@ -809,7 +840,7 @@ export function ProgressPage({
             <button className="button button--primary" type="button" disabled aria-busy="true">
               <Icon name="progress" size={17} />{text(copy.startingAction)}
             </button>
-          ) : readiness?.ready ? (
+          ) : canStart ? (
             <button className="button button--primary" type="button" disabled={busy} onClick={requestStart}>
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
@@ -832,7 +863,7 @@ export function ProgressPage({
             </button>
           )}
         />
-        <section className={`scan-activity${readiness?.ready || starting ? "" : " scan-activity--delayed"}`} aria-labelledby="scan-preflight-activity-title">
+        <section className={`scan-activity${canStart || starting ? "" : " scan-activity--delayed"}`} aria-labelledby="scan-preflight-activity-title">
           <div className="section-heading section-heading--row">
             <div>
               <p className="eyebrow">{text(copy.activityEyebrow)}</p>
@@ -891,6 +922,7 @@ export function ProgressPage({
   }
 
   const runMeta = runStatusMeta[selectedRun.status];
+  const requestOutcomeSummary = scanRequestOutcomeBeginnerSummary(selectedRun.requestOutcome);
   const blocked = blockedRunSummary(selectedRun);
   const skipped = skippedEngineRunSummary(selectedRun);
   const sharedInfrastructureFailure = sharedInfrastructureFailureSummary(selectedRun);
@@ -1029,7 +1061,7 @@ export function ProgressPage({
                 type="button"
                 className={run.id === selectedRun.id ? "run-picker__item run-picker__item--active" : "run-picker__item"}
                 aria-pressed={run.id === selectedRun.id}
-                onClick={() => setSelectedRunId(run.id)}
+                onClick={() => selectRun(run.id)}
               >
                 <strong>{run.label}</strong>
                 <span>{index === 0 ? text(copy.latest) : ""}{runStatusMeta[run.status].label} · {showDateTime(run.startedAt)}</span>
@@ -1065,21 +1097,27 @@ export function ProgressPage({
         <div className="run-overview__copy">
           <div className="run-overview__meta">
             <StatusPill
-              label={blocked
+              label={requestOutcomeSummary
+                ? text(requestOutcomeSummary.title)
+                : blocked
                 ? text(copy.blockedTitle)
                 : sharedInfrastructureFailure
                   ? text(copy.sharedFailureTitle)
                   : runMeta.label}
-              tone={blocked ? "warning" : sharedInfrastructureFailure ? "danger" : runMeta.tone}
+              tone={requestOutcomeSummary || blocked ? "warning" : sharedInfrastructureFailure ? "danger" : runMeta.tone}
             />
             <span>{selectedRun.label}</span>
           </div>
-          <h2>{blocked
+          <h2>{requestOutcomeSummary
+            ? text(requestOutcomeSummary.title)
+            : blocked
             ? text(copy.blockedTitle)
             : sharedInfrastructureFailure
               ? text(copy.sharedFailureTitle)
               : text(copy.processed, { percent: formatNumber(selectedRun.progress) })}</h2>
-          <p>{blocked
+          <p>{requestOutcomeSummary
+            ? [text(requestOutcomeSummary.description), text(requestOutcomeSummary.nextStep)].join(" ")
+            : blocked
             ? text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)
             : sharedInfrastructureFailure
               ? text(copy.sharedFailureBody, { count: formatNumber(sharedInfrastructureFailure.checkCount) })
@@ -1159,8 +1197,10 @@ export function ProgressPage({
       )}
 
       {blocked && (
-        <InlineNotice tone="warning" title={text(copy.blockedTitle)}>
-          <p>{text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)}</p>
+        <InlineNotice tone="warning" title={requestOutcomeSummary ? text(requestOutcomeSummary.title) : text(copy.blockedTitle)}>
+          <p>{requestOutcomeSummary
+            ? [text(requestOutcomeSummary.description), text(requestOutcomeSummary.nextStep)].join(" ")
+            : text(blocked.kind === "no_targets" ? copy.blockedNoTargets : copy.blockedNoChecks)}</p>
           <div className="button-group">
             {needsLatestInstaller ? (
               <a className="button button--primary button--small" href={PRODUCT_RELEASES} target="_blank" rel="noreferrer">
@@ -1182,8 +1222,13 @@ export function ProgressPage({
         <InlineNotice tone="warning" title={text(copy.sharedFailureTitle)}>
           <p>{text(copy.sharedFailureBody, { count: formatNumber(sharedInfrastructureFailure.checkCount) })}</p>
           <div className="button-group">
-            <button className="button button--primary button--small" type="button" onClick={onOpenToolSetup}>
-              <Icon name="settings" size={15} />{text(copy.openToolSetup)}
+            <button
+              className="button button--primary button--small"
+              type="button"
+              disabled={busy}
+              onClick={() => void onResume(selectedRun.id)}
+            >
+              <Icon name="refresh" size={15} />{text(copy.retryStoppedChecks)}
             </button>
             <button className="button button--secondary button--small" type="button" onClick={() => downloadDiagnostic(selectedRun)}>
               <Icon name="file" size={15} />{text(copy.downloadLog)}
@@ -1242,7 +1287,13 @@ export function ProgressPage({
           )}
         </div>
 
-        {blocked && blocked.skippedCheckCount > 0 ? (
+        {requestOutcomeSummary ? (
+          <EmptyState
+            icon="warning"
+            title={text(requestOutcomeSummary.title)}
+            description={[text(requestOutcomeSummary.description), text(requestOutcomeSummary.nextStep)].join(" ")}
+          />
+        ) : blocked && blocked.skippedCheckCount > 0 ? (
           aggregateTechnicalRecords(
             selectedRun.engineRuns,
             text(copy.skippedTechnical, { count: formatNumber(blocked.skippedCheckCount) }),
@@ -1288,8 +1339,18 @@ export function ProgressPage({
               const meta = engineStatusMeta[engine.status];
               const checkpoint = engine.checkpoint;
               const recoveryLabel = engineRecoveryLabelFor(engine);
+              const localhostSummary = localhostTcpBeginnerSummary(engine);
+              const localhostTone = !localhostSummary
+                ? undefined
+                : localhostSummary.outcome === "reachable"
+                  ? "info"
+                  : localhostSummary.outcome === "failed"
+                    ? "danger"
+                    : localhostSummary.outcome === "in_progress"
+                      ? meta.tone
+                      : "warning";
               return (
-                <article key={engine.id} className={`engine-row engine-row--${meta.tone}`}>
+                <article key={engine.id} className={`engine-row engine-row--${localhostTone ?? meta.tone}`}>
                   <div className="engine-row__identity">
                     <span className={`engine-icon engine-icon--${meta.tone}`}><Icon name={engineIcon(engine)} size={19} /></span>
                     <span>
@@ -1312,12 +1373,21 @@ export function ProgressPage({
                         <span>{text(copy.currentStep)}<strong>{phaseLabel(engine)}</strong></span>
                       </div>
                       {engine.status === "not_executed" && <p>{text(copy.notRunTechnical)}</p>}
-                      <dl>
-                        <div><dt>{text(copy.scannerName)}</dt><dd>{engine.engineName}</dd></div>
-                        <div><dt>{text(copy.targets)}</dt><dd>{formatNumber(engine.assetIds.length)}</dd></div>
-                        <div><dt>{text(copy.rawEvidenceFiles)}</dt><dd>{formatNumber(engine.rawArtifactCount)}</dd></div>
-                      </dl>
-                      {checkpoint && (
+                      {localhostSummary ? (
+                        <dl>
+                          <div><dt>{text(copy.builtInCheck)}</dt><dd>{text(localhostSummary.outcomeLabel)}</dd></div>
+                          <div><dt>{text(copy.endpoint)}</dt><dd><code>127.0.0.1:{formatNumber(localhostSummary.port)}</code></dd></div>
+                          <div><dt>{text(copy.timeout)}</dt><dd>{formatNumber(localhostSummary.timeoutMs)} ms</dd></div>
+                          <div><dt>{text(copy.payload)}</dt><dd>{text(copy.bytes, { count: formatNumber(localhostSummary.payloadBytes) })}</dd></div>
+                        </dl>
+                      ) : (
+                        <dl>
+                          <div><dt>{text(copy.scannerName)}</dt><dd>{engine.engineName}</dd></div>
+                          <div><dt>{text(copy.targets)}</dt><dd>{formatNumber(engine.assetIds.length)}</dd></div>
+                          <div><dt>{text(copy.rawEvidenceFiles)}</dt><dd>{formatNumber(engine.rawArtifactCount)}</dd></div>
+                        </dl>
+                      )}
+                      {!localhostSummary && checkpoint && (
                         <div className="checkpoint-card">
                           <div>
                             <Icon name="database" size={15} />
@@ -1347,53 +1417,73 @@ export function ProgressPage({
                       <dl>
                         <div><dt>{text(copy.reportedPhase)}</dt><dd><code>{displayTechnicalDetail(engine.phase) ?? text(copy.noneReported)}</code></dd></div>
                         <div><dt>{text(copy.errorCode)}</dt><dd><code>{displayTechnicalDetail(engine.errorCode) ?? text(copy.noneReported)}</code></dd></div>
-                        <div><dt>{text(copy.scannerMessage)}</dt><dd>{displayTechnicalDetail(engine.message) ?? text(copy.noneReported)}</dd></div>
-                        <div><dt>{text(copy.checkpointError)}</dt><dd>{displayTechnicalDetail(checkpoint?.lastError) ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(localhostSummary ? copy.taskMessage : copy.scannerMessage)}</dt><dd>{displayTechnicalDetail(engine.message) ?? text(copy.noneReported)}</dd></div>
+                        {!localhostSummary && <div><dt>{text(copy.checkpointError)}</dt><dd>{displayTechnicalDetail(checkpoint?.lastError) ?? text(copy.noneReported)}</dd></div>}
                       </dl>
                     </details>
                   </div>
                   <div className="engine-row__result">
-                    <StatusPill label={meta.label} tone={meta.tone} />
-                    <span>{engine.findingCountKnown === false
-                      ? text(copy.legacyFindingUnknown)
-                      : text(copy.findingCount, { count: formatNumber(engine.findingCount) })}</span>
+                    <StatusPill
+                      label={localhostSummary ? text(localhostSummary.outcomeLabel) : meta.label}
+                      tone={localhostTone ?? meta.tone}
+                    />
+                    <span>{localhostSummary
+                      ? `127.0.0.1:${formatNumber(localhostSummary.port)}`
+                      : engine.findingCountKnown === false
+                        ? text(copy.legacyFindingUnknown)
+                        : text(copy.findingCount, { count: formatNumber(engine.findingCount) })}</span>
                     {recoveryLabel && (
                       <small><Icon name="refresh" size={13} /> {text(recoveryLabel)}</small>
                     )}
                   </div>
                   <details className="engine-provenance">
-                    <summary>{text(copy.provenance)}</summary>
-                    <dl>
-                      <div><dt>{text(copy.jobId)}</dt><dd><code>{engine.id}</code></dd></div>
-                      <div><dt>{text(copy.engineId)}</dt><dd><code>{engine.engineId}</code></dd></div>
-                      <div><dt>{text(copy.categoryCode)}</dt><dd><code>{engine.category}</code></dd></div>
-                      <div><dt>{text(copy.scannerVersion)}</dt><dd>{engine.version}</dd></div>
-                      <div><dt>{text(copy.imageDigest)}</dt><dd><code>{engine.digest}</code></dd></div>
-                      <div><dt>{text(copy.ruleVersion)}</dt><dd>{engine.ruleVersion ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.adapter)}</dt><dd>{engine.adapterVersion ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.manifestSchema)}</dt><dd>{engine.manifestSchemaVersion ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.sourceRevision)}</dt><dd><code>{engine.sourceRevision ?? text(copy.noneReported)}</code></dd></div>
-                      <div><dt>{text(copy.sourceRepository)}</dt><dd>{engine.repositoryUrl ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.distributionMode)}</dt><dd>{engine.distributionMode ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.imageRepository)}</dt><dd>{engine.imageRepository ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.commandDigest)}</dt><dd><code>{engine.commandSha256 ?? text(copy.noneReported)}</code></dd></div>
-                      <div><dt>{text(copy.knowledgeInput)}</dt><dd>{engine.knowledgeInput
-                        ? `${engine.knowledgeInput.identifier} · ${engine.knowledgeInput.version ?? text(copy.noIndependentVersion)} · ${engine.knowledgeInput.pinState}`
-                        : text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.knowledgeDate)}</dt><dd>{engine.knowledgeInput?.knowledgeDate ? showPlainDate(engine.knowledgeInput.knowledgeDate) : text(copy.olderNotRecorded)}</dd></div>
-                      <div><dt>{text(copy.supportDate)}</dt><dd>{engine.knowledgeInput?.supportUntil
-                        ? `${showPlainDate(engine.knowledgeInput.supportUntil)} · ${engine.knowledgeInput.supportUntil < today ? text(copy.expiredReadable) : text(copy.currentlySupported)}`
-                        : text(copy.olderNotRecorded)}</dd></div>
-                      <div><dt>{text(copy.runtime)}</dt><dd>{engine.runtimeProvider ? `${engine.runtimeProvider} ${engine.runtimeVersion ?? text(copy.unknownVersion)}` : text(copy.notRunYet)}</dd></div>
-                      <div><dt>{text(copy.runtimeSecurity)}</dt><dd>{engine.runtimeSecurityOptions ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.exitCode)}</dt><dd>{engine.exitCode ?? text(copy.noneReported)}</dd></div>
-                      <div><dt>{text(copy.cleanupResult)}</dt><dd>
-                        {engine.cleanupRemoved === undefined ? text(copy.noneReported) : engine.cleanupRemoved ? text(copy.removed) : text(copy.absentOrUnneeded)}
-                        {engine.cleanupDetail ? ` · ${displayTechnicalDetail(engine.cleanupDetail) ?? ""}` : ""}
-                      </dd></div>
-                      <div><dt>{text(copy.started)}</dt><dd>{showDateTime(engine.startedAt)}</dd></div>
-                      <div><dt>{text(copy.ended)}</dt><dd>{showDateTime(engine.finishedAt)}</dd></div>
-                    </dl>
+                    <summary>{text(localhostSummary ? copy.technicalDetails : copy.provenance)}</summary>
+                    {localhostSummary ? (
+                      <dl>
+                        <div><dt>{text(copy.taskId)}</dt><dd><code>{engine.id}</code></dd></div>
+                        <div><dt>{text(copy.endpoint)}</dt><dd><code>127.0.0.1:{formatNumber(localhostSummary.port)}</code></dd></div>
+                        <div><dt>{text(copy.timeout)}</dt><dd>{formatNumber(localhostSummary.timeoutMs)} ms</dd></div>
+                        <div><dt>{text(copy.payload)}</dt><dd>{text(copy.bytes, { count: formatNumber(localhostSummary.payloadBytes) })}</dd></div>
+                        <div><dt>{text(copy.observedOutcome)}</dt><dd>{text(localhostSummary.outcomeLabel)}</dd></div>
+                        <div><dt>{text(copy.savedObservation)}</dt><dd><code>{engine.localhostTcpObservation?.outcome ?? text(copy.noneReported)}</code></dd></div>
+                        <div><dt>{text(copy.observedAt)}</dt><dd>{showDateTime(engine.localhostTcpObservation?.observedAt)}</dd></div>
+                        <div><dt>{text(copy.notIncluded)}</dt><dd>{text(localhostSummary.exclusions)}</dd></div>
+                        <div><dt>{text(copy.started)}</dt><dd>{showDateTime(engine.startedAt)}</dd></div>
+                        <div><dt>{text(copy.ended)}</dt><dd>{showDateTime(engine.finishedAt)}</dd></div>
+                      </dl>
+                    ) : (
+                      <dl>
+                        <div><dt>{text(copy.jobId)}</dt><dd><code>{engine.id}</code></dd></div>
+                        <div><dt>{text(copy.engineId)}</dt><dd><code>{engine.engineId}</code></dd></div>
+                        <div><dt>{text(copy.categoryCode)}</dt><dd><code>{engine.category}</code></dd></div>
+                        <div><dt>{text(copy.scannerVersion)}</dt><dd>{engine.version}</dd></div>
+                        <div><dt>{text(copy.imageDigest)}</dt><dd><code>{engine.digest}</code></dd></div>
+                        <div><dt>{text(copy.ruleVersion)}</dt><dd>{engine.ruleVersion ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.adapter)}</dt><dd>{engine.adapterVersion ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.manifestSchema)}</dt><dd>{engine.manifestSchemaVersion ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.sourceRevision)}</dt><dd><code>{engine.sourceRevision ?? text(copy.noneReported)}</code></dd></div>
+                        <div><dt>{text(copy.sourceRepository)}</dt><dd>{engine.repositoryUrl ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.distributionMode)}</dt><dd>{engine.distributionMode ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.imageRepository)}</dt><dd>{engine.imageRepository ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.commandDigest)}</dt><dd><code>{engine.commandSha256 ?? text(copy.noneReported)}</code></dd></div>
+                        <div><dt>{text(copy.knowledgeInput)}</dt><dd>{engine.knowledgeInput
+                          ? `${engine.knowledgeInput.identifier} · ${engine.knowledgeInput.version ?? text(copy.noIndependentVersion)} · ${engine.knowledgeInput.pinState}`
+                          : text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.knowledgeDate)}</dt><dd>{engine.knowledgeInput?.knowledgeDate ? showPlainDate(engine.knowledgeInput.knowledgeDate) : text(copy.olderNotRecorded)}</dd></div>
+                        <div><dt>{text(copy.supportDate)}</dt><dd>{engine.knowledgeInput?.supportUntil
+                          ? `${showPlainDate(engine.knowledgeInput.supportUntil)} · ${engine.knowledgeInput.supportUntil < today ? text(copy.expiredReadable) : text(copy.currentlySupported)}`
+                          : text(copy.olderNotRecorded)}</dd></div>
+                        <div><dt>{text(copy.runtime)}</dt><dd>{engine.runtimeProvider ? `${engine.runtimeProvider} ${engine.runtimeVersion ?? text(copy.unknownVersion)}` : text(copy.notRunYet)}</dd></div>
+                        <div><dt>{text(copy.runtimeSecurity)}</dt><dd>{engine.runtimeSecurityOptions ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.exitCode)}</dt><dd>{engine.exitCode ?? text(copy.noneReported)}</dd></div>
+                        <div><dt>{text(copy.cleanupResult)}</dt><dd>
+                          {engine.cleanupRemoved === undefined ? text(copy.noneReported) : engine.cleanupRemoved ? text(copy.removed) : text(copy.absentOrUnneeded)}
+                          {engine.cleanupDetail ? ` · ${displayTechnicalDetail(engine.cleanupDetail) ?? ""}` : ""}
+                        </dd></div>
+                        <div><dt>{text(copy.started)}</dt><dd>{showDateTime(engine.startedAt)}</dd></div>
+                        <div><dt>{text(copy.ended)}</dt><dd>{showDateTime(engine.finishedAt)}</dd></div>
+                      </dl>
+                    )}
                     {engine.warnings.length > 0 && (
                       <div className="engine-not-executed">
                         <Icon name="info" size={16} />
@@ -1414,10 +1504,11 @@ export function ProgressPage({
         </div>
         <div className="history-list">
           {runs.map((run) => {
+            const historyRequestOutcome = scanRequestOutcomeBeginnerSummary(run.requestOutcome);
             const historyBlocked = blockedRunSummary(run);
             const historySharedFailure = sharedInfrastructureFailureSummary(run);
             return (
-              <button key={run.id} type="button" className={run.id === selectedRun.id ? "history-row history-row--active" : "history-row"} onClick={() => setSelectedRunId(run.id)}>
+              <button key={run.id} type="button" className={run.id === selectedRun.id ? "history-row history-row--active" : "history-row"} onClick={() => selectRun(run.id)}>
                 <span className="history-row__line" aria-hidden="true" />
                 <span className="history-row__copy">
                   <strong>{run.label}</strong>
@@ -1425,11 +1516,13 @@ export function ProgressPage({
                 </span>
                 <StatusPill
                   label={historyBlocked
-                    ? text(copy.blockedTitle)
+                    ? historyRequestOutcome
+                      ? runStatusMeta[run.status].label
+                      : text(copy.blockedTitle)
                     : historySharedFailure
                       ? text(copy.sharedFailureTitle)
                       : runStatusMeta[run.status].label}
-                  tone={historyBlocked ? "warning" : historySharedFailure ? "danger" : runStatusMeta[run.status].tone}
+                  tone={historyRequestOutcome || historyBlocked ? "warning" : historySharedFailure ? "danger" : runStatusMeta[run.status].tone}
                 />
                 <b>{historyBlocked || historySharedFailure ? text(copy.historyNotStarted) : `${formatNumber(run.progress)}%`}</b>
               </button>

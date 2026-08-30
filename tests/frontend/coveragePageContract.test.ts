@@ -10,6 +10,14 @@ const providerPanelSource = readFileSync(
   new URL("../../src/components/ProviderAuthorizationPanel.tsx", import.meta.url),
   "utf8",
 );
+const appSource = readFileSync(
+  new URL("../../src/App.tsx", import.meta.url),
+  "utf8",
+);
+const scannerServiceSource = readFileSync(
+  new URL("../../src/services/scanner.ts", import.meta.url),
+  "utf8",
+);
 
 test("coverage onboarding keeps the complete input and permission surface", () => {
   for (const capability of [
@@ -17,7 +25,7 @@ test("coverage onboarding keeps the complete input and permission surface", () =
     "onConnectSourceSnapshot",
     "onAttachWorkspaceSnapshot",
     "onStartDiscovery",
-    "onApprovePending",
+    "onStartScan",
     "externalTarget",
     "externalPorts",
     "externalProtocol",
@@ -173,19 +181,37 @@ test("a readiness fix opens the exact cloud, workspace, or read-only source step
   assert.match(source, /id="workspace-snapshot-form"/u);
 });
 
-test("guided network, local, and signed-in cloud setup use one explicit confirmation without auto-approval", () => {
+test("guided network, local, and signed-in cloud setup combine confirmation and Start", () => {
   assert.ok(source.includes("simpleGuidedConsent = guidedLowImpactNetwork || guidedLocalConsent || guidedCloudConsent"));
-  assert.ok(source.includes("pageCopy.confirmAndSave"));
-  assert.ok(source.includes("pageCopy.useSignedInCloud"));
+  assert.ok(source.includes("pageCopy.confirmAndStart"));
+  assert.ok(source.includes("pageCopy.scanSignedInCloud"));
   assert.ok(source.includes("pageCopy.guidedCloudConfirmation"));
   assert.ok(source.includes("pageCopy.changeScanType"));
   assert.ok(source.includes("effectiveAllowSensitiveNetworks"));
-  const approveStart = source.indexOf("const approve = async () =>");
-  const approveEnd = source.indexOf("const changeSourceKind", approveStart);
-  assert.notEqual(approveStart, -1);
-  assert.notEqual(approveEnd, -1);
-  assert.ok(source.slice(approveStart, approveEnd).includes("onApprovePending("));
-  assert.equal(source.slice(0, approveStart).includes("onApprovePending("), false, "route setup must not auto-approve");
+  const start = source.indexOf("const startScan = async () =>");
+  const end = source.indexOf("const changeSourceKind", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.ok(source.slice(start, end).includes("onStartScan("));
+  assert.equal(source.slice(0, start).includes("onStartScan("), false, "route setup must not contact a target before Start");
+  assert.doesNotMatch(source, /Next, open Scan progress and press Start/u);
+  assert.ok(source.includes("This saves the exact target and limits, then starts the scan."));
+  assert.ok(source.includes("這會保存精確目標與限制並開始掃描"));
+});
+
+test("the desktop submits authorization and Start through one native command", () => {
+  const coverageStart = appSource.indexOf("case \"coverage\"");
+  const progressStart = appSource.indexOf("case \"progress\"", coverageStart);
+  const coverageWiring = appSource.slice(coverageStart, progressStart);
+  assert.match(coverageWiring, /onStartScan=\{[\s\S]*startScan\(\{[\s\S]*authorization:/u);
+  assert.doesNotMatch(coverageWiring, /scannerService\.approveScope|executeAction\("scope"/u);
+
+  const serviceStart = scannerServiceSource.indexOf("async startScan(input: StartScanInput)");
+  const serviceEnd = scannerServiceSource.indexOf("async startLocalhostQuickScan", serviceStart);
+  const service = scannerServiceSource.slice(serviceStart, serviceEnd);
+  assert.match(service, /COMMANDS\.startScan/u);
+  assert.match(service, /caseId: input\.caseId,[\s\S]*decisions,[\s\S]*engineIds:/u);
+  assert.doesNotMatch(service, /COMMANDS\.approveScope/u);
 });
 
 test("cloud sign-in leads to one exact read-only scan confirmation instead of another ownership form", () => {
@@ -195,7 +221,7 @@ test("cloud sign-in leads to one exact read-only scan confirmation instead of an
   assert.match(source, /guidedLowImpactNetwork \|\| guidedCloudConsent[\s\S]*pageCopy\.changeScanType/u);
   for (const [english, traditionalChinese] of [
     ["Your provider sign-in already identifies the account", "雲端服務商登入已確認帳號"],
-    ["Use this signed-in account", "使用這個已登入帳號"],
+    ["Scan this signed-in account", "掃描這個已登入帳號"],
   ]) {
     assert.ok(source.includes(english), english);
     assert.ok(source.includes(traditionalChinese), traditionalChinese);

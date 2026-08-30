@@ -58,7 +58,7 @@ interface CoveragePageProps {
   onAttachWorkspaceSnapshot: (input: AttachWorkspaceSnapshotInput) => Promise<boolean>;
   onStartDiscovery: () => Promise<void>;
   onAuthorizationChanged: () => Promise<void>;
-  onApprovePending: (assetIds: string[], modes: ScopeMode[], confirmation: string, externalScope?: ExternalScopeRequest) => Promise<boolean>;
+  onStartScan: (assetIds: string[], modes: ScopeMode[], confirmation: string, externalScope?: ExternalScopeRequest) => Promise<boolean>;
 }
 
 interface SourceDefinition {
@@ -477,7 +477,7 @@ const pageCopy = {
 
   allowEyebrow: bilingual("Step 3", "步驟 3"),
   allowTitle: bilingual("Choose what to scan", "選擇要掃描的內容"),
-  allowDescription: bilingual("Select one or more items, choose the checks, and save. Recommended settings work for most scans; advanced controls are still available.", "選擇一個或多個項目、挑選檢查方式並儲存。大多數情況直接使用建議設定即可，進階控制仍完整保留。"),
+  allowDescription: bilingual("Select one or more items, review the recommended checks, and start. Advanced controls are still available.", "選擇一個或多個項目、確認建議的檢查，然後直接開始。進階控制仍完整保留。"),
   pendingNoticeTitle: bilingual("Choose an item below", "從下方選擇一個項目"),
   pendingNoticeBody: bilingual("Select an item to see the checks we recommend for it.", "選取項目後，就會看到我們建議的檢查方式。"),
   selectedCount: bilingual("{count} selected", "已選 {count} 項"),
@@ -503,12 +503,12 @@ const pageCopy = {
   clearSelection: bilingual("Clear selected items", "清除已選項目"),
   grantEyebrow: bilingual("Scan choices", "掃描選項"),
   grantTitle: bilingual("Set up checks for selected items: {count}", "設定 {count} 個已選項目的檢查"),
-  grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then save.", "確認建議內容與你有權執行這些檢查，再儲存。"),
+  grantDescription: bilingual("Review our suggestions, confirm you are allowed to run the checks, then start.", "確認建議內容與你有權執行這些檢查，然後直接開始。"),
   guidedNetworkGrantDescription: bilingual("The exact target and recommended low-impact check are shown below.", "下方會顯示精確目標與建議的低影響檢查。"),
-  guidedLocalGrantDescription: bilingual("Review the saved local copy and the recommended checks, then add it to this scan.", "確認已保存的本機副本與建議檢查，再加入這次掃描。"),
-  guidedCloudGrantDescription: bilingual("Your provider sign-in already identifies the account. Review the exact account and read-only checks below, then add it to this scan.", "雲端服務商登入已確認帳號；請查看下方的精確帳號與唯讀檢查，再加入這次掃描。"),
+  guidedLocalGrantDescription: bilingual("Review the saved local copy and the recommended checks, then start.", "確認已保存的本機副本與建議檢查，然後直接開始。"),
+  guidedCloudGrantDescription: bilingual("Your provider sign-in already identifies the account. Review the exact account and read-only checks below, then start.", "雲端服務商登入已確認帳號；請查看下方的精確帳號與唯讀檢查，然後直接開始。"),
   presetTitle: bilingual("Recommended settings are ready", "建議設定已準備好"),
-  presetBody: bilingual("We picked a safe, useful starting point for the selected items. You can still change anything before saving.", "我們已依所選項目準備安全又實用的起始設定；儲存前仍可調整。"),
+  presetBody: bilingual("We picked a safe, useful starting point for the selected items. You can still change anything before starting.", "我們已依所選項目準備安全又實用的起始設定；開始前仍可調整。"),
   guidedNetworkPreset: bilingual(
     "We'll check only {target} with conservative connection settings. You can change the technical details if needed.",
     "這次只會用保守的連線設定檢查 {target}；需要時可修改技術細節。",
@@ -524,12 +524,12 @@ const pageCopy = {
 
   externalEyebrow: bilingual("Target confirmation", "確認掃描目標"),
   externalTitle: bilingual("Confirm {name}", "確認 {name}"),
-  externalDescription: bilingual("We've chosen conservative settings. Confirm this is your website or internal system, then save.", "我們已選好保守設定；確認這是你的網站或內部系統，再儲存即可。"),
+  externalDescription: bilingual("We've chosen conservative settings. Confirm this is your website or internal system, then start.", "我們已選好保守設定；確認這是你的網站或內部系統，然後直接開始。"),
   guidedExternalDescription: bilingual("This is the exact target saved in your scan project.", "這是掃描專案中保存的精確目標。"),
   advancedScanSettings: bilingual("Advanced scan settings", "進階掃描設定"),
   advancedScanSettingsHelp: bilingual("Connection details, speed limits, and the active-test list", "連線細節、速度限制與主動測試清單"),
   activeSetupTitle: bilingual("Active testing needs one more step", "主動測試還需要一個步驟"),
-  activeSetupBody: bilingual("Open Advanced scan settings and add the approved test list before saving.", "請打開「進階掃描設定」，加入已核准的測試清單後再儲存。"),
+  activeSetupBody: bilingual("Open Advanced scan settings and add the approved test list before starting.", "請打開「進階掃描設定」，加入已核准的測試清單後再開始。"),
   sourcePublic: bilingual("Public website", "公開網站"),
   sourceInternal: bilingual("Internal system", "內部系統"),
   sourceExposureUnknown: bilingual("Needs source details", "需要補充來源資料"),
@@ -568,8 +568,8 @@ const pageCopy = {
     "這個 CIDR 包含 {addresses} 個可用位址與 {ports} 個連接埠（共 {probes} 次連線檢查）。速率下限採用每秒 {effectiveRate} 次檢查，也就是每秒請求 {requestedRate} 次與 {concurrency} 個並行檢查中較低的數值。無回應的主機可能因每次連線各有逾時而花更久。",
   ),
   durationCeilingRiskBody: bilingual(
-    "The host scanner stops after a fixed {ceilingHours} hr. At the selected {timeout}-second connection timeout, the conservative bound is {upperHours} hr {upperMinutes} min, so this setup may stop incomplete before every address and port is checked. Keep the safe limits and narrow the CIDR, ports, or timeout before saving if complete coverage is required.",
-    "主機掃描器會在固定 {ceilingHours} 小時後停止。依目前每次連線 {timeout} 秒的逾時設定，保守上限為 {upperHours} 小時 {upperMinutes} 分鐘，因此可能在檢查完所有位址與連接埠前停止並留下不完整結果。若需要完整涵蓋，請保留安全限制，並在儲存前縮小 CIDR、連接埠或逾時時間。",
+    "The host scanner stops after a fixed {ceilingHours} hr. At the selected {timeout}-second connection timeout, the conservative bound is {upperHours} hr {upperMinutes} min, so this setup may stop incomplete before every address and port is checked. Keep the safe limits and narrow the CIDR, ports, or timeout before starting if complete coverage is required.",
+    "主機掃描器會在固定 {ceilingHours} 小時後停止。依目前每次連線 {timeout} 秒的逾時設定，保守上限為 {upperHours} 小時 {upperMinutes} 分鐘，因此可能在檢查完所有位址與連接埠前停止並留下不完整結果。若需要完整涵蓋，請保留安全限制，並在開始前縮小 CIDR、連接埠或逾時時間。",
   ),
   durationCeilingWithinBody: bilingual(
     "The host scanner still stops after a fixed {ceilingHours} hr. This setup's conservative {upperHours} hr {upperMinutes} min timeout bound fits within that ceiling, but it is not a completion guarantee.",
@@ -599,11 +599,11 @@ const pageCopy = {
   authorityHelp: bilingual("Add the ticket, contract, or approver that confirms this scan. Never enter a password, key, or token here.", "填入可證明這次掃描已核准的工單、合約或核准人；不要放入密碼、金鑰或 token。"),
   noteHelp: bilingual("Never enter a secret or credential here.", "不要在這裡填入秘密值或憑證。"),
   activeAuthorityLength: bilingual("An active-test permission reference needs at least 8 characters.", "主動測試的授權參考至少需要 8 個字元。"),
-  grantBoundaryHelp: bilingual("Next, open Scan progress and press Start when you're ready.", "下一步到「掃描進度」，準備好時再按下開始。"),
-  saveGrant: bilingual("Save scan choices", "儲存掃描選項"),
-  confirmAndSave: bilingual("I confirm and prepare this scan", "我確認並準備這次掃描"),
-  useSignedInCloud: bilingual("Use this signed-in account", "使用這個已登入帳號"),
-  savingGrant: bilingual("Recording…", "正在記錄…"),
+  grantBoundaryHelp: bilingual("This saves the exact target and limits, then starts the scan. Unavailable checks will be listed without stopping the others.", "這會保存精確目標與限制並開始掃描；無法執行的檢查會列出，不會阻止其他檢查。"),
+  startScan: bilingual("Start scan", "開始掃描"),
+  confirmAndStart: bilingual("Confirm and start scan", "確認並開始掃描"),
+  scanSignedInCloud: bilingual("Scan this signed-in account", "掃描這個已登入帳號"),
+  startingScan: bilingual("Starting…", "正在開始…"),
   defaultScopeNote: bilingual("The user confirmed ownership and the read-only boundary item by item in the local interface.", "使用者已在本機介面逐項確認資產所有權與唯讀範圍。"),
   guidedNetworkConfirmation: bilingual("The user explicitly confirmed this exact low-impact network target in the guided local interface.", "使用者已在本機引導介面明確確認這個精確的低影響網路目標。"),
   guidedLocalConfirmation: bilingual("The user explicitly selected this saved local copy and confirmed the recommended read-only checks.", "使用者已明確選擇這份已保存的本機副本，並確認建議的唯讀檢查。"),
@@ -809,7 +809,7 @@ export function CoveragePage({
   onAttachWorkspaceSnapshot,
   onStartDiscovery,
   onAuthorizationChanged,
-  onApprovePending,
+  onStartScan,
 }: CoveragePageProps) {
   const { text, formatDateTime, formatNumber } = useI18n();
   const guidedLocalProfile = assessmentIntent ? localProfileByAssessmentIntent[assessmentIntent] : undefined;
@@ -1109,7 +1109,7 @@ export function CoveragePage({
     });
   };
 
-  const approve = async () => {
+  const startScan = async () => {
     if (selectedAssets.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed)) return;
     if (requiresAuthorizationReference && !scopeConfirmation.trim()) return;
     if (!externalScopeReady) return;
@@ -1136,13 +1136,13 @@ export function CoveragePage({
       assertedAuthority: effectiveScopeConfirmation,
       allowSensitiveNetworks: effectiveAllowSensitiveNetworks,
     } : undefined;
-    const approved = await onApprovePending(
+    const started = await onStartScan(
       selectedAssets,
       scopeModes,
       effectiveScopeConfirmation,
       externalScope,
     );
-    if (approved) resetScopeForm();
+    if (started) resetScopeForm();
   };
 
   const changeSourceKind = (nextKind: SourceKind) => {
@@ -1713,7 +1713,7 @@ export function CoveragePage({
         </div>
 
         {selectedAssets.length > 0 && (
-          <form className="scope-confirmation-panel" onSubmit={(event) => { event.preventDefault(); void approve(); }}>
+          <form className="scope-confirmation-panel" onSubmit={(event) => { event.preventDefault(); void startScan(); }}>
             <div className="scope-confirmation-panel__heading">
               <div>
                 <p className="eyebrow">{text(pageCopy.grantEyebrow)}</p>
@@ -1961,12 +1961,12 @@ export function CoveragePage({
               <p><Icon name="lock" size={16} /> {text(pageCopy.grantBoundaryHelp)}</p>
               <button className="button button--primary" type="submit" disabled={busy || availableScopeModes.length === 0 || scopeModes.length === 0 || (!simpleGuidedConsent && !ownershipConfirmed) || (requiresAuthorizationReference && !scopeConfirmation.trim()) || !externalScopeReady}>
                 <Icon name="lock" size={16} />{busy
-                  ? text(pageCopy.savingGrant)
+                  ? text(pageCopy.startingScan)
                   : text(guidedCloudConsent
-                    ? pageCopy.useSignedInCloud
+                    ? pageCopy.scanSignedInCloud
                     : simpleGuidedConsent
-                      ? pageCopy.confirmAndSave
-                      : pageCopy.saveGrant)}
+                      ? pageCopy.confirmAndStart
+                      : pageCopy.startScan)}
               </button>
             </div>
           </form>

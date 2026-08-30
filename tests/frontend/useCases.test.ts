@@ -51,6 +51,18 @@ test("both locales preserve optional preparation, behavior, and boundary details
   }
 });
 
+test("company or team details are optional and never block scan-project creation", () => {
+  assert.ok(casesPageSource.includes('Company or team name (optional)'));
+  assert.ok(casesPageSource.includes('公司或團隊名稱（選填）'));
+  assert.doesNotMatch(casesPageSource, /!organizationName\.trim\(\)/u);
+  const fieldStart = casesPageSource.indexOf("<span>{text(pageCopy.organizationName)}</span>");
+  const fieldEnd = casesPageSource.indexOf("</label>", fieldStart);
+  const field = casesPageSource.slice(fieldStart, fieldEnd);
+  assert.match(field, /<input value=\{organizationName\}/u);
+  assert.match(field, /pageCopy\.organizationPlaceholder/u);
+  assert.doesNotMatch(field, /\brequired\b/u);
+});
+
 test("AI-application onboarding is explicit, local, and does not ask users to hide secrets", () => {
   const aiEnglish = startPageCopy.en.cards.ai_application;
   const aiTraditionalChinese = startPageCopy["zh-TW"].cards.ai_application;

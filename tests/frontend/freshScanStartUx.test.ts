@@ -19,7 +19,7 @@ test("a fresh scan request immediately replaces the empty state and prevents a d
   assert.match(app, /const \[startingScanCaseId, setStartingScanCaseId\] = useState<string>\(\)/u);
   assert.match(app, /<ProgressPage[\s\S]*caseId=\{currentCaseId\}/u);
   assert.match(app, /starting=\{Boolean\(currentCaseId && busyAction === "start-scan" && startingScanCaseId === currentCaseId\)\}/u);
-  assert.match(app, /onStart=\{\(\) => currentCaseId \? startScan\(currentCaseId\) : Promise\.resolve\(\)\}/u);
+  assert.match(app, /onStart=\{async \(\) => \{[\s\S]*if \(currentCaseId\) await startScan\(\{ caseId: currentCaseId \}\);/u);
   assert.match(progress, /starting\?: boolean/u);
   assert.match(progress, /startRunIds\.current = \{ caseId, ids: new Set\(runs\.map\(\(run\) => run\.id\)\) \}/u);
   assert.match(progress, /if \(!baseline \|\| baseline\.caseId !== caseId\) return/u);
@@ -32,7 +32,7 @@ test("a fresh scan request immediately replaces the empty state and prevents a d
   assert.match(noRun, /description=\{text\(starting \? copy\.startingDescription : emptyDescription\)\}/u);
   assert.match(
     noRun,
-    /action=\{starting \? \([\s\S]*?<button[^>]*disabled aria-busy="true">[\s\S]*?copy\.startingAction[\s\S]*?\) : readiness\?\.ready \?/u,
+    /action=\{starting \? \([\s\S]*?<button[^>]*disabled aria-busy="true">[\s\S]*?copy\.startingAction[\s\S]*?\) : canStart \?/u,
   );
   assert.match(noRun, /\{starting && \([\s\S]*?className="scan-activity__current" role="status"/u);
   assert.doesNotMatch(noRun, /selectedRun\.id/u);
@@ -61,8 +61,22 @@ test("a prepared case can start a new scan while terminal history remains visibl
 
   assert.equal(hasActiveScanWork(terminalHistory), false);
   assert.equal(canStartPreparedScan({ ready: true }, false, terminalHistory), true);
-  assert.equal(canStartPreparedScan({ ready: false }, false, terminalHistory), false);
-  assert.equal(canStartPreparedScan({ ready: true }, true, terminalHistory), false);
+  assert.equal(
+    canStartPreparedScan({ ready: false, blockerCode: "runtime_unavailable" }, false, terminalHistory),
+    true,
+    "a disposable runtime failure must become a task outcome after Start",
+  );
+  assert.equal(
+    canStartPreparedScan({ ready: false, blockerCode: "no_runnable_authorized_targets" }, false, terminalHistory),
+    true,
+    "zero runnable engines must still produce an honest durable report",
+  );
+  assert.equal(
+    canStartPreparedScan({ ready: false, blockerCode: "no_effective_scope_grants" }, false, terminalHistory),
+    false,
+    "a repeat scan needs an existing exact target assertion",
+  );
+  assert.equal(canStartPreparedScan(undefined, true, terminalHistory), true);
 
   for (const status of ["queued", "running", "paused"]) {
     assert.equal(

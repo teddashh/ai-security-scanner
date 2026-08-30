@@ -517,6 +517,7 @@ export type RunStatus =
   | "running"
   | "paused"
   | "completed"
+  | "no_checks_completed"
   | "partial"
   | "failed"
   | "cancelled";
@@ -566,13 +567,51 @@ export type EngineRecoveryAction =
   | "continue_saved_results"
   | "finish_cleanup";
 
+/** The immutable work contract saved for one check. */
+export type EngineTaskKind =
+  | { kind: "catalog_engine" }
+  | {
+      kind: "built_in_localhost_tcp";
+      port: number;
+      timeoutMs: number;
+      payloadBytes: number;
+    };
+
+export type LocalhostTcpOutcome = "reachable" | "closed" | "timed_out";
+
+/**
+ * One bounded TCP connection observation. This is reachability evidence only,
+ * never a vulnerability or security verdict.
+ */
+export interface LocalhostTcpObservation {
+  outcome: LocalhostTcpOutcome;
+  observedAt: string;
+}
+
+export type ScanRequestOutcomeCode =
+  | "no_effective_scope_grants"
+  | "no_ownership_confirmed_targets"
+  | "no_applicable_checks";
+
+/** A durable terminal request that contacted no target and completed no checks. */
+export interface ScanRequestOutcome {
+  status: "no_checks_completed";
+  code: ScanRequestOutcomeCode;
+  requestedAssetIds: string[];
+  requestedEngineIds: string[];
+}
+
 export interface EngineRun {
   id: string;
   engineId: string;
   engineName: string;
   category: string;
-  version: string;
-  digest: string;
+  /** Absent for product-owned tasks that do not use a catalog engine. */
+  version?: string;
+  /** Absent for product-owned tasks that do not use a container image. */
+  digest?: string;
+  taskKind: EngineTaskKind;
+  localhostTcpObservation?: LocalhostTcpObservation;
   ruleVersion?: string;
   adapterVersion?: string;
   manifestSchemaVersion?: string;
@@ -623,6 +662,7 @@ export interface ScanRun {
   caseId: string;
   label: string;
   verificationBaselineRunId?: string;
+  requestOutcome?: ScanRequestOutcome;
   status: RunStatus;
   progress: number;
   startedAt: string;
@@ -633,6 +673,194 @@ export interface ScanRun {
   engineRuns: EngineRun[];
   coveredAssetCount: number;
   totalAssetCount: number;
+}
+
+export type BeginnerReportSummary = "complete" | "partial" | "no_checks_completed";
+export type BeginnerReportLifecycle = "live" | "final";
+export type BeginnerReportDataAvailability = "recorded" | "current_case_fallback" | "unavailable";
+export type BeginnerReportStage = "quick_discovery" | "inventory" | "deep";
+export type BeginnerCoverageStatus =
+  | "tested_complete"
+  | "tested_partial"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "not_tested"
+  | "in_progress";
+export type BeginnerCoverageGapKind =
+  | "not_tested"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "excluded"
+  | "truncated"
+  | "unavailable";
+export type BeginnerNextActionCode =
+  | "review_finding"
+  | "retry_check"
+  | "review_scope_and_retry"
+  | "choose_compatible_check"
+  | "wait_or_cancel"
+  | "start_expected_service_and_retry"
+  | "review_coverage"
+  | "preserve_visible_limitation"
+  | "no_action_unless_scope_changes";
+
+export interface BeginnerRequestedTarget {
+  assetId: string;
+  label?: string;
+  assetKind?: string;
+  labelAvailability: BeginnerReportDataAvailability;
+  assetKindAvailability: BeginnerReportDataAvailability;
+}
+
+export interface BeginnerRequestedLimit {
+  name: string;
+  value: string;
+  source: "frozen_task_contract" | "frozen_scope_grant";
+}
+
+export interface BeginnerUnavailableDimension {
+  dimension: string;
+  explanation: string;
+}
+
+export interface BeginnerRequestedCoverage {
+  targets: BeginnerRequestedTarget[];
+  stage: {
+    value?: BeginnerReportStage;
+    availability: BeginnerReportDataAvailability;
+    explanation: string;
+  };
+  limits: BeginnerRequestedLimit[];
+  requestedCheckIds: string[];
+  requestOutcomeCode?: ScanRequestOutcomeCode;
+  automaticReductions: Array<{
+    dimension: string;
+    requested: string;
+    executed: string;
+    reason: string;
+  }>;
+  reductionsAvailability: BeginnerReportDataAvailability;
+  unavailableDimensions: BeginnerUnavailableDimension[];
+}
+
+export interface BeginnerActualCheck {
+  taskId: string;
+  checkId: string;
+  targetAssetIds: string[];
+  status: BeginnerCoverageStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  testedDimensions: Array<{
+    dimension: string;
+    value: string;
+    observation: string;
+    observedAt?: string;
+  }>;
+}
+
+export interface BeginnerActualCoverage {
+  observedFrom?: string;
+  observedUntil?: string;
+  checks: BeginnerActualCheck[];
+  unavailableDimensions: BeginnerUnavailableDimension[];
+}
+
+export interface BeginnerCoverageGap {
+  kind: BeginnerCoverageGapKind;
+  taskId?: string;
+  targetAssetIds: string[];
+  dimension: string;
+  reason: string;
+  nextActionCode: BeginnerNextActionCode;
+  nextAction: string;
+}
+
+export interface BeginnerReportFinding {
+  findingId: string;
+  fingerprint: string;
+  snapshotSource: "frozen_selected_run" | "current_canonical_legacy_fallback" | "observation_only";
+  title: string;
+  plainLanguageRisk: string;
+  possibleImpact: string;
+  severity: Severity;
+  confidence: Confidence;
+  priority?: number;
+  priorityReasons: string[];
+  targetAssetIds: string[];
+  nextStep: string;
+  recommendedExpertType: string;
+  evidenceReferences: Array<{
+    evidenceId: string;
+    engineId: string;
+    artifactSha256: string;
+    observedAt: string;
+  }>;
+  frameworkReferences: Array<{
+    framework: string;
+    frameworkVersion: string;
+    controlId: string;
+    title: string;
+    relationship: string;
+    rationale: string;
+    mappingVersion: string;
+  }>;
+}
+
+export interface BeginnerTechnicalTaskDetails {
+  taskId: string;
+  targetAssetIds: string[];
+  status: EngineRunStatus;
+  phase: string;
+  progressPercent: number;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+  cleanupRemoved?: boolean;
+  errorCode?: string;
+  evidenceSha256: string[];
+  execution: Record<string, unknown> & { kind?: string };
+}
+
+export interface BeginnerMasterReport {
+  schemaVersion: string;
+  caseId: string;
+  runId: string;
+  projectTitle: string;
+  state: {
+    summary: BeginnerReportSummary;
+    lifecycle: BeginnerReportLifecycle;
+    lastDurableUpdate: string;
+    explanation: string;
+  };
+  requested: BeginnerRequestedCoverage;
+  actual: BeginnerActualCoverage;
+  coverageGaps: BeginnerCoverageGap[];
+  coverageCounts: Record<
+    "testedComplete" | "testedPartial" | "failed" | "timedOut" | "cancelled" | "notTested" | "excluded" | "truncated" | "unavailable",
+    number
+  >;
+  findings: BeginnerReportFinding[];
+  nextSteps: Array<{
+    priority: number;
+    code: BeginnerNextActionCode;
+    action: string;
+    reason: string;
+    findingId?: string;
+    taskId?: string;
+    recommendedExpertType?: string;
+  }>;
+  /** Expert-only, redacted execution records. The Results page keeps these collapsed. */
+  technicalDetails: {
+    collapsedByDefault: true;
+    tasks: BeginnerTechnicalTaskDetails[];
+  };
+  frameworkNotice: {
+    nonCertification: string;
+    aidefendMappingStatus: string;
+  };
+  dataQualityWarnings: string[];
 }
 
 export type ScanReadinessState =
@@ -878,6 +1106,8 @@ export interface CaseExport {
   createdAt: string;
   fileName: string;
   sha256: string;
+  coverageManifestPath?: string;
+  coverageManifestSha256?: string;
   signatureState: "unsigned" | "local_integrity";
   includesRawEvidence?: boolean;
   rawArtifactsIncluded?: number;
@@ -911,6 +1141,7 @@ export interface ExportPreview {
   rawArtifactsOmitted: number;
   sensitiveRawArtifactsOmitted: number;
   sensitiveDataWarning: string;
+  coverageManifestIncluded: boolean;
 }
 
 export interface EngineManifest {
@@ -941,6 +1172,8 @@ export interface CaseWorkspace {
   findingGroupEvents: FindingGroupEvent[];
   workflowEvents: FindingWorkflowEvent[];
   exports: CaseExport[];
+  /** One backend-derived report per durable run; no frontend lifecycle is inferred here. */
+  beginnerReports?: BeginnerMasterReport[];
   verification?: VerificationSummary;
 }
 
@@ -963,7 +1196,20 @@ export interface AppSnapshot {
     detail: string;
   };
   artifactCleanupObligations?: CaseArtifactDeletionPlan[];
+  /** Saved projects that were preserved but could not be opened in this snapshot. */
+  caseRecoveryDiagnostics?: CaseRecoveryDiagnostic[];
   engineCount?: number;
+}
+
+export interface CaseRecoveryDiagnostic {
+  caseId: string;
+  title: string;
+  updatedAt: string;
+  revision: number;
+  documentBytes: number;
+  code: string;
+  message: string;
+  preserved: boolean;
 }
 
 export type ManagedRuntimeSetupPhase =

@@ -5,6 +5,13 @@ export const findRunCreatedAfterStart = (
 
 const activeRunStatuses = new Set(["queued", "running", "paused"]);
 const activeEngineStatuses = new Set(["pending", "running", "paused"]);
+const startBlockingReasons = new Set([
+  "demo_case",
+  "archived_case",
+  "scan_already_active",
+  "no_effective_scope_grants",
+  "no_ownership_confirmed_targets",
+]);
 
 export const hasActiveScanWork = (
   runs: ReadonlyArray<{
@@ -16,11 +23,11 @@ export const hasActiveScanWork = (
   || run.engineRuns?.some((engineRun) => activeEngineStatuses.has(engineRun.status)) === true);
 
 export const canStartPreparedScan = (
-  readiness: { ready: boolean } | undefined,
-  readinessCheckFailed: boolean,
+  readiness: { ready: boolean; blockerCode?: string } | undefined,
+  _readinessCheckFailed: boolean,
   runs: ReadonlyArray<{ status: string }>,
-): boolean => Boolean(
-  !readinessCheckFailed
-  && readiness?.ready
-  && !hasActiveScanWork(runs),
-);
+): boolean => {
+  if (hasActiveScanWork(runs)) return false;
+  const blocker = readiness?.blockerCode;
+  return !blocker || !startBlockingReasons.has(blocker);
+};

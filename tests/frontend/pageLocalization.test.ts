@@ -74,11 +74,12 @@ test("all progress controls remain wired while raw scanner status stays in detai
   assert.match(source, /未執行的檢查不能視為已通過/u);
 });
 
-test("scan readiness blocks empty runs and sends each fix to the useful screen", async () => {
+test("scan readiness only blocks unsafe empty runs and sends each fix to the useful screen", async () => {
   const progress = await readPage("ProgressPage.tsx");
   const app = await readFile(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
-  assert.match(progress, /action=\{starting \? \([\s\S]*\) : readiness\?\.ready \?/u);
+  assert.match(progress, /const canStart = canStartPreparedScan\([\s\S]*action=\{starting \? \([\s\S]*\) : canStart \?/u);
+  assert.doesNotMatch(progress, /action=\{starting \? \([\s\S]*\) : readiness\?\.ready \?/u);
   assert.match(progress, /readiness\?\.nextStep === "scanner_setup"[\s\S]*copy\.setupTools/u);
   assert.match(progress, /provider_capability_unavailable:[\s\S]*action: copy\.reconnectCloud/u);
   assert.match(progress, /One quick setup, then scan/u);

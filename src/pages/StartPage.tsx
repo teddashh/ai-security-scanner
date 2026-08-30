@@ -57,9 +57,6 @@ interface MarketingCopy {
   cardDetails: string;
   moreWaysTitle: string;
   moreWaysDescription: string;
-  setupEyebrow: string;
-  setupTitle: string;
-  setupDescription: string;
   controlSummary: string;
   cards: Record<UseCaseId, { outcome: string; action: string }>;
 }
@@ -120,9 +117,6 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     cardDetails: "See what’s included",
     moreWaysTitle: "More ways to scan",
     moreWaysDescription: "Source code, cloud accounts, infrastructure code, containers, and Kubernetes",
-    setupEyebrow: "One-time setup",
-    setupTitle: "Get the scan tools ready",
-    setupDescription: "Set it up once, then reuse it for every kind of check.",
     controlSummary: "How scanning stays under your control",
     cards: {
       deployed_website: {
@@ -218,9 +212,6 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     cardDetails: "查看包含哪些檢查",
     moreWaysTitle: "更多檢查方式",
     moreWaysDescription: "一般程式碼、雲端帳號、基礎設施程式碼、容器映像與 Kubernetes",
-    setupEyebrow: "只需設定一次",
-    setupTitle: "準備好掃描工具",
-    setupDescription: "完成一次設定，之後每種檢查都能直接使用。",
     controlSummary: "了解掃描如何由你控制",
     cards: {
       deployed_website: {
@@ -477,14 +468,9 @@ export function StartPage({
       </section>
 
       {setup && (
-        <section id="start-page-runtime-setup" className="start-page__setup" tabIndex={-1} aria-labelledby="start-page-setup-title">
-          <header className="start-page__section-heading">
-            <p className="eyebrow">{marketing.setupEyebrow}</p>
-            <h2 id="start-page-setup-title">{marketing.setupTitle}</h2>
-            <p>{marketing.setupDescription}</p>
-          </header>
+        <aside id="start-page-runtime-setup" className="start-page__setup" tabIndex={-1}>
           {setup}
-        </section>
+        </aside>
       )}
 
       <details className="start-page__scope-note">

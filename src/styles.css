@@ -902,6 +902,61 @@ button.update-control:hover:not(:disabled) {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 13px;
+  margin: 18px 0 22px;
+}
+
+.report-count-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.69rem;
+}
+
+.report-count-breakdown strong {
+  color: var(--ink-strong);
+}
+
+.coverage-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.coverage-card h3 {
+  margin-bottom: 12px;
+  font-size: 0.93rem;
+}
+
+.coverage-card > p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.5;
+}
+
+.coverage-card details {
+  margin-top: 12px;
+}
+
+.coverage-card summary {
+  color: var(--teal);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
 .metric-card {
   position: relative;
   display: grid;
@@ -2946,6 +3001,7 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 
 @media (max-width: 1250px) {
   .metrics-grid--four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .coverage-grid { grid-template-columns: 1fr; }
   .source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .coverage-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .coverage-legend__item:nth-last-child(-n + 2) { min-height: 118px; }

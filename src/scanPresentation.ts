@@ -1,5 +1,6 @@
 import type { BilingualText } from "./i18n";
 import { isExplicitPreScannerInfrastructureFailure } from "./scanDiagnostics";
+import { localhostTcpBeginnerSummary } from "./localhostTcpPresentation";
 import type { EngineRun } from "./types";
 
 export const catalogEngineIds = [
@@ -99,8 +100,8 @@ const nextStepCopy = {
     zhTW: "回到掃描設定，選擇正確目標並確認一次。",
   },
   toolSetup: {
-    en: "Open scan-tool setup, make sure the private engine is ready, then start a new scan.",
-    zhTW: "開啟掃描工具設定，確認私有引擎已就緒，再開始新的掃描。",
+    en: "Try this check again. The app will prepare a fresh private scan environment automatically.",
+    zhTW: "請再試一次；程式會自動準備新的專用掃描環境。",
   },
   executionStoppedWithResults: {
     en: "Review the results already saved, download the diagnostic log, then retry this check.",
@@ -123,8 +124,8 @@ const nextStepCopy = {
     zhTW: "請回到雲端設定，重新連接或檢查所選帳號。",
   },
   gatewayPreparation: {
-    en: "The private scan connection stopped before this check began. Repair the scan tools, then retry this check.",
-    zhTW: "專用掃描連線在這項檢查開始前就停止了。請修復掃描工具，再重試這項檢查。",
+    en: "The private scan connection stopped before this check began. Try the check again and the app will rebuild the connection automatically.",
+    zhTW: "專用掃描連線在這項檢查開始前就停止了。請再試一次，程式會自動重建連線。",
   },
   unavailableInRelease: {
     en: "These checks are not available in this version. Review completed results and update the app before trying again.",
@@ -135,8 +136,8 @@ const nextStepCopy = {
     zhTW: "請開始新的掃描，以目前安裝的版本執行這項檢查；已保存的掃描不會變更。",
   },
   mixedSkippedSetup: {
-    en: "The skipped checks need more than one action. Finish the target or cloud step, follow the scan-tool action shown, then start a new scan.",
-    zhTW: "未執行的檢查還需要幾個步驟；請先完成目標或雲端設定，再照畫面處理掃描工具，然後開始新的掃描。",
+    en: "Finish the target or cloud step shown, then try the unfinished checks again. The app prepares its scan tools automatically.",
+    zhTW: "請完成畫面上的目標或雲端步驟，再重試未完成的檢查；程式會自動準備掃描工具。",
   },
   skippedUnknown: {
     en: "Open the technical records for the skipped checks, finish the indicated setup, then start a new scan.",
@@ -188,8 +189,10 @@ const releaseUnavailableErrorCodes = new Set([
   "license_review",
 ]);
 
-export const engineOutcomeFor = (engine: Pick<EngineRun, "engineId">): BilingualText =>
-  engineOutcomeCopy[engine.engineId as CatalogEngineId] ?? fallbackOutcome;
+export const engineOutcomeFor = (engine: EngineRun): BilingualText =>
+  localhostTcpBeginnerSummary(engine)?.title
+  ?? engineOutcomeCopy[engine.engineId as CatalogEngineId]
+  ?? fallbackOutcome;
 
 export const skippedChecksNextStepFor = (reasonCodes: readonly string[]): BilingualText => {
   const hasTargetIssue = reasonCodes.some((code) => targetSetupErrorCodes.has(code));
@@ -207,6 +210,8 @@ export const skippedChecksNextStepFor = (reasonCodes: readonly string[]): Biling
 };
 
 export const engineNextStepFor = (engine: EngineRun): BilingualText => {
+  const localhostSummary = localhostTcpBeginnerSummary(engine);
+  if (localhostSummary) return localhostSummary.nextStep;
   if (engine.status === "completed") {
     return engine.findingCount > 0
       ? nextStepCopy.completedWithFindings

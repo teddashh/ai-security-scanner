@@ -34,6 +34,7 @@ import {
   scannerService,
   type ActionResponse,
   type CaseExportVerificationResult,
+  type StartScanInput,
 } from "./services/scanner";
 import { subscribeAllThenReconcile } from "./services/bufferedEventSubscription";
 import {
@@ -201,8 +202,8 @@ const scanStartIssueCopy = {
     zhTW: "目標已準備好，但這個版本沒有可執行這項檢查的工具。請取得最新安裝程式；這台電腦上的掃描專案會完整保留。",
   },
   runtime_unavailable: {
-    en: "The target is ready. Set up the private scan tools once, then start the scan.",
-    zhTW: "目標已準備好。先完成一次專用掃描工具設定，就能開始掃描。",
+    en: "The target is ready. Try again and the app will prepare the private scan tools automatically.",
+    zhTW: "目標已準備好。請再試一次，程式會自動準備專用掃描工具。",
   },
   provider_source_required: {
     en: "Connect the cloud account you want to scan. No scan has started yet.",
@@ -282,6 +283,7 @@ export default function App() {
   const [scanReadinessErrorCaseId, setScanReadinessErrorCaseId] = useState<string>();
   const [runtimeSetupFocusKey, setRuntimeSetupFocusKey] = useState(0);
   const [focusedFindingId, setFocusedFindingId] = useState<string>();
+  const [selectedReportRunId, setSelectedReportRunId] = useState<string>();
   const [verificationBaselineRunId, setVerificationBaselineRunId] = useState<string>();
   const [selectedUseCase, setSelectedUseCase] = useState<{
     definition: UseCaseDefinition;
@@ -510,8 +512,8 @@ export default function App() {
             })
             : preservedUnknownWorkspace
               ? text({
-                en: "The app could not confirm ownership of an older workspace, so it left that data untouched. This scan tool is unavailable in this session; saved scans remain usable.",
-                zhTW: "程式無法確認舊工作區的歸屬，因此沒有更動其中資料。這個掃描工具目前無法使用；已保存的掃描仍可開啟。",
+                en: "The older workspace was left untouched. Retry and the app will prepare a new isolated workspace without deleting the old one.",
+                zhTW: "程式沒有更動舊工作區。再次嘗試時會建立新的隔離工作空間，不需要刪除舊資料。",
               })
               : text({
                 en: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
@@ -522,10 +524,10 @@ export default function App() {
       recordTechnicalError("prepare managed runtime", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
+        title: text({ en: "One local check is unavailable", zhTW: "一項本機檢查目前無法使用" }),
         detail: text({
-          en: "Your scan projects were not changed. Return to the setup card and try setup again.",
-          zhTW: "你的掃描專案沒有變更；請回到設定卡片再試一次。",
+          en: "Your projects and reports are unchanged. Other checks remain available; retry automatic preparation when ready.",
+          zhTW: "你的專案與報告沒有變更，其他檢查仍可使用；準備好時可再試一次自動準備。",
         }),
       });
     } finally {
@@ -810,15 +812,15 @@ export default function App() {
           tone: result.mode === "demo" ? "info" : "warning",
           title: result.mode === "demo"
             ? text({ en: "Browser demo did not run a real check", zhTW: "瀏覽器展示模式沒有執行真實檢查" })
-            : text({ en: "This computer check did not start", zhTW: "這台電腦的檢查沒有開始" }),
+            : text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
           detail: result.mode === "demo"
             ? text({
               en: "Nothing on this computer was contacted or changed.",
               zhTW: "沒有連線或更動這台電腦上的任何內容。",
             })
             : text({
-              en: "Your saved scan projects and results were kept. Try again in a moment.",
-              zhTW: "已儲存的掃描專案與結果都已保留；請稍後再試一次。",
+              en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
+              zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
             }),
         });
         return;
@@ -834,6 +836,7 @@ export default function App() {
       setScanReadiness(undefined);
       setScanReadinessErrorCaseId(undefined);
       setSelectedUseCase(undefined);
+      setSelectedReportRunId(selectedQuickWorkspace.runs[0]?.id);
       setSnapshot((current) => {
         if (!current) return current;
         const selectedSnapshot = {
@@ -851,10 +854,10 @@ export default function App() {
       recordTechnicalError("start localhost quick scan", error);
       pushToast({
         tone: "danger",
-        title: text({ en: "This computer check did not start", zhTW: "這台電腦的檢查沒有開始" }),
+        title: text({ en: "This computer check needs attention", zhTW: "這台電腦的檢查需要留意" }),
         detail: text({
-          en: "Your saved scan projects and results were kept. Try again in a moment.",
-          zhTW: "已儲存的掃描專案與結果都已保留；請稍後再試一次。",
+          en: "The app could not confirm the saved state. Open Scan progress first; if no new check appears, try again. Existing projects and results were kept.",
+          zhTW: "程式無法確認已保存的狀態。請先開啟「掃描進度」查看；若沒有新的檢查，再試一次。既有專案與結果都已保留。",
         }),
       });
     } finally {
@@ -916,12 +919,14 @@ export default function App() {
     await executeAction(key, action);
   };
 
-  const startScan = async (caseId: string): Promise<void> => {
-    setStartingScanCaseId(caseId);
+  const startScan = async (input: StartScanInput): Promise<boolean> => {
+    setStartingScanCaseId(input.caseId);
     try {
-      await runAction("start-scan", () => scannerService.startScan(caseId));
+      const accepted = await executeAction("start-scan", () => scannerService.startScan(input));
+      if (accepted) navigate("progress");
+      return accepted;
     } finally {
-      setStartingScanCaseId((current) => current === caseId ? undefined : current);
+      setStartingScanCaseId((current) => current === input.caseId ? undefined : current);
     }
   };
 
@@ -1007,6 +1012,16 @@ export default function App() {
   };
 
   const workspace = snapshot?.workspace;
+  useEffect(() => {
+    const runs = workspace?.runs ?? [];
+    const newest = runs[0];
+    if (!newest) {
+      setSelectedReportRunId(undefined);
+      return;
+    }
+    const selectedStillExists = runs.some((run) => run.id === selectedReportRunId);
+    if (!selectedStillExists) setSelectedReportRunId(newest.id);
+  }, [selectedReportRunId, workspace?.case.id, workspace?.runs]);
   const activeScanCaseId = mode === "native"
     && !loading
     && workspace
@@ -1170,7 +1185,11 @@ export default function App() {
   };
 
   const currentCaseId = workspace?.case.id ?? selectedCase?.id;
-  const currentRun = workspace?.runs[0];
+  const currentRun = workspace?.runs.find((run) => run.id === selectedReportRunId)
+    ?? workspace?.runs[0];
+  const currentBeginnerReport = currentRun
+    ? workspace?.beginnerReports?.find((report) => report.runId === currentRun.id)
+    : undefined;
 
   const content = (() => {
     if (loading && !snapshot) {
@@ -1306,7 +1325,7 @@ export default function App() {
             assets={workspace.assets}
             scopeGrants={workspace.scopeGrants}
             nativeMode={mode === "native"}
-            busy={busyAction === "connect-source" || busyAction === "attach-workspace" || busyAction === "discovery" || busyAction === "scope"}
+            busy={busyAction === "connect-source" || busyAction === "attach-workspace" || busyAction === "discovery" || busyAction === "start-scan"}
             discoveryBusy={busyAction === "discovery"}
             onChooseSnapshot={() => scannerService.chooseSourceSnapshot()}
             onConnectSourceSnapshot={(input) => runAction("connect-source", () => scannerService.connectSourceSnapshot(input))}
@@ -1314,13 +1333,10 @@ export default function App() {
             onAttachWorkspaceSnapshot={(input) => executeAction("attach-workspace", () => scannerService.attachWorkspaceSnapshot(input))}
             onStartDiscovery={() => runAction("discovery", () => scannerService.startDiscovery(currentCaseId))}
             onAuthorizationChanged={() => loadSnapshot(currentCaseId, true)}
-            onApprovePending={(assetIds, modes, confirmation, externalScope) => executeAction("scope", () => scannerService.approveScope({
+            onStartScan={(assetIds, modes, confirmation, externalScope) => startScan({
               caseId: currentCaseId,
-              assetIds,
-              modes,
-              confirmation,
-              externalScope,
-            }))}
+              authorization: { assetIds, modes, confirmation, externalScope },
+            })}
           />
         );
       case "progress":
@@ -1328,6 +1344,7 @@ export default function App() {
           <ProgressPage
             caseId={currentCaseId}
             runs={workspace.runs}
+            selectedRunId={currentRun?.id}
             readiness={scanReadiness?.caseId === currentCaseId ? scanReadiness : undefined}
             readinessCheckFailed={scanReadinessErrorCaseId === currentCaseId}
             diagnosticContext={{
@@ -1336,7 +1353,9 @@ export default function App() {
             }}
             busy={Boolean(busyAction)}
             starting={Boolean(currentCaseId && busyAction === "start-scan" && startingScanCaseId === currentCaseId)}
-            onStart={() => currentCaseId ? startScan(currentCaseId) : Promise.resolve()}
+            onStart={async () => {
+              if (currentCaseId) await startScan({ caseId: currentCaseId });
+            }}
             onFixSetup={() => {
               if (scanReadinessErrorCaseId === currentCaseId) {
                 void retryScanReadiness(currentCaseId);
@@ -1363,18 +1382,17 @@ export default function App() {
               }
               navigate(scanReadiness?.nextStep === "cases" ? "cases" : "coverage");
             }}
-            onOpenToolSetup={() => {
-              setRuntimeSetupFocusKey((key) => key + 1);
-              navigate("start");
-            }}
             onPause={(runId) => runAction("pause-scan", () => scannerService.pauseScan(currentCaseId, runId))}
             onResume={(runId) => runAction("resume-scan", () => scannerService.resumeScan(currentCaseId, runId))}
             onCancel={(runId) => runAction("cancel-scan", () => scannerService.cancelScan(currentCaseId, runId))}
+            onSelectRun={setSelectedReportRunId}
           />
         );
       case "findings":
         return (
           <FindingsPage
+            report={currentBeginnerReport}
+            reportUnavailable={Boolean(currentRun && workspace.beginnerReports && !currentBeginnerReport)}
             findings={workspace.findings}
             findingGroups={workspace.findingGroups}
             findingGroupEvents={workspace.findingGroupEvents}
@@ -1400,6 +1418,7 @@ export default function App() {
             }))}
             onOpenCoverage={() => navigate("coverage")}
             onOpenProgress={() => navigate("progress")}
+            onSelectRun={setSelectedReportRunId}
           />
         );
       case "export":
@@ -1426,6 +1445,10 @@ export default function App() {
             onSelectBaseline={setVerificationBaselineRunId}
             onStartRescan={(baselineRunId) => runAction("rescan", () => scannerService.startRescan(currentCaseId, baselineRunId))}
             onOpenFinding={(findingId) => {
+              const findingRunId = workspace.findings.find((finding) => finding.id === findingId)?.lastSeenRunId;
+              if (findingRunId && workspace.runs.some((run) => run.id === findingRunId)) {
+                setSelectedReportRunId(findingRunId);
+              }
               setFocusedFindingId(findingId);
               navigate("findings");
             }}
@@ -1445,8 +1468,10 @@ export default function App() {
         selectedCase={selectedCase}
         loading={loading}
         dataUnavailable={snapshotRefreshUnavailable && snapshot !== undefined}
-        dataRetrying={snapshotRefreshUnavailable && loading}
+        dataRetrying={loading && (snapshotRefreshUnavailable
+          || Boolean(snapshot?.caseRecoveryDiagnostics?.length))}
         onRetryData={() => void loadSnapshot(snapshot?.selectedCaseId)}
+        caseRecoveryDiagnostics={snapshot?.caseRecoveryDiagnostics}
         caseSelectionUnavailable={caseSelectionUnavailableId !== undefined}
         caseSelectionRetrying={caseSelectionUnavailableId !== undefined && loading}
         onRetryCaseSelection={() => {

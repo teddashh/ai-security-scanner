@@ -5,6 +5,7 @@ import type {
   AiGeneratedArtifactAnswer,
   Asset,
   AssetType,
+  BeginnerMasterReport,
   CaseExport,
   ExportPreview,
   CasePhase,
@@ -23,6 +24,7 @@ import type {
   EngineRecoveryAction,
   EngineRun,
   EngineRunStatus,
+  EngineTaskKind,
   ExternalActivity,
   FrozenExternalScope,
   ExportFormat,
@@ -31,6 +33,7 @@ import type {
   FindingGroupEvent,
   FindingWorkflowState,
   LocalInputProfile,
+  LocalhostTcpObservation,
   LocalNetworkCandidateInventory,
   LocalNetworkCandidateStatus,
   LocalPrivateSubnetCandidate,
@@ -41,6 +44,7 @@ import type {
   ManagedRuntimeSetupPhase,
   ManagedRuntimeSetupStatus,
   RunStatus,
+  ScanRequestOutcome,
   ScopeGrant,
   ScopeMode,
   Severity,
@@ -161,6 +165,18 @@ interface NativeCoverageEntry {
 interface NativeEngineRun {
   id: string;
   engine_id: string;
+  task_kind?:
+    | { kind: "catalog_engine" }
+    | {
+        kind: "built_in_localhost_tcp";
+        port: number;
+        timeout_ms: number;
+        payload_bytes: number;
+      };
+  localhost_tcp_observation?: {
+    outcome: string;
+    observed_at: string;
+  } | null;
   asset_ids: string[];
   status: string;
   progress_percent: number;
@@ -208,7 +224,156 @@ interface NativeScanRun {
   completed_at: string | null;
   knowledge_cutoff: string;
   verification_baseline_run_id?: string | null;
+  request_outcome?: {
+    status: string;
+    code: string;
+    requested_asset_ids: string[];
+    requested_engine_ids: string[];
+    explanation: string;
+  } | null;
   engine_runs: NativeEngineRun[];
+}
+
+export interface NativeBeginnerMasterReport {
+  schema_version: string;
+  case_id: string;
+  run_id: string;
+  project_title: string;
+  state: {
+    summary: BeginnerMasterReport["state"]["summary"];
+    lifecycle: BeginnerMasterReport["state"]["lifecycle"];
+    last_durable_update: string;
+    explanation: string;
+  };
+  requested: {
+    targets: Array<{
+      asset_id: string;
+      label: string | null;
+      asset_kind: string | null;
+      label_availability: BeginnerMasterReport["requested"]["targets"][number]["labelAvailability"];
+      asset_kind_availability: BeginnerMasterReport["requested"]["targets"][number]["assetKindAvailability"];
+    }>;
+    stage: {
+      value: BeginnerMasterReport["requested"]["stage"]["value"] | null;
+      availability: BeginnerMasterReport["requested"]["stage"]["availability"];
+      explanation: string;
+    };
+    limits: Array<{
+      name: string;
+      value: string;
+      source: BeginnerMasterReport["requested"]["limits"][number]["source"];
+    }>;
+    requested_check_ids: string[];
+    request_outcome_code: BeginnerMasterReport["requested"]["requestOutcomeCode"] | null;
+    automatic_reductions: Array<{
+      dimension: string;
+      requested: string;
+      executed: string;
+      reason: string;
+    }>;
+    reductions_availability: BeginnerMasterReport["requested"]["reductionsAvailability"];
+    unavailable_dimensions: Array<{ dimension: string; explanation: string }>;
+  };
+  actual: {
+    observed_from: string | null;
+    observed_until: string | null;
+    checks: Array<{
+      task_id: string;
+      check_id: string;
+      target_asset_ids: string[];
+      status: BeginnerMasterReport["actual"]["checks"][number]["status"];
+      started_at: string | null;
+      finished_at: string | null;
+      tested_dimensions: Array<{
+        dimension: string;
+        value: string;
+        observation: string;
+        observed_at: string | null;
+      }>;
+    }>;
+    unavailable_dimensions: Array<{ dimension: string; explanation: string }>;
+  };
+  coverage_gaps: Array<{
+    kind: BeginnerMasterReport["coverageGaps"][number]["kind"];
+    task_id: string | null;
+    target_asset_ids: string[];
+    dimension: string;
+    reason: string;
+    next_action_code: BeginnerMasterReport["coverageGaps"][number]["nextActionCode"];
+    next_action: string;
+  }>;
+  coverage_counts: {
+    tested_complete: number;
+    tested_partial: number;
+    failed: number;
+    timed_out: number;
+    cancelled: number;
+    not_tested: number;
+    excluded: number;
+    truncated: number;
+    unavailable: number;
+  };
+  findings: Array<{
+    finding_id: string;
+    fingerprint: string;
+    snapshot_source: BeginnerMasterReport["findings"][number]["snapshotSource"];
+    title: string;
+    plain_language_risk: string;
+    possible_impact: string;
+    severity: Severity;
+    confidence: Confidence;
+    priority: number | null;
+    priority_reasons: string[];
+    target_asset_ids: string[];
+    next_step: string;
+    recommended_expert_type: string;
+    evidence_references: Array<{
+      evidence_id: string;
+      engine_id: string;
+      artifact_sha256: string;
+      observed_at: string;
+    }>;
+    framework_references: Array<{
+      framework: string;
+      framework_version: string;
+      control_id: string;
+      title: string;
+      relationship: string;
+      rationale: string;
+      mapping_version: string;
+    }>;
+  }>;
+  next_steps: Array<{
+    priority: number;
+    code: BeginnerMasterReport["nextSteps"][number]["code"];
+    action: string;
+    reason: string;
+    finding_id: string | null;
+    task_id: string | null;
+    recommended_expert_type: string | null;
+  }>;
+  technical_details: {
+    collapsed_by_default: true;
+    tasks: Array<{
+      task_id: string;
+      target_asset_ids: string[];
+      status: EngineRunStatus;
+      phase: string;
+      progress_percent: number;
+      started_at: string | null;
+      finished_at: string | null;
+      exit_code: number | null;
+      cleanup_removed: boolean | null;
+      error_code: string | null;
+      evidence_sha256: string[];
+      execution: Record<string, unknown> & { kind?: string };
+    }>;
+  };
+  framework_notice: {
+    non_certification: string;
+    aidefend_mapping_status: string;
+  };
+  data_quality_warnings: string[];
 }
 
 interface NativeEvidence {
@@ -285,6 +450,8 @@ export interface NativeCaseExport {
   format?: string | null;
   path: string;
   sha256: string;
+  coverage_manifest_path?: string | null;
+  coverage_manifest_sha256?: string | null;
   signature: string | null;
   redaction_profile: string;
   raw_artifacts_included?: number | null;
@@ -316,6 +483,7 @@ export interface NativeExportPreview {
   raw_artifacts_omitted: number;
   sensitive_raw_artifacts_omitted: number;
   sensitive_data_warning: string;
+  coverage_manifest_included: boolean;
 }
 
 interface NativeDiffReason {
@@ -437,6 +605,19 @@ export interface NativeAppSnapshot {
     requires_explicit_confirmation: boolean;
   }>;
   engine_count: number;
+  /** Added in v0.1.8. Older development snapshots may omit this projection. */
+  beginner_reports?: NativeBeginnerMasterReport[];
+  /** Added in v0.1.8. Unreadable project bytes are preserved instead of aborting startup. */
+  case_recovery_diagnostics?: Array<{
+    case_id: string;
+    title: string;
+    updated_at: string;
+    revision: number;
+    document_bytes: number;
+    code: string;
+    message: string;
+    preserved: boolean;
+  }>;
 }
 
 export interface NativeManagedRuntimeSetupStatus {
@@ -899,6 +1080,62 @@ const mapEngineStatus = (status: string): EngineRunStatus => {
   return states[status] ?? "not_executed";
 };
 
+const mapEngineTaskKind = (taskKind: NativeEngineRun["task_kind"]): EngineTaskKind => {
+  if (taskKind?.kind !== "built_in_localhost_tcp") return { kind: "catalog_engine" };
+  return {
+    kind: "built_in_localhost_tcp",
+    port: taskKind.port,
+    timeoutMs: taskKind.timeout_ms,
+    payloadBytes: taskKind.payload_bytes,
+  };
+};
+
+const mapLocalhostTcpObservation = (
+  observation: NativeEngineRun["localhost_tcp_observation"],
+): LocalhostTcpObservation | undefined => {
+  if (!observation || !["reachable", "closed", "timed_out"].includes(observation.outcome)) {
+    return undefined;
+  }
+  return {
+    outcome: observation.outcome as LocalhostTcpObservation["outcome"],
+    observedAt: observation.observed_at,
+  };
+};
+
+const exactCompletedLocalhostBinding = (
+  engineRun: EngineRun,
+  assetId: string,
+  nativeAssets: readonly NativeAsset[],
+): boolean => {
+  if (engineRun.taskKind.kind !== "built_in_localhost_tcp") return false;
+  const endpoint = `127.0.0.1:${engineRun.taskKind.port}`;
+  const asset = nativeAssets.find((candidate) => candidate.id === assetId);
+  const exactLoopbackAsset = asset?.kind === "web_service"
+    && !asset.candidate
+    && asset.owner_confirmed
+    && asset.internet_exposed === false
+    && asset.name === endpoint
+    && asset.identifiers.length === 1
+    && asset.identifiers.some((identifier) =>
+      identifier.namespace === "localhost_tcp_endpoint"
+        && identifier.value === endpoint
+    );
+  return Boolean(
+    exactLoopbackAsset
+    && engineRun.assetIds.length === 1
+    && engineRun.assetIds[0] === assetId
+    && engineRun.status === "completed"
+    && Number.isInteger(engineRun.taskKind.port)
+    && engineRun.taskKind.port >= 1
+    && engineRun.taskKind.port <= 65_535
+    && engineRun.taskKind.timeoutMs === 3_000
+    && engineRun.taskKind.payloadBytes === 0
+    && engineRun.localhostTcpObservation
+    && Number.isFinite(Date.parse(engineRun.localhostTcpObservation.observedAt))
+    && ["reachable", "closed"].includes(engineRun.localhostTcpObservation?.outcome ?? "")
+  );
+};
+
 const checkpointStages = new Set([
   "planned",
   "preflight",
@@ -997,6 +1234,29 @@ const runStatus = (runs: EngineRun[]): RunStatus => {
   return "partial";
 };
 
+const mapScanRequestOutcome = (
+  outcome: NativeScanRun["request_outcome"],
+  completedAt: string | null,
+  engineRunCount: number,
+): ScanRequestOutcome | undefined => {
+  if (
+    outcome?.status !== "no_checks_completed"
+    || !completedAt
+    || engineRunCount !== 0
+    || ![
+      "no_effective_scope_grants",
+      "no_ownership_confirmed_targets",
+      "no_applicable_checks",
+    ].includes(outcome.code)
+  ) return undefined;
+  return {
+    status: "no_checks_completed",
+    code: outcome.code as ScanRequestOutcome["code"],
+    requestedAssetIds: [...outcome.requested_asset_ids],
+    requestedEngineIds: [...outcome.requested_engine_ids],
+  };
+};
+
 const storedExportFormat = (format?: string | null): ExportFormat | undefined =>
   ["case_bundle", "json", "framework_report", "ocsf", "oscal", "html"].includes(format ?? "")
     ? format as ExportFormat
@@ -1009,6 +1269,8 @@ export const adaptNativeExport = (item: NativeCaseExport): CaseExport => ({
   createdAt: item.created_at,
   fileName: item.path.split(/[\\/]/).at(-1) ?? item.path,
   sha256: item.sha256,
+  coverageManifestPath: item.coverage_manifest_path ?? undefined,
+  coverageManifestSha256: item.coverage_manifest_sha256 ?? undefined,
   signatureState: item.signature ? "local_integrity" : "unsigned",
   includesRawEvidence: item.raw_artifacts_included == null
     ? undefined
@@ -1043,6 +1305,7 @@ export const adaptNativeExportPreview = (item: NativeExportPreview): ExportPrevi
   rawArtifactsOmitted: item.raw_artifacts_omitted,
   sensitiveRawArtifactsOmitted: item.sensitive_raw_artifacts_omitted,
   sensitiveDataWarning: item.sensitive_data_warning,
+  coverageManifestIncluded: item.coverage_manifest_included,
 });
 
 export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManifest => {
@@ -1275,8 +1538,15 @@ export const adaptNativeCase = (
     right.created_at.localeCompare(left.created_at) ||
     right.id.localeCompare(left.id)
   ).map((run, runIndex) => {
+    const requestOutcome = mapScanRequestOutcome(
+      run.request_outcome,
+      run.completed_at,
+      run.engine_runs.length,
+    );
     const engineRuns: EngineRun[] = run.engine_runs.map((engineRun) => {
-      const manifest = manifestById.get(engineRun.engine_id);
+      const taskKind = mapEngineTaskKind(engineRun.task_kind);
+      const isBuiltInLocalhostTcp = taskKind.kind === "built_in_localhost_tcp";
+      const manifest = isBuiltInLocalhostTcp ? undefined : manifestById.get(engineRun.engine_id);
       const status = mapEngineStatus(engineRun.status);
       const checkpoint = parseCheckpoint(engineRun.resume_token, engineRun);
       const failureKind = engineFailureKind(engineRun, checkpoint);
@@ -1303,19 +1573,29 @@ export const adaptNativeCase = (
       return {
         id: engineRun.id,
         engineId: engineRun.engine_id,
-        engineName: manifest?.name ?? engineRun.engine_id,
-        category: manifest?.category ?? "unknown",
-        version: engineRun.engine_version ?? manifest?.version ?? adapterText("Not reported", "未回報"),
-        digest: engineRun.image_digest ?? manifest?.imageDigest ?? adapterText("No image digest", "未提供映像摘要"),
-        ruleVersion: engineRun.rule_version ?? undefined,
-        adapterVersion: engineRun.adapter_version,
-        manifestSchemaVersion: engineRun.manifest_schema_version ?? undefined,
-        sourceRevision: engineRun.source_revision ?? undefined,
-        repositoryUrl: engineRun.repository_url ?? undefined,
-        distributionMode: engineRun.distribution_mode ?? undefined,
-        imageRepository: engineRun.image_repository ?? undefined,
-        commandSha256: engineRun.command_sha256 ?? undefined,
-        knowledgeInput: engineRun.knowledge_input ? {
+        engineName: isBuiltInLocalhostTcp
+          ? `127.0.0.1:${taskKind.port} TCP`
+          : manifest?.name ?? engineRun.engine_id,
+        category: isBuiltInLocalhostTcp ? "built_in_localhost_tcp" : manifest?.category ?? "unknown",
+        version: isBuiltInLocalhostTcp
+          ? undefined
+          : engineRun.engine_version ?? manifest?.version ?? adapterText("Not reported", "未回報"),
+        digest: isBuiltInLocalhostTcp
+          ? undefined
+          : engineRun.image_digest ?? manifest?.imageDigest ?? adapterText("No image digest", "未提供映像摘要"),
+        taskKind,
+        localhostTcpObservation: isBuiltInLocalhostTcp
+          ? mapLocalhostTcpObservation(engineRun.localhost_tcp_observation)
+          : undefined,
+        ruleVersion: isBuiltInLocalhostTcp ? undefined : engineRun.rule_version ?? undefined,
+        adapterVersion: isBuiltInLocalhostTcp ? undefined : engineRun.adapter_version,
+        manifestSchemaVersion: isBuiltInLocalhostTcp ? undefined : engineRun.manifest_schema_version ?? undefined,
+        sourceRevision: isBuiltInLocalhostTcp ? undefined : engineRun.source_revision ?? undefined,
+        repositoryUrl: isBuiltInLocalhostTcp ? undefined : engineRun.repository_url ?? undefined,
+        distributionMode: isBuiltInLocalhostTcp ? undefined : engineRun.distribution_mode ?? undefined,
+        imageRepository: isBuiltInLocalhostTcp ? undefined : engineRun.image_repository ?? undefined,
+        commandSha256: isBuiltInLocalhostTcp ? undefined : engineRun.command_sha256 ?? undefined,
+        knowledgeInput: !isBuiltInLocalhostTcp && engineRun.knowledge_input ? {
           kind: engineRun.knowledge_input.kind,
           identifier: engineRun.knowledge_input.identifier,
           version: engineRun.knowledge_input.version ?? undefined,
@@ -1324,12 +1604,12 @@ export const adaptNativeCase = (
           knowledgeDate: engineRun.knowledge_input.knowledge_date ?? undefined,
           supportUntil: engineRun.knowledge_input.support_until ?? undefined,
         } : undefined,
-        runtimeProvider: engineRun.runtime_provider ?? undefined,
-        runtimeVersion: engineRun.runtime_version ?? undefined,
-        runtimeSecurityOptions: engineRun.runtime_security_options ?? undefined,
-        exitCode: engineRun.exit_code ?? undefined,
-        cleanupRemoved: engineRun.cleanup_removed ?? undefined,
-        cleanupDetail: engineRun.cleanup_detail ?? undefined,
+        runtimeProvider: isBuiltInLocalhostTcp ? undefined : engineRun.runtime_provider ?? undefined,
+        runtimeVersion: isBuiltInLocalhostTcp ? undefined : engineRun.runtime_version ?? undefined,
+        runtimeSecurityOptions: isBuiltInLocalhostTcp ? undefined : engineRun.runtime_security_options ?? undefined,
+        exitCode: isBuiltInLocalhostTcp ? undefined : engineRun.exit_code ?? undefined,
+        cleanupRemoved: isBuiltInLocalhostTcp ? undefined : engineRun.cleanup_removed ?? undefined,
+        cleanupDetail: isBuiltInLocalhostTcp ? undefined : engineRun.cleanup_detail ?? undefined,
         warnings: releaseIncompatible ? [] : engineRun.warnings ?? [],
         status,
         progress: engineRun.progress_percent,
@@ -1362,12 +1642,19 @@ export const adaptNativeCase = (
         resumable: recoveryAction !== "none",
       };
     });
-    const allAssetIds = unique(run.engine_runs.flatMap((engineRun) => engineRun.asset_ids));
+    const allAssetIds = unique([
+      ...run.engine_runs.flatMap((engineRun) => engineRun.asset_ids),
+      ...(requestOutcome?.requestedAssetIds ?? []),
+    ]);
     const coveredAssetIds = allAssetIds.filter((assetId) => {
       const applicableRuns = engineRuns.filter((engineRun) => engineRun.assetIds.includes(assetId));
-      return applicableRuns.length > 0 && applicableRuns.every((engineRun) => engineRun.status === "completed");
+      return applicableRuns.length > 0 && applicableRuns.every((engineRun) =>
+        engineRun.taskKind.kind === "built_in_localhost_tcp"
+          ? exactCompletedLocalhostBinding(engineRun, assetId, nativeCase.assets)
+          : engineRun.status === "completed"
+      );
     });
-    const status = runStatus(engineRuns);
+    const status = requestOutcome ? "no_checks_completed" : runStatus(engineRuns);
     const lastEngineActivityAt = [...run.engine_runs]
       .flatMap((engineRun) => [engineRun.started_at, engineRun.finished_at])
       .filter((value): value is string => Boolean(value))
@@ -1378,6 +1665,7 @@ export const adaptNativeCase = (
       caseId: run.case_id,
       label: adapterText(`Scan ${run.sequence}`, `第 ${run.sequence} 次掃描`),
       verificationBaselineRunId: run.verification_baseline_run_id ?? undefined,
+      requestOutcome,
       status,
       progress: engineRuns.length > 0
         ? Math.round(engineRuns.reduce((total, engineRun) => total + engineRun.progress, 0) / engineRuns.length)
@@ -1514,6 +1802,9 @@ export const adaptNativeSnapshot = (
 ): AppSnapshot => {
   const engineManifests = nativeManifests.map(adaptNativeManifest);
   const workspace = snapshot.selected_case ? adaptNativeCase(snapshot.selected_case, engineManifests) : undefined;
+  if (workspace) {
+    workspace.beginnerReports = (snapshot.beginner_reports ?? []).map(adaptBeginnerMasterReport);
+  }
   const cases = snapshot.cases.map(adaptSummary);
   if (workspace) {
     const index = cases.findIndex((item) => item.id === workspace.case.id);
@@ -1544,6 +1835,151 @@ export const adaptNativeSnapshot = (
       exists: obligation.exists,
       requiresExplicitConfirmation: obligation.requires_explicit_confirmation,
     })),
+    caseRecoveryDiagnostics: (snapshot.case_recovery_diagnostics ?? []).map((diagnostic) => ({
+      caseId: diagnostic.case_id,
+      title: diagnostic.title,
+      updatedAt: diagnostic.updated_at,
+      revision: diagnostic.revision,
+      documentBytes: diagnostic.document_bytes,
+      code: diagnostic.code,
+      message: diagnostic.message,
+      preserved: diagnostic.preserved,
+    })),
     engineCount: snapshot.engine_count,
   };
 };
+
+export const adaptBeginnerMasterReport = (
+  report: NativeBeginnerMasterReport,
+): BeginnerMasterReport => ({
+  schemaVersion: report.schema_version,
+  caseId: report.case_id,
+  runId: report.run_id,
+  projectTitle: report.project_title,
+  state: {
+    summary: report.state.summary,
+    lifecycle: report.state.lifecycle,
+    lastDurableUpdate: report.state.last_durable_update,
+    explanation: report.state.explanation,
+  },
+  requested: {
+    targets: report.requested.targets.map((target) => ({
+      assetId: target.asset_id,
+      label: target.label ?? undefined,
+      assetKind: target.asset_kind ?? undefined,
+      labelAvailability: target.label_availability,
+      assetKindAvailability: target.asset_kind_availability,
+    })),
+    stage: {
+      value: report.requested.stage.value ?? undefined,
+      availability: report.requested.stage.availability,
+      explanation: report.requested.stage.explanation,
+    },
+    limits: report.requested.limits.map((limit) => ({ ...limit })),
+    requestedCheckIds: [...report.requested.requested_check_ids],
+    requestOutcomeCode: report.requested.request_outcome_code ?? undefined,
+    automaticReductions: report.requested.automatic_reductions.map((reduction) => ({ ...reduction })),
+    reductionsAvailability: report.requested.reductions_availability,
+    unavailableDimensions: report.requested.unavailable_dimensions.map((dimension) => ({ ...dimension })),
+  },
+  actual: {
+    observedFrom: report.actual.observed_from ?? undefined,
+    observedUntil: report.actual.observed_until ?? undefined,
+    checks: report.actual.checks.map((check) => ({
+      taskId: check.task_id,
+      checkId: check.check_id,
+      targetAssetIds: [...check.target_asset_ids],
+      status: check.status,
+      startedAt: check.started_at ?? undefined,
+      finishedAt: check.finished_at ?? undefined,
+      testedDimensions: check.tested_dimensions.map((dimension) => ({
+        dimension: dimension.dimension,
+        value: dimension.value,
+        observation: dimension.observation,
+        observedAt: dimension.observed_at ?? undefined,
+      })),
+    })),
+    unavailableDimensions: report.actual.unavailable_dimensions.map((dimension) => ({ ...dimension })),
+  },
+  coverageGaps: report.coverage_gaps.map((gap) => ({
+    kind: gap.kind,
+    taskId: gap.task_id ?? undefined,
+    targetAssetIds: [...gap.target_asset_ids],
+    dimension: gap.dimension,
+    reason: gap.reason,
+    nextActionCode: gap.next_action_code,
+    nextAction: gap.next_action,
+  })),
+  coverageCounts: {
+    testedComplete: report.coverage_counts.tested_complete,
+    testedPartial: report.coverage_counts.tested_partial,
+    failed: report.coverage_counts.failed,
+    timedOut: report.coverage_counts.timed_out,
+    cancelled: report.coverage_counts.cancelled,
+    notTested: report.coverage_counts.not_tested,
+    excluded: report.coverage_counts.excluded,
+    truncated: report.coverage_counts.truncated,
+    unavailable: report.coverage_counts.unavailable,
+  },
+  findings: report.findings.map((finding) => ({
+    findingId: finding.finding_id,
+    fingerprint: finding.fingerprint,
+    snapshotSource: finding.snapshot_source,
+    title: finding.title,
+    plainLanguageRisk: finding.plain_language_risk,
+    possibleImpact: finding.possible_impact,
+    severity: finding.severity,
+    confidence: finding.confidence,
+    priority: finding.priority ?? undefined,
+    priorityReasons: [...finding.priority_reasons],
+    targetAssetIds: [...finding.target_asset_ids],
+    nextStep: finding.next_step,
+    recommendedExpertType: finding.recommended_expert_type,
+    evidenceReferences: finding.evidence_references.map((evidence) => ({
+      evidenceId: evidence.evidence_id,
+      engineId: evidence.engine_id,
+      artifactSha256: evidence.artifact_sha256,
+      observedAt: evidence.observed_at,
+    })),
+    frameworkReferences: finding.framework_references.map((reference) => ({
+      framework: reference.framework,
+      frameworkVersion: reference.framework_version,
+      controlId: reference.control_id,
+      title: reference.title,
+      relationship: reference.relationship,
+      rationale: reference.rationale,
+      mappingVersion: reference.mapping_version,
+    })),
+  })),
+  nextSteps: report.next_steps.map((step) => ({
+    priority: step.priority,
+    code: step.code,
+    action: step.action,
+    reason: step.reason,
+    findingId: step.finding_id ?? undefined,
+    taskId: step.task_id ?? undefined,
+    recommendedExpertType: step.recommended_expert_type ?? undefined,
+  })),
+  technicalDetails: {
+    collapsedByDefault: true,
+    tasks: report.technical_details.tasks.map((task) => ({
+      taskId: task.task_id,
+      targetAssetIds: [...task.target_asset_ids],
+      status: task.status,
+      phase: task.phase,
+      progressPercent: task.progress_percent,
+      startedAt: task.started_at ?? undefined,
+      finishedAt: task.finished_at ?? undefined,
+      exitCode: task.exit_code ?? undefined,
+      cleanupRemoved: task.cleanup_removed ?? undefined,
+      errorCode: task.error_code ?? undefined,
+      evidenceSha256: [...task.evidence_sha256],
+      execution: { ...task.execution },
+    })),
+  },
+  frameworkNotice: {
+    nonCertification: report.framework_notice.non_certification,
+    aidefendMappingStatus: report.framework_notice.aidefend_mapping_status,
+  },
+  dataQualityWarnings: [...report.data_quality_warnings],
+});

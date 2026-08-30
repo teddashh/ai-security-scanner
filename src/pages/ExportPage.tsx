@@ -37,8 +37,8 @@ const copy = {
   eyebrow: { en: "SHARE RESULTS", zhTW: "分享結果" },
   title: { en: "Share results your team can act on", zhTW: "把結果變成團隊看得懂、接得下去的報告" },
   description: {
-    en: "Choose a readable report, a specialist handoff, or data for another tool. Your file is created and saved on this device.",
-    zhTW: "選擇好讀的報告、給資安專家的交接包，或其他工具能接手的資料；檔案只會建立在這台電腦上。",
+    en: "Start with a readable report for people or a master-report JSON for another tool. Advanced technical formats are available when you need them. Your file stays on this device until you share it.",
+    zhTW: "一般分享可選人看得懂的報告，或讓其他工具讀取的主要報告 JSON；需要時再打開進階技術格式。檔案在你主動分享前只會留在這台電腦上。",
   },
   preparing: { en: "Preparing…", zhTW: "準備中…" },
   exportDemo: { en: "Download clearly marked demo file", zhTW: "下載明確標示的展示檔" },
@@ -103,14 +103,14 @@ const copy = {
   formatEyebrow: { en: "FILE TYPE", zhTW: "檔案類型" },
   formatTitle: { en: "How do you want to share the results?", zhTW: "你想怎麼分享這份結果？" },
   formatDescription: { en: "Pick the option that best fits the person or tool receiving it.", zhTW: "依照接手的人或工具，選擇最適合的格式。" },
-  advancedFormats: { en: "More options for security and governance tools", zhTW: "更多資安與治理工具選項" },
+  advancedFormats: { en: "Advanced and technical formats", zhTW: "進階與技術格式" },
   advancedFormatsHint: {
-    en: "Use these when the receiving tool asks for a specific industry format.",
-    zhTW: "只有在接收工具指定產業格式時才需要選擇。",
+    en: "Use these for a security-specialist handoff, framework review, or a tool that requires a specific industry format.",
+    zhTW: "需要交給資安專家、檢視框架對照，或接收工具指定產業格式時再使用。",
   },
   advancedFormatsIncomplete: {
-    en: "These findings-only formats become available after every check in the selected scan finishes successfully.",
-    zhTW: "這些只包含問題的格式，會在選定掃描的每項檢查都成功完成後開放。",
+    en: "Every format remains available. OCSF and OSCAL include a companion coverage manifest when checks are unfinished or unavailable.",
+    zhTW: "所有格式都可使用。若有檢查尚未完成或無法執行，OCSF 與 OSCAL 會附上涵蓋說明檔。",
   },
   includeRaw: { en: "Include source files for specialist review", zhTW: "附上來源檔案，供專家核對" },
   includeRawBundle: {
@@ -161,6 +161,8 @@ const copy = {
   fileDetails: { en: "File details and integrity check", zhTW: "檔案細節與完整性檢查" },
   fileName: { en: "File name", zhTW: "檔案名稱" },
   fileHash: { en: "SHA-256", zhTW: "SHA-256" },
+  coverageManifest: { en: "Coverage companion", zhTW: "涵蓋說明檔" },
+  coverageManifestIncluded: { en: "Included next to this file", zhTW: "已存放在此檔案旁" },
   integrity: { en: "Integrity status", zhTW: "完整性狀態" },
   sourceFiles: { en: "Source-file contents", zhTW: "來源檔案內容" },
   demoFile: { en: "Demo file", zhTW: "展示檔" },
@@ -178,15 +180,15 @@ const copy = {
 
 const formatCopy = {
   case_bundle: {
-    title: { en: "Hand off to a security specialist", zhTW: "交給資安專家繼續處理" },
+    title: { en: "Technical case bundle", zhTW: "技術案件包" },
     detail: {
-      en: "Give a security specialist everything needed to pick up the work.",
-      zhTW: "把後續工作需要的內容一次交給資安專家。",
+      en: "Give a security specialist the detailed case records needed to pick up the work.",
+      zhTW: "把資安專家接手工作需要的詳細案件紀錄一次交付。",
     },
     extension: ".case.tar.gz",
   },
   html: {
-    title: { en: "Share a readable report", zhTW: "分享一份好讀的報告" },
+    title: { en: "Readable report (recommended)", zhTW: "好讀的報告（建議）" },
     detail: {
       en: "Open it in a browser, send it to a teammate, or save it as a PDF.",
       zhTW: "可用瀏覽器打開、傳給同事，或另存成 PDF。",
@@ -194,10 +196,10 @@ const formatCopy = {
     extension: ".html",
   },
   json: {
-    title: { en: "Connect the full results to another tool", zhTW: "把完整結果交給其他工具" },
+    title: { en: "Master-report JSON", zhTW: "主要報告 JSON" },
     detail: {
-      en: "Use the results in your own workflow, automation, or analysis.",
-      zhTW: "把結果串接到自己的流程、自動化或分析工具。",
+      en: "Send the same coverage, findings, and next steps to another tool in a structured file.",
+      zhTW: "用結構化檔案，把相同的涵蓋範圍、問題與下一步交給其他工具。",
     },
     extension: ".json",
   },
@@ -231,17 +233,21 @@ const formatCopy = {
   extension: string;
 }>;
 
-const formats = Object.keys(formatCopy) as ExportFormat[];
-const primaryFormats = formats.filter((id) => id !== "ocsf" && id !== "oscal");
-const advancedFormats = formats.filter((id) => id === "ocsf" || id === "oscal");
-const findingOnlyUnavailableCopy = {
+const primaryFormats = ["html", "json"] as const satisfies readonly ExportFormat[];
+const advancedFormats = [
+  "case_bundle",
+  "framework_report",
+  "ocsf",
+  "oscal",
+] as const satisfies readonly ExportFormat[];
+const findingOnlyCoverageCopy = {
   ocsf: {
-    en: "Available after every check finishes successfully. OCSF carries findings but cannot show missing checks.",
-    zhTW: "每項檢查都成功完成後才可使用。這個 OCSF 檔只包含問題，無法呈現缺少的檢查。",
+    en: "Includes OCSF findings plus a required coverage manifest showing missing or unfinished checks.",
+    zhTW: "包含 OCSF 問題資料，並附上必要的涵蓋說明檔，列出未測或未完成項目。",
   },
   oscal: {
-    en: "Available after every check finishes successfully. This OSCAL findings export cannot show missing checks.",
-    zhTW: "每項檢查都成功完成後才可使用。這個 OSCAL 問題匯出檔無法呈現缺少的檢查。",
+    en: "Includes OSCAL observations plus a required coverage manifest showing missing or unfinished checks.",
+    zhTW: "包含 OSCAL 觀察資料，並附上必要的涵蓋說明檔，列出未測或未完成項目。",
   },
 } as const;
 
@@ -259,8 +265,8 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
   const workspaceExportRevision = `${workspace.findings.length}|${workspace.runs
     .map((run) => `${run.id}:${run.status}:${run.progress}:${run.finishedAt ?? ""}`)
     .join("|")}`;
-  const [format, setFormat] = useState<ExportFormat>("case_bundle");
-  const [includeRawEvidence, setIncludeRawEvidence] = useState(true);
+  const [format, setFormat] = useState<ExportFormat>("html");
+  const [includeRawEvidence, setIncludeRawEvidence] = useState(false);
   const [redactSensitiveValues, setRedactSensitiveValues] = useState(true);
   const [preview, setPreview] = useState<ExportPreview>();
   const [previewError, setPreviewError] = useState<string>();
@@ -273,7 +279,7 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
     const availableFormat = resetUnavailableExportFormat(format, latestRun);
     if (availableFormat !== format) {
       setFormat(availableFormat);
-      setIncludeRawEvidence(true);
+      setIncludeRawEvidence(false);
     }
   }, [findingOnlyFormatsAvailable, format, latestRun]);
 
@@ -328,19 +334,19 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
   const shownCount = (value: number | undefined): string => value === undefined ? "—" : formatNumber(value);
   const renderFormatCard = (id: ExportFormat) => {
     const item = formatCopy[id];
-    const unavailableBecauseIncomplete = isFindingOnlyExportFormat(id) && !findingOnlyFormatsAvailable;
+    const unavailableWithoutRun = isFindingOnlyExportFormat(id) && !findingOnlyFormatsAvailable;
     return (
       <label
         key={id}
-        className={`${format === id ? "format-card format-card--active" : "format-card"}${unavailableBecauseIncomplete ? " format-card--disabled" : ""}`}
-        aria-disabled={unavailableBecauseIncomplete || undefined}
+        className={`${format === id ? "format-card format-card--active" : "format-card"}${unavailableWithoutRun ? " format-card--disabled" : ""}`}
+        aria-disabled={unavailableWithoutRun || undefined}
       >
         <input
           type="radio"
           name="export-format"
           value={id}
           checked={format === id}
-          disabled={unavailableBecauseIncomplete}
+          disabled={unavailableWithoutRun}
           onChange={() => {
             setFormat(id);
             if (id !== "case_bundle") setIncludeRawEvidence(false);
@@ -349,7 +355,7 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
         <span className="format-card__icon"><Icon name={id === "case_bundle" ? "cases" : "file"} size={20} /></span>
         <span>
           <strong>{text(item.title)}</strong>
-          <small>{text(unavailableBecauseIncomplete ? findingOnlyUnavailableCopy[id] : item.detail)}</small>
+          <small>{text(isFindingOnlyExportFormat(id) ? findingOnlyCoverageCopy[id] : item.detail)}</small>
         </span>
       </label>
     );
@@ -549,6 +555,10 @@ export function ExportPage({ workspace, exports, demoMode, busy, onPreview, onEx
                       <div><dt>{text(copy.fileName)}</dt><dd>{item.fileName}</dd></div>
                       <div><dt>{text(copy.exactType)}</dt><dd>{itemFormat ? `${text(itemFormat.title)} · ${itemFormat.extension}` : text(copy.legacyUnknownFormat)}</dd></div>
                       <div><dt>{text(copy.fileHash)}</dt><dd><code>{item.sha256}</code></dd></div>
+                      {item.coverageManifestPath && <div><dt>{text(copy.coverageManifest)}</dt><dd>
+                        <StatusPill label={text(copy.coverageManifestIncluded)} tone="neutral" />
+                        {item.coverageManifestSha256 && <code>{item.coverageManifestSha256}</code>}
+                      </dd></div>}
                       <div><dt>{text(copy.integrity)}</dt><dd>
                         <span className="export-row__badges">
                           {item.isDemo && <StatusPill label={text(copy.demoFile)} tone="demo" />}

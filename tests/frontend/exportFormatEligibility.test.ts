@@ -46,41 +46,52 @@ const run = (
   totalAssetCount: 0,
 });
 
-test("finding-only formats require a durable fully completed run", () => {
+test("finding-only formats are available for every existing run", () => {
   assert.equal(runSupportsFindingOnlyExport(run("completed", "completed")), true);
-  assert.equal(runSupportsFindingOnlyExport(run("completed", "completed", { finished: false })), false);
-  assert.equal(runSupportsFindingOnlyExport(run("completed", "completed", { engineRuns: [] })), false);
-  assert.equal(runSupportsFindingOnlyExport(run("running", "running", { finished: false })), false);
-  assert.equal(runSupportsFindingOnlyExport(run("partial", "partial")), false);
-  assert.equal(runSupportsFindingOnlyExport(run("failed", "failed")), false);
+  assert.equal(runSupportsFindingOnlyExport(run("completed", "completed", { finished: false })), true);
+  assert.equal(runSupportsFindingOnlyExport(run("completed", "completed", { engineRuns: [] })), true);
+  assert.equal(runSupportsFindingOnlyExport(run("running", "running", { finished: false })), true);
+  assert.equal(runSupportsFindingOnlyExport(run("partial", "partial")), true);
+  assert.equal(runSupportsFindingOnlyExport(run("failed", "failed")), true);
   assert.equal(runSupportsFindingOnlyExport(undefined), false);
 });
 
-test("interim and incomplete runs retain exports that carry the coverage ledger", () => {
+test("interim and incomplete runs retain every export with coverage companions where needed", () => {
   for (const incompleteRun of [
     run("running", "running", { finished: false }),
     run("partial", "partial"),
     run("failed", "failed"),
   ]) {
-    for (const format of ["case_bundle", "json", "framework_report", "html"] as const) {
+    for (const format of ["case_bundle", "json", "framework_report", "html", "ocsf", "oscal"] as const) {
       assert.equal(exportFormatIsAvailable(format, incompleteRun), true);
       assert.equal(resetUnavailableExportFormat(format, incompleteRun), format);
     }
-    assert.equal(exportFormatIsAvailable("ocsf", incompleteRun), false);
-    assert.equal(exportFormatIsAvailable("oscal", incompleteRun), false);
-    assert.equal(resetUnavailableExportFormat("ocsf", incompleteRun), "case_bundle");
-    assert.equal(resetUnavailableExportFormat("oscal", incompleteRun), "case_bundle");
   }
 });
 
-test("the export page resets blocked formats and skips their preview", () => {
+test("the export page explains mandatory coverage companions", () => {
   const source = readFileSync(new URL("../../src/pages/ExportPage.tsx", import.meta.url), "utf8");
 
   assert.match(source, /resetUnavailableExportFormat\(format, latestRun\)/u);
   assert.match(source, /if \(selectedFormatUnavailable\) \{[\s\S]*setPreviewPending\(false\);[\s\S]*return;/u);
-  assert.match(source, /disabled=\{unavailableBecauseIncomplete\}/u);
-  assert.match(source, /OCSF carries findings but cannot show missing checks/u);
-  assert.match(source, /這個 OCSF 檔只包含問題，無法呈現缺少的檢查/u);
-  assert.match(source, /This OSCAL findings export cannot show missing checks/u);
-  assert.match(source, /這個 OSCAL 問題匯出檔無法呈現缺少的檢查/u);
+  assert.match(source, /disabled=\{unavailableWithoutRun\}/u);
+  assert.match(source, /OCSF findings plus a required coverage manifest/u);
+  assert.match(source, /OCSF 問題資料，並附上必要的涵蓋說明檔/u);
+  assert.match(source, /OSCAL observations plus a required coverage manifest/u);
+  assert.match(source, /OSCAL 觀察資料，並附上必要的涵蓋說明檔/u);
+});
+
+test("the export page defaults to a readable report without raw source files", () => {
+  const source = readFileSync(new URL("../../src/pages/ExportPage.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /useState<ExportFormat>\("html"\)/u);
+  assert.match(source, /useState\(false\)/u);
+  assert.match(source, /const primaryFormats = \["html", "json"\]/u);
+  assert.match(source, /const advancedFormats = \[\s*"case_bundle",\s*"framework_report",\s*"ocsf",\s*"oscal",/u);
+  assert.match(source, /Readable report \(recommended\)/u);
+  assert.match(source, /好讀的報告（建議）/u);
+  assert.match(source, /Master-report JSON/u);
+  assert.match(source, /主要報告 JSON/u);
+  assert.match(source, /Advanced and technical formats/u);
+  assert.match(source, /進階與技術格式/u);
 });

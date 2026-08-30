@@ -151,6 +151,7 @@ export const runStatusMeta: Record<RunStatus, { label: string; tone: string }> =
   running: labelMeta("status.run.running", "info"),
   paused: labelMeta("status.run.paused", "warning"),
   completed: labelMeta("status.run.completed", "positive"),
+  no_checks_completed: labelMeta("status.run.noChecksCompleted", "warning"),
   partial: labelMeta("status.run.partial", "warning"),
   failed: labelMeta("status.run.failed", "danger"),
   cancelled: labelMeta("status.run.cancelled", "neutral"),

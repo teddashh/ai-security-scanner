@@ -318,6 +318,64 @@ export interface ScopeApprovalInput {
   externalScope?: ExternalScopeRequest;
 }
 
+export interface StartScanInput {
+  caseId: string;
+  /** Present only when Start also records the inline target assertion. */
+  authorization?: Omit<ScopeApprovalInput, "caseId">;
+  /** Empty means every applicable scanner. */
+  engineIds?: string[];
+}
+
+const nativeScopeDecisions = (input: ScopeApprovalInput) => {
+  const permissionMap: Record<string, string> = {
+    inventory: "inventory_read",
+    configuration: "configuration_read",
+    local_artifact: "local_artifact_read",
+    public_data: "passive_external_discovery",
+    passive: "passive_external_discovery",
+    low_impact_external: "low_impact_external_connection",
+    active_external: "active_external_testing",
+    active: "active_external_testing",
+  };
+  const permissions = input.modes
+    .map((mode) => permissionMap[mode])
+    .filter((mode): mode is string => Boolean(mode));
+  const needsReference = permissions.some((permission) =>
+    permission === "low_impact_external_connection" || permission === "active_external_testing"
+  );
+  const externalScope = input.externalScope ? {
+    target: input.externalScope.target,
+    ports: input.externalScope.ports,
+    protocol: input.externalScope.protocol,
+    activity: input.externalScope.activity,
+    rate_policy: {
+      requests_per_second: input.externalScope.ratePolicy.requestsPerSecond,
+      concurrency: input.externalScope.ratePolicy.concurrency,
+      timeout_seconds: input.externalScope.ratePolicy.timeoutSeconds,
+    },
+    template_policy: {
+      revision: input.externalScope.templatePolicy.revision,
+      allowed_template_ids: input.externalScope.templatePolicy.allowedTemplateIds,
+      allow_headless: input.externalScope.templatePolicy.allowHeadless,
+      allow_out_of_band: input.externalScope.templatePolicy.allowOutOfBand,
+      allow_fuzzing: input.externalScope.templatePolicy.allowFuzzing,
+      allow_file_upload: input.externalScope.templatePolicy.allowFileUpload,
+      allow_denial_of_service: input.externalScope.templatePolicy.allowDenialOfService,
+      allow_credential_attacks: input.externalScope.templatePolicy.allowCredentialAttacks,
+    },
+    asserted_authority: input.externalScope.assertedAuthority,
+    allow_sensitive_networks: input.externalScope.allowSensitiveNetworks,
+  } : null;
+  return input.assetIds.map((assetId) => ({
+    asset_id: assetId,
+    permissions,
+    confirmed_by: serviceText("Local user", "本機使用者"),
+    authorization_reference: needsReference || input.externalScope ? input.confirmation : null,
+    notes: input.confirmation,
+    external_scope: externalScope,
+  }));
+};
+
 interface NativeCaseDeletionResult {
   database_record_deleted: boolean;
   artifacts: {
@@ -600,53 +658,11 @@ export const scannerService = {
   },
 
   async approveScope(input: ScopeApprovalInput): Promise<ServiceResult<ActionResponse>> {
-    const permissionMap: Record<string, string> = {
-      inventory: "inventory_read",
-      configuration: "configuration_read",
-      local_artifact: "local_artifact_read",
-      public_data: "passive_external_discovery",
-      passive: "passive_external_discovery",
-      low_impact_external: "low_impact_external_connection",
-      active_external: "active_external_testing",
-      active: "active_external_testing",
-    };
-    const permissions = input.modes.map((mode) => permissionMap[mode]).filter((mode): mode is string => Boolean(mode));
-    const needsReference = permissions.some((permission) => permission === "low_impact_external_connection" || permission === "active_external_testing");
-    const externalScope = input.externalScope ? {
-      target: input.externalScope.target,
-      ports: input.externalScope.ports,
-      protocol: input.externalScope.protocol,
-      activity: input.externalScope.activity,
-      rate_policy: {
-        requests_per_second: input.externalScope.ratePolicy.requestsPerSecond,
-        concurrency: input.externalScope.ratePolicy.concurrency,
-        timeout_seconds: input.externalScope.ratePolicy.timeoutSeconds,
-      },
-      template_policy: {
-        revision: input.externalScope.templatePolicy.revision,
-        allowed_template_ids: input.externalScope.templatePolicy.allowedTemplateIds,
-        allow_headless: input.externalScope.templatePolicy.allowHeadless,
-        allow_out_of_band: input.externalScope.templatePolicy.allowOutOfBand,
-        allow_fuzzing: input.externalScope.templatePolicy.allowFuzzing,
-        allow_file_upload: input.externalScope.templatePolicy.allowFileUpload,
-        allow_denial_of_service: input.externalScope.templatePolicy.allowDenialOfService,
-        allow_credential_attacks: input.externalScope.templatePolicy.allowCredentialAttacks,
-      },
-      asserted_authority: input.externalScope.assertedAuthority,
-      allow_sensitive_networks: input.externalScope.allowSensitiveNetworks,
-    } : null;
     return actionResult(
       COMMANDS.approveScope,
       {
         caseId: input.caseId,
-        decisions: input.assetIds.map((assetId) => ({
-          asset_id: assetId,
-          permissions,
-          confirmed_by: serviceText("Local user", "本機使用者"),
-          authorization_reference: needsReference || input.externalScope ? input.confirmation : null,
-          notes: input.confirmation,
-          external_scope: externalScope,
-        })),
+        decisions: nativeScopeDecisions(input),
       },
       serviceText(
         "The selected target and permission boundary were recorded. No scan started automatically.",
@@ -659,13 +675,20 @@ export const scannerService = {
     );
   },
 
-  async startScan(caseId: string): Promise<ServiceResult<ActionResponse>> {
+  async startScan(input: StartScanInput): Promise<ServiceResult<ActionResponse>> {
+    const decisions = input.authorization
+      ? nativeScopeDecisions({ caseId: input.caseId, ...input.authorization })
+      : [];
     return actionResult(
       COMMANDS.startScan,
-      { caseId },
+      {
+        caseId: input.caseId,
+        decisions,
+        engineIds: input.engineIds ?? [],
+      },
       serviceText(
-        "The app selected every applicable scanner from the assets and current permissions. Anything that cannot run is marked Not run.",
-        "產品已依資產與目前權限選擇所有適用掃描工具；無法執行的項目會明確標成「未執行」。",
+        "Your exact target, limits, and scan were saved together. Unavailable checks will be listed in the report while the others continue.",
+        "精確目標、限制與掃描已一起保存；無法執行的檢查會列在報告中，其餘檢查會繼續。",
       ),
       serviceText(
         "Demo mode does not start a container or contact a target.",
@@ -942,6 +965,7 @@ export const scannerService = {
       rawArtifactsIncluded,
       rawArtifactsOmitted: rawArtifactCount - rawArtifactsIncluded,
       sensitiveRawArtifactsOmitted: 0,
+      coverageManifestIncluded: input.format === "ocsf" || input.format === "oscal",
       sensitiveDataWarning: serviceText(
         "This is an approximate demo preview. A DEMO_ONLY_NOT_A_SCAN file is not a signed case package and contains no verifiable original evidence.",
         "這是展示資料的近似預覽；DEMO_ONLY_NOT_A_SCAN 檔不是正式案件包，也不含可驗證的原始證據。",
