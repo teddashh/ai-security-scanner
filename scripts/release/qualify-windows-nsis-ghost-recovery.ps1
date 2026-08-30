@@ -26,6 +26,8 @@ $maximumSnapshotBytes = 512 * 1024 * 1024
 $processLeaseRelativePath = ".exclusive-process.lock"
 $maximumWindowsPathUtf16CodeUnits = 32760
 $maximumVerbatimWindowsPathUtf16CodeUnits = 32766
+$maximumRetainedProcessOutputBytes = 64 * 1024
+$maximumWslGuestScriptBytes = 64 * 1024
 $sentinelLifecycleRequiredPhases = @(
   "fixture_ready",
   "before_candidate_install",
@@ -91,6 +93,95 @@ public struct GhostQualificationByHandleFileInformation {
     public uint NumberOfLinks;
     public uint FileIndexHigh;
     public uint FileIndexLow;
+}
+
+public sealed class GhostQualificationBoundedCaptureStream : System.IO.Stream {
+    // Keep draining after the retained prefix fills so a noisy child cannot
+    // deadlock while the qualification is waiting for its exact process exit.
+    private readonly byte[] retained;
+    private readonly object sync = new object();
+    private int retainedLength;
+    private bool overflowed;
+
+    public GhostQualificationBoundedCaptureStream(int capacity) {
+        if (capacity < 1 || capacity > 1024 * 1024) {
+            throw new ArgumentOutOfRangeException(nameof(capacity));
+        }
+        retained = new byte[capacity];
+    }
+
+    public bool Overflowed {
+        get { lock (sync) { return overflowed; } }
+    }
+
+    public byte[] Snapshot() {
+        lock (sync) {
+            byte[] snapshot = new byte[retainedLength];
+            Buffer.BlockCopy(retained, 0, snapshot, 0, retainedLength);
+            return snapshot;
+        }
+    }
+
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+    public override long Length { get { lock (sync) { return retainedLength; } } }
+    public override long Position {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override void Flush() { }
+
+    private void WriteCore(ReadOnlySpan<byte> buffer) {
+        lock (sync) {
+            int remaining = retained.Length - retainedLength;
+            int copied = Math.Min(remaining, buffer.Length);
+            if (copied > 0) {
+                buffer.Slice(0, copied).CopyTo(retained.AsSpan(retainedLength));
+                retainedLength += copied;
+            }
+            if (copied != buffer.Length) { overflowed = true; }
+        }
+    }
+
+    public override void Write(byte[] buffer, int offset, int count) {
+        ArgumentNullException.ThrowIfNull(buffer);
+        if (offset < 0 || count < 0 || offset > buffer.Length - count) {
+            throw new ArgumentOutOfRangeException();
+        }
+        WriteCore(new ReadOnlySpan<byte>(buffer, offset, count));
+    }
+
+    public override void Write(ReadOnlySpan<byte> buffer) { WriteCore(buffer); }
+
+    public override System.Threading.Tasks.Task WriteAsync(
+        byte[] buffer,
+        int offset,
+        int count,
+        System.Threading.CancellationToken cancellationToken
+    ) {
+        cancellationToken.ThrowIfCancellationRequested();
+        Write(buffer, offset, count);
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    public override System.Threading.Tasks.ValueTask WriteAsync(
+        ReadOnlyMemory<byte> buffer,
+        System.Threading.CancellationToken cancellationToken = default
+    ) {
+        cancellationToken.ThrowIfCancellationRequested();
+        WriteCore(buffer.Span);
+        return System.Threading.Tasks.ValueTask.CompletedTask;
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) {
+        throw new NotSupportedException();
+    }
+    public override long Seek(long offset, System.IO.SeekOrigin origin) {
+        throw new NotSupportedException();
+    }
+    public override void SetLength(long value) { throw new NotSupportedException(); }
 }
 "@
 }
@@ -564,6 +655,139 @@ function Get-LowerSha256([string]$Path, [uint64]$MaximumBytes = 8GB) {
   return (Get-NoFollowFileSha256Proof $Path "SHA-256 input" $MaximumBytes).Sha256
 }
 
+function ConvertTo-LfWslGuestScript([string]$Script, [string]$Label) {
+  # Git for Windows can materialize this PowerShell file with CRLF. PowerShell
+  # preserves those bytes inside here-strings, but Linux sh requires LF-only
+  # command text. Normalize exact CRLF and reject every remaining bare CR.
+  if ([String]::IsNullOrWhiteSpace($Script) -or $Script.IndexOf([char]0) -ge 0) {
+    throw "$Label is empty or contains a NUL code unit."
+  }
+  $normalized = $Script.Replace("`r`n", "`n")
+  $byteCount = [Text.Encoding]::UTF8.GetByteCount($normalized)
+  if ($byteCount -lt 1 -or $byteCount -gt $maximumWslGuestScriptBytes -or
+      $normalized.Contains("`r")) {
+    throw "$Label did not normalize to one bounded LF-only UTF-8 script."
+  }
+  return $normalized
+}
+
+function Assert-WslGuestScriptNormalizationRegression() {
+  $normalized = ConvertTo-LfWslGuestScript "first`r`nsecond`r`n" (
+    "CRLF guest-script regression"
+  )
+  if ($normalized -cne "first`nsecond`n" -or $normalized.Contains("`r")) {
+    throw "CRLF guest-script regression did not produce exact LF-only bytes."
+  }
+  foreach ($fixture in @(
+    "first`rsecond",
+    "first$([char]0)second",
+    ([string]::new([char]120, $maximumWslGuestScriptBytes + 1))
+  )) {
+    $rejected = $false
+    try { ConvertTo-LfWslGuestScript $fixture "Invalid guest-script regression" | Out-Null }
+    catch { $rejected = $true }
+    if (-not $rejected) {
+      throw "Guest-script normalization accepted a forbidden regression fixture."
+    }
+  }
+}
+
+function Complete-BoundedProcessCapture(
+  [object]$StdoutTask,
+  [object]$StderrTask,
+  [object]$StdoutCapture,
+  [object]$StderrCapture,
+  [string]$Label
+) {
+  if ($null -eq $StdoutTask -or $null -eq $StderrTask -or
+      $null -eq $StdoutCapture -or $null -eq $StderrCapture) {
+    throw "$Label has no complete redirected-output lease."
+  }
+  $drain = [Threading.Tasks.Task]::WhenAll([Threading.Tasks.Task[]]@(
+    $StdoutTask,
+    $StderrTask
+  ))
+  try { $drained = $drain.Wait(5000) }
+  catch { throw "$Label output drain failed within its fixed deadline." }
+  if (-not $drained -or -not $drain.IsCompletedSuccessfully) {
+    throw "$Label output did not drain within its fixed deadline."
+  }
+  [byte[]]$stdoutBytes = $StdoutCapture.Snapshot()
+  [byte[]]$stderrBytes = $StderrCapture.Snapshot()
+  try {
+    $stdout = [Text.UTF8Encoding]::new(
+      $false,
+      -not $StdoutCapture.Overflowed
+    ).GetString($stdoutBytes)
+    $stderr = [Text.UTF8Encoding]::new(
+      $false,
+      -not $StderrCapture.Overflowed
+    ).GetString($stderrBytes)
+  } catch {
+    throw "$Label output was not valid UTF-8."
+  }
+  if ($stdout.IndexOf([char]0) -ge 0 -or $stderr.IndexOf([char]0) -ge 0) {
+    throw "$Label output contained a NUL code unit."
+  }
+  return [PSCustomObject]@{
+    stdout = $stdout
+    stderr = $stderr
+    stdoutBytes = [int]$stdoutBytes.Length
+    stderrBytes = [int]$stderrBytes.Length
+    stdoutOverflowed = [bool]$StdoutCapture.Overflowed
+    stderrOverflowed = [bool]$StderrCapture.Overflowed
+  }
+}
+
+function Assert-BoundedCaptureStreamRegression() {
+  $capture = [GhostQualificationBoundedCaptureStream]::new(8)
+  [byte[]]$first = 1, 2, 3, 4, 5, 6, 7, 8, 9
+  [byte[]]$later = 10, 11, 12
+  $capture.Write($first, 0, $first.Length)
+  $capture.Write($later, 0, $later.Length)
+  [byte[]]$snapshot = $capture.Snapshot()
+  if (-not $capture.Overflowed -or $snapshot.Length -ne 8 -or
+      [Convert]::ToHexString($snapshot) -cne "0102030405060708") {
+    throw "Bounded process capture did not retain its exact prefix while continuing to drain."
+  }
+  $capture.Dispose()
+
+  [byte[]]$payload = 0..31
+  $source = [IO.MemoryStream]::new($payload, $false)
+  $asyncCapture = [GhostQualificationBoundedCaptureStream]::new(8)
+  try {
+    $copy = $source.CopyToAsync($asyncCapture)
+    if (-not $copy.Wait(1000) -or -not $copy.IsCompletedSuccessfully -or
+        $source.Position -ne $source.Length -or -not $asyncCapture.Overflowed -or
+        $asyncCapture.Snapshot().Length -ne 8) {
+      throw "Bounded async process capture stopped draining after its prefix filled."
+    }
+  } finally {
+    $asyncCapture.Dispose()
+    $source.Dispose()
+  }
+}
+
+function Get-SingleLineProcessDiagnostic([object]$Output) {
+  $diagnostic = (([string]$Output.stderr) + " " + ([string]$Output.stdout)).Trim()
+  $sanitized = [Text.StringBuilder]::new($diagnostic.Length)
+  foreach ($character in $diagnostic.ToCharArray()) {
+    $code = [int]$character
+    if ($code -lt 32 -or ($code -ge 127 -and $code -le 159) -or
+        $code -eq 0x2028 -or $code -eq 0x2029) {
+      $sanitized.Append(" ") | Out-Null
+    } else {
+      $sanitized.Append($character) | Out-Null
+    }
+  }
+  $diagnostic = $sanitized.ToString().Trim()
+  if ($diagnostic.Length -gt 4096) {
+    $diagnostic = $diagnostic.Substring(0, 4096) + " (truncated)"
+  }
+  if ($diagnostic.Length -eq 0) { return "no diagnostic output" }
+  return $diagnostic
+}
+
 function Invoke-ExactProcess(
   [string]$FileName,
   [string[]]$Arguments,
@@ -584,8 +808,8 @@ function Invoke-ExactProcess(
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $CaptureOutput
   $startInfo.RedirectStandardError = $CaptureOutput
-  if ($KeepRunning -and $CaptureOutput) {
-    throw "$Label cannot keep a process lease while waiting to drain redirected output."
+  if ($KeepRunning -and -not $CaptureOutput) {
+    throw "$Label must retain bounded redirected output with its process lease."
   }
   foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
   if ($null -ne $Environment) {
@@ -596,6 +820,10 @@ function Invoke-ExactProcess(
   $process.StartInfo = $startInfo
   $started = $false
   $processLeaseReturned = $false
+  $stdoutTask = $null
+  $stderrTask = $null
+  $stdoutCapture = $null
+  $stderrCapture = $null
   try {
     if ($null -ne $ExpectedExecutableProof -and $null -ne $ExpectedSystemExecutableProof) {
       throw "$Label cannot use both product-file and Windows-system executable proofs."
@@ -669,10 +897,27 @@ function Invoke-ExactProcess(
       $executionGuard.Dispose()
     }
     if (-not $started) { throw "$Label did not start." }
+    if ($CaptureOutput) {
+      $captureLimit = if ($KeepRunning) {
+        $maximumRetainedProcessOutputBytes
+      } else {
+        1024 * 1024
+      }
+      $stdoutCapture = [GhostQualificationBoundedCaptureStream]::new($captureLimit)
+      $stderrCapture = [GhostQualificationBoundedCaptureStream]::new($captureLimit)
+      $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutCapture)
+      $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderrCapture)
+    }
     if ($KeepRunning) {
       $process.Refresh()
       if ($process.HasExited) {
-        throw "$Label exited before its foreground process lease could be retained."
+        $output = Complete-BoundedProcessCapture $stdoutTask $stderrTask $stdoutCapture (
+          $stderrCapture
+        ) "$Label retained startup"
+        $overflow = if ($output.stdoutOverflowed -or $output.stderrOverflowed) {
+          " (output exceeded the fixed byte bound)"
+        } else { "" }
+        throw "$Label exited with status $($process.ExitCode) before its foreground process lease could be retained${overflow}: $(Get-SingleLineProcessDiagnostic $output)"
       }
       $processStartedAt = $process.StartTime.ToUniversalTime().ToString(
         "o",
@@ -683,13 +928,11 @@ function Invoke-ExactProcess(
         Process = $process
         ProcessId = [int]$process.Id
         ProcessStartedAt = $processStartedAt
+        StdoutTask = $stdoutTask
+        StderrTask = $stderrTask
+        StdoutCapture = $stdoutCapture
+        StderrCapture = $stderrCapture
       }
-    }
-    $stdoutTask = $null
-    $stderrTask = $null
-    if ($CaptureOutput) {
-      $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-      $stderrTask = $process.StandardError.ReadToEndAsync()
     }
     if (-not $process.WaitForExit($TimeoutMilliseconds)) {
       try { $process.Kill($true) } catch {}
@@ -699,20 +942,20 @@ function Invoke-ExactProcess(
     $stdout = ""
     $stderr = ""
     if ($CaptureOutput) {
-      $drain = [Threading.Tasks.Task]::WhenAll([Threading.Tasks.Task[]]@($stdoutTask, $stderrTask))
-      if (-not $drain.Wait(5000) -or -not $drain.IsCompletedSuccessfully) {
-        throw "$Label output did not drain within its fixed deadline."
+      $output = Complete-BoundedProcessCapture $stdoutTask $stderrTask $stdoutCapture (
+        $stderrCapture
+      ) $Label
+      if ($output.stdoutOverflowed -or $output.stderrOverflowed) {
+        throw "$Label output exceeded its fixed byte bound."
       }
-      $stdout = $stdoutTask.Result
-      $stderr = $stderrTask.Result
-      if ([Text.Encoding]::UTF8.GetByteCount($stdout) -gt 1024 * 1024 -or
-          [Text.Encoding]::UTF8.GetByteCount($stderr) -gt 1024 * 1024) {
-        throw "$Label output exceeded one MiB."
-      }
+      $stdout = [string]$output.stdout
+      $stderr = [string]$output.stderr
     }
     if ($process.ExitCode -ne 0) {
-      $bounded = ($stdout + " " + $stderr).Replace("`r", " ").Replace("`n", " ")
-      if ($bounded.Length -gt 4096) { $bounded = $bounded.Substring(0, 4096) + " (truncated)" }
+      $bounded = Get-SingleLineProcessDiagnostic ([PSCustomObject]@{
+        stdout = $stdout
+        stderr = $stderr
+      })
       throw "$Label failed with status $($process.ExitCode): $bounded"
     }
     return [ordered]@{ stdout = $stdout; stderr = $stderr; exitCode = $process.ExitCode }
@@ -725,6 +968,13 @@ function Invoke-ExactProcess(
             $process.Kill($true)
             $process.WaitForExit(5000) | Out-Null
           }
+        } catch {}
+      }
+      if ($CaptureOutput -and $null -ne $stdoutTask -and $null -ne $stderrTask) {
+        try {
+          Complete-BoundedProcessCapture $stdoutTask $stderrTask $stdoutCapture $stderrCapture (
+            "$Label cleanup"
+          ) | Out-Null
         } catch {}
       }
       $process.Dispose()
@@ -1259,6 +1509,7 @@ test "$(cat "/proc/$pid/comm")" = "sleep"
 kill -0 "$pid"
 printf '%s\n%s\n%s\n' "$pid" "$start_ticks" "$boot_id"
 '@.Replace("__TOKEN__", $Token)
+  $command = ConvertTo-LfWslGuestScript $command "$Label guest identity script"
   $result = Invoke-TrustedWsl $TrustedWsl @(
     "--distribution", $DistributionName, "--user", "root", "--exec", "sh", "-c", $command
   ) $TimeoutMilliseconds "$Label guest identity" $true
@@ -1290,7 +1541,16 @@ function Assert-WslSentinelLeaseProcess([object]$Lease, [string]$Label) {
   }
   $process = $Lease.Process
   $process.Refresh()
-  if ($process.HasExited) { throw "$Label foreground WSL client exited before reproof." }
+  if ($process.HasExited) {
+    $output = Complete-WslSentinelLeaseOutput $Lease "$Label early exit"
+    $overflow = if ($output.stdoutOverflowed -or $output.stderrOverflowed) {
+      " (output exceeded the fixed byte bound)"
+    } else { "" }
+    throw "$Label foreground WSL client exited with status $($process.ExitCode) before reproof${overflow}: $(Get-SingleLineProcessDiagnostic $output)"
+  }
+  if ($Lease.StdoutCapture.Overflowed -or $Lease.StderrCapture.Overflowed) {
+    throw "$Label foreground WSL client exceeded its retained output bound."
+  }
   $startedAt = $process.StartTime.ToUniversalTime().ToString(
     "o",
     [Globalization.CultureInfo]::InvariantCulture
@@ -1299,6 +1559,19 @@ function Assert-WslSentinelLeaseProcess([object]$Lease, [string]$Label) {
       $startedAt -cne [string]$Lease.WindowsClientStartedAt) {
     throw "$Label foreground WSL client PID or start time changed."
   }
+}
+
+function Complete-WslSentinelLeaseOutput([object]$Lease, [string]$Label) {
+  if ($null -eq $Lease -or $null -eq $Lease.Process) {
+    throw "$Label has no sentinel output lease."
+  }
+  if ($Lease.OutputCompleted) { return $Lease.Output }
+  $output = Complete-BoundedProcessCapture $Lease.StdoutTask $Lease.StderrTask (
+    $Lease.StdoutCapture
+  ) $Lease.StderrCapture $Label
+  $Lease.Output = $output
+  $Lease.OutputCompleted = $true
+  return $output
 }
 
 function Start-WslSentinelLease(
@@ -1313,20 +1586,31 @@ function Start-WslSentinelLease(
   $command = @'
 set -eu
 umask 077
+phase=initialize
 token='__TOKEN__'
 state="/run/assm-qc-sentinel-$token"
 temporary="$state.tmp.$$"
+trap 'status=$?; if [ "$status" -ne 0 ]; then rm -f -- "$temporary" "$state"; printf "assm sentinel startup failed at %s (exit %s)\n" "$phase" "$status" >&2; fi' EXIT
+phase=runtime_directory
+test -d /run
+test -w /run
+phase=sleep_executable
 test -x /usr/bin/sleep
 test ! -L /usr/bin/sleep
+phase=unique_state
 test ! -e "$state"
+phase=process_identity
 pid="$$"
 start_ticks="$(awk '{ print $22 }' "/proc/$pid/stat")"
 boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+phase=publish_state
 printf '%s\n%s\n%s\n%s\n' "$token" "$pid" "$start_ticks" "$boot_id" > "$temporary"
 chmod 600 "$temporary"
 mv "$temporary" "$state"
+phase=foreground_sleep
 exec /usr/bin/sleep 2147483647
 '@.Replace("__TOKEN__", $Token)
+  $command = ConvertTo-LfWslGuestScript $command "$Label foreground sentinel script"
   $environment = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
   $environment["SystemRoot"] = $TrustedWsl.windows
   $environment["WINDIR"] = $TrustedWsl.windows
@@ -1335,7 +1619,7 @@ exec /usr/bin/sleep 2147483647
   $environment["WSL_UTF8"] = "1"
   $processLease = Invoke-ExactProcess $TrustedWsl.executable @(
     "--distribution", $DistributionName, "--user", "root", "--exec", "sh", "-c", $command
-  ) 120000 "$Label foreground sentinel start" $false $environment `
+  ) 120000 "$Label foreground sentinel start" $true $environment `
     -ExpectedSystemExecutableProof $TrustedWsl.proof -KeepRunning $true
   $lease = [PSCustomObject]@{
     Process = $processLease.Process
@@ -1344,6 +1628,12 @@ exec /usr/bin/sleep 2147483647
     RegistrationId = [string]$registration.RegistrationId
     WindowsClientPid = [int]$processLease.ProcessId
     WindowsClientStartedAt = [string]$processLease.ProcessStartedAt
+    StdoutTask = $processLease.StdoutTask
+    StderrTask = $processLease.StderrTask
+    StdoutCapture = $processLease.StdoutCapture
+    StderrCapture = $processLease.StderrCapture
+    OutputCompleted = $false
+    Output = $null
     Token = $Token
     TokenSha256 = Get-LowerSha256Bytes ([Text.Encoding]::UTF8.GetBytes($Token))
     LinuxBootId = $null
@@ -1477,11 +1767,17 @@ rm -f "$state"
     $command = $command.Replace("__PID__", ([uint64]$Lease.LinuxPid).ToString([Globalization.CultureInfo]::InvariantCulture))
     $command = $command.Replace("__TICKS__", ([uint64]$Lease.LinuxStartTicks).ToString([Globalization.CultureInfo]::InvariantCulture))
     $command = $command.Replace("__BOOT__", [string]$Lease.LinuxBootId)
+    $command = ConvertTo-LfWslGuestScript $command "$Label exact guest stop script"
     Invoke-TrustedWsl $TrustedWsl @(
       "--distribution", $Lease.DistributionName, "--user", "root", "--exec", "sh", "-c", $command
     ) 30000 "$Label exact guest stop" | Out-Null
     if (-not $process.WaitForExit(15000)) {
       throw "$Label foreground WSL client did not exit after its exact guest stopped."
+    }
+    $output = Complete-WslSentinelLeaseOutput $Lease "$Label foreground output"
+    if ($output.stdoutOverflowed -or $output.stderrOverflowed -or
+        [int]$output.stdoutBytes -ne 0 -or [int]$output.stderrBytes -ne 0) {
+      throw "$Label foreground WSL client emitted unexpected output: $(Get-SingleLineProcessDiagnostic $output)"
     }
     $stopIdentityProven = $true
   } finally {
@@ -1492,6 +1788,10 @@ rm -f "$state"
         $process.WaitForExit(5000) | Out-Null
       }
     } catch {}
+    if (-not $Lease.OutputCompleted) {
+      try { Complete-WslSentinelLeaseOutput $Lease "$Label cleanup output" | Out-Null }
+      catch {}
+    }
     $process.Dispose()
     $Lease.Disposed = $true
     if ($stopIdentityProven) { $Lease.Stopped = $true }
@@ -1678,6 +1978,7 @@ function Unregister-ProvenExactWsl(
   $environment["WINDIR"] = $TrustedWsl.windows
   $environment["PATH"] = $TrustedWsl.system32
   $environment["NoDefaultCurrentDirectoryInExePath"] = "1"
+  $environment["WSL_UTF8"] = "1"
   Invoke-ExactProcess $TrustedWsl.executable @("--unregister", $Name) 90000 "Exact managed WSL cleanup" $true $environment -ExpectedSystemExecutableProof $TrustedWsl.proof | Out-Null
   $remaining = @(Get-WslRegistrations | Where-Object {
     [String]::Equals($_.Name, $Name, [StringComparison]::Ordinal)
@@ -1686,6 +1987,9 @@ function Unregister-ProvenExactWsl(
     throw "Exact managed WSL cleanup left its proven registration behind."
   }
 }
+
+Assert-WslGuestScriptNormalizationRegression
+Assert-BoundedCaptureStreamRegression
 
 $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
 $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP)

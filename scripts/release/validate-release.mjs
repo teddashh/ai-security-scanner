@@ -853,17 +853,115 @@ function validatePlatformQualificationSources(sources) {
   const exactProcess = sourceFunction(nsisGhost, "Invoke-ExactProcess", "exact process execution");
   for (const required of [
     '[bool]$KeepRunning = $false',
+    "$KeepRunning -and -not $CaptureOutput",
     "$process = [Diagnostics.Process]::new()",
     "$process.Start()",
+    "[GhostQualificationBoundedCaptureStream]::new($captureLimit)",
+    "$process.StandardOutput.BaseStream.CopyToAsync($stdoutCapture)",
+    "$process.StandardError.BaseStream.CopyToAsync($stderrCapture)",
     "$process.HasExited",
     "$process.StartTime.ToUniversalTime()",
+    "Complete-BoundedProcessCapture",
+    "$process.ExitCode",
     "$processLeaseReturned = $true",
     "Process = $process",
     "ProcessId = [int]$process.Id",
     "ProcessStartedAt = $processStartedAt",
+    "StdoutTask = $stdoutTask",
+    "StderrTask = $stderrTask",
+    "StdoutCapture = $stdoutCapture",
+    "StderrCapture = $stderrCapture",
     "if (-not $processLeaseReturned)",
     "$process.Dispose()",
   ]) assert(exactProcess.includes(required), "foreground process lease support is missing: " + required);
+  assert(!exactProcess.includes("ReadToEndAsync"), "exact process capture must remain fixed-cap and continuously drained");
+  assertOrderedTokens(exactProcess, [
+    "$started = $process.Start()",
+    "$stdoutCapture = [GhostQualificationBoundedCaptureStream]::new($captureLimit)",
+    "$stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutCapture)",
+    "$stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderrCapture)",
+    "if ($KeepRunning) {\n      $process.Refresh()",
+    "$process.HasExited",
+    "$processLeaseReturned = $true",
+    "Process = $process",
+  ], "retained bounded process capture");
+
+  for (const required of [
+    "public sealed class GhostQualificationBoundedCaptureStream",
+    "private readonly byte[] retained",
+    "if (copied != buffer.Length) { overflowed = true; }",
+    "WriteCore(buffer.Span)",
+    "public byte[] Snapshot()",
+    "Assert-BoundedCaptureStreamRegression",
+    "Assert-WslGuestScriptNormalizationRegression",
+  ]) assert(nsisGhost.includes(required), "bounded process/guest-script regression support is missing: " + required);
+  assert(
+    nsisGhost.includes(
+      "\nAssert-WslGuestScriptNormalizationRegression\nAssert-BoundedCaptureStreamRegression\n",
+    ),
+    "bounded guest-script and process-capture regressions are not executed before qualification setup",
+  );
+
+  const captureCompletion = sourceFunction(
+    nsisGhost,
+    "Complete-BoundedProcessCapture",
+    "bounded process capture completion",
+  );
+  for (const required of [
+    "[Threading.Tasks.Task]::WhenAll",
+    "$drain.Wait(5000)",
+    "$StdoutCapture.Snapshot()",
+    "$StderrCapture.Snapshot()",
+    "[Text.UTF8Encoding]::new",
+    "stdoutOverflowed = [bool]$StdoutCapture.Overflowed",
+    "stderrOverflowed = [bool]$StderrCapture.Overflowed",
+  ]) assert(captureCompletion.includes(required), "bounded process capture completion is missing: " + required);
+
+  const captureRegression = sourceFunction(
+    nsisGhost,
+    "Assert-BoundedCaptureStreamRegression",
+    "bounded process capture regression",
+  );
+  for (const required of [
+    "[GhostQualificationBoundedCaptureStream]::new(8)",
+    "$capture.Write($first, 0, $first.Length)",
+    "$capture.Write($later, 0, $later.Length)",
+    "$source.CopyToAsync($asyncCapture)",
+    "$copy.Wait(1000)",
+    "$source.Position -ne $source.Length",
+    "$asyncCapture.Overflowed",
+  ]) assert(captureRegression.includes(required), "bounded process capture regression is missing: " + required);
+
+  const guestNormalizer = sourceFunction(
+    nsisGhost,
+    "ConvertTo-LfWslGuestScript",
+    "WSL guest-script normalizer",
+  );
+  for (const required of [
+    '.Replace("`r`n", "`n")',
+    "$normalized.Contains(\"`r\")",
+    "$Script.IndexOf([char]0)",
+    "$maximumWslGuestScriptBytes",
+    "[Text.Encoding]::UTF8.GetByteCount($normalized)",
+  ]) assert(guestNormalizer.includes(required), "WSL guest-script normalizer is missing: " + required);
+  assert(
+    !guestNormalizer.includes('.Replace("`r", "`n")') &&
+      !guestNormalizer.includes('.Replace("`r", "")'),
+    "WSL guest-script normalization must reject a bare CR instead of silently rewriting it",
+  );
+
+  const guestNormalizationRegression = sourceFunction(
+    nsisGhost,
+    "Assert-WslGuestScriptNormalizationRegression",
+    "WSL guest-script normalization regression",
+  );
+  for (const required of [
+    '"first`r`nsecond`r`n"',
+    '"first`nsecond`n"',
+    '"first`rsecond"',
+    '"first$([char]0)second"',
+    "$maximumWslGuestScriptBytes + 1",
+  ]) assert(guestNormalizationRegression.includes(required), "WSL guest-script normalization regression is missing: " + required);
 
   const runningInventory = sourceFunction(
     nsisGhost,
@@ -876,6 +974,22 @@ function validatePlatformQualificationSources(sources) {
     "running inventory",
   ]) assert(runningInventory.includes(required), "running WSL inventory proof is missing: " + required);
 
+  const exactWslUnregisterStart = nsisGhost.indexOf("function Unregister-ProvenExactWsl(");
+  const exactWslUnregisterEnd = nsisGhost.indexOf(
+    "\n}\n\nAssert-WslGuestScriptNormalizationRegression",
+    exactWslUnregisterStart,
+  );
+  assert(
+    exactWslUnregisterStart >= 0 && exactWslUnregisterEnd > exactWslUnregisterStart,
+    "exact WSL unregister function is missing or unbounded",
+  );
+  const exactWslUnregister = nsisGhost.slice(exactWslUnregisterStart, exactWslUnregisterEnd);
+  for (const required of [
+    '$environment["WSL_UTF8"] = "1"',
+    'Invoke-ExactProcess $TrustedWsl.executable @("--unregister", $Name)',
+    "-ExpectedSystemExecutableProof $TrustedWsl.proof",
+  ]) assert(exactWslUnregister.includes(required), "exact WSL unregister is missing: " + required);
+
   const sentinelGuestIdentity = sourceFunction(
     nsisGhost,
     "Get-WslSentinelGuestIdentity",
@@ -883,6 +997,7 @@ function validatePlatformQualificationSources(sources) {
   );
   for (const required of [
     'state="/run/assm-qc-sentinel-$token"',
+    "ConvertTo-LfWslGuestScript",
     'test -r "/proc/$pid/stat"',
     'awk \'{ print $22 }\' "/proc/$pid/stat"',
     "cat /proc/sys/kernel/random/boot_id",
@@ -901,6 +1016,11 @@ function validatePlatformQualificationSources(sources) {
   for (const required of [
     "$process.Refresh()",
     "$process.HasExited",
+    "Complete-WslSentinelLeaseOutput",
+    "$process.ExitCode",
+    "Get-SingleLineProcessDiagnostic",
+    "$Lease.StdoutCapture.Overflowed",
+    "$Lease.StderrCapture.Overflowed",
     "$process.StartTime.ToUniversalTime()",
     "$process.Id",
     "$Lease.WindowsClientPid",
@@ -911,11 +1031,17 @@ function validatePlatformQualificationSources(sources) {
   for (const required of [
     "Get-ExactWslRegistration $DistributionName $ExpectedBasePath",
     'state="/run/assm-qc-sentinel-$token"',
+    "ConvertTo-LfWslGuestScript",
+    "phase=runtime_directory",
+    "phase=sleep_executable",
+    "phase=publish_state",
+    "assm sentinel startup failed at %s (exit %s)",
     'pid="$$"',
     'awk \'{ print $22 }\' "/proc/$pid/stat"',
     "cat /proc/sys/kernel/random/boot_id",
     "exec /usr/bin/sleep 2147483647",
     "Invoke-ExactProcess $TrustedWsl.executable",
+    ') 120000 "$Label foreground sentinel start" $true $environment',
     "-ExpectedSystemExecutableProof $TrustedWsl.proof -KeepRunning $true",
     "Process = $processLease.Process",
     "RegistrationId = [string]$registration.RegistrationId",
@@ -925,6 +1051,10 @@ function validatePlatformQualificationSources(sources) {
     "LinuxBootId",
     "LinuxPid",
     "LinuxStartTicks",
+    "StdoutTask = $processLease.StdoutTask",
+    "StderrTask = $processLease.StderrTask",
+    "StdoutCapture = $processLease.StdoutCapture",
+    "StderrCapture = $processLease.StderrCapture",
     "$deadline.ElapsedMilliseconds -lt 30000",
   ]) assert(sentinelStart.includes(required), "foreground sentinel lease start is missing: " + required);
   assert(
@@ -973,15 +1103,30 @@ function validatePlatformQualificationSources(sources) {
   for (const required of [
     "Get-ExactWslRegistration $Lease.DistributionName $Lease.ExpectedBasePath",
     'state="/run/assm-qc-sentinel-$token"',
+    "ConvertTo-LfWslGuestScript",
     "kill -TERM",
     'test "$attempt" -lt 100',
     ") 30000 \"$Label exact guest stop\"",
     "$process.WaitForExit(15000)",
+    "Complete-WslSentinelLeaseOutput",
+    "$output.stdoutOverflowed",
+    "$output.stderrOverflowed",
+    "$output.stdoutBytes -ne 0",
+    "$output.stderrBytes -ne 0",
     "$process.Kill($true)",
     "$process.WaitForExit(5000)",
     "$process.Dispose()",
     "$Lease.Stopped = $true",
   ]) assert(sentinelStop.includes(required), "bounded sentinel lease stop is missing: " + required);
+  assertOrderedTokens(sentinelStop, [
+    "$process.WaitForExit(15000)",
+    "Complete-WslSentinelLeaseOutput",
+    "$output.stdoutOverflowed",
+    "$output.stdoutBytes -ne 0",
+    "$stopIdentityProven = $true",
+    "$process.Dispose()",
+    "$Lease.Stopped = $true",
+  ], "bounded quiet sentinel stop");
 
   const sideBySideStart = nsisGhost.indexOf("$sideBySideProcess = Invoke-ExactProcess");
   const sideBySideEnd = nsisGhost.indexOf("$candidateCase = Invoke-CliJson", sideBySideStart);
@@ -2623,6 +2768,7 @@ async function main() {
   );
   const cargoToml = await readFile(path.join(PROJECT_ROOT, "src-tauri/Cargo.toml"), "utf8");
   const cargoLock = await readFile(path.join(PROJECT_ROOT, "Cargo.lock"), "utf8");
+  const gitAttributes = await readFile(path.join(PROJECT_ROOT, ".gitattributes"), "utf8");
   const repositoryReadme = await readFile(path.join(PROJECT_ROOT, "README.md"), "utf8");
   const releaseGuide = await readFile(path.join(PROJECT_ROOT, "docs/release/README.md"), "utf8");
   const releaseMetadataSchema = await readJson(
@@ -2665,6 +2811,11 @@ async function main() {
   const containerRuntimeSource = await readFile(
     path.join(PROJECT_ROOT, "src-tauri/src/container_runtime.rs"),
     "utf8",
+  );
+
+  assert(
+    /^\*\.ps1 text eol=lf$/mu.test(gitAttributes),
+    "PowerShell qualification scripts must remain LF-only in Windows checkouts",
   );
 
   assert(isSemver(version), `package version is not native-compatible numeric SemVer: ${version}`);

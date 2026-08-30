@@ -3,3 +3,4 @@ engines/** text=auto eol=lf
 mappings/vendor/aidefend/** text eol=lf
 mappings/control-mappings.json text eol=lf
 scripts/validate-aidefend-snapshot.mjs text eol=lf
+*.ps1 text eol=lf
