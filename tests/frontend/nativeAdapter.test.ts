@@ -766,6 +766,7 @@ test("mixed terminal and queued engine work keeps the scan queued for downstream
 const adaptGatewayFailure = (
   message: string,
   errorCode = "execution_failed",
+  checkpointStage = "failed",
 ) => {
   const checkpoint = JSON.stringify({
     case_id: "case-1",
@@ -773,7 +774,7 @@ const adaptGatewayFailure = (
     engine_run_id: "engine-run-1",
     engine_id: "naabu",
     attempt: 1,
-    stage: "failed",
+    stage: checkpointStage,
     container_name: null,
     scope_sha256: null,
     artifact_ids: [],
@@ -1159,6 +1160,23 @@ test("release-incompatible saved work is static, redacted, and not resumable", (
   assert.equal(failed?.checkpoint?.lastError, undefined);
   assert.deepEqual(failed?.warnings, []);
   assert.doesNotMatch(JSON.stringify(failed), /RAW_BACKEND_SENTINEL|target-private/u);
+});
+
+test("ambiguous cleanup identity never offers an unsafe cleanup retry", () => {
+  const rawBackendText = "RAW_CLEANUP_SENTINEL private-runtime-path";
+  const failed = adaptGatewayFailure(
+    rawBackendText,
+    "runtime_cleanup_identity_unavailable",
+    "cleanup_pending",
+  ).runs[0]?.engineRuns[0];
+
+  assert.equal(failed?.checkpoint?.stage, "cleanup_pending");
+  assert.equal(failed?.errorCode, "runtime_cleanup_identity_unavailable");
+  assert.equal(failed?.recoveryAction, "none");
+  assert.equal(failed?.resumable, false);
+  assert.equal(failed?.checkpoint?.lastError, undefined);
+  assert.deepEqual(failed?.warnings, []);
+  assert.doesNotMatch(JSON.stringify(failed), /RAW_CLEANUP_SENTINEL|private-runtime-path/u);
 });
 
 test("every product-owned gateway preparation marker maps to one redacted failure category", () => {

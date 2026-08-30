@@ -47,11 +47,11 @@ test("English and Traditional Chinese locales cover the exact same message contr
 test("typed translators interpolate central and page-local bilingual copy", () => {
   assert.equal(
     i18n.translate("en", "runtime.badge.ready"),
-    "Local checks ready",
+    "Local tools ready at last check",
   );
   assert.equal(
     i18n.translate("zh-TW", "runtime.badge.ready"),
-    "本機檢查已就緒",
+    "本機工具上次檢查時可用",
   );
 
   const localCopy = {

@@ -46,7 +46,7 @@ export const en = {
   "nav.verification.label": "Check fixes",
   "nav.verification.hint": "Compare before and after",
 
-  "runtime.badge.ready": "Local checks ready",
+  "runtime.badge.ready": "Local tools ready at last check",
   "runtime.badge.needsSetup": "Preparing local checks",
   "runtime.badge.demo": "Demo mode",
   "runtime.nextStep": "Scan tool status",

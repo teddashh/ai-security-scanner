@@ -77,8 +77,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     title: "Local checks are preparing automatically",
     description:
       "Keep using the app while ai-security-scanner prepares what it can. No separate setup is required.",
-    readyTitle: "Your local scan tools are ready",
-    readyDescription: "Choose what you want to scan and get started.",
+    readyTitle: "Local scan tools were ready at the last check",
+    readyDescription: "Choose a scan and get started. The app checks them again before it runs.",
     idleTitle: "One local check is not ready yet",
     idleDescription: "Try again and the app will safely continue or restart its automatic preparation. Your saved projects are unchanged.",
     demoTitle: "Explore a scan with sample results",
@@ -164,8 +164,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     title: "正在自動準備本機檢查",
     description:
       "你可以繼續使用程式；ai-security-scanner 會在背景準備可用的檢查，不需要另外完成設定。",
-    readyTitle: "本機掃描工具準備好了",
-    readyDescription: "選擇你想掃描的項目，就能直接開始。",
+    readyTitle: "本機掃描工具上次檢查時可用",
+    readyDescription: "選擇你想掃描的項目即可開始；程式會在執行前再次確認。",
     idleTitle: "一項本機檢查尚未準備好",
     idleDescription: "請再試一次，程式會安全地繼續或重新開始自動準備；已保存的專案不會變更。",
     demoTitle: "先用範例結果看看掃描怎麼運作",

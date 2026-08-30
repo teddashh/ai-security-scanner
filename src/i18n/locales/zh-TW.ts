@@ -48,7 +48,7 @@ export const zhTW = {
   "nav.verification.label": "確認修復",
   "nav.verification.hint": "比較修復前後的差異",
 
-  "runtime.badge.ready": "本機檢查已就緒",
+  "runtime.badge.ready": "本機工具上次檢查時可用",
   "runtime.badge.needsSetup": "正在準備本機檢查",
   "runtime.badge.demo": "展示模式",
   "runtime.nextStep": "掃描工具狀態",

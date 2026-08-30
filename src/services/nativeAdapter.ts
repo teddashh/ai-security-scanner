@@ -1238,7 +1238,9 @@ const engineRecoveryAction = (
   checkpoint: EngineCheckpoint | undefined,
   errorCode: string | null | undefined,
 ): EngineRecoveryAction => {
-  if (errorCode === "resume_release_incompatible") return "none";
+  if (["resume_release_incompatible", "runtime_cleanup_identity_unavailable"].includes(errorCode ?? "")) {
+    return "none";
+  }
   if (!hasResumeToken || !checkpoint || !["paused", "failed", "partial", "cancelled"].includes(status)) {
     return "none";
   }
@@ -1577,7 +1579,9 @@ export const adaptNativeCase = (
       const checkpoint = parseCheckpoint(engineRun.resume_token, engineRun);
       const failureKind = engineFailureKind(engineRun, checkpoint);
       const releaseIncompatible = engineRun.error_code === "resume_release_incompatible";
-      const publicCheckpoint = (failureKind === "gateway_preparation_failed" || releaseIncompatible) && checkpoint
+      const cleanupIdentityUnavailable = engineRun.error_code === "runtime_cleanup_identity_unavailable";
+      const staticFailure = releaseIncompatible || cleanupIdentityUnavailable;
+      const publicCheckpoint = (failureKind === "gateway_preparation_failed" || staticFailure) && checkpoint
         ? { ...checkpoint, lastError: undefined }
         : checkpoint;
       const recoveryAction = engineRecoveryAction(
@@ -1636,7 +1640,7 @@ export const adaptNativeCase = (
         exitCode: isBuiltInLocalhostTcp ? undefined : engineRun.exit_code ?? undefined,
         cleanupRemoved: isBuiltInLocalhostTcp ? undefined : engineRun.cleanup_removed ?? undefined,
         cleanupDetail: isBuiltInLocalhostTcp ? undefined : engineRun.cleanup_detail ?? undefined,
-        warnings: releaseIncompatible ? [] : engineRun.warnings ?? [],
+        warnings: staticFailure ? [] : engineRun.warnings ?? [],
         status,
         progress: engineRun.progress_percent,
         phase: engineRun.phase,
@@ -1650,6 +1654,11 @@ export const adaptNativeCase = (
           ? adapterText(
             "This saved check was created by a different app release and cannot be continued safely. Start a new scan; saved evidence and findings remain unchanged.",
             "這項已保存的檢查由不同版本的應用程式建立，無法安全續跑。請開始新的掃描；已保存的證據與問題不會變更。",
+          )
+          : cleanupIdentityUnavailable
+          ? adapterText(
+            "The older cleanup identity could not be verified, so it was preserved without cleanup. Saved results remain available; start a new scan for fresh results.",
+            "無法驗證舊的清理識別，因此程式保留原狀且未執行清理。已保存的結果仍可查看；請開始新的掃描取得新結果。",
           )
           : failureKind === "gateway_preparation_failed"
           ? adapterText(
