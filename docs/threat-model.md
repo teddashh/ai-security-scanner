@@ -29,7 +29,7 @@ It considers a single human user on one workstation. Shared-workstation authoriz
 3. **Evidence integrity:** raw evidence and provenance cannot be silently replaced, dropped, or confused with another case.
 4. **Coverage honesty:** missing, partial, failed, or unknown work cannot appear as a pass.
 5. **Local confidentiality:** the product does not transmit credentials or case data without an explicit user action.
-6. **Supply-chain accountability:** every executable, image, ruleset, template set, and database is traceable to a pinned artifact and a release disposition.
+6. **Supply-chain accountability:** every product-distributed or product-downloaded executable, engine image, ruleset, template set, and database is traceable to a pinned artifact and an operation-scoped release disposition. OS-owned facilities such as the verified Windows `System32\\wsl.exe` boundary remain governed by platform trust rather than being misrepresented as project artifacts.
 7. **Safe failure:** interruption or partial cleanup is visible and recoverable.
 8. **Non-remediation:** the product cannot use scanner authority to change the assessed environment.
 9. **Outcome continuity:** product-owned reversible failure is repaired automatically, ambiguous objects are preserved beside a new isolated object, and optional failure leaves independent work plus an honest partial report available.
@@ -302,8 +302,9 @@ They must not:
   executions are never pooled.
 - Legacy or unanswered AI context remains unknown; it is not converted to an AIDEFEND
   not-applicable statement.
-- If a connected source returns no assets, framework coverage stays incomplete/unknown; zero
-  returned inventory is not treated as proof that the source is empty.
+- If a connected source returns no assets, the source inventory remains incomplete/unknown; zero
+  returned inventory is not treated as proof that the source is empty. Framework relationships do
+  not define scan coverage.
 - If a runtime provider cannot enforce a manifest boundary, the affected engine does not run through that provider; unaffected tasks continue and a partial/no-checks master report is saved.
 - If product-owned disposable runtime state is corrupt, bounded automatic repair or side-by-side replacement runs. If ownership is ambiguous, the old object is preserved and a uniquely named generation is created; no name-only mutation is allowed.
 - If a lifecycle event is missed, authoritative startup/focus/resume/watchdog polling reconciles the durable journal within the canonical refresh bound or exposes Retry/offline-with-last-known-data.

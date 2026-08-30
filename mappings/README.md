@@ -37,7 +37,7 @@ as an exact mapping.
 
 Mapping is applied after evidence/finding preservation. Missing, stale, malformed, historically
 unavailable, or inapplicable entries produce an unavailable/omitted relationship and an optional
-coverage notice in the same beginner master report. They do not delay quick discovery, full
+mapping-availability notice in the same beginner master report. They do not change scan coverage or delay quick discovery, full
 inventory, deep checks, finding display, or readable export. No aggregate framework score is
 generated.
 

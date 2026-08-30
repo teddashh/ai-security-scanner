@@ -58,7 +58,8 @@ Do not substitute an upstream scanner command when a product adapter is unavaila
 Create or seed only when the user requested it:
 
 ```sh
-ai-security-scanner-cli case create --title TITLE --organization ORGANIZATION
+ai-security-scanner-cli case create --title TITLE
+# Add --organization ORGANIZATION only when the user supplied a company/team name.
 ai-security-scanner-cli case seed-demo
 ```
 

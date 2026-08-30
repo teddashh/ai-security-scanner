@@ -195,7 +195,7 @@ CoverageRecord
   id
   case_id
   run_id?
-  subject_kind: environment | data_source | asset | control_area
+  subject_kind: environment | data_source | asset
   subject_id
   state: discovered_authorized_scanned |
          discovered_not_authorized |
@@ -421,11 +421,10 @@ The initial command surface is:
 | `list_engine_manifests` | Return installed/available engines, versions, licensing disposition, runtime needs, and implementation status. |
 | `start_discovery` | Persist the run/discovery task, then capture bounded provider-native inventory or consume preserved snapshots, persist raw pages first, and run attributable candidate-asset discovery. |
 | `cancel_discovery` | Cancel the active case-bound provider capture while retaining already-preserved partial evidence. |
-| `approve_scope` | Internal operation used by the combined Start action to store the one applicable assertion and resolved target; it is not a second user ceremony. |
 | `update_finding_workflow` | Append a human handling decision without altering scanner evidence. |
 | `group_findings` | Create one reversible presentation group for two or more case-owned canonical findings. |
 | `ungroup_findings` | Remove only the active group projection and append a removal event. |
-| `start_scan` | Freeze and persist requested coverage plus known target-stage-engine tasks, then preflight and start independently runnable tasks. |
+| `start_scan` | In one durable mutation, apply the inline target assertion, freeze requested coverage, and persist known target-stage-engine tasks; only then preflight and start independently runnable tasks. |
 | `pause_scan` | Request a safe checkpoint and pause where supported. |
 | `resume_scan` | Resume a paused or recoverable run. |
 | `cancel_scan` | Cancel remaining work and perform credential/container cleanup. |
@@ -704,9 +703,9 @@ Synthetic cases are permitted for development and onboarding only. `seed_demo_ca
 
 ## 18. Repository skills boundary
 
-Claude/Codex skills call documented application or maintenance commands. They may inspect manifests, runtime health, job state, and cleanup state. They do not receive secret values, bypass `approve_scope`, connect directly to the runtime socket, execute remediation, or turn a demo result into a real result.
+Claude/Codex skills call documented application or maintenance commands. They may inspect manifests, runtime health, job state, and cleanup state. They do not receive secret values, fabricate or bypass the user's scope assertion, connect directly to the runtime socket, execute remediation, or turn a demo result into a real result.
 
-Here `approve_scope` is the backend record produced by the canonical combined Start interaction. Skills cannot supply the user's public/internal assertion, widen an existing contract, or enable a deeper/active activity on the user's behalf.
+The durable scope grant is produced inside the canonical combined Start interaction. Skills cannot supply the user's public/internal assertion, widen an existing contract, or enable a deeper/active activity on the user's behalf.
 
 ## 19. Architectural acceptance conditions
 

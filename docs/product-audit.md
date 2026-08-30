@@ -463,7 +463,7 @@ The rewrite is not a request to remove all safeguards. These mechanisms directly
 - product-owned component repair;
 - optional engine/gateway/mapping/signing/updater failures as task/feature warnings or degradation, while hard-blocking only the exact untrusted engine/update or untrustworthy signed-export operation;
 - unreadable case isolation instead of global startup failure;
-- framework and specialist-format limitations as explicit coverage notices.
+- framework-relationship and specialist-format limitations as mapping/format notices that do not redefine scan coverage.
 
 ### Remove / stop investing
 
@@ -507,12 +507,12 @@ Proceed in parallel or immediately afterward with the remaining release-blocking
 
 1. Move fixed WSL detection/preparation into the signed install/resume flow; cover no-WSL and restart without Terminal or an installation rollback.
 2. Replace deterministic-name/manual WSL collision handling with unique side-by-side runtime creation; do not execute legacy export/import/unregister. Repair a failed packaged component without executing it, or disable only dependent tasks.
-3. Add a version-neutral ghost/stale-registration and same-version Repair path that installs/replaces app binaries without requiring an old uninstaller.
+3. **Implemented on the integration line:** the NSIS installer now uses a version-neutral ghost/stale-registration and same-version Repair path that replaces product binaries and registration without requiring an old uninstaller or inspecting runtime ownership.
 4. Add authoritative startup/focus/resume/watchdog reconciliation for all scan/runtime operations; bound preparing/running states and stop target contact promptly on Cancel.
 5. Replace recursive NSIS app-data deletion with the three explicit choices: app only; app plus verified scan tools while keeping projects; all product data after confirmation.
 6. Replace the AWS/self-declared usability-evidence contract with the exact-candidate installed-Windows localhost beginner protocol. Bind it only to promotion of that Windows artifact; keep ordinary development/CI unblocked.
 
-Focused real-boundary fixtures cover no-WSL/restart; lost event; transient stopped runtime; ambiguous name; N-1 ghost registration with missing binaries, uninstaller, manifest, and ownership proof; corrupt packaged component; gateway-dependent engine failure with an offline sibling; and stop/preservation/reinstall behavior for all three uninstall choices. The ghost fixture installs successfully, preserves old/ambiguous runtime bytes and cases, and completes localhost with a unique generation.
+Focused fixtures currently cover lost-event reconciliation, transient stopped runtimes, ambiguous names, corrupt packaged components, and gateway-dependent engine failure with an offline sibling. The version-neutral N-1 ghost source path has a static fixture for missing binaries, uninstaller, manifest, and ownership proof. No-WSL/restart, all three real uninstaller choices, data preservation/reinstall, and an installed localhost completion remain Windows acceptance work; they must not be described as qualified before those exact human paths run.
 
 ### Second batch — P1 scan value, partial results, report, and primary UX
 
