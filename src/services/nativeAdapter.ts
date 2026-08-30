@@ -688,7 +688,6 @@ const managedRuntimeRecoveryActions = {
   windows_wsl_update_required: "update_wsl",
   windows_restart_required: "restart_windows",
   windows_wsl_command_failed: "retry_wsl_check",
-  windows_wsl_distribution_requires_manual_action: "resolve_wsl_distribution_manually",
 } as const satisfies Record<ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupNextAction>;
 
 const managedRuntimeSetupPhases = new Set<ManagedRuntimeSetupPhase>([

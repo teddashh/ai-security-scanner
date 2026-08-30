@@ -58,7 +58,6 @@ export const en = {
   "runtime.prerequisite.generic": "The local scan tools did not start. Your scan project is safe on this device. Try setup again.",
   "runtime.recovery.retryAutomatic": "Automatic setup could not finish. Your saved work is unchanged; try it again. Checks that do not need this tool remain available.",
   "runtime.recovery.windowsPending": "Windows requires a restart to finish its change. Reopen ai-security-scanner afterward and automatic setup will resume; your saved work is unchanged.",
-  "runtime.recovery.preservedUnknown": "An older scan-tool workspace was left untouched. Automatic preparation uses a new isolated workspace and does not delete the old data.",
   "runtime.phase.idle.label": "Preparing local checks",
   "runtime.phase.idle.detail": "This happens automatically in the background; no separate setup is required.",
   "runtime.phase.install.label": "Preparing the scan tools",

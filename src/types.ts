@@ -1240,16 +1240,14 @@ export type ManagedRuntimeSetupFailureReason =
   | "windows_wsl_optional_feature_disabled"
   | "windows_wsl_update_required"
   | "windows_restart_required"
-  | "windows_wsl_command_failed"
-  | "windows_wsl_distribution_requires_manual_action";
+  | "windows_wsl_command_failed";
 
 export type ManagedRuntimeSetupNextAction =
   | "install_wsl"
   | "enable_wsl_optional_features"
   | "update_wsl"
   | "restart_windows"
-  | "retry_wsl_check"
-  | "resolve_wsl_distribution_manually";
+  | "retry_wsl_check";
 
 export interface ManagedRuntimeSetupStatus {
   phase: ManagedRuntimeSetupPhase;

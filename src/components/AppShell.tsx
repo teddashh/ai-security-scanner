@@ -85,7 +85,6 @@ const runtimeRecoveryKeys = {
   update_wsl: "runtime.recovery.retryAutomatic",
   restart_windows: "runtime.recovery.windowsPending",
   retry_wsl_check: "runtime.recovery.retryAutomatic",
-  resolve_wsl_distribution_manually: "runtime.recovery.preservedUnknown",
 } as const satisfies Record<ManagedRuntimeSetupNextAction, TranslationKey>;
 
 const casePhaseLabelKeys = {

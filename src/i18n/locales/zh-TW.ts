@@ -60,7 +60,6 @@ export const zhTW = {
   "runtime.prerequisite.generic": "本機掃描工具沒有啟動成功。你的掃描專案仍安全留在這台電腦；請再試一次。",
   "runtime.recovery.retryAutomatic": "自動設定未能完成。已保存的工作沒有變更；請再試一次。不需要這項工具的檢查仍可使用。",
   "runtime.recovery.windowsPending": "Windows 必須重新啟動才能完成變更。重新啟動後，再開啟 ai-security-scanner，自動設定就會繼續；已保存的工作沒有變更。",
-  "runtime.recovery.preservedUnknown": "舊的掃描工具工作區已完整保留。程式會自動使用新的隔離工作空間，不會刪除舊資料。",
   "runtime.phase.idle.label": "正在準備本機檢查",
   "runtime.phase.idle.detail": "程式會在背景自動完成，不需要另外設定。",
   "runtime.phase.install.label": "正在準備掃描工具",

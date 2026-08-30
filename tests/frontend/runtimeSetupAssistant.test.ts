@@ -45,21 +45,16 @@ test("backend prerequisite states stay inside one automatic, plain-language setu
   }
 });
 
-test("an unproven older workspace is preserved while retry prepares an isolated replacement", () => {
-  for (const phrase of [
-    "Older scan-tool data was preserved",
-    "left untouched",
-    "new isolated workspace",
-    "舊的掃描工具資料已保留",
-    "沒有更動舊工作區",
-    "新的隔離工作空間",
-  ]) assert.ok(source.includes(phrase), phrase);
-
-  assert.match(source, /preservedUnknownWorkspace = status\?\.nextAction === "resolve_wsl_distribution_manually"/u);
+test("an unproven older workspace never becomes a manual setup contract", () => {
+  for (const candidate of [source, shellSource, appSource]) {
+    assert.doesNotMatch(
+      candidate,
+      /resolve_wsl_distribution_manually|windows_wsl_distribution_requires_manual_action/u,
+    );
+  }
   assert.match(source, /!setupFailed && !setupCancelled && !setupIdleUnavailable \? null/u);
   assert.match(source, /<button[^>]*onClick=\{onSetup\}/u);
   assert.doesNotMatch(source, /unavailable in this session|這個掃描工具目前無法使用/u);
-  assert.doesNotMatch(shellSource, /preservedUnknownWorkspace \? null/u);
   assert.doesNotMatch(appSource, /onOpenRuntimeSetup/u);
   assert.doesNotMatch(source, /backup|remov(?:e|al)|rename|備份|移除|重新命名/iu);
 });
@@ -118,7 +113,7 @@ test("a required Windows restart is explicit without exposing platform administr
 });
 
 test("technical details expose only a bounded failure category", () => {
-  assert.match(source, /technicalDetail = setupFailed[\s\S]*"older_workspace_ownership_unconfirmed"[\s\S]*"local_scan_tool_unavailable"/u);
+  assert.match(source, /technicalDetail = setupFailed \? "local_scan_tool_unavailable" : undefined/u);
   assert.match(source, /<code>\{technicalDetail\}<\/code>/u);
   assert.doesNotMatch(source, /displaySafeTechnicalDetail\(status\?\.detail\)|<code>\{status\?\.detail\}<\/code>/u);
 });

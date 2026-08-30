@@ -767,8 +767,6 @@ export default function App() {
       await refreshRuntimeSnapshot();
       const completed = setupStatus.phase === "completed";
       const cancelled = setupStatus.phase === "cancelled";
-      const preservedUnknownWorkspace = setupStatus.phase === "failed"
-        && setupStatus.nextAction === "resolve_wsl_distribution_manually";
       if (!automatic && !completed && !cancelled) {
         window.location.hash = "start";
         setPage("start");
@@ -779,9 +777,7 @@ export default function App() {
           ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
           : cancelled
             ? text({ en: "Scan-tool setup paused", zhTW: "掃描工具設定已暫停" })
-            : preservedUnknownWorkspace
-              ? text({ en: "Older scan-tool data was preserved", zhTW: "舊的掃描工具資料已保留" })
-              : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
+            : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
         detail: completed
           ? automatic
             ? text({
@@ -797,15 +793,10 @@ export default function App() {
               en: "The completed part of the download was kept. Continue setup whenever you are ready.",
               zhTW: "已完成的下載進度已保留；準備好時可繼續設定。",
             })
-            : preservedUnknownWorkspace
-              ? text({
-                en: "The older workspace was left untouched. Retry and the app will prepare a new isolated workspace without deleting the old one.",
-                zhTW: "程式沒有更動舊工作區。再次嘗試時會建立新的隔離工作空間，不需要刪除舊資料。",
-              })
-              : text({
-                en: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
-                zhTW: "掃描工具未能完成設定。你的掃描專案沒有變更；請再試一次。如果問題持續發生，可查看「技術細節」。",
-              }),
+            : text({
+              en: "The scan tools could not finish setup. Your scan projects are unchanged. Try setup again; open Technical details if it keeps happening.",
+              zhTW: "掃描工具未能完成設定。你的掃描專案沒有變更；請再試一次。如果問題持續發生，可查看「技術細節」。",
+            }),
       });
     } catch (error) {
       if (commandGeneration !== runtimeSetupCommandGeneration.current) return;

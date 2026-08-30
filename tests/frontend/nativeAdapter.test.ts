@@ -232,18 +232,15 @@ test("managed runtime setup adapter preserves the exact failed recovery contract
   });
 });
 
-test("managed runtime setup adapter preserves the typed manual WSL distribution recovery", () => {
+test("managed runtime setup adapter rejects the retired manual WSL distribution contract", () => {
   const adapted = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
     failure_reason: "windows_wsl_distribution_requires_manual_action",
     next_action: "resolve_wsl_distribution_manually",
     detail: "Windows still reports WSL distribution podman-assm1-win-x64-0123456789ab",
   }));
 
-  assert.equal(
-    adapted.failureReason,
-    "windows_wsl_distribution_requires_manual_action",
-  );
-  assert.equal(adapted.nextAction, "resolve_wsl_distribution_manually");
+  assert.equal(adapted.failureReason, undefined);
+  assert.equal(adapted.nextAction, undefined);
 });
 
 test("managed runtime setup adapter preserves active automatic workspace recovery", () => {
@@ -306,12 +303,6 @@ test("managed runtime setup adapter hides recovery fields outside failed or when
   assert.equal(mismatched.failureReason, undefined);
   assert.equal(mismatched.nextAction, undefined);
 
-  const mismatchedManualRecovery = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
-    failure_reason: "windows_wsl_distribution_requires_manual_action",
-    next_action: "retry_wsl_check",
-  }));
-  assert.equal(mismatchedManualRecovery.failureReason, undefined);
-  assert.equal(mismatchedManualRecovery.nextAction, undefined);
 });
 
 test("managed runtime prerequisite repair adapter accepts only bounded terminal results", () => {

@@ -715,8 +715,6 @@ pub enum ManagedRuntimeSetupFailureReason {
     RestartRequired,
     #[serde(rename = "windows_wsl_command_failed")]
     WslCommandFailed,
-    #[serde(rename = "windows_wsl_distribution_requires_manual_action")]
-    WslDistributionRequiresManualAction,
 }
 
 /// Stable next actions paired with [`ManagedRuntimeSetupFailureReason`].
@@ -728,7 +726,6 @@ pub enum ManagedRuntimeSetupNextAction {
     UpdateWsl,
     RestartWindows,
     RetryWslCheck,
-    ResolveWslDistributionManually,
 }
 
 /// Terminal result of the deliberately narrow Windows prerequisite repair.
@@ -3794,22 +3791,22 @@ impl ManagedRuntimeManager {
                 "managed Windows runtime target did not use the WSL provider".into(),
             ));
         }
+        // Every generation selected by the current Windows lifecycle is already
+        // collision-safe. Do not run the retired name-recovery inventory after
+        // selection: it adds a redundant WSL dependency and could turn an
+        // unrelated legacy read failure into a current setup/scan gate.
+        if windows_machine_uses_current_compatibility_generation(machine_name) {
+            return Ok(false);
+        }
         let expected = format!("podman-{machine_name}");
         let distributions = self.windows_wsl_distribution_inventory(managed_command)?;
         let expected_present = distributions
             .iter()
             .any(|distribution| distribution.eq_ignore_ascii_case(&expected));
-        // Current-generation names are reconciled by the non-destructive
-        // side-by-side selector. Never parse or mutate an old recovery pointer
-        // here, because a malformed pointer is itself ambiguous state that must
-        // remain untouched rather than becoming a manual prerequisite.
-        if windows_machine_uses_current_compatibility_generation(machine_name) {
-            return Ok(false);
-        }
         let pending = match self.read_windows_wsl_recovery_intent_locked(machine_name) {
             Ok(pending) => pending,
             Err(AppError::NotAuthorized(_)) => {
-                return fail_windows_wsl_distribution_requires_manual_action(setup, &expected);
+                return reject_legacy_windows_wsl_recovery_without_mutation(&expected);
             }
             Err(error) => return Err(error),
         };
@@ -4807,10 +4804,7 @@ impl ManagedRuntimeManager {
             ) {
                 Ok(intent) => intent,
                 Err(AppError::NotAuthorized(_)) => {
-                    return fail_windows_wsl_distribution_requires_manual_action(
-                        setup,
-                        &distribution_name,
-                    );
+                    return reject_legacy_windows_wsl_recovery_without_mutation(&distribution_name);
                 }
                 Err(error) => return Err(error),
             },
@@ -10212,12 +10206,9 @@ fn windows_wsl_repair_parameters(action: ManagedRuntimeSetupNextAction) -> AppRe
         }
         ManagedRuntimeSetupNextAction::UpdateWsl => Ok("--update"),
         ManagedRuntimeSetupNextAction::RestartWindows
-        | ManagedRuntimeSetupNextAction::RetryWslCheck
-        | ManagedRuntimeSetupNextAction::ResolveWslDistributionManually => {
-            Err(AppError::InvalidRequest(
-                "this managed runtime prerequisite cannot be changed automatically".into(),
-            ))
-        }
+        | ManagedRuntimeSetupNextAction::RetryWslCheck => Err(AppError::InvalidRequest(
+            "this managed runtime prerequisite cannot be changed automatically".into(),
+        )),
     }
 }
 
@@ -10547,22 +10538,19 @@ impl WindowsWslPrerequisiteFailure {
             .unwrap_or_default();
         match self.reason {
             ManagedRuntimeSetupFailureReason::WslNotInstalled => format!(
-                "Windows Subsystem for Linux (WSL 2) is not installed.{status} Install WSL 2 in Windows, then retry. ai-security-scanner did not change Windows settings."
+                "Windows has not installed the component needed by the local scan tools.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows setup action and the standard Windows approval prompt when required. Saved work and checks that do not need this local tool remain available."
             ),
             ManagedRuntimeSetupFailureReason::WslOptionalFeatureDisabled => format!(
-                "Windows has not made the features required by WSL 2 available.{status} Enable Windows Subsystem for Linux and Virtual Machine Platform, restart Windows if prompted, then retry. ai-security-scanner did not change Windows settings."
+                "Windows has not finished enabling the components needed by the local scan tools.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows setup action and ask for a restart only when Windows requires it. Saved work and unaffected checks remain available."
             ),
             ManagedRuntimeSetupFailureReason::WslUpdateRequired => format!(
-                "WSL 2 needs an update before the isolated scanner can start.{status} Update WSL in Windows, then retry. ai-security-scanner did not install the update."
+                "A Windows component used by the local scan tools needs an update.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows update action and the standard Windows approval prompt when required. Saved work and unaffected checks remain available."
             ),
             ManagedRuntimeSetupFailureReason::RestartRequired => format!(
-                "Windows must restart to finish preparing WSL 2.{status} Restart Windows, reopen ai-security-scanner, then retry."
+                "Windows must restart to finish preparing the local scan tools.{status} Restart Windows and reopen ai-security-scanner; automatic preparation will continue with saved work unchanged."
             ),
             ManagedRuntimeSetupFailureReason::WslCommandFailed => format!(
-                "Windows could not confirm that WSL 2 is ready.{status} Open Windows Terminal, run `wsl.exe --status`, resolve the reported Windows issue, then retry. ai-security-scanner did not change Windows settings."
-            ),
-            ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction => format!(
-                "Windows still reports an old scan-tool WSL distribution.{status} ai-security-scanner left it untouched. Back it up if needed, then resolve that exact distribution manually and retry."
+                "Windows could not confirm that the local scan tools are ready.{status} ai-security-scanner left Windows settings and saved work unchanged. Try automatic preparation again; checks that do not need this local tool can continue. If the problem continues, export the redacted diagnostic log."
             ),
         }
     }
@@ -10579,21 +10567,10 @@ fn fail_windows_wsl_prerequisite(
     Err(AppError::NotAvailable(detail))
 }
 
-fn fail_windows_wsl_distribution_requires_manual_action<T>(
-    setup: Option<&ManagedRuntimeSetupController>,
-    distribution_name: &str,
-) -> AppResult<T> {
-    let detail = format!(
-        "managed_runtime_recovery:wsl_distribution_requires_manual_action: Windows still reports WSL distribution {distribution_name}, but ai-security-scanner could not prove that its registered storage belongs to this product. Nothing was removed. Follow Microsoft's official backup and removal process for that exact distribution, then retry."
-    );
-    if let Some(setup) = setup {
-        setup.record_failure(
-            ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction,
-            ManagedRuntimeSetupNextAction::ResolveWslDistributionManually,
-            detail.clone(),
-        )?;
-    }
-    Err(AppError::NotAuthorized(detail))
+fn reject_legacy_windows_wsl_recovery_without_mutation<T>(distribution_name: &str) -> AppResult<T> {
+    Err(AppError::NotAuthorized(format!(
+        "managed Windows runtime preserved legacy distribution {distribution_name}; legacy in-place recovery is retired and grants no ownership or cleanup authority"
+    )))
 }
 
 fn classify_windows_wsl_prerequisite_failure(
@@ -16084,6 +16061,44 @@ mod tests {
     }
 
     #[test]
+    fn current_windows_generation_skips_legacy_absence_recovery_without_inventory() {
+        let mut fixture = fixture();
+        fixture.manager.install().expect("verified runtime payload");
+        let target = modeled_windows_target(&mut fixture);
+        let command = fixture
+            .manager
+            .windows_wsl_read_only_command(&target)
+            .expect("read-only command shell");
+        let current_names = [
+            machine_name(&target),
+            fixture.manager.isolated_windows_machine_name(&target, 1),
+        ];
+
+        for current_name in current_names {
+            assert!(windows_machine_uses_current_compatibility_generation(
+                &current_name
+            ));
+            assert!(
+                !fixture
+                    .manager
+                    .prove_windows_wsl_distribution_absent_locked(
+                        &target,
+                        &command,
+                        &current_name,
+                        None,
+                    )
+                    .expect("current generation bypasses retired recovery")
+            );
+        }
+
+        assert_eq!(
+            fixture.commands.calls(),
+            Vec::<Vec<String>>::new(),
+            "current setup/start must not perform a legacy WSL inventory or recovery command"
+        );
+    }
+
+    #[test]
     fn matching_provider_row_without_exact_binding_is_a_collision_not_ownership() {
         let mut fixture = fixture();
         let target = modeled_windows_target(&mut fixture);
@@ -16278,10 +16293,14 @@ mod tests {
         assert_eq!(fixture.commands.calls(), Vec::<Vec<String>>::new());
     }
 
-    fn machine_json(manager: &ManagedRuntimeManager, running: bool) -> Vec<u8> {
+    fn machine_json_named(
+        manager: &ManagedRuntimeManager,
+        selected_machine_name: &str,
+        running: bool,
+    ) -> Vec<u8> {
         let target = manager.loaded.target().expect("target");
         serde_json::to_vec(&serde_json::json!([{
-            "Name": machine_name(target),
+            "Name": selected_machine_name,
             "Running": running,
             "VMType": target.provider.argument(),
             "CPUs": 2,
@@ -16289,6 +16308,11 @@ mod tests {
             "DiskSize": (40_u64 * 1024 * 1024 * 1024).to_string()
         }]))
         .expect("json")
+    }
+
+    fn machine_json(manager: &ManagedRuntimeManager, running: bool) -> Vec<u8> {
+        let target = manager.loaded.target().expect("target");
+        machine_json_named(manager, &machine_name(target), running)
     }
 
     #[cfg(windows)]
@@ -16539,7 +16563,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn assert_pending_windows_wsl_recovery_is_manual_and_read_only(
+    fn assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
         fixture: &Fixture,
         target: &ManagedTarget,
         distribution_root: &Path,
@@ -16548,7 +16572,7 @@ mod tests {
             .manager
             .runtime_command(target)
             .expect("current managed command");
-        assert_windows_wsl_recovery_is_manual_and_read_only(
+        assert_windows_wsl_recovery_is_rejected_and_read_only(
             fixture,
             target,
             distribution_root,
@@ -16559,7 +16583,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn assert_windows_wsl_recovery_is_manual_and_read_only(
+    fn assert_windows_wsl_recovery_is_rejected_and_read_only(
         fixture: &Fixture,
         target: &ManagedTarget,
         distribution_root: &Path,
@@ -16582,7 +16606,7 @@ mod tests {
                 machine,
                 Some(&setup),
             )
-            .expect_err("invalid pending recovery must require manual action");
+            .expect_err("invalid legacy recovery must be rejected without mutation");
         setup
             .finish_failed(&operation_id, error.to_string())
             .expect("finish failed recovery fixture setup");
@@ -16590,18 +16614,12 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("wsl_distribution_requires_manual_action")
+                .contains("legacy in-place recovery is retired")
         );
         let status = setup.status().expect("terminal failed recovery status");
         assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
-        assert_eq!(
-            status.failure_reason,
-            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
-        );
-        assert_eq!(
-            status.next_action,
-            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
-        );
+        assert_eq!(status.failure_reason, None);
+        assert_eq!(status.next_action, None);
         assert_eq!(
             fixture.commands.calls(),
             vec![vec![String::from("--list"), String::from("--quiet")]]
@@ -18063,6 +18081,41 @@ mod tests {
     }
 
     #[test]
+    fn windows_prerequisite_details_never_assign_wsl_administration_to_the_user() {
+        for failure in [
+            WindowsWslPrerequisiteFailure::not_installed(Some(1)),
+            WindowsWslPrerequisiteFailure::optional_feature_disabled(Some(1)),
+            WindowsWslPrerequisiteFailure::update_required(Some(1)),
+            WindowsWslPrerequisiteFailure::restart_required(Some(1)),
+            WindowsWslPrerequisiteFailure::command_failed(Some(1)),
+        ] {
+            let detail = failure.detail().to_ascii_lowercase();
+            for prohibited in [
+                "open windows terminal",
+                "open powershell",
+                "run `wsl",
+                "install wsl",
+                "enable windows subsystem",
+                "update wsl",
+            ] {
+                assert!(
+                    !detail.contains(prohibited),
+                    "prerequisite detail assigned a technical setup task to the beginner: {detail}"
+                );
+            }
+        }
+
+        let retry_detail = WindowsWslPrerequisiteFailure::command_failed(Some(1))
+            .detail()
+            .to_ascii_lowercase();
+        assert!(retry_detail.contains("try automatic preparation again"));
+        assert!(
+            !retry_detail.contains("it will retry automatic preparation"),
+            "a user-triggered retry must not be described as automatic: {retry_detail}"
+        );
+    }
+
+    #[test]
     fn windows_wsl_repair_uses_only_fixed_backend_arguments() {
         let _typed_entrypoint: fn(
             ManagedRuntimeSetupNextAction,
@@ -18083,56 +18136,37 @@ mod tests {
         for action in [
             ManagedRuntimeSetupNextAction::RestartWindows,
             ManagedRuntimeSetupNextAction::RetryWslCheck,
-            ManagedRuntimeSetupNextAction::ResolveWslDistributionManually,
         ] {
             assert!(windows_wsl_repair_parameters(action).is_err());
         }
     }
 
     #[test]
-    fn surviving_wsl_distribution_has_a_typed_manual_recovery_that_cannot_be_repaired() {
+    fn rejected_legacy_distribution_never_becomes_a_user_setup_action() {
         let controller = ManagedRuntimeSetupController::default();
         let operation_id = controller.begin().expect("begin setup");
         let distribution = "podman-assm1-win-x64-0123456789ab";
-        let error = fail_windows_wsl_distribution_requires_manual_action::<()>(
-            Some(&controller),
-            distribution,
-        )
-        .expect_err("a surviving distribution requires manual review");
+        let error = reject_legacy_windows_wsl_recovery_without_mutation::<()>(distribution)
+            .expect_err("legacy recovery is rejected without mutation");
         controller
             .finish_failed(&operation_id, error.to_string())
             .expect("finish failed setup");
 
-        let status = controller.status().expect("typed manual recovery status");
+        let status = controller.status().expect("generic failed setup status");
         assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
-        assert_eq!(
-            status.failure_reason,
-            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
-        );
-        assert_eq!(
-            status.next_action,
-            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
-        );
+        assert_eq!(status.failure_reason, None);
+        assert_eq!(status.next_action, None);
         assert!(status.detail.contains(distribution));
         assert!(
             status
                 .detail
-                .contains("official backup and removal process")
+                .contains("legacy in-place recovery is retired")
         );
         assert!(controller.begin_prerequisite_repair(&operation_id).is_err());
-        assert!(
-            windows_wsl_repair_parameters(
-                ManagedRuntimeSetupNextAction::ResolveWslDistributionManually
-            )
-            .is_err()
-        );
 
-        let encoded = serde_json::to_value(&status).expect("serialize manual recovery status");
-        assert_eq!(
-            encoded["failure_reason"],
-            "windows_wsl_distribution_requires_manual_action"
-        );
-        assert_eq!(encoded["next_action"], "resolve_wsl_distribution_manually");
+        let encoded = serde_json::to_value(&status).expect("serialize failed setup status");
+        assert_eq!(encoded["failure_reason"], serde_json::Value::Null);
+        assert_eq!(encoded["next_action"], serde_json::Value::Null);
     }
 
     #[test]
@@ -19452,7 +19486,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn uninstall_requires_manual_action_when_wsl_distribution_survives_machine_rm() {
+    fn uninstall_preserves_private_state_when_wsl_distribution_survives_machine_rm() {
         let fixture = fixture();
         fixture.manager.install().expect("install");
         let target = fixture.manager.loaded.target().expect("target");
@@ -19493,13 +19527,9 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("wsl_distribution_requires_manual_action")
+                .contains("Windows still registers the selected scan workspace")
         );
-        assert!(
-            error
-                .to_string()
-                .contains("official backup and removal process")
-        );
+        assert!(error.to_string().contains("provider data was preserved"));
         assert!(fixture.manager.install_directory().exists());
         assert!(fixture.manager.provider_home().exists());
         assert!(identity.is_file());
@@ -19920,54 +19950,108 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_machine_init_never_retries_when_failed_import_published_distribution() {
-        let fixture = fixture();
-        let target = fixture.manager.loaded.target().expect("Windows target");
-        let expected_distribution = format!("podman-{}", machine_name(target));
+    fn interrupted_windows_init_is_preserved_and_continues_in_a_fresh_generation() {
+        let mut fixture = fixture();
+        let target = fixture
+            .manager
+            .loaded
+            .target()
+            .expect("Windows target")
+            .clone();
+        let default_machine = machine_name(&target);
+        let default_distribution = format!("podman-{default_machine}");
+        let default_vhd = fixture
+            .manager
+            .windows_wsl_distribution_storage_path(&target, &default_machine, 0)
+            .join("ext4.vhdx");
+        let isolated_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let isolated_storage =
+            fixture
+                .manager
+                .windows_wsl_distribution_storage_path(&target, &isolated_machine, 1);
+        let isolated_vhd = isolated_storage.join("ext4.vhdx");
+        let isolated_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000041".into(),
+            distribution_name: format!("podman-{isolated_machine}"),
+            base_path: isolated_storage,
+        };
+        let mut registration_snapshots = VecDeque::new();
+        for _ in 0..6 {
+            registration_snapshots.push_back(Vec::new());
+        }
+        registration_snapshots.push_back(vec![isolated_registration]);
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+            registration_snapshots,
+        )));
 
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
-        fixture
-            .commands
-            .push(failure(b"partial WSL import failure"));
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture.commands.push_with_side_effect(
+            failure(b"partial WSL import failure"),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: default_vhd.clone(),
+                bytes: b"interrupted-default-generation".to_vec(),
+            },
+        );
         push_windows_wsl_ready(&fixture.commands);
         fixture
             .commands
-            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
+            .push(success(utf16le(&format!("{default_distribution}\r\n"))));
+        fixture.commands.push(success(b"[]".to_vec()));
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: isolated_vhd.clone(),
+                bytes: b"fresh-isolated-generation".to_vec(),
+            },
+        );
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &isolated_machine,
+            false,
+        )));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
 
-        let setup = ManagedRuntimeSetupController::default();
-        let error = fixture
+        let command = fixture
             .manager
-            .setup(&setup)
-            .expect_err("a published distribution must stop automatic retry");
+            .start()
+            .expect("an interrupted product workspace must not block a fresh generation");
 
-        assert!(
-            error
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        let status = setup.status().expect("typed setup failure");
+        assert_eq!(command.runtime_version(), "5.8.2");
         assert_eq!(
-            status.failure_reason,
-            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
+            fs::read(&default_vhd).expect("preserved interrupted workspace"),
+            b"interrupted-default-generation"
         );
         assert_eq!(
-            status.next_action,
-            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
+            fs::read(&isolated_vhd).expect("fresh isolated workspace"),
+            b"fresh-isolated-generation"
         );
+        let selection = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .expect("durable generation selection")
+            .expect("one generation selection");
+        assert_eq!(selection.generation_index, 1);
+        assert_eq!(selection.selected_machine_name, isolated_machine);
+        assert_eq!(selection.preserved_collision_names, vec![default_machine]);
+
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 8);
-        assert_eq!(calls[7], ["--list", "--quiet"]);
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|arguments| {
-                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
-                })
-                .count(),
-            1
-        );
+        let init_calls = calls
+            .iter()
+            .filter(|arguments| {
+                arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(init_calls.len(), 2);
+        assert_eq!(init_calls[0].last(), Some(&selection.default_machine_name));
+        assert_eq!(init_calls[1].last(), Some(&selection.selected_machine_name));
+        assert!(calls.iter().flatten().all(|argument| {
+            argument != "--unregister" && argument != "--export" && argument != "--import"
+        }));
     }
 
     #[cfg(windows)]
@@ -20012,132 +20096,79 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_machine_init_never_retries_when_hidden_registration_exists() {
+    fn ambiguous_windows_registration_is_preserved_while_start_uses_fresh_generation() {
         let mut fixture = fixture();
-        let target = fixture.manager.loaded.target().expect("Windows target");
-        let expected_distribution = format!("podman-{}", machine_name(target));
-        let hidden_registration = fixture.manager.provider_home().join("hidden-registration");
-        fixture.manager.wsl_registrations =
-            Arc::new(FixedWindowsWslRegistrations(vec![WindowsWslRegistration {
-                registration_id: "00000000-0000-0000-0000-000000000004".into(),
-                distribution_name: expected_distribution.clone(),
-                base_path: hidden_registration,
-            }]));
-
-        push_windows_wsl_ready(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
-        push_windows_wsl_absent(&fixture.commands);
-        fixture
-            .commands
-            .push(failure(b"partial WSL import failure"));
-        push_windows_wsl_ready(&fixture.commands);
-        push_windows_wsl_absent(&fixture.commands);
-
-        let setup = ManagedRuntimeSetupController::default();
-        let error = fixture
+        let target = fixture
             .manager
-            .setup(&setup)
-            .expect_err("a registry-only distribution must stop automatic retry");
-
-        assert!(
-            error
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        assert_eq!(
-            setup.status().expect("typed setup failure").failure_reason,
-            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
-        );
-        let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 8);
-        assert_eq!(calls[7], ["--list", "--quiet"]);
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|arguments| {
-                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
-                })
-                .count(),
-            1
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_machine_init_never_retries_when_provider_machine_state_exists() {
-        let mut fixture = fixture();
-        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+            .loaded
+            .target()
+            .expect("Windows target")
+            .clone();
+        let default_machine = machine_name(&target);
+        let hidden_base = fixture._temp.path().join("unowned-wsl-registration");
+        fs::create_dir(&hidden_base).expect("ambiguous registration directory");
+        let sentinel = hidden_base.join("must-remain");
+        fs::write(&sentinel, b"unowned-registration-bytes").expect("ambiguous bytes");
+        let hidden_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000004".into(),
+            distribution_name: format!("podman-{default_machine}"),
+            base_path: hidden_base,
+        };
+        let isolated_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let isolated_storage =
+            fixture
+                .manager
+                .windows_wsl_distribution_storage_path(&target, &isolated_machine, 1);
+        let isolated_vhd = isolated_storage.join("ext4.vhdx");
+        let isolated_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000042".into(),
+            distribution_name: format!("podman-{isolated_machine}"),
+            base_path: isolated_storage,
+        };
+        let mut registration_snapshots = VecDeque::new();
+        for _ in 0..4 {
+            registration_snapshots.push_back(vec![hidden_registration.clone()]);
+        }
+        registration_snapshots.push_back(vec![hidden_registration.clone(), isolated_registration]);
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+            registration_snapshots,
+        )));
 
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
-        fixture
-            .commands
-            .push(failure(b"partial WSL import failure"));
-        push_windows_wsl_ready(&fixture.commands);
-        push_windows_wsl_absent(&fixture.commands);
-        fixture
-            .commands
-            .push(success(machine_json(&fixture.manager, false)));
-
-        let error = fixture
-            .manager
-            .start()
-            .expect_err("provider machine residue must stop automatic retry");
-
-        assert!(error.to_string().contains("left provider machine state"));
-        let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 9);
-        assert_eq!(calls[8], ["machine", "list", "--format", "json"]);
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|arguments| {
-                    arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
-                })
-                .count(),
-            1
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_machine_init_never_retries_when_unregistered_storage_exists() {
-        let mut fixture = fixture();
-        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
-        let target = fixture.manager.loaded.target().expect("Windows target");
-        let vhd = windows_fixture_vhd_path(&fixture.manager, target);
-
-        push_windows_wsl_ready(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
-        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push_with_side_effect(
-            failure(b"partial WSL import failure"),
+            success(Vec::new()),
             FakeCommandSideEffect::CreateManagedWslVhd {
-                path: vhd.clone(),
-                bytes: b"partial WSL import".to_vec(),
+                path: isolated_vhd,
+                bytes: b"fresh-isolated-generation".to_vec(),
             },
         );
-        push_windows_wsl_ready(&fixture.commands);
-        push_windows_wsl_absent(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &isolated_machine,
+            false,
+        )));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
 
-        let error = fixture
+        fixture
             .manager
             .start()
-            .expect_err("unregistered provider storage must stop automatic retry");
+            .expect("an ambiguous registration must route setup side-by-side");
 
-        assert!(
-            error
-                .to_string()
-                .contains("left unregistered provider storage")
-        );
-        assert_eq!(
-            fs::read(&vhd).expect("preserved partial VHD").as_slice(),
-            b"partial WSL import"
-        );
+        assert_eq!(fs::read(&sentinel).unwrap(), b"unowned-registration-bytes");
+        let selection = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.generation_index, 1);
+        assert_eq!(selection.selected_machine_name, isolated_machine);
+        assert_eq!(selection.preserved_collision_names, vec![default_machine]);
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 9);
         assert_eq!(
             calls
                 .iter()
@@ -20147,6 +20178,9 @@ mod tests {
                 .count(),
             1
         );
+        assert!(calls.iter().flatten().all(|argument| {
+            argument != "--unregister" && argument != "--export" && argument != "--import"
+        }));
     }
 
     #[cfg(windows)]
@@ -20290,162 +20324,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn unproven_orphan_preserves_the_distribution_and_durable_init_intent() {
-        let fixture = fixture();
-        fixture.manager.install().expect("install");
-        let target = fixture.manager.loaded.target().expect("target");
-        fixture
-            .manager
-            .runtime_command(target)
-            .expect("private provider home");
-        let cached_image = {
-            let _lock = fixture.manager.lock().expect("lifecycle lock");
-            fixture
-                .manager
-                .acquire_machine_image_locked(target, None)
-                .expect("cache exact machine image")
-        };
-        let orphaned_vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        fs::create_dir(orphaned_vhd.parent().expect("orphaned VHD parent"))
-            .expect("create orphaned WSL distribution root");
-        fs::write(&orphaned_vhd, b"orphaned fixture VHD").expect("write orphaned fixture VHD");
-        let expected_machine = machine_name(target);
-        let expected_distribution = format!("podman-{expected_machine}");
-        fixture
-            .manager
-            .ensure_windows_wsl_ownership_proof_locked(
-                target,
-                &expected_machine,
-                WindowsWslOwnershipBasis::InitIntent,
-            )
-            .expect("record prior product initialization intent");
-
-        push_windows_wsl_ready(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
-        fixture.commands.push(success(utf16le(&format!(
-            "Ubuntu\r\n{expected_distribution}\r\n"
-        ))));
-        let error = fixture
-            .manager
-            .start()
-            .expect_err("orphan cleanup must require explicit manual action");
-
-        assert!(
-            error
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        assert_eq!(*fixture.downloader.calls.lock().expect("download calls"), 1);
-        assert_eq!(fs::read(&cached_image).unwrap(), fixture.image);
-        assert!(private_entry_exists(&orphaned_vhd).unwrap());
-        assert!(fixture.manager.provider_home().is_dir());
-        assert!(
-            fixture
-                .manager
-                .windows_wsl_ownership_proof_path(
-                    &expected_machine,
-                    WindowsWslOwnershipBasis::InitIntent,
-                )
-                .is_file()
-        );
-
-        let calls = fixture.commands.calls();
-        assert_eq!(calls[2], ["machine", "list", "--format", "json"]);
-        assert_eq!(calls[3], ["--list", "--quiet"]);
-        assert_eq!(calls.len(), 4);
-        assert!(!calls.iter().any(|arguments| {
-            arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
-        }));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn unproven_orphan_retry_keeps_the_durable_intent_and_remains_read_only() {
-        let fixture = fixture();
-        fixture.manager.install().expect("install");
-        let target = fixture.manager.loaded.target().expect("target");
-        fixture
-            .manager
-            .runtime_command(target)
-            .expect("private provider home");
-        let cached_image = {
-            let _lock = fixture.manager.lock().expect("lifecycle lock");
-            fixture
-                .manager
-                .acquire_machine_image_locked(target, None)
-                .expect("cache exact machine image")
-        };
-        let orphaned_vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        fs::create_dir(orphaned_vhd.parent().expect("orphaned VHD parent"))
-            .expect("create orphaned WSL distribution root");
-        fs::write(&orphaned_vhd, b"orphaned fixture VHD").expect("write orphaned fixture VHD");
-        let expected_distribution = format!("podman-{}", machine_name(target));
-        fixture
-            .manager
-            .ensure_windows_wsl_ownership_proof_locked(
-                target,
-                &machine_name(target),
-                WindowsWslOwnershipBasis::InitIntent,
-            )
-            .expect("record prior product initialization intent");
-
-        push_windows_wsl_ready(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
-        let first = fixture
-            .manager
-            .start()
-            .expect_err("first orphan check requires manual action");
-
-        assert!(
-            first
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        assert!(
-            fixture
-                .manager
-                .windows_wsl_ownership_proof_path(
-                    &machine_name(target),
-                    WindowsWslOwnershipBasis::InitIntent,
-                )
-                .is_file()
-        );
-
-        push_windows_wsl_ready(&fixture.commands);
-        fixture.commands.push(success(b"[]".to_vec()));
-        fixture
-            .commands
-            .push(success(utf16le(&format!("{expected_distribution}\r\n"))));
-        let second = fixture
-            .manager
-            .start()
-            .expect_err("retry remains manual and read-only");
-
-        assert!(
-            second
-                .to_string()
-                .contains("wsl_distribution_requires_manual_action")
-        );
-        assert!(fixture.manager.install_directory().is_dir());
-        assert!(fixture.manager.provider_home().is_dir());
-        assert!(private_entry_exists(&orphaned_vhd).unwrap());
-        assert_eq!(fs::read(&cached_image).unwrap(), fixture.image);
-        assert_eq!(*fixture.downloader.calls.lock().expect("download calls"), 1);
-        let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 8);
-        assert_eq!(calls[3], ["--list", "--quiet"]);
-        assert_eq!(calls[7], ["--list", "--quiet"]);
-        assert!(!calls.iter().any(|arguments| {
-            arguments.len() >= 2 && arguments[0] == "machine" && arguments[1] == "init"
-        }));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn n_minus_one_ghost_install_without_current_receipt_requires_manual_action() {
+    fn n_minus_one_ghost_install_without_current_receipt_is_rejected_without_user_action() {
         let mut fixture = fixture();
         let (target, _, distribution_root, _) =
             seed_n_minus_one_windows_ghost_workspace(&mut fixture);
@@ -20477,18 +20356,12 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("wsl_distribution_requires_manual_action")
+                .contains("legacy in-place recovery is retired")
         );
         let status = setup.status().expect("terminal failed recovery status");
         assert_eq!(status.phase, ManagedRuntimeSetupPhase::Failed);
-        assert_eq!(
-            status.failure_reason,
-            Some(ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction)
-        );
-        assert_eq!(
-            status.next_action,
-            Some(ManagedRuntimeSetupNextAction::ResolveWslDistributionManually)
-        );
+        assert_eq!(status.failure_reason, None);
+        assert_eq!(status.next_action, None);
         assert_eq!(
             fixture.commands.calls(),
             vec![vec![String::from("--list"), String::from("--quiet")]]
@@ -21490,7 +21363,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("wsl_distribution_requires_manual_action")
+                .contains("legacy in-place recovery is retired")
         );
         assert_eq!(fixture.commands.calls().len(), calls_before + 1);
         assert!(distribution_root.join("ext4.vhdx").is_file());
@@ -21537,7 +21410,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn pending_v1_recovery_intent_requires_manual_action_without_wsl_mutation() {
+    fn pending_v1_recovery_intent_is_rejected_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, intent) = bounded_n_minus_one_pending_fixture();
         let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let mut legacy = serde_json::to_value(&intent).expect("encode v1 fixture");
@@ -21555,7 +21428,7 @@ mod tests {
             &serde_json::to_vec(legacy).unwrap(),
         );
 
-        assert_pending_windows_wsl_recovery_is_manual_and_read_only(
+        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21564,7 +21437,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn pending_v2_with_wrong_current_manifest_requires_manual_action_without_wsl_mutation() {
+    fn pending_v2_with_wrong_current_manifest_is_rejected_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, mut intent) =
             bounded_n_minus_one_pending_fixture();
         let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
@@ -21575,7 +21448,7 @@ mod tests {
             &serde_json::to_vec(&intent).unwrap(),
         );
 
-        assert_pending_windows_wsl_recovery_is_manual_and_read_only(
+        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21584,7 +21457,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn pending_bounded_v2_without_receipt_requires_manual_action_without_wsl_mutation() {
+    fn pending_bounded_v2_without_receipt_is_rejected_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, mut intent) =
             bounded_n_minus_one_pending_fixture();
         let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
@@ -21595,7 +21468,7 @@ mod tests {
             &serde_json::to_vec(&intent).unwrap(),
         );
 
-        assert_pending_windows_wsl_recovery_is_manual_and_read_only(
+        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21604,7 +21477,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn pending_bounded_v2_with_changed_receipt_requires_manual_action_without_wsl_mutation() {
+    fn pending_bounded_v2_with_changed_receipt_is_rejected_without_wsl_mutation() {
         let (mut fixture, target, distribution_root, install_location, _) =
             bounded_n_minus_one_pending_fixture();
         let _ = install_current_windows_nsis_candidate(
@@ -21613,7 +21486,7 @@ mod tests {
             Some(WINDOWS_GHOST_MIGRATION_UPDATED_RECEIPT),
         );
 
-        assert_pending_windows_wsl_recovery_is_manual_and_read_only(
+        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21645,7 +21518,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn pending_bounded_v2_with_wrong_source_manifest_requires_manual_action_without_wsl_mutation() {
+    fn pending_bounded_v2_with_wrong_source_manifest_is_rejected_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, mut intent) =
             bounded_n_minus_one_pending_fixture();
         let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
@@ -21656,7 +21529,7 @@ mod tests {
             &serde_json::to_vec(&intent).unwrap(),
         );
 
-        assert_pending_windows_wsl_recovery_is_manual_and_read_only(
+        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21665,14 +21538,14 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn hard_linked_pending_recovery_intent_requires_manual_action_without_wsl_mutation() {
+    fn hard_linked_pending_recovery_intent_is_rejected_without_wsl_mutation() {
         let (fixture, target, distribution_root, _, _) = bounded_n_minus_one_pending_fixture();
         let machine = WINDOWS_GHOST_MIGRATION_MACHINE_NAME.to_owned();
         let pending = fixture.manager.windows_wsl_recovery_pending_path(&machine);
         fs::hard_link(&pending, pending.with_extension("alias.json"))
             .expect("create adversarial hard link to pending intent");
 
-        assert_pending_windows_wsl_recovery_is_manual_and_read_only(
+        assert_pending_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21681,7 +21554,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn current_prefix_provider_without_installed_manifest_requires_manual_action() {
+    fn current_prefix_provider_without_installed_manifest_is_rejected() {
         let (fixture, target, distribution_root, _, managed_command) =
             current_verified_pending_fixture();
         let machine = machine_name(&target);
@@ -21689,7 +21562,7 @@ mod tests {
             .expect("remove pending intent so ownership is proved from scratch");
         remove_windows_fixture_file(&fixture.manager.install_directory().join("manifest.json"));
 
-        assert_windows_wsl_recovery_is_manual_and_read_only(
+        assert_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21701,7 +21574,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn pending_verified_manifest_with_forged_source_sha_requires_manual_action() {
+    fn pending_verified_manifest_with_forged_source_sha_is_rejected() {
         let (fixture, target, distribution_root, mut intent, managed_command) =
             current_verified_pending_fixture();
         let machine = machine_name(&target);
@@ -21712,7 +21585,7 @@ mod tests {
             &serde_json::to_vec(&intent).unwrap(),
         );
 
-        assert_windows_wsl_recovery_is_manual_and_read_only(
+        assert_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -21724,12 +21597,12 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn pending_verified_manifest_with_removed_source_manifest_requires_manual_action() {
+    fn pending_verified_manifest_with_removed_source_manifest_is_rejected() {
         let (fixture, target, distribution_root, _, managed_command) =
             current_verified_pending_fixture();
         remove_windows_fixture_file(&fixture.manager.install_directory().join("manifest.json"));
 
-        assert_windows_wsl_recovery_is_manual_and_read_only(
+        assert_windows_wsl_recovery_is_rejected_and_read_only(
             &fixture,
             &target,
             &distribution_root,
@@ -22160,12 +22033,21 @@ mod tests {
             .find("return Ok(false)")
             .map(|index| index + absence_current_guard)
             .expect("assm2 absence-proof side-by-side return");
+        let legacy_inventory = absence_proof
+            .find("let distributions = self.windows_wsl_distribution_inventory")
+            .expect("retired legacy distribution inventory");
         let legacy_recovery = absence_proof
             .find("self.recover_windows_wsl_distribution_locked")
             .expect("legacy recovery call after assm2 guard");
+        let legacy_rejection = absence_proof
+            .find("reject_legacy_windows_wsl_recovery_without_mutation")
+            .expect("retired legacy rejection after assm2 guard");
         assert!(absence_current_guard < absence_side_by_side_return);
+        assert!(absence_side_by_side_return < legacy_inventory);
         assert!(absence_side_by_side_return < legacy_recovery);
-        assert!(!absence_proof.contains("ResolveWslDistributionManually"));
+        assert!(absence_side_by_side_return < legacy_rejection);
+        assert!(!production.contains("ResolveWslDistributionManually"));
+        assert!(!production.contains("WslDistributionRequiresManualAction"));
         assert_eq!(
             production
                 .matches("self.recover_windows_wsl_distribution_locked(")

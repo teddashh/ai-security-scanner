@@ -153,10 +153,6 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         title: "One local scan tool is unavailable",
         description: "The automatic check did not finish, and no saved scan was changed. Try automatic setup again; other available checks can still run.",
       },
-      resolve_wsl_distribution_manually: {
-        title: "Older scan-tool data was preserved",
-        description: "The older workspace was left untouched. Retry and the app will prepare a new isolated workspace without deleting the old one.",
-      },
     },
   },
   "zh-TW": {
@@ -240,10 +236,6 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
         title: "一項本機掃描工具目前無法使用",
         description: "自動檢查未能完成，而且沒有更動任何已保存的掃描。請再試一次自動設定；其他可用檢查仍可執行。",
       },
-      resolve_wsl_distribution_manually: {
-        title: "舊的掃描工具資料已保留",
-        description: "程式沒有更動舊工作區。再次嘗試時會建立新的隔離工作空間，不需要刪除舊資料。",
-      },
     },
   },
 };
@@ -285,12 +277,7 @@ export function RuntimeSetupAssistant({
     setupIdleUnavailable,
   } = presentation;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
-  const preservedUnknownWorkspace = status?.nextAction === "resolve_wsl_distribution_manually";
-  const technicalDetail = setupFailed
-    ? preservedUnknownWorkspace
-      ? "older_workspace_ownership_unconfirmed"
-      : "local_scan_tool_unavailable"
-    : undefined;
+  const technicalDetail = setupFailed ? "local_scan_tool_unavailable" : undefined;
   const progress = useMemo(() => {
     if (!status?.totalBytes || status.totalBytes <= 0) return undefined;
     return Math.min(status.receivedBytes, status.totalBytes);
