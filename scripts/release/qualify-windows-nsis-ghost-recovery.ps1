@@ -18,6 +18,7 @@ $priorMachineImageSha256 = "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b
 $priorProviderNamespace = $priorRuntimeManifestSha256.Substring(0, 16)
 $oldMachineName = "assm1-win-x64-$($priorMachineImageSha256.Substring(0, 12))"
 $oldDistributionName = "podman-$oldMachineName"
+$currentMachinePrefix = "assm2-win-x64"
 $oldVersionDirectoryName = "podman-machine-5.8.2-$priorProviderNamespace"
 $maximumDownloadBytes = 64 * 1024 * 1024
 $maximumSnapshotFiles = 4096
@@ -40,6 +41,7 @@ using Microsoft.Win32.SafeHandles;
 
 public static class GhostQualificationNativeMethods {
     public const uint GENERIC_READ = 0x80000000;
+    public const uint FILE_READ_DATA = 0x00000001;
     public const uint FILE_READ_ATTRIBUTES = 0x00000080;
     public const uint FILE_SHARE_READ = 0x00000001;
     public const uint FILE_SHARE_WRITE = 0x00000002;
@@ -127,6 +129,60 @@ function Get-OpenDirectoryIdentity([Microsoft.Win32.SafeHandles.SafeFileHandle]$
     attributes = [uint32]$information.FileAttributes
     volume = [uint32]$information.VolumeSerialNumber
     index = (([uint64]$information.FileIndexHigh -shl 32) -bor [uint64]$information.FileIndexLow)
+  }
+}
+
+function Get-RetainedVhdIdentity([string]$Path, [string]$Label) {
+  # Observation only: the minimum read category participates in Windows share
+  # arbitration without reading VHD bytes. No-follow and omitted delete sharing
+  # pin the exact file identity while its metadata is captured.
+  $verbatimPath = Get-VerbatimWindowsPath $Path $Label
+  $handle = [GhostQualificationNativeMethods]::CreateFileW(
+    $verbatimPath,
+    [GhostQualificationNativeMethods]::FILE_READ_DATA,
+    [GhostQualificationNativeMethods]::FILE_SHARE_READ -bor
+      [GhostQualificationNativeMethods]::FILE_SHARE_WRITE,
+    [IntPtr]::Zero,
+    [GhostQualificationNativeMethods]::OPEN_EXISTING,
+    [GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT,
+    [IntPtr]::Zero
+  )
+  if ($null -eq $handle -or $handle.IsInvalid) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($null -ne $handle) { $handle.Dispose() }
+    throw [ComponentModel.Win32Exception]::new(
+      $errorCode,
+      "$Label could not be opened for non-destructive identity observation"
+    )
+  }
+  try {
+    $information = [GhostQualificationByHandleFileInformation]::new()
+    if (-not [GhostQualificationNativeMethods]::GetFileInformationByHandle(
+        $handle,
+        [ref]$information
+      )) {
+      throw [ComponentModel.Win32Exception]::new(
+        [Runtime.InteropServices.Marshal]::GetLastWin32Error(),
+        "$Label identity could not be read"
+      )
+    }
+    $size = (([uint64]$information.FileSizeHigh -shl 32) -bor [uint64]$information.FileSizeLow)
+    $fileIndex = (([uint64]$information.FileIndexHigh -shl 32) -bor [uint64]$information.FileIndexLow)
+    if (($information.FileAttributes -band [uint32][IO.FileAttributes]::Directory) -ne 0 -or
+        ($information.FileAttributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $size -lt 1 -or $information.NumberOfLinks -lt 1) {
+      throw "$Label is not one non-empty no-follow regular file."
+    }
+    return [ordered]@{
+      path = [IO.Path]::GetFullPath($Path)
+      sizeBytes = [uint64]$size
+      volumeSerialNumber = [uint32]$information.VolumeSerialNumber
+      fileIndex = [uint64]$fileIndex
+      numberOfLinks = [uint32]$information.NumberOfLinks
+      attributes = [uint32]$information.FileAttributes
+    }
+  } finally {
+    $handle.Dispose()
   }
 }
 
@@ -766,7 +822,13 @@ function Get-WslRegistrations {
       $name = Get-OptionalRegistryString $properties "DistributionName"
       $basePath = Get-OptionalRegistryString $properties "BasePath"
       if (-not [String]::IsNullOrWhiteSpace($name)) {
-        [PSCustomObject]@{ Name = $name; BasePath = $basePath; KeyPath = $_.PSPath }
+        $registrationId = ([Guid]::Parse($_.PSChildName.Trim('{', '}'))).ToString("D").ToLowerInvariant()
+        [PSCustomObject]@{
+          Name = $name
+          BasePath = $basePath
+          KeyPath = $_.PSPath
+          RegistrationId = $registrationId
+        }
       }
     }
   )
@@ -1076,6 +1138,52 @@ function Get-TrustedWslExecutable {
   return [ordered]@{ executable = $wsl; windows = $windows; system32 = $system32; proof = $proof }
 }
 
+function Invoke-TrustedWsl(
+  [object]$TrustedWsl,
+  [string[]]$Arguments,
+  [int]$TimeoutMilliseconds,
+  [string]$Label,
+  [bool]$CaptureOutput = $true
+) {
+  $environment = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+  $environment["SystemRoot"] = $TrustedWsl.windows
+  $environment["WINDIR"] = $TrustedWsl.windows
+  $environment["PATH"] = $TrustedWsl.system32
+  $environment["NoDefaultCurrentDirectoryInExePath"] = "1"
+  return Invoke-ExactProcess $TrustedWsl.executable $Arguments $TimeoutMilliseconds $Label (
+    $CaptureOutput
+  ) $environment -ExpectedSystemExecutableProof $TrustedWsl.proof
+}
+
+function Start-WslSentinelProcess(
+  [object]$TrustedWsl,
+  [string]$DistributionName,
+  [string]$Token,
+  [string]$Label
+) {
+  if ($Token -cnotmatch '^[0-9a-f]{32}$') { throw "$Label sentinel token is malformed." }
+  $command = (
+    "printf '%s' '$Token' > /tmp/assm-qc-sentinel; " +
+    "nohup sh -c 'while :; do sleep 300; done' >/tmp/assm-qc-live.log 2>&1 & " +
+    "echo `$! > /tmp/assm-qc-pid"
+  )
+  Invoke-TrustedWsl $TrustedWsl @(
+    "--distribution", $DistributionName, "--user", "root", "--exec", "sh", "-c", $command
+  ) 120000 "$Label sentinel start" | Out-Null
+}
+
+function Assert-WslSentinelProcess(
+  [object]$TrustedWsl,
+  [string]$DistributionName,
+  [string]$Token,
+  [string]$Label
+) {
+  $command = 'test "$(cat /tmp/assm-qc-sentinel)" = "{0}" && kill -0 "$(cat /tmp/assm-qc-pid)"' -f $Token
+  Invoke-TrustedWsl $TrustedWsl @(
+    "--distribution", $DistributionName, "--user", "root", "--exec", "sh", "-c", $command
+  ) 120000 "$Label sentinel reproof" | Out-Null
+}
+
 function Get-ProvenFailureCleanupWslBasePath(
   [object]$Registration,
   [string]$ExactDistributionName,
@@ -1285,6 +1393,10 @@ $oldWslBasePath = Join-Path $oldProviderHome "data\containers\podman\machine\wsl
 $oldVersionRoot = Join-Path $managedRuntimeRoot "versions"
 $oldVersionDirectory = Join-Path $oldVersionRoot $oldVersionDirectoryName
 $workspaceRoot = Join-Path $managedRuntimeRoot "wsl-recovery-workspaces"
+$retainedProofRoot = Join-Path $managedRuntimeRoot "wsl-legacy-retained"
+$oldVhdPath = Join-Path $oldWslBasePath "ext4.vhdx"
+$oldProviderConfigPath = Join-Path $oldProviderHome "config\containers\containers.conf"
+$oldSshPublicKeyPath = Join-Path $oldProviderHome "data\containers\podman\machine\machine.pub"
 
 foreach ($path in @($installDirectory, $dataDirectory, $priorInstallerPath)) {
   if (Test-Path -LiteralPath $path) { throw "Ghost qualification requires a fresh exact namespace: $path" }
@@ -1325,10 +1437,22 @@ if ($candidateRuntimeEvidence.schema_version -cne "3" -or
   throw "Candidate managed-runtime evidence has no exact Windows WSL identity."
 }
 $candidateMachineImageSha256 = [string]$candidateTargets[0].machine_image.sha256
+$candidateMachineName = "$currentMachinePrefix-$($candidateMachineImageSha256.Substring(0, 12))"
+$candidateDistributionName = "podman-$candidateMachineName"
 $candidateProviderHome = Join-Path $managedRuntimeRoot "provider-home\$candidateProviderNamespace"
-$candidateWslBasePath = Join-Path $candidateProviderHome "data\containers\podman\machine\wsl\wsldist\$oldMachineName"
+$candidateWslBasePath = Join-Path $candidateProviderHome "data\containers\podman\machine\wsl\wsldist\$candidateMachineName"
 $candidateVersionDirectory = Join-Path $managedRuntimeRoot "versions\podman-machine-5.8.2-$candidateProviderNamespace"
 $trustedWsl = Get-TrustedWslExecutable
+$unrelatedDistributionName = "ai-security-scanner-unrelated-$([Guid]::NewGuid().ToString("N"))"
+$unrelatedWslBasePath = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "unrelated-wsl"
+) "unrelated-wsl" "Unrelated WSL qualification workspace"
+$unrelatedExportArchive = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "unrelated-rootfs.tar"
+) "unrelated-rootfs.tar" "Unrelated WSL qualification rootfs"
+$masterFrameworkReportPath = Assert-ExactChildPath $workRoot (
+  Join-Path $workRoot "master-framework-report.json"
+) "master-framework-report.json" "Retained master framework report"
 
 $activeCli = $null
 $activeUninstaller = $null
@@ -1410,7 +1534,48 @@ try {
   $oldIdentityRoot = Join-Path $oldProviderHome "data\containers\podman\machine"
   Assert-SingleLinkFile (Join-Path $oldIdentityRoot "machine") "v0.1.7 managed SSH private key" (16 * 1024) | Out-Null
   Assert-SingleLinkFile (Join-Path $oldIdentityRoot "machine.pub") "v0.1.7 managed SSH public key" (4 * 1024) | Out-Null
-  Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
+  $oldRegistrationBefore = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
+  $retainedProofName = "$([string]$oldRegistrationBefore.RegistrationId).json"
+  $retainedProofPath = Join-Path $retainedProofRoot $retainedProofName
+  if (Test-Path -LiteralPath $retainedProofPath) {
+    throw "Ghost fixture unexpectedly started with a retained-legacy proof."
+  }
+
+  $oldProviderConfigSha256 = Get-LowerSha256 $oldProviderConfigPath (16 * 1024)
+  $oldSshPublicKeySha256 = Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)
+
+  # Build one unrelated WSL distribution from the stopped fixture before the
+  # candidate starts. Export/import here is qualification setup only; the
+  # candidate must leave both registrations and their live processes alone.
+  Invoke-TrustedWsl $trustedWsl @(
+    "--export", $oldDistributionName, $unrelatedExportArchive
+  ) 900000 "Qualification-only unrelated WSL rootfs export" | Out-Null
+  Get-NoFollowFileSha256Proof $unrelatedExportArchive (
+    "Qualification-only unrelated WSL rootfs"
+  ) (8GB) | Out-Null
+  Invoke-TrustedWsl $trustedWsl @(
+    "--import", $unrelatedDistributionName, $unrelatedWslBasePath,
+    $unrelatedExportArchive, "--version", "2"
+  ) 900000 "Qualification-only unrelated WSL import" | Out-Null
+  $unrelatedRegistrationBefore = Get-ExactWslRegistration (
+    $unrelatedDistributionName
+  ) $unrelatedWslBasePath
+
+  $oldSentinelToken = [Guid]::NewGuid().ToString("N")
+  $unrelatedSentinelToken = [Guid]::NewGuid().ToString("N")
+  Start-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
+  Start-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
+    "Unrelated WSL"
+  )
+  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
+  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
+    "Unrelated WSL"
+  )
+  $oldRegistrationBefore = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
+  $unrelatedRegistrationBefore = Get-ExactWslRegistration (
+    $unrelatedDistributionName
+  ) $unrelatedWslBasePath
+  $oldVhdBefore = Get-RetainedVhdIdentity $oldVhdPath "Legacy assm1 WSL VHD"
 
   Assert-RealDirectory $oldVersionDirectory "v0.1.7 installed versions payload" | Out-Null
   $oldInstalledManifest = Join-Path $oldVersionDirectory "manifest.json"
@@ -1432,6 +1597,11 @@ try {
   }
   Get-ExactProductRegistry $priorVersion $installDirectory | Out-Null
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
+  Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
+  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
+  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
+    "Unrelated WSL"
+  )
   $beforeInstallerSnapshot = Get-PreservedDataSnapshot $dataDirectory
 
   Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate bounded ghost NSIS migration" -ExpectedExecutableProof $candidateInstaller | Out-Null
@@ -1566,218 +1736,294 @@ try {
   }
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
 
-  $recoveryProcess = Invoke-ExactProcess $candidateCli @(
+  if (Test-Path -LiteralPath $retainedProofPath) {
+    throw "Candidate wrote the retained-legacy proof before runtime initialization began."
+  }
+  $preStartRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
+  if (-not $preStartRegistry.InstallTransitionPresent -or
+      $preStartRegistry.InstallTransition -cne $installerTransitionReceipt) {
+    throw "Candidate lost the exact transition receipt before the retained proof could be committed."
+  }
+
+  $sideBySideProcess = Invoke-ExactProcess $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "runtime", "managed", "start"
-  ) 1200000 "Candidate automatic managed WSL ghost recovery" $true
-  if (($recoveryProcess.stdout + $recoveryProcess.stderr).Contains("wsl_distribution_requires_manual_action", [StringComparison]::Ordinal)) {
-    throw "Candidate fell back to the manual WSL action during the supported ghost migration."
+  ) 1200000 "Candidate automatic side-by-side managed WSL initialization" $true
+  if (($sideBySideProcess.stdout + $sideBySideProcess.stderr).Contains("wsl_distribution_requires_manual_action", [StringComparison]::Ordinal)) {
+    throw "Candidate fell back to manual WSL action instead of initializing its separate assm2 workspace."
   }
-  try { $recoveredStatus = $recoveryProcess.stdout | ConvertFrom-Json -DateKind String }
-  catch { throw "Candidate automatic ghost recovery did not emit valid status JSON." }
-  if ($recoveredStatus.phase -cne "running" -or $recoveredStatus.available -ne $true -or
-      $recoveredStatus.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
-      $recoveredStatus.machine_image_sha256 -cne $candidateMachineImageSha256) {
-    throw "Candidate ghost recovery did not reach the released running runtime identity."
-  }
-  $postRecoveryRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
-  if ($postRecoveryRegistry.InstallTransitionPresent -or
-      -not [String]::IsNullOrEmpty($postRecoveryRegistry.InstallTransition)) {
-    throw "Automatic recovery did not consume the exact HKCU InstallTransition value."
+  try { $sideBySideStatus = $sideBySideProcess.stdout | ConvertFrom-Json -DateKind String }
+  catch { throw "Candidate side-by-side initialization did not emit valid status JSON." }
+  if ($sideBySideStatus.phase -cne "running" -or $sideBySideStatus.available -ne $true -or
+      $sideBySideStatus.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
+      $sideBySideStatus.machine_image_sha256 -cne $candidateMachineImageSha256) {
+    throw "Candidate assm2 workspace did not reach the released running runtime identity."
   }
   Assert-RealDirectory $candidateVersionDirectory "Candidate installed runtime version" | Out-Null
   Assert-RealDirectory $candidateProviderHome "Candidate provider home" | Out-Null
-  if (Test-Path -LiteralPath $oldProviderHome) { throw "Automatic recovery retained the obsolete provider home." }
-  Get-ExactWslRegistration $oldDistributionName $candidateWslBasePath | Out-Null
+  Assert-RealDirectory $oldProviderHome "Retained v0.1.7 provider home" | Out-Null
 
-  $pendingRecovery = Join-Path $dataDirectory "managed-runtime\wsl-recovery\pending-$oldMachineName.json"
-  if (Test-Path -LiteralPath $pendingRecovery) { throw "Automatic recovery left its pending transaction." }
-  if ((Test-Path -LiteralPath $workspaceRoot) -and @(Get-ChildItem -LiteralPath $workspaceRoot -Force).Count -ne 0) {
-    throw "Automatic recovery left a temporary WSL import workspace."
+  $oldRegistrationAfter = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
+  $currentRegistration = Get-ExactWslRegistration $candidateDistributionName $candidateWslBasePath
+  $unrelatedRegistrationAfter = Get-ExactWslRegistration (
+    $unrelatedDistributionName
+  ) $unrelatedWslBasePath
+  if ([string]$oldRegistrationAfter.RegistrationId -cne [string]$oldRegistrationBefore.RegistrationId -or
+      [string]$unrelatedRegistrationAfter.RegistrationId -cne [string]$unrelatedRegistrationBefore.RegistrationId) {
+    throw "Candidate rebound a legacy or unrelated WSL registration."
   }
+  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
+  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
+    "Unrelated WSL"
+  )
+  $oldVhdAfter = Get-RetainedVhdIdentity $oldVhdPath "Retained legacy assm1 WSL VHD"
+  foreach ($identityField in @(
+      "volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes"
+    )) {
+    if ([uint64]$oldVhdAfter[$identityField] -ne [uint64]$oldVhdBefore[$identityField]) {
+      throw "Candidate changed legacy VHD identity field $identityField."
+    }
+  }
+  if ((Get-LowerSha256 $oldProviderConfigPath (16 * 1024)) -cne $oldProviderConfigSha256 -or
+      (Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)) -cne $oldSshPublicKeySha256) {
+    throw "Candidate changed the retained legacy provider proof files."
+  }
+
+  $retainedProofPath = Assert-ExactChildPath $retainedProofRoot (
+    Join-Path $retainedProofRoot $retainedProofName
+  ) $retainedProofName "Retained legacy-workspace proof"
+  $retainedProofItem = Assert-OwnerOnlyFullControlFile $retainedProofPath (
+    "Retained legacy-workspace proof"
+  ) (64 * 1024)
+  $retainedProofSha256 = Get-LowerSha256 $retainedProofPath (64 * 1024)
+  $retainedProof = Read-BoundedJsonFile $retainedProofPath (
+    "Retained legacy-workspace proof"
+  ) (64 * 1024)
+  Assert-ExactJsonProperties $retainedProof @(
+    "schema_version",
+    "authorizes_cleanup",
+    "transition_evidence_source",
+    "install_transition_receipt",
+    "previous_manifest_sha256",
+    "current_manifest_sha256",
+    "machine_image_sha256",
+    "legacy_machine_name",
+    "legacy_distribution_name",
+    "current_machine_name",
+    "current_distribution_name",
+    "legacy_registration_id",
+    "legacy_registration_base_path",
+    "legacy_provider_home",
+    "legacy_provider_namespace",
+    "legacy_vhd_path",
+    "legacy_vhd_size_bytes",
+    "legacy_vhd_volume_serial_number",
+    "legacy_vhd_file_index",
+    "legacy_vhd_number_of_links",
+    "legacy_vhd_attributes",
+    "legacy_provider_config_sha256",
+    "legacy_ssh_public_key_sha256",
+    "current_registration_id",
+    "current_registration_base_path",
+    "current_provider_home"
+  ) "Retained legacy-workspace proof"
+  if ($retainedProof.schema_version -cne "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1" -or
+      $retainedProof.authorizes_cleanup -ne $false -or
+      $retainedProof.transition_evidence_source -cne "nsis_install_transition" -or
+      [string]$retainedProof.install_transition_receipt -cne $installerTransitionReceipt -or
+      [string]$retainedProof.previous_manifest_sha256 -cne $priorRuntimeManifestSha256 -or
+      [string]$retainedProof.current_manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
+      [string]$retainedProof.machine_image_sha256 -cne $candidateMachineImageSha256 -or
+      [string]$retainedProof.legacy_machine_name -cne $oldMachineName -or
+      [string]$retainedProof.legacy_distribution_name -cne $oldDistributionName -or
+      [string]$retainedProof.current_machine_name -cne $candidateMachineName -or
+      [string]$retainedProof.current_distribution_name -cne $candidateDistributionName -or
+      [string]$retainedProof.legacy_registration_id -cne [string]$oldRegistrationBefore.RegistrationId -or
+      [string]$retainedProof.current_registration_id -cne [string]$currentRegistration.RegistrationId -or
+      [string]$retainedProof.legacy_provider_namespace -cne $priorProviderNamespace -or
+      [uint64]$retainedProof.legacy_vhd_size_bytes -ne [uint64]$oldVhdAfter.sizeBytes -or
+      [uint32]$retainedProof.legacy_vhd_volume_serial_number -ne [uint32]$oldVhdAfter.volumeSerialNumber -or
+      [uint64]$retainedProof.legacy_vhd_file_index -ne [uint64]$oldVhdAfter.fileIndex -or
+      [uint32]$retainedProof.legacy_vhd_number_of_links -ne [uint32]$oldVhdAfter.numberOfLinks -or
+      [uint32]$retainedProof.legacy_vhd_attributes -ne [uint32]$oldVhdAfter.attributes -or
+      [string]$retainedProof.legacy_provider_config_sha256 -cne $oldProviderConfigSha256 -or
+      [string]$retainedProof.legacy_ssh_public_key_sha256 -cne $oldSshPublicKeySha256) {
+    throw "Retained proof does not bind the exact non-destructive assm1-to-assm2 observation."
+  }
+  Assert-SameWindowsPath ([string]$retainedProof.legacy_registration_base_path) $oldWslBasePath (
+    "Retained proof legacy registration"
+  )
+  Assert-SameWindowsPath ([string]$retainedProof.legacy_provider_home) $oldProviderHome (
+    "Retained proof legacy provider"
+  )
+  Assert-SameWindowsPath ([string]$retainedProof.legacy_vhd_path) $oldVhdPath (
+    "Retained proof legacy VHD"
+  )
+  Assert-SameWindowsPath ([string]$retainedProof.current_registration_base_path) (
+    $candidateWslBasePath
+  ) "Retained proof current registration"
+  Assert-SameWindowsPath ([string]$retainedProof.current_provider_home) $candidateProviderHome (
+    "Retained proof current provider"
+  )
+
+  # The proof has already been opened, parsed, identity-bound, and ACL-checked.
+  # Only now confirm that the one-shot registry receipt is absent. The static
+  # source contract additionally requires durable write+sync before consumption.
+  $postSideBySideRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
+  if ($postSideBySideRegistry.InstallTransitionPresent -or
+      -not [String]::IsNullOrEmpty($postSideBySideRegistry.InstallTransition)) {
+    throw "Candidate did not consume the transition after durably recording legacy retention."
+  }
+
   $quarantineRegistrations = @(Get-WslRegistrations | Where-Object {
     $_.Name -cmatch '^ai-security-scanner-recovery-[0-9a-f]{32}$'
   })
-  if ($quarantineRegistrations.Count -ne 0) { throw "Automatic recovery left a quarantine WSL registration." }
-
-  $recoveryRoot = Join-Path $dataDirectory "managed-runtime\wsl-recovery"
-  $consumedProofName = "ghost-migration-consumed-$oldMachineName.json"
-  $consumedProofPath = Assert-ExactChildPath $recoveryRoot (
-    Join-Path $recoveryRoot $consumedProofName
-  ) $consumedProofName "Permanent ghost-migration consumed proof"
-  $consumedProofItem = Assert-OwnerOnlyFullControlFile $consumedProofPath (
-    "Permanent ghost-migration consumed proof"
-  ) (64 * 1024)
-  $consumedProofSha256 = Get-LowerSha256 $consumedProofPath (64 * 1024)
-  $consumedProof = Read-BoundedJsonFile $consumedProofPath (
-    "Permanent ghost-migration consumed proof"
-  ) (64 * 1024)
-  Assert-ExactJsonProperties $consumedProof @(
-    "schema_version",
-    "recovery_id",
-    "install_transition_receipt",
-    "source_provider_manifest_sha256",
-    "manifest_sha256",
-    "machine_image_sha256",
-    "machine_name",
-    "distribution_name"
-  ) "Permanent ghost-migration consumed proof"
-  $recoveryAttempts = @(
-    Get-ChildItem -LiteralPath $recoveryRoot -Directory -Force |
-      Where-Object { $_.Name -cmatch '^[0-9a-f]{32}$' }
-  )
-  if ($recoveryAttempts.Count -ne 1) { throw "Expected one durable completed recovery attempt, found $($recoveryAttempts.Count)." }
-  $recoveryEntries = @(Get-ChildItem -LiteralPath $recoveryRoot -Force)
-  if ($recoveryEntries.Count -ne 2 -or
-      @($recoveryEntries | Where-Object { $_.Name -ceq $consumedProofName }).Count -ne 1) {
-    throw "Recovery root must contain exactly one retained attempt and its permanent consumed proof."
+  if ($quarantineRegistrations.Count -ne 0) {
+    throw "Side-by-side initialization unexpectedly created a recovery quarantine registration."
   }
-  $recoveryId = $recoveryAttempts[0].Name
-  $attemptRoot = $recoveryAttempts[0].FullName
-  $intentPath = Join-Path $attemptRoot "intent.json"
-  $intent = Read-BoundedJsonFile $intentPath "Recovery intent"
-  $backup = Read-BoundedJsonFile (Join-Path $attemptRoot "backup.json") "Recovery backup receipt"
-  $import = Read-BoundedJsonFile (Join-Path $attemptRoot "import.json") "Recovery import receipt"
-  $archive = Join-Path $attemptRoot "workspace-recovery.tar"
-  $archiveItem = Get-NoFollowFileSha256Proof $archive "Durable WSL recovery archive" (8GB)
-  $archiveSha256 = [string]$archiveItem.Sha256
-  $parsedRecoveryId = [Guid]::Parse([string]$backup.recovery_id)
-  $quarantineName = "ai-security-scanner-recovery-$recoveryId"
-  if ($parsedRecoveryId.ToString("N") -cne $recoveryId -or
-      $backup.schema_version -cne "ai-security-scanner.managed-wsl-recovery-backup/v1" -or
-      $backup.distribution_name -cne $oldDistributionName -or
-      $backup.quarantine_distribution_name -cne $quarantineName -or
-      [int64]$backup.size_bytes -ne [int64]$archiveItem.Length -or
-      [string]$backup.sha256 -cne $archiveSha256) {
-    throw "Durable WSL recovery backup receipt is inconsistent."
-  }
-  if ($import.schema_version -cne "ai-security-scanner.managed-wsl-recovery-import/v1" -or
-      ([Guid]::Parse([string]$import.recovery_id)).ToString("N") -cne $recoveryId -or
-      $import.quarantine_distribution_name -cne $quarantineName -or
-      [int64]$import.archive_size_bytes -ne [int64]$archiveItem.Length -or
-      [string]$import.archive_sha256 -cne $archiveSha256 -or
-      [string]$backup.sha256 -cne [string]$import.archive_sha256 -or
-      [int64]$backup.size_bytes -ne [int64]$import.archive_size_bytes) {
-    throw "Durable WSL recovery import receipt is inconsistent with the backup."
-  }
-  foreach ($reportedArchive in @([string]$backup.recovery_archive, [string]$import.recovery_archive)) {
-    if (-not [String]::Equals(
-        [IO.Path]::GetFullPath($reportedArchive),
-        [IO.Path]::GetFullPath($archive),
-        [StringComparison]::OrdinalIgnoreCase
-      )) { throw "Recovery receipt is not bound to its exact durable archive." }
-  }
-  $expectedWorkspace = Join-Path $workspaceRoot $recoveryId
-  if (-not [String]::Equals(
-      [IO.Path]::GetFullPath([string]$import.quarantine_install_directory),
-      [IO.Path]::GetFullPath($expectedWorkspace),
-      [StringComparison]::OrdinalIgnoreCase
-    )) { throw "Recovery import receipt is not bound to its exact temporary workspace." }
-  Assert-ExactJsonProperties $intent @(
-    "schema_version",
-    "recovery_id",
-    "manifest_sha256",
-    "machine_image_sha256",
-    "ownership_basis",
-    "source_provider_manifest_sha256",
-    "install_transition_receipt",
-    "machine_name",
-    "distribution_name",
-    "quarantine_distribution_name",
-    "registration_base_path",
-    "provider_home",
-    "attempt_directory",
-    "quarantine_install_directory",
-    "staging_archive",
-    "recovery_archive"
-  ) "Recovery intent"
-  if ($intent.schema_version -cne "ai-security-scanner.managed-wsl-recovery-intent/v2" -or
-      ([Guid]::Parse([string]$intent.recovery_id)).ToString("N") -cne $recoveryId -or
-      [string]$intent.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
-      [string]$intent.machine_image_sha256 -cne $candidateMachineImageSha256 -or
-      $intent.ownership_basis -cne "bounded_n_minus_one_ghost_migration" -or
-      [string]$intent.source_provider_manifest_sha256 -cne $priorRuntimeManifestSha256 -or
-      $null -eq $intent.install_transition_receipt -or
-      [string]$intent.install_transition_receipt -cne $installerTransitionReceipt -or
-      $intent.machine_name -cne $oldMachineName -or
-      $intent.distribution_name -cne $oldDistributionName -or
-      $intent.quarantine_distribution_name -cne $quarantineName) {
-    throw "Recovery intent does not carry the exact bounded N-1 migration proof."
-  }
-  if ($consumedProof.schema_version -cne "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1" -or
-      ([Guid]::Parse([string]$consumedProof.recovery_id)).ToString("N") -cne $recoveryId -or
-      [string]$consumedProof.install_transition_receipt -cne $installerTransitionReceipt -or
-      [string]$consumedProof.install_transition_receipt -cne [string]$intent.install_transition_receipt -or
-      [string]$consumedProof.source_provider_manifest_sha256 -cne $priorRuntimeManifestSha256 -or
-      [string]$consumedProof.source_provider_manifest_sha256 -cne [string]$intent.source_provider_manifest_sha256 -or
-      [string]$consumedProof.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
-      [string]$consumedProof.manifest_sha256 -cne [string]$intent.manifest_sha256 -or
-      [string]$consumedProof.machine_image_sha256 -cne $candidateMachineImageSha256 -or
-      [string]$consumedProof.machine_image_sha256 -cne [string]$intent.machine_image_sha256 -or
-      [string]$consumedProof.machine_name -cne $oldMachineName -or
-      [string]$consumedProof.machine_name -cne [string]$intent.machine_name -or
-      [string]$consumedProof.distribution_name -cne $oldDistributionName -or
-      [string]$consumedProof.distribution_name -cne [string]$intent.distribution_name) {
-    throw "Permanent consumed proof does not carry the exact one-shot N-1 migration identity."
-  }
-  Assert-SameWindowsPath ([string]$intent.registration_base_path) $oldWslBasePath "Recovery intent registration"
-  Assert-SameWindowsPath ([string]$intent.provider_home) $oldProviderHome "Recovery intent source provider"
-  Assert-SameWindowsPath ([string]$intent.attempt_directory) $attemptRoot "Recovery intent attempt directory"
-  Assert-SameWindowsPath ([string]$intent.quarantine_install_directory) $expectedWorkspace "Recovery intent quarantine workspace"
-  Assert-SameWindowsPath ([string]$intent.staging_archive) (Join-Path $attemptRoot "workspace.exporting.tar") "Recovery intent staging archive"
-  Assert-SameWindowsPath ([string]$intent.recovery_archive) $archive "Recovery intent durable archive"
 
   $candidateCase = Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "case", "show", $caseId
-  ) 120000 "Recovered candidate synthetic case read"
-  if ([string]$candidateCase.id -cne $caseId) { throw "Automatic recovery did not preserve the synthetic case." }
-  $afterBundle = Join-Path $exportDirectory "after-ghost-recovery.case.tar.gz"
+  ) 120000 "Side-by-side candidate synthetic case read"
+  if ([string]$candidateCase.id -cne $caseId) { throw "Side-by-side initialization did not preserve the synthetic case." }
+  $afterBundle = Join-Path $exportDirectory "after-side-by-side.case.tar.gz"
   Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "export", "create", "--case-id", $caseId,
     "--run-id", $runId, "--format", "case-bundle", "--destination", $afterBundle
-  ) 120000 "Recovered candidate signed synthetic export" | Out-Null
+  ) 120000 "Side-by-side candidate signed synthetic export" | Out-Null
   $afterVerification = Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "export", "verify", "--path", $afterBundle
-  ) 120000 "Recovered candidate signed export verification"
+  ) 120000 "Side-by-side candidate signed export verification"
   if ($afterVerification.valid -ne $true -or
       [string]$afterVerification.signer_key_id -cne [string]$beforeVerification.signer_key_id -or
       [string]$afterVerification.public_key_base64 -cne [string]$beforeVerification.public_key_base64 -or
       (Get-LowerSha256 $privateSigningKey (64 * 1024)) -cne $privateSigningKeySha256Before -or
       -not (Test-Path -LiteralPath $sentinelPath -PathType Leaf) -or
       (Test-Path -LiteralPath $rotationIntentPath)) {
-    throw "Automatic recovery did not preserve the case and integrity-signing identity."
+    throw "Side-by-side initialization did not preserve the case and integrity-signing identity."
+  }
+
+  Invoke-CliJson $candidateCli @(
+    "--json", "--data-dir", $dataDirectory,
+    "export", "create", "--case-id", $caseId, "--run-id", $runId,
+    "--format", "framework-report", "--destination", $masterFrameworkReportPath
+  ) 120000 "Candidate installed-artifact master framework report export" | Out-Null
+  $masterFrameworkReportProof = Get-NoFollowFileSha256Proof (
+    $masterFrameworkReportPath
+  ) "Installed-artifact master framework report" (4 * 1024 * 1024)
+  $masterFrameworkReport = Read-BoundedJsonFile (
+    $masterFrameworkReportPath
+  ) "Installed-artifact master framework report" (4 * 1024 * 1024)
+  Assert-ExactJsonProperties $masterFrameworkReport @(
+    "schema_version", "product_name", "product_version", "export_kind", "case_id",
+    "selected_run_id", "selected_run_sequence", "selected_run_recorded_at", "knowledge_date",
+    "notice", "coverage", "declared_ai_context", "observation_provenance", "frameworks",
+    "unrecognized_relationships"
+  ) "Installed-artifact master framework report"
+  $expectedReportNotice = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete."
+  $frameworks = @($masterFrameworkReport.frameworks)
+  if ($masterFrameworkReport.schema_version -cne "1.1.0" -or
+      $masterFrameworkReport.product_name -cne "ai-security-scanner" -or
+      $masterFrameworkReport.product_version -cne $CurrentVersion -or
+      $masterFrameworkReport.export_kind -cne "master_framework_relationship_report" -or
+      $masterFrameworkReport.case_id -cne $caseId -or
+      $masterFrameworkReport.selected_run_id -cne $runId -or
+      $masterFrameworkReport.notice -cne $expectedReportNotice -or
+      $masterFrameworkReport.coverage.state -cne "incomplete_or_unknown" -or
+      $masterFrameworkReport.coverage.current_coverage_ledger_has_unknown_or_incomplete_entries -ne $true -or
+      @($masterFrameworkReport.coverage.limitations).Count -lt 1 -or
+      $masterFrameworkReport.declared_ai_context.aidefend_applicability -cne "unknown" -or
+      $frameworks.Count -ne 3 -or
+      $frameworks[0].framework -cne "NIST CSF" -or $frameworks[0].expected_version -cne "2.0" -or
+      [int]$frameworks[0].relationship_count -lt 1 -or
+      $frameworks[1].framework -cne "ISO/IEC 27001" -or $frameworks[1].expected_version -cne "2022" -or
+      [int]$frameworks[1].relationship_count -lt 1 -or
+      $frameworks[2].framework -cne "AIDEFEND" -or $frameworks[2].expected_version -cne "1.20260805" -or
+      $frameworks[2].state -cne "unknown_due_to_unanswered_context" -or
+      [int]$frameworks[2].relationship_count -ne 0) {
+    throw "Installed candidate did not emit the fixed truthful NIST, ISO 27001, and AIDEFEND master report contract."
+  }
+  $masterReportBundleEntries = @(
+    $afterVerification.manifest.entries |
+      Where-Object { [string]$_.path -ceq "exports/master-framework-report.json" }
+  )
+  if ($masterReportBundleEntries.Count -ne 1) {
+    throw "Verified candidate bundle does not contain exactly one master framework report entry."
+  }
+  $masterReportBundleEntry = $masterReportBundleEntries[0]
+  if ([string]$masterReportBundleEntry.media_type -cne "application/json" -or
+      [string]$masterReportBundleEntry.sha256 -cne [string]$masterFrameworkReportProof.Sha256 -or
+      [int64]$masterReportBundleEntry.byte_length -ne [int64]$masterFrameworkReportProof.Length) {
+    throw "Standalone master framework report bytes do not exactly match the verified signed bundle entry."
+  }
+  $masterFrameworkReportObservation = [ordered]@{
+    reportFile = "master-framework-report.json"
+    reportBytes = [int64]$masterFrameworkReportProof.Length
+    reportSha256 = [string]$masterFrameworkReportProof.Sha256
+    bundleEntryPath = [string]$masterReportBundleEntry.path
+    bundleEntryBytes = [int64]$masterReportBundleEntry.byte_length
+    bundleEntrySha256 = [string]$masterReportBundleEntry.sha256
+    exactBundleEntryMatch = $true
+    schemaVersion = [string]$masterFrameworkReport.schema_version
+    product = [string]$masterFrameworkReport.product_name
+    productVersion = [string]$masterFrameworkReport.product_version
+    caseId = [string]$masterFrameworkReport.case_id
+    runId = [string]$masterFrameworkReport.selected_run_id
+    frameworkKeys = @("nist_csf", "iso_iec_27001", "aidefend")
+    truthfulUnknownCoverage = $true
+    noComplianceOutcomeClaims = $true
   }
 
   Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "runtime", "managed", "stop", "--force"
-  ) 300000 "Recovered managed runtime cleanup stop" | Out-Null
+  ) 300000 "Current assm2 managed runtime cleanup stop" | Out-Null
   Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "runtime", "managed", "uninstall", "--force", "--purge-image-cache"
-  ) 900000 "Recovered managed runtime cleanup uninstall" | Out-Null
-  $postPurgeConsumedProof = Assert-OwnerOnlyFullControlFile $consumedProofPath (
-    "Consumed proof retained after managed runtime purge"
+  ) 900000 "Current assm2 managed runtime cleanup uninstall" | Out-Null
+  $postPurgeRetainedProof = Assert-OwnerOnlyFullControlFile $retainedProofPath (
+    "Retained proof after current-runtime purge"
   ) (64 * 1024)
-  if ($postPurgeConsumedProof.Length -ne $consumedProofItem.Length -or
-      (Get-LowerSha256 $consumedProofPath (64 * 1024)) -cne $consumedProofSha256) {
-    throw "Managed runtime purge changed or removed the permanent consumed proof."
+  if ($postPurgeRetainedProof.Length -ne $retainedProofItem.Length -or
+      (Get-LowerSha256 $retainedProofPath (64 * 1024)) -cne $retainedProofSha256) {
+    throw "Current-runtime purge changed or removed the retained legacy proof."
   }
-  $remainingDistribution = @(Get-WslRegistrations | Where-Object {
-    [String]::Equals($_.Name, $oldDistributionName, [StringComparison]::Ordinal)
+  $currentAfterPurge = @(Get-WslRegistrations | Where-Object {
+    [String]::Equals($_.Name, $candidateDistributionName, [StringComparison]::Ordinal)
   })
-  $remainingQuarantine = @(Get-WslRegistrations | Where-Object {
-    $_.Name -cmatch '^ai-security-scanner-recovery-[0-9a-f]{32}$'
-  })
-  if ($remainingDistribution.Count -ne 0 -or $remainingQuarantine.Count -ne 0) {
-    throw "Managed runtime cleanup retained an exact or quarantine WSL registration."
+  if ($currentAfterPurge.Count -ne 0) {
+    throw "Current-runtime purge retained the assm2 WSL registration."
   }
+  $oldRegistrationAfterPurge = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
+  $unrelatedRegistrationAfterPurge = Get-ExactWslRegistration (
+    $unrelatedDistributionName
+  ) $unrelatedWslBasePath
+  if ([string]$oldRegistrationAfterPurge.RegistrationId -cne [string]$oldRegistrationBefore.RegistrationId -or
+      [string]$unrelatedRegistrationAfterPurge.RegistrationId -cne [string]$unrelatedRegistrationBefore.RegistrationId) {
+    throw "Current-runtime purge rebound a retained WSL registration."
+  }
+  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
+  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
+    "Unrelated WSL"
+  )
   Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall" | Out-Null
   $activeCli = $null
-  $postUninstallConsumedProof = Assert-OwnerOnlyFullControlFile $consumedProofPath (
-    "Consumed proof retained until explicit private-data cleanup"
+  $postUninstallRetainedProof = Assert-OwnerOnlyFullControlFile $retainedProofPath (
+    "Retained proof until explicit private-data cleanup"
   ) (64 * 1024)
-  if ($postUninstallConsumedProof.Length -ne $consumedProofItem.Length -or
-      (Get-LowerSha256 $consumedProofPath (64 * 1024)) -cne $consumedProofSha256) {
-    throw "NSIS uninstall changed or removed the permanent consumed proof before explicit private-data cleanup."
+  if ($postUninstallRetainedProof.Length -ne $retainedProofItem.Length -or
+      (Get-LowerSha256 $retainedProofPath (64 * 1024)) -cne $retainedProofSha256 -or
+      -not (Test-Path -LiteralPath $oldProviderHome -PathType Container) -or
+      (Get-LowerSha256 $privateSigningKey (64 * 1024)) -cne $privateSigningKeySha256Before -or
+      -not (Test-Path -LiteralPath $sentinelPath -PathType Leaf)) {
+    throw "NSIS uninstall changed retained workspace, case, or signing data before explicit cleanup."
   }
+  Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
+  Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
+
+  # Explicit qualification teardown. Production never receives cleanup
+  # authority from the retained proof; only these fixed test namespaces are
+  # unregistered after every preservation assertion has passed.
+  Unregister-ProvenExactWsl $trustedWsl $oldDistributionName $oldWslBasePath
+  Unregister-ProvenExactWsl $trustedWsl $unrelatedDistributionName $unrelatedWslBasePath
   if (Test-Path -LiteralPath $installDirectory) {
     Remove-ExactTree $installDirectory $localApplicationData "ai-security-scanner" "Default NSIS install directory cleanup"
   }
@@ -1788,7 +2034,7 @@ try {
 
   $observations = [ordered]@{
     schemaVersion = 1
-    scenario = "real_registered_wsl_n_minus_one_ghost_install_recovery"
+    scenario = "real_registered_wsl_n_minus_one_ghost_install_side_by_side"
     platform = "windows-x86_64"
     runner = "windows-2025"
     priorRelease = [ordered]@{
@@ -1819,13 +2065,18 @@ try {
       oldProviderNamespace = $priorProviderNamespace
       oldProviderCryptographicIdentityPresent = $true
       distributionName = $oldDistributionName
+      registrationId = [string]$oldRegistrationBefore.RegistrationId
       registeredWslStateExercised = $true
       registrationBoundToOldProvider = $true
+      missingVersionsManifestExercised = $true
       oldVersionDirectory = $oldVersionDirectoryName
       oldVersionPayloadDigestVerifiedBeforeRemoval = $true
       oldVersionPayloadDirectoryRemoved = $true
       oldDesktopRemoved = $true
       oldUninstallerRemoved = $true
+      unrelatedDistributionName = $unrelatedDistributionName
+      unrelatedRegistrationId = [string]$unrelatedRegistrationBefore.RegistrationId
+      unrelatedDistributionRunning = $true
     }
     installerMigration = [ordered]@{
       candidateInstallerCompleted = $true
@@ -1840,50 +2091,69 @@ try {
       sameVersionSilentReinstallCompleted = $true
       transitionReceiptSurvivedSameVersionReinstall = $true
     }
-    runtimeRecovery = [ordered]@{
+    runtimeSideBySide = [ordered]@{
       startSucceeded = $true
       noManualActionFallback = $true
       runningAndAvailable = $true
-      sameDistributionName = $true
-      registrationMovedToCurrentProvider = $true
+      legacyMachineName = $oldMachineName
+      legacyDistributionName = $oldDistributionName
+      legacyRegistrationIdBefore = [string]$oldRegistrationBefore.RegistrationId
+      legacyRegistrationIdAfter = [string]$oldRegistrationAfter.RegistrationId
+      legacyRegistrationBasePathExact = $true
+      legacyProviderRetained = $true
+      legacyProviderNamespace = $priorProviderNamespace
+      legacyVhdIdentityPreserved = $true
+      legacyProviderProofFilesPreserved = $true
+      legacySentinelProcessSurvived = $true
+      currentMachineName = $candidateMachineName
+      currentDistributionName = $candidateDistributionName
+      currentRegistrationId = [string]$currentRegistration.RegistrationId
+      currentRegistrationBasePathExact = $true
       currentProviderNamespace = $candidateProviderNamespace
-      oldProviderRemoved = $true
-      recoveryId = $recoveryId
-      durableIntentPresent = $true
-      intentProofValid = $true
-      intentSchemaVersion = [string]$intent.schema_version
-      intentOwnershipBasis = [string]$intent.ownership_basis
-      intentManifestSha256 = [string]$intent.manifest_sha256
-      intentMachineImageSha256 = [string]$intent.machine_image_sha256
-      intentSourceProviderManifestSha256 = [string]$intent.source_provider_manifest_sha256
-      intentTransitionReceipt = [string]$intent.install_transition_receipt
-      receiptConsumption = [ordered]@{
-        registryValueAbsent = $true
-        proofPathExact = $true
+      currentProviderCreated = $true
+      unrelatedDistributionName = $unrelatedDistributionName
+      unrelatedRegistrationIdBefore = [string]$unrelatedRegistrationBefore.RegistrationId
+      unrelatedRegistrationIdAfter = [string]$unrelatedRegistrationAfter.RegistrationId
+      unrelatedRegistrationBasePathExact = $true
+      unrelatedSentinelProcessSurvived = $true
+      noQuarantineDistributionCreated = $true
+      retainedProof = [ordered]@{
+        pathBoundToLegacyRegistrationId = $true
         proofPresent = $true
         proofProtected = $true
-        proofBytes = [int64]$consumedProofItem.Length
-        proofSha256 = $consumedProofSha256
-        schemaVersion = [string]$consumedProof.schema_version
-        recoveryId = [string]$consumedProof.recovery_id
-        installTransitionReceipt = [string]$consumedProof.install_transition_receipt
-        sourceProviderManifestSha256 = [string]$consumedProof.source_provider_manifest_sha256
-        manifestSha256 = [string]$consumedProof.manifest_sha256
-        machineImageSha256 = [string]$consumedProof.machine_image_sha256
-        machineName = [string]$consumedProof.machine_name
-        distributionName = [string]$consumedProof.distribution_name
-        proofRetainedAfterRuntimePurge = $true
+        proofBytes = [int64]$retainedProofItem.Length
+        proofSha256 = $retainedProofSha256
+        schemaVersion = [string]$retainedProof.schema_version
+        authorizesCleanup = [bool]$retainedProof.authorizes_cleanup
+        transitionEvidenceSource = [string]$retainedProof.transition_evidence_source
+        installTransitionReceipt = [string]$retainedProof.install_transition_receipt
+        previousManifestSha256 = [string]$retainedProof.previous_manifest_sha256
+        currentManifestSha256 = [string]$retainedProof.current_manifest_sha256
+        machineImageSha256 = [string]$retainedProof.machine_image_sha256
+        legacyMachineName = [string]$retainedProof.legacy_machine_name
+        legacyDistributionName = [string]$retainedProof.legacy_distribution_name
+        currentMachineName = [string]$retainedProof.current_machine_name
+        currentDistributionName = [string]$retainedProof.current_distribution_name
+        legacyRegistrationId = [string]$retainedProof.legacy_registration_id
+        currentRegistrationId = [string]$retainedProof.current_registration_id
+        legacyProviderNamespace = [string]$retainedProof.legacy_provider_namespace
+        legacyVhdSizeBytes = [uint64]$retainedProof.legacy_vhd_size_bytes
+        legacyVhdVolumeSerialNumber = [uint32]$retainedProof.legacy_vhd_volume_serial_number
+        legacyVhdFileIndex = ([uint64]$retainedProof.legacy_vhd_file_index).ToString(
+          [Globalization.CultureInfo]::InvariantCulture
+        )
+        legacyVhdNumberOfLinks = [uint32]$retainedProof.legacy_vhd_number_of_links
+        legacyVhdAttributes = [uint32]$retainedProof.legacy_vhd_attributes
+        legacyProviderConfigSha256 = [string]$retainedProof.legacy_provider_config_sha256
+        legacySshPublicKeySha256 = [string]$retainedProof.legacy_ssh_public_key_sha256
+        proofRetainedAfterCurrentRuntimePurge = $true
         proofRetainedUntilExplicitPrivateDataCleanup = $true
       }
-      durableArchivePresent = $true
-      archiveBytes = [int64]$archiveItem.Length
-      archiveSha256 = $archiveSha256
-      backupReceiptValid = $true
-      importReceiptValid = $true
-      backupAndImportAgree = $true
-      pendingRecoveryAbsent = $true
-      temporaryWorkspaceAbsent = $true
-      quarantineDistributionAbsent = $true
+      receiptConsumption = [ordered]@{
+        proofAbsentWhileRegistryReceiptPresent = $true
+        proofValidatedBeforeRegistryAbsenceCheck = $true
+        registryValueAbsentAfterDurableProof = $true
+      }
     }
     dataPreservation = [ordered]@{
       preInstallerFileCount = [int]$beforeInstallerSnapshot.fileCount
@@ -1915,10 +2185,17 @@ try {
       identityPublicKeyBase64 = [string]$candidateSigningIdentity.public_key_base64
       firstBundleValid = $true
       secondBundleValid = $true
+      masterFrameworkReport = $masterFrameworkReportObservation
     }
     cleanup = [ordered]@{
-      managedRuntimePurged = $true
-      exactWslDistributionAbsent = $true
+      currentRuntimePurged = $true
+      currentDistributionAbsent = $true
+      legacyDistributionRetainedThroughRuntimePurge = $true
+      unrelatedDistributionRetainedThroughRuntimePurge = $true
+      retainedProofPreservedThroughRuntimePurge = $true
+      legacyDataPreservedThroughNsisUninstall = $true
+      explicitQualificationTeardownRemovedLegacy = $true
+      explicitQualificationTeardownRemovedUnrelated = $true
       quarantineDistributionsAbsent = $true
       candidateUninstalled = $true
       installDirectoryRemoved = $true
@@ -1943,12 +2220,27 @@ try {
     try {
       $registrations = @(Get-WslRegistrations)
       foreach ($registration in $registrations) {
-        $isExact = [String]::Equals($registration.Name, $oldDistributionName, [StringComparison]::Ordinal)
+        $isLegacy = [String]::Equals($registration.Name, $oldDistributionName, [StringComparison]::Ordinal)
+        $isCurrent = [String]::Equals($registration.Name, $candidateDistributionName, [StringComparison]::Ordinal)
+        $isUnrelatedFixture = [String]::Equals(
+          $registration.Name,
+          $unrelatedDistributionName,
+          [StringComparison]::Ordinal
+        )
         $isQuarantine = $registration.Name -cmatch '^ai-security-scanner-recovery-[0-9a-f]{32}$'
-        if (-not $isExact -and -not $isQuarantine) { continue }
-        $expectedBasePath = Get-ProvenFailureCleanupWslBasePath (
-          $registration
-        ) $oldDistributionName $oldWslBasePath $candidateWslBasePath $workspaceRoot
+        if (-not $isLegacy -and -not $isCurrent -and -not $isUnrelatedFixture -and
+            -not $isQuarantine) { continue }
+        $expectedBasePath = if ($isLegacy) {
+          $oldWslBasePath
+        } elseif ($isCurrent) {
+          $candidateWslBasePath
+        } elseif ($isUnrelatedFixture) {
+          $unrelatedWslBasePath
+        } else {
+          Get-ProvenFailureCleanupWslBasePath (
+            $registration
+          ) $oldDistributionName $oldWslBasePath $candidateWslBasePath $workspaceRoot
+        }
         Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath
       }
     } catch { $cleanupFailures.Add($_.Exception.Message) }
@@ -1981,7 +2273,7 @@ if ($null -ne $primaryFailure) {
   throw [InvalidOperationException]::new($primaryFailure.Exception.Message + $suffix, $primaryFailure.Exception)
 }
 if (-not $cleanupComplete -or $null -eq $observations) {
-  throw "Real registered-WSL ghost qualification did not reach its verified cleanup state."
+  throw "Real registered-WSL side-by-side ghost qualification did not reach its verified cleanup state."
 }
 $observationsPath = Join-Path $workRoot "observations.json"
 $observations | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $observationsPath -Encoding utf8NoBOM -NoNewline

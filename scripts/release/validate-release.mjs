@@ -752,480 +752,203 @@ function validatePlatformQualificationSources(sources) {
     '"runtime", "managed", "install"',
     '"runtime", "managed", "start"',
     '"runtime", "managed", "stop", "--force"',
-    "podman-$oldMachineName",
     "Remove-ExactTree $oldVersionDirectory",
     "recovered-ghost-v0.1.7",
     "wsl_distribution_requires_manual_action",
-    "workspace-recovery.tar",
-    "FILE_FLAG_OPEN_REPARSE_POINT",
-    "FILE_FLAG_BACKUP_SEMANTICS",
-    "Get-BoundedAbsoluteWindowsPath",
-    "$maximumWindowsPathUtf16CodeUnits = 32760",
-    "$maximumVerbatimWindowsPathUtf16CodeUnits = 32766",
-    "Open-NoFollowSingleLinkFile",
-    "$identity.links -ne 1",
-    '$processLeaseRelativePath = ".exclusive-process.lock"',
-    "Assert-ExactEmptyProcessLeaseFile",
-    "Assert-PreservedDataSnapshotHousekeepingRegression $workRoot",
-    "Open-NoFollowWindowsSystemFile",
-    "$identity.links -lt 1",
-    "Get-NoFollowWindowsSystemExecutableProof",
-    "Open-NoFollowRealDirectory",
-    "Assert-SameNoFollowDirectoryIdentity",
-    "Assert-NoFollowDirectoryIdentityRegression $workRoot",
-    "Get-ProvenFailureCleanupWslBasePath",
-    "Assert-FailureCleanupWslBindingRegression $workRoot",
-    "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath",
-    "Same-directory extended-prefix regression",
-    "Different-directory regression",
-    "Get-AuthenticodeSignature -LiteralPath",
-    "O=Microsoft Corporation",
-    "windows_system32_microsoft_authenticode_v1",
-    "-ExpectedSystemExecutableProof $TrustedWsl.proof",
-    "Get-NoFollowFileSha256Proof",
-    "ExpectedExecutableProof",
-    "HashData($executionGuard)",
-    "executable is not the exact previously verified installer",
-    "-ExpectedExecutableProof $priorInstallerProof",
-    "-ExpectedExecutableProof $candidateInstaller",
-    "[GhostQualificationNativeMethods]::CreateFileW",
-    "ai-security-scanner.managed-wsl-recovery-intent/v2",
-    "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
-    '$candidateRuntimeEvidence.schema_version -cne "3"',
-    '$candidateRuntimeEvidence.management_contract_revision -cne "2026-08-29.1"',
-    "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1",
-    "bounded_n_minus_one_ghost_migration",
-    "intentProofValid = $true",
-    "ghost-migration-consumed-$oldMachineName.json",
-    "InstallTransitionPresent",
-    "Automatic recovery did not consume the exact HKCU InstallTransition value.",
-    "Assert-OwnerOnlyFullControlFile $consumedProofPath",
-    "proofRetainedAfterRuntimePurge = $true",
-    "proofRetainedUntilExplicitPrivateDataCleanup = $true",
-    "Candidate same-version silent reinstall before ghost recovery",
-    "transitionReceiptSurvivedSameVersionReinstall = $true",
-    "backup.json",
-    "import.json",
-    '"export", "identity", "show"',
-    "integrity-signing-key.identity-anchor.json",
-    "integrity-signing-key.rotation-intent.json",
-    "Assert-OwnerOnlyFullControlFile",
-    "anchorIdentitySha256",
-    "identityDocumentSha256",
-    "$writerOptions.Encoder = [Text.Encodings.Web.JavaScriptEncoder]::UnsafeRelaxedJsonEscaping",
-    "Assert-SerdeCompatibleJsonCompaction",
-    "rotationIntentAbsent = $true",
-    'registeredWslStateExercised = $true',
-  ]) assert(nsisGhost.includes(required), `registered-WSL ghost qualification is missing: ${required}`);
-
-  const ordinaryFileOpenStart = nsisGhost.indexOf("function Open-NoFollowSingleLinkFile(");
-  const ordinaryFileOpenEnd = nsisGhost.indexOf("function Assert-ExactEmptyProcessLeaseFile(", ordinaryFileOpenStart);
-  assert(
-    ordinaryFileOpenStart >= 0 && ordinaryFileOpenEnd > ordinaryFileOpenStart,
-    "registered-WSL ghost qualification has no isolated non-empty product-file opener",
-  );
-  const ordinaryFileOpen = nsisGhost.slice(ordinaryFileOpenStart, ordinaryFileOpenEnd);
-  assert(
-    ordinaryFileOpen.includes("$identity.links -ne 1") &&
-      ordinaryFileOpen.includes("$identity.bytes -lt 1") &&
-      !ordinaryFileOpen.includes("processLease") &&
-      !ordinaryFileOpen.includes("MinimumBytes"),
-    "registered-WSL generic installer/key/archive proof must remain single-link and non-empty",
-  );
-
-  const processLeaseProofStart = ordinaryFileOpenEnd;
-  const processLeaseProofEnd = nsisGhost.indexOf("function Open-NoFollowWindowsSystemFile(", processLeaseProofStart);
-  assert(
-    processLeaseProofEnd > processLeaseProofStart,
-    "registered-WSL ghost qualification has no isolated root process-lease proof",
-  );
-  const processLeaseProof = nsisGhost.slice(processLeaseProofStart, processLeaseProofEnd);
-  for (const required of [
-    "[GhostQualificationNativeMethods]::CreateFileW",
-    "[GhostQualificationNativeMethods]::GENERIC_READ",
-    "[GhostQualificationNativeMethods]::FILE_SHARE_READ",
-    "[GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT",
-    "$before.links -ne 1",
-    "$before.bytes -ne 0",
-    "$before.volume -ne $after.volume",
-    "$before.index -ne $after.index",
-    "$stream.Dispose()",
-    "$handle.Dispose()",
-  ]) assert(processLeaseProof.includes(required), `registered-WSL root process-lease proof is missing: ${required}`);
-  assert(
-    !processLeaseProof.includes("Open-NoFollowSingleLinkFile") &&
-      !processLeaseProof.includes("FILE_SHARE_WRITE") &&
-      !processLeaseProof.includes("FILE_SHARE_DELETE"),
-    "registered-WSL empty process-lease exception must not weaken or share the generic file proof",
-  );
-
-  const preservedSnapshotStart = nsisGhost.indexOf("function Get-PreservedDataSnapshot(");
-  const preservedRegressionStart = nsisGhost.indexOf(
-    "function Assert-PreservedDataSnapshotHousekeepingRegression(",
-    preservedSnapshotStart,
-  );
-  assert(
-    preservedSnapshotStart >= 0 && preservedRegressionStart > preservedSnapshotStart,
-    "registered-WSL ghost qualification has no bounded preserved-data snapshot",
-  );
-  const preservedSnapshot = nsisGhost.slice(preservedSnapshotStart, preservedRegressionStart);
-  const exactLeaseExclusion = "if (-not $item.PSIsContainer -and $relative -ceq $processLeaseRelativePath)";
-  assert(
-    preservedSnapshot.includes(exactLeaseExclusion) &&
-      preservedSnapshot.includes('Assert-ExactEmptyProcessLeaseFile $item.FullName "Root process lease"') &&
-      preservedSnapshot.includes('if ($relative -eq "managed-runtime" -or $relative.StartsWith("managed-runtime/", [StringComparison]::Ordinal))') &&
-      preservedSnapshot.includes('Get-NoFollowFileSha256Proof $item.FullName "Preserved data file"') &&
-      (preservedSnapshot.match(/\$processLeaseRelativePath/gu) ?? []).length === 1,
-    "registered-WSL preserved-data snapshot must exclude only the proven exact root process lease",
-  );
-
-  const preservedRegressionEnd = nsisGhost.indexOf("function Read-BoundedUtf8File(", preservedRegressionStart);
-  assert(
-    preservedRegressionEnd > preservedRegressionStart,
-    "registered-WSL ghost qualification has no process-lease snapshot regression",
-  );
-  const preservedRegression = nsisGhost.slice(preservedRegressionStart, preservedRegressionEnd);
-  for (const required of [
-    '[IO.File]::WriteAllBytes((Join-Path $fixtureRoot $processLeaseRelativePath), [byte[]]::new(0))',
-    "$snapshot.fileCount -ne 1",
-    "$snapshot.totalBytes -ne $payloadBytes.Length",
-    "Join-Path $nestedDirectory $processLeaseRelativePath",
-    '"Preserved data file is not one bounded no-follow single-link regular file."',
-    "Preserved-data snapshot ignored a nested process-lease-shaped file.",
-    "Remove-ExactTree $fixtureRoot $Parent $fixtureName",
-  ]) assert(preservedRegression.includes(required), `registered-WSL process-lease snapshot regression is missing: ${required}`);
-  assert(
-    (nsisGhost.match(/Assert-PreservedDataSnapshotHousekeepingRegression/gu) ?? []).length === 2 &&
-      (nsisGhost.match(/Assert-ExactEmptyProcessLeaseFile/gu) ?? []).length === 2,
-    "registered-WSL process-lease exception must be defined once, exercised once, and used only by the snapshot",
-  );
-
-  const synchronousGhostUninstall = 'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall"';
-  const synchronousGhostFailureUninstall = 'Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path candidate uninstall"';
-  assert(
-    nsisGhost.includes(synchronousGhostUninstall) &&
-      nsisGhost.includes(synchronousGhostFailureUninstall) &&
-      (nsisGhost.match(/"_\?=\$installDirectory"/gu) ?? []).length === 2 &&
-      !nsisGhost.includes('Invoke-ExactProcess $candidateUninstaller @("/S")') &&
-      !nsisGhost.includes('Invoke-ExactProcess $activeUninstaller @("/S")'),
-    "registered-WSL ghost cleanup must synchronously wait for the exact NSIS uninstall directory",
-  );
-  const happyGhostUninstall = nsisGhost.indexOf(synchronousGhostUninstall);
-  const productRegistrationCheck = nsisGhost.indexOf(
-    'if (@(Get-ProductRegistryEntries).Count -ne 0) { throw "Candidate uninstaller left the product registry entry." }',
-    happyGhostUninstall,
-  );
-  const clearedGhostActiveUninstaller = nsisGhost.indexOf(
-    "$activeUninstaller = $null",
-    happyGhostUninstall,
-  );
-  assert(
-    happyGhostUninstall >= 0 &&
-      productRegistrationCheck > happyGhostUninstall &&
-      clearedGhostActiveUninstaller > productRegistrationCheck,
-    "registered-WSL ghost qualification must retain cleanup ownership until NSIS registry removal is proven",
-  );
-  const escapedSerdeCompactionFixture = "$fixture = '{\"public_key_base64\":\"A\\u002BB\\/==\"}'";
-  const literalSerdeCompactionExpected = "$expected = '{\"public_key_base64\":\"A+B/==\"}'";
-  for (const [label, source] of [
-    ["normal Windows N-1", nsisUpgrade],
-    ["registered-WSL ghost", nsisGhost],
-  ]) {
-    assert(
-      source.includes(escapedSerdeCompactionFixture) &&
-        source.includes(literalSerdeCompactionExpected) &&
-        (source.match(/Assert-SerdeCompatibleJsonCompaction/gu) ?? []).length === 2,
-      `${label} qualification must prove escaped JSON input compacts to the literal serde_json byte contract`,
-    );
-  }
-  assert(
-    (nsisGhost.match(/ConvertFrom-Json -DateKind String/gu) ?? []).length === 5 &&
-      !/ConvertFrom-Json(?! -DateKind String)/u.test(nsisGhost),
-    "registered-WSL ghost qualification must preserve every JSON date as an exact source string",
-  );
-  assert(
-    (nsisUpgrade.match(/-ExpectedExecutableProof/gu) ?? []).length === 3,
-    "normal Windows N-1 qualification must bind all three installer launches to exact handle proofs",
-  );
-  assert(
-    (nsisGhost.match(/-ExpectedExecutableProof/gu) ?? []).length === 3,
-    "registered-WSL ghost qualification must bind all three installer launches to exact handle proofs",
-  );
-  assert(
-    (nsisGhost.match(/-ExpectedSystemExecutableProof/gu) ?? []).length === 1,
-    "registered-WSL ghost qualification must reserve its hard-link-aware proof for one OS-trusted WSL cleanup launch",
-  );
-  assert(
-    (nsisGhost.match(/Open-NoFollowWindowsSystemFile/gu) ?? []).length === 3 &&
-      (nsisGhost.match(/\$identity\.links -lt 1/gu) ?? []).length === 1 &&
-      (nsisGhost.match(/\$identity\.links -ne 1/gu) ?? []).length === 1,
-    "registered-WSL ghost qualification must isolate Windows system hard-link handling from the single-link product evidence policy",
-  );
-  assert(
-    (nsisGhost.match(/Get-NoFollowWindowsSystemExecutableProof/gu) ?? []).length === 2,
-    "registered-WSL ghost qualification must create its Windows system proof only through the fixed trusted-WSL resolver",
-  );
-  const systemProofStart = nsisGhost.indexOf("function Get-NoFollowWindowsSystemExecutableProof(");
-  const systemProofEnd = nsisGhost.indexOf("function Get-LowerSha256(", systemProofStart);
-  assert(systemProofStart >= 0 && systemProofEnd > systemProofStart, "registered-WSL ghost qualification has no bounded Windows system proof function");
-  const systemProof = nsisGhost.slice(systemProofStart, systemProofEnd);
-  const systemHandleOpen = systemProof.indexOf("$stream = Open-NoFollowWindowsSystemFile");
-  const authenticodeCheck = systemProof.indexOf("Get-AuthenticodeSignature -LiteralPath");
-  const sameHandleRehash = systemProof.indexOf("$afterSignatureDigest = [Security.Cryptography.SHA256]::HashData($stream)");
-  const systemHandleDispose = systemProof.indexOf("$stream.Dispose()");
-  assert(
-    systemHandleOpen >= 0 &&
-      authenticodeCheck > systemHandleOpen &&
-      sameHandleRehash > authenticodeCheck &&
-      systemHandleDispose > sameHandleRehash &&
-      (systemProof.match(/\$stream\.Dispose\(\)/gu) ?? []).length === 1,
-    "registered-WSL ghost qualification must hold and rehash the original restrictive system-file handle across Authenticode verification",
-  );
-  const directoryOpenStart = nsisGhost.indexOf("function Open-NoFollowRealDirectory(");
-  const directoryOpenEnd = nsisGhost.indexOf("function Assert-SameNoFollowDirectoryIdentity(", directoryOpenStart);
-  assert(directoryOpenStart >= 0 && directoryOpenEnd > directoryOpenStart, "registered-WSL ghost qualification has no bounded no-follow directory opener");
-  const directoryOpen = nsisGhost.slice(directoryOpenStart, directoryOpenEnd);
-  for (const required of [
-    "FILE_READ_ATTRIBUTES",
-    "FILE_SHARE_READ -bor [GhostQualificationNativeMethods]::FILE_SHARE_WRITE",
-    "FILE_FLAG_BACKUP_SEMANTICS -bor [GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT",
-    "[IO.FileAttributes]::Directory",
-    "[IO.FileAttributes]::ReparsePoint",
-    "Get-OpenDirectoryIdentity $handle",
-  ]) assert(directoryOpen.includes(required), `registered-WSL no-follow directory opener is missing: ${required}`);
-  assert(
-    !directoryOpen.includes("FILE_SHARE_DELETE"),
-    "registered-WSL no-follow directory proof must prevent path deletion or replacement while its handles are held",
-  );
-  const directoryProofStart = directoryOpenEnd;
-  const directoryProofEnd = nsisGhost.indexOf("function Assert-SingleLinkFile(", directoryProofStart);
-  assert(directoryProofEnd > directoryProofStart, "registered-WSL ghost qualification has no bounded directory-identity proof");
-  const directoryProof = nsisGhost.slice(directoryProofStart, directoryProofEnd);
-  const actualDirectoryOpen = directoryProof.indexOf("$actualHandle = Open-NoFollowRealDirectory");
-  const expectedDirectoryOpen = directoryProof.indexOf("$expectedHandle = Open-NoFollowRealDirectory");
-  const volumeIdentityCheck = directoryProof.indexOf("$actualBefore.volume -ne $expectedBefore.volume");
-  const fileIndexIdentityCheck = directoryProof.indexOf("$actualBefore.index -ne $expectedBefore.index");
-  const expectedDirectoryDispose = directoryProof.indexOf("$expectedHandle.Dispose()");
-  const actualDirectoryDispose = directoryProof.indexOf("$actualHandle.Dispose()");
-  assert(
-    actualDirectoryOpen >= 0 &&
-      expectedDirectoryOpen > actualDirectoryOpen &&
-      volumeIdentityCheck > expectedDirectoryOpen &&
-      fileIndexIdentityCheck > volumeIdentityCheck &&
-      expectedDirectoryDispose > fileIndexIdentityCheck &&
-      actualDirectoryDispose > expectedDirectoryDispose &&
-      (directoryProof.match(/Open-NoFollowRealDirectory/gu) ?? []).length === 2 &&
-      (directoryProof.match(/\.Dispose\(\)/gu) ?? []).length === 2,
-    "registered-WSL directory identity must compare volume and file index while both restrictive no-follow handles remain open",
-  );
-  const boundedPathStart = nsisGhost.indexOf("function Get-BoundedAbsoluteWindowsPath(");
-  const boundedPathEnd = nsisGhost.indexOf("function Get-VerbatimWindowsPath(", boundedPathStart);
-  assert(boundedPathStart >= 0 && boundedPathEnd > boundedPathStart, "registered-WSL ghost qualification has no bounded Windows path parser");
-  const boundedPath = nsisGhost.slice(boundedPathStart, boundedPathEnd);
-  for (const required of [
-    "$Path.IndexOf([char]0) -ge 0",
-    "$Path.Length -gt $maximumWindowsPathUtf16CodeUnits",
-    "[IO.Path]::IsPathFullyQualified($Path)",
-    "$full.IndexOf([char]0) -ge 0",
-    "$full.Length -gt $maximumWindowsPathUtf16CodeUnits",
-  ]) assert(boundedPath.includes(required), `registered-WSL bounded Windows path parser is missing: ${required}`);
-  const exactWslStart = nsisGhost.indexOf("function Get-ExactWslRegistration(");
-  const exactWslEnd = nsisGhost.indexOf("function Assert-NoFollowDirectoryIdentityRegression(", exactWslStart);
-  assert(exactWslStart >= 0 && exactWslEnd > exactWslStart, "registered-WSL ghost qualification has no exact registration binding function");
-  const exactWsl = nsisGhost.slice(exactWslStart, exactWslEnd);
-  assert(
-    exactWsl.includes("[String]::Equals($_.Name, $Name, [StringComparison]::Ordinal)") &&
-      exactWsl.includes("$matches.Count -ne 1") &&
-      exactWsl.includes("Get-BoundedAbsoluteWindowsPath $matches[0].BasePath") &&
-      exactWsl.includes("Get-BoundedAbsoluteWindowsPath $ExpectedBasePath") &&
-      exactWsl.includes("Assert-SameNoFollowDirectoryIdentity $registeredBasePath $boundedExpectedBasePath") &&
-      !exactWsl.includes("Resolve-RealDirectory") &&
-      !exactWsl.includes("[String]::Equals($actual, $expected"),
-    "registered-WSL binding must retain the exact distro identity and bind its registry BasePath by directory object, not path spelling",
-  );
-  const directoryRegressionStart = exactWslEnd;
-  const directoryRegressionEnd = nsisGhost.indexOf("function Get-PreservedDataSnapshot(", directoryRegressionStart);
-  assert(directoryRegressionEnd > directoryRegressionStart, "registered-WSL ghost qualification has no directory-identity regression fixture");
-  const directoryRegression = nsisGhost.slice(directoryRegressionStart, directoryRegressionEnd);
-  for (const required of [
-    "Get-VerbatimWindowsPath $sameDirectory",
-    "Directory identity regression did not exercise two Windows path spellings.",
-    "Assert-SameNoFollowDirectoryIdentity $sameDirectory $extendedSameDirectory",
-    "Assert-SameNoFollowDirectoryIdentity $sameDirectory $differentDirectory",
-    "Directory identity comparison accepted two different directory objects.",
-    "Remove-ExactTree $fixtureRoot $Parent $fixtureName",
-  ]) assert(directoryRegression.includes(required), `registered-WSL directory-identity regression is missing: ${required}`);
-  assert(
-    (nsisGhost.match(/Assert-NoFollowDirectoryIdentityRegression/gu) ?? []).length === 2,
-    "registered-WSL directory-identity regression must be defined once and run once",
-  );
-  const cleanupBindingStart = nsisGhost.indexOf(
-    "function Get-ProvenFailureCleanupWslBasePath(",
-  );
-  const cleanupRegressionStart = nsisGhost.indexOf(
-    "function Assert-FailureCleanupWslBindingRegression(",
-    cleanupBindingStart,
-  );
-  assert(
-    cleanupBindingStart >= 0 && cleanupRegressionStart > cleanupBindingStart,
-    "registered-WSL ghost qualification has no bounded failure-cleanup binding",
-  );
-  const cleanupBinding = nsisGhost.slice(cleanupBindingStart, cleanupRegressionStart);
-  for (const required of [
-    "Get-BoundedAbsoluteWindowsPath",
-    "Get-ComparableWindowsPath",
-    "@($OldBasePath, $CandidateBasePath)",
-    "^ai-security-scanner-recovery-[0-9a-f]{32}$",
-    "Assert-ExactChildPath $boundedWorkspaceRoot",
-    "Assert-SameWindowsPath $registeredBasePath $expectedBasePath",
-    "Assert-SameNoFollowDirectoryIdentity $registeredBasePath $expectedBasePath",
-  ]) {
-    assert(
-      cleanupBinding.includes(required),
-      `registered-WSL failure cleanup binding is missing: ${required}`,
-    );
-  }
-  assert(
-    !cleanupBinding.includes("Resolve-RealDirectory") &&
-      !cleanupBinding.includes("StartsWith($managedRoot"),
-    "registered-WSL failure cleanup must not use followed or prefix-only path ownership",
-  );
-  const cleanupUnregisterStart = nsisGhost.indexOf(
-    "function Unregister-ProvenExactWsl(",
-    cleanupRegressionStart,
-  );
-  const cleanupUnregisterEnd = nsisGhost.indexOf("$artifactRoot =", cleanupUnregisterStart);
-  assert(
-    cleanupUnregisterStart > cleanupRegressionStart && cleanupUnregisterEnd > cleanupUnregisterStart,
-    "registered-WSL ghost qualification has no exact failure-path unregister helper",
-  );
-  const cleanupUnregister = nsisGhost.slice(cleanupUnregisterStart, cleanupUnregisterEnd);
-  const cleanupPreflight = cleanupUnregister.indexOf(
-    "Get-ExactWslRegistration $Name $ExpectedBasePath",
-  );
-  const cleanupMutation = cleanupUnregister.indexOf(
-    'Invoke-ExactProcess $TrustedWsl.executable @("--unregister", $Name)',
-  );
-  const cleanupAbsenceProof = cleanupUnregister.indexOf("$remaining = @(Get-WslRegistrations");
-  assert(
-    cleanupPreflight >= 0 &&
-      cleanupMutation > cleanupPreflight &&
-      cleanupAbsenceProof > cleanupMutation &&
-      cleanupUnregister.includes("$remaining.Count -ne 0"),
-    "registered-WSL failure cleanup must re-prove exact name/path identity before unregister and prove absence after it",
-  );
-  const cleanupRegressionEnd = cleanupUnregisterStart;
-  const cleanupRegression = nsisGhost.slice(cleanupRegressionStart, cleanupRegressionEnd);
-  for (const required of [
-    "Get-VerbatimWindowsPath $oldBasePath",
-    "Get-VerbatimWindowsPath $quarantineBasePath",
-    "Failure-cleanup WSL binding accepted an exact name with an unrelated BasePath.",
-    "Failure-cleanup WSL binding accepted a quarantine name outside its exact workspace.",
-    "Failure-cleanup WSL binding accepted an unrelated distribution name.",
-    "Remove-ExactTree $fixtureRoot $Parent $fixtureName",
-  ]) {
-    assert(
-      cleanupRegression.includes(required),
-      `registered-WSL failure-cleanup regression is missing: ${required}`,
-    );
-  }
-  assert(
-    (nsisGhost.match(/Assert-FailureCleanupWslBindingRegression/gu) ?? []).length === 2 &&
-      !nsisGhost.includes("Resolve-RealDirectory $registration.BasePath") &&
-      !nsisGhost.includes(".StartsWith($managedRoot"),
-    "registered-WSL failure-cleanup regression must run once and prefix-only cleanup must stay absent",
-  );
-  const failurePrimaryGuard = nsisGhost.lastIndexOf("  if ($null -ne $primaryFailure) {");
-  const failureFinallyStart = nsisGhost.lastIndexOf("} finally {", failurePrimaryGuard);
-  const failureCleanupCallStart = nsisGhost.indexOf(
-    "    try {\n      $registrations = @(Get-WslRegistrations)",
-    failurePrimaryGuard,
-  );
-  const failureCleanupForeach = nsisGhost.indexOf(
-    "      foreach ($registration in $registrations) {",
-    failureCleanupCallStart,
-  );
-  const failureCleanupExactFilter = nsisGhost.indexOf(
-    "$isExact = [String]::Equals($registration.Name, $oldDistributionName, [StringComparison]::Ordinal)",
-    failureCleanupForeach,
-  );
-  const failureCleanupQuarantineFilter = nsisGhost.indexOf(
-    "$isQuarantine = $registration.Name -cmatch '^ai-security-scanner-recovery-[0-9a-f]{32}$'",
-    failureCleanupExactFilter,
-  );
-  const failureCleanupContinue = nsisGhost.indexOf(
-    "if (-not $isExact -and -not $isQuarantine) { continue }",
-    failureCleanupQuarantineFilter,
-  );
-  const failureCleanupCallCatch = nsisGhost.indexOf(
-    "    } catch { $cleanupFailures.Add($_.Exception.Message) }",
-    failureCleanupCallStart,
-  );
-  const failureCleanupCallEnd = nsisGhost.indexOf(
-    "    if ($null -ne $activeUninstaller",
-    failureCleanupCallCatch,
-  );
-  assert(
-    failureFinallyStart >= 0 &&
-      failurePrimaryGuard > failureFinallyStart &&
-      failureCleanupCallStart > failurePrimaryGuard &&
-      failureCleanupForeach > failureCleanupCallStart &&
-      failureCleanupExactFilter > failureCleanupForeach &&
-      failureCleanupQuarantineFilter > failureCleanupExactFilter &&
-      failureCleanupContinue > failureCleanupQuarantineFilter &&
-      failureCleanupCallCatch > failureCleanupContinue &&
-      failureCleanupCallEnd > failureCleanupCallCatch,
-    "registered-WSL ghost qualification has no primary-failure-scoped exact registration cleanup block",
-  );
-  const failureCleanupCall = nsisGhost.slice(failureCleanupCallStart, failureCleanupCallCatch);
-  const failureCleanupProof = failureCleanupCall.indexOf(
-    "$expectedBasePath = Get-ProvenFailureCleanupWslBasePath",
-  );
-  const failureCleanupMutation = failureCleanupCall.indexOf(
-    "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath",
-  );
-  const failureCleanupLoopClose = failureCleanupCall.indexOf("\n      }\n", failureCleanupMutation);
-  assert(
-    failureCleanupProof >= 0 &&
-      failureCleanupMutation > failureCleanupProof &&
-      failureCleanupLoopClose > failureCleanupMutation &&
-      failureCleanupCall.includes(
-        "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath\n      }",
-      ) &&
-      failureCleanupCall.split("$expectedBasePath = Get-ProvenFailureCleanupWslBasePath").length -
-        1 ===
-        1 &&
-      failureCleanupCall.split(
-        "Unregister-ProvenExactWsl $trustedWsl $registration.Name $expectedBasePath",
-      ).length -
-        1 ===
-        1,
-    "registered-WSL failure cleanup must prove the exact expected BasePath before unregistering that same registration",
-  );
-  for (const required of [
-    "windows_nsis_real_registered_wsl_n_minus_one_ghost_recovery",
-    "registeredWslStateExercised",
-    "noManualActionFallback",
-    "intentProofValid",
-    "intentSourceProviderManifestSha256",
-    "receiptConsumption",
-    "registryValueAbsent",
-    "proofPathExact",
-    "proofProtected",
-    "proofRetainedAfterRuntimePurge",
-    "proofRetainedUntilExplicitPrivateDataCleanup",
-    "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1",
-    "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
-    'runtime.schema_version === "3"',
-    'runtime.management_contract_revision === "2026-08-29.1"',
-    "transitionReceiptSurvivedSameVersionReinstall",
+    '$currentMachinePrefix = "assm2-win-x64"',
+    '$candidateDistributionName = "podman-$candidateMachineName"',
+    "Get-RetainedVhdIdentity",
+    "Start-WslSentinelProcess",
+    "Assert-WslSentinelProcess",
+    "Qualification-only unrelated WSL rootfs export",
+    "Qualification-only unrelated WSL import",
+    "Candidate automatic side-by-side managed WSL initialization",
+    "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1",
+    '$retainedProof.authorizes_cleanup -ne $false',
+    '$retainedProof.transition_evidence_source -cne "nsis_install_transition"',
+    "legacy_registration_id",
+    "current_registration_id",
+    "legacy_vhd_file_index",
+    "legacy_provider_config_sha256",
+    "legacy_ssh_public_key_sha256",
+    "Candidate did not consume the transition after durably recording legacy retention.",
+    "Current assm2 managed runtime cleanup uninstall",
+    "Explicit qualification teardown",
+    "master-framework-report.json",
+    "NIST CSF",
+    "ISO/IEC 27001",
+    "AIDEFEND",
     "legacy_key_adopted",
-    "identityDocumentCompactSha256",
-    "anchorIdentityDocumentSha256",
-    "anchorMatchesIdentityDocument",
-    "rotationIntentAbsent",
+    "integrity-signing-key.identity-anchor.json",
+    "transitionReceiptSurvivedSameVersionReinstall = $true",
+    "missingVersionsManifestExercised = $true",
+    "legacySentinelProcessSurvived = $true",
+    "unrelatedSentinelProcessSurvived = $true",
+    "proofAbsentWhileRegistryReceiptPresent = $true",
+    "proofValidatedBeforeRegistryAbsenceCheck = $true",
+    "registryValueAbsentAfterDurableProof = $true",
+    "public const uint FILE_READ_DATA = 0x00000001;",
+  ]) assert(nsisGhost.includes(required), "registered-WSL side-by-side qualification is missing: " + required);
+
+  const retainedVhdStart = nsisGhost.indexOf("function Get-RetainedVhdIdentity(");
+  const retainedVhdEnd = nsisGhost.indexOf("function Open-NoFollowSingleLinkFile(", retainedVhdStart);
+  assert(
+    retainedVhdStart >= 0 && retainedVhdEnd > retainedVhdStart,
+    "registered-WSL side-by-side qualification has no bounded VHD observation function",
+  );
+  const retainedVhd = nsisGhost.slice(retainedVhdStart, retainedVhdEnd);
+  for (const required of [
+    "[GhostQualificationNativeMethods]::CreateFileW",
+    "[GhostQualificationNativeMethods]::FILE_READ_DATA",
+    "[GhostQualificationNativeMethods]::FILE_SHARE_READ -bor",
+    "[GhostQualificationNativeMethods]::FILE_SHARE_WRITE",
+    "[GhostQualificationNativeMethods]::FILE_FLAG_OPEN_REPARSE_POINT",
+    "GetFileInformationByHandle",
+    "[IO.FileAttributes]::ReparsePoint",
+    "$handle.Dispose()",
+  ]) assert(retainedVhd.includes(required), "retained VHD observation is missing: " + required);
+  assert(
+    !retainedVhd.includes("FILE_SHARE_DELETE") &&
+      !retainedVhd.includes("GENERIC_WRITE") &&
+      !retainedVhd.includes("GENERIC_READ"),
+    "retained VHD observation must use minimum read share arbitration, remain no-follow, and stay non-destructive",
+  );
+
+  const wslRegistrationStart = nsisGhost.indexOf("function Get-WslRegistrations");
+  const wslRegistrationEnd = nsisGhost.indexOf("function Get-ExactWslRegistration", wslRegistrationStart);
+  const wslRegistration = nsisGhost.slice(wslRegistrationStart, wslRegistrationEnd);
+  for (const required of [
+    "[Guid]::Parse($_.PSChildName.Trim('{', '}'))",
+    '.ToString("D").ToLowerInvariant()',
+    "RegistrationId = $registrationId",
+    "DistributionName",
+    "BasePath",
+  ]) assert(wslRegistration.includes(required), "WSL registry proof is missing: " + required);
+
+  const sideBySideStart = nsisGhost.indexOf("$sideBySideProcess = Invoke-ExactProcess");
+  const sideBySideEnd = nsisGhost.indexOf("$candidateCase = Invoke-CliJson", sideBySideStart);
+  assert(
+    sideBySideStart >= 0 && sideBySideEnd > sideBySideStart,
+    "registered-WSL qualification has no bounded side-by-side initialization section",
+  );
+  const sideBySideSection = nsisGhost.slice(sideBySideStart, sideBySideEnd);
+  for (const forbidden of ['"--export"', '"--import"', '"--unregister"', '"--shutdown"', '"--terminate"']) {
+    assert(
+      !sideBySideSection.includes(forbidden),
+      "candidate side-by-side initialization includes a destructive or global legacy WSL action: " + forbidden,
+    );
+  }
+  for (const required of [
+    "Get-ExactWslRegistration $oldDistributionName $oldWslBasePath",
+    "Get-ExactWslRegistration $candidateDistributionName $candidateWslBasePath",
+    "$unrelatedRegistrationAfter.RegistrationId -cne",
+    "Assert-WslSentinelProcess $trustedWsl $oldDistributionName",
+    "Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName",
+    "Candidate changed legacy VHD identity field",
+    "Retained legacy-workspace proof",
+    "authorizes_cleanup",
+    "current_registration_id",
+  ]) assert(sideBySideSection.includes(required), "bounded side-by-side initialization proof is missing: " + required);
+
+  const proofRead = sideBySideSection.indexOf("$retainedProof = Read-BoundedJsonFile");
+  const proofSchema = sideBySideSection.indexOf('$retainedProof.schema_version -cne "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1"');
+  const proofAcl = sideBySideSection.indexOf("$retainedProofItem = Assert-OwnerOnlyFullControlFile");
+  const receiptAbsenceCheck = sideBySideSection.indexOf("$postSideBySideRegistry = Get-ExactProductRegistry");
+  assert(
+    proofAcl >= 0 && proofRead > proofAcl && proofSchema > proofRead && receiptAbsenceCheck > proofSchema,
+    "qualification must validate the durable retained proof before confirming receipt consumption",
+  );
+  const fixtureExport = nsisGhost.indexOf('"--export", $oldDistributionName, $unrelatedExportArchive');
+  const candidateStart = nsisGhost.indexOf("$sideBySideProcess = Invoke-ExactProcess");
+  assert(
+    fixtureExport >= 0 && fixtureExport < candidateStart,
+    "unrelated WSL setup export must be isolated before candidate execution",
+  );
+  assert(
+    !nsisGhost.includes('Invoke-TrustedWsl $trustedWsl @("--shutdown"') &&
+      !nsisGhost.includes('Invoke-TrustedWsl $trustedWsl @("--terminate", $oldDistributionName'),
+    "qualification must not globally stop WSL or terminate the retained legacy distribution",
+  );
+
+  const runtimePurge = nsisGhost.indexOf('"Current assm2 managed runtime cleanup uninstall"');
+  const oldAfterPurge = nsisGhost.indexOf("$oldRegistrationAfterPurge = Get-ExactWslRegistration", runtimePurge);
+  const unrelatedAfterPurge = nsisGhost.indexOf("$unrelatedRegistrationAfterPurge = Get-ExactWslRegistration", oldAfterPurge);
+  const nsisUninstall = nsisGhost.indexOf('"Candidate NSIS cleanup uninstall"', unrelatedAfterPurge);
+  const signingIdentityAdoption = nsisGhost.indexOf("$candidateSigningIdentity = Invoke-CliJson");
+  const postSideBySideBundleVerification = nsisGhost.indexOf(
+    "$afterVerification = Invoke-CliJson",
+    candidateStart,
+  );
+  const masterReportExport = nsisGhost.indexOf(
+    '"--format", "framework-report", "--destination", $masterFrameworkReportPath',
+    postSideBySideBundleVerification,
+  );
+  const masterReportBundleBinding = nsisGhost.indexOf(
+    "$masterReportBundleEntries = @(",
+    masterReportExport,
+  );
+  const masterReportObservation = nsisGhost.indexOf(
+    "$masterFrameworkReportObservation = [ordered]@{",
+    masterReportBundleBinding,
+  );
+  const postUninstallSigningKeyReproof = nsisGhost.indexOf(
+    "(Get-LowerSha256 $privateSigningKey (64 * 1024)) -cne $privateSigningKeySha256Before",
+    nsisUninstall,
+  );
+  assert(
+    signingIdentityAdoption >= 0 &&
+      signingIdentityAdoption < candidateStart &&
+      postSideBySideBundleVerification > candidateStart &&
+      masterReportExport > postSideBySideBundleVerification &&
+      masterReportBundleBinding > masterReportExport &&
+      masterReportObservation > masterReportBundleBinding &&
+      runtimePurge > masterReportObservation &&
+      postUninstallSigningKeyReproof > nsisUninstall,
+    "registered-WSL qualification must re-prove signing continuity and bind the master framework report after assm2 starts and before cleanup",
+  );
+  const explicitOldTeardown = nsisGhost.indexOf(
+    "Unregister-ProvenExactWsl $trustedWsl $oldDistributionName $oldWslBasePath",
+    nsisUninstall,
+  );
+  const explicitUnrelatedTeardown = nsisGhost.indexOf(
+    "Unregister-ProvenExactWsl $trustedWsl $unrelatedDistributionName $unrelatedWslBasePath",
+    explicitOldTeardown,
+  );
+  assert(
+    runtimePurge >= 0 &&
+      oldAfterPurge > runtimePurge &&
+      unrelatedAfterPurge > oldAfterPurge &&
+      nsisUninstall > unrelatedAfterPurge &&
+      explicitOldTeardown > nsisUninstall &&
+      explicitUnrelatedTeardown > explicitOldTeardown,
+    "qualification teardown must occur only after current-runtime purge and NSIS data-preservation proofs",
+  );
+
+  for (const required of [
+    "windows_nsis_real_registered_wsl_n_minus_one_ghost_side_by_side",
+    "runtimeSideBySide",
+    "CURRENT_MACHINE",
+    "CURRENT_DISTRIBUTION",
+    "legacyRegistrationIdBefore",
+    "legacyRegistrationIdAfter",
+    "unrelatedRegistrationIdBefore",
+    "unrelatedRegistrationIdAfter",
+    "retainedProof",
+    "authorizesCleanup === false",
+    "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1",
+    "transitionEvidenceSource",
+    "nsis_install_transition",
+    "proofAbsentWhileRegistryReceiptPresent",
+    "proofValidatedBeforeRegistryAbsenceCheck",
+    "registryValueAbsentAfterDurableProof",
+    "masterFrameworkReport",
+    "nist_csf",
+    "iso_iec_27001",
+    "aidefend",
+    "legacy_key_adopted",
     "validateWindowsNsisGhostRecoveryEvidenceFile",
-  ]) assert(nsisGhostEvidence.includes(required), `registered-WSL ghost evidence contract is missing: ${required}`);
+  ]) assert(nsisGhostEvidence.includes(required), "registered-WSL side-by-side evidence contract is missing: " + required);
+
   for (const required of [
     "validateWindowsNsisUpgradeEvidenceFile",
     "validateWindowsNsisGhostRecoveryEvidenceFile",
@@ -1252,11 +975,11 @@ function validatePlatformQualificationSources(sources) {
     "signed case bundle whose report bytes do not bind to the retained report",
     "signed case bundle with impossible observation provenance",
     "signed case bundle whose frozen AI answers contradict the report",
-    "ghost evidence without a verified v2 recovery intent",
+    "ghost evidence that turns retention into cleanup authority",
     "ghost evidence with a lost same-version transition receipt",
     "ghost evidence with an unconsumed registry receipt",
-    "ghost evidence with a mutated consumed proof",
-    "ghost evidence with an incomplete consumed proof",
+    "ghost evidence with a mutated retained proof",
+    "ghost evidence with an incomplete retained proof",
     "windows-nsis-upgrade-qualification.json",
     "windows-nsis-ghost-recovery-qualification.json",
     'schema_version: "3"',
@@ -1495,12 +1218,19 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     'containers.join("podman").join("machine").join(provider)',
     'join(provider)\n                    .join("cache")',
     "windows_runtime_command_precreates_the_exact_private_podman_machine_namespace",
+    "const WINDOWS_WSL_VHD_RELEASE_TIMEOUT: Duration = MACHINE_STOP_TIMEOUT;",
     "verify_windows_wsl_recovery_vhd_with_timing",
-    "windows_wsl_vhd_verification_waits_for_exact_handle_release",
-    "windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file",
+    "windows_directory_guards_block_replacement_until_release",
+    "windows_wsl_vhd_verification_waits_for_exact_read_holder_release",
+    "windows_wsl_vhd_verification_blocks_writers_and_deleters_while_guarded",
+    "windows_wsl_vhd_observation_allows_live_writers_and_blocks_replacement",
+    "windows_wsl_vhd_verification_waits_for_exact_writer_release",
+    "windows_wsl_vhd_writer_timeout_is_typed_and_preserves_the_file",
     "n_minus_one_vhd_release_reproof_rejects_a_rebound_distribution_before_export",
     "n_minus_one_vhd_timeout_preserves_the_full_recovery_checkpoint",
     "uncheckpointed_quarantine_without_a_vhd_is_exactly_unregistered",
+    "current_windows_compatibility_generation_match_is_exact_and_bounded",
+    "full_setup_with_pending_assm2_checkpoint_fails_closed_without_name_based_wsl_mutation",
     "uninstall_waits_for_exact_windows_wsl_vhd_release",
     "uninstall_provider_attribute_open_timeout_retains_install_and_image_cache",
   ]) {
@@ -1511,6 +1241,11 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
   }
   const directWslUnregister = 'OsString::from("--unregister")';
   const managedRuntimeProduction = managedRuntime.split("\n#[cfg(test)]\nmod tests {")[0];
+  assert(
+    !managedRuntimeProduction.includes('OsString::from("--shutdown")') &&
+      !managedRuntimeProduction.includes('.arg("--shutdown")'),
+    "managed runtime must not globally stop unrelated Windows WSL distributions",
+  );
   const boundedRecoverySection = (start, end, label) => {
     const startIndex = managedRuntimeProduction.indexOf(start);
     const endIndex = managedRuntimeProduction.indexOf(end, startIndex + start.length);
@@ -1518,6 +1253,58 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     return managedRuntimeProduction.slice(startIndex, endIndex);
   };
   const unregisterCount = (source) => source.split(directWslUnregister).length - 1;
+  const currentGenerationPredicate = boundedRecoverySection(
+    "fn windows_machine_uses_current_compatibility_generation",
+    "fn machine_name(target: &ManagedTarget)",
+    "current Windows compatibility-generation predicate",
+  );
+  assert(
+    currentGenerationPredicate.includes("strip_prefix(WINDOWS_MACHINE_PREFIX)") &&
+      currentGenerationPredicate.includes("suffix.strip_prefix('-')") &&
+      currentGenerationPredicate.includes("!suffix.is_empty()"),
+    "current Windows compatibility generation must use an exact, non-empty assm2 namespace prefix",
+  );
+  const currentDistributionAbsenceProof = boundedRecoverySection(
+    "fn prove_windows_wsl_distribution_absent_locked",
+    "fn windows_wsl_distribution_inventory",
+    "current Windows distribution absence proof",
+  );
+  const absenceCurrentGuard = currentDistributionAbsenceProof.indexOf(
+    "if windows_machine_uses_current_compatibility_generation(machine_name)",
+  );
+  const absenceManualFailure = currentDistributionAbsenceProof.indexOf(
+    "return fail_windows_wsl_distribution_requires_manual_action",
+    absenceCurrentGuard,
+  );
+  const absenceLegacyRecovery = currentDistributionAbsenceProof.indexOf(
+    "self.recover_windows_wsl_distribution_locked",
+  );
+  assert(
+    absenceCurrentGuard !== -1 &&
+      absenceManualFailure > absenceCurrentGuard &&
+      absenceLegacyRecovery > absenceManualFailure,
+    "current assm2 collision/pending state must fail closed before legacy WSL recovery",
+  );
+  assert(
+    managedRuntimeProduction.split("self.recover_windows_wsl_distribution_locked(").length - 1 ===
+      1,
+    "legacy Windows WSL recovery must retain one guarded production caller",
+  );
+  for (const forbidden of [
+    "ManagedCommandOperation::MachineInitialization",
+    "ManagedCommandOperation::MachineStop",
+    "ManagedCommandOperation::MachineRemoval",
+    "ManagedCommandOperation::WslDistributionTerminate",
+    "ManagedCommandOperation::WslDistributionExport",
+    "ManagedCommandOperation::WslDistributionImport",
+    "ManagedCommandOperation::WslDistributionRemoval",
+    'OsString::from("--shutdown")',
+  ]) {
+    assert(
+      !currentDistributionAbsenceProof.slice(0, absenceLegacyRecovery).includes(forbidden),
+      `current assm2 absence proof contains a pre-guard destructive edge: ${forbidden}`,
+    );
+  }
   assert(
     unregisterCount(managedRuntimeProduction) === 4 &&
       !managedRuntimeProduction.includes('.arg("--unregister")') &&
@@ -1658,6 +1445,52 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "fn windows_wsl_ownership_proof_path",
     "bounded completed Windows WSL recovery cleanup",
   );
+  const completionCurrentGuard = completedRecoveryCleanup.indexOf(
+    "if windows_machine_uses_current_compatibility_generation(machine_name)",
+  );
+  const completionCurrentPending = completedRecoveryCleanup.indexOf(
+    "if private_entry_exists(&pending)?",
+    completionCurrentGuard,
+  );
+  const completionCurrentManual = completedRecoveryCleanup.indexOf(
+    "return fail_windows_wsl_distribution_requires_manual_action",
+    completionCurrentPending,
+  );
+  const completionCurrentOk = completedRecoveryCleanup.indexOf(
+    "return Ok(());",
+    completionCurrentManual,
+  );
+  const completionLegacyPending = completedRecoveryCleanup.indexOf(
+    "if private_entry_exists(&pending)?",
+    completionCurrentOk + 1,
+  );
+  assert(
+    completionCurrentGuard !== -1 &&
+      completionCurrentPending > completionCurrentGuard &&
+      completionCurrentManual > completionCurrentPending &&
+      completionCurrentOk > completionCurrentManual &&
+      completionLegacyPending > completionCurrentOk,
+    "completed recovery must fail current assm2 pending state closed before the legacy branch",
+  );
+  const completionCurrentFailClosed = completedRecoveryCleanup.slice(
+    0,
+    completionLegacyPending,
+  );
+  for (const forbidden of [
+    "windows_wsl_distribution_inventory",
+    "read_windows_wsl_recovery_intent_locked",
+    "ManagedCommandOperation::WslDistributionTerminate",
+    "ManagedCommandOperation::WslDistributionExport",
+    "ManagedCommandOperation::WslDistributionImport",
+    "ManagedCommandOperation::WslDistributionRemoval",
+    "remove_regular_file(&pending)",
+    'OsString::from("--shutdown")',
+  ]) {
+    assert(
+      !completionCurrentFailClosed.includes(forbidden),
+      `current assm2 completion reaches a name-based recovery edge before failing closed: ${forbidden}`,
+    );
+  }
   assert(
     unregisterCount(completedRecoveryCleanup) === 1 &&
       completedRecoveryCleanup.includes("verify_windows_wsl_recovery_archive") &&
@@ -1705,11 +1538,171 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "#[cfg(not(windows))]\nfn verify_windows_wsl_recovery_vhd_with_timing",
     "bounded Windows WSL VHD release proof",
   );
+  const realDirectoryGuard = boundedRecoverySection(
+    "fn open_windows_real_directory_security_handle",
+    "fn verify_windows_managed_namespace_ancestor_chain",
+    "Windows real-directory share guard",
+  );
+  const managedDirectoryGuard = boundedRecoverySection(
+    "fn open_or_create_windows_managed_directory_guard",
+    "fn ensure_windows_managed_private_directory",
+    "Windows managed-directory share guard",
+  );
+  for (const [section, label] of [
+    [realDirectoryGuard, "real-directory"],
+    [managedDirectoryGuard, "managed-directory"],
+  ]) {
+    assert(
+      section.includes("FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL,") &&
+        section.includes("FILE_SHARE_READ | FILE_SHARE_WRITE,") &&
+        section.includes("FILE_FLAG_OPEN_REPARSE_POINT"),
+      `Windows ${label} guard must use a directory read-category share lock and open no-follow`,
+    );
+  }
+  const vhdQuiescenceGuard = boundedRecoverySection(
+    "fn open_windows_wsl_vhd_quiescence_guard",
+    "fn open_windows_wsl_vhd_observation_guard",
+    "Windows WSL VHD quiescence guard",
+  );
+  assert(
+    vhdQuiescenceGuard.includes("CreateFileW") &&
+      vhdQuiescenceGuard.includes("            FILE_READ_DATA,") &&
+      vhdQuiescenceGuard.includes("            FILE_SHARE_READ,") &&
+      vhdQuiescenceGuard.includes("FILE_FLAG_OPEN_REPARSE_POINT") &&
+      vhdQuiescenceGuard.includes("File::from_raw_handle") &&
+      !vhdQuiescenceGuard.includes("FILE_SHARE_WRITE") &&
+      !vhdQuiescenceGuard.includes("FILE_SHARE_DELETE") &&
+      !vhdQuiescenceGuard.includes("FILE_GENERIC_READ") &&
+      !vhdQuiescenceGuard.includes(".read(true)") &&
+      !vhdQuiescenceGuard.includes(".write(true)"),
+    "Windows WSL VHD guard must request minimum read access, share read only, open no-follow, and retain the exact handle",
+  );
+  const vhdObservationGuard = boundedRecoverySection(
+    "fn open_windows_wsl_vhd_observation_guard",
+    "fn open_windows_managed_ssh_cleanup_file",
+    "Windows WSL VHD observation guard",
+  );
+  assert(
+    vhdObservationGuard.includes("CreateFileW") &&
+      vhdObservationGuard.includes("            FILE_READ_DATA,") &&
+      vhdObservationGuard.includes("FILE_SHARE_READ | FILE_SHARE_WRITE") &&
+      vhdObservationGuard.includes("FILE_FLAG_OPEN_REPARSE_POINT") &&
+      vhdObservationGuard.includes("File::from_raw_handle") &&
+      !vhdObservationGuard.includes("FILE_SHARE_DELETE") &&
+      !vhdObservationGuard.includes("FILE_GENERIC_READ") &&
+      !vhdObservationGuard.includes(".read(true)") &&
+      !vhdObservationGuard.includes(".write(true)"),
+    "retained Windows WSL VHD observation must allow a live writer while denying replacement with minimum read access",
+  );
+  const retainedLegacyRecorder = boundedRecoverySection(
+    "fn record_bounded_windows_legacy_workspace_retained",
+    "fn record_bounded_windows_ghost_migration_consumed",
+    "bounded Windows retained-legacy recorder",
+  );
+  for (const required of [
+    "WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME",
+    "legacy_registrations.len() != 1",
+    "legacy_registration.registration_id",
+    "windows_wsl_legacy_retained_path",
+    "verify_current_windows_wsl_machine_registration_binding",
+    "exact_bounded_windows_legacy_pending_evidence",
+    "open_windows_wsl_vhd_observation_guard",
+    "legacy_provider_config_sha256",
+    "legacy_ssh_public_key_sha256",
+    "legacy_vhd_volume_serial_number",
+    "authorizes_cleanup: false",
+    "write_private_atomic(&retained_path, &encoded)?",
+    "let persisted: WindowsWslLegacyWorkspaceRetainedProof",
+    "persisted != proof",
+    "consume_install_transition(&installation, &install_transition_receipt)",
+  ]) {
+    assert(
+      retainedLegacyRecorder.includes(required),
+      `bounded retained-legacy recorder is missing: ${required}`,
+    );
+  }
+  for (const forbidden of [
+    "ManagedCommandOperation::MachineInitialization",
+    "ManagedCommandOperation::MachineStop",
+    "ManagedCommandOperation::MachineRemoval",
+    "ManagedCommandOperation::WslDistributionTerminate",
+    "ManagedCommandOperation::WslDistributionExport",
+    "ManagedCommandOperation::WslDistributionImport",
+    "ManagedCommandOperation::WslDistributionRemoval",
+    'OsString::from("--shutdown")',
+    "remove_provider_home_after_machine_removal",
+  ]) {
+    assert(
+      !retainedLegacyRecorder.includes(forbidden),
+      `observation-only retained-legacy recorder contains a destructive edge: ${forbidden}`,
+    );
+  }
+  assertOrderedTokens(
+    retainedLegacyRecorder,
+    [
+      "write_private_atomic(&retained_path, &encoded)?",
+      "let persisted: WindowsWslLegacyWorkspaceRetainedProof",
+      "if persisted != proof",
+      "consume_install_transition(&installation, &install_transition_receipt)",
+    ],
+    "durable retained-legacy proof before NSIS receipt consumption",
+  );
+  const nonblockingLegacyRecorder = boundedRecoverySection(
+    "fn retain_bounded_windows_legacy_workspace_nonblocking",
+    "fn validate_windows_wsl_legacy_workspace_retained_proof",
+    "nonblocking Windows retained-legacy wrapper",
+  );
+  assert(
+    nonblockingLegacyRecorder.includes(
+      "let _ =\n                self.record_bounded_windows_legacy_workspace_retained",
+    ),
+    "unclassifiable assm1 state must remain nonblocking after assm2 is live",
+  );
+  const startLocked = boundedRecoverySection(
+    "fn start_locked",
+    "fn require_windows_wsl_prerequisite_locked",
+    "managed runtime start lifecycle",
+  );
+  assertOrderedTokens(
+    startLocked,
+    [
+      "self.wait_for_server(&command, MACHINE_START_TIMEOUT, setup)?",
+      "self.complete_windows_wsl_recovery_locked",
+      "self.retain_bounded_windows_legacy_workspace_nonblocking",
+      "Ok(command)",
+    ],
+    "assm2 preflight before nonblocking legacy observation",
+  );
+  const machineNaming = boundedRecoverySection(
+    "fn machine_name(target: &ManagedTarget)",
+    "fn installation_directory_name",
+    "managed runtime machine naming",
+  );
+  assert(
+    managedRuntime.includes('const WINDOWS_MACHINE_PREFIX: &str = "assm2";') &&
+      managedRuntime.includes(
+        'const WINDOWS_GHOST_MIGRATION_CURRENT_MACHINE_NAME: &str = "assm2-win-x64-e2b6cbcadd8b";',
+      ) &&
+      machineNaming.includes("ManagedOperatingSystem::Windows") &&
+      machineNaming.includes("WINDOWS_MACHINE_PREFIX"),
+    "Windows runtime compatibility generation must remain explicitly pinned to assm2",
+  );
+  const atomicPrivateCommit = boundedRecoverySection(
+    "fn commit_private_atomic_rename",
+    "fn remove_regular_file",
+    "durable private-file atomic commit",
+  );
+  assert(
+    atomicPrivateCommit.includes("MoveFileExW") &&
+      atomicPrivateCommit.includes("MOVEFILE_WRITE_THROUGH") &&
+      managedRuntime.includes("commit_private_atomic_rename(&temporary, path)?"),
+    "Windows retained proof must use a write-through atomic namespace commit",
+  );
   assert(
     boundedVhdRelease.includes("windows_error_is_sharing_violation") &&
       boundedVhdRelease.includes("checked_add(timeout)") &&
       boundedVhdRelease.includes("thread::sleep") &&
-      boundedVhdRelease.includes("open_windows_managed_ssh_identity_file") &&
+      boundedVhdRelease.includes("open_windows_wsl_vhd_quiescence_guard") &&
       boundedVhdRelease.includes("validate_windows_wsl_recovery_file_information") &&
       boundedVhdRelease.includes("AppError::Runtime") &&
       boundedVhdRelease.includes("retaining the exact registration and recovery checkpoint") &&
@@ -1728,7 +1721,7 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "let base_path = verify_registration_base_path()?",
   );
   const vhdFirstOpen = boundedVhdRelease.indexOf(
-    "open_windows_managed_ssh_identity_file(&path)",
+    "open_windows_wsl_vhd_quiescence_guard(&path)",
   );
   const vhdSharingBranch = boundedVhdRelease.indexOf(
     "Err(error) if windows_error_is_sharing_violation(&error)",
@@ -1743,7 +1736,7 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "let rebound_base_path = verify_registration_base_path()?",
   );
   const vhdReboundOpen = boundedVhdRelease.indexOf(
-    "open_windows_managed_ssh_identity_file(&rebound_path)",
+    "open_windows_wsl_vhd_quiescence_guard(&rebound_path)",
   );
   const vhdIdentityComparison = boundedVhdRelease.indexOf(
     "rebound_information != information",
@@ -1836,8 +1829,104 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     assert(start !== -1 && end > start, `managed runtime is missing the real Windows test ${name}`);
     return managedRuntime.slice(start, end);
   };
+  const directoryGuardTest = windowsTestSection(
+    "windows_directory_guards_block_replacement_until_release",
+  );
+  for (const required of [
+    "open_windows_real_directory_security_handle(&directory)",
+    'expect("a second read-category guard remains compatible")',
+    ".access_mode(FILE_TRAVERSE | DELETE)",
+    'expect_err("the real-directory guard must reject delete access")',
+    "windows_error_is_sharing_violation",
+    "assert!(fs::rename(&directory, &renamed).is_err());",
+    "drop(compatible_guard);",
+    "drop(guard);",
+    'fs::rename(&directory, &renamed).expect("rename after real-directory guard release")',
+    "open_or_create_windows_managed_private_directory_guard(&managed, false)",
+    "assert!(fs::rename(&managed, &managed_renamed).is_err());",
+    "drop(managed_guard);",
+    'expect("rename after managed-directory guard release")',
+  ]) {
+    assert(
+      directoryGuardTest.includes(required),
+      `Windows directory share-guard test is missing: ${required}`,
+    );
+  }
+  const vhdReaderTest = windowsTestSection(
+    "windows_wsl_vhd_verification_waits_for_exact_read_holder_release",
+  );
+  const pendingAssm2FullSetupTest = windowsTestSection(
+    "full_setup_with_pending_assm2_checkpoint_fails_closed_without_name_based_wsl_mutation",
+  );
+  for (const required of [
+    "current_verified_pending_fixture()",
+    "machine_json(&fixture.manager, true)",
+    'expect_err("pending assm2 recovery must fail closed")',
+    "ManagedRuntimeSetupFailureReason::WslDistributionRequiresManualAction",
+    "ManagedRuntimeSetupNextAction::ResolveWslDistributionManually",
+    '"--terminate" | "--export" | "--import" | "--unregister" | "--shutdown"',
+    "pending assm2 state changed",
+    "windows_wsl_ghost_migration_consumed_path",
+  ]) {
+    assert(
+      pendingAssm2FullSetupTest.includes(required),
+      `pending assm2 full-setup fail-closed test is missing: ${required}`,
+    );
+  }
+  assertOrderedTokens(
+    vhdReaderTest,
+    [
+      'let base_path = versions_root.join("exclusive-reader");',
+      'let vhd = base_path.join("ext4.vhdx");',
+      "let read_holder = open_without_windows_sharing(&vhd);",
+      "let started = Instant::now();",
+      "let release = thread::spawn(move || {",
+      "verify_windows_wsl_recovery_vhd_with_timing(",
+      'expect("VHD proof resumes after the exact reader is released")',
+      'release.join().expect("release fixture VHD reader")',
+      "assert_eq!(snapshot.size, expected_size);",
+      "assert!(started.elapsed() >= Duration::from_millis(250));",
+    ],
+    "Windows exact-reader release-wait test",
+  );
+  const vhdGuardTest = windowsTestSection(
+    "windows_wsl_vhd_verification_blocks_writers_and_deleters_while_guarded",
+  );
+  for (const required of [
+    "open_windows_wsl_vhd_quiescence_guard(&vhd)",
+    'expect("the guard still permits a reader")',
+    'expect_err("the guard must reject a writer")',
+    'expect_err("the guard must reject delete access")',
+    "windows_error_is_sharing_violation",
+    "assert!(fs::rename(&vhd, &renamed).is_err());",
+    "drop(guard);",
+    'fs::rename(&vhd, &renamed).expect("rename after guard release")',
+  ]) {
+    assert(vhdGuardTest.includes(required), `Windows VHD guard test is missing: ${required}`);
+  }
+  const vhdObservationTest = windowsTestSection(
+    "windows_wsl_vhd_observation_allows_live_writers_and_blocks_replacement",
+  );
+  for (const required of [
+    "open_windows_writer_with_full_sharing(&vhd)",
+    "open_windows_wsl_vhd_observation_guard(&vhd)",
+    'expect("observe a VHD that already has a fully shared writer")',
+    'expect("the existing live writer remains usable")',
+    "let concurrent_writer = open_windows_writer_with_full_sharing(&vhd);",
+    'expect_err("the observation guard must reject delete access")',
+    "windows_error_is_sharing_violation",
+    "assert!(fs::rename(&vhd, &renamed).is_err());",
+    "drop(concurrent_writer);",
+    "drop(guard);",
+    'fs::rename(&vhd, &renamed).expect("rename after observation guard release")',
+  ]) {
+    assert(
+      vhdObservationTest.includes(required),
+      `Windows live-VHD observation test is missing: ${required}`,
+    );
+  }
   const vhdReleaseWaitTest = windowsTestSection(
-    "windows_wsl_vhd_verification_waits_for_exact_handle_release",
+    "windows_wsl_vhd_verification_waits_for_exact_writer_release",
   );
   assertOrderedTokens(
     vhdReleaseWaitTest,
@@ -1847,10 +1936,10 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
       'let base_path = versions_root.join("release-wait");',
       "ensure_private_directory(&base_path).unwrap();",
       'let vhd = base_path.join("ext4.vhdx");',
-      "let locked_vhd = open_without_windows_sharing(&vhd);",
+      "let locked_vhd = open_windows_writer_with_full_sharing(&vhd);",
       "verify_windows_wsl_recovery_vhd_with_timing(",
       "|| Ok(base_path.clone()),",
-      'expect("VHD proof resumes after the exact handle is released")',
+      'expect("VHD proof resumes after the exact writer is released")',
       'release.join().expect("release fixture VHD handle")',
       "assert_eq!(snapshot.size, expected_size);",
       "assert!(started.elapsed() >= Duration::from_millis(250));",
@@ -1864,7 +1953,7 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "Windows exact-VHD release-wait test does not prove a bounded sharing-violation retry",
   );
   const vhdReleaseTimeoutTest = windowsTestSection(
-    "windows_wsl_vhd_verification_timeout_is_typed_and_preserves_the_file",
+    "windows_wsl_vhd_writer_timeout_is_typed_and_preserves_the_file",
   );
   assertOrderedTokens(
     vhdReleaseTimeoutTest,
@@ -1874,13 +1963,13 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
       'let base_path = versions_root.join("release-timeout");',
       "ensure_private_directory(&base_path).unwrap();",
       'let vhd = base_path.join("ext4.vhdx");',
-      "let locked_vhd = open_without_windows_sharing(&vhd);",
+      "let locked_vhd = open_windows_writer_with_full_sharing(&vhd);",
       "verify_windows_wsl_recovery_vhd_with_timing(",
       "|| Ok(base_path.clone()),",
       "Duration::from_millis(150)",
       'expect_err("an unreleased VHD must hit the bounded deadline")',
       "matches!(error, AppError::Runtime(_))",
-      'contains("remained in use")',
+      'contains("remained writable or replaceable")',
       "assert!(vhd.is_file());",
       "drop(locked_vhd);",
       'expect("the retained VHD can be verified on retry")',
@@ -1924,7 +2013,7 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
   for (const required of [
     "RebindingWindowsWslRegistrations",
     "arm_on_read: 3",
-    "open_without_windows_sharing(&source_vhd)",
+    "open_windows_writer_with_full_sharing(&source_vhd)",
     "Some((Duration::from_secs(5), Duration::from_millis(25)))",
     "matches!(error, AppError::NotAuthorized(_))",
     "fs::read(&pending_path).unwrap(), pending_before",
@@ -1942,9 +2031,9 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "backup_path.clone()",
     "import_path.clone()",
     "intent.recovery_archive.clone()",
-    "open_without_windows_sharing(&source_vhd)",
+    "open_windows_writer_with_full_sharing(&source_vhd)",
     "matches!(error, AppError::Runtime(_))",
-    'contains("remained in use")',
+    'contains("remained writable or replaceable")',
     "windows_wsl_ghost_migration_consumed_path(&machine)",
     'String::from("--terminate")',
     '"timeout must stop before export or either unregister"',
@@ -1960,6 +2049,7 @@ function validateManagedRuntimeExecutionContract(managedRuntime, containerRuntim
     "uncheckpointed_quarantine_without_a_vhd_is_exactly_unregistered",
   );
   for (const required of [
+    "let machine = intent.machine_name.clone();",
     "!quarantine_vhd.exists()",
     "SequencedWindowsWslRegistrations",
     "remove_uncheckpointed_windows_wsl_quarantine_locked",

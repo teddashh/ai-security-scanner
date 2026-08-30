@@ -1164,7 +1164,7 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
 
   const ghostObservations = {
     schemaVersion: 1,
-    scenario: "real_registered_wsl_n_minus_one_ghost_install_recovery",
+    scenario: "real_registered_wsl_n_minus_one_ghost_install_side_by_side",
     platform: "windows-x86_64",
     runner: "windows-2025",
     priorRelease,
@@ -1183,13 +1183,18 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       oldProviderNamespace: "8b2257ace33ecb14",
       oldProviderCryptographicIdentityPresent: true,
       distributionName: "podman-assm1-win-x64-e2b6cbcadd8b",
+      registrationId: "00112233-4455-6677-8899-aabbccddeeff",
       registeredWslStateExercised: true,
       registrationBoundToOldProvider: true,
+      missingVersionsManifestExercised: true,
       oldVersionDirectory: "podman-machine-5.8.2-8b2257ace33ecb14",
       oldVersionPayloadDigestVerifiedBeforeRemoval: true,
       oldVersionPayloadDirectoryRemoved: true,
       oldDesktopRemoved: true,
       oldUninstallerRemoved: true,
+      unrelatedDistributionName: "ai-security-scanner-unrelated-0123456789abcdef0123456789abcdef",
+      unrelatedRegistrationId: "11223344-5566-7788-99aa-bbccddeeff00",
+      unrelatedDistributionRunning: true,
     },
     installerMigration: {
       candidateInstallerCompleted: true,
@@ -1204,50 +1209,67 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       sameVersionSilentReinstallCompleted: true,
       transitionReceiptSurvivedSameVersionReinstall: true,
     },
-    runtimeRecovery: {
+    runtimeSideBySide: {
       startSucceeded: true,
       noManualActionFallback: true,
       runningAndAvailable: true,
-      sameDistributionName: true,
-      registrationMovedToCurrentProvider: true,
+      legacyMachineName: "assm1-win-x64-e2b6cbcadd8b",
+      legacyDistributionName: "podman-assm1-win-x64-e2b6cbcadd8b",
+      legacyRegistrationIdBefore: "00112233-4455-6677-8899-aabbccddeeff",
+      legacyRegistrationIdAfter: "00112233-4455-6677-8899-aabbccddeeff",
+      legacyRegistrationBasePathExact: true,
+      legacyProviderRetained: true,
+      legacyProviderNamespace: "8b2257ace33ecb14",
+      legacyVhdIdentityPreserved: true,
+      legacyProviderProofFilesPreserved: true,
+      legacySentinelProcessSurvived: true,
+      currentMachineName: "assm2-win-x64-e2b6cbcadd8b",
+      currentDistributionName: "podman-assm2-win-x64-e2b6cbcadd8b",
+      currentRegistrationId: "22334455-6677-8899-aabb-ccddeeff0011",
+      currentRegistrationBasePathExact: true,
       currentProviderNamespace: runtimeSha256.slice(0, 16),
-      oldProviderRemoved: true,
-      recoveryId: "00112233445566778899aabbccddeeff",
-      durableIntentPresent: true,
-      intentProofValid: true,
-      intentSchemaVersion: "ai-security-scanner.managed-wsl-recovery-intent/v2",
-      intentOwnershipBasis: "bounded_n_minus_one_ghost_migration",
-      intentManifestSha256: runtimeSha256,
-      intentMachineImageSha256: machineImageSha256,
-      intentSourceProviderManifestSha256: priorRelease.runtimeManifestSha256,
-      intentTransitionReceipt: "recovered-ghost-v0.1.7",
-      receiptConsumption: {
-        registryValueAbsent: true,
-        proofPathExact: true,
+      currentProviderCreated: true,
+      unrelatedDistributionName: "ai-security-scanner-unrelated-0123456789abcdef0123456789abcdef",
+      unrelatedRegistrationIdBefore: "11223344-5566-7788-99aa-bbccddeeff00",
+      unrelatedRegistrationIdAfter: "11223344-5566-7788-99aa-bbccddeeff00",
+      unrelatedRegistrationBasePathExact: true,
+      unrelatedSentinelProcessSurvived: true,
+      noQuarantineDistributionCreated: true,
+      retainedProof: {
+        pathBoundToLegacyRegistrationId: true,
         proofPresent: true,
         proofProtected: true,
-        proofBytes: 1024,
+        proofBytes: 2048,
         proofSha256: "ef".repeat(32),
-        schemaVersion: "ai-security-scanner.managed-wsl-ghost-migration-consumed/v1",
-        recoveryId: "00112233-4455-6677-8899-aabbccddeeff",
+        schemaVersion: "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1",
+        authorizesCleanup: false,
+        transitionEvidenceSource: "nsis_install_transition",
         installTransitionReceipt: "recovered-ghost-v0.1.7",
-        sourceProviderManifestSha256: priorRelease.runtimeManifestSha256,
-        manifestSha256: runtimeSha256,
+        previousManifestSha256: priorRelease.runtimeManifestSha256,
+        currentManifestSha256: runtimeSha256,
         machineImageSha256,
-        machineName: "assm1-win-x64-e2b6cbcadd8b",
-        distributionName: "podman-assm1-win-x64-e2b6cbcadd8b",
-        proofRetainedAfterRuntimePurge: true,
+        legacyMachineName: "assm1-win-x64-e2b6cbcadd8b",
+        legacyDistributionName: "podman-assm1-win-x64-e2b6cbcadd8b",
+        currentMachineName: "assm2-win-x64-e2b6cbcadd8b",
+        currentDistributionName: "podman-assm2-win-x64-e2b6cbcadd8b",
+        legacyRegistrationId: "00112233-4455-6677-8899-aabbccddeeff",
+        currentRegistrationId: "22334455-6677-8899-aabb-ccddeeff0011",
+        legacyProviderNamespace: "8b2257ace33ecb14",
+        legacyVhdSizeBytes: 65_536,
+        legacyVhdVolumeSerialNumber: 1234,
+        legacyVhdFileIndex: "9876543210",
+        legacyVhdNumberOfLinks: 1,
+        legacyVhdAttributes: 32,
+        legacyProviderConfigSha256: "cd".repeat(32),
+        legacySshPublicKeySha256: "ab".repeat(32),
+        proofRetainedAfterCurrentRuntimePurge: true,
         proofRetainedUntilExplicitPrivateDataCleanup: true,
       },
-      durableArchivePresent: true,
-      archiveBytes: 65_536,
-      archiveSha256: "cd".repeat(32),
-      backupReceiptValid: true,
-      importReceiptValid: true,
-      backupAndImportAgree: true,
-      pendingRecoveryAbsent: true,
-      temporaryWorkspaceAbsent: true,
-      quarantineDistributionAbsent: true,
+      receiptConsumption: {
+        proofAbsentWhileRegistryReceiptPresent: true,
+        proofValidatedBeforeRegistryAbsenceCheck: true,
+        registryValueAbsentAfterDurableProof: true,
+      },
     },
     dataPreservation: {
       preInstallerFileCount: 8,
@@ -1256,10 +1278,33 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       demoCasePreserved: true,
       privateSigningMaterialBytePreserved: true,
       ...signing,
+      masterFrameworkReport: {
+        reportFile: "master-framework-report.json",
+        reportBytes: 4096,
+        reportSha256: "bc".repeat(32),
+        bundleEntryPath: "exports/master-framework-report.json",
+        bundleEntryBytes: 4096,
+        bundleEntrySha256: "bc".repeat(32),
+        exactBundleEntryMatch: true,
+        schemaVersion: "1.1.0",
+        product: "ai-security-scanner",
+        productVersion: VERSION,
+        caseId: "00112233-4455-6677-8899-aabbccddeeff",
+        runId: "11223344-5566-7788-99aa-bbccddeeff00",
+        frameworkKeys: ["nist_csf", "iso_iec_27001", "aidefend"],
+        truthfulUnknownCoverage: true,
+        noComplianceOutcomeClaims: true,
+      },
     },
     cleanup: {
-      managedRuntimePurged: true,
-      exactWslDistributionAbsent: true,
+      currentRuntimePurged: true,
+      currentDistributionAbsent: true,
+      legacyDistributionRetainedThroughRuntimePurge: true,
+      unrelatedDistributionRetainedThroughRuntimePurge: true,
+      retainedProofPreservedThroughRuntimePurge: true,
+      legacyDataPreservedThroughNsisUninstall: true,
+      explicitQualificationTeardownRemovedLegacy: true,
+      explicitQualificationTeardownRemovedUnrelated: true,
       quarantineDistributionsAbsent: true,
       candidateUninstalled: true,
       installDirectoryRemoved: true,
@@ -1573,9 +1618,9 @@ async function main() {
     );
     const validGhostQualification = await readFile(ghostQualification);
     const dishonestGhostQualification = JSON.parse(validGhostQualification.toString("utf8"));
-    dishonestGhostQualification.observations.runtimeRecovery.intentProofValid = false;
+    dishonestGhostQualification.observations.runtimeSideBySide.retainedProof.authorizesCleanup = true;
     await writeFile(ghostQualification, `${JSON.stringify(dishonestGhostQualification, null, 2)}\n`);
-    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence without a verified v2 recovery intent");
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence that turns retention into cleanup authority");
     await writeFile(ghostQualification, validGhostQualification);
     const lostGhostTransition = JSON.parse(validGhostQualification.toString("utf8"));
     lostGhostTransition.observations.installerMigration.transitionReceiptSurvivedSameVersionReinstall = false;
@@ -1583,19 +1628,19 @@ async function main() {
     expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with a lost same-version transition receipt");
     await writeFile(ghostQualification, validGhostQualification);
     const unconsumedGhostReceipt = JSON.parse(validGhostQualification.toString("utf8"));
-    unconsumedGhostReceipt.observations.runtimeRecovery.receiptConsumption.registryValueAbsent = false;
+    unconsumedGhostReceipt.observations.runtimeSideBySide.receiptConsumption.registryValueAbsentAfterDurableProof = false;
     await writeFile(ghostQualification, `${JSON.stringify(unconsumedGhostReceipt, null, 2)}\n`);
     expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with an unconsumed registry receipt");
     await writeFile(ghostQualification, validGhostQualification);
-    const tamperedConsumedProof = JSON.parse(validGhostQualification.toString("utf8"));
-    tamperedConsumedProof.observations.runtimeRecovery.receiptConsumption.manifestSha256 = "ef".repeat(32);
-    await writeFile(ghostQualification, `${JSON.stringify(tamperedConsumedProof, null, 2)}\n`);
-    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with a mutated consumed proof");
+    const tamperedRetainedProof = JSON.parse(validGhostQualification.toString("utf8"));
+    tamperedRetainedProof.observations.runtimeSideBySide.retainedProof.currentManifestSha256 = "ef".repeat(32);
+    await writeFile(ghostQualification, `${JSON.stringify(tamperedRetainedProof, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with a mutated retained proof");
     await writeFile(ghostQualification, validGhostQualification);
-    const incompleteConsumedProof = JSON.parse(validGhostQualification.toString("utf8"));
-    delete incompleteConsumedProof.observations.runtimeRecovery.receiptConsumption.installTransitionReceipt;
-    await writeFile(ghostQualification, `${JSON.stringify(incompleteConsumedProof, null, 2)}\n`);
-    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with an incomplete consumed proof");
+    const incompleteRetainedProof = JSON.parse(validGhostQualification.toString("utf8"));
+    delete incompleteRetainedProof.observations.runtimeSideBySide.retainedProof.legacyRegistrationId;
+    await writeFile(ghostQualification, `${JSON.stringify(incompleteRetainedProof, null, 2)}\n`);
+    expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with an incomplete retained proof");
     await writeFile(ghostQualification, validGhostQualification);
     const macQualification = path.join(release, "platform-qualification-macos-universal-dmg.json");
     const hiddenMacQualification = `${macQualification}.missing`;
