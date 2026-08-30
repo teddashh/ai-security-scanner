@@ -7,8 +7,8 @@ Each engine/digest is an independent publication unit. A complete matrix may be 
 Every project-managed engine image publication uses the shared immutable-version guard and
 `.github/actions/engine-image-evidence` action. A new build is pushed only to a run-unique
 `candidate-<source-revision>-<run-id>-<attempt>` tag. The human-readable version tag is created
-only after the candidate digest is publicly readable, smoke-tested, and signed. It covers all 20 managed
-images: CloudQuery, Prowler, Cloudsplaining, ScoutSuite, Steampipe, Naabu, httpx, Nuclei,
+only after the candidate digest is publicly readable, smoke-tested, and signed. The current managed
+inventory is CloudQuery, Prowler, Cloudsplaining, ScoutSuite, Steampipe, Naabu, httpx, Nuclei,
 Greenbone, ScubaGear, Maester, Semgrep, Gitleaks, TruffleHog, Trivy, Grype, Kubescape, kube-bench,
 Checkov, and Syft. KICS retains separately verified upstream-image provenance instead of being
 represented as a project-built image.

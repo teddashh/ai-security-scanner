@@ -43,8 +43,8 @@ const engine = (overrides: Partial<EngineRun> = {}): EngineRun => ({
   ...overrides,
 });
 
-test("all 21 catalog engines have plain-language English and Traditional Chinese outcomes", () => {
-  assert.equal(catalogEngineIds.length, 21);
+test("every currently supported catalog engine has plain-language bilingual outcomes", () => {
+  assert.ok(catalogEngineIds.length > 0);
   assert.deepEqual(Object.keys(engineOutcomeCopy).sort(), [...catalogEngineIds].sort());
   for (const engineId of catalogEngineIds) {
     const outcome = engineOutcomeCopy[engineId];

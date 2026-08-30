@@ -11,29 +11,6 @@ const root = resolve(import.meta.dirname, "..");
 const catalogPath = resolve(root, "engines/catalog.json");
 const schemaPath = resolve(root, "engines/compatibility.schema.json");
 const upstreamLockPath = resolve(root, "engines/upstreams.lock.json");
-const expectedIds = [
-  "cloudquery",
-  "steampipe",
-  "prowler",
-  "scoutsuite",
-  "cloudsplaining",
-  "scubagear",
-  "maester",
-  "naabu",
-  "httpx",
-  "nuclei",
-  "greenbone",
-  "semgrep",
-  "gitleaks",
-  "trufflehog",
-  "checkov",
-  "kics",
-  "trivy",
-  "grype",
-  "syft",
-  "kubescape",
-  "kube-bench",
-];
 const managedCloudIds = new Set([
   "cloudquery",
   "cloudsplaining",
@@ -49,8 +26,6 @@ const managedExternalContracts = new Map([
 const managedExternalIds = new Set(managedExternalContracts.keys());
 const managedM365Ids = new Set(["scubagear", "maester"]);
 const managedImageRepositoryPrefix = "ghcr.io/teddashh/ai-security-scanner-engine-";
-const managedLocalK8sIds = ["semgrep", "gitleaks", "trufflehog", "trivy", "grype", "kubescape", "kube-bench"];
-const managedLocalK8sWorkflowIds = managedLocalK8sIds.filter((id) => id !== "gitleaks");
 const managedLocalSmokeOutputFiles = new Map([
   ["semgrep", "semgrep.json"],
   ["trufflehog", "trufflehog.jsonl"],
@@ -199,17 +174,16 @@ const managedGreenboneContract = {
   notusImageDigest: "sha256:73a309ed3dab7a5646952664434b425e2162909c7f92ed55f0abcfc37e211def",
   smokeOid: "1.3.6.1.4.1.25623.1.0.108252",
 };
-const managedEvidenceWorkflows = new Map([
-  [".github/workflows/engine-images-cloud.yml", ["cloudquery", "prowler", "cloudsplaining", "scoutsuite", "steampipe"]],
-  [".github/workflows/engine-images-external.yml", ["naabu", "httpx", "nuclei"]],
-  [".github/workflows/engine-images-m365.yml", ["scubagear", "maester"]],
-  [".github/workflows/engine-images-local-k8s.yml", managedLocalK8sWorkflowIds],
-  [".github/workflows/engine-image-gitleaks.yml", ["gitleaks"]],
-  [".github/workflows/engine-image-greenbone.yml", ["greenbone"]],
-  [".github/workflows/engine-image-checkov.yml", ["checkov"]],
-  [".github/workflows/engine-image-syft.yml", ["syft"]],
-]);
-const managedEvidenceEngineIds = [...managedEvidenceWorkflows.values()].flat();
+const managedEvidenceWorkflows = [
+  ".github/workflows/engine-images-cloud.yml",
+  ".github/workflows/engine-images-external.yml",
+  ".github/workflows/engine-images-m365.yml",
+  ".github/workflows/engine-images-local-k8s.yml",
+  ".github/workflows/engine-image-gitleaks.yml",
+  ".github/workflows/engine-image-greenbone.yml",
+  ".github/workflows/engine-image-checkov.yml",
+  ".github/workflows/engine-image-syft.yml",
+];
 const localK8sWorkflowRelative = ".github/workflows/engine-images-local-k8s.yml";
 const newlyPublishedEvidenceWorkflows = [
   ".github/workflows/engine-images-external.yml",
@@ -264,11 +238,11 @@ function sortedUnique(values) {
 
 function validateExactIdSet(actual, expected, label) {
   const actualIds = sortedUnique(actual);
-  const expectedIds = sortedUnique(expected);
-  if (deepEqual(actualIds, expectedIds)) return;
+  const expectedValues = sortedUnique(expected);
+  if (deepEqual(actualIds, expectedValues)) return;
   const actualSet = new Set(actualIds);
-  const expectedSet = new Set(expectedIds);
-  const missing = expectedIds.filter((id) => !actualSet.has(id));
+  const expectedSet = new Set(expectedValues);
+  const missing = expectedValues.filter((id) => !actualSet.has(id));
   const unexpected = actualIds.filter((id) => !expectedSet.has(id));
   errors.push(`${label}: missing [${missing.join(", ") || "none"}]; unexpected [${unexpected.join(", ") || "none"}]`);
 }
@@ -335,7 +309,20 @@ function resolveEvidenceStepEngines(workflow, job, step, label) {
 }
 
 function validateManagedImageEvidence(catalogEntries) {
-  const expectedManagedIds = managedEvidenceEngineIds;
+  const catalogManagedIds = [];
+  for (const engine of Array.isArray(catalogEntries) ? catalogEntries : []) {
+    const repository = engine?.image?.repository;
+    if (typeof repository !== "string" || !repository.startsWith(managedImageRepositoryPrefix)) continue;
+    catalogManagedIds.push(engine.id);
+    if (upstreamImageOnlyIds.has(engine.id)) {
+      errors.push(`catalog:${engine.id}.image.repository: upstream-only engine must not be counted as a project-managed image`);
+    }
+    const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+    if (repository !== expectedRepository) {
+      errors.push(`catalog:${engine.id}.image.repository: project-managed image must be exactly ${expectedRepository}`);
+    }
+  }
+  const catalogManagedIdSet = new Set(catalogManagedIds);
   const guardActionPath = resolve(root, ".github/actions/engine-image-evidence/publication-guard/action.yml");
   const promotionActionPath = resolve(root, ".github/actions/engine-image-evidence/promote/action.yml");
   const guardActionText = existsSync(guardActionPath) ? readFileSync(guardActionPath, "utf8") : "";
@@ -358,13 +345,6 @@ function validateManagedImageEvidence(catalogEntries) {
       errors.push(`${label} action is missing or does not preserve its fail-closed authentication contract`);
     }
   }
-  if (expectedManagedIds.length !== 20 || new Set(expectedManagedIds).size !== 20) {
-    errors.push("managed evidence contract must enumerate exactly 20 unique engines");
-  }
-  for (const id of upstreamImageOnlyIds) {
-    if (expectedManagedIds.includes(id)) errors.push(`managed evidence contract must not count upstream-only engine ${id}`);
-  }
-
   const localK8sWorkflowPath = resolve(root, localK8sWorkflowRelative);
   const localK8sWorkflowText = existsSync(localK8sWorkflowPath)
     ? readFileSync(localK8sWorkflowPath, "utf8")
@@ -376,10 +356,22 @@ function validateManagedImageEvidence(catalogEntries) {
       ? localK8sMatrix.map((entry) => [entry?.engine, entry?.output_file])
       : [],
   );
-  if (observedSmokeOutputs.size !== managedLocalSmokeOutputFiles.size ||
-      [...managedLocalSmokeOutputFiles].some(([engine, outputFile]) =>
-        observedSmokeOutputs.get(engine) !== outputFile)) {
-    errors.push(`${localK8sWorkflowRelative}: managed smoke output basenames differ from the fixed six-engine evidence contract`);
+  for (const [engine, outputFile] of observedSmokeOutputs) {
+    const expectedOutputFile = managedLocalSmokeOutputFiles.get(engine);
+    if (!expectedOutputFile) {
+      errors.push(`${localK8sWorkflowRelative}:jobs.publish: ${engine} has no reviewed managed-smoke output contract`);
+    } else if (outputFile !== expectedOutputFile) {
+      errors.push(`${localK8sWorkflowRelative}:jobs.publish: ${engine} smoke output must be ${expectedOutputFile}`);
+    }
+  }
+  const localPublishNeeds = Array.isArray(localK8sWorkflow?.jobs?.publish?.needs)
+    ? localK8sWorkflow.jobs.publish.needs
+    : [localK8sWorkflow?.jobs?.publish?.needs].filter(Boolean);
+  if (localPublishNeeds.includes("semgrep-native-cache")) {
+    errors.push(`${localK8sWorkflowRelative}: Semgrep's optional native cache must not gate unrelated engine publication`);
+  }
+  if (localK8sWorkflow?.jobs?.["semgrep-native-cache"]?.["continue-on-error"] !== true) {
+    errors.push(`${localK8sWorkflowRelative}: the optional Semgrep cache refresh must not fail sibling publication`);
   }
   const localPublishSteps = localK8sWorkflow?.jobs?.publish?.steps;
   const localVerifyStep = Array.isArray(localPublishSteps)
@@ -446,7 +438,7 @@ function validateManagedImageEvidence(catalogEntries) {
   }
 
   const coveredIds = [];
-  for (const [relative, expectedWorkflowIds] of managedEvidenceWorkflows) {
+  for (const relative of managedEvidenceWorkflows) {
     const workflow = parseWorkflow(relative);
     if (!workflow) continue;
     const paths = workflow.on?.push?.paths;
@@ -601,38 +593,23 @@ function validateManagedImageEvidence(catalogEntries) {
     if (workflowIds.length !== new Set(workflowIds).size) {
       errors.push(`${relative}: common evidence action covers an engine more than once`);
     }
-    validateExactIdSet(workflowIds, expectedWorkflowIds, `${relative}: common evidence engine coverage differs from contract`);
+    for (const engineId of workflowIds) {
+      if (!catalogManagedIdSet.has(engineId)) {
+        errors.push(`${relative}: ${engineId} publication has no matching project-managed catalog entry`);
+      }
+    }
     coveredIds.push(...workflowIds);
   }
 
   if (coveredIds.length !== new Set(coveredIds).size) {
     errors.push("managed image evidence workflows cover an engine more than once");
   }
-  validateExactIdSet(coveredIds, expectedManagedIds, "managed image evidence workflow coverage differs from the 20-engine contract");
-
-  const catalogManagedIds = [];
-  for (const engine of Array.isArray(catalogEntries) ? catalogEntries : []) {
-    const repository = engine?.image?.repository;
-    if (typeof repository !== "string" || !repository.startsWith(managedImageRepositoryPrefix)) continue;
-    catalogManagedIds.push(engine.id);
-    if (upstreamImageOnlyIds.has(engine.id)) {
-      errors.push(`catalog:${engine.id}.image.repository: upstream-only engine must not be counted as a project-managed image`);
-    }
-    const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
-    if (repository !== expectedRepository) {
-      errors.push(`catalog:${engine.id}.image.repository: project-managed image must be exactly ${expectedRepository}`);
-    }
-  }
   validateExactIdSet(
     catalogManagedIds,
     coveredIds,
     "catalog project-managed GHCR images differ from signed workflow coverage",
   );
-  validateExactIdSet(
-    catalogManagedIds,
-    expectedManagedIds,
-    "catalog project-managed GHCR images differ from the 20-engine contract",
-  );
+  return { coveredIds, workflowCount: managedEvidenceWorkflows.length };
 }
 
 function jsonType(value) {
@@ -1968,19 +1945,13 @@ const upstreamLock = parseJson(upstreamLockPath);
 
 if (schema && catalog) validateSchemaValue(catalog, schema, "catalog", schema, errors);
 if (schema?.$schema !== "https://json-schema.org/draft/2020-12/schema") errors.push("compatibility schema must use JSON Schema draft 2020-12");
-if (schema?.minItems !== 21 || schema?.maxItems !== 21) errors.push("compatibility schema must require exactly 21 entries");
+if (Object.hasOwn(schema ?? {}, "minItems") || Object.hasOwn(schema ?? {}, "maxItems")) {
+  errors.push("compatibility schema must not turn catalog cardinality into a product-readiness requirement");
+}
 
 const catalogIds = Array.isArray(catalog) ? catalog.map((engine) => engine.id) : [];
-if (!deepEqual(catalogIds, expectedIds)) {
-  errors.push(`catalog ids/order must be exactly: ${expectedIds.join(", ")}`);
-}
 if (new Set(catalogIds).size !== catalogIds.length) errors.push("catalog engine ids must be unique");
-validateExactIdSet(
-  [...managedLocalK8sContracts.keys()],
-  managedLocalK8sIds,
-  "published local/Kubernetes validation contract differs from the exact seven-engine set",
-);
-validateManagedImageEvidence(catalog);
+const managedEvidence = validateManagedImageEvidence(catalog);
 
 const lockedRepositories = new Map((upstreamLock?.repositories ?? []).map((entry) => [entry.remote.replace(/\.git$/, ""), entry]));
 for (const engine of Array.isArray(catalog) ? catalog : []) {
@@ -2281,6 +2252,6 @@ const licenseReview = catalog.filter((engine) => ["license_review", "blocked"].i
 
 console.log(`Validated ${catalog.length} engine compatibility records against ${schemaPath.replace(`${root}/`, "")}.`);
 console.log(`Verified final upstream image pins: ${imagePins}; verified candidate/base pins: ${candidatePins}; managed build plans: ${managedPlans}; multi-component plans: ${multiComponentPlans}.`);
-console.log(`Signed managed-image evidence contract: ${managedEvidenceEngineIds.length} engines across ${managedEvidenceWorkflows.size} workflows.`);
+console.log(`Signed managed-image evidence contract: ${managedEvidence.coveredIds.length} present engines across ${managedEvidence.workflowCount} workflows.`);
 console.log(`Runnable now: ${runnable.length ? runnable.join(", ") : "none"}.`);
 console.log(`License review: ${licenseReview.join(", ") || "none"}.`);

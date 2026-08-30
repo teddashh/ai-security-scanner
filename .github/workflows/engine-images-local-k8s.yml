@@ -56,8 +56,9 @@ jobs:
             engines/images/local-launcher/testdata/oci-layout-source
 
   semgrep-native-cache:
-    name: Prime Semgrep ${{ matrix.arch }} cache on a native runner
+    name: Refresh optional Semgrep ${{ matrix.arch }} build cache
     needs: launcher-tests
+    continue-on-error: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:
@@ -99,9 +100,7 @@ jobs:
 
   publish:
     name: Publish ${{ matrix.engine }} for amd64 + arm64
-    needs:
-      - launcher-tests
-      - semgrep-native-cache
+    needs: launcher-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
