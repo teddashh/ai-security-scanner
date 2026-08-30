@@ -1,5 +1,7 @@
 # Provider-native authorization and isolated bootstrap
 
+Normative status: this is a subordinate Advanced-feature reference. The [canonical product specification](product-spec.md) controls authorization UX and guarantees that provider setup never blocks localhost, website, internal-network, or local-code first value.
+
 `ai-security-scanner` supports AWS, Azure, Google Cloud, and Microsoft 365 without accepting a provider password, long-lived access key, refresh token, application secret, or administrator credential through the frontend. The preferred path uses the provider's public-client protocol. The optional bootstrap path runs in the separately packaged `ai-security-scanner-bootstrap-broker` process when a dedicated read-only identity must be created.
 
 This feature does not ship sample OAuth client IDs. Azure, Microsoft 365, and Google deployments must register their own public client. Values such as all-zero UUIDs, example Google client IDs, and unknown JSON fields are rejected.

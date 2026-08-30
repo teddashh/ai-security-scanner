@@ -4,6 +4,8 @@ Status: implementation architecture
 
 Last updated: 2026-08-26
 
+Normative status: this is a subordinate implementation reference. The [canonical product specification](product-spec.md) controls user-visible behavior and acceptance. Any conflict in views, gates, runtime readiness, recovery, or delivery order is a current implementation/design gap, not an additional product requirement.
+
 This document describes the target architecture. Component names and interfaces are requirements or proposed contracts until corresponding code and tests exist; they are not implementation claims.
 
 ## 1. Architectural goals

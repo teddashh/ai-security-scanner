@@ -1,5 +1,7 @@
 # Release-managed local runtime
 
+Normative status: this is a subordinate current-implementation/runtime reference. The [canonical product specification](product-spec.md) controls user-visible setup, isolation, recovery, Repair, upgrade, and uninstall behavior. Deterministic-name reclamation, manual WSL action, or fail-closed wording here cannot add a product gate contrary to that specification.
+
 `ai-security-scanner` can run containerized engines on a clean workstation without asking the
 user to install Docker, Podman, QEMU, or a system service. Docker and user-installed Podman remain
 explicit compatibility providers; they are not silently mixed with managed runs.

@@ -4,6 +4,8 @@ Status: v0.2.0 catalog companion and research inventory; current engine artifact
 
 Last updated: 2026-08-28
 
+Normative status: this catalog is subordinate to the [canonical product specification](product-spec.md). Engine admission may block execution of that engine artifact only; it does not define whole-product scan readiness, reporting, or release acceptance.
+
 This document explains the v0.2.0 required-engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. This prose never upgrades a non-runnable catalog entry or proves that an image or GitHub Release has been published.
 
 Required-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting an earlier release decision.

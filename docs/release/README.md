@@ -1,5 +1,7 @@
 # Release pipeline
 
+Normative status: this is a subordinate publication/qualification reference. The [canonical product specification](../product-spec.md) controls product acceptance and warning-versus-hard-block policy. Publication, signing, engine-admission, and platform-artifact rules here cannot become local scan/report gates or block an independently qualified platform.
+
 The release workflow builds native Tauri installers from either a manual `main` preflight or an
 exact numeric SemVer tag. Manual dispatch is preflight-only: it must resolve to `refs/heads/main`, receives
 no publication privileges, creates no tag or GitHub Release, and preserves the finalized candidate

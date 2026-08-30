@@ -4,6 +4,8 @@ Status: design-time threat model
 
 Last updated: 2026-08-26
 
+Normative status: this threat model is subordinate to the [canonical product specification](product-spec.md). It may require an operation-scoped safety control, but cannot turn optional-engine, mapping, signing, updater, or disposable-runtime failure into a product-wide gate unless the specification's hard-block rule permits it.
+
 This document defines threats and required controls for the intended product. It does not assert that the controls are implemented or that the product has passed a security review. Risk acceptance requires an explicit repository decision; silence is not acceptance.
 
 ## 1. Scope

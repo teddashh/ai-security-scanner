@@ -2,6 +2,8 @@
 
 Status: required product-completion evidence; no completed session is recorded yet
 
+Normative status: this is a subordinate Advanced cloud-study protocol. The [canonical product specification](../product-spec.md) replaces it as the universal first-value/release path with a qualifying beginner's installed-Windows localhost journey. This AWS study remains feature-specific and cannot block unrelated local/network/code paths.
+
 This study answers one narrow question from the product specification: can a person who can sign in
 as an administrator, but does not understand cloud IAM or security scanners, complete the first
 assessment without a maintainer taking over?
