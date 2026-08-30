@@ -823,8 +823,8 @@ try {
   if (-not [String]::Equals($candidateRegistry.KeyName, $priorRegistry.KeyName, [StringComparison]::Ordinal)) {
     throw "NSIS upgrade replaced the product registry identity instead of updating it."
   }
-  if ($candidateRegistry.InstallTransition -cne "uninstalled-$priorVersion") {
-    throw "NSIS upgrade did not prove that the normal N-1 uninstaller completed."
+  if ($candidateRegistry.InstallTransition -cne "overlaid-$priorVersion") {
+    throw "NSIS upgrade did not record the reviewed data-preserving N-1 overlay."
   }
   Invoke-ExactProcess $candidateInstallerPath @("/S", "/D=$installDirectory") 180000 "Candidate same-version silent NSIS reinstall" -ExpectedExecutableProof $candidateInstallerItem | Out-Null
   Assert-RealFile $priorDesktop "Reinstalled candidate desktop at the canonical path" (512 * 1024 * 1024) | Out-Null
@@ -836,7 +836,7 @@ try {
   }
   $candidateRegistry = Get-OneCurrentUserUninstallEntry $CurrentVersion $installDirectory
   if (-not [String]::Equals($candidateRegistry.KeyName, $priorRegistry.KeyName, [StringComparison]::Ordinal) -or
-      $candidateRegistry.InstallTransition -cne "uninstalled-$priorVersion") {
+      $candidateRegistry.InstallTransition -cne "overlaid-$priorVersion") {
     throw "Same-version silent reinstall did not preserve the bounded N-1 transition receipt."
   }
   $candidateUninstallerSha256 = Get-LowerSha256 $candidateUninstaller (512 * 1024 * 1024)
@@ -1130,7 +1130,7 @@ try {
       unattendedMode = "silent"
       sameVersionSilentReinstallCompleted = $true
       transitionReceiptSurvivedSameVersionReinstall = $true
-      transitionReceipt = "uninstalled-$priorVersion"
+      transitionReceipt = "overlaid-$priorVersion"
     }
     dataPreservation = [ordered]@{
       defaultLocalDataDirectoryUsed = $true

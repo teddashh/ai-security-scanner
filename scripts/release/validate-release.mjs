@@ -686,7 +686,7 @@ function validatePlatformQualificationSources(sources) {
     "Candidate same-version silent NSIS reinstall",
     'unattendedMode = "silent"',
     "transitionReceiptSurvivedSameVersionReinstall",
-    'transitionReceipt = "uninstalled-$priorVersion"',
+    'transitionReceipt = "overlaid-$priorVersion"',
     '"export", "identity", "show"',
     'continuity_event -cne "legacy_key_adopted"',
     "integrity-signing-key",

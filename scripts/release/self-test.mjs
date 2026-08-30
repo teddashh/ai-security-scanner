@@ -1049,7 +1049,7 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       unattendedMode: "silent",
       sameVersionSilentReinstallCompleted: true,
       transitionReceiptSurvivedSameVersionReinstall: true,
-      transitionReceipt: "uninstalled-0.1.7",
+      transitionReceipt: "overlaid-0.1.7",
     },
     dataPreservation: {
       defaultLocalDataDirectoryUsed: true,

@@ -4,9 +4,10 @@
 ; Upstream URL: https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi
 ; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079
 ; Upstream license: Apache-2.0 OR MIT
-; Local patch: bounded v0.1.7 ghost-registration recovery, observable transition
-; receipts, and explicit unattended N-1 upgrade behavior. The release validator
-; reverses these reviewed hunks and verifies both complete-file SHA-256 values.
+; Local patch: version-neutral stale-registration and same-version repair,
+; data-preserving upgrade overlays, and the bounded v0.1.7 runtime transition
+; receipts. The release validator reverses these reviewed hunks and verifies
+; both complete-file SHA-256 values.
 
 Unicode true
 ManifestDPIAware true
@@ -87,7 +88,7 @@ Var WixMode
 Var OldMainBinaryName
 Var PreviousVersion
 Var InstallTransition
-Var GhostRegistrationMode
+Var RegistrationOverlayMode
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -199,6 +200,14 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
+  ; .onInit proves an exact current-user product registration before choosing
+  ; this path. Stale registrations, same-version repairs, and upgrades replace
+  ; only the candidate's known files and registration in place. They never run
+  ; an absent or older uninstaller and never touch runtime, cases, or app data.
+  ${If} $RegistrationOverlayMode <> 0
+    Abort
+  ${EndIf}
+
   ; Uninstall previous WiX installation if exists.
   ;
   ; A WiX installer stores the installation info in registry
@@ -226,14 +235,6 @@ Function PageReinstall
     StrCpy $R6 "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1"
     Goto compare_version
   wix_loop_done:
-
-  ; .onInit evaluates the one bounded v0.1.7 ghost registration before any
-  ; page or silent/passive branching. A custom page Abort skips only this
-  ; maintenance page, allowing the normal Install section to repair the exact
-  ; product registration without pretending that an old uninstaller ran.
-  ${If} $GhostRegistrationMode = 1
-    Abort
-  ${EndIf}
 
   ; Check if there is an existing installation, if not, abort the reinstall page
   ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
@@ -433,7 +434,7 @@ Function PageLeaveReinstall
 FunctionEnd
 
 ; 5. Choose install directory page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryIfRepairOrPassive
 !insertmacro MUI_PAGE_DIRECTORY
 
 ; 6. Start menu shortcut page
@@ -566,11 +567,11 @@ Function .onInit
   ${EndIf}
 
   ; These calls are intentionally unconditional and precede every silent,
-  ; passive, custom-page, and install-section path. Qualification can therefore
-  ; distinguish the bounded ghost migration from a generic silent overwrite.
-  Call DetectBoundedV017GhostRegistration
+  ; passive, custom-page, and install-section path. Product-owned binaries and
+  ; registration can therefore be repaired without making private data or a
+  ; managed runtime an installer prerequisite.
+  Call DetectVersionNeutralProductRepair
   Call PreserveBoundedV017TransitionForV018Reinstall
-  Call RunBoundedSilentV017Upgrade
 
 
   !if "${INSTALLMODE}" == "both"
@@ -960,19 +961,14 @@ Function RestorePreviousInstallLocation
     StrCpy $INSTDIR $4
 FunctionEnd
 
-Function DetectBoundedV017GhostRegistration
-  StrCpy $GhostRegistrationMode 0
+Function DetectVersionNeutralProductRepair
+  StrCpy $RegistrationOverlayMode 0
   StrCpy $InstallTransition ""
-  ; Tauri's normal upgrade path executes the previous UninstallString before
-  ; copying candidate files. v0.1.7 could leave a current-user registration
-  ; behind after both installed executables had already disappeared. Accept
-  ; only that one fail-closed ghost shape. This exception neither deletes the
-  ; registration nor touches LocalAppData/provider/WSL state.
-  ;
-  ; Every field is checked independently. A different product, publisher,
-  ; version, path, command, main-binary name, or any surviving executable keeps
-  ; Tauri's ordinary uninstaller and abort behavior.
-  !if "${VERSION}" == "0.1.8"
+  ; Bind automatic repair to the exact HKCU product identity and its internally
+  ; consistent install path. DisplayVersion is deliberately not an ownership
+  ; proof: a stale registration from any product version can be repaired. This
+  ; function performs no deletion or external command and never inspects or
+  ; claims WSL/runtime state.
   !if "${INSTALLMODE}" == "currentUser"
     ReadRegStr $R2 HKCU "${UNINSTKEY}" "DisplayName"
     ReadRegStr $R3 HKCU "${UNINSTKEY}" "Publisher"
@@ -980,24 +976,51 @@ Function DetectBoundedV017GhostRegistration
     ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"
     ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"
     ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"
-    ReadRegStr $R0 HKCU "${UNINSTKEY}" "InstallTransition"
-    StrCpy $R8 '$\"$LOCALAPPDATA\${PRODUCTNAME}$\"'
-    StrCpy $R9 '$\"$LOCALAPPDATA\${PRODUCTNAME}\uninstall.exe$\"'
+    ReadRegStr $3 HKCU "${UNINSTKEY}" "InstallTransition"
+    StrCpy $R8 '$\"$INSTDIR$\"'
+    StrCpy $R9 '$\"$INSTDIR\uninstall.exe$\"'
     ${If} $R2 == "${PRODUCTNAME}"
     ${AndIf} $R3 == "${MANUFACTURER}"
-    ${AndIf} $R4 == "0.1.7"
     ${AndIf} $R5 == $R8
     ${AndIf} $R6 == $R9
     ${AndIf} $R7 == "${MAINBINARYNAME}.exe"
-    ${AndIf} $R0 == ""
-    ${AndIfNot} ${FileExists} "$LOCALAPPDATA\${PRODUCTNAME}\${MAINBINARYNAME}.exe"
-    ${AndIfNot} ${FileExists} "$LOCALAPPDATA\${PRODUCTNAME}\uninstall.exe"
-      StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
-      StrCpy $GhostRegistrationMode 1
-      StrCpy $InstallTransition "recovered-ghost-v0.1.7"
-      DetailPrint "Recovering the exact incomplete ai-security-scanner v0.1.7 registration."
+      StrCpy $PreviousVersion $R4
+      ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+      ${AndIf} ${FileExists} "$INSTDIR\uninstall.exe"
+        nsis_tauri_utils::SemverCompare "${VERSION}" $R4
+        Pop $R1
+        ; Preserve Tauri's existing EarlyChecks input even when this detector
+        ; deliberately leaves a downgrade or malformed comparison on the
+        ; ordinary installer path.
+        StrCpy $R0 $R1
+        ${If} $R1 = 0
+          StrCpy $RegistrationOverlayMode 2
+          DetailPrint "Repairing this ai-security-scanner version in place."
+        ${ElseIf} $R1 = 1
+          StrCpy $RegistrationOverlayMode 3
+          !if "${VERSION}" == "0.1.8"
+            ${If} $R4 == "0.1.7"
+            ${AndIf} $3 == ""
+              StrCpy $InstallTransition "overlaid-0.1.7"
+            ${EndIf}
+          !endif
+          DetailPrint "Upgrading ai-security-scanner in place while preserving its data."
+        ${EndIf}
+      ${Else}
+        ; A missing product binary makes the old UninstallString unusable. Keep
+        ; every remaining byte and let the normal Install section replace only
+        ; this candidate's files and registry values.
+        StrCpy $RegistrationOverlayMode 1
+        StrCpy $R0 0
+        !if "${VERSION}" == "0.1.8"
+          ${If} $R4 == "0.1.7"
+          ${AndIf} $3 == ""
+            StrCpy $InstallTransition "recovered-ghost-v0.1.7"
+          ${EndIf}
+        !endif
+        DetailPrint "Repairing an incomplete ai-security-scanner installation in place."
+      ${EndIf}
     ${EndIf}
-  !endif
   !endif
 FunctionEnd
 
@@ -1014,7 +1037,7 @@ Function PreserveBoundedV017TransitionForV018Reinstall
     ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"
     ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"
     ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"
-    ReadRegStr $R0 HKCU "${UNINSTKEY}" "InstallTransition"
+    ReadRegStr $2 HKCU "${UNINSTKEY}" "InstallTransition"
     StrCpy $R8 '$\"$INSTDIR$\"'
     StrCpy $R9 '$\"$INSTDIR\uninstall.exe$\"'
     ${If} $R2 == "${PRODUCTNAME}"
@@ -1025,74 +1048,12 @@ Function PreserveBoundedV017TransitionForV018Reinstall
     ${AndIf} $R7 == "${MAINBINARYNAME}.exe"
     ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
     ${AndIf} ${FileExists} "$INSTDIR\uninstall.exe"
-      ${If} $R0 == "recovered-ghost-v0.1.7"
-      ${OrIf} $R0 == "uninstalled-0.1.7"
-      ${OrIf} $R0 == "updated-0.1.7"
-      ${OrIf} $R0 == "overlaid-0.1.7"
-        StrCpy $InstallTransition $R0
+      ${If} $2 == "recovered-ghost-v0.1.7"
+      ${OrIf} $2 == "uninstalled-0.1.7"
+      ${OrIf} $2 == "updated-0.1.7"
+      ${OrIf} $2 == "overlaid-0.1.7"
+        StrCpy $InstallTransition $2
       ${EndIf}
-    ${EndIf}
-  !endif
-  !endif
-FunctionEnd
-
-Function RunBoundedSilentV017Upgrade
-  ; NSIS does not call page callbacks in /S mode. Handle only the exact public
-  ; v0.1.7 current-user installation here, before any install section copies
-  ; candidate bytes. Interactive, passive, updater, ghost, clean-install, and
-  ; same-version paths keep their existing behavior.
-  !if "${VERSION}" == "0.1.8"
-  !if "${INSTALLMODE}" == "currentUser"
-    ${IfNot} ${Silent}
-      Return
-    ${EndIf}
-    ${If} $UpdateMode = 1
-      Return
-    ${EndIf}
-    ${If} $GhostRegistrationMode = 1
-      Return
-    ${EndIf}
-
-    ReadRegStr $R2 HKCU "${UNINSTKEY}" "DisplayName"
-    ReadRegStr $R3 HKCU "${UNINSTKEY}" "Publisher"
-    ReadRegStr $R4 HKCU "${UNINSTKEY}" "DisplayVersion"
-    ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"
-    ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"
-    ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"
-    ReadRegStr $R0 HKCU "${UNINSTKEY}" "InstallTransition"
-    ${If} $R4 != "0.1.7"
-      Return
-    ${EndIf}
-    StrCpy $R8 '$\"$INSTDIR$\"'
-    StrCpy $R9 '$\"$INSTDIR\uninstall.exe$\"'
-    ${If} $R2 == "${PRODUCTNAME}"
-    ${AndIf} $R3 == "${MANUFACTURER}"
-    ${AndIf} $R4 == "0.1.7"
-    ${AndIf} $R5 == $R8
-    ${AndIf} $R6 == $R9
-    ${AndIf} $R7 == "${MAINBINARYNAME}.exe"
-    ${AndIf} $R0 == ""
-    ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
-    ${AndIf} ${FileExists} "$INSTDIR\uninstall.exe"
-      StrCpy $PreviousVersion "0.1.7"
-      ClearErrors
-      ExecWait '$R6 /S _?=$INSTDIR' $0
-      ${If} ${Errors}
-        SetErrorLevel 1
-        Abort "The verified v0.1.7 uninstaller could not be started."
-      ${EndIf}
-      ${If} $0 <> 0
-        SetErrorLevel 1
-        Abort "The verified v0.1.7 uninstaller did not finish successfully."
-      ${EndIf}
-      ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
-        SetErrorLevel 1
-        Abort "The verified v0.1.7 application is still running or could not be removed."
-      ${EndIf}
-      StrCpy $InstallTransition "uninstalled-0.1.7"
-    ${Else}
-      SetErrorLevel 1
-      Abort "The existing v0.1.7 registration is incomplete or does not match the reviewed upgrade path."
     ${EndIf}
   !endif
   !endif
@@ -1100,6 +1061,13 @@ FunctionEnd
 
 Function Skip
   Abort
+FunctionEnd
+
+Function SkipDirectoryIfRepairOrPassive
+  ${If} $RegistrationOverlayMode <> 0
+  ${OrIf} $PassiveMode = 1
+    Abort
+  ${EndIf}
 FunctionEnd
 
 Function SkipIfPassive

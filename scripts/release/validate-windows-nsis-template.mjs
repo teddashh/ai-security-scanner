@@ -19,8 +19,8 @@ const PINNED_UPSTREAM = Object.freeze({
   upstreamUrl:
     "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   upstreamSha256: "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
-  patchContract: "ai-security-scanner.bounded-v0.1.7-ghost-registration/v2",
-  vendoredSha256: "71b8773dd1c7dc6c27b56fe40d4986dc496a9dca0cf5402b553e7b911bc76a77",
+  patchContract: "ai-security-scanner.version-neutral-product-repair/v1",
+  vendoredSha256: "9fe2b6711daff2c94d8748ce19ebed221b33a60acca25dcc3f502fd3fdb9bdcb",
 });
 
 function assert(condition, message) {
@@ -29,6 +29,10 @@ function assert(condition, message) {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function block(lines) {
+  return `${lines.join("\n")}\n`;
 }
 
 function exactKeys(value, expected, label) {
@@ -42,540 +46,424 @@ function exactKeys(value, expected, label) {
 function replaceOnce(source, patched, upstream, label) {
   const first = source.indexOf(patched);
   assert(first !== -1, `vendored NSIS template is missing reviewed patch hunk: ${label}`);
-  assert(source.indexOf(patched, first + patched.length) === -1, `reviewed NSIS patch hunk is ambiguous: ${label}`);
+  assert(
+    source.indexOf(patched, first + patched.length) === -1,
+    `reviewed NSIS patch hunk is ambiguous: ${label}`,
+  );
   return `${source.slice(0, first)}${upstream}${source.slice(first + patched.length)}`;
 }
 
+function replaceExactly(source, patched, upstream, expectedCount, label) {
+  const actualCount = source.split(patched).length - 1;
+  assert(actualCount === expectedCount, `${label} occurs ${actualCount} times instead of ${expectedCount}`);
+  return source.replaceAll(patched, upstream);
+}
+
+function extractFunction(source, name) {
+  const marker = `Function ${name}\n`;
+  const start = source.indexOf(marker);
+  assert(start !== -1, `NSIS function ${name} is missing`);
+  assert(source.indexOf(marker, start + marker.length) === -1, `NSIS function ${name} is duplicated`);
+  const functionEnd = source.indexOf("FunctionEnd\n", start);
+  assert(functionEnd > start, `NSIS function ${name} has no FunctionEnd`);
+  const end = functionEnd + "FunctionEnd\n".length;
+  return { start, end, source: source.slice(start, end) };
+}
+
+function removeFunction(source, name) {
+  const extracted = extractFunction(source, name);
+  const trailingBlank = source.slice(extracted.end, extracted.end + 1) === "\n" ? 1 : 0;
+  return `${source.slice(0, extracted.start)}${source.slice(extracted.end + trailingBlank)}`;
+}
+
+function assertOrdered(source, tokens, label) {
+  let cursor = -1;
+  for (const token of tokens) {
+    const next = source.indexOf(token, cursor + 1);
+    assert(next !== -1, `${label} is missing: ${token}`);
+    assert(next > cursor, `${label} ordering changed near: ${token}`);
+    cursor = next;
+  }
+}
+
 function reconstructPinnedUpstream(vendored) {
+  let reconstructed = vendored;
   const rewrites = [
     {
       label: "vendored provenance header",
-      patched: `; Vendored from Tauri CLI's NSIS template for reproducible Windows packaging.
-; Upstream tag: tauri-cli-v2.11.4
-; Upstream commit: 8909f221d1515955fc843808032bdc5d62209c96
-; Upstream URL: https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi
-; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079
-; Upstream license: Apache-2.0 OR MIT
-; Local patch: bounded v0.1.7 ghost-registration recovery, observable transition
-; receipts, and explicit unattended N-1 upgrade behavior. The release validator
-; reverses these reviewed hunks and verifies both complete-file SHA-256 values.
-
-`,
+      patched: block([
+        "; Vendored from Tauri CLI's NSIS template for reproducible Windows packaging.",
+        "; Upstream tag: tauri-cli-v2.11.4",
+        "; Upstream commit: 8909f221d1515955fc843808032bdc5d62209c96",
+        "; Upstream URL: https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
+        "; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
+        "; Upstream license: Apache-2.0 OR MIT",
+        "; Local patch: version-neutral stale-registration and same-version repair,",
+        "; data-preserving upgrade overlays, and the bounded v0.1.7 runtime transition",
+        "; receipts. The release validator reverses these reviewed hunks and verifies",
+        "; both complete-file SHA-256 values.",
+        "",
+      ]),
       upstream: "",
     },
     {
-      label: "state variables",
-      patched: `Var OldMainBinaryName
-Var PreviousVersion
-Var InstallTransition
-Var GhostRegistrationMode
-`,
-      upstream: `Var OldMainBinaryName
-`,
+      label: "repair state variables",
+      patched: block([
+        "Var OldMainBinaryName",
+        "Var PreviousVersion",
+        "Var InstallTransition",
+        "Var RegistrationOverlayMode",
+      ]),
+      upstream: block(["Var OldMainBinaryName"]),
     },
     {
-      label: "maintenance-page ghost bypass",
-      patched: `  ; .onInit evaluates the one bounded v0.1.7 ghost registration before any
-  ; page or silent/passive branching. A custom page Abort skips only this
-  ; maintenance page, allowing the normal Install section to repair the exact
-  ; product registration without pretending that an old uninstaller ran.
-  \${If} $GhostRegistrationMode = 1
-    Abort
-  \${EndIf}
-
-`,
+      label: "maintenance-page repair bypass",
+      patched: block([
+        "  ; .onInit proves an exact current-user product registration before choosing",
+        "  ; this path. Stale registrations, same-version repairs, and upgrades replace",
+        "  ; only the candidate's known files and registration in place. They never run",
+        "  ; an absent or older uninstaller and never touch runtime, cases, or app data.",
+        "  ${If} $RegistrationOverlayMode <> 0",
+        "    Abort",
+        "  ${EndIf}",
+        "",
+      ]),
       upstream: "",
+    },
+    {
+      label: "repair directory lock",
+      patched: "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryIfRepairOrPassive\n",
+      upstream: "!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive\n",
     },
     {
       label: "previous-version receipt source",
-      patched: `  StrCpy $PreviousVersion $R0
-`,
+      patched: block(["  StrCpy $PreviousVersion $R0"]),
       upstream: "",
     },
     {
-      label: "headless normal-upgrade selection",
-      patched: `  ; Passive and silent setup have no usable radio-button HWND. Make their
-  ; normal upgrade behavior explicit: select the first (uninstall old version)
-  ; choice. Tauri updater mode remains the separate no-uninstall path below.
-  \${If} $PassiveMode = 1
-    StrCpy $R1 1
-  \${ElseIf} \${Silent}
-    StrCpy $R1 1
-  \${Else}
-    \${NSD_GetState} $R2 $R1
-  \${EndIf}
-`,
-      upstream: `  \${NSD_GetState} $R2 $R1
-`,
+      label: "headless maintenance selection",
+      patched: block([
+        "  ; Passive and silent setup have no usable radio-button HWND. Make their",
+        "  ; normal upgrade behavior explicit: select the first (uninstall old version)",
+        "  ; choice. Tauri updater mode remains the separate no-uninstall path below.",
+        "  ${If} $PassiveMode = 1",
+        "    StrCpy $R1 1",
+        "  ${ElseIf} ${Silent}",
+        "    StrCpy $R1 1",
+        "  ${Else}",
+        "    ${NSD_GetState} $R2 $R1",
+        "  ${EndIf}",
+      ]),
+      upstream: block(["  ${NSD_GetState} $R2 $R1"]),
     },
     {
       label: "old-uninstaller unattended-mode propagation",
-      patched: `      \${If} $PassiveMode = 1
-        StrCpy $R1 "$R1 /P" ; preserve passive mode in the old uninstaller
-      \${ElseIf} \${Silent}
-        StrCpy $R1 "$R1 /S" ; preserve silent mode in the old uninstaller
-      \${EndIf}
-`,
-      upstream: `      \${IfThen} $PassiveMode = 1 \${|} StrCpy $R1 "$R1 /P" \${|} ; append /P
-`,
+      patched: block([
+        "      ${If} $PassiveMode = 1",
+        '        StrCpy $R1 "$R1 /P" ; preserve passive mode in the old uninstaller',
+        "      ${ElseIf} ${Silent}",
+        '        StrCpy $R1 "$R1 /S" ; preserve silent mode in the old uninstaller',
+        "      ${EndIf}",
+      ]),
+      upstream: block([
+        '      ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P',
+      ]),
     },
     {
       label: "updater transition receipt",
-      patched: `    \${If} $PreviousVersion == "0.1.7"
-      StrCpy $InstallTransition "updated-0.1.7"
-    \${EndIf}
-`,
+      patched: block([
+        '    ${If} $PreviousVersion == "0.1.7"',
+        '      StrCpy $InstallTransition "updated-0.1.7"',
+        "    ${EndIf}",
+      ]),
       upstream: "",
     },
     {
-      label: "interactive overlay transition receipts",
-      patched: `      \${If} $PreviousVersion == "0.1.7"
-        StrCpy $InstallTransition "overlaid-0.1.7"
-      \${EndIf}
-`,
+      label: "interactive overlay transition receipt",
+      patched: block([
+        '      ${If} $PreviousVersion == "0.1.7"',
+        '        StrCpy $InstallTransition "overlaid-0.1.7"',
+        "      ${EndIf}",
+      ]),
+      upstream: "",
+      count: 2,
+    },
+    {
+      label: "old-uninstaller transition receipt",
+      patched: block([
+        "    ${If} $WixMode <> 1",
+        '    ${AndIf} $PreviousVersion == "0.1.7"',
+        '      StrCpy $InstallTransition "uninstalled-0.1.7"',
+        "    ${EndIf}",
+      ]),
       upstream: "",
     },
     {
-      label: "normal-uninstaller transition receipt",
-      patched: `    \${If} $WixMode <> 1
-    \${AndIf} $PreviousVersion == "0.1.7"
-      StrCpy $InstallTransition "uninstalled-0.1.7"
-    \${EndIf}
-`,
-      upstream: "",
-    },
-    {
-      label: "unconditional bounded detection",
-      patched: `  ; These calls are intentionally unconditional and precede every silent,
-  ; passive, custom-page, and install-section path. Qualification can therefore
-  ; distinguish the bounded ghost migration from a generic silent overwrite.
-  Call DetectBoundedV017GhostRegistration
-  Call PreserveBoundedV017TransitionForV018Reinstall
-  Call RunBoundedSilentV017Upgrade
-
-`,
+      label: "unconditional product repair detection",
+      patched: block([
+        "  ; These calls are intentionally unconditional and precede every silent,",
+        "  ; passive, custom-page, and install-section path. Product-owned binaries and",
+        "  ; registration can therefore be repaired without making private data or a",
+        "  ; managed runtime an installer prerequisite.",
+        "  Call DetectVersionNeutralProductRepair",
+        "  Call PreserveBoundedV017TransitionForV018Reinstall",
+        "",
+      ]),
       upstream: "",
     },
     {
       label: "transition receipt registry value",
-      patched: `  \${If} $InstallTransition == ""
-    DeleteRegValue SHCTX "\${UNINSTKEY}" "InstallTransition"
-  \${Else}
-    WriteRegStr SHCTX "\${UNINSTKEY}" "InstallTransition" "$InstallTransition"
-  \${EndIf}
-`,
-      upstream: "",
-    },
-    {
-      label: "bounded v0.1.7 registration proof",
-      patched: `Function DetectBoundedV017GhostRegistration
-  StrCpy $GhostRegistrationMode 0
-  StrCpy $InstallTransition ""
-  ; Tauri's normal upgrade path executes the previous UninstallString before
-  ; copying candidate files. v0.1.7 could leave a current-user registration
-  ; behind after both installed executables had already disappeared. Accept
-  ; only that one fail-closed ghost shape. This exception neither deletes the
-  ; registration nor touches LocalAppData/provider/WSL state.
-  ;
-  ; Every field is checked independently. A different product, publisher,
-  ; version, path, command, main-binary name, or any surviving executable keeps
-  ; Tauri's ordinary uninstaller and abort behavior.
-  !if "\${INSTALLMODE}" == "currentUser"
-    ReadRegStr $R2 HKCU "\${UNINSTKEY}" "DisplayName"
-    ReadRegStr $R3 HKCU "\${UNINSTKEY}" "Publisher"
-    ReadRegStr $R4 HKCU "\${UNINSTKEY}" "DisplayVersion"
-    ReadRegStr $R5 HKCU "\${UNINSTKEY}" "InstallLocation"
-    ReadRegStr $R6 HKCU "\${UNINSTKEY}" "UninstallString"
-    ReadRegStr $R7 HKCU "\${UNINSTKEY}" "MainBinaryName"
-    StrCpy $R8 '$\"$LOCALAPPDATA\\\${PRODUCTNAME}$\"'
-    StrCpy $R9 '$\"$LOCALAPPDATA\\\${PRODUCTNAME}\\uninstall.exe$\"'
-    \${If} $R2 == "\${PRODUCTNAME}"
-    \${AndIf} $R3 == "\${MANUFACTURER}"
-    \${AndIf} $R4 == "0.1.7"
-    \${AndIf} $R5 == $R8
-    \${AndIf} $R6 == $R9
-    \${AndIf} $R7 == "\${MAINBINARYNAME}.exe"
-    \${AndIfNot} \${FileExists} "$LOCALAPPDATA\\\${PRODUCTNAME}\\\${MAINBINARYNAME}.exe"
-    \${AndIfNot} \${FileExists} "$LOCALAPPDATA\\\${PRODUCTNAME}\\uninstall.exe"
-      StrCpy $INSTDIR "$LOCALAPPDATA\\\${PRODUCTNAME}"
-      StrCpy $GhostRegistrationMode 1
-      StrCpy $InstallTransition "recovered-ghost-v0.1.7"
-      DetailPrint "Recovering the exact incomplete ai-security-scanner v0.1.7 registration."
-    \${EndIf}
-  !endif
-FunctionEnd
-
-`,
-      upstream: "",
-    },
-    {
-      label: "bounded same-version transition preservation",
-      patched: "",
-      upstream: "",
-    },
-    {
-      label: "bounded silent N-1 upgrade",
-      patched: "",
+      patched: block([
+        '  ${If} $InstallTransition == ""',
+        '    DeleteRegValue SHCTX "${UNINSTKEY}" "InstallTransition"',
+        "  ${Else}",
+        '    WriteRegStr SHCTX "${UNINSTKEY}" "InstallTransition" "$InstallTransition"',
+        "  ${EndIf}",
+      ]),
       upstream: "",
     },
   ];
-  let reconstructed = vendored;
+
   for (const rewrite of rewrites) {
-    if (rewrite.label === "bounded v0.1.7 registration proof") {
-      const start = reconstructed.indexOf("Function DetectBoundedV017GhostRegistration\n");
-      const functionEnd = reconstructed.indexOf("FunctionEnd\n", start);
-      assert(start !== -1 && functionEnd > start, "reviewed NSIS ghost-proof function is missing");
-      const end = functionEnd + "FunctionEnd\n\n".length;
-      reconstructed = `${reconstructed.slice(0, start)}${reconstructed.slice(end)}`;
-      continue;
-    }
-    if (rewrite.label === "bounded same-version transition preservation") {
-      const start = reconstructed.indexOf("Function PreserveBoundedV017TransitionForV018Reinstall\n");
-      const functionEnd = reconstructed.indexOf("FunctionEnd\n", start);
-      assert(start !== -1 && functionEnd > start, "reviewed NSIS same-version receipt preservation is missing");
-      const end = functionEnd + "FunctionEnd\n\n".length;
-      reconstructed = `${reconstructed.slice(0, start)}${reconstructed.slice(end)}`;
-      continue;
-    }
-    if (rewrite.label === "bounded silent N-1 upgrade") {
-      const start = reconstructed.indexOf("Function RunBoundedSilentV017Upgrade\n");
-      const functionEnd = reconstructed.indexOf("FunctionEnd\n", start);
-      assert(start !== -1 && functionEnd > start, "reviewed NSIS silent N-1 upgrade function is missing");
-      const end = functionEnd + "FunctionEnd\n\n".length;
-      reconstructed = `${reconstructed.slice(0, start)}${reconstructed.slice(end)}`;
-      continue;
-    }
-    if (rewrite.label === "interactive overlay transition receipts") {
-      assert(
-        reconstructed.split(rewrite.patched).length === 3,
-        "reviewed NSIS overlay receipt must occur in exactly two interactive branches",
-      );
-      reconstructed = reconstructed.replaceAll(rewrite.patched, rewrite.upstream);
-      continue;
-    }
-    reconstructed = replaceOnce(
-      reconstructed,
-      rewrite.patched,
-      rewrite.upstream,
-      rewrite.label,
-    );
+    reconstructed = rewrite.count
+      ? replaceExactly(
+          reconstructed,
+          rewrite.patched,
+          rewrite.upstream,
+          rewrite.count,
+          rewrite.label,
+        )
+      : replaceOnce(reconstructed, rewrite.patched, rewrite.upstream, rewrite.label);
   }
+  reconstructed = removeFunction(reconstructed, "DetectVersionNeutralProductRepair");
+  reconstructed = removeFunction(
+    reconstructed,
+    "PreserveBoundedV017TransitionForV018Reinstall",
+  );
+  reconstructed = removeFunction(reconstructed, "SkipDirectoryIfRepairOrPassive");
   return reconstructed;
 }
 
-function validateBoundedPatch(vendored) {
-  const start = vendored.indexOf("Function DetectBoundedV017GhostRegistration\n");
-  const end = vendored.indexOf("FunctionEnd\n", start);
-  assert(start !== -1 && end > start, "bounded ghost registration function is missing");
-  const proof = vendored.slice(start, end + "FunctionEnd\n".length);
-  for (const required of [
-    '!if "${VERSION}" == "0.1.8"',
-    '!if "${INSTALLMODE}" == "currentUser"',
-    'ReadRegStr $R2 HKCU "${UNINSTKEY}" "DisplayName"',
-    'ReadRegStr $R3 HKCU "${UNINSTKEY}" "Publisher"',
-    'ReadRegStr $R4 HKCU "${UNINSTKEY}" "DisplayVersion"',
-    'ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"',
-    'ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"',
-    'ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"',
-    'ReadRegStr $R0 HKCU "${UNINSTKEY}" "InstallTransition"',
-    'StrCpy $R8 \'$\\"$LOCALAPPDATA\\${PRODUCTNAME}$\\"\'',
-    'StrCpy $R9 \'$\\"$LOCALAPPDATA\\${PRODUCTNAME}\\uninstall.exe$\\"\'',
-    '${If} $R2 == "${PRODUCTNAME}"',
-    '${AndIf} $R3 == "${MANUFACTURER}"',
-    '${AndIf} $R4 == "0.1.7"',
-    '${AndIf} $R5 == $R8',
-    '${AndIf} $R6 == $R9',
-    '${AndIf} $R7 == "${MAINBINARYNAME}.exe"',
-    '${AndIf} $R0 == ""',
-    '${AndIfNot} ${FileExists} "$LOCALAPPDATA\\${PRODUCTNAME}\\${MAINBINARYNAME}.exe"',
-    '${AndIfNot} ${FileExists} "$LOCALAPPDATA\\${PRODUCTNAME}\\uninstall.exe"',
-    'StrCpy $InstallTransition "recovered-ghost-v0.1.7"',
-  ]) {
-    assert(proof.includes(required), `bounded ghost registration proof is missing: ${required}`);
-  }
-  for (const forbidden of [
-    "EnumRegKey",
-    "DeleteRegKey",
-    "DeleteRegValue",
-    "Delete ",
-    "RMDir",
-    "CopyFiles",
-    "Exec ",
-    "ExecWait",
-    "nsExec",
-    "wsl",
-    "--unregister",
-  ]) {
-    assert(!proof.includes(forbidden), `bounded ghost registration proof mutates or broadens scope: ${forbidden}`);
-  }
-  const preservationStart = vendored.indexOf("Function PreserveBoundedV017TransitionForV018Reinstall\n");
-  const preservationEnd = vendored.indexOf("FunctionEnd\n", preservationStart);
-  assert(
-    preservationStart !== -1 && preservationEnd > preservationStart,
-    "bounded same-version transition preservation function is missing",
-  );
-  const preservation = vendored.slice(
-    preservationStart,
-    preservationEnd + "FunctionEnd\n".length,
-  );
-  for (const required of [
-    '!if "${VERSION}" == "0.1.8"',
-    '!if "${INSTALLMODE}" == "currentUser"',
-    'ReadRegStr $R2 HKCU "${UNINSTKEY}" "DisplayName"',
-    'ReadRegStr $R3 HKCU "${UNINSTKEY}" "Publisher"',
-    'ReadRegStr $R4 HKCU "${UNINSTKEY}" "DisplayVersion"',
-    'ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"',
-    'ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"',
-    'ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"',
-    'ReadRegStr $R0 HKCU "${UNINSTKEY}" "InstallTransition"',
-    'StrCpy $R8 \'$\\"$INSTDIR$\\"\'',
-    'StrCpy $R9 \'$\\"$INSTDIR\\uninstall.exe$\\"\'',
-    '${If} $R2 == "${PRODUCTNAME}"',
-    '${AndIf} $R3 == "${MANUFACTURER}"',
-    '${AndIf} $R4 == "0.1.8"',
-    '${AndIf} $R5 == $R8',
-    '${AndIf} $R6 == $R9',
-    '${AndIf} $R7 == "${MAINBINARYNAME}.exe"',
-    '${AndIf} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"',
-    '${AndIf} ${FileExists} "$INSTDIR\\uninstall.exe"',
-    '${If} $R0 == "recovered-ghost-v0.1.7"',
-    '${OrIf} $R0 == "uninstalled-0.1.7"',
-    '${OrIf} $R0 == "updated-0.1.7"',
-    '${OrIf} $R0 == "overlaid-0.1.7"',
-    'StrCpy $InstallTransition $R0',
-  ]) {
-    assert(preservation.includes(required), `same-version transition preservation is missing: ${required}`);
-  }
-  for (const forbidden of [
-    "EnumRegKey",
-    "DeleteRegKey",
-    "DeleteRegValue",
-    "Delete ",
-    "RMDir",
-    "CopyFiles",
-    "Exec ",
-    "ExecWait",
-    "nsExec",
-    "wsl",
-    "--unregister",
-  ]) {
-    assert(
-      !preservation.includes(forbidden),
-      `same-version transition preservation mutates or broadens scope: ${forbidden}`,
-    );
-  }
-  const silentUpgradeStart = vendored.indexOf("Function RunBoundedSilentV017Upgrade\n");
-  const silentUpgradeEnd = vendored.indexOf("FunctionEnd\n", silentUpgradeStart);
-  assert(
-    silentUpgradeStart !== -1 && silentUpgradeEnd > silentUpgradeStart,
-    "bounded silent N-1 upgrade function is missing",
-  );
-  const silentUpgrade = vendored.slice(
-    silentUpgradeStart,
-    silentUpgradeEnd + "FunctionEnd\n".length,
-  );
-  const silentUpgradeRequired = [
-    '!if "${VERSION}" == "0.1.8"',
-    '!if "${INSTALLMODE}" == "currentUser"',
-    '${IfNot} ${Silent}',
-    '${If} $UpdateMode = 1',
-    '${If} $GhostRegistrationMode = 1',
-    'ReadRegStr $R2 HKCU "${UNINSTKEY}" "DisplayName"',
-    'ReadRegStr $R3 HKCU "${UNINSTKEY}" "Publisher"',
-    'ReadRegStr $R4 HKCU "${UNINSTKEY}" "DisplayVersion"',
-    'ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"',
-    'ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"',
-    'ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"',
-    'ReadRegStr $R0 HKCU "${UNINSTKEY}" "InstallTransition"',
-    '${If} $R4 != "0.1.7"',
-    'StrCpy $R8 \'$\\"$INSTDIR$\\"\'',
-    'StrCpy $R9 \'$\\"$INSTDIR\\uninstall.exe$\\"\'',
-    '${If} $R2 == "${PRODUCTNAME}"',
-    '${AndIf} $R3 == "${MANUFACTURER}"',
-    '${AndIf} $R4 == "0.1.7"',
-    '${AndIf} $R5 == $R8',
-    '${AndIf} $R6 == $R9',
-    '${AndIf} $R7 == "${MAINBINARYNAME}.exe"',
-    '${AndIf} $R0 == ""',
-    '${AndIf} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"',
-    '${AndIf} ${FileExists} "$INSTDIR\\uninstall.exe"',
-    'StrCpy $PreviousVersion "0.1.7"',
-    "ExecWait '$R6 /S _?=$INSTDIR' $0",
-    '${If} ${Errors}',
-    '${If} $0 <> 0',
-    '${If} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"',
-    'StrCpy $InstallTransition "uninstalled-0.1.7"',
-    '${Else}',
-    'SetErrorLevel 1',
-    'Abort "The existing v0.1.7 registration is incomplete or does not match the reviewed upgrade path."',
+function modeledRepairDecision({ exactIdentity, mainBinaryPresent, uninstallerPresent, compare }) {
+  if (!exactIdentity) return "normal";
+  if (!mainBinaryPresent || !uninstallerPresent) return "stale_repair";
+  if (compare === 0) return "same_version_repair";
+  if (compare === 1) return "upgrade_overlay";
+  return "normal";
+}
+
+function validateModeledDecisionTable() {
+  const fixtures = [
+    [{ exactIdentity: false, mainBinaryPresent: false, uninstallerPresent: false, compare: 1 }, "normal"],
+    [{ exactIdentity: true, mainBinaryPresent: false, uninstallerPresent: false, compare: -1 }, "stale_repair"],
+    [{ exactIdentity: true, mainBinaryPresent: false, uninstallerPresent: true, compare: 0 }, "stale_repair"],
+    [{ exactIdentity: true, mainBinaryPresent: true, uninstallerPresent: false, compare: 0 }, "stale_repair"],
+    [{ exactIdentity: true, mainBinaryPresent: true, uninstallerPresent: true, compare: 0 }, "same_version_repair"],
+    [{ exactIdentity: true, mainBinaryPresent: true, uninstallerPresent: true, compare: 1 }, "upgrade_overlay"],
+    [{ exactIdentity: true, mainBinaryPresent: true, uninstallerPresent: true, compare: -1 }, "normal"],
+    [{ exactIdentity: true, mainBinaryPresent: true, uninstallerPresent: true, compare: null }, "normal"],
   ];
-  for (const required of silentUpgradeRequired) {
-    assert(silentUpgrade.includes(required), `bounded silent N-1 upgrade is missing: ${required}`);
-  }
-  for (const forbidden of [
-    "EnumRegKey",
-    "HKLM",
-    "DeleteRegKey",
-    "DeleteRegValue",
-    "Delete ",
-    "RMDir",
-    "CopyFiles",
-    "Exec ",
-    "nsExec",
-    "wsl",
-    "--unregister",
-    "WriteRegStr",
-    "WriteRegDWORD",
-  ]) {
-    assert(!silentUpgrade.includes(forbidden), `bounded silent N-1 upgrade broadens scope: ${forbidden}`);
-  }
-  assert(
-    silentUpgrade.split("ExecWait").length === 2,
-    "bounded silent N-1 upgrade must execute exactly one reviewed command",
-  );
-  assert(
-    silentUpgrade.split('StrCpy $InstallTransition "uninstalled-0.1.7"').length === 2,
-    "bounded silent N-1 upgrade must issue its receipt exactly once",
-  );
-  for (const [before, after, label] of [
-    ['${IfNot} ${Silent}', '${If} $UpdateMode = 1', "silent before updater guard"],
-    ['${If} $UpdateMode = 1', '${If} $GhostRegistrationMode = 1', "updater before ghost guard"],
-    ['${If} $GhostRegistrationMode = 1', 'ReadRegStr $R2 HKCU', "guards before registry proof"],
-    ['ReadRegStr $R0 HKCU', '${If} $R4 != "0.1.7"', "registry proof before N-1 selection"],
-    ['StrCpy $PreviousVersion "0.1.7"', "ExecWait '$R6 /S _?=$INSTDIR' $0", "N-1 binding before execution"],
-    ["ExecWait '$R6 /S _?=$INSTDIR' $0", '${If} ${Errors}', "execution before launch-error check"],
-    ['${If} ${Errors}', '${If} $0 <> 0', "launch error before exit-code check"],
-    ['${If} $0 <> 0', '${If} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"', "exit code before postcondition"],
-    ['${If} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"', 'StrCpy $InstallTransition "uninstalled-0.1.7"', "postcondition before receipt"],
-  ]) {
+  for (const [input, expected] of fixtures) {
     assert(
-      silentUpgrade.indexOf(before) !== -1 &&
-        silentUpgrade.indexOf(after) > silentUpgrade.indexOf(before),
-      `bounded silent N-1 upgrade ordering changed: ${label}`,
+      modeledRepairDecision(input) === expected,
+      `version-neutral installer decision drifted for ${JSON.stringify(input)}`,
     );
   }
-  const onInit = vendored.slice(vendored.indexOf("Function .onInit\n"), vendored.indexOf("FunctionEnd\n", vendored.indexOf("Function .onInit\n")));
-  assert(
-    onInit.includes("Call DetectBoundedV017GhostRegistration") &&
-      vendored.split("Call DetectBoundedV017GhostRegistration").length === 2,
-    "bounded ghost detection is not one unconditional .onInit call",
+}
+
+function validateProductRepairPatch(vendored) {
+  const detector = extractFunction(vendored, "DetectVersionNeutralProductRepair").source;
+  assertOrdered(
+    detector,
+    [
+      "StrCpy $RegistrationOverlayMode 0",
+      'ReadRegStr $R2 HKCU "${UNINSTKEY}" "DisplayName"',
+      'ReadRegStr $R3 HKCU "${UNINSTKEY}" "Publisher"',
+      'ReadRegStr $R4 HKCU "${UNINSTKEY}" "DisplayVersion"',
+      'ReadRegStr $R5 HKCU "${UNINSTKEY}" "InstallLocation"',
+      'ReadRegStr $R6 HKCU "${UNINSTKEY}" "UninstallString"',
+      'ReadRegStr $R7 HKCU "${UNINSTKEY}" "MainBinaryName"',
+      'StrCpy $R8 \'$\\"$INSTDIR$\\"\'',
+      'StrCpy $R9 \'$\\"$INSTDIR\\uninstall.exe$\\"\'',
+      '${If} $R2 == "${PRODUCTNAME}"',
+      '${AndIf} $R3 == "${MANUFACTURER}"',
+      "${AndIf} $R5 == $R8",
+      "${AndIf} $R6 == $R9",
+      '${AndIf} $R7 == "${MAINBINARYNAME}.exe"',
+      'StrCpy $PreviousVersion $R4',
+      '${If} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"',
+      '${AndIf} ${FileExists} "$INSTDIR\\uninstall.exe"',
+      'nsis_tauri_utils::SemverCompare "${VERSION}" $R4',
+      "Pop $R1",
+      "StrCpy $R0 $R1",
+      "${If} $R1 = 0",
+      "StrCpy $RegistrationOverlayMode 2",
+      "${ElseIf} $R1 = 1",
+      "StrCpy $RegistrationOverlayMode 3",
+      "${Else}",
+      "StrCpy $RegistrationOverlayMode 1",
+    ],
+    "version-neutral product repair detector",
   );
-  assert(
-    onInit.includes("Call PreserveBoundedV017TransitionForV018Reinstall") &&
-      vendored.split("Call PreserveBoundedV017TransitionForV018Reinstall").length === 2 &&
-      onInit.indexOf("Call DetectBoundedV017GhostRegistration") <
-        onInit.indexOf("Call PreserveBoundedV017TransitionForV018Reinstall"),
-    "bounded same-version receipt preservation is not one ordered .onInit call",
-  );
-  assert(
-    onInit.includes("Call RunBoundedSilentV017Upgrade") &&
-      vendored.split("Call RunBoundedSilentV017Upgrade").length === 2 &&
-      onInit.indexOf("Call PreserveBoundedV017TransitionForV018Reinstall") <
-        onInit.indexOf("Call RunBoundedSilentV017Upgrade"),
-    "bounded silent N-1 upgrade is not one ordered .onInit call",
-  );
-  assert(
-    vendored.includes('WriteRegStr SHCTX "${UNINSTKEY}" "InstallTransition" "$InstallTransition"'),
-    "installer does not persist an observable migration receipt",
-  );
-  assert(
-    vendored.includes('${AndIf} $PreviousVersion == "0.1.7"') &&
-      vendored.includes('StrCpy $InstallTransition "uninstalled-0.1.7"'),
-    "normal NSIS upgrade does not persist an old-uninstaller receipt",
-  );
-  assert(
-    vendored.includes('StrCpy $R1 "$R1 /P" ; preserve passive mode in the old uninstaller') &&
-      vendored.includes('StrCpy $R1 "$R1 /S" ; preserve silent mode in the old uninstaller'),
-    "normal unattended upgrade does not propagate its mode to the old uninstaller",
-  );
-  assert(
-    vendored.includes('StrCpy $InstallTransition "updated-0.1.7"') &&
-      vendored.split('StrCpy $InstallTransition "overlaid-0.1.7"').length === 3,
-    "updater and interactive overlay transitions are not independently receipted",
-  );
-  for (const header of [
-    `; Upstream tag: ${PINNED_UPSTREAM.upstreamTag}`,
-    `; Upstream commit: ${PINNED_UPSTREAM.upstreamCommit}`,
-    `; Upstream URL: ${PINNED_UPSTREAM.upstreamUrl}`,
-    `; Upstream SHA-256: ${PINNED_UPSTREAM.upstreamSha256}`,
-    "; Upstream license: Apache-2.0 OR MIT",
-    "; Local patch: bounded v0.1.7 ghost-registration recovery, observable transition",
+  for (const required of [
+    'StrCpy $InstallTransition "recovered-ghost-v0.1.7"',
+    'StrCpy $InstallTransition "overlaid-0.1.7"',
+    '${AndIf} $3 == ""',
   ]) {
-    assert(vendored.includes(header), `vendored NSIS provenance header is missing: ${header}`);
+    assert(detector.includes(required), `bounded runtime receipt bridge is missing: ${required}`);
   }
-}
-
-function expectBoundedPatchMutationRejected(vendored, before, after, label) {
-  const first = vendored.indexOf(before);
-  assert(first !== -1, `NSIS mutation self-test input is missing: ${label}`);
   assert(
-    vendored.indexOf(before, first + before.length) === -1,
-    `NSIS mutation self-test input is ambiguous: ${label}`,
+    detector.indexOf("StrCpy $RegistrationOverlayMode 1") <
+      detector.lastIndexOf('${If} $R4 == "0.1.7"'),
+    "the old version incorrectly gates stale-registration repair",
   );
-  const mutated = `${vendored.slice(0, first)}${after}${vendored.slice(first + before.length)}`;
-  let rejected = false;
-  try {
-    validateBoundedPatch(mutated);
-  } catch {
-    rejected = true;
+  assert(
+    !/^\s*(?:Delete|DeleteReg|RMDir|Exec|ExecWait|nsExec|WriteReg|EnumRegKey)\b/mu.test(detector),
+    "product repair detection mutates state or executes an old command",
+  );
+  assert(!detector.includes("--unregister"), "product repair detection claims WSL state");
+
+  const preservation = extractFunction(
+    vendored,
+    "PreserveBoundedV017TransitionForV018Reinstall",
+  ).source;
+  for (const required of [
+    '!if "${VERSION}" == "0.1.8"',
+    'ReadRegStr $2 HKCU "${UNINSTKEY}" "InstallTransition"',
+    '${If} $2 == "recovered-ghost-v0.1.7"',
+    '${OrIf} $2 == "uninstalled-0.1.7"',
+    '${OrIf} $2 == "updated-0.1.7"',
+    '${OrIf} $2 == "overlaid-0.1.7"',
+    "StrCpy $InstallTransition $2",
+  ]) {
+    assert(preservation.includes(required), `bounded receipt preservation is missing: ${required}`);
   }
-  assert(rejected, `NSIS patch validator accepted mutation: ${label}`);
+  assert(
+    !/^\s*(?:Delete|DeleteReg|RMDir|Exec|ExecWait|nsExec|WriteReg|EnumRegKey)\b/mu.test(
+      preservation,
+    ),
+    "same-version receipt preservation mutates product or user state",
+  );
+
+  const page = extractFunction(vendored, "PageReinstall").source;
+  assertOrdered(
+    page,
+    [
+      "${If} $RegistrationOverlayMode <> 0",
+      "Abort",
+      "${EndIf}",
+      'EnumRegKey $1 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall" $0',
+    ],
+    "maintenance-page repair bypass",
+  );
+  const onInit = extractFunction(vendored, ".onInit").source;
+  assert(
+    onInit.split("Call DetectVersionNeutralProductRepair").length === 2,
+    "product repair detector is not one unconditional .onInit call",
+  );
+  assertOrdered(
+    onInit,
+    [
+      "Call RestorePreviousInstallLocation",
+      "Call DetectVersionNeutralProductRepair",
+      "Call PreserveBoundedV017TransitionForV018Reinstall",
+    ],
+    "installer initialization",
+  );
+  assert(
+    vendored.split("!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryIfRepairOrPassive").length ===
+      2,
+    "repair-aware directory page hook is missing or duplicated",
+  );
+  const directoryGuard = extractFunction(
+    vendored,
+    "SkipDirectoryIfRepairOrPassive",
+  ).source;
+  assertOrdered(
+    directoryGuard,
+    [
+      "${If} $RegistrationOverlayMode <> 0",
+      "${OrIf} $PassiveMode = 1",
+      "Abort",
+      "${EndIf}",
+    ],
+    "repair install-directory lock",
+  );
+  assert(
+    !vendored.includes("RunBoundedSilentV017Upgrade") &&
+      !vendored.includes("DetectBoundedV017GhostRegistration"),
+    "version-specific installer gate or old-uninstaller path remains",
+  );
+
+  const installSectionStart = vendored.indexOf("Section Install\n");
+  const installSectionEnd = vendored.indexOf("SectionEnd\n", installSectionStart);
+  assert(installSectionStart !== -1 && installSectionEnd > installSectionStart, "Install section is missing");
+  const installSection = vendored.slice(installSectionStart, installSectionEnd);
+  assert(
+    installSection.includes('File "${MAINBINARYSRCPATH}"') &&
+      installSection.includes('WriteUninstaller "$INSTDIR\\uninstall.exe"') &&
+      installSection.includes('WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"'),
+    "repair no longer replaces product binaries and registration",
+  );
+  for (const forbidden of [
+    'RmDir /r "$APPDATA',
+    'RmDir /r "$LOCALAPPDATA',
+    "managed-runtime",
+    "wsl",
+    "--unregister",
+  ]) {
+    assert(!installSection.toLowerCase().includes(forbidden.toLowerCase()), `Install section touches excluded data: ${forbidden}`);
+  }
 }
 
-function expectSilentUpgradeMutationRejected(vendored, before, after, label) {
-  const start = vendored.indexOf("Function RunBoundedSilentV017Upgrade\n");
-  const functionEnd = vendored.indexOf("FunctionEnd\n", start);
-  assert(start !== -1 && functionEnd > start, "NSIS silent-upgrade mutation function is missing");
-  const end = functionEnd + "FunctionEnd\n".length;
-  const source = vendored.slice(start, end);
+function expectRepairMutationRejected(vendored, functionName, before, after, label) {
+  const scope = extractFunction(vendored, functionName);
+  const source = scope.source;
   const first = source.indexOf(before);
-  assert(first !== -1, `NSIS silent-upgrade mutation input is missing: ${label}`);
-  assert(
-    source.indexOf(before, first + before.length) === -1,
-    `NSIS silent-upgrade mutation input is ambiguous: ${label}`,
-  );
+  assert(first !== -1, `mutation fixture is missing: ${label}`);
+  assert(source.indexOf(before, first + before.length) === -1, `mutation fixture is ambiguous: ${label}`);
   const mutatedFunction = `${source.slice(0, first)}${after}${source.slice(first + before.length)}`;
-  const mutated = `${vendored.slice(0, start)}${mutatedFunction}${vendored.slice(end)}`;
+  const mutated = `${vendored.slice(0, scope.start)}${mutatedFunction}${vendored.slice(scope.end)}`;
   let rejected = false;
   try {
-    validateBoundedPatch(mutated);
+    validateProductRepairPatch(mutated);
   } catch {
     rejected = true;
   }
-  assert(rejected, `NSIS patch validator accepted silent-upgrade mutation: ${label}`);
+  assert(rejected, `NSIS repair validator accepted mutation: ${label}`);
 }
 
-function validateBoundedPatchMutationGuards(vendored) {
-  for (const [before, after, label] of [
+function validateMutationGuards(vendored) {
+  for (const [functionName, before, after, label] of [
+    ["DetectVersionNeutralProductRepair", '    ${AndIf} $R3 == "${MANUFACTURER}"\n', "", "publisher binding removed"],
+    ["DetectVersionNeutralProductRepair", "    ${AndIf} $R6 == $R9\n", "", "uninstall path binding removed"],
+    ["DetectVersionNeutralProductRepair", '      ${AndIf} ${FileExists} "$INSTDIR\\uninstall.exe"\n', "", "uninstaller state removed"],
+    ["DetectVersionNeutralProductRepair", "          StrCpy $RegistrationOverlayMode 2\n", "          StrCpy $RegistrationOverlayMode 0\n", "same-version repair disabled"],
+    ["DetectVersionNeutralProductRepair", "          StrCpy $RegistrationOverlayMode 3\n", "          StrCpy $RegistrationOverlayMode 0\n", "upgrade overlay disabled"],
     [
-      "  Call DetectBoundedV017GhostRegistration\n  Call PreserveBoundedV017TransitionForV018Reinstall\n  Call RunBoundedSilentV017Upgrade\n",
-      "  Call DetectBoundedV017GhostRegistration\n  Call RunBoundedSilentV017Upgrade\n  Call PreserveBoundedV017TransitionForV018Reinstall\n",
-      "silent upgrade call reordered before receipt preservation",
+      "PageReinstall",
+      "  ${If} $RegistrationOverlayMode <> 0\n    Abort\n  ${EndIf}\n",
+      "",
+      "old-uninstaller bypass removed",
     ],
-    ["  Call RunBoundedSilentV017Upgrade\n", "", "silent upgrade call removed"],
-  ]) {
-    expectBoundedPatchMutationRejected(vendored, before, after, label);
-  }
-  for (const [before, after, label] of [
-    ["    ${IfNot} ${Silent}\n      Return\n    ${EndIf}\n", "", "silent-mode guard removed"],
-    ["    ${If} $UpdateMode = 1\n      Return\n    ${EndIf}\n", "", "updater guard removed"],
-    ["    ${If} $GhostRegistrationMode = 1\n      Return\n    ${EndIf}\n", "", "ghost guard removed"],
-    ['    ${If} $R4 != "0.1.7"\n      Return\n    ${EndIf}\n', "", "N-1 version selection removed"],
-    ['    ${AndIf} $R5 == $R8\n', "", "install-location proof removed"],
-    ['    ${AndIf} $R6 == $R9\n', "", "uninstall-command proof removed"],
-    ['    ${AndIf} $R0 == ""\n', "", "blank predecessor receipt proof removed"],
-    ['    ${AndIf} ${FileExists} "$INSTDIR\\uninstall.exe"\n', "", "uninstaller presence proof removed"],
-    ["      ExecWait '$R6 /S _?=$INSTDIR' $0\n", "      ExecWait '$R6 _?=$INSTDIR' $0\n", "silent flag removed from old uninstaller"],
-    ['      ${If} $0 <> 0\n', '      ${If} $0 = 0\n', "old-uninstaller exit check inverted"],
-    ['      ${If} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"\n', '      ${IfNot} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"\n', "post-uninstall file check inverted"],
     [
-      "      ClearErrors\n      ExecWait '$R6 /S _?=$INSTDIR' $0\n",
-      '      StrCpy $InstallTransition "uninstalled-0.1.7"\n      ClearErrors\n      ExecWait \'$R6 /S _?=$INSTDIR\' $0\n',
-      "receipt written before the old uninstaller succeeds",
+      "SkipDirectoryIfRepairOrPassive",
+      "  ${If} $RegistrationOverlayMode <> 0\n",
+      "  ${If} $RegistrationOverlayMode = 0\n",
+      "repair install-directory lock disabled",
     ],
   ]) {
-    expectSilentUpgradeMutationRejected(vendored, before, after, label);
+    expectRepairMutationRejected(vendored, functionName, before, after, label);
   }
+  const detector = extractFunction(vendored, "DetectVersionNeutralProductRepair");
+  const injected = `${vendored.slice(0, detector.end - "FunctionEnd\n".length)}  ExecWait '$R6' $0\nFunctionEnd\n${vendored.slice(detector.end)}`;
+  let rejected = false;
+  try {
+    validateProductRepairPatch(injected);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, "NSIS repair validator accepted execution of the old uninstaller");
 }
 
 export async function validateWindowsNsisTemplate() {
@@ -597,7 +485,7 @@ export async function validateWindowsNsisTemplate() {
   );
   assert(
     tauri.bundle?.windows?.nsis?.installMode === "currentUser",
-    "bounded NSIS ghost recovery requires the explicit current-user install mode",
+    "version-neutral NSIS repair requires the explicit current-user install mode",
   );
   assert(
     packageLock.packages?.["node_modules/@tauri-apps/cli"]?.version === "2.11.4",
@@ -615,15 +503,16 @@ export async function validateWindowsNsisTemplate() {
       `release third-party notice does not cover the vendored NSIS template: ${noticeMarker}`,
     );
   }
-  validateBoundedPatch(vendored);
-  validateBoundedPatchMutationGuards(vendored);
+  validateModeledDecisionTable();
+  validateProductRepairPatch(vendored);
+  validateMutationGuards(vendored);
   const reconstructed = reconstructPinnedUpstream(vendored);
   assert(
     sha256(reconstructed) === provenance.upstreamSha256,
     "reversing the reviewed patch does not reconstruct the pinned upstream template",
   );
   process.stdout.write(
-    `Validated bounded NSIS template patch against ${provenance.upstreamTag} (${provenance.upstreamCommit})\n`,
+    `Validated version-neutral NSIS repair against ${provenance.upstreamTag} (${provenance.upstreamCommit})\n`,
   );
 }
 

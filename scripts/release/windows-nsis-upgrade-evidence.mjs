@@ -1811,8 +1811,8 @@ function validateObservations(observations, currentVersion, currentInstaller) {
     "transition receipt survival across same-version reinstall",
   );
   assert(
-    observations.installation.transitionReceipt === `uninstalled-${PRIOR_WINDOWS_NSIS.version}`,
-    "normal NSIS upgrade did not record a completed N-1 uninstaller transition",
+    observations.installation.transitionReceipt === `overlaid-${PRIOR_WINDOWS_NSIS.version}`,
+    "normal NSIS upgrade did not record the reviewed data-preserving N-1 overlay",
   );
 
   const data = observations.dataPreservation;
