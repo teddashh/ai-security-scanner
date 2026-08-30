@@ -120,7 +120,7 @@ implementation, effectiveness, certification, or compliance.
 
 [Docker Desktop licensing](https://docs.docker.com/subscription/desktop-license/) is not the same as the Apache-2.0 licenses on Moby, Docker CLI, or Docker Compose. `ai-security-scanner` must not bundle, redistribute, or require an enterprise user to use Docker Desktop based only on those repository licenses.
 
-The packaged path uses a private, versioned Podman machine runtime: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and a Windows WSL 2 capability that the signed installer detects and prepares automatically when needed. Docker or a user-installed Podman remains an optional compatibility provider and is never treated as part of the installer.
+The intended packaged path uses a private, versioned Podman machine runtime: QEMU on Linux, Apple Virtualization.framework through vfkit on macOS, and a Windows WSL 2 capability that the signed installer must detect and prepare automatically when needed. This inventory does not claim that the Windows path is implemented or qualified; current gaps remain in the [product audit](docs/product-audit.md). Docker or a user-installed Podman remains an optional compatibility provider and is never treated as part of the installer.
 
 ## Rules, feeds, plugins, and databases
 

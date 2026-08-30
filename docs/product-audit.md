@@ -2,7 +2,7 @@
 
 Status: completed static product-design, UX, architecture, and specification audit
 
-Documentation follow-up: subordinate current-behavior documents are being reconciled to the canonical specification on the same integration workline. Residual contradictions are defects to remove, not alternative requirements. Evidence that describes the pre-rewrite documents is explicitly pinned to the audit baseline below.
+Documentation follow-up: the tracked current product-behavior documents have been reconciled to the canonical specification on this integration workline. Historical release-line notes are explicitly non-normative, and a low-cost CI contract check now verifies document authority, the highest-risk outcome-first decisions, and local links. A future contradiction remains a defect to remove, not an alternative requirement. Evidence that describes the pre-rewrite documents is explicitly pinned to the audit baseline below.
 
 Audit baseline: `7e0f0de548bebf64dcfdc41d9b000f9e7a16fc4b` (`origin/main` at audit start)
 
@@ -554,12 +554,14 @@ The canonical specification now explicitly defines:
 
 Architecture, managed-runtime, threat-model, provider, engine-catalog, release, cloud-usability,
 README, contributing, security, third-party, mapping, and research references have received an
-outcome-first consistency pass. That pass is not proof that every sentence or machine-readable
-release contract is already aligned: any residual global-readiness, synchronous-cleanup,
-all-platform, framework, or supply-chain coupling remains an implementation/documentation defect
-under this audit. Historical release notes preserve what an old version claimed or did, but are
-labeled non-normative and must not be copied into current implementation. Baseline contradictions
-remain audit evidence through commit-pinned citations; they are not current requirements.
+outcome-first consistency pass. Their body text now defers product decisions to the canonical
+specification instead of defining competing readiness, recovery, framework, engine, or release
+rules. Historical release notes preserve what an old version claimed or did, but are labeled
+non-normative and must not be copied into current implementation. The repository's focused
+document-contract test checks those authority declarations, high-risk product decisions, and local
+links on every ordinary CI run. Baseline contradictions remain audit evidence through commit-pinned
+citations; they are not current requirements. Machine-readable contracts and production code still
+reveal implementation gaps; those gaps cannot silently redefine the intended behavior.
 
 This audit does not assert those requirements are implemented. It makes their absence explicit and gives the next goal a bounded P0 starting set.
 
@@ -570,6 +572,8 @@ Performed for this audit:
 - repository branch/HEAD/worktree inspection;
 - whole-repository static search and file/line evidence review;
 - cross-check of canonical spec against frontend, backend, runtime, installer, reporting, storage, tests, and workflows;
+- current subordinate-document authority, outcome-invariant, historical-label, and local-link checks;
+- all low-cost `tests/ci/*.test.mjs` checks, including the document contract and agent-skill parity;
 - Markdown structure/content checks and `git diff --check` after writing (recorded in the final handoff).
 
 Intentionally not performed:
