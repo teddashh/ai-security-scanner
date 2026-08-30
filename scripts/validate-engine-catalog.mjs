@@ -24,7 +24,51 @@ const managedExternalContracts = new Map([
   ["nuclei", { tag: "3.11.1-4" }],
 ]);
 const managedExternalIds = new Set(managedExternalContracts.keys());
-const managedM365Ids = new Set(["scubagear", "maester"]);
+const managedM365Contracts = new Map([
+  ["scubagear", {
+    tag: "1.8.0-2",
+    sourceRatingField: "SourceCriticality",
+    sourceRatingVariable: "$criticality",
+    optionalPropertySnippet: "$control.PSObject.Properties['Criticality']",
+    optionalValueSnippet: "$criticalityValue = if ($null -eq $criticalityProperty) { $null } else { $criticalityProperty.Value }",
+    forbiddenDirectPropertySnippet: "$control.Criticality",
+    switchExpression: "$criticality.ToLowerInvariant()",
+    reviewedRatings: ["shall", "shall/3rd party", "shall/not-implemented", "should", "should/3rd party", "should/not-implemented"],
+    normalizationSnippets: [
+      "'shall' { 'high'; break }",
+      "'shall/3rd party' { 'high'; break }",
+      "'shall/not-implemented' { 'high'; break }",
+      "'should' { 'medium'; break }",
+      "'should/3rd party' { 'medium'; break }",
+      "'should/not-implemented' { 'medium'; break }",
+    ],
+    forbiddenNormalizationSnippets: [
+      "'^Shall(?:/|$)'",
+      "'^Should(?:/|$)'",
+    ],
+  }],
+  ["maester", {
+    tag: "2.0.0-2",
+    sourceRatingField: "SourceSeverity",
+    sourceRatingVariable: "$sourceSeverity",
+    optionalPropertySnippet: "$test.PSObject.Properties['Severity']",
+    optionalValueSnippet: "$sourceSeverityValue = if ($null -eq $sourceSeverityProperty) { $null } else { $sourceSeverityProperty.Value }",
+    forbiddenDirectPropertySnippet: "$test.Severity",
+    switchExpression: "$sourceSeverity.ToLowerInvariant()",
+    reviewedRatings: ["critical", "high", "medium", "low", "info"],
+    normalizationSnippets: [
+      "'critical' { 'critical'; break }",
+      "'high' { 'high'; break }",
+      "'medium' { 'medium'; break }",
+      "'low' { 'low'; break }",
+      "'info' { 'informational'; break }",
+    ],
+    forbiddenNormalizationSnippets: [
+      "'informational' { 'informational'; break }",
+    ],
+  }],
+]);
+const managedM365Ids = new Set(managedM365Contracts.keys());
 const managedImageRepositoryPrefix = "ghcr.io/teddashh/ai-security-scanner-engine-";
 const managedLocalSmokeOutputFiles = new Map([
   ["semgrep", "semgrep.json"],
@@ -311,7 +355,12 @@ function resolveEvidenceStepEngines(workflow, job, step, label) {
 function validateManagedImageEvidence(catalogEntries) {
   const catalogManagedIds = [];
   for (const engine of Array.isArray(catalogEntries) ? catalogEntries : []) {
-    const repository = engine?.image?.repository;
+    const planPath = engine?.compatibility?.packaging_plan;
+    const plan = typeof planPath === "string" && existsSync(resolve(root, planPath))
+      ? parseJson(resolve(root, planPath))
+      : null;
+    const repository = engine?.image?.repository ??
+      (isPendingM365Publication(plan, engine) ? plan.final_artifact.repository : undefined);
     if (typeof repository !== "string" || !repository.startsWith(managedImageRepositoryPrefix)) continue;
     catalogManagedIds.push(engine.id);
     if (upstreamImageOnlyIds.has(engine.id)) {
@@ -1821,11 +1870,39 @@ function validateManagedExternalImage(plan, planRelative, engine) {
   }
 }
 
+function isPendingM365Publication(plan, engine) {
+  const contract = managedM365Contracts.get(engine.id);
+  const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+  return Boolean(contract) && plan?.publish_state === "publication_in_progress" &&
+    plan.publication === null && engine.distribution_mode === "pull_pinned_image" && engine.image === null &&
+    engine.default_enabled === false && engine.status === "experimental" &&
+    engine.compatibility?.runnable === false && engine.compatibility?.artifact_state === "managed_build_plan" &&
+    Array.isArray(engine.compatibility?.blocked_by) &&
+    engine.compatibility.blocked_by.length > 0 && Array.isArray(plan.blockers) && plan.blockers.length > 0 &&
+    plan.final_artifact?.repository === expectedRepository && plan.final_artifact?.tag === contract.tag &&
+    plan.final_artifact?.digest === null && engine.provenance?.engine?.artifact_source_revision === null &&
+    engine.provenance?.engine?.source_association === "source_build_required";
+}
+
 function validateManagedM365Image(plan, planRelative, engine) {
-  if (plan.publish_state !== "published_managed_artifact") {
-    errors.push(`${planRelative}: managed Microsoft 365 image must be a published managed artifact`);
+  const contract = managedM365Contracts.get(engine.id);
+  const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+  if (!contract) {
+    errors.push(`${planRelative}: managed Microsoft 365 engine has no reviewed artifact contract`);
+    return;
   }
-  validatePublishedManagedEvidence(plan, planRelative, engine);
+  if (plan.publish_state === "published_managed_artifact") {
+    if (plan.final_artifact?.repository !== expectedRepository || plan.final_artifact?.tag !== contract.tag) {
+      errors.push(`${planRelative}: published Microsoft 365 artifact does not match the reviewed wrapper-hardened repository/tag`);
+    }
+    validatePublishedManagedEvidence(plan, planRelative, engine);
+  } else if (plan.publish_state === "publication_in_progress") {
+    if (!isPendingM365Publication(plan, engine)) {
+      errors.push(`${planRelative}: unpublished wrapper-hardened Microsoft 365 build must remain isolated with null artifact/publication claims and an explicit per-engine blocker`);
+    }
+  } else {
+    errors.push(`${planRelative}: managed Microsoft 365 artifact must be published or explicitly awaiting its own publication`);
+  }
 
   const engineRoot = `engines/images/${engine.id}`;
   const dockerfileRelative = `${engineRoot}/Dockerfile`;
@@ -1890,12 +1967,35 @@ function validateManagedM365Image(plan, planRelative, engine) {
   const scriptRelative = `${engineRoot}/run-${engine.id}.ps1`;
   const scriptPath = resolve(root, scriptRelative);
   const scriptText = readFileSync(scriptPath, "utf8");
+  const normalizationStartText = `$severity = switch (${contract.switchExpression}) {`;
+  const normalizationStart = scriptText.indexOf(normalizationStartText);
+  const normalizationDefault = normalizationStart < 0
+    ? -1
+    : scriptText.indexOf("default { 'unknown' }", normalizationStart + normalizationStartText.length);
+  const observedRatings = normalizationStart < 0 || normalizationDefault < 0
+    ? []
+    : [...scriptText.slice(normalizationStart, normalizationDefault).matchAll(/^\s*'([^']+)'\s*\{/gm)]
+      .map((match) => match[1]);
   if (plan.wrapper?.entrypoint !== "/usr/local/bin/ai-security-scanner-m365-launcher" ||
       plan.wrapper?.launcher_sha256 !== sha256File(launcherPath) ||
       plan.wrapper?.script?.path !== scriptRelative ||
       plan.wrapper?.script?.sha256 !== sha256File(scriptPath) ||
+      plan.wrapper?.strategy !== engine.compatibility?.wrapper?.strategy ||
+      !plan.wrapper?.strategy?.includes("unknown") ||
       !dockerfileText.includes(`ENTRYPOINT ${JSON.stringify([plan.wrapper?.entrypoint])}`)) {
-    errors.push(`${planRelative}: Microsoft 365 launcher or fixed script identity does not match`);
+    errors.push(`${planRelative}: Microsoft 365 launcher, wrapper contract, or fixed script identity does not match`);
+  }
+  if (!scriptText.includes(contract.optionalPropertySnippet) ||
+      !scriptText.includes(contract.optionalValueSnippet) ||
+      scriptText.includes(contract.forbiddenDirectPropertySnippet) ||
+      !scriptText.includes(`${contract.sourceRatingField} = ${contract.sourceRatingVariable}`) ||
+      !scriptText.includes("default { 'unknown' }") ||
+      !deepEqual(observedRatings, contract.reviewedRatings) ||
+      !contract.normalizationSnippets.every((snippet) => scriptText.includes(snippet)) ||
+      contract.forbiddenNormalizationSnippets.some((snippet) => scriptText.includes(snippet)) ||
+      scriptText.includes("else { 'low' }") ||
+      scriptText.includes("{ $severity = 'medium' }")) {
+    errors.push(`${planRelative}: Microsoft 365 wrapper must safely retain the optional original source rating, map only its exact reviewed values, and leave missing or unrecognized values unknown`);
   }
   const expectedCommand = ["--engine", engine.id, "--scope", "/run/ai-security-scanner/scope.json", "--output", "/output"];
   if (!deepEqual(plan.command, expectedCommand)) errors.push(`${planRelative}: Microsoft 365 command is not the fixed launcher contract`);
@@ -2075,12 +2175,6 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   if (engine.provenance?.engine?.source_association !== "attested_match" && engine.compatibility?.runnable) {
     errors.push(`${label}: runnable image requires attested matching source provenance`);
   }
-  if (engine.distribution_mode === "pull_pinned_image" || engine.distribution_mode === "bundled_image") {
-    validateImage(engine.image, `${label}.image`);
-  } else if (engine.image !== null) {
-    errors.push(`${label}: non-image distribution must not expose an executable image reference`);
-  }
-
   const planRelative = engine.compatibility?.packaging_plan;
   const planPath = planRelative ? resolve(root, planRelative) : null;
   if (!planPath || !existsSync(planPath)) {
@@ -2089,6 +2183,15 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   }
   const plan = parseJson(planPath);
   if (!plan) continue;
+  if (engine.distribution_mode === "pull_pinned_image" || engine.distribution_mode === "bundled_image") {
+    if (engine.image !== null) {
+      validateImage(engine.image, `${label}.image`);
+    } else if (!isPendingM365Publication(plan, engine)) {
+      errors.push(`${label}.image: only an exactly isolated ScubaGear or Maester publication-in-progress operation may omit its immutable image`);
+    }
+  } else if (engine.image !== null) {
+    errors.push(`${label}: non-image distribution must not expose an executable image reference`);
+  }
   if (engine.id === "prowler") {
     errors.push(...validateProwlerCatalogContract({ engine, plan, projectRoot: root }));
   }
@@ -2127,10 +2230,10 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   if (engine.image) {
     validateImage(plan.final_artifact, `${planRelative}.final_artifact`);
     if (!deepEqual(plan.final_artifact, { repository: engine.image.repository, tag: engine.image.tag, digest: engine.image.digest })) errors.push(`${planRelative}: final artifact does not match catalog image`);
-  } else if (managedCloudIds.has(engine.id)) {
+  } else if (managedCloudIds.has(engine.id) || isPendingM365Publication(plan, engine)) {
     const pending = plan.final_artifact;
     if (!pending || typeof pending.repository !== "string" || typeof pending.tag !== "string" || pending.digest !== null || plan.publish_state !== "publication_in_progress") {
-      errors.push(`${planRelative}: cloud image publication in progress must retain its exact repository/tag and null digest`);
+      errors.push(`${planRelative}: managed image publication in progress must retain its exact repository/tag and null digest`);
     } else {
       validateTag(pending.tag, `${planRelative}.final_artifact.tag`);
     }
@@ -2193,6 +2296,7 @@ if (!existsSync(m365WorkflowPath)) {
   errors.push("managed Microsoft 365 publication workflow is missing");
 } else {
   const workflowText = readFileSync(m365WorkflowPath, "utf8");
+  const workflow = parseWorkflow(".github/workflows/engine-images-m365.yml");
   if (!/^\s*workflow_dispatch:\s*$/m.test(workflowText) ||
       !/^\s*-\s*["']?engines\/images\/m365-launcher\/\*\*["']?\s*$/m.test(workflowText)) {
     errors.push("managed Microsoft 365 workflow must retain dispatch and shared-launcher triggers");
@@ -2202,6 +2306,10 @@ if (!existsSync(m365WorkflowPath)) {
     const negative = new RegExp(`^\\s*-\\s*["']?!engines/images/${engineId}/plan\\.json["']?\\s*$`, "m");
     if (!positive.test(workflowText) || !negative.test(workflowText)) {
       errors.push(`managed Microsoft 365 workflow must watch ${engineId} inputs while excluding digest writeback`);
+    }
+    const matrixEntry = workflow?.jobs?.publish?.strategy?.matrix?.include?.find((entry) => entry?.engine === engineId);
+    if (matrixEntry?.tag !== managedM365Contracts.get(engineId)?.tag) {
+      errors.push(`managed Microsoft 365 workflow tag for ${engineId} must match its wrapper-hardened artifact contract`);
     }
   }
   for (const required of [
@@ -2252,6 +2360,6 @@ const licenseReview = catalog.filter((engine) => ["license_review", "blocked"].i
 
 console.log(`Validated ${catalog.length} engine compatibility records against ${schemaPath.replace(`${root}/`, "")}.`);
 console.log(`Verified final upstream image pins: ${imagePins}; verified candidate/base pins: ${candidatePins}; managed build plans: ${managedPlans}; multi-component plans: ${multiComponentPlans}.`);
-console.log(`Signed managed-image evidence contract: ${managedEvidence.coveredIds.length} present engines across ${managedEvidence.workflowCount} workflows.`);
+console.log(`Managed-image publication workflow contract: ${managedEvidence.coveredIds.length} present or pending engine coordinates across ${managedEvidence.workflowCount} workflows.`);
 console.log(`Runnable now: ${runnable.length ? runnable.join(", ") : "none"}.`);
 console.log(`License review: ${licenseReview.join(", ") || "none"}.`);

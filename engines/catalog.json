@@ -729,12 +729,7 @@
     "homepage_url": "https://www.cisa.gov/resources-tools/services/secure-cloud-business-applications-scuba-project",
     "license_spdx": "CC0-1.0",
     "distribution_mode": "pull_pinned_image",
-    "image": {
-      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
-      "tag": "1.8.0-1",
-      "digest": "sha256:0d43f9e053021c1853fc06ea1dd3c962cd02c023e81a02edef56269cedfb0e33",
-      "signature_identity": null
-    },
+    "image": null,
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
     "engine_version": "1.8.0",
     "rule_version": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -764,10 +759,11 @@
       "--output",
       "/output"
     ],
-    "status": "integrated",
+    "status": "experimental",
     "notices": [
       "The managed profile runs only ScubaGear's commercial AAD product with local OPA evaluation and a protected short-lived Microsoft Graph token.",
-      "The multi-platform image is built from exact source, PowerShell module, OPA, base-image, and license pins; all direct dependency notices are embedded."
+      "The multi-platform image is built from exact source, PowerShell module, OPA, base-image, and license pins; all direct dependency notices are embedded.",
+      "A wrapper-hardened image that preserves unrecognized upstream criticality as unknown is awaiting immutable publication; this engine remains independently unavailable until then."
     ],
     "license": {
       "disposition": "allow",
@@ -781,8 +777,8 @@
         "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
         "source_ref": "main",
         "acquisition_source": "https://github.com/cisagov/ScubaGear/commit/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
-        "artifact_source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
-        "source_association": "attested_match"
+        "artifact_source_revision": null,
+        "source_association": "source_build_required"
       },
       "rules": {
         "mode": "embedded",
@@ -809,9 +805,11 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": true,
+      "runnable": false,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [],
+      "blocked_by": [
+        "The wrapper-hardened ScubaGear image has not yet been published and independently verified."
+      ],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "Microsoft Entra ID configuration",
@@ -821,7 +819,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token, then invoke the fixed AAD-only ScubaGear script without a shell.",
+        "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token; retain source criticality, map only reviewed Shall/Should values, and leave every other rating unknown; then invoke the fixed AAD-only ScubaGear script without a shell.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-m365-launcher"
       },
       "packaging_plan": "engines/images/scubagear/plan.json"
@@ -862,12 +860,7 @@
     "homepage_url": "https://maester.dev/",
     "license_spdx": "MIT",
     "distribution_mode": "pull_pinned_image",
-    "image": {
-      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-      "tag": "2.0.0-1",
-      "digest": "sha256:c3f080f60ac6c900ad87a673b1b8d14e87667017c71bb4f5dfdf77eabf1c4bcd",
-      "signature_identity": null
-    },
+    "image": null,
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "engine_version": "2.0.0",
     "rule_version": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -897,11 +890,12 @@
       "--output",
       "/output"
     ],
-    "status": "integrated",
+    "status": "experimental",
     "notices": [
       "The managed profile runs only the pinned Entra test tree; long-running, preview, mutable raw-GitHub, and DNS-dependent tests are excluded from the Graph-only closure.",
       "Excluded tags are MT.1025-MT.1028, MT.1030-MT.1031, and MT.1182; the exact profile is recorded in the packaging plan and output provenance.",
-      "The multi-platform image is built from exact source, PowerShell module, base-image, and license pins; all direct dependency notices are embedded."
+      "The multi-platform image is built from exact source, PowerShell module, base-image, and license pins; all direct dependency notices are embedded.",
+      "A wrapper-hardened image that preserves missing or unrecognized upstream severity as unknown is awaiting immutable publication; this engine remains independently unavailable until then."
     ],
     "license": {
       "disposition": "allow",
@@ -915,8 +909,8 @@
         "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
         "source_ref": "main",
         "acquisition_source": "https://github.com/maester365/maester/commit/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
-        "artifact_source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
-        "source_association": "attested_match"
+        "artifact_source_revision": null,
+        "source_association": "source_build_required"
       },
       "rules": {
         "mode": "embedded",
@@ -943,9 +937,11 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": true,
+      "runnable": false,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [],
+      "blocked_by": [
+        "The wrapper-hardened Maester image has not yet been published and independently verified."
+      ],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "Microsoft Entra ID configuration",
@@ -955,7 +951,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token, then invoke the fixed Graph-only Entra test profile without a shell.",
+        "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token; retain source severity, map only Maester's documented ratings, and leave every other rating unknown; then invoke the fixed Graph-only Entra test profile without a shell.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-m365-launcher"
       },
       "packaging_plan": "engines/images/maester/plan.json"

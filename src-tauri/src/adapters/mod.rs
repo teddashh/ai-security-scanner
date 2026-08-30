@@ -1359,6 +1359,8 @@ fn extract_scubagear(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
         "ScubaGear",
         &["PolicyId", "ControlId", "id"],
         &["Result", "status"],
+        &["SourceCriticality", "Criticality"],
+        "source-criticality",
     )
 }
 
@@ -1369,6 +1371,8 @@ fn extract_maester(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
         "Maester",
         &["Id", "TestId", "id"],
         &["Result", "Outcome", "status"],
+        &["SourceSeverity"],
+        "source-rating",
     )
 }
 
@@ -1378,6 +1382,8 @@ fn extract_m365(
     engine: &str,
     rule_keys: &[&str],
     status_keys: &[&str],
+    source_rating_keys: &[&str],
+    source_rating_tag: &str,
 ) -> Vec<SourceRecord> {
     let mut candidates = Vec::new();
     match parsed {
@@ -1407,6 +1413,12 @@ fn extract_m365(
         if !seen.insert(dedup) {
             continue;
         }
+        let source_rating = string_any(object, source_rating_keys);
+        let source_rating_tags = source_rating
+            .as_deref()
+            .filter(|rating| !rating.is_empty())
+            .map(|rating| vec![format!("{source_rating_tag}:{}", safe_tag(rating))])
+            .unwrap_or_default();
         records.push(record!(
             pointer,
             rule_id.clone(),
@@ -1419,7 +1431,7 @@ fn extract_m365(
             Confidence::High,
             EvidenceKind::Configuration,
             references_from(value),
-            vec![],
+            source_rating_tags,
         ));
         if records.len() >= MAX_RECORDS {
             break;

@@ -433,6 +433,91 @@ fn checkov_missing_and_unrecognized_severity_stays_unknown() {
 }
 
 #[test]
+fn m365_missing_and_unrecognized_source_ratings_stay_unknown_and_traceable() {
+    let cases: [(&str, &[u8], &str, &str, &str); 2] = [
+        (
+            "scubagear",
+            br#"{
+              "Results": [
+                {"PolicyId":"missing", "Requirement":"Missing criticality", "Result":"Failed", "Severity":"unknown"},
+                {"PolicyId":"custom", "Requirement":"Custom criticality", "Result":"Failed", "Severity":"unknown", "SourceCriticality":"Vendor-Special"},
+                {"PolicyId":"lookalike", "Requirement":"Unreviewed Shall suffix", "Result":"Failed", "Severity":"unknown", "SourceCriticality":"Shall/Vendor-Special"},
+                {"PolicyId":"shall", "Requirement":"Known criticality", "Result":"Failed", "Severity":"high", "SourceCriticality":"Shall/3rd Party"}
+              ]
+            }"#,
+            "source-criticality:vendor-special",
+            "source-criticality:shall/vendor-special",
+            "source-criticality:shall/3rd-party",
+        ),
+        (
+            "maester",
+            br#"{
+              "Results": [
+                {"Id":"missing", "Title":"Missing rating", "Result":"Failed", "Severity":"unknown"},
+                {"Id":"custom", "Title":"Custom rating", "Result":"Failed", "Severity":"unknown", "SourceSeverity":"Vendor-Special"},
+                {"Id":"lookalike", "Title":"Undocumented informational alias", "Result":"Failed", "Severity":"unknown", "SourceSeverity":"Informational"},
+                {"Id":"info", "Title":"Known information", "Result":"Failed", "Severity":"informational", "SourceSeverity":"Info"}
+              ]
+            }"#,
+            "source-rating:vendor-special",
+            "source-rating:informational",
+            "source-rating:info",
+        ),
+    ];
+
+    for (engine_id, bytes, unknown_tag, lookalike_tag, known_tag) in cases {
+        let output = normalize_bytes(
+            engine_id,
+            bytes,
+            &format!("{engine_id}-source-rating.json"),
+            "application/json",
+            "run-m365-source-rating",
+        );
+        assert!(
+            output.complete,
+            "unexpected warnings: {:?}",
+            output.warnings
+        );
+        assert_eq!(output.findings.len(), 4);
+
+        let by_rule = output
+            .findings
+            .iter()
+            .map(|finding| {
+                let source_rule = finding
+                    .tags
+                    .iter()
+                    .find_map(|tag| tag.strip_prefix("source-rule:"))
+                    .expect("source rule tag");
+                (source_rule, finding)
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(by_rule["missing"].severity, Severity::Unknown);
+        assert_eq!(by_rule["custom"].severity, Severity::Unknown);
+        assert_eq!(by_rule["lookalike"].severity, Severity::Unknown);
+        assert!(by_rule["custom"].tags.iter().any(|tag| tag == unknown_tag));
+        assert!(
+            by_rule["lookalike"]
+                .tags
+                .iter()
+                .any(|tag| tag == lookalike_tag)
+        );
+        assert!(
+            output
+                .findings
+                .iter()
+                .any(|finding| finding.tags.iter().any(|tag| tag == known_tag))
+        );
+        assert!(output.findings.iter().all(|finding| {
+            finding
+                .evidence
+                .iter()
+                .all(|evidence| evidence.pointer.is_some())
+        }));
+    }
+}
+
+#[test]
 fn prowler_5_39_ocsf_maps_provider_native_accounts_to_canonical_assets() {
     // Shape and field names are reduced from the pinned Prowler 5.39 OCSF
     // serializer/fixtures: status_code, metadata.event_code,

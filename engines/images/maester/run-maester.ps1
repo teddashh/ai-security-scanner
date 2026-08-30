@@ -130,14 +130,23 @@ try {
             default { $null }
         }
         if ($null -eq $result) { continue }
-        $severity = (ConvertTo-SafeText -Value $test.Severity -MaximumLength 32).ToLowerInvariant()
-        if ($severity -notin @('critical', 'high', 'medium', 'low', 'informational', 'info')) { $severity = 'medium' }
-        if ($severity -eq 'info') { $severity = 'informational' }
+        $sourceSeverityProperty = $test.PSObject.Properties['Severity']
+        $sourceSeverityValue = if ($null -eq $sourceSeverityProperty) { $null } else { $sourceSeverityProperty.Value }
+        $sourceSeverity = ConvertTo-SafeText -Value $sourceSeverityValue -MaximumLength 32
+        $severity = switch ($sourceSeverity.ToLowerInvariant()) {
+            'critical' { 'critical'; break }
+            'high' { 'high'; break }
+            'medium' { 'medium'; break }
+            'low' { 'low'; break }
+            'info' { 'informational'; break }
+            default { 'unknown' }
+        }
         $normalized.Add([ordered]@{
             Id = ConvertTo-SafeText -Value $test.Id -MaximumLength 256
             Title = ConvertTo-SafeText -Value $test.Title
             Result = $result
             SourceResult = $sourceResult
+            SourceSeverity = $sourceSeverity
             Severity = $severity
             Service = 'Microsoft Entra ID'
             asset_id = $binding.AssetId

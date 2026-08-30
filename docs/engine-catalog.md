@@ -1,6 +1,6 @@
 # ai-security-scanner engine catalog
 
-Status: v0.2.0 catalog companion and research inventory; current engine artifacts released with the v0.1.3 adapter contract
+Status: v0.2.0 catalog companion and research inventory; 19 artifacts are currently runnable, while the ScubaGear and Maester wrapper-hardened images await independent publication
 
 Last updated: 2026-08-30
 
@@ -66,8 +66,8 @@ Each planned catalog entry is admitted independently through the same manifest, 
 | Cloud configuration | [Prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Managed OCI image with exact AWS-account, Azure-subscription, and GCP-project narrow-IAM profiles; Azure/GCP behavior is supplied by six hash-bound downstream runtime patches | One complete short-lived provider credential for exactly one selected native asset; fixed provider endpoint closure; no bootstrap credential enters the engine | ALLOW |
 | Cloud configuration | [ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Managed OCI image built from pinned source | Short-lived AWS read-only capability and fixed endpoint closure | SOURCE_OFFER |
 | AWS IAM | [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Managed OCI image over bounded IAM evidence | AWS IAM read only or explicit local policy input | ALLOW |
-| Microsoft 365 | [ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 | Managed PowerShell/OCI image with pinned modules | Short-lived Microsoft Graph/service-specific read-only permission set | ALLOW |
-| Microsoft 365 | [Maester](https://github.com/maester365/maester) | MIT | Managed PowerShell/OCI image with pinned test modules | Short-lived Microsoft Graph read-only permission set | ALLOW |
+| Microsoft 365 | [ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 | Managed PowerShell/OCI candidate that retains source criticality and leaves unknown values unknown; unavailable independently until the new immutable image is published and recorded | Short-lived Microsoft Graph/service-specific read-only permission set | ALLOW |
+| Microsoft 365 | [Maester](https://github.com/maester365/maester) | MIT | Managed PowerShell/OCI candidate that retains source severity and leaves unknown values unknown; unavailable independently until the new immutable image is published and recorded | Short-lived Microsoft Graph read-only permission set | ALLOW |
 | External surface | [Naabu](https://github.com/projectdiscovery/naabu) | MIT | Managed OCI image with fixed launcher | `low_impact_external` grant, concrete target allowlist, and rate limits | ALLOW |
 | External surface | [httpx](https://github.com/projectdiscovery/httpx) | MIT | Managed OCI image with fixed launcher | `low_impact_external` grant plus redirect and resolved-IP enforcement | ALLOW |
 | Active external testing | [Nuclei](https://github.com/projectdiscovery/nuclei) | MIT | Managed OCI image with an exact allowlisted template snapshot | `active_external` grant, target allowlist, rate/time limits, and denied template classes | ALLOW |

@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/cisagov/ScubaGear",
     "revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
@@ -16,23 +16,10 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
-    "tag": "1.8.0-1",
-    "digest": "sha256:0d43f9e053021c1853fc06ea1dd3c962cd02c023e81a02edef56269cedfb0e33"
+    "tag": "1.8.0-2",
+    "digest": null
   },
-  "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480491",
-    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "platform_digests": {
-      "linux/amd64": "sha256:067ea5452b5db34cf057a7fab329a629673d2369a29819cc5c75c7a6ce908f2e",
-      "linux/arm64": "sha256:901184fedcd066316bf0769b86fe0e46f9af1a5a16f37d3b7eb7196c1cb0bb5d"
-    },
-    "anonymous_pull_verified": true,
-    "evidence_artifact": "scubagear-image-evidence-32754480491-1"
-  },
+  "publication": null,
   "build_recipe": {
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
     "source_archive": {
@@ -95,17 +82,17 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/scubagear/Dockerfile",
-    "sha256": "sha256:af3c16c416b37c47417644101566130cc47d7543152d51c53b1e702f4eab91a1",
+    "sha256": "sha256:e245f439a246ba1446293fc23e249bf1c5742f3e8880f9e07e0fc88964f7fc5a",
     "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token, then invoke the fixed AAD-only ScubaGear script without a shell.",
+    "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token; retain source criticality, map only reviewed Shall/Should values, and leave every other rating unknown; then invoke the fixed AAD-only ScubaGear script without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-m365-launcher",
     "launcher_sha256": "sha256:9db814b18999c58a9ebe2c62aa5e7fc33606e2f96547cb2141b4d1cbb76b9222",
     "script": {
       "path": "engines/images/scubagear/run-scubagear.ps1",
-      "sha256": "sha256:efbf7d66e147f2018c8ca92a16d9922f3d068e21ed32b62350f14fea153be1ae"
+      "sha256": "sha256:cff02b2becec67d983e5a85b4ce4303b11f52490f8d70b6251e301ace1b72716"
     }
   },
   "managed_runtime": {
@@ -142,5 +129,7 @@
     "rationale": "CC0-1.0 engine source, MIT Graph authentication, and Apache-2.0 dependency notices are embedded in the managed image.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [
+    "Publish and independently verify the wrapper-hardened 1.8.0-2 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
+  ]
 }

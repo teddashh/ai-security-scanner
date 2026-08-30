@@ -134,13 +134,24 @@ try {
                 default { $null }
             }
             if ($null -eq $result) { continue }
-            $criticality = ConvertTo-SafeText -Value $control.Criticality -MaximumLength 128
-            $severity = if ($criticality -match '^Shall') { 'high' } elseif ($criticality -match '^Should') { 'medium' } else { 'low' }
+            $criticalityProperty = $control.PSObject.Properties['Criticality']
+            $criticalityValue = if ($null -eq $criticalityProperty) { $null } else { $criticalityProperty.Value }
+            $criticality = ConvertTo-SafeText -Value $criticalityValue -MaximumLength 128
+            $severity = switch ($criticality.ToLowerInvariant()) {
+                'shall' { 'high'; break }
+                'shall/3rd party' { 'high'; break }
+                'shall/not-implemented' { 'high'; break }
+                'should' { 'medium'; break }
+                'should/3rd party' { 'medium'; break }
+                'should/not-implemented' { 'medium'; break }
+                default { 'unknown' }
+            }
             $normalized.Add([ordered]@{
                 PolicyId = ConvertTo-SafeText -Value $control.'Control ID' -MaximumLength 256
                 Requirement = ConvertTo-SafeText -Value $control.Requirement
                 Result = $result
                 SourceResult = $sourceResult
+                SourceCriticality = $criticality
                 Severity = $severity
                 Service = 'Microsoft Entra ID'
                 asset_id = $binding.AssetId

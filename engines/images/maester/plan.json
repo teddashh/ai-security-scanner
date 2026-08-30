@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/maester365/maester",
     "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
@@ -16,23 +16,10 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
-    "tag": "2.0.0-1",
-    "digest": "sha256:c3f080f60ac6c900ad87a673b1b8d14e87667017c71bb4f5dfdf77eabf1c4bcd"
+    "tag": "2.0.0-2",
+    "digest": null
   },
-  "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/32754480491",
-    "source_revision": "122f3c2f83ab596ee6dfda759124d30e533bbcd5",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "platform_digests": {
-      "linux/amd64": "sha256:dfb051235ed5072103e0152623f4e4fa7e057bb6f8770e1a17679827deaa259d",
-      "linux/arm64": "sha256:33a2b1f16ec54ded3b05220d00b95043adec229d0fd331cbb01b4d483aa5e4ea"
-    },
-    "anonymous_pull_verified": true,
-    "evidence_artifact": "maester-image-evidence-32754480491-1"
-  },
+  "publication": null,
   "build_recipe": {
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "source_archive": {
@@ -101,17 +88,17 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/maester/Dockerfile",
-    "sha256": "sha256:a7e8090e62af4a83f83b10960e2d34096b6a11238bf15be5617c124930319c17",
+    "sha256": "sha256:ce5cf3e8bac78fb720de42315e377861c9571f8e49da3ab0c8e3c2daa299bc2a",
     "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token, then invoke the fixed Graph-only Entra test profile without a shell.",
+    "strategy": "Validate one immutable Microsoft 365 tenant scope and one short-lived protected Graph token; retain source severity, map only Maester's documented ratings, and leave every other rating unknown; then invoke the fixed Graph-only Entra test profile without a shell.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-m365-launcher",
     "launcher_sha256": "sha256:9db814b18999c58a9ebe2c62aa5e7fc33606e2f96547cb2141b4d1cbb76b9222",
     "script": {
       "path": "engines/images/maester/run-maester.ps1",
-      "sha256": "sha256:0388a130a71b5152efca5cf123f4e8cc863861b52ab98518c2be2c364eee3ccc"
+      "sha256": "sha256:35d22af813dc33398b7a5bc33448d36b429dd80a6d159655cdfd4f9acaf9dd37"
     }
   },
   "managed_runtime": {
@@ -148,5 +135,7 @@
     "rationale": "MIT engine and Graph authentication source plus Apache-2.0 Pester notices are embedded in the managed image.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [
+    "Publish and independently verify the wrapper-hardened 2.0.0-2 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence."
+  ]
 }
