@@ -1444,9 +1444,27 @@ fn extract_naabu(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sou
     json_rows(parsed, warnings)
         .into_iter()
         .filter_map(|(pointer, value)| {
-            let object = value.as_object()?;
-            let host = string_any(object, &["host", "ip"])?;
-            let port = scalar_string(object.get("port")?)?;
+            let Some(object) = value.as_object() else {
+                push_warning(
+                    warnings,
+                    format!("Naabu record at {pointer} was not an object and was not normalized"),
+                );
+                return None;
+            };
+            let Some(host) = string_any(object, &["host", "ip"]) else {
+                push_warning(
+                    warnings,
+                    format!("Naabu record at {pointer} had no bounded host and was not normalized"),
+                );
+                return None;
+            };
+            let Some(port) = object.get("port").and_then(scalar_string) else {
+                push_warning(
+                    warnings,
+                    format!("Naabu record at {pointer} had no bounded port and was not normalized"),
+                );
+                return None;
+            };
             let protocol = string_any(object, &["protocol"]).unwrap_or_else(|| "tcp".into());
             Some(record!(
                 pointer,

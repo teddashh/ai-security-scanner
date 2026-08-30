@@ -4,7 +4,7 @@
 //! scanner process and never handles credentials. Container execution belongs
 //! to `orchestrator`; the resulting durable report is reconciled here.
 
-use crate::adapter::AdapterRegistry;
+use crate::adapter::{AdapterAssetIdentifierMap, AdapterInput, AdapterRegistry};
 use crate::adapters::{
     FINGERPRINT_SCHEMA_VERSION, control_mapping_provenance, control_mapping_version,
     is_mapping_independent_empty_json_lines, is_runtime_stream_capture_path,
@@ -2039,9 +2039,8 @@ impl<'a> CaseService<'a> {
 
     /// Persists one exact launcher-v2 journal result after binding its typed
     /// coverage back to the actual no-follow verified journal bytes and every
-    /// captured final artifact. Result payloads are append-only. The only
-    /// permitted mutation is a false-to-true normalization promotion after
-    /// the exact same journal coverage is presented again.
+    /// captured final artifact. Result payloads are append-only here; only the
+    /// trusted adapter path may later promote their normalization state.
     pub fn persist_naabu_attempt_result(
         &self,
         case_id: &str,
@@ -2049,6 +2048,12 @@ impl<'a> CaseService<'a> {
         engine_run_id: &str,
         result: &NaabuAttemptResult,
     ) -> AppResult<AssessmentCase> {
+        if result.normalization_complete {
+            return Err(AppError::InvalidRequest(
+                "Naabu attempt results must be persisted before normalization; only the trusted adapter path may mark normalization complete"
+                    .into(),
+            ));
+        }
         retry_case_revision_conflicts(|| {
             self.persist_naabu_attempt_result_once(case_id, scan_run_id, engine_run_id, result)
         })
@@ -2073,7 +2078,7 @@ impl<'a> CaseService<'a> {
             .position(|engine_run| engine_run.id == engine_run_id)
             .ok_or_else(|| AppError::InvalidRequest("engine run not found".into()))?;
 
-        let (candidate_results, event, exact_replay) = {
+        let (candidate_results, exact_replay) = {
             let run = &case.scan_runs[run_index];
             let engine_run = &run.engine_runs[engine_index];
             if run.case_id != case_id
@@ -2114,7 +2119,6 @@ impl<'a> CaseService<'a> {
             })?;
 
             let mut candidate = engine_run.naabu_attempt_results.clone();
-            let mut event = "execution.naabu_attempt_result_persisted";
             let mut exact_replay = false;
             if let Some(index) = candidate
                 .iter()
@@ -2127,19 +2131,13 @@ impl<'a> CaseService<'a> {
                         result.execution_attempt
                     )));
                 }
-                match (saved.normalization_complete, result.normalization_complete) {
-                    (false, true) => {
-                        candidate[index].normalization_complete = true;
-                        event = "execution.naabu_attempt_normalization_completed";
-                    }
-                    (true, false) => {
-                        return Err(AppError::Conflict(format!(
-                            "Naabu attempt {} normalization cannot regress",
-                            result.execution_attempt
-                        )));
-                    }
-                    _ => exact_replay = true,
+                if saved.normalization_complete {
+                    return Err(AppError::Conflict(format!(
+                        "Naabu attempt {} normalization cannot regress",
+                        result.execution_attempt
+                    )));
                 }
+                exact_replay = true;
             } else {
                 if candidate.len() >= MAX_NAABU_ATTEMPT_RESULTS {
                     return Err(AppError::Conflict(format!(
@@ -2174,7 +2172,7 @@ impl<'a> CaseService<'a> {
                         "Naabu attempt result conflicts with its immutable history: {error}"
                     ))
                 })?;
-            (candidate, event, exact_replay)
+            (candidate, exact_replay)
         };
 
         if exact_replay {
@@ -2205,6 +2203,230 @@ impl<'a> CaseService<'a> {
         case.scan_runs[run_index].engine_runs[engine_index].naabu_attempt_results =
             candidate_results;
         case.touch();
+        self.storage
+            .save_case(&mut case, "execution.naabu_attempt_result_persisted")?;
+        Ok(case)
+    }
+
+    /// Normalizes only the exact launcher-v2 finals already bound to one
+    /// persisted attempt result. Scanner/runtime state is not changed here:
+    /// usable findings and bounded warnings survive incomplete adaptation,
+    /// while the result is promoted only after the adapter reports complete.
+    pub fn adapt_and_persist_naabu_attempt(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        engine_run_id: &str,
+        execution_attempt: u32,
+    ) -> AppResult<AssessmentCase> {
+        retry_case_revision_conflicts(|| {
+            self.adapt_and_persist_naabu_attempt_once(
+                case_id,
+                scan_run_id,
+                engine_run_id,
+                execution_attempt,
+            )
+        })
+    }
+
+    fn adapt_and_persist_naabu_attempt_once(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        engine_run_id: &str,
+        execution_attempt: u32,
+    ) -> AppResult<AssessmentCase> {
+        if execution_attempt == 0 {
+            return Err(AppError::InvalidRequest(
+                "Naabu adaptation attempt must be nonzero".into(),
+            ));
+        }
+        let mut case = self.mutable_case(case_id, "adapt captured Naabu evidence")?;
+        let run_index = case
+            .scan_runs
+            .iter()
+            .position(|run| run.id == scan_run_id)
+            .ok_or_else(|| AppError::InvalidRequest("scan run not found".into()))?;
+        let engine_index = case.scan_runs[run_index]
+            .engine_runs
+            .iter()
+            .position(|engine_run| engine_run.id == engine_run_id)
+            .ok_or_else(|| AppError::InvalidRequest("engine run not found".into()))?;
+
+        let (mut output, result_index, mapping_identity_matches) = {
+            let run = &case.scan_runs[run_index];
+            let engine_run = &run.engine_runs[engine_index];
+            if run.case_id != case_id
+                || engine_run.scan_run_id != scan_run_id
+                || engine_run.engine_id != NAABU_ENGINE_ID
+                || !matches!(engine_run.task_kind, EngineTaskKind::CatalogEngine)
+            {
+                return Err(AppError::NotAuthorized(
+                    "Naabu adaptation does not belong to the persisted Naabu execution".into(),
+                ));
+            }
+            let plan = engine_run.naabu_work_plan.as_ref().ok_or_else(|| {
+                AppError::Conflict("Naabu adaptation has no immutable saved work plan".into())
+            })?;
+            plan.validate().map_err(|error| {
+                AppError::Conflict(format!("saved Naabu work plan is invalid: {error}"))
+            })?;
+            validate_naabu_plan_membership(case_id, run, engine_run, plan)?;
+            validate_naabu_attempt_history(plan, &engine_run.naabu_attempt_requests)?;
+            reduce_naabu_attempt_coverage(
+                plan,
+                &engine_run.naabu_attempt_requests,
+                &engine_run.naabu_attempt_results,
+            )
+            .map_err(|error| {
+                AppError::Conflict(format!(
+                    "saved Naabu attempt-result history is invalid: {error}"
+                ))
+            })?;
+            let result_index = engine_run
+                .naabu_attempt_results
+                .iter()
+                .position(|result| result.execution_attempt == execution_attempt)
+                .ok_or_else(|| {
+                    AppError::InvalidRequest(
+                        "Naabu adaptation has no matching persisted attempt result".into(),
+                    )
+                })?;
+            let result = &engine_run.naabu_attempt_results[result_index];
+            if result.normalization_complete {
+                return Ok(case);
+            }
+            let request = engine_run
+                .naabu_attempt_requests
+                .iter()
+                .find(|request| request.execution_attempt == execution_attempt)
+                .expect("validated Naabu result history has an exact request");
+            validate_naabu_attempt_result_provenance(
+                &self.artifact_root,
+                &case,
+                run,
+                engine_run,
+                plan,
+                request,
+                result,
+            )?;
+
+            let manifest = self.engines.get(NAABU_ENGINE_ID).ok_or_else(|| {
+                AppError::NotAvailable(
+                    "The Naabu adapter manifest is unavailable; captured evidence remains saved"
+                        .into(),
+                )
+            })?;
+            validate_naabu_adapter_compatibility(engine_run, manifest)?;
+            let artifacts_by_id = case
+                .raw_artifacts
+                .iter()
+                .map(|artifact| (artifact.id.as_str(), artifact))
+                .collect::<BTreeMap<_, _>>();
+            let adapter_artifacts = result
+                .coverage
+                .validated_artifact_bindings
+                .iter()
+                .map(|binding| {
+                    artifacts_by_id
+                        .get(binding.raw_artifact_id.as_str())
+                        .copied()
+                        .cloned()
+                        .ok_or_else(|| {
+                            AppError::Conflict(format!(
+                                "validated Naabu final {} is absent from the case",
+                                binding.raw_artifact_id
+                            ))
+                        })
+                })
+                .collect::<AppResult<Vec<_>>>()?;
+            let assets = case
+                .assets
+                .iter()
+                .filter(|asset| engine_run.asset_ids.contains(&asset.id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let asset_identifier_map = AdapterAssetIdentifierMap::from_assets(&assets);
+            let input = AdapterInput {
+                case_id,
+                scan_run_id,
+                engine_run_id,
+                manifest,
+                ai_system_applicable: matches!(
+                    run.frozen_ai_system_applicability(),
+                    AiSystemApplicabilityAnswer::Applicable
+                ),
+                ai_generated_artifact_applicable: matches!(
+                    run.ai_generated_artifact,
+                    AiGeneratedArtifactAnswer::Yes
+                ),
+                asset_ids: &engine_run.asset_ids,
+                asset_identifier_map: &asset_identifier_map,
+                artifact_root: &self.artifact_root,
+                raw_artifacts: &adapter_artifacts,
+            };
+            let output = self.adapters.normalize(&input)?.ok_or_else(|| {
+                AppError::NotAvailable(format!(
+                    "No compatible Naabu adapter version {} is available; captured evidence remains saved",
+                    engine_run.adapter_version
+                ))
+            })?;
+            let (current_mapping_version, current_mapping_provenance, _) =
+                optional_control_mapping_identity();
+            let mapping_identity_matches = current_mapping_version.is_some()
+                && current_mapping_provenance.is_some()
+                && engine_run.mapping_version == current_mapping_version
+                && engine_run.mapping_provenance == current_mapping_provenance;
+            (output, result_index, mapping_identity_matches)
+        };
+
+        if !mapping_identity_matches {
+            for finding in &mut output.findings {
+                finding.control_references.clear();
+            }
+            if output.warnings.len() < 256 {
+                output.warnings.push(
+                    "Framework relationships were omitted because the run's frozen mapping identity does not match the available mapping. Scanner findings remain usable."
+                        .into(),
+                );
+            }
+        }
+
+        let mut changed = false;
+        for finding in &output.findings {
+            let mut contextual_finding = finding.clone();
+            crate::prioritization::apply_case_context(&case, &mut contextual_finding);
+            changed |=
+                reconcile_naabu_attempt_finding(&mut case, &contextual_finding, NAABU_ENGINE_ID)?;
+        }
+        {
+            let engine_run = &mut case.scan_runs[run_index].engine_runs[engine_index];
+            for warning in output.warnings {
+                if engine_run.warnings.len() >= 256 {
+                    break;
+                }
+                if !engine_run.warnings.contains(&warning) {
+                    engine_run.warnings.push(warning);
+                    changed = true;
+                }
+            }
+            if output.complete
+                && !engine_run.naabu_attempt_results[result_index].normalization_complete
+            {
+                engine_run.naabu_attempt_results[result_index].normalization_complete = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(case);
+        }
+
+        case.touch();
+        let event = if output.complete {
+            "execution.naabu_attempt_normalization_completed"
+        } else {
+            "execution.naabu_attempt_normalization_partial"
+        };
         self.storage.save_case(&mut case, event)?;
         Ok(case)
     }
@@ -7417,6 +7639,232 @@ fn insert_or_validate_artifact(case: &mut AssessmentCase, artifact: &RawArtifact
     Ok(())
 }
 
+/// Reconciles a retry of one trusted Naabu adapter without discarding evidence
+/// already saved for the same run and fingerprint. An identical source record
+/// may intentionally produce the same stable evidence ID from a later final;
+/// in that case the first exact artifact reference remains authoritative.
+fn reconcile_naabu_attempt_finding(
+    case: &mut AssessmentCase,
+    incoming: &Finding,
+    engine_id: &str,
+) -> AppResult<bool> {
+    let mut incoming_asset_ids = incoming.asset_ids.clone();
+    incoming_asset_ids.sort();
+    incoming_asset_ids.dedup();
+    let Some(observation_index) = case.finding_observations.iter().position(|observation| {
+        observation.run_id == incoming.last_seen_run_id
+            && observation.fingerprint == incoming.fingerprint
+    }) else {
+        if let Some(canonical) = case
+            .findings
+            .iter()
+            .find(|finding| finding.fingerprint == incoming.fingerprint)
+            .cloned()
+            && canonical.last_seen_run_id != incoming.last_seen_run_id
+        {
+            let incoming_sequence = case
+                .scan_runs
+                .iter()
+                .find(|run| run.id == incoming.last_seen_run_id)
+                .map(|run| run.sequence)
+                .ok_or_else(|| {
+                    AppError::Runtime("Naabu retry finding refers to a missing scan run".into())
+                })?;
+            let canonical_sequence = case
+                .scan_runs
+                .iter()
+                .find(|run| run.id == canonical.last_seen_run_id)
+                .map(|run| run.sequence);
+            if canonical_sequence.is_none_or(|sequence| sequence > incoming_sequence) {
+                let mut snapshot = incoming.clone();
+                snapshot.id = canonical.id.clone();
+                snapshot.first_seen_run_id = canonical.first_seen_run_id.clone();
+                snapshot.status = canonical.status.clone();
+                snapshot.asset_ids = incoming_asset_ids.clone();
+                for evidence in &mut snapshot.evidence {
+                    evidence.finding_id = canonical.id.clone();
+                }
+                let observed_at = snapshot
+                    .evidence
+                    .iter()
+                    .map(|evidence| evidence.observed_at)
+                    .max()
+                    .unwrap_or_else(Utc::now);
+                case.finding_observations.push(FindingObservation {
+                    id: deterministic_observation_id(
+                        &incoming.last_seen_run_id,
+                        &incoming.fingerprint,
+                    ),
+                    run_id: incoming.last_seen_run_id.clone(),
+                    finding_id: canonical.id,
+                    fingerprint: incoming.fingerprint.clone(),
+                    asset_ids: incoming_asset_ids,
+                    engine_ids: vec![engine_id.to_owned()],
+                    severity: snapshot.severity.clone(),
+                    confidence: snapshot.confidence.clone(),
+                    evidence_hashes: canonical_evidence_hashes(&snapshot),
+                    observed_at,
+                    finding_snapshot: Some(snapshot),
+                });
+                return Ok(true);
+            }
+        }
+        reconcile_finding(case, incoming, engine_id)?;
+        return Ok(true);
+    };
+
+    let observation = &case.finding_observations[observation_index];
+    if observation.asset_ids != incoming_asset_ids
+        || !observation
+            .engine_ids
+            .iter()
+            .any(|value| value == engine_id)
+    {
+        return Err(AppError::Runtime(format!(
+            "conflicting Naabu retry observation for fingerprint {}",
+            incoming.fingerprint
+        )));
+    }
+    let prior_snapshot = observation
+        .finding_snapshot
+        .clone()
+        .or_else(|| {
+            case.findings
+                .iter()
+                .find(|finding| finding.id == observation.finding_id)
+                .cloned()
+        })
+        .ok_or_else(|| {
+            AppError::Runtime(format!(
+                "Naabu retry observation {} has no retained finding snapshot",
+                incoming.fingerprint
+            ))
+        })?;
+    if prior_snapshot.case_id != incoming.case_id
+        || prior_snapshot.last_seen_run_id != incoming.last_seen_run_id
+        || prior_snapshot.fingerprint != incoming.fingerprint
+    {
+        return Err(AppError::Runtime(format!(
+            "Naabu retry finding identity drifted for fingerprint {}",
+            incoming.fingerprint
+        )));
+    }
+
+    let canonical_index = case
+        .findings
+        .iter()
+        .position(|finding| finding.id == observation.finding_id)
+        .ok_or_else(|| {
+            AppError::Runtime(format!(
+                "Naabu retry canonical finding disappeared for fingerprint {}",
+                incoming.fingerprint
+            ))
+        })?;
+    let canonical_id = case.findings[canonical_index].id.clone();
+    let canonical_first_seen = case.findings[canonical_index].first_seen_run_id.clone();
+    let canonical_status = case.findings[canonical_index].status.clone();
+    let mut merged = incoming.clone();
+    merged.id = canonical_id.clone();
+    merged.first_seen_run_id = canonical_first_seen;
+    merged.status = canonical_status;
+    merged.asset_ids = incoming_asset_ids.clone();
+
+    let mut evidence_by_id = BTreeMap::<String, crate::domain::Evidence>::new();
+    for mut evidence in prior_snapshot.evidence {
+        evidence.finding_id = canonical_id.clone();
+        evidence_by_id.insert(evidence.id.clone(), evidence);
+    }
+    for mut evidence in incoming.evidence.clone() {
+        evidence.finding_id = canonical_id.clone();
+        if let Some(existing) = evidence_by_id.get(&evidence.id) {
+            if !same_retry_evidence_commitment(existing, &evidence) {
+                return Err(AppError::Runtime(format!(
+                    "Naabu retry reused evidence ID {} for different evidence",
+                    evidence.id
+                )));
+            }
+            continue;
+        }
+        evidence_by_id.insert(evidence.id.clone(), evidence);
+    }
+    merged.evidence = evidence_by_id.into_values().collect();
+
+    // Mapping is optional. Preserve relationships already proven for this run
+    // when a later retry is adapted while the mapping catalog is unavailable.
+    for reference in prior_snapshot.control_references {
+        if !merged
+            .control_references
+            .iter()
+            .any(|candidate| same_control_reference(candidate, &reference))
+        {
+            merged.control_references.push(reference);
+        }
+    }
+
+    let mut changed = false;
+    let prior_observation = serde_json::to_value(&case.finding_observations[observation_index])?;
+    {
+        let observation = &mut case.finding_observations[observation_index];
+        observation.engine_ids.sort();
+        observation.engine_ids.dedup();
+        observation.severity = merged.severity.clone();
+        observation.confidence = merged.confidence.clone();
+        observation.evidence_hashes = canonical_evidence_hashes(&merged);
+        observation.observed_at = merged
+            .evidence
+            .iter()
+            .map(|evidence| evidence.observed_at)
+            .max()
+            .unwrap_or(observation.observed_at);
+        observation.finding_snapshot = Some(merged.clone());
+    }
+    if prior_observation != serde_json::to_value(&case.finding_observations[observation_index])? {
+        changed = true;
+    }
+
+    // A delayed retry for an older run may update that run's frozen snapshot,
+    // but it must not replace a newer run's canonical presentation.
+    if case.findings[canonical_index].last_seen_run_id == incoming.last_seen_run_id
+        && serde_json::to_value(&case.findings[canonical_index])? != serde_json::to_value(&merged)?
+    {
+        case.findings[canonical_index] = merged;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+fn same_retry_evidence_commitment(
+    existing: &crate::domain::Evidence,
+    incoming: &crate::domain::Evidence,
+) -> bool {
+    existing.id == incoming.id
+        && existing.finding_id == incoming.finding_id
+        && existing.run_id == incoming.run_id
+        && existing.engine_run_id == incoming.engine_run_id
+        && existing.kind == incoming.kind
+        && existing.engine_id == incoming.engine_id
+        && existing.source_rule == incoming.source_rule
+        && existing.result_pointer_sha256 == incoming.result_pointer_sha256
+        && existing.summary == incoming.summary
+        && existing.artifact_sha256 == incoming.artifact_sha256
+        && existing.pointer == incoming.pointer
+        && existing.redacted == incoming.redacted
+}
+
+fn same_control_reference(
+    left: &crate::domain::ControlReference,
+    right: &crate::domain::ControlReference,
+) -> bool {
+    left.framework == right.framework
+        && left.framework_version == right.framework_version
+        && left.control_id == right.control_id
+        && left.title == right.title
+        && left.relationship == right.relationship
+        && left.rationale == right.rationale
+        && left.mapping_version == right.mapping_version
+        && left.mapping_provenance == right.mapping_provenance
+}
+
 fn reconcile_finding(
     case: &mut AssessmentCase,
     incoming: &Finding,
@@ -7727,6 +8175,22 @@ fn same_naabu_attempt_result_payload(
         && saved.execution_attempt == incoming.execution_attempt
         && saved.journal_raw_artifact_id == incoming.journal_raw_artifact_id
         && saved.coverage == incoming.coverage
+}
+
+fn validate_naabu_adapter_compatibility(
+    engine_run: &EngineRun,
+    manifest: &EngineManifest,
+) -> AppResult<()> {
+    if manifest.id != NAABU_ENGINE_ID
+        || engine_run.adapter_version != manifest.adapter_version
+        || engine_run.fingerprint_schema_version.as_deref() != Some(FINGERPRINT_SCHEMA_VERSION)
+    {
+        return Err(AppError::NotAvailable(
+            "The captured Naabu evidence needs the exact saved adapter and fingerprint schema. Findings were not invented, and the raw result remains available."
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_naabu_attempt_result_provenance(
@@ -9968,6 +10432,15 @@ mod tests {
         outcome: WorkUnitOutcome,
         normalization_complete: bool,
     ) -> PreparedNaabuAttemptResult {
+        prepared_naabu_attempt_result_with_suffix(fixture, outcome, normalization_complete, &[])
+    }
+
+    fn prepared_naabu_attempt_result_with_suffix(
+        fixture: &Fixture,
+        outcome: WorkUnitOutcome,
+        normalization_complete: bool,
+        final_suffix: &[u8],
+    ) -> PreparedNaabuAttemptResult {
         assert!(matches!(
             outcome,
             WorkUnitOutcome::TestedComplete | WorkUnitOutcome::TestedPartial
@@ -9987,7 +10460,16 @@ mod tests {
             )
             .unwrap();
 
-        let final_bytes = b"{\"port\":9001}\n";
+        let grant = &plan.frozen_grants[unit.grant_index as usize];
+        let mut final_bytes = serde_json::to_vec(&serde_json::json!({
+            "host": grant.addresses[unit.address_start as usize].to_string(),
+            "port": grant.ports[unit.port_start as usize],
+            "protocol": "tcp",
+            "asset_id": grant.asset_id,
+        }))
+        .unwrap();
+        final_bytes.push(b'\n');
+        final_bytes.extend_from_slice(final_suffix);
         let final_relative = "launcher-v2/units/unit-000000/attempt-1.jsonl";
         let final_identity = FinalArtifactIdentity {
             engine_run_id: execution.engine_run_id.clone(),
@@ -9995,7 +10477,7 @@ mod tests {
             scope_sha256: unit.scope_sha256.clone(),
             attempt: 1,
             relative_path: final_relative.into(),
-            sha256: sha256_bytes(final_bytes),
+            sha256: sha256_bytes(&final_bytes),
             byte_length: final_bytes.len() as u64,
         };
         let requested = vec![RequestedWorkUnit {
@@ -10049,7 +10531,7 @@ mod tests {
             engine_run_id: execution.engine_run_id.clone(),
             relative_path: format!("{artifact_prefix}/{final_relative}"),
             media_type: "application/x-ndjson".into(),
-            sha256: sha256_bytes(final_bytes),
+            sha256: sha256_bytes(&final_bytes),
             byte_length: final_bytes.len() as u64,
             created_at: Utc::now(),
             contains_sensitive_data: true,
@@ -10138,8 +10620,159 @@ mod tests {
             .unwrap();
     }
 
+    fn prepared_naabu_retry_result(
+        fixture: &Fixture,
+        prepared: &PreparedNaabuAttemptResult,
+        execution_attempt: u32,
+        outcome: WorkUnitOutcome,
+    ) -> NaabuAttemptResult {
+        let unit = prepared.plan.work_units.first().unwrap();
+        let request = naabu_attempt_request(
+            &prepared.plan,
+            execution_attempt,
+            vec![unit.unit_id.clone()],
+        );
+        fixture
+            .service()
+            .persist_naabu_attempt_request(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.plan,
+                &request,
+            )
+            .unwrap();
+
+        let grant = &prepared.plan.frozen_grants[unit.grant_index as usize];
+        let mut final_bytes = serde_json::to_vec(&serde_json::json!({
+            "host": grant.addresses[unit.address_start as usize].to_string(),
+            "port": grant.ports[unit.port_start as usize],
+            "protocol": "tcp",
+            "asset_id": grant.asset_id,
+            "attempt_marker": execution_attempt,
+        }))
+        .unwrap();
+        final_bytes.push(b'\n');
+        let final_relative =
+            format!("launcher-v2/units/unit-000000/attempt-{execution_attempt}.jsonl");
+        let final_identity = FinalArtifactIdentity {
+            engine_run_id: prepared.engine_run_id.clone(),
+            unit_id: unit.unit_id.clone(),
+            scope_sha256: unit.scope_sha256.clone(),
+            attempt: execution_attempt,
+            relative_path: final_relative.clone(),
+            sha256: sha256_bytes(&final_bytes),
+            byte_length: final_bytes.len() as u64,
+        };
+        let requested = vec![RequestedWorkUnit {
+            unit_id: unit.unit_id.clone(),
+            scope_sha256: unit.scope_sha256.clone(),
+        }];
+        let mut journal = serde_json::to_vec(&serde_json::json!({
+            "record_type": "header",
+            "schema_version": 2,
+            "engine_run_id": prepared.engine_run_id,
+            "execution_attempt": execution_attempt,
+            "requested_work_units": requested,
+        }))
+        .unwrap();
+        journal.push(b'\n');
+        journal.extend_from_slice(
+            &serde_json::to_vec(&serde_json::json!({
+                "record_type": "attempt_finished",
+                "unit_id": unit.unit_id,
+                "scope_sha256": unit.scope_sha256,
+                "attempt": execution_attempt,
+                "outcome": outcome,
+                "incomplete_reason": (outcome == WorkUnitOutcome::TestedPartial)
+                    .then_some(IncompleteReason::Failed),
+                "final_artifact": final_identity,
+            }))
+            .unwrap(),
+        );
+        journal.push(b'\n');
+
+        let artifact_prefix = format!(
+            "{}/{}/{}/attempt-{execution_attempt}/output",
+            prepared.case_id, prepared.scan_run_id, prepared.engine_run_id
+        );
+        let journal_raw = RawArtifact {
+            id: format!("raw-naabu-journal-{execution_attempt}"),
+            case_id: prepared.case_id.clone(),
+            run_id: prepared.scan_run_id.clone(),
+            engine_run_id: prepared.engine_run_id.clone(),
+            relative_path: format!("{artifact_prefix}/launcher-v2/journal.jsonl"),
+            media_type: "application/x-ndjson".into(),
+            sha256: sha256_bytes(&journal),
+            byte_length: journal.len() as u64,
+            created_at: Utc::now(),
+            contains_sensitive_data: true,
+        };
+        let final_raw = RawArtifact {
+            id: format!("raw-naabu-final-{execution_attempt}"),
+            case_id: prepared.case_id.clone(),
+            run_id: prepared.scan_run_id.clone(),
+            engine_run_id: prepared.engine_run_id.clone(),
+            relative_path: format!("{artifact_prefix}/{final_relative}"),
+            media_type: "application/x-ndjson".into(),
+            sha256: sha256_bytes(&final_bytes),
+            byte_length: final_bytes.len() as u64,
+            created_at: Utc::now(),
+            contains_sensitive_data: true,
+        };
+        let artifact_root = fixture.directory.path().join("artifacts");
+        for (artifact, bytes) in [
+            (&journal_raw, journal.as_slice()),
+            (&final_raw, final_bytes.as_slice()),
+        ] {
+            let path = artifact_root.join(&artifact.relative_path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let coverage = parse_launcher_v2_journal(
+            &journal,
+            &prepared.engine_run_id,
+            execution_attempt,
+            &requested,
+            &[HostObservedFinalArtifact {
+                raw_artifact_id: final_raw.id.clone(),
+                relative_path: final_relative,
+                sha256: final_raw.sha256.clone(),
+                byte_length: final_raw.byte_length,
+            }],
+        )
+        .unwrap();
+        let result = NaabuAttemptResult {
+            schema_version: NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
+            execution_attempt,
+            journal_raw_artifact_id: journal_raw.id.clone(),
+            coverage,
+            normalization_complete: false,
+        };
+
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        let engine_run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap()
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        engine_run.raw_artifact_ids.push(journal_raw.id.clone());
+        engine_run.raw_artifact_ids.push(final_raw.id.clone());
+        case.raw_artifacts.push(journal_raw);
+        case.raw_artifacts.push(final_raw);
+        fixture
+            .storage
+            .save_case(&mut case, "test.naabu_retry_launcher_v2_artifacts")
+            .unwrap();
+        result
+    }
+
     #[test]
-    fn naabu_attempt_result_appends_reopens_replays_and_promotes_once() {
+    fn naabu_attempt_result_appends_reopens_replays_and_rejects_untrusted_promotion() {
         let fixture = Fixture::new();
         let prepared =
             prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
@@ -10219,11 +10852,6 @@ mod tests {
 
         let mut promoted_result = prepared.result.clone();
         promoted_result.normalization_complete = true;
-        fixture.storage.inject_save_case_faults(
-            "execution.naabu_attempt_normalization_completed",
-            1,
-            crate::storage::SaveCaseFault::Storage,
-        );
         assert!(matches!(
             service.persist_naabu_attempt_result(
                 &prepared.case_id,
@@ -10231,7 +10859,7 @@ mod tests {
                 &prepared.engine_run_id,
                 &promoted_result,
             ),
-            Err(AppError::Storage(_))
+            Err(AppError::InvalidRequest(_))
         ));
         let unpromoted = service.show_case(&prepared.case_id).unwrap();
         assert_eq!(unpromoted.storage_revision, append_revision);
@@ -10245,45 +10873,6 @@ mod tests {
                 .unwrap()
                 .len(),
             append_events.len()
-        );
-        let promoted = service
-            .persist_naabu_attempt_result(
-                &prepared.case_id,
-                &prepared.scan_run_id,
-                &prepared.engine_run_id,
-                &promoted_result,
-            )
-            .unwrap();
-        assert_eq!(promoted.storage_revision, append_revision + 1);
-        assert!(
-            promoted.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
-        );
-        let promoted_events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
-        assert_eq!(promoted_events.len(), append_events.len() + 1);
-        assert_eq!(
-            promoted_events.last().unwrap().event_type,
-            "execution.naabu_attempt_normalization_completed"
-        );
-
-        let retained_revision = promoted.storage_revision;
-        assert!(matches!(
-            service.persist_naabu_attempt_result(
-                &prepared.case_id,
-                &prepared.scan_run_id,
-                &prepared.engine_run_id,
-                &prepared.result,
-            ),
-            Err(AppError::Conflict(_))
-        ));
-        let retained = service.show_case(&prepared.case_id).unwrap();
-        assert_eq!(retained.storage_revision, retained_revision);
-        assert_eq!(
-            fixture
-                .storage
-                .list_case_events(&prepared.case_id)
-                .unwrap()
-                .len(),
-            promoted_events.len()
         );
     }
 
@@ -10518,10 +11107,356 @@ mod tests {
     }
 
     #[test]
+    fn naabu_adaptation_atomically_saves_findings_and_trusted_completion() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+        let before = fixture.service().show_case(&prepared.case_id).unwrap();
+        let status_before = before.scan_runs[0].engine_runs[0].status.clone();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+
+        fixture.storage.inject_save_case_faults(
+            "execution.naabu_attempt_normalization_completed",
+            1,
+            crate::storage::SaveCaseFault::Storage,
+        );
+        assert!(matches!(
+            fixture.service().adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                1,
+            ),
+            Err(AppError::Storage(_))
+        ));
+        let retained = fixture.service().show_case(&prepared.case_id).unwrap();
+        assert_eq!(retained.storage_revision, before.storage_revision);
+        assert!(retained.findings.is_empty());
+        assert!(retained.finding_observations.is_empty());
+        assert!(
+            !retained.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events_before
+        );
+
+        fixture.storage.inject_save_case_faults(
+            "execution.naabu_attempt_normalization_completed",
+            1,
+            crate::storage::SaveCaseFault::Conflict,
+        );
+        let adapted = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                1,
+            )
+            .expect("bounded conflict retry");
+        assert_eq!(adapted.storage_revision, before.storage_revision + 1);
+        assert_eq!(adapted.scan_runs[0].engine_runs[0].status, status_before);
+        assert!(
+            adapted.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
+        );
+        assert_eq!(adapted.findings.len(), 1);
+        assert_eq!(adapted.finding_observations.len(), 1);
+        assert_eq!(adapted.findings[0].evidence.len(), 1);
+        assert_eq!(
+            adapted.findings[0].evidence[0].artifact_id,
+            "raw-naabu-final-1"
+        );
+        assert_ne!(
+            adapted.findings[0].evidence[0].artifact_id,
+            prepared.result.journal_raw_artifact_id
+        );
+        let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
+        assert_eq!(events.len(), events_before + 1);
+        assert_eq!(
+            events.last().unwrap().event_type,
+            "execution.naabu_attempt_normalization_completed"
+        );
+
+        let replayed = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                1,
+            )
+            .expect("completed adaptation replay");
+        assert_eq!(replayed.storage_revision, adapted.storage_revision);
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events.len()
+        );
+    }
+
+    #[test]
+    fn partial_naabu_adaptation_keeps_valid_findings_without_terminalizing() {
+        let fixture = Fixture::new();
+        let prepared = prepared_naabu_attempt_result_with_suffix(
+            &fixture,
+            WorkUnitOutcome::TestedPartial,
+            false,
+            b"{\"host\":\"198.51.100.2\"}\n",
+        );
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+        let before = fixture.service().show_case(&prepared.case_id).unwrap();
+        let status_before = before.scan_runs[0].engine_runs[0].status.clone();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+
+        let adapted = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                1,
+            )
+            .expect("usable records survive a structurally incomplete sibling line");
+        let engine_run = &adapted.scan_runs[0].engine_runs[0];
+        assert_eq!(engine_run.status, status_before);
+        assert!(!engine_run.naabu_attempt_results[0].normalization_complete);
+        assert!(
+            engine_run
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("no bounded port"))
+        );
+        assert_eq!(adapted.findings.len(), 1);
+        assert_eq!(adapted.finding_observations.len(), 1);
+        assert_eq!(
+            adapted.findings[0].evidence[0].artifact_id,
+            "raw-naabu-final-1"
+        );
+        let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
+        assert_eq!(events.len(), events_before + 1);
+        assert_eq!(
+            events.last().unwrap().event_type,
+            "execution.naabu_attempt_normalization_partial"
+        );
+
+        let replayed = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                1,
+            )
+            .expect("partial adaptation replay");
+        assert_eq!(replayed.storage_revision, adapted.storage_revision);
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events.len()
+        );
+    }
+
+    #[test]
+    fn naabu_adaptation_keeps_findings_when_framework_mapping_identity_changed() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        let engine_run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap()
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        engine_run.mapping_version = Some("mapping-no-longer-available".into());
+        engine_run.mapping_provenance = None;
+        fixture
+            .storage
+            .save_case(&mut case, "test.naabu_mapping_identity_changed")
+            .unwrap();
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+
+        let adapted = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                1,
+            )
+            .expect("framework mapping drift is a reporting warning, not a finding gate");
+
+        assert_eq!(adapted.findings.len(), 1);
+        assert!(adapted.findings[0].control_references.is_empty());
+        let engine_run = &adapted.scan_runs[0].engine_runs[0];
+        assert!(engine_run.naabu_attempt_results[0].normalization_complete);
+        assert!(engine_run.warnings.iter().any(|warning| {
+            warning.contains("Framework relationships were omitted")
+                && warning.contains("Scanner findings remain usable")
+        }));
+    }
+
+    #[test]
+    fn naabu_retry_unions_same_run_finding_evidence_without_duplicates() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedPartial, false);
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+        let first = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                1,
+            )
+            .unwrap();
+        assert_eq!(first.findings.len(), 1);
+        assert_eq!(first.findings[0].evidence.len(), 1);
+        let first_evidence_id = first.findings[0].evidence[0].id.clone();
+        let first_evidence_artifact = first.findings[0].evidence[0].artifact_id.clone();
+
+        mark_naabu_attempt_clean_for_retry(&fixture, &prepared);
+        let second_result =
+            prepared_naabu_retry_result(&fixture, &prepared, 2, WorkUnitOutcome::TestedComplete);
+        fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &second_result,
+            )
+            .unwrap();
+        let before_second = fixture.service().show_case(&prepared.case_id).unwrap();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+        let merged = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                2,
+            )
+            .expect("same fingerprint retry evidence is monotonic");
+
+        assert_eq!(merged.storage_revision, before_second.storage_revision + 1);
+        assert_eq!(merged.findings.len(), 1);
+        assert_eq!(merged.finding_observations.len(), 1);
+        assert_eq!(merged.findings[0].evidence.len(), 2);
+        assert!(
+            merged.findings[0]
+                .evidence
+                .iter()
+                .any(|evidence| evidence.id == first_evidence_id
+                    && evidence.artifact_id == first_evidence_artifact)
+        );
+        assert!(
+            merged.findings[0]
+                .evidence
+                .iter()
+                .any(|evidence| evidence.artifact_id == "raw-naabu-final-2")
+        );
+        assert_eq!(
+            merged.finding_observations[0]
+                .finding_snapshot
+                .as_ref()
+                .unwrap()
+                .evidence
+                .len(),
+            2
+        );
+        assert!(merged.scan_runs[0].engine_runs[0].naabu_attempt_results[1].normalization_complete);
+        let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
+        assert_eq!(events.len(), events_before + 1);
+
+        let replayed = fixture
+            .service()
+            .adapt_and_persist_naabu_attempt(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                2,
+            )
+            .unwrap();
+        assert_eq!(replayed.storage_revision, merged.storage_revision);
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events.len()
+        );
+    }
+
+    #[test]
     fn cumulative_complete_units_cannot_be_redispatched_but_partial_units_can() {
         let complete_fixture = Fixture::new();
-        let complete =
-            prepared_naabu_attempt_result(&complete_fixture, WorkUnitOutcome::TestedComplete, true);
+        let complete = prepared_naabu_attempt_result(
+            &complete_fixture,
+            WorkUnitOutcome::TestedComplete,
+            false,
+        );
         complete_fixture
             .service()
             .persist_naabu_attempt_result(
@@ -10588,7 +11523,7 @@ mod tests {
 
         let partial_fixture = Fixture::new();
         let partial =
-            prepared_naabu_attempt_result(&partial_fixture, WorkUnitOutcome::TestedPartial, true);
+            prepared_naabu_attempt_result(&partial_fixture, WorkUnitOutcome::TestedPartial, false);
         partial_fixture
             .service()
             .persist_naabu_attempt_result(
@@ -10623,7 +11558,7 @@ mod tests {
     fn late_complete_result_survives_an_already_committed_retry_request() {
         let fixture = Fixture::new();
         let prepared =
-            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, true);
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
         mark_naabu_attempt_clean_for_retry(&fixture, &prepared);
         let second = naabu_attempt_request(
             &prepared.plan,
@@ -19399,5 +20334,114 @@ mod tests {
         assert_eq!(second.title, "Updated title");
         assert_eq!(second.evidence[0].id, "evidence-2");
         assert_eq!(second.evidence[0].run_id, "run-2");
+    }
+
+    #[test]
+    fn delayed_older_naabu_retry_updates_only_its_snapshot() {
+        let fixture = Fixture::new();
+        let mut case = fixture.create();
+        let case_id = case.id.clone();
+        let created_at = Utc::now();
+        let run = |id: &str, sequence: u32| ScanRun {
+            id: id.into(),
+            case_id: case_id.clone(),
+            sequence,
+            created_at,
+            completed_at: None,
+            request_outcome: None,
+            knowledge_cutoff: created_at,
+            ai_system_applicable: false,
+            ai_system_applicability: AiSystemApplicabilityAnswer::Unknown,
+            ai_generated_artifact: AiGeneratedArtifactAnswer::Unknown,
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
+            engine_admission_issues: vec![],
+            engine_runs: vec![],
+        };
+        case.scan_runs = vec![run("run-old", 1), run("run-new", 2)];
+
+        let finding = |run_id: &str, title: &str, evidence_id: &str, hash_byte: char| Finding {
+            id: format!("finding-{run_id}"),
+            case_id: case_id.clone(),
+            first_seen_run_id: run_id.into(),
+            last_seen_run_id: run_id.into(),
+            fingerprint: "stable-naabu-fingerprint".into(),
+            title: title.into(),
+            plain_language_summary: format!("summary for {run_id}"),
+            possible_impact: format!("impact for {run_id}"),
+            severity: Severity::Informational,
+            confidence: Confidence::High,
+            priority: 15,
+            priority_reasons: vec![format!("priority for {run_id}")],
+            asset_ids: vec!["asset-1".into()],
+            evidence: vec![Evidence {
+                id: evidence_id.into(),
+                finding_id: format!("finding-{run_id}"),
+                run_id: run_id.into(),
+                engine_run_id: Some(format!("engine-{run_id}")),
+                kind: EvidenceKind::ExternalValidation,
+                engine_id: NAABU_ENGINE_ID.into(),
+                source_rule: Some("open-tcp-port".into()),
+                result_pointer_sha256: Some(hash_byte.to_string().repeat(64)),
+                observed_at: created_at,
+                summary: format!("evidence for {run_id}"),
+                artifact_id: format!("artifact-{evidence_id}"),
+                artifact_sha256: hash_byte.to_string().repeat(64),
+                pointer: Some("line:1".into()),
+                redacted: false,
+            }],
+            control_references: vec![],
+            recommendation: format!("recommendation for {run_id}"),
+            verification_guidance: format!("verification for {run_id}"),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Network security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![run_id.into()],
+        };
+
+        let newer = finding("run-new", "Newer canonical result", "evidence-new", 'a');
+        reconcile_finding(&mut case, &newer, NAABU_ENGINE_ID).unwrap();
+        let canonical_id = case.findings[0].id.clone();
+
+        let older = finding("run-old", "Delayed older result", "evidence-old-1", 'b');
+        assert!(reconcile_naabu_attempt_finding(&mut case, &older, NAABU_ENGINE_ID).unwrap());
+        assert_eq!(case.findings.len(), 1);
+        assert_eq!(case.findings[0].id, canonical_id);
+        assert_eq!(case.findings[0].last_seen_run_id, "run-new");
+        assert_eq!(case.findings[0].title, "Newer canonical result");
+        assert_eq!(case.finding_observations.len(), 2);
+        let older_observation = case
+            .finding_observations
+            .iter()
+            .find(|observation| observation.run_id == "run-old")
+            .unwrap();
+        assert_eq!(older_observation.finding_id, canonical_id);
+        assert_eq!(
+            older_observation.finding_snapshot.as_ref().unwrap().title,
+            "Delayed older result"
+        );
+
+        let mut older_retry = finding("run-old", "Delayed older retry", "evidence-old-1", 'b');
+        older_retry.evidence.push(
+            finding("run-old", "unused", "evidence-old-2", 'c')
+                .evidence
+                .remove(0),
+        );
+        assert!(reconcile_naabu_attempt_finding(&mut case, &older_retry, NAABU_ENGINE_ID).unwrap());
+        assert_eq!(case.findings[0].last_seen_run_id, "run-new");
+        assert_eq!(case.findings[0].title, "Newer canonical result");
+        assert_eq!(case.finding_observations.len(), 2);
+        let older_snapshot = case
+            .finding_observations
+            .iter()
+            .find(|observation| observation.run_id == "run-old")
+            .unwrap()
+            .finding_snapshot
+            .as_ref()
+            .unwrap();
+        assert_eq!(older_snapshot.title, "Delayed older retry");
+        assert_eq!(older_snapshot.evidence.len(), 2);
     }
 }
