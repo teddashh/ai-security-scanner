@@ -56,6 +56,10 @@ pub struct ExecutionCheckpoint {
     pub stage: ExecutionStage,
     pub container_name: Option<String>,
     pub scope_sha256: Option<String>,
+    /// Exact digest of the private launcher-v2 work plan mounted into this
+    /// container. Legacy executions omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_plan_sha256: Option<String>,
     pub artifact_ids: Vec<String>,
     pub cleanup_completed: bool,
     pub last_error: Option<String>,
@@ -110,6 +114,18 @@ impl ExecutionCheckpoint {
             return Err(AppError::InvalidRequest(
                 "checkpoint runtime provider and provenance must be recorded together".into(),
             ));
+        }
+        if let Some(digest) = self.launcher_plan_sha256.as_deref() {
+            if self.engine_id != NAABU_ENGINE_ID || self.scope_sha256.is_none() {
+                return Err(AppError::InvalidRequest(
+                    "checkpoint launcher plan digest requires a Naabu execution scope".into(),
+                ));
+            }
+            if !is_lowercase_sha256(digest) {
+                return Err(AppError::InvalidRequest(
+                    "checkpoint Naabu launcher plan digest is invalid".into(),
+                ));
+            }
         }
         let expected = planned_container_name(&self.engine_id, &self.engine_run_id, self.attempt)?;
         if self
@@ -252,11 +268,22 @@ pub struct EngineExecutionRequest<'a> {
     /// not populate this yet: only a future immutable Naabu manifest that
     /// explicitly opts into launcher journal v2 may supply it.
     pub naabu_launcher_plan: Option<&'a NaabuLauncherPlanV2>,
+    /// Durable digest chosen by host planning for the exact serialized v2
+    /// sidecar. The orchestrator verifies the file it wrote before it builds
+    /// or invokes any runtime plan.
+    pub expected_naabu_launcher_plan_sha256: Option<&'a str>,
     pub workspace: Option<&'a Path>,
     pub network_policy: &'a NetworkPolicy,
     pub resource_limits: &'a ResourceLimits,
     pub credentials: &'a ScannerCredentialSet,
     pub attempt: u32,
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn validate_naabu_launcher_request(request: &EngineExecutionRequest<'_>) -> AppResult<()> {
@@ -272,14 +299,21 @@ fn validate_naabu_launcher_request(request: &EngineExecutionRequest<'_>) -> AppR
                 request.manifest.id
             )));
         }
-        Some(_) if request.naabu_launcher_plan.is_none() => {
+        Some(_)
+            if request.naabu_launcher_plan.is_none()
+                || request.expected_naabu_launcher_plan_sha256.is_none() =>
+        {
             return Err(AppError::InvalidRequest(
-                "Naabu launcher journal v2 requires its private execution plan".into(),
+                "Naabu launcher journal v2 requires its private execution plan and exact digest"
+                    .into(),
             ));
         }
-        None if request.naabu_launcher_plan.is_some() => {
+        None if request.naabu_launcher_plan.is_some()
+            || request.expected_naabu_launcher_plan_sha256.is_some() =>
+        {
             return Err(AppError::InvalidRequest(
-                "a launcher execution plan requires an explicit reviewed launcher version".into(),
+                "a launcher execution plan or digest requires an explicit reviewed launcher version"
+                    .into(),
             ));
         }
         _ => {}
@@ -288,6 +322,14 @@ fn validate_naabu_launcher_request(request: &EngineExecutionRequest<'_>) -> AppR
     let Some(plan) = request.naabu_launcher_plan else {
         return Ok(());
     };
+    let expected_digest = request
+        .expected_naabu_launcher_plan_sha256
+        .expect("launcher v2 presence was validated together");
+    if !is_lowercase_sha256(expected_digest) {
+        return Err(AppError::InvalidRequest(
+            "expected Naabu launcher plan digest is not lowercase SHA-256".into(),
+        ));
+    }
     if request.manifest.id != NAABU_ENGINE_ID
         || plan.schema_version != NAABU_LAUNCHER_PLAN_SCHEMA_VERSION
         || plan.engine_id != NAABU_ENGINE_ID
@@ -414,6 +456,15 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 )
             })
             .transpose()?;
+        if launcher_plan_file
+            .as_ref()
+            .map(|control_file| control_file.sha256.as_str())
+            != request.expected_naabu_launcher_plan_sha256
+        {
+            return Err(AppError::NotAuthorized(
+                "written Naabu launcher plan does not match its durable expected digest".into(),
+            ));
+        }
         let plan_directories = run_directories_with_workspace(
             &directories,
             request.workspace.unwrap_or(&directories.workspace),
@@ -437,6 +488,11 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 .map(|control_file| control_file.path.as_path()),
         )
         .build()?;
+        if plan.launcher_plan_sha256() != request.expected_naabu_launcher_plan_sha256 {
+            return Err(AppError::NotAuthorized(
+                "container plan changed the expected Naabu launcher plan digest".into(),
+            ));
+        }
 
         let checkpoint = ExecutionCheckpoint {
             case_id: request.case_id.into(),
@@ -447,6 +503,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             stage: ExecutionStage::Planned,
             container_name: Some(plan.container_name().to_owned()),
             scope_sha256: Some(plan.scope_sha256().to_owned()),
+            launcher_plan_sha256: plan.launcher_plan_sha256().map(str::to_owned),
             artifact_ids: Vec::new(),
             cleanup_completed: false,
             last_error: None,
@@ -526,12 +583,14 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         report.checkpoint.stage = ExecutionStage::Running;
         observer(&report)?;
         let mut created_container = None;
+        let mut creation_may_be_untracked = false;
         let runtime_result = self.runtime.run(
             &plan,
             request.credentials,
             cancellation,
             &capture,
             &mut created_container,
+            &mut creation_may_be_untracked,
         );
         if let Ok(outcome) = runtime_result.as_ref() {
             report.exit_code = outcome.exit_code;
@@ -546,15 +605,14 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             );
             Ok(artifacts)
         })();
-        let cleanup_result = match created_container.as_ref() {
-            Some(created) => self.runtime.cleanup(plan.ownership(), Some(created)),
-            None => {
-                report.checkpoint.container_name = None;
-                Ok(CleanupOutcome {
-                    removed: false,
-                    detail: "this runtime invocation did not create a container".into(),
-                })
-            }
+        let cleanup_result = match (created_container.as_ref(), creation_may_be_untracked) {
+            (Some(created), _) => self.runtime.cleanup(plan.ownership(), Some(created)),
+            (None, true) => self.runtime.cleanup(plan.ownership(), None),
+            (None, false) => Ok(CleanupOutcome {
+                removed: false,
+                detail: "the runtime invocation ended before container creation was possible"
+                    .into(),
+            }),
         };
 
         match artifact_result {
@@ -572,6 +630,33 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             Ok(cleanup) => {
                 report.checkpoint.cleanup_completed = true;
                 report.cleanup = Some(cleanup);
+            }
+            Err(AppError::NotAuthorized(problem)) => {
+                // A same-name object whose exact ownership labels cannot be
+                // proven belongs outside this attempt's cleanup authority.
+                // Preserve it, close this attempt's cleanup obligation, and
+                // let a later attempt use its own unique name. Treating this
+                // as retryable cleanup would permanently gate the user's scan
+                // on an object the product must never change.
+                report.checkpoint.cleanup_completed = true;
+                report.cleanup = Some(CleanupOutcome {
+                    removed: false,
+                    detail: format!(
+                        "No runtime object was changed because exact product ownership could not be proven: {problem}"
+                    ),
+                });
+                report.warnings.push(
+                    "An existing runtime object could not be proven to belong to this scan, so it was preserved. A retry uses a new isolated attempt."
+                        .into(),
+                );
+                // The same ownership ambiguity also means this attempt's
+                // runtime output cannot be promoted to trusted findings, even
+                // if the client process reported exit zero. Raw capture stays
+                // available for diagnosis, while the attempt ends truthfully
+                // and a new isolated attempt can continue.
+                report.fail(
+                    "Runtime ownership could not be proven after launch. Raw output was preserved, but this attempt's results were not trusted; retry uses a new isolated attempt.",
+                );
             }
             Err(error) => {
                 let runtime_error = match runtime_result.as_ref() {
@@ -661,6 +746,8 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             || ownership.engine_id != checkpoint.engine_id
             || ownership.attempt != checkpoint.attempt
             || Some(ownership.scope_sha256.as_str()) != checkpoint.scope_sha256.as_deref()
+            || ownership.launcher_plan_sha256.as_deref()
+                != checkpoint.launcher_plan_sha256.as_deref()
         {
             return Err(AppError::NotAuthorized(
                 "cleanup ownership proof does not match the saved execution checkpoint".into(),
@@ -1002,6 +1089,22 @@ impl<'a> ScopeDocument<'a> {
         } else {
             None
         };
+        // The control file is exact-only and may already exist after a crash.
+        // Anchor its required timestamp to durable authorization input rather
+        // than wall-clock serialization time so replaying the same attempt is
+        // byte-for-byte identical. Validated execution scope always contains
+        // at least one grant.
+        let generated_at = scope
+            .iter()
+            .flat_map(|entry| entry.grants.iter())
+            .map(|grant| grant.confirmed_at)
+            .max()
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "validated execution scope contains no durable authorization timestamp".into(),
+                )
+            })?
+            .to_rfc3339();
         let assets = scope
             .iter()
             .map(|entry| {
@@ -1047,7 +1150,7 @@ impl<'a> ScopeDocument<'a> {
         Ok(Self {
             schema_version: if external_launcher { "2" } else { "1" },
             engine_id: &manifest.id,
-            generated_at: Utc::now().to_rfc3339(),
+            generated_at,
             assets,
         })
     }
@@ -1148,6 +1251,7 @@ mod tests {
     };
     use crate::naabu_work_plan::{NaabuLauncherFrozenGrant, NaabuLauncherWorkUnit};
     use chrono::Duration;
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
@@ -1168,6 +1272,22 @@ mod tests {
                 warnings: vec!["one malformed record was retained only as raw evidence".into()],
                 complete: false,
             })
+        }
+    }
+
+    struct MustNotRunAdapter;
+
+    impl EngineAdapter for MustNotRunAdapter {
+        fn engine_id(&self) -> &str {
+            "scanner"
+        }
+
+        fn adapter_version(&self) -> &str {
+            "adapter-1"
+        }
+
+        fn normalize(&self, _input: &AdapterInput<'_>) -> AppResult<AdapterOutput> {
+            panic!("ownership-ambiguous runtime output must never reach an adapter")
         }
     }
 
@@ -1221,8 +1341,11 @@ mod tests {
             _credentials: &ScannerCredentialSet,
             _cancellation: &CancellationToken,
             _capture: &CapturePaths,
-            _created_container: &mut Option<CreatedContainer>,
+            created_container: &mut Option<CreatedContainer>,
+            creation_may_be_untracked: &mut bool,
         ) -> AppResult<RuntimeOutcome> {
+            *created_container = None;
+            *creation_may_be_untracked = false;
             let path = plan.launcher_plan_file().ok_or_else(|| {
                 AppError::Internal("launcher-v2 plan was not mounted into the run plan".into())
             })?;
@@ -1366,6 +1489,11 @@ mod tests {
         }
     }
 
+    fn naabu_launcher_plan_sha256(plan: &NaabuLauncherPlanV2) -> String {
+        let encoded = serde_json::to_vec(plan).expect("launcher plan JSON");
+        hex::encode(Sha256::digest(encoded))
+    }
+
     fn asset(id: &str, active_external: bool) -> Asset {
         Asset {
             id: id.into(),
@@ -1499,6 +1627,74 @@ mod tests {
             json["assets"][0]["grants"][0]
                 .get("resolved_addresses")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn replaying_the_same_attempt_reuses_identical_scope_and_reaches_the_observer() {
+        let temp = tempfile::tempdir().expect("temporary run root");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("artifact store");
+        let runtime = FakeContainerRuntime::default();
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: None,
+            naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+
+        let mut first_observer_calls = 0;
+        let first = orchestrator
+            .execute_with_observer(&request, &cancellation, |_| {
+                first_observer_calls += 1;
+                Ok(())
+            })
+            .expect("first attempt checkpoint");
+        assert_eq!(first_observer_calls, 1);
+        assert_eq!(first.checkpoint.stage, ExecutionStage::Cancelled);
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let mut replay_observer_calls = 0;
+        let replay = orchestrator
+            .execute_with_observer(&request, &cancellation, |_| {
+                replay_observer_calls += 1;
+                Ok(())
+            })
+            .expect("same durable attempt reuses its exact control file");
+
+        assert_eq!(replay_observer_calls, 1);
+        assert_eq!(replay.checkpoint.stage, ExecutionStage::Cancelled);
+        assert_eq!(
+            replay.checkpoint.scope_sha256,
+            first.checkpoint.scope_sha256
+        );
+        assert_eq!(
+            runtime.calls(),
+            Vec::<RuntimeCall>::new(),
+            "a cancelled exact replay must reach the observer without contacting a runtime"
         );
     }
 
@@ -1660,6 +1856,7 @@ mod tests {
         let limits = ResourceLimits::default();
         let credentials = ScannerCredentialSet::default();
         let launcher_plan = naabu_launcher_plan("engine-run-1", 1);
+        let expected_launcher_digest = naabu_launcher_plan_sha256(&launcher_plan);
         let request = EngineExecutionRequest {
             case_id: "case-1",
             scan_run_id: "run-1",
@@ -1671,6 +1868,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: Some(&frozen_destinations),
             naabu_launcher_plan: Some(&launcher_plan),
+            expected_naabu_launcher_plan_sha256: Some(&expected_launcher_digest),
             workspace: None,
             network_policy: &policy,
             resource_limits: &limits,
@@ -1678,10 +1876,34 @@ mod tests {
             attempt: 1,
         };
 
+        let mut observed_checkpoint_digests = Vec::new();
         let report = orchestrator
-            .execute(&request, &CancellationToken::default())
+            .execute_with_observer(&request, &CancellationToken::default(), |checkpoint| {
+                observed_checkpoint_digests
+                    .push(checkpoint.checkpoint.launcher_plan_sha256.clone());
+                Ok(())
+            })
             .expect("captured launcher plan report");
         assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
+        assert_eq!(
+            report.checkpoint.container_name.as_deref(),
+            Some(
+                planned_container_name(NAABU_ENGINE_ID, "engine-run-1", 1)
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            report.checkpoint.launcher_plan_sha256.as_deref(),
+            Some(expected_launcher_digest.as_str())
+        );
+        assert!(report.checkpoint.resume_token().is_ok());
+        assert!(!observed_checkpoint_digests.is_empty());
+        assert!(
+            observed_checkpoint_digests
+                .iter()
+                .all(|digest| { digest.as_deref() == Some(expected_launcher_digest.as_str()) })
+        );
         assert!(
             report
                 .checkpoint
@@ -1762,6 +1984,7 @@ mod tests {
         let limits = ResourceLimits::default();
         let credentials = ScannerCredentialSet::default();
         let launcher_plan = naabu_launcher_plan("another-engine-run", 1);
+        let expected_launcher_digest = naabu_launcher_plan_sha256(&launcher_plan);
         let request = EngineExecutionRequest {
             case_id: "case-1",
             scan_run_id: "run-1",
@@ -1773,6 +1996,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: Some(&frozen_destinations),
             naabu_launcher_plan: Some(&launcher_plan),
+            expected_naabu_launcher_plan_sha256: Some(&expected_launcher_digest),
             workspace: None,
             network_policy: &policy,
             resource_limits: &limits,
@@ -1792,6 +2016,66 @@ mod tests {
                 .join(NAABU_LAUNCHER_PLAN_CONTROL_FILE)
                 .exists()
         );
+    }
+
+    #[test]
+    fn mismatched_naabu_launcher_digest_is_rejected_before_runtime_creation() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = naabu_launcher_v2_manifest();
+        let assets = vec![asset("one", true)];
+        let grants = vec![grant(
+            "one",
+            ScanPermission::LowImpactExternalConnection,
+            true,
+        )];
+        let frozen_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: ["192.0.2.10".parse().expect("test address")]
+                .into_iter()
+                .collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let launcher_plan = naabu_launcher_plan("engine-run-1", 1);
+        let wrong_digest = "f".repeat(64);
+        assert_ne!(wrong_digest, naabu_launcher_plan_sha256(&launcher_plan));
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: Some(&frozen_destinations),
+            naabu_launcher_plan: Some(&launcher_plan),
+            expected_naabu_launcher_plan_sha256: Some(&wrong_digest),
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let error = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect_err("mismatched launcher digest must fail closed");
+        assert!(error.to_string().contains("durable expected digest"));
+        assert!(runtime.calls().is_empty());
     }
 
     #[test]
@@ -1833,6 +2117,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1895,6 +2180,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1971,6 +2257,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1983,7 +2270,14 @@ mod tests {
             .expect("failed launch report");
 
         assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
-        assert!(report.checkpoint.container_name.is_none());
+        assert_eq!(
+            report.checkpoint.container_name.as_deref(),
+            Some(
+                planned_container_name("scanner", "engine-run-1", 1)
+                    .unwrap()
+                    .as_str()
+            )
+        );
         assert!(report.checkpoint.cleanup_completed);
         assert!(
             !runtime
@@ -1991,6 +2285,142 @@ mod tests {
                 .iter()
                 .any(|call| matches!(call, RuntimeCall::Cleanup(_)))
         );
+    }
+
+    #[test]
+    fn untracked_runtime_creation_is_reconciled_by_exact_planned_ownership() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_untracked_creation(true);
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(125),
+            ..FakeRunBehavior::default()
+        });
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = manifest(false);
+        let assets = vec![asset("asset-1", false)];
+        let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+        let policy = NetworkPolicy::Disabled;
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: None,
+            naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
+            workspace: Some(&workspace),
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("untracked launch report");
+
+        let expected_name = planned_container_name("scanner", "engine-run-1", 1).unwrap();
+        assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
+        assert_eq!(
+            report.checkpoint.container_name.as_deref(),
+            Some(expected_name.as_str())
+        );
+        assert!(report.checkpoint.cleanup_completed);
+        assert_eq!(
+            runtime.calls().last(),
+            Some(&RuntimeCall::Cleanup(expected_name))
+        );
+    }
+
+    #[test]
+    fn foreign_runtime_ownership_is_preserved_without_green_or_blocking_retry() {
+        for untracked_creation in [false, true] {
+            let temp = tempfile::tempdir().expect("temp directory");
+            let workspace = temp.path().join("workspace");
+            std::fs::create_dir(&workspace).expect("workspace");
+            let store = ArtifactStore::open(temp.path().join("artifacts")).expect("artifact store");
+            let runtime = FakeContainerRuntime::default();
+            runtime.set_untracked_creation(untracked_creation);
+            runtime.set_foreign_cleanup_mismatch(true);
+            runtime.set_behavior(FakeRunBehavior {
+                exit_code: Some(0),
+                stdout: b"untrusted runtime output".to_vec(),
+                stderr: Vec::new(),
+                output_files: BTreeMap::from([(
+                    "result.json".into(),
+                    br#"{"would":"be-a-finding"}"#.to_vec(),
+                )]),
+            });
+            let mut adapters = AdapterRegistry::default();
+            adapters
+                .register(Arc::new(MustNotRunAdapter))
+                .expect("register tripwire adapter");
+            let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+            let manifest = manifest(false);
+            let assets = vec![asset("asset-1", false)];
+            let grants = vec![grant("asset-1", ScanPermission::LocalArtifactRead, false)];
+            let policy = NetworkPolicy::Disabled;
+            let limits = ResourceLimits::default();
+            let credentials = ScannerCredentialSet::default();
+            let request = EngineExecutionRequest {
+                case_id: "case-1",
+                scan_run_id: "run-1",
+                engine_run_id: "engine-run-1",
+                manifest: &manifest,
+                ai_system_applicable: false,
+                ai_generated_artifact_applicable: false,
+                assets: &assets,
+                scope_grants: &grants,
+                frozen_destinations: None,
+                naabu_launcher_plan: None,
+                expected_naabu_launcher_plan_sha256: None,
+                workspace: Some(&workspace),
+                network_policy: &policy,
+                resource_limits: &limits,
+                credentials: &credentials,
+                attempt: 1,
+            };
+
+            let report = orchestrator
+                .execute(&request, &CancellationToken::default())
+                .expect("ambiguous ownership is a terminal attempt outcome");
+
+            let first_name = planned_container_name("scanner", "engine-run-1", 1).unwrap();
+            let retry_name = planned_container_name("scanner", "engine-run-1", 2).unwrap();
+            assert_ne!(first_name, retry_name);
+            assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
+            assert!(report.checkpoint.cleanup_completed);
+            assert_eq!(
+                report.checkpoint.container_name.as_deref(),
+                Some(first_name.as_str())
+            );
+            assert!(
+                report.raw_artifacts.len() >= 3,
+                "raw capture remains available"
+            );
+            assert!(report.findings.is_empty());
+            assert!(report.cleanup.as_ref().is_some_and(|cleanup| {
+                !cleanup.removed && cleanup.detail.contains("ownership could not be proven")
+            }));
+            assert!(report.warnings.iter().any(|warning| {
+                warning.contains("was preserved") && warning.contains("new isolated attempt")
+            }));
+            assert_eq!(
+                runtime.calls().last(),
+                Some(&RuntimeCall::Cleanup(first_name))
+            );
+        }
     }
 
     #[test]
@@ -2028,6 +2458,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -2088,6 +2519,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -2159,6 +2591,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: None,
             network_policy: &policy,
             resource_limits: &limits,
@@ -2214,6 +2647,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -2259,6 +2693,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -2325,6 +2760,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -2381,6 +2817,7 @@ mod tests {
             scope_grants: &grants,
             frozen_destinations: None,
             naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -2422,6 +2859,7 @@ mod tests {
             stage: ExecutionStage::CapturedAwaitingAdapter,
             container_name: Some("ass-scanner-engine-run-1-a1".into()),
             scope_sha256: Some("abc".into()),
+            launcher_plan_sha256: None,
             artifact_ids: vec!["artifact-1".into()],
             cleanup_completed: true,
             last_error: None,
@@ -2444,10 +2882,71 @@ mod tests {
             .as_object_mut()
             .expect("checkpoint object")
             .remove("managed_network");
+        legacy
+            .as_object_mut()
+            .expect("checkpoint object")
+            .remove("launcher_plan_sha256");
         let legacy = ExecutionCheckpoint::from_resume_token(&legacy.to_string())
             .expect("pre-managed-network checkpoint remains readable");
         assert!(legacy.managed_network.is_none());
+        assert!(legacy.launcher_plan_sha256.is_none());
         assert!(legacy.runtime_command_provenance.is_none());
+    }
+
+    #[test]
+    fn checkpoint_rejects_a_non_lowercase_launcher_digest() {
+        let token = serde_json::json!({
+            "case_id": "case-1",
+            "scan_run_id": "run-1",
+            "engine_run_id": "engine-run-1",
+            "engine_id": "naabu",
+            "attempt": 1,
+            "stage": "planned",
+            "container_name": "ass-naabu-engine-run-1-a1",
+            "scope_sha256": "b".repeat(64),
+            "launcher_plan_sha256": "A".repeat(64),
+            "artifact_ids": [],
+            "cleanup_completed": true,
+            "last_error": null
+        })
+        .to_string();
+
+        let error = ExecutionCheckpoint::from_resume_token(&token)
+            .expect_err("uppercase launcher digest rejected");
+        assert!(error.to_string().contains("launcher plan digest"));
+    }
+
+    #[test]
+    fn checkpoint_launcher_digest_requires_a_naabu_scope() {
+        let base = serde_json::json!({
+            "case_id": "case-1",
+            "scan_run_id": "run-1",
+            "engine_run_id": "engine-run-1",
+            "engine_id": "naabu",
+            "attempt": 1,
+            "stage": "planned",
+            "container_name": "ass-naabu-engine-run-1-a1",
+            "scope_sha256": "b".repeat(64),
+            "launcher_plan_sha256": "a".repeat(64),
+            "artifact_ids": [],
+            "cleanup_completed": false,
+            "last_error": null
+        });
+
+        for (field, replacement) in [
+            ("engine_id", serde_json::json!("scanner")),
+            ("scope_sha256", serde_json::Value::Null),
+        ] {
+            let mut malformed = base.clone();
+            malformed[field] = replacement;
+            let error = ExecutionCheckpoint::from_resume_token(&malformed.to_string())
+                .expect_err("unowned launcher digest rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires a Naabu execution scope")
+            );
+        }
     }
 
     #[test]

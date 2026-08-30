@@ -1091,6 +1091,7 @@ pub(crate) fn case_for_export(
                 // ports. Standard exports retain the ordinary redacted run
                 // outcome, but never this execution-only target corpus.
                 engine_run.naabu_work_plan = None;
+                engine_run.naabu_attempt_requests.clear();
                 engine_run.error_message = engine_run
                     .error_message
                     .as_ref()
@@ -1164,6 +1165,10 @@ fn redact_finding(finding: &mut Finding, replacements: &[(String, String)]) {
     for tag in &mut finding.tags {
         redact_known_literals(tag, replacements);
     }
+    for reference in &mut finding.official_references {
+        redact_known_literals(reference, replacements);
+    }
+    redact_known_literals(&mut finding.recommended_expert_type, replacements);
     for evidence in &mut finding.evidence {
         evidence.summary = "[redacted evidence summary]".into();
         evidence.pointer = None;
@@ -1210,6 +1215,54 @@ fn standard_redaction_replacements(case: &AssessmentCase) -> Vec<(String, String
             add_redaction_replacement(&mut replacements, &external.target.canonical_text(), &alias);
         }
     }
+    // A grant can be removed or replaced after a run. The run snapshot still
+    // appears in technical export fields and historical finding prose, so it
+    // is part of the Standard redaction corpus even when no live grant points
+    // to that target anymore.
+    for run in &case.scan_runs {
+        for grant in &run.scope_grant_snapshots {
+            let Some(external) = grant.external_scope.as_ref() else {
+                continue;
+            };
+            let alias = case
+                .assets
+                .iter()
+                .position(|asset| asset.id == grant.asset_id)
+                .map(|index| format!("Asset {}", index + 1))
+                .unwrap_or_else(|| "[redacted target]".into());
+            add_redaction_replacement(&mut replacements, &external.target.canonical_text(), &alias);
+        }
+    }
+    // A frozen Naabu plan may contain DNS answers that never appeared in the
+    // asset or grant text. Findings can legitimately quote those observed
+    // addresses, so collect the private execution corpus before the plan is
+    // removed from a standard export.
+    for run in &case.scan_runs {
+        for engine_run in &run.engine_runs {
+            let Some(plan) = engine_run.naabu_work_plan.as_ref() else {
+                continue;
+            };
+            for frozen_grant in &plan.frozen_grants {
+                let alias = case
+                    .assets
+                    .iter()
+                    .position(|asset| asset.id == frozen_grant.asset_id)
+                    .map(|index| format!("Asset {}", index + 1))
+                    .unwrap_or_else(|| "[redacted target]".into());
+                add_redaction_replacement(
+                    &mut replacements,
+                    &frozen_grant.target.canonical_text(),
+                    &alias,
+                );
+                if let Some(hostname) = frozen_grant.resolved_hostname.as_deref() {
+                    add_redaction_replacement(&mut replacements, hostname, &alias);
+                }
+                for address in &frozen_grant.addresses {
+                    add_redaction_replacement(&mut replacements, &address.to_string(), &alias);
+                }
+            }
+        }
+    }
     replacements.sort_by(|left, right| {
         right
             .0
@@ -1238,16 +1291,45 @@ fn add_redaction_replacement(
 
 fn redact_known_literals(value: &mut String, replacements: &[(String, String)]) {
     for (sensitive, alias) in replacements {
-        if value == sensitive {
+        let exact_match = if sensitive.is_ascii() {
+            value.eq_ignore_ascii_case(sensitive)
+        } else {
+            value == sensitive
+        };
+        if exact_match {
             *value = alias.clone();
             continue;
         }
         // Avoid corrupting ordinary prose for very short identifiers such as
         // "IP". Exact-field matches above are still redacted at any length.
-        if sensitive.chars().count() >= 4 && value.contains(sensitive) {
-            *value = value.replace(sensitive, alias);
+        if sensitive.chars().count() >= 4 {
+            if sensitive.is_ascii() {
+                *value = replace_ascii_case_insensitive(value, sensitive, alias);
+            } else if value.contains(sensitive) {
+                *value = value.replace(sensitive, alias);
+            }
         }
     }
+}
+
+fn replace_ascii_case_insensitive(value: &str, sensitive: &str, alias: &str) -> String {
+    debug_assert!(sensitive.is_ascii());
+    let folded_value = value.to_ascii_lowercase();
+    let folded_sensitive = sensitive.to_ascii_lowercase();
+    let mut output = String::with_capacity(value.len());
+    let mut copied_through = 0;
+    while let Some(relative_start) = folded_value[copied_through..].find(&folded_sensitive) {
+        let start = copied_through + relative_start;
+        let end = start + sensitive.len();
+        output.push_str(&value[copied_through..start]);
+        output.push_str(alias);
+        copied_through = end;
+    }
+    if copied_through == 0 {
+        return value.to_owned();
+    }
+    output.push_str(&value[copied_through..]);
+    output
 }
 
 fn sort_case(case: &mut AssessmentCase) {
@@ -2155,6 +2237,7 @@ mod tests {
                 knowledge_input: None,
                 scope_contract_sha256: None,
                 naabu_work_plan: None,
+                naabu_attempt_requests: Vec::new(),
                 mapping_version: None,
                 mapping_provenance: None,
                 fingerprint_schema_version: None,
@@ -2756,6 +2839,8 @@ mod tests {
         const PLAN_HOSTNAME: &str = "work-plan-secret.example.test";
         const PLAN_ADDRESS_ONE: &str = "10.44.55.66";
         const PLAN_ADDRESS_TWO: &str = "10.44.55.67";
+        const HISTORICAL_HOSTNAME: &str = "retired-secret.example.test";
+        const HISTORICAL_HOSTNAME_RENDERED: &str = "Retired-Secret.Example.Test";
         const PLAN_PORT_ONE: u16 = 49_151;
         const PLAN_PORT_TWO: u16 = 49_152;
         let temp = tempdir().unwrap();
@@ -2796,7 +2881,7 @@ mod tests {
                 id: "external-1".into(),
                 case_id: case.id.clone(),
                 asset_id: "asset-1".into(),
-                target: CanonicalTarget::Hostname(SENTINEL.to_ascii_lowercase()),
+                target: CanonicalTarget::Hostname(HISTORICAL_HOSTNAME.into()),
                 ports: [8443].into_iter().collect(),
                 protocol: TransportProtocol::Https,
                 activity: ExternalActivity::ActiveExternal,
@@ -2819,45 +2904,60 @@ mod tests {
         case.scope_grants.push(grant.clone());
         case.scan_runs[0].scope_grant_ids = vec![grant.id.clone()];
         case.scan_runs[0].scope_grant_snapshots = vec![grant];
+        case.scope_grants.clear();
         case.scan_runs[0].engine_runs[0].resume_token = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].error_message = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].cleanup_detail = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].warnings = vec![SENTINEL.into()];
-        case.scan_runs[0].engine_runs[0].naabu_work_plan = Some(
-            build_naabu_work_plan(
-                NaabuWorkPlanIdentity::new("case-1", "run-1", "engine-run-1", time),
-                &[ResolvedExternalPlan {
-                    grant_id: "work-plan-grant".into(),
-                    case_id: "case-1".into(),
-                    asset_id: "asset-1".into(),
-                    target: CanonicalTarget::Hostname(PLAN_HOSTNAME.into()),
-                    resolution: ResolutionSnapshot {
-                        hostname: Some(PLAN_HOSTNAME.into()),
-                        addresses: [
-                            PLAN_ADDRESS_ONE.parse().unwrap(),
-                            PLAN_ADDRESS_TWO.parse().unwrap(),
-                        ]
-                        .into_iter()
-                        .collect(),
-                        resolved_at: time,
-                    },
-                    ports: [PLAN_PORT_ONE, PLAN_PORT_TWO].into_iter().collect(),
-                    protocol: TransportProtocol::Tcp,
-                    activity: ExternalActivity::LowImpactExternal,
-                    rate_policy: RatePolicy {
-                        requests_per_second: 2,
-                        concurrency: 1,
-                        timeout_seconds: 3,
-                    },
-                    template_policy: TemplatePolicy::conservative("not_applicable", Vec::new()),
-                    frozen_at: time,
-                    expires_at: time + chrono::Duration::hours(1),
-                    allow_sensitive_networks: true,
-                }],
-                None,
-            )
-            .unwrap(),
-        );
+        let private_naabu_plan = build_naabu_work_plan(
+            NaabuWorkPlanIdentity::new("case-1", "run-1", "engine-run-1", time),
+            &[ResolvedExternalPlan {
+                grant_id: "work-plan-grant".into(),
+                case_id: "case-1".into(),
+                asset_id: "asset-1".into(),
+                target: CanonicalTarget::Hostname(PLAN_HOSTNAME.into()),
+                resolution: ResolutionSnapshot {
+                    hostname: Some(PLAN_HOSTNAME.into()),
+                    addresses: [
+                        PLAN_ADDRESS_ONE.parse().unwrap(),
+                        PLAN_ADDRESS_TWO.parse().unwrap(),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    resolved_at: time,
+                },
+                ports: [PLAN_PORT_ONE, PLAN_PORT_TWO].into_iter().collect(),
+                protocol: TransportProtocol::Tcp,
+                activity: ExternalActivity::LowImpactExternal,
+                rate_policy: RatePolicy {
+                    requests_per_second: 2,
+                    concurrency: 1,
+                    timeout_seconds: 3,
+                },
+                template_policy: TemplatePolicy::conservative("not_applicable", Vec::new()),
+                frozen_at: time,
+                expires_at: time + chrono::Duration::hours(1),
+                allow_sensitive_networks: true,
+            }],
+            None,
+        )
+        .unwrap();
+        let requested_unit_ids = private_naabu_plan
+            .work_units
+            .iter()
+            .map(|unit| unit.unit_id.clone())
+            .collect::<Vec<_>>();
+        let requested_units = requested_unit_ids.iter().cloned().collect();
+        let private_launcher = private_naabu_plan
+            .launcher_plan_v2(1, Some(&requested_units))
+            .unwrap();
+        case.scan_runs[0].engine_runs[0].naabu_attempt_requests = vec![NaabuAttemptRequest {
+            schema_version: NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+            execution_attempt: 1,
+            requested_unit_ids,
+            launcher_plan_sha256: sha256_bytes(&serde_json::to_vec(&private_launcher).unwrap()),
+        }];
+        case.scan_runs[0].engine_runs[0].naabu_work_plan = Some(private_naabu_plan);
         case.coverage.push(CoverageEntry {
             id: "coverage-1".into(),
             scope_key: SENTINEL.into(),
@@ -2875,13 +2975,17 @@ mod tests {
             first_seen_run_id: "run-1".into(),
             last_seen_run_id: "run-1".into(),
             fingerprint: "fingerprint-1".into(),
-            title: "Generic finding title".into(),
-            plain_language_summary: "Generic summary".into(),
-            possible_impact: "Generic impact".into(),
+            title: format!(
+                "{PLAN_HOSTNAME} resolved to {PLAN_ADDRESS_ONE}; earlier target {HISTORICAL_HOSTNAME_RENDERED}"
+            ),
+            plain_language_summary: format!(
+                "The scan observed {PLAN_ADDRESS_ONE} and {PLAN_ADDRESS_TWO}."
+            ),
+            possible_impact: format!("Traffic may reach {PLAN_ADDRESS_TWO}."),
             severity: Severity::High,
             confidence: Confidence::High,
             priority: 50,
-            priority_reasons: vec![],
+            priority_reasons: vec![format!("Observed at {PLAN_ADDRESS_ONE}")],
             asset_ids: vec!["asset-1".into()],
             evidence: vec![Evidence {
                 id: "evidence-1".into(),
@@ -2900,13 +3004,13 @@ mod tests {
                 redacted: false,
             }],
             control_references: vec![],
-            recommendation: "Human review".into(),
-            verification_guidance: "Repeat the scan".into(),
+            recommendation: format!("Review {PLAN_HOSTNAME} and {PLAN_ADDRESS_TWO}."),
+            verification_guidance: format!("Repeat against {PLAN_ADDRESS_ONE}."),
             rollback_considerations: None,
-            official_references: vec![],
-            recommended_expert_type: "Security reviewer".into(),
+            official_references: vec![format!("https://{PLAN_HOSTNAME}/help")],
+            recommended_expert_type: format!("Owner of {PLAN_ADDRESS_ONE}"),
             status: FindingStatus::Unreviewed,
-            tags: vec![],
+            tags: vec![format!("resolved:{PLAN_ADDRESS_TWO}")],
         });
         case.finding_observations.push(FindingObservation {
             id: "observation-1".into(),
@@ -2971,23 +3075,48 @@ mod tests {
                 "the work-plan redaction fixture must contain {private_value}"
             );
         }
+        assert!(
+            unredacted
+                .to_ascii_lowercase()
+                .contains(HISTORICAL_HOSTNAME),
+            "historical mixed-case target fixture must be meaningful"
+        );
         let redacted = case_for_export(&case, RedactionProfile::Standard);
-        assert!(!serde_json::to_string(&redacted).unwrap().contains(SENTINEL));
+        let redacted_json = serde_json::to_string(&redacted).unwrap();
+        assert!(!redacted_json.contains(SENTINEL));
+        for private_target in [PLAN_HOSTNAME, PLAN_ADDRESS_ONE, PLAN_ADDRESS_TWO] {
+            assert!(
+                !redacted_json.contains(private_target),
+                "standard-redacted case leaked frozen target {private_target} from finding prose"
+            );
+        }
+        assert!(
+            !redacted_json
+                .to_ascii_lowercase()
+                .contains(HISTORICAL_HOSTNAME),
+            "standard-redacted case leaked a historical mixed-case target"
+        );
         assert!(
             redacted.scan_runs[0].engine_runs[0]
                 .naabu_work_plan
                 .is_none()
         );
         assert!(
-            !String::from_utf8(export_ocsf_finding_events_bytes(&redacted, "run-1").unwrap())
-                .unwrap()
-                .contains(SENTINEL)
+            redacted.scan_runs[0].engine_runs[0]
+                .naabu_attempt_requests
+                .is_empty()
         );
-        assert!(
-            !String::from_utf8(export_oscal_assessment_results_bytes(&redacted, "run-1").unwrap())
-                .unwrap()
-                .contains(SENTINEL)
-        );
+        let ocsf = String::from_utf8(export_ocsf_finding_events_bytes(&redacted, "run-1").unwrap())
+            .unwrap();
+        let oscal =
+            String::from_utf8(export_oscal_assessment_results_bytes(&redacted, "run-1").unwrap())
+                .unwrap();
+        for private_value in [SENTINEL, PLAN_HOSTNAME, PLAN_ADDRESS_ONE, PLAN_ADDRESS_TWO] {
+            assert!(!ocsf.contains(private_value));
+            assert!(!oscal.contains(private_value));
+        }
+        assert!(!ocsf.to_ascii_lowercase().contains(HISTORICAL_HOSTNAME));
+        assert!(!oscal.to_ascii_lowercase().contains(HISTORICAL_HOSTNAME));
 
         let destination = temp.path().join("sentinel-redacted.case.tar.gz");
         create_case_bundle_at(
@@ -3026,6 +3155,13 @@ mod tests {
                     "standard-redacted bundle entry leaked private Naabu work-plan data"
                 );
             }
+            assert!(
+                !bytes
+                    .to_ascii_lowercase()
+                    .windows(HISTORICAL_HOSTNAME.len())
+                    .any(|window| window == HISTORICAL_HOSTNAME.as_bytes()),
+                "standard-redacted bundle entry leaked a historical mixed-case target"
+            );
         }
     }
 

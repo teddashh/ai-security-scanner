@@ -719,6 +719,21 @@ pub struct LocalhostTcpObservation {
     pub observed_at: DateTime<Utc>,
 }
 
+pub const NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION: u32 = 1;
+pub const MAX_NAABU_ATTEMPT_REQUESTS: usize = 512;
+
+/// Immutable, target-free record of the exact launcher work requested before
+/// one Naabu attempt can contact a target. The referenced work-unit identities
+/// remain meaningful only together with the adjacent immutable work plan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NaabuAttemptRequest {
+    pub schema_version: u32,
+    pub execution_attempt: u32,
+    pub requested_unit_ids: Vec<String>,
+    pub launcher_plan_sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineRun {
     pub id: Id,
@@ -769,6 +784,15 @@ pub struct EngineRun {
     /// executions and never imply complete work-unit coverage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub naabu_work_plan: Option<NaabuWorkPlanV1>,
+    /// Append-only launcher requests persisted atomically with the immutable
+    /// Naabu work plan and before their corresponding target contact. Missing
+    /// values in legacy cases deserialize as an empty history.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_naabu_attempt_requests"
+    )]
+    pub naabu_attempt_requests: Vec<NaabuAttemptRequest>,
     /// Exact project-authored control-mapping catalog used while adapting this
     /// run. Missing values identify legacy runs and fail closed during diffing.
     #[serde(default)]
@@ -800,6 +824,21 @@ pub struct EngineRun {
     pub raw_artifact_ids: Vec<Id>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+}
+
+fn deserialize_naabu_attempt_requests<'de, D>(
+    deserializer: D,
+) -> Result<Vec<NaabuAttemptRequest>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let requests = Vec::<NaabuAttemptRequest>::deserialize(deserializer)?;
+    if requests.len() > MAX_NAABU_ATTEMPT_REQUESTS {
+        return Err(serde::de::Error::custom(format!(
+            "Naabu attempt-request history exceeds {MAX_NAABU_ATTEMPT_REQUESTS} entries"
+        )));
+    }
+    Ok(requests)
 }
 
 /// Closed reason codes for a scan request that reached a durable terminal

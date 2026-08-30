@@ -1,20 +1,142 @@
 use crate::domain::{RawArtifact, new_id};
 use crate::error::{AppError, AppResult};
+use crate::naabu_work_plan::MAX_NAABU_WORK_UNITS;
 use chrono::Utc;
+use fs2::FileExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
 const DEFAULT_MAX_OUTPUT_FILES: usize = 10_000;
+const MAX_LAUNCHER_V2_CONTEXT_COMPONENT_BYTES: usize = 128;
+const MAX_LAUNCHER_V2_OUTPUT_RELATIVE_PATH_BYTES: usize = 512;
+const LAUNCHER_V2_UNIT_ORDINAL_DIGITS: usize = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactContext {
     pub case_id: String,
     pub scan_run_id: String,
     pub engine_run_id: String,
+}
+
+/// Exact, filesystem-independent classification of one captured launcher-v2
+/// output artifact. Paths in these variants are relative to the invocation's
+/// `/output` mount, not to the case artifact root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherV2OutputArtifact<'a> {
+    Journal {
+        output_relative_path: &'a str,
+    },
+    Final {
+        output_relative_path: &'a str,
+        unit_ordinal: u32,
+        attempt: u32,
+    },
+    Quarantine {
+        output_relative_path: &'a str,
+        unit_ordinal: u32,
+        attempt: u32,
+    },
+    Other,
+}
+
+/// Classifies only the fixed launcher-v2 namespace belonging to the exact
+/// case/run/engine/attempt tuple. This intentionally parses the portable `/`
+/// contract directly instead of applying host-specific path semantics.
+///
+/// Unknown, malformed, legacy, runtime-stream, and staging paths are ordinary
+/// retained raw artifacts represented by [`LauncherV2OutputArtifact::Other`].
+pub fn classify_launcher_v2_output_artifact<'a>(
+    context: &ArtifactContext,
+    attempt: u32,
+    artifact: &'a RawArtifact,
+) -> LauncherV2OutputArtifact<'a> {
+    if attempt == 0
+        || artifact.case_id != context.case_id
+        || artifact.run_id != context.scan_run_id
+        || artifact.engine_run_id != context.engine_run_id
+        || !launcher_v2_context_component(&context.case_id)
+        || !launcher_v2_context_component(&context.scan_run_id)
+        || !launcher_v2_context_component(&context.engine_run_id)
+    {
+        return LauncherV2OutputArtifact::Other;
+    }
+
+    let output_prefix = format!(
+        "{}/{}/{}/attempt-{attempt}/output/",
+        context.case_id, context.scan_run_id, context.engine_run_id
+    );
+    let Some(relative) = artifact.relative_path.strip_prefix(&output_prefix) else {
+        return LauncherV2OutputArtifact::Other;
+    };
+    if !bounded_portable_launcher_v2_path(relative) {
+        return LauncherV2OutputArtifact::Other;
+    }
+    if relative == "launcher-v2/journal.jsonl" {
+        return LauncherV2OutputArtifact::Journal {
+            output_relative_path: relative,
+        };
+    }
+
+    let components = relative.split('/').collect::<Vec<_>>();
+    if components.len() != 4 || components[0] != "launcher-v2" {
+        return LauncherV2OutputArtifact::Other;
+    }
+    let Some(unit_ordinal) = parse_launcher_v2_unit_ordinal(components[2]) else {
+        return LauncherV2OutputArtifact::Other;
+    };
+    match components[1] {
+        "units" if components[3] == format!("attempt-{attempt}.jsonl") => {
+            LauncherV2OutputArtifact::Final {
+                output_relative_path: relative,
+                unit_ordinal,
+                attempt,
+            }
+        }
+        "quarantine" if components[3] == format!("attempt-{attempt}.raw.jsonl") => {
+            LauncherV2OutputArtifact::Quarantine {
+                output_relative_path: relative,
+                unit_ordinal,
+                attempt,
+            }
+        }
+        _ => LauncherV2OutputArtifact::Other,
+    }
+}
+
+fn launcher_v2_context_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_LAUNCHER_V2_CONTEXT_COMPONENT_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn bounded_portable_launcher_v2_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_LAUNCHER_V2_OUTPUT_RELATIVE_PATH_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.'))
+        && value
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+}
+
+fn parse_launcher_v2_unit_ordinal(value: &str) -> Option<u32> {
+    let digits = value.strip_prefix("unit-")?;
+    if digits.len() != LAUNCHER_V2_UNIT_ORDINAL_DIGITS
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let ordinal = digits.parse::<u32>().ok()?;
+    (usize::try_from(ordinal).ok()? < MAX_NAABU_WORK_UNITS).then_some(ordinal)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,10 +148,71 @@ pub struct RunDirectories {
     pub raw: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CapturePaths {
     pub stdout: PathBuf,
     pub stderr: PathBuf,
+    stdout_file: Arc<File>,
+    stderr_file: Arc<File>,
+    active_writers: Arc<AtomicUsize>,
+}
+
+impl PartialEq for CapturePaths {
+    fn eq(&self, other: &Self) -> bool {
+        self.stdout == other.stdout && self.stderr == other.stderr
+    }
+}
+
+impl Eq for CapturePaths {}
+
+impl CapturePaths {
+    /// Clone the already-open, verified product capture files for one runtime
+    /// invocation. No path is reopened here: a later path replacement cannot
+    /// redirect scanner output to another file or reparse point.
+    pub(crate) fn clone_empty_writers(&self) -> AppResult<(CaptureWriter, CaptureWriter)> {
+        let stdout = clone_empty_capture_file(&self.stdout_file, "stdout")?;
+        let stderr = clone_empty_capture_file(&self.stderr_file, "stderr")?;
+        self.active_writers.fetch_add(2, Ordering::AcqRel);
+        Ok((
+            CaptureWriter::new(stdout, self.active_writers.clone()),
+            CaptureWriter::new(stderr, self.active_writers.clone()),
+        ))
+    }
+}
+
+pub(crate) struct CaptureWriter {
+    file: File,
+    active_writers: Arc<AtomicUsize>,
+}
+
+impl CaptureWriter {
+    fn new(file: File, active_writers: Arc<AtomicUsize>) -> Self {
+        Self {
+            file,
+            active_writers,
+        }
+    }
+
+    pub(crate) fn sync_all(&self) -> std::io::Result<()> {
+        self.file.sync_all()
+    }
+}
+
+impl Write for CaptureWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.file.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Drop for CaptureWriter {
+    fn drop(&mut self) {
+        let previous = self.active_writers.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "capture writer count underflowed");
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,14 +380,41 @@ pub fn inspect_raw_artifacts(artifact_root: &Path, artifacts: &[RawArtifact]) ->
 impl ArtifactStore {
     pub fn open(root: impl AsRef<Path>) -> AppResult<Self> {
         let root = root.as_ref();
-        fs::create_dir_all(root)?;
-        restrict_directory(root)?;
+        match fs::symlink_metadata(root) {
+            Ok(metadata) if !metadata_is_directory_non_reparse(&metadata) => {
+                return Err(AppError::NotAuthorized(format!(
+                    "artifact root is not a regular non-reparse directory: {}",
+                    root.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let parent = root.parent().ok_or_else(|| {
+                    AppError::InvalidRequest("artifact root must have a parent directory".into())
+                })?;
+                fs::create_dir_all(parent)?;
+                match fs::create_dir(root) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+                let metadata = fs::symlink_metadata(root)?;
+                if !metadata_is_directory_non_reparse(&metadata) {
+                    return Err(AppError::NotAuthorized(format!(
+                        "artifact root changed into a reparse path while it was created: {}",
+                        root.display()
+                    )));
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
         let root = fs::canonicalize(root).map_err(|error| {
             AppError::Runtime(format!(
                 "artifact root {} could not be resolved: {error}",
                 root.display()
             ))
         })?;
+        restrict_open_directory(&root)?;
         Ok(Self {
             root,
             max_output_files: DEFAULT_MAX_OUTPUT_FILES,
@@ -235,31 +445,26 @@ impl ArtifactStore {
         let case_id = safe_component("case id", &context.case_id)?;
         let scan_run_id = safe_component("scan run id", &context.scan_run_id)?;
         let engine_run_id = safe_component("engine run id", &context.engine_run_id)?;
-        let root = self
-            .root
-            .join(case_id)
-            .join(scan_run_id)
-            .join(engine_run_id)
-            .join(format!("attempt-{attempt}"));
+        let mut root = self.root.clone();
+        for component in [
+            case_id.to_owned(),
+            scan_run_id.to_owned(),
+            engine_run_id.to_owned(),
+            format!("attempt-{attempt}"),
+        ] {
+            root = prepare_private_directory_component(&self.root, &root, &component)?;
+        }
+        let workspace = prepare_private_directory_component(&self.root, &root, "workspace")?;
+        let output = prepare_private_directory_component(&self.root, &root, "output")?;
+        let control = prepare_private_directory_component(&self.root, &root, "control")?;
+        let raw = prepare_private_directory_component(&self.root, &root, "raw")?;
         let directories = RunDirectories {
-            workspace: root.join("workspace"),
-            output: root.join("output"),
-            control: root.join("control"),
-            raw: root.join("raw"),
+            workspace,
+            output,
+            control,
+            raw,
             root,
         };
-
-        for directory in [
-            &directories.root,
-            &directories.workspace,
-            &directories.output,
-            &directories.control,
-            &directories.raw,
-        ] {
-            fs::create_dir_all(directory)?;
-            restrict_directory(directory)?;
-            self.ensure_inside_root(directory)?;
-        }
 
         Ok(directories)
     }
@@ -268,9 +473,19 @@ impl ArtifactStore {
         self.ensure_inside_root(&directories.raw)?;
         let stdout = directories.raw.join("stdout.log");
         let stderr = directories.raw.join("stderr.log");
-        create_private_file(&stdout)?;
-        create_private_file(&stderr)?;
-        Ok(CapturePaths { stdout, stderr })
+        let stdout_file = create_or_reuse_empty_private_capture_file(&stdout)?;
+        let stderr_file = create_or_reuse_empty_private_capture_file(&stderr)?;
+        verify_capture_path_identity(&self.root, &stdout, &stdout_file)?;
+        verify_capture_path_identity(&self.root, &stderr, &stderr_file)?;
+        restrict_open_file(&stdout_file)?;
+        restrict_open_file(&stderr_file)?;
+        Ok(CapturePaths {
+            stdout,
+            stderr,
+            stdout_file: Arc::new(stdout_file),
+            stderr_file: Arc::new(stderr_file),
+            active_writers: Arc::new(AtomicUsize::new(0)),
+        })
     }
 
     pub fn write_control_json<T: Serialize>(
@@ -285,10 +500,8 @@ impl ArtifactStore {
         let bytes = serde_json::to_vec(value).map_err(|error| {
             AppError::Runtime(format!("control document could not be encoded: {error}"))
         })?;
-        let mut file = create_private_file(&path)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        restrict_readonly_file(&path)?;
+        publish_or_reuse_private_control_file(&self.root, &path, &bytes)?;
+        self.ensure_inside_root(&path)?;
         Ok(ControlFile {
             path,
             sha256: sha256_bytes(&bytes),
@@ -301,10 +514,105 @@ impl ArtifactStore {
         context: &ArtifactContext,
         capture: &CapturePaths,
     ) -> AppResult<Vec<RawArtifact>> {
+        if capture.active_writers.load(Ordering::Acquire) != 0 {
+            return Err(AppError::Conflict(
+                "capture output is still being written; finalization was deferred".into(),
+            ));
+        }
         Ok(vec![
-            self.describe_file(context, &capture.stdout, "text/plain; charset=utf-8", true)?,
-            self.describe_file(context, &capture.stderr, "text/plain; charset=utf-8", true)?,
+            self.describe_capture_file(
+                context,
+                &capture.stdout,
+                &capture.stdout_file,
+                "text/plain; charset=utf-8",
+            )?,
+            self.describe_capture_file(
+                context,
+                &capture.stderr,
+                &capture.stderr_file,
+                "text/plain; charset=utf-8",
+            )?,
         ])
+    }
+
+    fn describe_capture_file(
+        &self,
+        context: &ArtifactContext,
+        path: &Path,
+        held_file: &File,
+        media_type: &str,
+    ) -> AppResult<RawArtifact> {
+        let mut held = held_file.try_clone()?;
+        held.seek(SeekFrom::Start(0))?;
+        let held_length = held.metadata()?.len();
+        let (sha256, byte_length) = hash_opened_file_bounded(held, held_length.saturating_add(1))?;
+        if byte_length != held_length {
+            return Err(AppError::Conflict(format!(
+                "capture changed while it was finalized: {}",
+                path.display()
+            )));
+        }
+
+        // The durable artifact path must still name the exact bytes written
+        // through the retained handle. A replacement symlink/reparse point is
+        // refused without opening its target; a replacement regular file is
+        // accepted only if its bounded bytes are identical.
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            AppError::Runtime(format!(
+                "capture {} could not be inspected: {error}",
+                path.display()
+            ))
+        })?;
+        if !metadata_is_regular_non_reparse(&metadata) {
+            return Err(AppError::NotAuthorized(format!(
+                "capture path changed and is not a regular non-reparse file: {}",
+                path.display()
+            )));
+        }
+        let canonical = fs::canonicalize(path)?;
+        self.ensure_inside_root(&canonical)?;
+        let path_file = open_readonly_no_follow(path)?;
+        let path_metadata = path_file.metadata()?;
+        if !metadata_is_regular_non_reparse(&path_metadata)
+            || path_metadata.len() != held_length
+            || !opened_files_have_same_identity(held_file, &path_file)?
+        {
+            return Err(AppError::Conflict(format!(
+                "capture path no longer identifies the prepared output: {}",
+                path.display()
+            )));
+        }
+        let (path_sha256, path_length) =
+            hash_opened_file_bounded(path_file, held_length.saturating_add(1))?;
+        if path_length != byte_length || path_sha256 != sha256 {
+            return Err(AppError::Conflict(format!(
+                "capture path no longer identifies the prepared output: {}",
+                path.display()
+            )));
+        }
+        let relative_path = canonical
+            .strip_prefix(&self.root)
+            .map_err(|_| {
+                AppError::Runtime(format!(
+                    "capture escaped the private artifact root: {}",
+                    canonical.display()
+                ))
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        Ok(RawArtifact {
+            id: new_id(),
+            case_id: context.case_id.clone(),
+            run_id: context.scan_run_id.clone(),
+            engine_run_id: context.engine_run_id.clone(),
+            relative_path,
+            media_type: media_type.to_owned(),
+            sha256,
+            byte_length,
+            created_at: Utc::now(),
+            contains_sensitive_data: true,
+        })
     }
 
     pub fn collect_output_artifacts(
@@ -335,16 +643,30 @@ impl ArtifactStore {
                 path.display()
             ))
         })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
+        if !metadata_is_regular_non_reparse(&metadata) {
             return Err(AppError::Runtime(format!(
-                "artifact must be a regular file and not a symlink: {}",
+                "artifact must be a regular non-reparse file: {}",
                 path.display()
             )));
         }
 
         let canonical = fs::canonicalize(path)?;
         self.ensure_inside_root(&canonical)?;
-        let (sha256, byte_length) = hash_file(&canonical)?;
+        let file = open_readonly_no_follow(path)?;
+        if !metadata_is_regular_non_reparse(&file.metadata()?) {
+            return Err(AppError::Conflict(format!(
+                "artifact changed while it was opened: {}",
+                path.display()
+            )));
+        }
+        let maximum = metadata.len().saturating_add(1);
+        let (sha256, byte_length) = hash_opened_file_bounded(file, maximum)?;
+        if byte_length != metadata.len() {
+            return Err(AppError::Conflict(format!(
+                "artifact changed while it was hashed: {}",
+                path.display()
+            )));
+        }
         let relative_path = canonical
             .strip_prefix(&self.root)
             .map_err(|_| {
@@ -421,6 +743,60 @@ fn collect_regular_files(
     Ok(())
 }
 
+fn prepare_private_directory_component(
+    artifact_root: &Path,
+    parent: &Path,
+    component: &str,
+) -> AppResult<PathBuf> {
+    let parent_metadata = fs::symlink_metadata(parent).map_err(|error| {
+        AppError::Runtime(format!(
+            "private artifact parent {} could not be inspected: {error}",
+            parent.display()
+        ))
+    })?;
+    if !metadata_is_directory_non_reparse(&parent_metadata) {
+        return Err(AppError::NotAuthorized(format!(
+            "private artifact parent is not a regular non-reparse directory: {}",
+            parent.display()
+        )));
+    }
+    let canonical_parent = fs::canonicalize(parent)?;
+    if !canonical_parent.starts_with(artifact_root) {
+        return Err(AppError::NotAuthorized(format!(
+            "private artifact parent escaped the artifact root: {}",
+            parent.display()
+        )));
+    }
+
+    let path = canonical_parent.join(component);
+    match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(AppError::Runtime(format!(
+                "private artifact directory {} could not be created: {error}",
+                path.display()
+            )));
+        }
+    }
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata_is_directory_non_reparse(&metadata) {
+        return Err(AppError::NotAuthorized(format!(
+            "private artifact path is not a regular non-reparse directory: {}",
+            path.display()
+        )));
+    }
+    let canonical = fs::canonicalize(&path)?;
+    if !canonical.starts_with(artifact_root) {
+        return Err(AppError::NotAuthorized(format!(
+            "private artifact directory escaped the artifact root: {}",
+            path.display()
+        )));
+    }
+    restrict_open_directory(&canonical)?;
+    Ok(canonical)
+}
+
 fn safe_component<'a>(label: &str, value: &'a str) -> AppResult<&'a str> {
     if value.is_empty()
         || value == "."
@@ -492,6 +868,138 @@ fn open_readonly_no_follow(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 
+fn open_read_append_no_follow(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+fn open_read_write_no_follow(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+fn metadata_is_regular_non_reparse(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    let is_reparse_point = {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    };
+    #[cfg(not(windows))]
+    let is_reparse_point = false;
+    metadata.is_file() && !metadata.file_type().is_symlink() && !is_reparse_point
+}
+
+fn metadata_is_directory_non_reparse(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    let is_reparse_point = {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    };
+    #[cfg(not(windows))]
+    let is_reparse_point = false;
+    metadata.is_dir() && !metadata.file_type().is_symlink() && !is_reparse_point
+}
+
+fn verify_capture_path_identity(root: &Path, path: &Path, held_file: &File) -> AppResult<()> {
+    verify_open_path_identity(root, path, held_file, "private capture")
+}
+
+fn verify_control_path_identity(root: &Path, path: &Path, held_file: &File) -> AppResult<()> {
+    verify_open_path_identity(root, path, held_file, "private control")
+}
+
+fn verify_open_path_identity(
+    root: &Path,
+    path: &Path,
+    held_file: &File,
+    label: &str,
+) -> AppResult<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata_is_regular_non_reparse(&metadata) {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} path is not a regular non-reparse file: {}",
+            path.display()
+        )));
+    }
+    let canonical = fs::canonicalize(path)?;
+    if !canonical.starts_with(root) {
+        return Err(AppError::NotAuthorized(format!(
+            "{label} path escaped the artifact root: {}",
+            path.display()
+        )));
+    }
+    let reopened = open_readonly_no_follow(path)?;
+    if !metadata_is_regular_non_reparse(&reopened.metadata()?)
+        || !opened_files_have_same_identity(held_file, &reopened)?
+    {
+        return Err(AppError::Conflict(format!(
+            "{label} path changed while it was prepared: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn opened_files_have_same_identity(first: &File, second: &File) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let first = first.metadata()?;
+    let second = second.metadata()?;
+    Ok(first.dev() == second.dev() && first.ino() == second.ino())
+}
+
+#[cfg(windows)]
+fn opened_files_have_same_identity(first: &File, second: &File) -> std::io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let identity = |file: &File| -> std::io::Result<(u32, u64)> {
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: file owns a valid handle and information is a correctly
+        // sized writable BY_HANDLE_FILE_INFORMATION output buffer.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut information) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((
+            information.dwVolumeSerialNumber,
+            (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
+        ))
+    };
+    Ok(identity(first)? == identity(second)?)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn opened_files_have_same_identity(_first: &File, _second: &File) -> std::io::Result<bool> {
+    Ok(false)
+}
+
 fn hash_opened_file_bounded(mut file: File, maximum_bytes: u64) -> std::io::Result<(String, u64)> {
     let mut digest = Sha256::new();
     let mut byte_length = 0_u64;
@@ -508,35 +1016,310 @@ fn hash_opened_file_bounded(mut file: File, maximum_bytes: u64) -> std::io::Resu
     Ok((hex::encode(digest.finalize()), byte_length))
 }
 
-fn create_private_file(path: &Path) -> AppResult<File> {
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| {
-            AppError::Runtime(format!(
-                "private artifact file {} could not be created: {error}",
-                path.display()
-            ))
-        })?;
-    restrict_file(path)?;
-    Ok(file)
+fn create_or_reuse_empty_private_capture_file(path: &Path) -> AppResult<File> {
+    let mut create = OpenOptions::new();
+    create.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        create.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        create.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    match create.open(path) {
+        Ok(file) => {
+            verify_empty_capture_handle(&file, path)?;
+            Ok(file)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(path)?;
+            if !metadata_is_regular_non_reparse(&metadata) || metadata.len() != 0 {
+                return Err(AppError::Conflict(format!(
+                    "existing private capture file is not an empty product preflight file: {}",
+                    path.display()
+                )));
+            }
+            let file = open_read_write_no_follow(path).map_err(|error| {
+                AppError::Runtime(format!(
+                    "existing private capture file {} could not be opened safely: {error}",
+                    path.display()
+                ))
+            })?;
+            verify_empty_capture_handle(&file, path)?;
+            Ok(file)
+        }
+        Err(error) => Err(AppError::Runtime(format!(
+            "private artifact file {} could not be created: {error}",
+            path.display()
+        ))),
+    }
 }
 
-fn hash_file(path: &Path) -> AppResult<(String, u64)> {
-    let mut file = File::open(path)?;
-    let mut digest = Sha256::new();
-    let mut byte_length = 0_u64;
-    let mut buffer = [0_u8; HASH_BUFFER_BYTES];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-        byte_length += read as u64;
+fn clone_empty_capture_file(file: &File, stream: &str) -> AppResult<File> {
+    let cloned = file.try_clone().map_err(|error| {
+        AppError::Runtime(format!(
+            "verified {stream} capture handle could not be cloned: {error}"
+        ))
+    })?;
+    verify_empty_capture_handle(&cloned, Path::new(stream))?;
+    Ok(cloned)
+}
+
+fn verify_empty_capture_handle(file: &File, display_path: &Path) -> AppResult<()> {
+    let metadata = file.metadata()?;
+    if !metadata_is_regular_non_reparse(&metadata) {
+        return Err(AppError::NotAuthorized(format!(
+            "private capture handle is not a regular non-reparse file: {}",
+            display_path.display()
+        )));
     }
-    Ok((hex::encode(digest.finalize()), byte_length))
+    if metadata.len() != 0 {
+        return Err(AppError::Conflict(format!(
+            "existing private capture file is not an empty product preflight file: {}",
+            display_path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_open_file(file: &File) -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_open_file(_file: &File) -> AppResult<()> {
+    Ok(())
+}
+
+/// Publishes a new immutable control document, or reuses the exact document
+/// left by an interrupted invocation. Existing bytes are never replaced: an
+/// interrupted regular file may only be completed when it is an exact prefix
+/// of this invocation's document. The canonical file itself is locked,
+/// synced, and finally reverified; an unused staging copy would add I/O but
+/// cannot make direct canonical publication atomic on Windows.
+fn publish_or_reuse_private_control_file(
+    artifact_root: &Path,
+    path: &Path,
+    expected: &[u8],
+) -> AppResult<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata_is_regular_non_reparse(&metadata)
+                || metadata.len() >= expected.len() as u64
+            {
+                return verify_existing_private_control_file(artifact_root, path, expected);
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(AppError::Runtime(format!(
+                "private control file {} could not be inspected: {error}",
+                path.display()
+            )));
+        }
+    }
+
+    let mut create = OpenOptions::new();
+    create.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        create.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        create.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    match create.open(path) {
+        Ok(mut canonical) => {
+            verify_control_path_identity(artifact_root, path, &canonical)?;
+            restrict_open_file(&canonical)?;
+            canonical.try_lock_exclusive().map_err(|error| {
+                AppError::Conflict(format!(
+                    "private control file is already being published: {} ({error})",
+                    path.display()
+                ))
+            })?;
+            let result = (|| -> AppResult<()> {
+                canonical.write_all(expected)?;
+                canonical.sync_all()?;
+                verify_open_control_file(&mut canonical, expected, path)?;
+                restrict_open_readonly_file(&canonical)
+            })();
+            let _ = canonical.unlock();
+            result
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            complete_interrupted_private_control_file(artifact_root, path, expected)
+        }
+        Err(error) => Err(AppError::Runtime(format!(
+            "private control file {} could not be published: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn complete_interrupted_private_control_file(
+    artifact_root: &Path,
+    path: &Path,
+    expected: &[u8],
+) -> AppResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        AppError::Runtime(format!(
+            "interrupted private control file {} could not be inspected: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata_is_regular_non_reparse(&metadata) {
+        return Err(AppError::NotAuthorized(format!(
+            "existing private control path is not a regular non-reparse file: {}",
+            path.display()
+        )));
+    }
+
+    let mut file = open_read_append_no_follow(path).map_err(|error| {
+        AppError::Runtime(format!(
+            "interrupted private control file {} could not be opened safely: {error}",
+            path.display()
+        ))
+    })?;
+    verify_control_path_identity(artifact_root, path, &file)?;
+    file.try_lock_exclusive().map_err(|error| {
+        AppError::Conflict(format!(
+            "interrupted private control file is already being reconciled: {} ({error})",
+            path.display()
+        ))
+    })?;
+    let result = (|| -> AppResult<()> {
+        let length = file.metadata()?.len();
+        if length > expected.len() as u64 {
+            return Err(AppError::Conflict(format!(
+                "existing private control file does not match the exact expected document: {}",
+                path.display()
+            )));
+        }
+        file.seek(SeekFrom::Start(0))?;
+        let mut observed = Vec::with_capacity(length as usize);
+        (&mut file)
+            .take((expected.len() as u64).saturating_add(1))
+            .read_to_end(&mut observed)?;
+        if !expected.starts_with(&observed) {
+            return Err(AppError::Conflict(format!(
+                "existing private control file does not match the exact expected document: {}",
+                path.display()
+            )));
+        }
+        if observed.len() < expected.len() {
+            file.seek(SeekFrom::End(0))?;
+            file.write_all(&expected[observed.len()..])?;
+            file.sync_all()?;
+        }
+        verify_open_control_file(&mut file, expected, path)?;
+        restrict_open_readonly_file(&file)
+    })();
+    let _ = file.unlock();
+    result
+}
+
+fn verify_open_control_file(file: &mut File, expected: &[u8], path: &Path) -> AppResult<()> {
+    let metadata = file.metadata()?;
+    if !metadata_is_regular_non_reparse(&metadata) || metadata.len() != expected.len() as u64 {
+        return Err(AppError::Conflict(format!(
+            "existing private control file does not match the exact expected document: {}",
+            path.display()
+        )));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut observed = Vec::with_capacity(expected.len());
+    file.take((expected.len() as u64).saturating_add(1))
+        .read_to_end(&mut observed)?;
+    if observed != expected {
+        return Err(AppError::Conflict(format!(
+            "existing private control file does not match the exact expected document: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn verify_existing_private_control_file(
+    artifact_root: &Path,
+    path: &Path,
+    expected: &[u8],
+) -> AppResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        AppError::Runtime(format!(
+            "existing private control file {} could not be inspected: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata_is_regular_non_reparse(&metadata) {
+        return Err(AppError::NotAuthorized(format!(
+            "existing private control path is not a regular non-reparse file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() != expected.len() as u64 {
+        return Err(AppError::Conflict(format!(
+            "existing private control file does not match the exact expected document: {}",
+            path.display()
+        )));
+    }
+
+    let already_readonly = metadata.permissions().readonly();
+    let mut file = if already_readonly {
+        open_readonly_no_follow(path)
+    } else {
+        open_read_write_no_follow(path)
+    }
+    .map_err(|error| {
+        AppError::Runtime(format!(
+            "existing private control file {} could not be opened safely: {error}",
+            path.display()
+        ))
+    })?;
+    verify_control_path_identity(artifact_root, path, &file)?;
+    file.try_lock_exclusive().map_err(|error| {
+        AppError::Conflict(format!(
+            "existing private control file is still being published: {} ({error})",
+            path.display()
+        ))
+    })?;
+    let result = (|| -> AppResult<()> {
+        let opened_metadata = file.metadata()?;
+        if !metadata_is_regular_non_reparse(&opened_metadata)
+            || opened_metadata.len() != expected.len() as u64
+        {
+            return Err(AppError::Conflict(format!(
+                "existing private control file changed while it was inspected: {}",
+                path.display()
+            )));
+        }
+        let maximum = (expected.len() as u64).saturating_add(1);
+        let mut observed = Vec::with_capacity(expected.len());
+        (&mut file).take(maximum).read_to_end(&mut observed)?;
+        if observed != expected {
+            return Err(AppError::Conflict(format!(
+                "existing private control file does not match the exact expected document: {}",
+                path.display()
+            )));
+        }
+        if !already_readonly {
+            restrict_open_readonly_file(&file)?;
+        }
+        Ok(())
+    })();
+    let _ = file.unlock();
+    result
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {
@@ -564,41 +1347,46 @@ fn media_type_for_path(path: &Path) -> &'static str {
 }
 
 #[cfg(unix)]
-fn restrict_directory(path: &Path) -> AppResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+fn restrict_open_directory(path: &Path) -> AppResult<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    if !metadata_is_directory_non_reparse(&directory.metadata()?) {
+        return Err(AppError::NotAuthorized(format!(
+            "private artifact directory changed before it could be restricted: {}",
+            path.display()
+        )));
+    }
+    directory.set_permissions(fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn restrict_directory(_path: &Path) -> AppResult<()> {
+fn restrict_open_directory(path: &Path) -> AppResult<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata_is_directory_non_reparse(&metadata) {
+        return Err(AppError::NotAuthorized(format!(
+            "private artifact directory changed before it could be verified: {}",
+            path.display()
+        )));
+    }
     Ok(())
 }
 
 #[cfg(unix)]
-fn restrict_file(path: &Path) -> AppResult<()> {
+fn restrict_open_readonly_file(file: &File) -> AppResult<()> {
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn restrict_readonly_file(path: &Path) -> AppResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o400))?;
+    file.set_permissions(fs::Permissions::from_mode(0o400))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn restrict_readonly_file(path: &Path) -> AppResult<()> {
-    let mut permissions = fs::metadata(path)?.permissions();
+fn restrict_open_readonly_file(file: &File) -> AppResult<()> {
+    let mut permissions = file.metadata()?.permissions();
     permissions.set_readonly(true);
-    fs::set_permissions(path, permissions)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn restrict_file(_path: &Path) -> AppResult<()> {
+    file.set_permissions(permissions)?;
     Ok(())
 }
 
@@ -635,6 +1423,303 @@ mod tests {
         }
     }
 
+    fn launcher_v2_artifact(output_relative_path: &str, attempt: u32) -> RawArtifact {
+        let context = context();
+        raw_artifact(
+            &format!(
+                "{}/{}/{}/attempt-{attempt}/output/{output_relative_path}",
+                context.case_id, context.scan_run_id, context.engine_run_id
+            ),
+            b"launcher evidence",
+        )
+    }
+
+    #[test]
+    fn launcher_v2_classifier_returns_exact_typed_artifacts() {
+        let context = context();
+        let journal = launcher_v2_artifact("launcher-v2/journal.jsonl", 7);
+        let final_artifact =
+            launcher_v2_artifact("launcher-v2/units/unit-000042/attempt-7.jsonl", 7);
+        let quarantine =
+            launcher_v2_artifact("launcher-v2/quarantine/unit-000009/attempt-7.raw.jsonl", 7);
+
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 7, &journal),
+            LauncherV2OutputArtifact::Journal {
+                output_relative_path: "launcher-v2/journal.jsonl"
+            }
+        );
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 7, &final_artifact),
+            LauncherV2OutputArtifact::Final {
+                output_relative_path: "launcher-v2/units/unit-000042/attempt-7.jsonl",
+                unit_ordinal: 42,
+                attempt: 7,
+            }
+        );
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 7, &quarantine),
+            LauncherV2OutputArtifact::Quarantine {
+                output_relative_path: "launcher-v2/quarantine/unit-000009/attempt-7.raw.jsonl",
+                unit_ordinal: 9,
+                attempt: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn launcher_v2_classifier_rejects_near_matches_and_nonportable_paths() {
+        let context = context();
+        for relative in [
+            "launcher-v2/journal.jsonl.partial",
+            "launcher-v2/journal.jsonl/extra",
+            "launcher-v2/units/unit-42/attempt-7.jsonl",
+            "launcher-v2/units/unit-0000042/attempt-7.jsonl",
+            "launcher-v2/units/unit-000512/attempt-7.jsonl",
+            "launcher-v2/units/unit-999999/attempt-7.jsonl",
+            "launcher-v2/units/unit-00004x/attempt-7.jsonl",
+            "launcher-v2/units/unit-000042/attempt-07.jsonl",
+            "launcher-v2/units/unit-000042/attempt-8.jsonl",
+            "launcher-v2/units/unit-000042/attempt-7.jsonl.partial",
+            "launcher-v2/units/unit-000042/attempt-7.jsonl/extra",
+            "launcher-v2/quarantine/unit-000042/attempt-7.jsonl",
+            "launcher-v2/quarantine/unit-000042/attempt-7.raw.jsonl.partial",
+            "launcher-v2/units/../unit-000042/attempt-7.jsonl",
+            "launcher-v2//units/unit-000042/attempt-7.jsonl",
+            "launcher-v2\\units\\unit-000042\\attempt-7.jsonl",
+            "/launcher-v2/units/unit-000042/attempt-7.jsonl",
+            "launcher-v2/units/unit-000042/attempt-7.jsonl/",
+            "raw/stdout.log",
+            "raw/stderr.log",
+        ] {
+            let artifact = launcher_v2_artifact(relative, 7);
+            assert_eq!(
+                classify_launcher_v2_output_artifact(&context, 7, &artifact),
+                LauncherV2OutputArtifact::Other,
+                "unexpected classification for {relative}"
+            );
+        }
+    }
+
+    #[test]
+    fn launcher_v2_classifier_requires_exact_context_and_attempt_directory() {
+        let context = context();
+        let exact = launcher_v2_artifact("launcher-v2/journal.jsonl", 7);
+
+        let wrong_attempt_directory = launcher_v2_artifact("launcher-v2/journal.jsonl", 8);
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 7, &wrong_attempt_directory),
+            LauncherV2OutputArtifact::Other
+        );
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 0, &exact),
+            LauncherV2OutputArtifact::Other
+        );
+
+        let mut wrong_provenance = exact.clone();
+        wrong_provenance.engine_run_id = "engine-run-2".into();
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 7, &wrong_provenance),
+            LauncherV2OutputArtifact::Other
+        );
+
+        let mut wrong_context = context.clone();
+        wrong_context.case_id = "case-2".into();
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&wrong_context, 7, &exact),
+            LauncherV2OutputArtifact::Other
+        );
+
+        let alternate_separator = raw_artifact(
+            "case-1\\run-1\\engine-run-1\\attempt-7\\output\\launcher-v2\\journal.jsonl",
+            b"launcher evidence",
+        );
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 7, &alternate_separator),
+            LauncherV2OutputArtifact::Other
+        );
+
+        let runtime_stdout = raw_artifact(
+            "case-1/run-1/engine-run-1/attempt-7/raw/stdout.log",
+            b"runtime output",
+        );
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context, 7, &runtime_stdout),
+            LauncherV2OutputArtifact::Other
+        );
+    }
+
+    #[test]
+    fn launcher_v2_classifier_applies_bounded_ascii_contracts() {
+        let mut oversized_context = context();
+        oversized_context.case_id = "a".repeat(MAX_LAUNCHER_V2_CONTEXT_COMPONENT_BYTES + 1);
+        let artifact = raw_artifact(
+            &format!(
+                "{}/run-1/engine-run-1/attempt-7/output/launcher-v2/journal.jsonl",
+                oversized_context.case_id
+            ),
+            b"launcher evidence",
+        );
+        let mut artifact = artifact;
+        artifact.case_id = oversized_context.case_id.clone();
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&oversized_context, 7, &artifact),
+            LauncherV2OutputArtifact::Other
+        );
+
+        let oversized_output = format!(
+            "launcher-v2/{}",
+            "a".repeat(MAX_LAUNCHER_V2_OUTPUT_RELATIVE_PATH_BYTES)
+        );
+        let artifact = launcher_v2_artifact(&oversized_output, 7);
+        assert_eq!(
+            classify_launcher_v2_output_artifact(&context(), 7, &artifact),
+            LauncherV2OutputArtifact::Other
+        );
+    }
+
+    #[test]
+    fn exact_existing_control_document_is_reused_after_interruption() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path()).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+        let document = serde_json::json!({
+            "schema_version": 2,
+            "attempt": 1,
+            "units": ["unit-1", "unit-2"],
+        });
+
+        let first = store
+            .write_control_json(&directories, "launcher-plan.json", &document)
+            .expect("initial control document");
+        let first_bytes = fs::read(&first.path).expect("initial bytes");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&first.path, fs::Permissions::from_mode(0o600))
+                .expect("simulate interrupted permission hardening");
+        }
+
+        let reused = store
+            .write_control_json(&directories, "launcher-plan.json", &document)
+            .expect("exact control document is reusable");
+
+        assert_eq!(reused.sha256, first.sha256);
+        assert_eq!(reused.byte_length, first.byte_length);
+        assert_eq!(fs::read(&reused.path).unwrap(), first_bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&reused.path).unwrap().permissions().mode() & 0o777,
+                0o400
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_prefix_control_document_is_completed_without_replacement() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path()).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+        let document = serde_json::json!({
+            "schema_version": 2,
+            "attempt": 1,
+            "units": ["unit-1", "unit-2"],
+        });
+        let expected = serde_json::to_vec(&document).unwrap();
+        let canonical = directories.control.join("launcher-plan.json");
+        fs::write(&canonical, &expected[..expected.len() / 2]).expect("interrupted prefix");
+
+        let completed = store
+            .write_control_json(&directories, "launcher-plan.json", &document)
+            .expect("interrupted product control file is reconciled");
+
+        assert_eq!(fs::read(&canonical).unwrap(), expected);
+        assert_eq!(completed.sha256, sha256_bytes(&expected));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&canonical).unwrap().permissions().mode() & 0o777,
+                0o400
+            );
+        }
+    }
+
+    #[test]
+    fn changed_existing_control_document_is_never_overwritten() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path()).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+        let original = serde_json::json!({"attempt": 1, "units": ["unit-1"]});
+        let changed = serde_json::json!({"attempt": 1, "units": ["unit-2"]});
+        let control = store
+            .write_control_json(&directories, "launcher-plan.json", &original)
+            .expect("initial control document");
+        let original_bytes = fs::read(&control.path).expect("initial bytes");
+
+        let error = store
+            .write_control_json(&directories, "launcher-plan.json", &changed)
+            .expect_err("changed control document must be refused");
+
+        assert!(error.to_string().contains("exact expected document"));
+        assert_eq!(fs::read(&control.path).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn shorter_nonprefix_control_document_is_never_completed_or_overwritten() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path()).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+        let path = directories.control.join("scope.json");
+        let foreign_bytes = b"not-an-expected-prefix";
+        fs::write(&path, foreign_bytes).expect("mismatched existing file");
+
+        let error = store
+            .write_control_json(
+                &directories,
+                "scope.json",
+                &serde_json::json!({"scope": "expected and longer than the mismatch"}),
+            )
+            .expect_err("shorter mismatch must be refused");
+
+        assert!(error.to_string().contains("exact expected document"));
+        assert_eq!(fs::read(&path).unwrap(), foreign_bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_control_symlink_is_never_followed_or_replaced() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+        let outside = temp.path().join("outside.json");
+        fs::write(&outside, b"outside-data").expect("outside file");
+        let linked = directories.control.join("scope.json");
+        symlink(&outside, &linked).expect("control symlink");
+
+        let error = store
+            .write_control_json(
+                &directories,
+                "scope.json",
+                &serde_json::json!({"scope": "expected"}),
+            )
+            .expect_err("control symlink must be refused");
+
+        assert!(error.to_string().contains("non-reparse"));
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-data");
+        assert!(
+            fs::symlink_metadata(&linked)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
     #[test]
     fn capture_files_are_hashed_as_raw_artifacts() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -659,6 +1744,93 @@ mod tests {
     }
 
     #[test]
+    fn capture_finalization_refuses_while_a_verified_writer_is_live() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path()).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+        let capture = store.prepare_capture(&directories).expect("capture files");
+        let writers = capture
+            .clone_empty_writers()
+            .expect("verified writer leases");
+
+        let error = store
+            .finalize_capture(&context(), &capture)
+            .expect_err("live capture writers must defer finalization");
+        assert!(error.to_string().contains("still being written"));
+
+        drop(writers);
+        assert_eq!(
+            store
+                .finalize_capture(&context(), &capture)
+                .expect("quiesced capture")
+                .len(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_capture_handle_cannot_be_redirected_by_later_path_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+        let capture = store.prepare_capture(&directories).expect("capture files");
+        let retained_stdout = directories.raw.join("retained-stdout.log");
+        fs::rename(&capture.stdout, &retained_stdout).expect("retain opened inode");
+        let outside = temp.path().join("outside.log");
+        fs::write(&outside, b"outside-must-not-change").expect("outside sentinel");
+        symlink(&outside, &capture.stdout).expect("replace path after preparation");
+
+        let (mut stdout, stderr) = capture
+            .clone_empty_writers()
+            .expect("clone exact prepared handles");
+        stdout
+            .write_all(b"scanner-output\n")
+            .expect("write through held handle");
+        stdout.sync_all().expect("sync held handle");
+        drop((stdout, stderr));
+
+        assert_eq!(fs::read(&retained_stdout).unwrap(), b"scanner-output\n");
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-must-not-change");
+        assert!(
+            fs::symlink_metadata(&capture.stdout)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let error = store
+            .finalize_capture(&context(), &capture)
+            .expect_err("finalization must refuse the replaced durable path");
+        assert!(error.to_string().contains("non-reparse"));
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-must-not-change");
+    }
+
+    #[test]
+    fn empty_preflight_capture_files_are_reused_but_nonempty_files_are_preserved() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path()).expect("artifact store");
+        let directories = store.prepare_run(&context(), 1).expect("run directories");
+
+        let first = store
+            .prepare_capture(&directories)
+            .expect("initial capture");
+        let reused = store
+            .prepare_capture(&directories)
+            .expect("empty preflight capture is reusable");
+        assert_eq!(reused.stdout, first.stdout);
+        assert_eq!(reused.stderr, first.stderr);
+
+        fs::write(&first.stdout, b"possible scanner output").expect("captured bytes");
+        let error = store
+            .prepare_capture(&directories)
+            .expect_err("nonempty capture must not be discarded");
+        assert!(error.to_string().contains("not an empty product preflight"));
+        assert_eq!(fs::read(&first.stdout).unwrap(), b"possible scanner output");
+    }
+
+    #[test]
     fn unsafe_identifiers_cannot_escape_artifact_root() {
         let temp = tempfile::tempdir().expect("temp directory");
         let store = ArtifactStore::open(temp.path()).expect("artifact store");
@@ -669,6 +1841,56 @@ mod tests {
             .prepare_run(&bad, 1)
             .expect_err("unsafe path rejected");
         assert!(error.to_string().contains("unsafe path"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_intermediate_run_directory_is_rejected_before_outside_mutation() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let artifact_root = temp.path().join("artifacts");
+        let store = ArtifactStore::open(&artifact_root).expect("artifact store");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("outside directory");
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755))
+            .expect("outside permissions");
+        symlink(&outside, artifact_root.join("case-1")).expect("intermediate symlink");
+
+        let error = store
+            .prepare_run(&context(), 1)
+            .expect_err("symlinked intermediate must be refused");
+
+        assert!(error.to_string().contains("non-reparse"));
+        assert!(!outside.join("run-1").exists());
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_artifact_root_is_rejected_without_changing_outside_permissions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temp = tempfile::tempdir().expect("temp directory");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("outside directory");
+        fs::write(outside.join("user-data"), b"preserve").expect("outside data");
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755))
+            .expect("outside permissions");
+        let linked_root = temp.path().join("artifacts");
+        symlink(&outside, &linked_root).expect("artifact root symlink");
+
+        let error = ArtifactStore::open(&linked_root).expect_err("symlink root must be refused");
+
+        assert!(error.to_string().contains("non-reparse"));
+        assert_eq!(fs::read(outside.join("user-data")).unwrap(), b"preserve");
+        assert_eq!(
+            fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
     }
 
     #[test]

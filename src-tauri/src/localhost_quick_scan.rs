@@ -173,6 +173,7 @@ pub fn prepare_localhost_quick_scan(
         knowledge_input: None,
         scope_contract_sha256: None,
         naabu_work_plan: None,
+        naabu_attempt_requests: Vec::new(),
         mapping_version: None,
         mapping_provenance: None,
         fingerprint_schema_version: None,

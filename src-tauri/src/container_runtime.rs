@@ -1,4 +1,4 @@
-use crate::artifact_store::{CapturePaths, RunDirectories};
+use crate::artifact_store::{CapturePaths, CaptureWriter, RunDirectories};
 use crate::domain::{
     EngineManifest, MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS, MIN_ENGINE_EXECUTION_TIMEOUT_SECONDS,
     ScanPermission,
@@ -60,6 +60,8 @@ const CONTAINER_ENGINE_LABEL_KEY: &str = "ai.security-scanner.engine";
 const CONTAINER_ENGINE_RUN_LABEL_KEY: &str = "ai.security-scanner.engine-run";
 const CONTAINER_ATTEMPT_LABEL_KEY: &str = "ai.security-scanner.attempt";
 const CONTAINER_SCOPE_LABEL_KEY: &str = "ai.security-scanner.scope-sha256";
+const CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY: &str =
+    "ai.security-scanner.naabu-launcher-plan-sha256";
 const NAABU_LAUNCHER_V2_COMMAND: [&str; 10] = [
     "--engine",
     "naabu",
@@ -1255,6 +1257,13 @@ impl<'a> ContainerPlanBuilder<'a> {
             format!("{CONTAINER_SCOPE_LABEL_KEY}={scope_sha256}"),
         ];
 
+        if let Some(digest) = launcher_plan_sha256.as_ref() {
+            runtime_args.extend([
+                "--label".into(),
+                format!("{CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY}={digest}"),
+            ]);
+        }
+
         match self.network_policy {
             NetworkPolicy::Disabled => {
                 runtime_args.extend(["--network".into(), "none".into()]);
@@ -1311,7 +1320,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             scope_file,
             scope_sha256: scope_sha256.clone(),
             launcher_plan_file,
-            launcher_plan_sha256,
+            launcher_plan_sha256: launcher_plan_sha256.clone(),
             credential_control_dir,
             network_policy: self.network_policy.clone(),
             output_bytes: self.limits.output_bytes,
@@ -1323,6 +1332,7 @@ impl<'a> ContainerPlanBuilder<'a> {
                 engine_id: self.manifest.id.clone(),
                 attempt: self.attempt,
                 scope_sha256,
+                launcher_plan_sha256: launcher_plan_sha256.clone(),
                 image: self.image.clone(),
             },
         })
@@ -1381,6 +1391,9 @@ pub struct OwnedContainerCleanupRequest {
     pub engine_id: String,
     pub attempt: u32,
     pub scope_sha256: String,
+    /// Exact digest of the private launcher-v2 work plan. Legacy executions
+    /// have no such document or ownership label and therefore retain `None`.
+    pub launcher_plan_sha256: Option<String>,
     pub image: PinnedImage,
 }
 
@@ -1409,11 +1422,23 @@ impl OwnedContainerCleanupRequest {
                 "scope digest is invalid for owned container cleanup".into(),
             ));
         }
+        if let Some(digest) = self.launcher_plan_sha256.as_deref() {
+            if self.engine_id != NAABU_ENGINE_ID {
+                return Err(AppError::InvalidRequest(
+                    "a launcher plan digest is valid only for owned Naabu container cleanup".into(),
+                ));
+            }
+            if !is_lowercase_sha256(digest) {
+                return Err(AppError::InvalidRequest(
+                    "Naabu launcher plan digest is invalid for owned container cleanup".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
     fn expected_labels(&self) -> BTreeMap<&'static str, String> {
-        BTreeMap::from([
+        let mut labels = BTreeMap::from([
             (CONTAINER_MANAGED_LABEL_KEY, "true".into()),
             (CONTAINER_CASE_LABEL_KEY, self.case_id.clone()),
             (CONTAINER_SCAN_RUN_LABEL_KEY, self.scan_run_id.clone()),
@@ -1424,8 +1449,19 @@ impl OwnedContainerCleanupRequest {
                 CONTAINER_SCOPE_LABEL_KEY,
                 self.scope_sha256.to_ascii_lowercase(),
             ),
-        ])
+        ]);
+        if let Some(digest) = self.launcher_plan_sha256.as_ref() {
+            labels.insert(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY, digest.clone());
+        }
+        labels
     }
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 #[derive(Clone, Default)]
@@ -1495,6 +1531,11 @@ pub trait ContainerRuntime: Send + Sync {
     fn execution_preflight(&self) -> AppResult<RuntimePreflight>;
     fn verify_network(&self, policy: &NetworkPolicy) -> AppResult<()>;
     fn pull(&self, image: &PinnedImage) -> AppResult<()>;
+    /// Runs one exact container plan. Implementations must reset both output
+    /// parameters. `creation_may_be_untracked` becomes true as soon as a
+    /// runtime process could have created the planned object; a missing
+    /// `created_container` after that point requires ownership-label
+    /// reconciliation by the caller and is not proof of absence.
     fn run(
         &self,
         plan: &ContainerRunPlan,
@@ -1502,6 +1543,7 @@ pub trait ContainerRuntime: Send + Sync {
         cancellation: &CancellationToken,
         capture: &CapturePaths,
         created_container: &mut Option<CreatedContainer>,
+        creation_may_be_untracked: &mut bool,
     ) -> AppResult<RuntimeOutcome>;
     fn cleanup(
         &self,
@@ -1522,6 +1564,8 @@ pub struct ProcessContainerRuntime {
     preflight_cache: Arc<RuntimePreflightCache>,
     #[cfg(test)]
     test_execution_timeout: Option<StdDuration>,
+    #[cfg(test)]
+    test_capture_drain_timeout: Option<StdDuration>,
 }
 
 #[derive(Debug, Default)]
@@ -1753,6 +1797,16 @@ fn prove_owned_container(
                 "container ownership label {key} does not match the persisted execution"
             )));
         }
+    }
+    if request.launcher_plan_sha256.is_none()
+        && inspected
+            .config
+            .labels
+            .contains_key(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY)
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "container ownership label {CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY} was not present in the persisted execution"
+        )));
     }
     let image_matches = inspected
         .config
@@ -2186,7 +2240,12 @@ struct OutputCaptureWorkers {
 }
 
 impl OutputCaptureWorkers {
-    fn start(child: &mut Child, capture: &CapturePaths, budget: &OutputBudget) -> AppResult<Self> {
+    fn start(
+        child: &mut Child,
+        stdout_file: CaptureWriter,
+        stderr_file: CaptureWriter,
+        budget: &OutputBudget,
+    ) -> AppResult<Self> {
         let stdout_pipe = child
             .stdout
             .take()
@@ -2195,15 +2254,13 @@ impl OutputCaptureWorkers {
             .stderr
             .take()
             .ok_or_else(|| AppError::Runtime("container stderr pipe was unavailable".into()))?;
-        let stdout_file = open_runtime_capture_file(&capture.stdout)?;
-        let stderr_file = open_runtime_capture_file(&capture.stderr)?;
         Ok(Self {
             stdout: spawn_file_capture(stdout_pipe, stdout_file, budget.clone()),
             stderr: spawn_file_capture(stderr_pipe, stderr_file, budget.clone()),
         })
     }
 
-    fn finish_by(self, deadline: std::time::Instant) -> io::Result<()> {
+    fn finish_by(&mut self, deadline: std::time::Instant) -> io::Result<()> {
         // Wait for both readers against one shared deadline. If a descendant
         // inherited a pipe, callers can terminate the process tree and return
         // without an unbounded JoinHandle wait.
@@ -2218,33 +2275,71 @@ impl OutputCaptureWorkers {
 struct FileCapture {
     result: std::sync::mpsc::Receiver<io::Result<()>>,
     worker: Option<thread::JoinHandle<()>>,
+    completion: Option<Result<(), StoredCaptureError>>,
+}
+
+#[derive(Clone)]
+struct StoredCaptureError {
+    kind: io::ErrorKind,
+    message: String,
+}
+
+impl StoredCaptureError {
+    fn from_io(error: io::Error) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+
+    fn to_io(&self) -> io::Error {
+        io::Error::new(self.kind, self.message.clone())
+    }
 }
 
 impl FileCapture {
-    fn finish_by(mut self, deadline: std::time::Instant) -> io::Result<()> {
+    fn finish_by(&mut self, deadline: std::time::Instant) -> io::Result<()> {
+        if let Some(completion) = self.completion.as_ref() {
+            return completion
+                .as_ref()
+                .map(|_| ())
+                .map_err(StoredCaptureError::to_io);
+        }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let result = match self.result.recv_timeout(remaining) {
             Ok(result) => result,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "container output pipes did not close before the bounded drain deadline",
-            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "container output pipes did not close before the bounded drain deadline",
+                ));
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 Err(io::Error::other("container output capture thread failed"))
             }
         };
-        if result.is_ok()
-            && let Some(worker) = self.worker.take()
-        {
-            worker
-                .join()
-                .map_err(|_| io::Error::other("container output capture thread failed"))?;
+        let worker_failed = self
+            .worker
+            .take()
+            .is_some_and(|worker| worker.join().is_err());
+        let result = if worker_failed {
+            Err(io::Error::other("container output capture thread failed"))
+        } else {
+            result
+        };
+        self.completion = Some(result.map_err(StoredCaptureError::from_io));
+        match self.completion.as_ref().expect("capture completion stored") {
+            Ok(()) => Ok(()),
+            Err(error) => Err(error.to_io()),
         }
-        result
     }
 }
 
-fn spawn_file_capture<R>(mut reader: R, mut file: File, budget: OutputBudget) -> FileCapture
+fn spawn_file_capture<R>(
+    mut reader: R,
+    mut file: CaptureWriter,
+    budget: OutputBudget,
+) -> FileCapture
 where
     R: Read + Send + 'static,
 {
@@ -2276,25 +2371,8 @@ where
     FileCapture {
         result,
         worker: Some(worker),
+        completion: None,
     }
-}
-
-fn open_runtime_capture_file(path: &Path) -> AppResult<File> {
-    validate_mount_file(path, "runtime capture")?;
-    let mut options = OpenOptions::new();
-    options.write(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(AppError::NotAuthorized(
-            "runtime capture must remain a regular file".into(),
-        ));
-    }
-    Ok(file)
 }
 
 fn measure_output_tree(
@@ -2365,6 +2443,8 @@ impl ProcessContainerRuntime {
             preflight_cache: Arc::default(),
             #[cfg(test)]
             test_execution_timeout: None,
+            #[cfg(test)]
+            test_capture_drain_timeout: None,
         }
     }
 
@@ -2374,6 +2454,8 @@ impl ProcessContainerRuntime {
             preflight_cache: Arc::default(),
             #[cfg(test)]
             test_execution_timeout: None,
+            #[cfg(test)]
+            test_capture_drain_timeout: None,
         })
     }
 
@@ -2383,12 +2465,20 @@ impl ProcessContainerRuntime {
             preflight_cache: Arc::default(),
             #[cfg(test)]
             test_execution_timeout: None,
+            #[cfg(test)]
+            test_capture_drain_timeout: None,
         }
     }
 
     #[cfg(all(test, unix))]
     fn with_test_execution_timeout(mut self, timeout: StdDuration) -> Self {
         self.test_execution_timeout = Some(timeout);
+        self
+    }
+
+    #[cfg(all(test, unix))]
+    fn with_test_capture_drain_timeout(mut self, timeout: StdDuration) -> Self {
+        self.test_capture_drain_timeout = Some(timeout);
         self
     }
 
@@ -2781,8 +2871,10 @@ impl ContainerRuntime for ProcessContainerRuntime {
         cancellation: &CancellationToken,
         capture: &CapturePaths,
         created_container: &mut Option<CreatedContainer>,
+        creation_may_be_untracked: &mut bool,
     ) -> AppResult<RuntimeOutcome> {
         *created_container = None;
+        *creation_may_be_untracked = false;
         validate_run_plan_integrity(plan)?;
         credentials.validate_fresh()?;
         if cancellation.is_cancelled() {
@@ -2805,9 +2897,19 @@ impl ContainerRuntime for ProcessContainerRuntime {
             Some(&container_id_file),
         )?;
         let execution = (|| -> AppResult<RuntimeOutcome> {
+            // Capture paths are verified and opened by ArtifactStore. Clone
+            // those exact handles before process creation; never reopen or
+            // truncate a path that could have been replaced with a Windows
+            // reparse point (or a Unix symlink) after preparation.
+            let (stdout_file, stderr_file) = capture.clone_empty_writers()?;
             let execution_timeout = StdDuration::from_secs(plan.execution_timeout_seconds());
             #[cfg(test)]
             let execution_timeout = self.test_execution_timeout.unwrap_or(execution_timeout);
+            let capture_drain_timeout = CONTAINER_CAPTURE_DRAIN_TIMEOUT;
+            #[cfg(test)]
+            let capture_drain_timeout = self
+                .test_capture_drain_timeout
+                .unwrap_or(capture_drain_timeout);
             let execution_started = std::time::Instant::now();
             let mut command = Command::new(&self.context.binary);
             command.args(&runtime_args);
@@ -2824,6 +2926,12 @@ impl ContainerRuntime for ProcessContainerRuntime {
             let mut child = command.spawn().map_err(|error| {
                 AppError::Runtime(format!("container run could not start: {error}"))
             })?;
+            // From this point until an invocation-only cidfile is verified,
+            // the runtime process may have created the planned object without
+            // returning its immutable ID. The caller must reconcile by the
+            // complete ownership labels and must not treat a missing ID as
+            // proof that no container exists.
+            *creation_may_be_untracked = true;
             if let Err(error) = process_tree.attach(&child) {
                 process_tree.terminate_and_wait(&mut child);
                 return Err(AppError::Runtime(format!(
@@ -2831,13 +2939,14 @@ impl ContainerRuntime for ProcessContainerRuntime {
                 )));
             }
             let budget = OutputBudget::new(plan.output_bytes());
-            let capture_workers = match OutputCaptureWorkers::start(&mut child, capture, &budget) {
-                Ok(workers) => workers,
-                Err(error) => {
-                    process_tree.terminate_and_wait(&mut child);
-                    return Err(error);
-                }
-            };
+            let mut capture_workers =
+                match OutputCaptureWorkers::start(&mut child, stdout_file, stderr_file, &budget) {
+                    Ok(workers) => workers,
+                    Err(error) => {
+                        process_tree.terminate_and_wait(&mut child);
+                        return Err(error);
+                    }
+                };
             let wait_context = ContainerWaitContext {
                 plan,
                 execution_started,
@@ -2851,10 +2960,27 @@ impl ContainerRuntime for ProcessContainerRuntime {
             {
                 process_tree.terminate_and_wait(&mut child);
             }
-            let capture_result = capture_workers
-                .finish_by(std::time::Instant::now() + CONTAINER_CAPTURE_DRAIN_TIMEOUT);
+            let mut capture_result =
+                capture_workers.finish_by(std::time::Instant::now() + capture_drain_timeout);
             if capture_result.is_err() {
                 process_tree.terminate_and_wait(&mut child);
+                if capture_result
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == io::ErrorKind::TimedOut)
+                {
+                    let post_termination = capture_workers
+                        .finish_by(std::time::Instant::now() + capture_drain_timeout);
+                    if let Err(post_termination) = post_termination {
+                        let initial =
+                            capture_result.expect_err("capture result was checked as an error");
+                        capture_result = Err(io::Error::new(
+                            post_termination.kind(),
+                            format!(
+                                "{initial}; output writers did not quiesce after process-tree termination: {post_termination}"
+                            ),
+                        ));
+                    }
+                }
             }
             let budget_result = budget.check(plan.output());
             match (outcome, capture_result, budget_result) {
@@ -2987,7 +3113,9 @@ pub struct FakeContainerRuntime {
     fail_network: AtomicBool,
     fail_pull: AtomicBool,
     fail_cleanup: AtomicBool,
+    foreign_cleanup_mismatch: AtomicBool,
     skip_creation: AtomicBool,
+    untracked_creation: AtomicBool,
 }
 
 impl FakeContainerRuntime {
@@ -3022,8 +3150,17 @@ impl FakeContainerRuntime {
         self.fail_cleanup.store(fail, Ordering::SeqCst);
     }
 
+    pub fn set_foreign_cleanup_mismatch(&self, mismatch: bool) {
+        self.foreign_cleanup_mismatch
+            .store(mismatch, Ordering::SeqCst);
+    }
+
     pub fn set_skip_creation(&self, skip: bool) {
         self.skip_creation.store(skip, Ordering::SeqCst);
+    }
+
+    pub fn set_untracked_creation(&self, untracked: bool) {
+        self.untracked_creation.store(untracked, Ordering::SeqCst);
     }
 
     pub fn calls(&self) -> Vec<RuntimeCall> {
@@ -3102,8 +3239,10 @@ impl ContainerRuntime for FakeContainerRuntime {
         cancellation: &CancellationToken,
         capture: &CapturePaths,
         created_container: &mut Option<CreatedContainer>,
+        creation_may_be_untracked: &mut bool,
     ) -> AppResult<RuntimeOutcome> {
         *created_container = None;
+        *creation_may_be_untracked = false;
         validate_run_plan_integrity(plan)?;
         credentials.validate_fresh()?;
         self.calls
@@ -3116,7 +3255,10 @@ impl ContainerRuntime for FakeContainerRuntime {
                 cancelled: true,
             });
         }
-        if !self.skip_creation.load(Ordering::SeqCst) {
+        if self.untracked_creation.load(Ordering::SeqCst) {
+            *creation_may_be_untracked = true;
+        } else if !self.skip_creation.load(Ordering::SeqCst) {
+            *creation_may_be_untracked = true;
             *created_container = Some(CreatedContainer::from_runtime_id(&"f".repeat(64))?);
         }
         let behavior = self.behavior.lock().expect("fake behavior lock").clone();
@@ -3147,8 +3289,11 @@ impl ContainerRuntime for FakeContainerRuntime {
         if bytes > plan.output_bytes() {
             return Err(output_limit_error(plan.output_bytes()));
         }
-        fs::write(&capture.stdout, &behavior.stdout)?;
-        fs::write(&capture.stderr, &behavior.stderr)?;
+        let (mut stdout, mut stderr) = capture.clone_empty_writers()?;
+        stdout.write_all(&behavior.stdout)?;
+        stderr.write_all(&behavior.stderr)?;
+        stdout.sync_all()?;
+        stderr.sync_all()?;
         for (relative, bytes) in behavior.output_files {
             let path = safe_fake_output_path(&plan.output, &relative)?;
             if let Some(parent) = path.parent() {
@@ -3172,6 +3317,11 @@ impl ContainerRuntime for FakeContainerRuntime {
             .lock()
             .expect("fake calls lock")
             .push(RuntimeCall::Cleanup(container_name));
+        if self.foreign_cleanup_mismatch.load(Ordering::SeqCst) {
+            return Err(AppError::NotAuthorized(
+                "fake foreign ownership mismatch".into(),
+            ));
+        }
         if self.fail_cleanup.load(Ordering::SeqCst) {
             return Err(AppError::Runtime("fake cleanup failure".into()));
         }
@@ -3374,16 +3524,28 @@ fn validate_run_plan_launcher_integrity(plan: &ContainerRunPlan) -> AppResult<()
     let launch_arguments = &plan.runtime_args[..image_index];
     match (&plan.launcher_plan_file, &plan.launcher_plan_sha256) {
         (None, None) => {
-            if launch_arguments
-                .iter()
-                .any(|argument| argument.contains(CONTAINER_NAABU_LAUNCHER_PLAN_PATH))
-            {
+            if plan.ownership.launcher_plan_sha256.is_some() {
                 return Err(AppError::NotAuthorized(
-                    "legacy run plan gained an unbound Naabu launcher mount".into(),
+                    "legacy run plan gained a Naabu launcher ownership digest".into(),
+                ));
+            }
+            if launch_arguments.iter().any(|argument| {
+                argument.contains(CONTAINER_NAABU_LAUNCHER_PLAN_PATH)
+                    || argument.starts_with(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY)
+            }) {
+                return Err(AppError::NotAuthorized(
+                    "legacy run plan gained an unbound Naabu launcher mount or ownership label"
+                        .into(),
                 ));
             }
         }
         (Some(path), Some(expected_sha256)) => {
+            if plan.ownership.launcher_plan_sha256.as_deref() != Some(expected_sha256.as_str()) {
+                return Err(AppError::NotAuthorized(
+                    "Naabu launcher plan digest does not match its container ownership proof"
+                        .into(),
+                ));
+            }
             validate_mount_file(path, "Naabu launcher plan")?;
             let current_sha256 = hash_bounded_control_file(
                 path,
@@ -3407,6 +3569,22 @@ fn validate_run_plan_launcher_integrity(plan: &ContainerRunPlan) -> AppResult<()
             if mount_values != [expected_mount.as_str()] {
                 return Err(AppError::NotAuthorized(
                     "container run plan did not preserve the exact read-only Naabu launcher mount"
+                        .into(),
+                ));
+            }
+            let expected_label =
+                format!("{CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY}={expected_sha256}");
+            let label_values = launch_arguments
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--label"
+                        && arguments[1].starts_with(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY))
+                    .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>();
+            if label_values != [expected_label.as_str()] {
+                return Err(AppError::NotAuthorized(
+                    "container run plan did not preserve the exact Naabu launcher ownership label"
                         .into(),
                 ));
             }
@@ -4311,6 +4489,7 @@ esac
             engine_id: "scanner".into(),
             attempt: 1,
             scope_sha256: hash_control_file(scope).expect("scope digest"),
+            launcher_plan_sha256: None,
             image: image.clone(),
         }
     }
@@ -4389,6 +4568,50 @@ esac\n",
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("fake runtime executable");
         (binary, log)
+    }
+
+    #[cfg(unix)]
+    fn fake_capture_runtime(
+        temp: &tempfile::TempDir,
+        plan: &ContainerRunPlan,
+    ) -> (PathBuf, PathBuf) {
+        let binary = temp.path().join("fake-capture-runtime");
+        let log = temp.path().join("fake-capture-runtime.log");
+        let response = temp.path().join("fake-capture-inspect.json");
+        let immutable_id = "9".repeat(64);
+        fs::write(&response, owned_container_inspect(plan, &immutable_id))
+            .expect("owned inspect fixture");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprevious=''\nfor argument in \"$@\"; do\n  if [ \"$previous\" = --cidfile ]; then printf '%s\\n' '{}' > \"$argument\"; fi\n  previous=$argument\ndone\nif [ \"$1\" = container ] && [ \"$2\" = inspect ]; then /bin/cat '{}'; exit 0; fi\ncase \"$1\" in\n  run) printf 'runtime-stdout\\n'; printf 'runtime-stderr\\n' >&2; exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            log.display(),
+            immutable_id,
+            response.display(),
+        );
+        fs::write(&binary, script).expect("fake runtime script");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake runtime executable");
+        (binary, log)
+    }
+
+    #[cfg(unix)]
+    fn fake_inherited_capture_runtime(
+        temp: &tempfile::TempDir,
+        plan: &ContainerRunPlan,
+    ) -> PathBuf {
+        let binary = temp.path().join("fake-inherited-capture-runtime");
+        let response = temp.path().join("fake-inherited-capture-inspect.json");
+        let immutable_id = "8".repeat(64);
+        fs::write(&response, owned_container_inspect(plan, &immutable_id))
+            .expect("owned inspect fixture");
+        let script = format!(
+            "#!/bin/sh\nprevious=''\nfor argument in \"$@\"; do\n  if [ \"$previous\" = --cidfile ]; then printf '%s\\n' '{}' > \"$argument\"; fi\n  previous=$argument\ndone\nif [ \"$1\" = container ] && [ \"$2\" = inspect ]; then /bin/cat '{}'; exit 0; fi\ncase \"$1\" in\n  run) printf 'before-descendant\\n'; /bin/sleep 30 & exit 0 ;;\n  stop) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            immutable_id,
+            response.display(),
+        );
+        fs::write(&binary, script).expect("fake runtime script");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake runtime executable");
+        binary
     }
 
     #[cfg(unix)]
@@ -4628,6 +4851,107 @@ esac\n",
     }
 
     #[test]
+    fn launcher_v2_cleanup_requires_the_exact_digest_label() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let mut request = owned_cleanup_request(&scope, &image);
+        let expected_digest = "c".repeat(64);
+        request.engine_id = NAABU_ENGINE_ID.into();
+        request.launcher_plan_sha256 = Some(expected_digest);
+        let exact_labels = request.expected_labels();
+        let document = |labels: BTreeMap<&'static str, String>| {
+            serde_json::to_vec(&serde_json::json!([{
+                "Id": "b".repeat(64),
+                "Name": request.container_name().expect("name"),
+                "Config": {
+                    "Image": request.image.reference(),
+                    "Labels": labels,
+                }
+            }]))
+            .expect("inspect document")
+        };
+
+        assert_eq!(
+            prove_owned_container(&document(exact_labels.clone()), &request)
+                .expect("exact launcher digest label"),
+            "b".repeat(64)
+        );
+
+        let mut missing = exact_labels.clone();
+        missing.remove(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY);
+        let missing_error = prove_owned_container(&document(missing), &request)
+            .expect_err("missing launcher digest label rejected");
+        assert!(
+            missing_error
+                .to_string()
+                .contains(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY)
+        );
+
+        let mut foreign = exact_labels;
+        foreign.insert(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY, "d".repeat(64));
+        let foreign_error = prove_owned_container(&document(foreign), &request)
+            .expect_err("foreign launcher digest label rejected");
+        assert!(
+            foreign_error
+                .to_string()
+                .contains(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY)
+        );
+    }
+
+    #[test]
+    fn legacy_cleanup_refuses_an_unexpected_launcher_digest_label() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let request = owned_cleanup_request(&scope, &image);
+        let mut labels = request.expected_labels();
+        labels.insert(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY, "e".repeat(64));
+        let document = serde_json::to_vec(&serde_json::json!([{
+            "Id": "b".repeat(64),
+            "Name": request.container_name().expect("name"),
+            "Config": {
+                "Image": request.image.reference(),
+                "Labels": labels,
+            }
+        }]))
+        .expect("inspect document");
+
+        let error = prove_owned_container(&document, &request)
+            .expect_err("unexpected launcher ownership label rejected");
+        assert!(
+            error
+                .to_string()
+                .contains(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY)
+        );
+    }
+
+    #[test]
+    fn launcher_cleanup_digest_must_be_lowercase_sha256() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let mut request = owned_cleanup_request(&scope, &image);
+        request.engine_id = NAABU_ENGINE_ID.into();
+        request.launcher_plan_sha256 = Some("A".repeat(64));
+
+        let error = request
+            .container_name()
+            .expect_err("uppercase launcher digest rejected");
+        assert!(error.to_string().contains("launcher plan digest"));
+    }
+
+    #[test]
+    fn launcher_cleanup_digest_is_rejected_for_a_non_naabu_owner() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let mut request = owned_cleanup_request(&scope, &image);
+        request.launcher_plan_sha256 = Some("a".repeat(64));
+
+        let error = request
+            .container_name()
+            .expect_err("non-Naabu launcher digest rejected");
+        assert!(error.to_string().contains("only for owned Naabu"));
+    }
+
+    #[test]
     fn owned_container_image_proof_accepts_default_registry_canonicalization() {
         let (_temp, _store, _directories, scope, _manifest, _image) =
             plan_fixture(vec!["scanner".into()]);
@@ -4692,6 +5016,26 @@ esac\n",
                 "unexpected error for mismatched image reference: {error}"
             );
         }
+    }
+
+    #[test]
+    fn fake_cleanup_can_model_a_foreign_same_name_ownership_mismatch() {
+        let (_temp, _store, _directories, scope, _manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let request = owned_cleanup_request(&scope, &image);
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_foreign_cleanup_mismatch(true);
+
+        let error = runtime
+            .cleanup(&request, None)
+            .expect_err("foreign same-name cleanup must be refused");
+
+        assert!(matches!(&error, AppError::NotAuthorized(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("fake foreign ownership mismatch")
+        );
     }
 
     #[cfg(unix)]
@@ -4966,6 +5310,19 @@ esac\n",
                 .all(|argument| !argument.contains("do-not-put-this-in-argv"))
         );
         assert!(!plan.runtime_args.iter().any(|argument| argument == "--env"));
+        assert!(plan.ownership().launcher_plan_sha256.is_none());
+        assert!(
+            !plan
+                .ownership()
+                .expected_labels()
+                .contains_key(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY)
+        );
+        assert!(
+            !plan
+                .runtime_args
+                .iter()
+                .any(|argument| argument.starts_with(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY))
+        );
     }
 
     #[test]
@@ -5014,6 +5371,28 @@ esac\n",
         )
         .expect("launcher digest");
         assert_eq!(plan.launcher_plan_sha256(), Some(expected_digest.as_str()));
+        assert_eq!(
+            plan.ownership().launcher_plan_sha256.as_deref(),
+            Some(expected_digest.as_str())
+        );
+        assert_eq!(
+            plan.ownership()
+                .expected_labels()
+                .get(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY),
+            Some(&expected_digest)
+        );
+        let expected_label = format!("{CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY}={expected_digest}");
+        assert_eq!(
+            plan.runtime_args
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--label"
+                        && arguments[1].starts_with(CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY))
+                    .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>(),
+            [expected_label.as_str()]
+        );
         let expected_mount =
             bind_mount(&canonical, CONTAINER_NAABU_LAUNCHER_PLAN_PATH, true).expect("mount");
         assert_eq!(
@@ -5343,6 +5722,7 @@ esac\n",
                 &CancellationToken::default(),
                 &capture,
                 &mut None,
+                &mut false,
             )
             .expect_err("changed scope rejected");
         assert!(error.to_string().contains("scope document changed"));
@@ -5494,6 +5874,7 @@ esac\n",
                 &CancellationToken::default(),
                 &capture,
                 &mut None,
+                &mut false,
             )
             .expect_err("weakened network isolation rejected");
         assert!(error.to_string().contains("exact none network isolation"));
@@ -5581,6 +5962,7 @@ esac\n",
                 &CancellationToken::default(),
                 &capture,
                 &mut None,
+                &mut false,
             )
             .expect_err("direct process run rejected");
 
@@ -5679,12 +6061,141 @@ esac\n",
                 &CancellationToken::default(),
                 &capture,
                 &mut None,
+                &mut false,
             )
             .expect_err("aggregate output must be rejected");
         assert!(error.to_string().contains("scan coverage is incomplete"));
         assert_eq!(fs::metadata(&capture.stdout).expect("stdout").len(), 0);
         assert_eq!(fs::metadata(&capture.stderr).expect("stderr").len(), 0);
         assert_eq!(fs::read_dir(plan.output()).expect("output").count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_runtime_capture_cannot_be_redirected_by_path_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("capture plan");
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let retained_stdout = directories.raw.join("retained-stdout.log");
+        let retained_stderr = directories.raw.join("retained-stderr.log");
+        fs::rename(&capture.stdout, &retained_stdout).expect("retain stdout inode");
+        fs::rename(&capture.stderr, &retained_stderr).expect("retain stderr inode");
+        let outside_stdout = temp.path().join("outside-stdout.log");
+        let outside_stderr = temp.path().join("outside-stderr.log");
+        fs::write(&outside_stdout, b"outside-stdout-sentinel").expect("stdout sentinel");
+        fs::write(&outside_stderr, b"outside-stderr-sentinel").expect("stderr sentinel");
+        symlink(&outside_stdout, &capture.stdout).expect("replace stdout path");
+        symlink(&outside_stderr, &capture.stderr).expect("replace stderr path");
+        let (binary, _log) = fake_capture_runtime(&temp, &plan);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary);
+        let mut created = None;
+        let mut creation_may_be_untracked = false;
+
+        let outcome = runtime
+            .run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &CancellationToken::default(),
+                &capture,
+                &mut created,
+                &mut creation_may_be_untracked,
+            )
+            .expect("runtime uses retained capture handles");
+
+        assert_eq!(outcome.exit_code, Some(0));
+        assert!(!outcome.cancelled);
+        assert!(created.is_some());
+        assert!(creation_may_be_untracked);
+        assert_eq!(fs::read(&retained_stdout).unwrap(), b"runtime-stdout\n");
+        assert_eq!(fs::read(&retained_stderr).unwrap(), b"runtime-stderr\n");
+        assert_eq!(
+            fs::read(&outside_stdout).unwrap(),
+            b"outside-stdout-sentinel"
+        );
+        assert_eq!(
+            fs::read(&outside_stderr).unwrap(),
+            b"outside-stderr-sentinel"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_capture_pipe_cannot_write_after_runtime_returns() {
+        let (temp, store, directories, scope, manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect("inherited capture plan");
+        let capture = store.prepare_capture(&directories).expect("capture");
+        let binary = fake_inherited_capture_runtime(&temp, &plan);
+        let runtime = ProcessContainerRuntime::new(RuntimeProvider::Docker, binary)
+            .with_test_capture_drain_timeout(StdDuration::from_millis(100));
+
+        let error = runtime
+            .run(
+                &plan,
+                &ScannerCredentialSet::default(),
+                &CancellationToken::default(),
+                &capture,
+                &mut None,
+                &mut false,
+            )
+            .expect_err("inherited pipe must make coverage incomplete");
+        assert!(error.to_string().contains("pipes did not close"));
+
+        let first = store
+            .finalize_capture(
+                &ArtifactContext {
+                    case_id: "case-1".into(),
+                    scan_run_id: "run-1".into(),
+                    engine_run_id: "engine-run-1".into(),
+                },
+                &capture,
+            )
+            .expect("writers quiesced before runtime return");
+        thread::sleep(StdDuration::from_millis(200));
+        let second = store
+            .finalize_capture(
+                &ArtifactContext {
+                    case_id: "case-1".into(),
+                    scan_run_id: "run-1".into(),
+                    engine_run_id: "engine-run-1".into(),
+                },
+                &capture,
+            )
+            .expect("capture remains stable");
+        assert_eq!(first[0].sha256, second[0].sha256);
+        assert_eq!(first[0].byte_length, second[0].byte_length);
+        assert_eq!(fs::read(&capture.stdout).unwrap(), b"before-descendant\n");
     }
 
     #[cfg(unix)]
@@ -5723,6 +6234,7 @@ esac\n",
                 &CancellationToken::default(),
                 &capture,
                 &mut None,
+                &mut false,
             )
             .expect_err("stdout flood must terminate the run");
         assert!(error.to_string().contains("scan coverage is incomplete"));
@@ -5773,6 +6285,7 @@ esac\n",
                 &CancellationToken::default(),
                 &capture,
                 &mut created,
+                &mut false,
             )
             .expect_err("slow scanner must reach its host deadline");
         let message = error.to_string();
@@ -5838,14 +6351,16 @@ esac\n",
         let worker_token = cancellation.clone();
         let worker = thread::spawn(move || {
             let mut created = None;
+            let mut creation_may_be_untracked = false;
             let outcome = runtime.run(
                 &plan,
                 &ScannerCredentialSet::default(),
                 &worker_token,
                 &capture,
                 &mut created,
+                &mut creation_may_be_untracked,
             );
-            (outcome, created)
+            (outcome, created, creation_may_be_untracked)
         });
         wait_until(|| {
             fs::read_to_string(&log)
@@ -5863,7 +6378,7 @@ esac\n",
         cancellation.resume();
         wait_until(|| !cancellation.is_paused());
         wait_until(|| worker.is_finished());
-        let (outcome, created) = worker.join().expect("runtime thread");
+        let (outcome, created, creation_may_be_untracked) = worker.join().expect("runtime thread");
         let error = outcome.expect_err("active execution must exhaust its remaining timeout");
         assert!(
             error
@@ -5874,6 +6389,7 @@ esac\n",
             created.as_ref().map(CreatedContainer::immutable_id),
             Some(immutable_id.as_str())
         );
+        assert!(creation_may_be_untracked);
 
         let commands = fs::read_to_string(log).expect("runtime log");
         assert!(
@@ -5965,14 +6481,16 @@ esac\n",
         let worker_token = cancellation.clone();
         let worker = thread::spawn(move || {
             let mut created = None;
+            let mut creation_may_be_untracked = false;
             let outcome = runtime.run(
                 &plan,
                 &ScannerCredentialSet::default(),
                 &worker_token,
                 &capture,
                 &mut created,
+                &mut creation_may_be_untracked,
             );
-            (outcome, created)
+            (outcome, created, creation_may_be_untracked)
         });
         wait_until(|| {
             fs::read_to_string(&log)
@@ -5980,11 +6498,12 @@ esac\n",
         });
 
         cancellation.cancel();
-        let (outcome, created) = worker.join().expect("runtime thread");
+        let (outcome, created, creation_may_be_untracked) = worker.join().expect("runtime thread");
         let outcome = outcome.expect("cancelled runtime outcome");
 
         assert!(outcome.cancelled);
         assert!(created.is_none());
+        assert!(creation_may_be_untracked);
         let commands = fs::read_to_string(log).expect("runtime log");
         assert!(!commands.lines().any(|line| {
             line.starts_with("pause ")
@@ -6027,6 +6546,7 @@ esac\n",
                 &worker_token,
                 &capture,
                 &mut None,
+                &mut false,
             )
         });
         wait_until(|| {
@@ -6100,6 +6620,7 @@ esac\n",
                 &worker_token,
                 &capture,
                 &mut None,
+                &mut false,
             )
         });
         wait_until(|| {
@@ -6165,6 +6686,7 @@ esac\n",
                 &worker_token,
                 &capture,
                 &mut None,
+                &mut false,
             )
         });
         // A pause may race runtime startup. The runtime must defer the control

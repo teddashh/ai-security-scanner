@@ -17,9 +17,11 @@ use ai_security_scanner_lib::container_runtime::{
 };
 use ai_security_scanner_lib::demo::build_demo_case;
 use ai_security_scanner_lib::discovery::run_connector;
+#[cfg(test)]
+use ai_security_scanner_lib::domain::EngineRunStatus;
 use ai_security_scanner_lib::domain::{
     AssessmentActivity, CaseStatus, CreateCaseRequest, DataClass, DistributionMode, EngineManifest,
-    EngineRunStatus, FindingStatus, ScanPermission, SourceConnectionStatus, SourceKind, new_id,
+    FindingStatus, ScanPermission, SourceConnectionStatus, SourceKind, new_id,
 };
 use ai_security_scanner_lib::error::{AppError, AppResult};
 use ai_security_scanner_lib::export::{ExportOptions, RedactionProfile, verify_case_bundle};
@@ -1842,6 +1844,7 @@ async fn execute_runtime(
                     engine_id: engine_run.engine_id.clone(),
                     attempt: checkpoint.attempt,
                     scope_sha256,
+                    launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
                     image,
                 };
                 if let Some(name) = container_name.as_deref()
@@ -2591,19 +2594,23 @@ fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
     runtime.verify_network(&network_policy)?;
     runtime.pull(&image)?;
     let mut created_container = None;
+    let mut creation_may_be_untracked = false;
     let run_result = runtime.run(
         &plan,
         &credentials,
         &CancellationToken::default(),
         &capture,
         &mut created_container,
+        &mut creation_may_be_untracked,
     );
     let created_object_id = created_container
         .as_ref()
         .map(|created| created.immutable_id().to_owned());
-    let cleanup_result = created_container
-        .as_ref()
-        .map(|created| runtime.cleanup(plan.ownership(), Some(created)));
+    let cleanup_result = match (created_container.as_ref(), creation_may_be_untracked) {
+        (Some(created), _) => Some(runtime.cleanup(plan.ownership(), Some(created))),
+        (None, true) => Some(runtime.cleanup(plan.ownership(), None)),
+        (None, false) => None,
+    };
     let (outcome, cleanup) = match (run_result, cleanup_result) {
         (Ok(outcome), Some(Ok(cleanup))) => (outcome, cleanup),
         (Ok(_), None) => {
@@ -2631,6 +2638,12 @@ fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
                 .into(),
         ));
     }
+    let created_object_id = created_object_id.ok_or_else(|| {
+        AppError::Runtime(
+            "managed-container qualification reconciled an untracked invocation but received no immutable created-object identity"
+                .into(),
+        )
+    })?;
 
     let report_path = directories
         .output
@@ -2693,7 +2706,7 @@ fn execute_fixed_managed_container_qualification<R: ContainerRuntime>(
             "credential_count": 0,
             "exit_code": outcome.exit_code,
             "cancelled": outcome.cancelled,
-            "created_object_id": created_object_id.expect("successful runtime returns identity"),
+            "created_object_id": created_object_id,
             "cleanup_removed": cleanup.removed,
         },
         "evidence": {

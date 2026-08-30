@@ -764,6 +764,7 @@ fn reconcile_exact_runtime_cleanup(
         scope_sha256: checkpoint.scope_sha256.clone().ok_or_else(|| {
             AppError::NotAuthorized("cleanup checkpoint has no frozen scope digest".into())
         })?,
+        launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
         image,
     };
     if let Some(container_name) = checkpoint.container_name.as_deref()
@@ -3478,8 +3479,50 @@ pub async fn resume_scan(
         }
         let plan = state
             .case_service()
-            .persist_resume_before_execution_preflight(&case_id, &run_id)?;
-        start_persisted_scan_job(&app, plan)
+            .persist_resume_before_execution_preflight(&case_id, &run_id);
+        match plan {
+            Ok(plan) => {
+                let needs_cleanup = durable_run_needs_background_cleanup(&plan.scan_run);
+                // Start valid sibling work first. Exact target-free cleanup is
+                // detached so slow or temporarily unavailable local runtime
+                // housekeeping can never strand the persisted plan in Queued.
+                let started = start_persisted_scan_job(&app, plan);
+                if needs_cleanup {
+                    schedule_exact_runtime_cleanup_reconciliation(
+                        &app,
+                        case_id.clone(),
+                        run_id.clone(),
+                    );
+                }
+                started
+            }
+            Err(error) => {
+                let Ok(case) = state.case_service().show_case(&case_id) else {
+                    return Err(error);
+                };
+                let needs_cleanup = case
+                    .scan_runs
+                    .iter()
+                    .find(|run| run.id == run_id)
+                    .is_some_and(durable_run_needs_background_cleanup);
+                if !needs_cleanup {
+                    return Err(error);
+                }
+                schedule_exact_runtime_cleanup_reconciliation(
+                    &app,
+                    case_id.clone(),
+                    run_id.clone(),
+                );
+                let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+                tracing::info!(
+                    case_id = %case_id,
+                    scan_run_id = %run_id,
+                    resume_error = %error,
+                    "resume scheduled bounded runtime reconciliation without runnable scanner work"
+                );
+                Ok(case)
+            }
+        }
     })
 }
 
@@ -4411,6 +4454,7 @@ fn execute_planned_engine(
         scope_grants: &execution.scope_grants,
         frozen_destinations,
         naabu_launcher_plan: None,
+        expected_naabu_launcher_plan_sha256: None,
         workspace: resolved_workspace
             .as_ref()
             .map(|workspace| workspace.tree_path.as_path()),
@@ -4501,6 +4545,7 @@ fn cleanup_resume_container(
         scope_sha256: checkpoint.scope_sha256.clone().ok_or_else(|| {
             AppError::NotAuthorized("resume cleanup checkpoint has no frozen scope digest".into())
         })?,
+        launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
         image: PinnedImage::from_manifest(&execution.manifest)?,
     };
     if ownership.container_name()? != persisted_container_name {
@@ -4563,6 +4608,7 @@ fn resume_captured_execution(
         scope_grants: &execution.scope_grants,
         frozen_destinations: None,
         naabu_launcher_plan: None,
+        expected_naabu_launcher_plan_sha256: None,
         workspace: None,
         network_policy: &network,
         resource_limits: &limits,
@@ -5697,6 +5743,7 @@ fn checkpoint_for(
         stage,
         container_name: None,
         scope_sha256: None,
+        launcher_plan_sha256: None,
         artifact_ids: vec![],
         cleanup_completed: managed_network.is_none(),
         last_error,
@@ -6134,6 +6181,7 @@ mod tests {
             stage: ExecutionStage::Failed,
             container_name: Some("ass-scanner-engine-run-1-a1".into()),
             scope_sha256: Some("b".repeat(64)),
+            launcher_plan_sha256: None,
             artifact_ids: vec!["artifact-1".into()],
             cleanup_completed: true,
             last_error: Some("adapter rejected the captured result".into()),
@@ -7948,6 +7996,7 @@ mod tests {
             stage: ExecutionStage::Planned,
             container_name: None,
             scope_sha256: None,
+            launcher_plan_sha256: None,
             artifact_ids: vec![],
             cleanup_completed: false,
             last_error: None,

@@ -970,6 +970,7 @@ mod tests {
             }),
             scope_contract_sha256: Some("d".repeat(64)),
             naabu_work_plan: None,
+            naabu_attempt_requests: Vec::new(),
             mapping_version: Some("2026-08-24.1".into()),
             mapping_provenance: Some(crate::domain::ControlMappingProvenance {
                 mapping_version: "2026-08-24.1".into(),
