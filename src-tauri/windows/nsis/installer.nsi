@@ -5,9 +5,12 @@
 ; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079
 ; Upstream license: Apache-2.0 OR MIT
 ; Local patch: version-neutral stale-registration and same-version repair,
-; data-preserving upgrade overlays, and the bounded v0.1.7 runtime transition
-; receipts. The release validator reverses these reviewed hunks and verifies
-; both complete-file SHA-256 values.
+; data-preserving upgrade overlays, the bounded v0.1.7 runtime transition
+; receipts, and a bilingual three-choice uninstall delegated to the fixed
+; product CLI with bounded, visible coordinator records and exact registration
+; postconditions.
+; The release validator reverses these reviewed hunks and verifies both
+; complete-file SHA-256 values.
 
 Unicode true
 ManifestDPIAware true
@@ -470,46 +473,115 @@ Function RunMainBinary
 FunctionEnd
 
 ; Uninstaller Pages
-; 1. Confirm uninstall page
-Var DeleteAppDataCheckbox
-Var DeleteAppDataCheckboxState
-!define /ifndef WS_EX_LAYOUTRTL         0x00400000
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.ConfirmShow
-Function un.ConfirmShow ; Add add a `Delete app data` check box
-  ; $1 inner dialog HWND
-  ; $2 window DPI
-  ; $3 style
-  ; $4 x
-  ; $5 y
-  ; $6 width
-  ; $7 height
-  FindWindow $1 "#32770" "" $HWNDPARENT ; Find inner dialog
-  System::Call "user32::GetDpiForWindow(p r1) i .r2"
-  ${If} $(^RTL) = 1
-    StrCpy $3 "${__NSD_CheckBox_EXSTYLE} | ${WS_EX_LAYOUTRTL}"
-    IntOp $4 50 * $2
-  ${Else}
-    StrCpy $3 "${__NSD_CheckBox_EXSTYLE}"
-    IntOp $4 0 * $2
+; 1. Choose exactly what this uninstall removes. Silent/passive uninstall and
+;    updater replacement deliberately keep the default app-only choice.
+Var UninstallChoice
+Var UninstallAppOnlyRadio
+Var UninstallScanToolsRadio
+Var UninstallAllDataRadio
+Var UninstallCoordinatorResult
+Var UninstallCoordinatorOutput
+Var UninstallReceiptPath
+Var UninstallPartialOutcome
+Var UninstallPostconditionFailed
+Var UninstallInstallPathRegistration
+Var UninstallInstallPathRegistrationPresent
+Var UninstallInstallerLanguage
+Var UninstallInstallerLanguagePresent
+
+UninstPage custom un.UninstallChoicePage un.UninstallChoiceLeave
+
+Function un.UninstallChoicePage
+  ${If} $PassiveMode = 1
+  ${OrIf} $UpdateMode = 1
+  ${OrIf} ${Silent}
+    Abort
   ${EndIf}
-  IntOp $5 100 * $2
-  IntOp $6 400 * $2
-  IntOp $7 25 * $2
-  IntOp $4 $4 / 96
-  IntOp $5 $5 / 96
-  IntOp $6 $6 / 96
-  IntOp $7 $7 / 96
-  System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(deleteAppData)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
-  Pop $DeleteAppDataCheckbox
-  SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $1
-  SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $1 1
+
+  ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+    !insertmacro MUI_HEADER_TEXT "選擇要移除的內容" "未明確選擇刪除的資料都會保留。"
+  ${Else}
+    !insertmacro MUI_HEADER_TEXT "Choose what to remove" "Anything you do not explicitly choose to delete is preserved."
+  ${EndIf}
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+  ${IfThen} $(^RTL) = 1 ${|} nsDialogs::SetRTL $(^RTL) ${|}
+
+  ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+    ${NSD_CreateRadioButton} 0 4u 100% 14u "僅移除應用程式（預設）"
+    Pop $UninstallAppOnlyRadio
+    ${NSD_CreateLabel} 16u 20u -16u 22u "保留專案、證據、匯出、偏好設定、簽章身分與掃描工具。"
+    Pop $0
+
+    ${NSD_CreateRadioButton} 0 48u 100% 14u "移除應用程式與掃描工具；保留專案"
+    Pop $UninstallScanToolsRadio
+    ${NSD_CreateLabel} 16u 64u -16u 28u "保留專案、證據、匯出、偏好設定與簽章身分；所有權不明的項目會保留。"
+    Pop $0
+
+    ${NSD_CreateRadioButton} 0 98u 100% 14u "移除應用程式與所有 ai-security-scanner 資料"
+    Pop $UninstallAllDataRadio
+    ${NSD_CreateLabel} 16u 114u -16u 28u "下一步再次確認後，永久移除本產品能安全辨識的資料。"
+    Pop $0
+  ${Else}
+    ${NSD_CreateRadioButton} 0 4u 100% 14u "Remove the app only (default)"
+    Pop $UninstallAppOnlyRadio
+    ${NSD_CreateLabel} 16u 20u -16u 22u "Keeps projects, evidence, exports, preferences, signing identity, and scan tools."
+    Pop $0
+
+    ${NSD_CreateRadioButton} 0 48u 100% 14u "Remove the app and scan tools; keep my projects"
+    Pop $UninstallScanToolsRadio
+    ${NSD_CreateLabel} 16u 64u -16u 28u "Keeps projects, evidence, exports, preferences, and signing identity. Ambiguous items are retained."
+    Pop $0
+
+    ${NSD_CreateRadioButton} 0 98u 100% 14u "Remove the app and all ai-security-scanner data"
+    Pop $UninstallAllDataRadio
+    ${NSD_CreateLabel} 16u 114u -16u 28u "Permanently removes data this app can safely identify after one more confirmation."
+    Pop $0
+  ${EndIf}
+
+  ${If} $UninstallChoice == "scan-tools"
+    ${NSD_Check} $UninstallScanToolsRadio
+  ${ElseIf} $UninstallChoice == "all-data"
+    ${NSD_Check} $UninstallAllDataRadio
+  ${Else}
+    ${NSD_Check} $UninstallAppOnlyRadio
+  ${EndIf}
+
+  GetDlgItem $0 $HWNDPARENT 1
+  ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+    SendMessage $0 ${WM_SETTEXT} 0 "STR:解除安裝"
+  ${Else}
+    SendMessage $0 ${WM_SETTEXT} 0 "STR:Uninstall"
+  ${EndIf}
+  nsDialogs::Show
 FunctionEnd
-!define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
-Function un.ConfirmLeave
-  SendMessage $DeleteAppDataCheckbox ${BM_GETCHECK} 0 0 $DeleteAppDataCheckboxState
+
+Function un.UninstallChoiceLeave
+  ${NSD_GetState} $UninstallScanToolsRadio $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $UninstallChoice "scan-tools"
+    Return
+  ${EndIf}
+
+  ${NSD_GetState} $UninstallAllDataRadio $0
+  ${If} $0 == ${BST_CHECKED}
+    ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+      MessageBox MB_ICONSTOP|MB_YESNO|MB_DEFBUTTON2 "這會永久移除專案、證據、匯出、偏好設定、簽章身分，以及本產品能安全辨識的掃描工具，且無法復原。若要先匯出備份，請選擇「否」返回。確定要移除所有 ai-security-scanner 資料嗎？" IDYES un_all_data_confirmed
+    ${Else}
+      MessageBox MB_ICONSTOP|MB_YESNO|MB_DEFBUTTON2 "This permanently removes projects, evidence, exports, preferences, signing identity, and scan tools this app can safely identify. It cannot be undone. Choose No to return and export a backup first. Remove all ai-security-scanner data?" IDYES un_all_data_confirmed
+    ${EndIf}
+    Abort
+    un_all_data_confirmed:
+    StrCpy $UninstallChoice "all-data"
+    Return
+  ${EndIf}
+
+  StrCpy $UninstallChoice "app-only"
 FunctionEnd
-!define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive
-!insertmacro MUI_UNPAGE_CONFIRM
 
 ; 2. Uninstalling Page
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -522,6 +594,35 @@ FunctionEnd
 {{#each language_files}}
   !include "{{this}}"
 {{/each}}
+
+; BEGIN AI SECURITY SCANNER BILINGUAL UNINSTALL STRINGS
+; Product-specific uninstall messages are deliberately available in every
+; configured installer language. Scanner/runtime terminology stays out of the
+; primary choice page; these strings appear only when an operation is partial
+; or cannot safely continue.
+LangString unCoordinatorRecordLabel ${LANG_ENGLISH} "Privacy-safe removal details:"
+LangString unCoordinatorRecordLabel ${LANG_TRADCHINESE} "不含敏感資訊的移除細節："
+LangString unCoordinatorStartFailed ${LANG_ENGLISH} "The app could not prepare removal. Nothing was deleted. Close ai-security-scanner and try again."
+LangString unCoordinatorStartFailed ${LANG_TRADCHINESE} "應用程式無法準備移除，因此尚未刪除任何內容。請關閉 ai-security-scanner 後再試一次。"
+LangString unCoordinatorTimedOut ${LANG_ENGLISH} "Cleanup is taking longer than expected. The app was kept so you can retry safely; some selected cleanup may already be complete."
+LangString unCoordinatorTimedOut ${LANG_TRADCHINESE} "清理時間超出預期。應用程式已保留，您可以安全地重試；部分所選內容可能已經清理完成。"
+LangString unCoordinatorInvalidRecord ${LANG_ENGLISH} "The app could not confirm what was removed, so it kept the app for a safe retry."
+LangString unCoordinatorInvalidRecord ${LANG_TRADCHINESE} "應用程式無法確認已移除的內容，因此保留應用程式，讓您可以安全地重試。"
+LangString unCoordinatorFatal ${LANG_ENGLISH} "The app could not safely finish preparing removal. The app and its data were kept."
+LangString unCoordinatorFatal ${LANG_TRADCHINESE} "應用程式無法安全地完成移除準備，因此應用程式與資料都已保留。"
+LangString unCoordinatorRetained ${LANG_ENGLISH} "Some items could not be safely identified or removed, so they were left untouched. The app will still be removed."
+LangString unCoordinatorRetained ${LANG_TRADCHINESE} "部分項目無法安全辨識或移除，因此保持原狀。應用程式仍會移除。"
+LangString unCoordinatorReceiptSaved ${LANG_ENGLISH} "A short, privacy-safe removal record was saved here:"
+LangString unCoordinatorReceiptSaved ${LANG_TRADCHINESE} "簡短且不含敏感資訊的移除紀錄已儲存於："
+LangString unCoordinatorReceiptFailed ${LANG_ENGLISH} "Windows could not save the short removal record. The same details remain visible above."
+LangString unCoordinatorReceiptFailed ${LANG_TRADCHINESE} "Windows 無法儲存簡短的移除紀錄；上方仍會顯示相同細節。"
+LangString unCoordinatorContactNotStopped ${LANG_ENGLISH} "A scan is still contacting a target. Choose Retry to stop it again, or Cancel to keep the app and data installed."
+LangString unCoordinatorContactNotStopped ${LANG_TRADCHINESE} "掃描仍在連線至目標。請選擇「重試」再次停止掃描，或選擇「取消」保留應用程式與資料。"
+LangString unCoordinatorContactRetained ${LANG_ENGLISH} "The scan could not be stopped. The app and its data were kept."
+LangString unCoordinatorContactRetained ${LANG_TRADCHINESE} "掃描無法停止，因此應用程式與資料都已保留。"
+LangString unPostconditionPartial ${LANG_ENGLISH} "Windows could not remove every app file or registration. Anything it could not confirm was left untouched. Restart Windows, then try uninstalling again."
+LangString unPostconditionPartial ${LANG_TRADCHINESE} "Windows 無法移除所有應用程式檔案或登錄資料。無法確認的內容都保持原狀。請重新啟動 Windows，然後再次解除安裝。"
+; END AI SECURITY SCANNER BILINGUAL UNINSTALL STRINGS
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -832,6 +933,221 @@ Function un.onInit
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
   ${EndIf}
+
+  ; This default is intentionally immune to silent/passive command-line input.
+  ; /UPDATE also forces app-only again inside the coordinator function.
+  StrCpy $UninstallChoice "app-only"
+FunctionEnd
+
+Function un.RunProductUninstallCoordinator
+  ; A future caller cannot turn an updater replacement into data cleanup by
+  ; changing UI state. The CLI accepts no path override for this command.
+  ${If} $UpdateMode = 1
+    StrCpy $UninstallChoice "app-only"
+  ${EndIf}
+
+  un_coordinator_retry:
+  StrCpy $UninstallCoordinatorOutput ""
+  ${If} $UninstallChoice == "scan-tools"
+    nsExec::ExecToStack /TIMEOUT=600000 '"$INSTDIR\ai-security-scanner-cli.exe" --json product-uninstall --mode scan-tools --non-interactive --coordinator-envelope'
+  ${ElseIf} $UninstallChoice == "all-data"
+    nsExec::ExecToStack /TIMEOUT=600000 '"$INSTDIR\ai-security-scanner-cli.exe" --json product-uninstall --mode all-data --non-interactive --confirmation "REMOVE ALL AI-SECURITY-SCANNER DATA" --coordinator-envelope'
+  ${Else}
+    nsExec::ExecToStack /TIMEOUT=600000 '"$INSTDIR\ai-security-scanner-cli.exe" --json product-uninstall --mode app-only --non-interactive --coordinator-envelope'
+  ${EndIf}
+  Pop $0
+  Pop $UninstallCoordinatorOutput
+
+  ${If} $UninstallCoordinatorOutput != ""
+    DetailPrint "$(unCoordinatorRecordLabel) $UninstallCoordinatorOutput"
+  ${EndIf}
+
+  ${If} $0 == "error"
+    DetailPrint "$(unCoordinatorStartFailed)"
+    ${If} $PassiveMode <> 1
+    ${AndIf} $UpdateMode <> 1
+    ${AndIfNot} ${Silent}
+      MessageBox MB_ICONSTOP "$(unCoordinatorStartFailed)"
+    ${EndIf}
+    StrCpy $UninstallCoordinatorResult "fatal"
+    Return
+  ${EndIf}
+
+  ${If} $0 == "timeout"
+    Call un.PersistCoordinatorReceipt
+    DetailPrint "$(unCoordinatorTimedOut)"
+    ${If} $PassiveMode <> 1
+    ${AndIf} $UpdateMode <> 1
+    ${AndIfNot} ${Silent}
+      ${If} $UninstallReceiptPath == ""
+        MessageBox MB_ICONSTOP "$(unCoordinatorTimedOut)"
+      ${Else}
+        MessageBox MB_ICONSTOP "$(unCoordinatorTimedOut)$\r$\n$\r$\n$(unCoordinatorReceiptSaved)$\r$\n$UninstallReceiptPath"
+      ${EndIf}
+    ${EndIf}
+    StrCpy $UninstallCoordinatorResult "fatal"
+    Return
+  ${EndIf}
+
+  ; The helper emits no progress output and exactly one fixed envelope at exit,
+  ; so nsExec's idle timeout is also the operation's outer bound. Accept an exit
+  ; code only when schema, selected mode, result class, embedded exit code, and
+  ; terminal sentinel are all present in that complete bounded envelope.
+  ${StrLoc} $1 $UninstallCoordinatorOutput '"schema_version":"ai-security-scanner.product-uninstall/v1"' ">"
+  ${If} $1 != 1
+    Goto un_coordinator_invalid_record
+  ${EndIf}
+  ${If} $UninstallChoice == "scan-tools"
+    StrCpy $2 '"mode":"scan_tools"'
+  ${ElseIf} $UninstallChoice == "all-data"
+    StrCpy $2 '"mode":"all_data"'
+  ${Else}
+    StrCpy $2 '"mode":"app_only"'
+  ${EndIf}
+  ${StrLoc} $1 $UninstallCoordinatorOutput $2 ">"
+  ${If} $1 == ""
+    Goto un_coordinator_invalid_record
+  ${EndIf}
+  ${StrLoc} $1 $UninstallCoordinatorOutput '"terminal":"complete"}' ">"
+  ${If} $1 == ""
+    Goto un_coordinator_invalid_record
+  ${EndIf}
+  ${If} $0 = 0
+    StrCpy $2 '"result_class":"completed","exit_code":0'
+  ${ElseIf} $0 = 10
+    StrCpy $2 '"result_class":"completed_with_retained_state","exit_code":10'
+  ${ElseIf} $0 = 20
+    StrCpy $2 '"result_class":"contact_not_stopped","exit_code":20'
+  ${Else}
+    Goto un_coordinator_invalid_record
+  ${EndIf}
+  ${StrLoc} $1 $UninstallCoordinatorOutput $2 ">"
+  ${If} $1 == ""
+    Goto un_coordinator_invalid_record
+  ${EndIf}
+  Goto un_coordinator_record_valid
+
+  un_coordinator_invalid_record:
+  Call un.PersistCoordinatorReceipt
+  DetailPrint "$(unCoordinatorInvalidRecord)"
+  ${If} $PassiveMode <> 1
+  ${AndIf} $UpdateMode <> 1
+  ${AndIfNot} ${Silent}
+    MessageBox MB_ICONSTOP "$(unCoordinatorInvalidRecord)"
+  ${EndIf}
+  StrCpy $UninstallCoordinatorResult "fatal"
+  Return
+
+  un_coordinator_record_valid:
+  ${If} $0 = 0
+    StrCpy $UninstallCoordinatorResult "completed"
+    Return
+  ${EndIf}
+
+  ${If} $0 = 10
+    ; The coordinator has already stopped target contact and recorded exact,
+    ; redacted retained-state classes. Ambiguous or failed cleanup is a warning,
+    ; not a reason to delete by a broader heuristic or keep the application installed.
+    Call un.PersistCoordinatorReceipt
+    DetailPrint "$(unCoordinatorRetained)"
+    ${If} $PassiveMode <> 1
+    ${AndIf} $UpdateMode <> 1
+    ${AndIfNot} ${Silent}
+      ${If} $UninstallReceiptPath == ""
+        MessageBox MB_ICONEXCLAMATION "$(unCoordinatorRetained)$\r$\n$\r$\n$(unCoordinatorReceiptFailed)"
+      ${Else}
+        MessageBox MB_ICONEXCLAMATION "$(unCoordinatorRetained)$\r$\n$\r$\n$(unCoordinatorReceiptSaved)$\r$\n$UninstallReceiptPath"
+      ${EndIf}
+    ${EndIf}
+    StrCpy $UninstallCoordinatorResult "retained-warning"
+    Return
+  ${EndIf}
+
+  ${If} $0 = 20
+    ; Exit 20 alone means verified target contact did not stop. Interactive
+    ; users can retry the same bounded coordinator operation without widening
+    ; its scope. Headless callers receive exit 20 and retain all app binaries.
+    ${If} $PassiveMode <> 1
+    ${AndIf} $UpdateMode <> 1
+    ${AndIfNot} ${Silent}
+      MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "$(unCoordinatorContactNotStopped)" IDRETRY un_coordinator_retry
+    ${EndIf}
+    Call un.PersistCoordinatorReceipt
+    DetailPrint "$(unCoordinatorContactRetained)"
+    StrCpy $UninstallCoordinatorResult "contact-not-stopped"
+    Return
+  ${EndIf}
+
+  ; Any other code is a coordinator invocation/contract failure before NSIS
+  ; has permission to remove its controller. Never reinterpret it as a cleanup
+  ; warning and never continue silently.
+  Call un.PersistCoordinatorReceipt
+  DetailPrint "$(unCoordinatorFatal)"
+  ${If} $PassiveMode <> 1
+  ${AndIf} $UpdateMode <> 1
+  ${AndIfNot} ${Silent}
+    ${If} $UninstallReceiptPath == ""
+      MessageBox MB_ICONSTOP "$(unCoordinatorFatal)"
+    ${Else}
+      MessageBox MB_ICONSTOP "$(unCoordinatorFatal)$\r$\n$\r$\n$(unCoordinatorReceiptSaved)$\r$\n$UninstallReceiptPath"
+    ${EndIf}
+  ${EndIf}
+  StrCpy $UninstallCoordinatorResult "fatal"
+FunctionEnd
+
+Function un.PersistCoordinatorReceipt
+  ${If} $UninstallReceiptPath != ""
+    Return
+  ${EndIf}
+  ${If} $UninstallCoordinatorOutput == ""
+    Return
+  ${EndIf}
+
+  ; GetTempFileName atomically creates one installer-owned, unpredictable file
+  ; beneath Windows' temp directory. The CLI never receives this path, and no
+  ; caller can redirect the coordinator to an arbitrary location.
+  ClearErrors
+  GetTempFileName $UninstallReceiptPath $TEMP
+  ${If} ${Errors}
+    StrCpy $UninstallReceiptPath ""
+    DetailPrint "$(unCoordinatorReceiptFailed)"
+    Return
+  ${EndIf}
+  ClearErrors
+  FileOpen $1 "$UninstallReceiptPath" w
+  ${If} ${Errors}
+    Delete "$UninstallReceiptPath"
+    StrCpy $UninstallReceiptPath ""
+    DetailPrint "$(unCoordinatorReceiptFailed)"
+    Return
+  ${EndIf}
+  FileWrite $1 "$UninstallCoordinatorOutput$\r$\n"
+  FileClose $1
+  ${If} ${Errors}
+    Delete "$UninstallReceiptPath"
+    StrCpy $UninstallReceiptPath ""
+    DetailPrint "$(unCoordinatorReceiptFailed)"
+    Return
+  ${EndIf}
+  DetailPrint "$(unCoordinatorReceiptSaved) $UninstallReceiptPath"
+FunctionEnd
+
+Function un.AppendPostconditionReceipt
+  Call un.PersistCoordinatorReceipt
+  ${If} $UninstallReceiptPath == ""
+    Return
+  ${EndIf}
+  ClearErrors
+  FileOpen $1 "$UninstallReceiptPath" a
+  ${If} ${Errors}
+    DetailPrint "$(unCoordinatorReceiptFailed)"
+    Return
+  ${EndIf}
+  FileWrite $1 '{"schema_version":"ai-security-scanner.nsis-uninstall/v1","result":"partial","reason_code":"known_app_or_registration_retained"}$\r$\n'
+  FileClose $1
+  ${If} ${Errors}
+    DetailPrint "$(unCoordinatorReceiptFailed)"
+  ${EndIf}
 FunctionEnd
 
 Section Uninstall
@@ -841,6 +1157,42 @@ Section Uninstall
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+
+  ; BEGIN AI SECURITY SCANNER BOUNDED UNINSTALL DISPATCH
+  ; The fixed bundled CLI stops dispatch/verified target contact and performs
+  ; only the exact selected product cleanup. It runs after app-close handling
+  ; and before NSIS deletes the CLI or any other application binary.
+  Call un.RunProductUninstallCoordinator
+  ${If} $UninstallCoordinatorResult == "contact-not-stopped"
+    SetErrorLevel 20
+    Quit
+  ${ElseIf} $UninstallCoordinatorResult == "fatal"
+    SetErrorLevel 1
+    Quit
+  ${EndIf}
+
+  StrCpy $UninstallPartialOutcome 0
+  ${If} $UninstallCoordinatorResult == "retained-warning"
+  ${AndIf} $UpdateMode <> 1
+    StrCpy $UninstallPartialOutcome 1
+  ${EndIf}
+
+  ; Snapshot the two exact current-user product values before NSIS removes app
+  ; files. /UPDATE must preserve both. App-only and scan-tools remove only the
+  ; default install-path value while preserving the selected installer language.
+  StrCpy $UninstallInstallPathRegistrationPresent 0
+  ClearErrors
+  ReadRegStr $UninstallInstallPathRegistration HKCU "${MANUPRODUCTKEY}" ""
+  ${IfNot} ${Errors}
+    StrCpy $UninstallInstallPathRegistrationPresent 1
+  ${EndIf}
+  StrCpy $UninstallInstallerLanguagePresent 0
+  ClearErrors
+  ReadRegStr $UninstallInstallerLanguage HKCU "${MANUPRODUCTKEY}" "Installer Language"
+  ${IfNot} ${Errors}
+    StrCpy $UninstallInstallerLanguagePresent 1
+  ${EndIf}
+  ; END AI SECURITY SCANNER BOUNDED UNINSTALL DISPATCH
 
   ; Delete the app directory and its content from disk
   ; Copy main executable
@@ -918,31 +1270,140 @@ Section Uninstall
     DeleteRegKey HKCU "${UNINSTKEY}"
   !endif
 
-  ; Removes the Autostart entry for ${PRODUCTNAME} from the HKCU Run key if it exists.
-  ; This ensures the program does not launch automatically after uninstallation if it exists.
-  ; If it doesn't exist, it does nothing.
-  ; We do this when not updating (to preserve the registry value on updates)
+  ; ai-security-scanner does not create a Windows Run entry. Do not delete a
+  ; same-named value that another program or the user may own.
+
+  ; BEGIN AI SECURITY SCANNER EXACT REGISTRATION AND POSTCONDITIONS
+  ; Product data and disposable runtime cleanup is coordinator-owned. NSIS
+  ; never recursively removes an application-data parent or guesses ownership
+  ; from a name. /UPDATE preserves both product values. App-only and scan-tools
+  ; remove the stale exact install-path registration but preserve the selected
+  ; installer language. All-data removes only the exact product key, then the
+  ; exact manufacturer key if it is empty.
   ${If} $UpdateMode <> 1
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+    ${If} $UninstallChoice == "all-data"
+      DeleteRegKey HKCU "${MANUPRODUCTKEY}"
+      DeleteRegKey /ifempty HKCU "${MANUKEY}"
+    ${Else}
+      DeleteRegValue HKCU "${MANUPRODUCTKEY}" ""
+    ${EndIf}
   ${EndIf}
 
-  ; Delete app data if the checkbox is selected
-  ; and if not updating
-  ${If} $DeleteAppDataCheckboxState = 1
-  ${AndIf} $UpdateMode <> 1
-    ; Clear the install location $INSTDIR from registry
-    DeleteRegKey SHCTX "${MANUPRODUCTKEY}"
-    DeleteRegKey /ifempty SHCTX "${MANUKEY}"
-
-    ; Clear the install language from registry
-    DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"
-    DeleteRegKey /ifempty HKCU "${MANUPRODUCTKEY}"
-    DeleteRegKey /ifempty HKCU "${MANUKEY}"
-
-    SetShellVarContext current
-    RmDir /r "$APPDATA\${BUNDLEID}"
-    RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
+  ; Verify the two known app binaries and exact registration postconditions.
+  ; A mismatch becomes an explicit partial result (exit 10); it never widens
+  ; deletion to a parent directory or an ownership guess.
+  StrCpy $UninstallPostconditionFailed 0
+  ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    StrCpy $UninstallPostconditionFailed 1
   ${EndIf}
+  {{#each binaries}}
+  ${If} ${FileExists} "$INSTDIR\\{{this}}"
+    StrCpy $UninstallPostconditionFailed 1
+  ${EndIf}
+  {{/each}}
+  ${If} ${FileExists} "$INSTDIR\uninstall.exe"
+    StrCpy $UninstallPostconditionFailed 1
+  ${EndIf}
+  ClearErrors
+  ReadRegStr $0 HKCU "${UNINSTKEY}" ""
+  ${IfNot} ${Errors}
+    StrCpy $UninstallPostconditionFailed 1
+  ${EndIf}
+  ClearErrors
+  ReadRegStr $0 HKCU "${UNINSTKEY}" "DisplayName"
+  ${IfNot} ${Errors}
+    StrCpy $UninstallPostconditionFailed 1
+  ${EndIf}
+  ClearErrors
+  StrCpy $0 ""
+  EnumRegValue $0 HKCU "${UNINSTKEY}" 0
+  ${If} $0 != ""
+    StrCpy $UninstallPostconditionFailed 1
+  ${EndIf}
+  ClearErrors
+  StrCpy $0 ""
+  EnumRegKey $0 HKCU "${UNINSTKEY}" 0
+  ${If} $0 != ""
+    StrCpy $UninstallPostconditionFailed 1
+  ${EndIf}
+
+  ${If} $UpdateMode = 1
+    ${If} $UninstallInstallPathRegistrationPresent = 1
+      ClearErrors
+      ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" ""
+      ${If} ${Errors}
+        StrCpy $UninstallPostconditionFailed 1
+      ${ElseIf} $0 != $UninstallInstallPathRegistration
+        StrCpy $UninstallPostconditionFailed 1
+      ${EndIf}
+    ${EndIf}
+    ${If} $UninstallInstallerLanguagePresent = 1
+      ClearErrors
+      ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" "Installer Language"
+      ${If} ${Errors}
+        StrCpy $UninstallPostconditionFailed 1
+      ${ElseIf} $0 != $UninstallInstallerLanguage
+        StrCpy $UninstallPostconditionFailed 1
+      ${EndIf}
+    ${EndIf}
+  ${ElseIf} $UninstallChoice == "all-data"
+    ClearErrors
+    ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" ""
+    ${IfNot} ${Errors}
+      StrCpy $UninstallPostconditionFailed 1
+    ${EndIf}
+    ClearErrors
+    ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" "Installer Language"
+    ${IfNot} ${Errors}
+      StrCpy $UninstallPostconditionFailed 1
+    ${EndIf}
+    ClearErrors
+    StrCpy $0 ""
+    EnumRegValue $0 HKCU "${MANUPRODUCTKEY}" 0
+    ${If} $0 != ""
+      StrCpy $UninstallPostconditionFailed 1
+    ${EndIf}
+    ClearErrors
+    StrCpy $0 ""
+    EnumRegKey $0 HKCU "${MANUPRODUCTKEY}" 0
+    ${If} $0 != ""
+      StrCpy $UninstallPostconditionFailed 1
+    ${EndIf}
+  ${Else}
+    ClearErrors
+    ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" ""
+    ${IfNot} ${Errors}
+      StrCpy $UninstallPostconditionFailed 1
+    ${EndIf}
+    ${If} $UninstallInstallerLanguagePresent = 1
+      ClearErrors
+      ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" "Installer Language"
+      ${If} ${Errors}
+        StrCpy $UninstallPostconditionFailed 1
+      ${ElseIf} $0 != $UninstallInstallerLanguage
+        StrCpy $UninstallPostconditionFailed 1
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  ${If} $UninstallPostconditionFailed = 1
+    StrCpy $UninstallPartialOutcome 1
+    Call un.AppendPostconditionReceipt
+    DetailPrint "$(unPostconditionPartial)"
+    ${If} $PassiveMode <> 1
+    ${AndIf} $UpdateMode <> 1
+    ${AndIfNot} ${Silent}
+      ${If} $UninstallReceiptPath == ""
+        MessageBox MB_ICONEXCLAMATION "$(unPostconditionPartial)"
+      ${Else}
+        MessageBox MB_ICONEXCLAMATION "$(unPostconditionPartial)$\r$\n$\r$\n$(unCoordinatorReceiptSaved)$\r$\n$UninstallReceiptPath"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ${If} $UninstallPartialOutcome = 1
+    SetErrorLevel 10
+  ${EndIf}
+  ; END AI SECURITY SCANNER EXACT REGISTRATION AND POSTCONDITIONS
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
     !insertmacro NSIS_HOOK_POSTUNINSTALL

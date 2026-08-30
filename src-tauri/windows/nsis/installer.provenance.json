@@ -6,6 +6,6 @@
   "upstreamPath": "crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   "upstreamUrl": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   "upstreamSha256": "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
-  "patchContract": "ai-security-scanner.version-neutral-product-repair/v1",
-  "vendoredSha256": "9fe2b6711daff2c94d8748ce19ebed221b33a60acca25dcc3f502fd3fdb9bdcb"
+  "patchContract": "ai-security-scanner.version-neutral-repair-and-bounded-uninstall/v3",
+  "vendoredSha256": "ce5b0a2947cf067b571a6dd7f253e622a90bb05134390afc20485eb352b498fb"
 }

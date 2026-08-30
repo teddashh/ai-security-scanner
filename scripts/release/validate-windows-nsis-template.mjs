@@ -19,8 +19,8 @@ const PINNED_UPSTREAM = Object.freeze({
   upstreamUrl:
     "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   upstreamSha256: "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
-  patchContract: "ai-security-scanner.version-neutral-product-repair/v1",
-  vendoredSha256: "9fe2b6711daff2c94d8748ce19ebed221b33a60acca25dcc3f502fd3fdb9bdcb",
+  patchContract: "ai-security-scanner.version-neutral-repair-and-bounded-uninstall/v3",
+  vendoredSha256: "ce5b0a2947cf067b571a6dd7f253e622a90bb05134390afc20485eb352b498fb",
 });
 
 function assert(condition, message) {
@@ -57,6 +57,22 @@ function replaceExactly(source, patched, upstream, expectedCount, label) {
   const actualCount = source.split(patched).length - 1;
   assert(actualCount === expectedCount, `${label} occurs ${actualCount} times instead of ${expectedCount}`);
   return source.replaceAll(patched, upstream);
+}
+
+function replaceBoundedSection(source, startMarker, endMarker, replacement, label) {
+  const start = source.indexOf(startMarker);
+  assert(start !== -1, `vendored NSIS template is missing reviewed section start: ${label}`);
+  assert(
+    source.indexOf(startMarker, start + startMarker.length) === -1,
+    `reviewed NSIS section start is ambiguous: ${label}`,
+  );
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert(end > start, `vendored NSIS template is missing reviewed section end: ${label}`);
+  assert(
+    source.indexOf(endMarker, end + endMarker.length) === -1,
+    `reviewed NSIS section end is ambiguous: ${label}`,
+  );
+  return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
 }
 
 function extractFunction(source, name) {
@@ -99,9 +115,12 @@ function reconstructPinnedUpstream(vendored) {
         "; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
         "; Upstream license: Apache-2.0 OR MIT",
         "; Local patch: version-neutral stale-registration and same-version repair,",
-        "; data-preserving upgrade overlays, and the bounded v0.1.7 runtime transition",
-        "; receipts. The release validator reverses these reviewed hunks and verifies",
-        "; both complete-file SHA-256 values.",
+        "; data-preserving upgrade overlays, the bounded v0.1.7 runtime transition",
+        "; receipts, and a bilingual three-choice uninstall delegated to the fixed",
+        "; product CLI with bounded, visible coordinator records and exact registration",
+        "; postconditions.",
+        "; The release validator reverses these reviewed hunks and verifies both",
+        "; complete-file SHA-256 values.",
         "",
       ]),
       upstream: "",
@@ -222,6 +241,32 @@ function reconstructPinnedUpstream(vendored) {
       ]),
       upstream: "",
     },
+    {
+      label: "uninstall default selection",
+      patched: block([
+        "",
+        "  ; This default is intentionally immune to silent/passive command-line input.",
+        "  ; /UPDATE also forces app-only again inside the coordinator function.",
+        '  StrCpy $UninstallChoice "app-only"',
+      ]),
+      upstream: "",
+    },
+    {
+      label: "do not mutate an unowned Windows Run value",
+      patched: block([
+        "  ; ai-security-scanner does not create a Windows Run entry. Do not delete a",
+        "  ; same-named value that another program or the user may own.",
+      ]),
+      upstream: block([
+        "  ; Removes the Autostart entry for ${PRODUCTNAME} from the HKCU Run key if it exists.",
+        "  ; This ensures the program does not launch automatically after uninstallation if it exists.",
+        "  ; If it doesn't exist, it does nothing.",
+        "  ; We do this when not updating (to preserve the registry value on updates)",
+        "  ${If} $UpdateMode <> 1",
+        '    DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${PRODUCTNAME}"',
+        "  ${EndIf}",
+      ]),
+    },
   ];
 
   for (const rewrite of rewrites) {
@@ -240,7 +285,100 @@ function reconstructPinnedUpstream(vendored) {
     reconstructed,
     "PreserveBoundedV017TransitionForV018Reinstall",
   );
+  reconstructed = removeFunction(reconstructed, "un.RunProductUninstallCoordinator");
+  reconstructed = removeFunction(reconstructed, "un.PersistCoordinatorReceipt");
+  reconstructed = removeFunction(reconstructed, "un.AppendPostconditionReceipt");
   reconstructed = removeFunction(reconstructed, "SkipDirectoryIfRepairOrPassive");
+  reconstructed = replaceBoundedSection(
+    reconstructed,
+    "; BEGIN AI SECURITY SCANNER BILINGUAL UNINSTALL STRINGS\n",
+    "Function .onInit\n",
+    "",
+    "bilingual uninstall strings",
+  );
+  reconstructed = replaceBoundedSection(
+    reconstructed,
+    "  ; BEGIN AI SECURITY SCANNER BOUNDED UNINSTALL DISPATCH\n",
+    "  ; Delete the app directory and its content from disk\n",
+    "",
+    "bounded uninstall dispatch",
+  );
+  reconstructed = replaceBoundedSection(
+    reconstructed,
+    "  ; BEGIN AI SECURITY SCANNER EXACT REGISTRATION AND POSTCONDITIONS\n",
+    "  !ifmacrodef NSIS_HOOK_POSTUNINSTALL\n",
+    block([
+      "  ; Delete app data if the checkbox is selected",
+      "  ; and if not updating",
+      "  ${If} $DeleteAppDataCheckboxState = 1",
+      "  ${AndIf} $UpdateMode <> 1",
+      "    ; Clear the install location $INSTDIR from registry",
+      '    DeleteRegKey SHCTX "${MANUPRODUCTKEY}"',
+      '    DeleteRegKey /ifempty SHCTX "${MANUKEY}"',
+      "",
+      "    ; Clear the install language from registry",
+      '    DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"',
+      '    DeleteRegKey /ifempty HKCU "${MANUPRODUCTKEY}"',
+      '    DeleteRegKey /ifempty HKCU "${MANUKEY}"',
+      "",
+      "    SetShellVarContext current",
+      '    RmDir /r "$APPDATA\\${BUNDLEID}"',
+      '    RmDir /r "$LOCALAPPDATA\\${BUNDLEID}"',
+      "  ${EndIf}",
+      "",
+    ]),
+    "exact registration and postconditions",
+  );
+  reconstructed = replaceBoundedSection(
+    reconstructed,
+    "; Uninstaller Pages\n",
+    "; 2. Uninstalling Page\n",
+    block([
+      "; Uninstaller Pages",
+      "; 1. Confirm uninstall page",
+      "Var DeleteAppDataCheckbox",
+      "Var DeleteAppDataCheckboxState",
+      "!define /ifndef WS_EX_LAYOUTRTL         0x00400000",
+      "!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.ConfirmShow",
+      "Function un.ConfirmShow ; Add add a `Delete app data` check box",
+      "  ; $1 inner dialog HWND",
+      "  ; $2 window DPI",
+      "  ; $3 style",
+      "  ; $4 x",
+      "  ; $5 y",
+      "  ; $6 width",
+      "  ; $7 height",
+      '  FindWindow $1 "#32770" "" $HWNDPARENT ; Find inner dialog',
+      '  System::Call "user32::GetDpiForWindow(p r1) i .r2"',
+      "  ${If} $(^RTL) = 1",
+      '    StrCpy $3 "${__NSD_CheckBox_EXSTYLE} | ${WS_EX_LAYOUTRTL}"',
+      "    IntOp $4 50 * $2",
+      "  ${Else}",
+      '    StrCpy $3 "${__NSD_CheckBox_EXSTYLE}"',
+      "    IntOp $4 0 * $2",
+      "  ${EndIf}",
+      "  IntOp $5 100 * $2",
+      "  IntOp $6 400 * $2",
+      "  IntOp $7 25 * $2",
+      "  IntOp $4 $4 / 96",
+      "  IntOp $5 $5 / 96",
+      "  IntOp $6 $6 / 96",
+      "  IntOp $7 $7 / 96",
+      '  System::Call \'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(deleteAppData)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s\'',
+      "  Pop $DeleteAppDataCheckbox",
+      "  SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $1",
+      "  SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $1 1",
+      "FunctionEnd",
+      "!define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave",
+      "Function un.ConfirmLeave",
+      "  SendMessage $DeleteAppDataCheckbox ${BM_GETCHECK} 0 0 $DeleteAppDataCheckboxState",
+      "FunctionEnd",
+      "!define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive",
+      "!insertmacro MUI_UNPAGE_CONFIRM",
+      "",
+    ]),
+    "three-choice uninstall page",
+  );
   return reconstructed;
 }
 
@@ -250,6 +388,25 @@ function modeledRepairDecision({ exactIdentity, mainBinaryPresent, uninstallerPr
   if (compare === 0) return "same_version_repair";
   if (compare === 1) return "upgrade_overlay";
   return "normal";
+}
+
+function modeledUninstallChoice({ updateMode, passive, silent, selected }) {
+  if (updateMode || passive || silent) return "app-only";
+  return ["app-only", "scan-tools", "all-data"].includes(selected) ? selected : "app-only";
+}
+
+function modeledCoordinatorOutcome({ invocationFailed, exitCode }) {
+  if (invocationFailed) return "fatal";
+  if (exitCode === 0) return "completed";
+  if (exitCode === 10) return "retained-warning";
+  if (exitCode === 20) return "contact-not-stopped";
+  return "fatal";
+}
+
+function modeledRegistrationOutcome({ updateMode, selected }) {
+  if (updateMode) return "preserve-install-path-and-language";
+  if (selected === "all-data") return "remove-exact-product-key";
+  return "remove-install-path-preserve-language";
 }
 
 function validateModeledDecisionTable() {
@@ -269,6 +426,414 @@ function validateModeledDecisionTable() {
       `version-neutral installer decision drifted for ${JSON.stringify(input)}`,
     );
   }
+
+  const uninstallFixtures = [
+    [{ updateMode: false, passive: false, silent: false, selected: "app-only" }, "app-only"],
+    [{ updateMode: false, passive: false, silent: false, selected: "scan-tools" }, "scan-tools"],
+    [{ updateMode: false, passive: false, silent: false, selected: "all-data" }, "all-data"],
+    [{ updateMode: false, passive: false, silent: false, selected: "unexpected" }, "app-only"],
+    [{ updateMode: false, passive: true, silent: false, selected: "all-data" }, "app-only"],
+    [{ updateMode: false, passive: false, silent: true, selected: "all-data" }, "app-only"],
+    [{ updateMode: true, passive: false, silent: false, selected: "all-data" }, "app-only"],
+  ];
+  for (const [input, expected] of uninstallFixtures) {
+    assert(
+      modeledUninstallChoice(input) === expected,
+      `uninstall choice drifted for ${JSON.stringify(input)}`,
+    );
+  }
+
+  const outcomeFixtures = [
+    [{ invocationFailed: false, exitCode: 0 }, "completed"],
+    [{ invocationFailed: false, exitCode: 10 }, "retained-warning"],
+    [{ invocationFailed: false, exitCode: 20 }, "contact-not-stopped"],
+    [{ invocationFailed: false, exitCode: 1 }, "fatal"],
+    [{ invocationFailed: false, exitCode: 30 }, "fatal"],
+    [{ invocationFailed: true, exitCode: 0 }, "fatal"],
+  ];
+  for (const [input, expected] of outcomeFixtures) {
+    assert(
+      modeledCoordinatorOutcome(input) === expected,
+      `uninstall coordinator outcome drifted for ${JSON.stringify(input)}`,
+    );
+  }
+
+  const registrationFixtures = [
+    [{ updateMode: true, selected: "app-only" }, "preserve-install-path-and-language"],
+    [{ updateMode: true, selected: "all-data" }, "preserve-install-path-and-language"],
+    [{ updateMode: false, selected: "app-only" }, "remove-install-path-preserve-language"],
+    [{ updateMode: false, selected: "scan-tools" }, "remove-install-path-preserve-language"],
+    [{ updateMode: false, selected: "all-data" }, "remove-exact-product-key"],
+  ];
+  for (const [input, expected] of registrationFixtures) {
+    assert(
+      modeledRegistrationOutcome(input) === expected,
+      `uninstall registration outcome drifted for ${JSON.stringify(input)}`,
+    );
+  }
+}
+
+function validateProductUninstallPatch(vendored) {
+  assert(
+    vendored.split("UninstPage custom un.UninstallChoicePage un.UninstallChoiceLeave").length === 2,
+    "the three-choice uninstall page is missing or duplicated",
+  );
+  for (const forbidden of [
+    "DeleteAppDataCheckbox",
+    "DeleteAppDataCheckboxState",
+    "$(deleteAppData)",
+    "MUI_UNPAGE_CONFIRM",
+  ]) {
+    assert(!vendored.includes(forbidden), `legacy all-or-nothing uninstall control remains: ${forbidden}`);
+  }
+
+  const page = extractFunction(vendored, "un.UninstallChoicePage").source;
+  assertOrdered(
+    page,
+    [
+      "${If} $PassiveMode = 1",
+      "${OrIf} $UpdateMode = 1",
+      "${OrIf} ${Silent}",
+      "Abort",
+      "nsDialogs::Create 1018",
+      '${If} $UninstallChoice == "scan-tools"',
+      "${NSD_Check} $UninstallScanToolsRadio",
+      '${ElseIf} $UninstallChoice == "all-data"',
+      "${NSD_Check} $UninstallAllDataRadio",
+      "${Else}",
+      "${NSD_Check} $UninstallAppOnlyRadio",
+    ],
+    "uninstall choice page",
+  );
+  assert(
+    page.split("${NSD_CreateRadioButton}").length === 7,
+    "each of the two language paths must expose exactly three uninstall choices",
+  );
+  for (const required of [
+    "Remove the app only (default)",
+    "Remove the app and scan tools; keep my projects",
+    "Remove the app and all ai-security-scanner data",
+    "Keeps projects, evidence, exports, preferences, signing identity, and scan tools.",
+    "Ambiguous items are retained.",
+    "僅移除應用程式（預設）",
+    "移除應用程式與掃描工具；保留專案",
+    "移除應用程式與所有 ai-security-scanner 資料",
+  ]) {
+    assert(page.includes(required), `uninstall choice disclosure is missing: ${required}`);
+  }
+
+  const leave = extractFunction(vendored, "un.UninstallChoiceLeave").source;
+  assertOrdered(
+    leave,
+    [
+      "${NSD_GetState} $UninstallScanToolsRadio $0",
+      'StrCpy $UninstallChoice "scan-tools"',
+      "${NSD_GetState} $UninstallAllDataRadio $0",
+      "MB_ICONSTOP|MB_YESNO|MB_DEFBUTTON2",
+      "IDYES un_all_data_confirmed",
+      "Abort",
+      "un_all_data_confirmed:",
+      'StrCpy $UninstallChoice "all-data"',
+      'StrCpy $UninstallChoice "app-only"',
+    ],
+    "explicit all-data confirmation",
+  );
+  assert(
+    leave.includes("cannot be undone") && leave.includes("export a backup first"),
+    "all-data confirmation does not disclose irreversibility and the backup exit",
+  );
+  assert(
+    leave.includes("無法復原") && leave.includes("先匯出備份"),
+    "Traditional Chinese all-data confirmation does not disclose irreversibility and backup",
+  );
+
+  const uninit = extractFunction(vendored, "un.onInit").source;
+  assertOrdered(
+    uninit,
+    [
+      '${GetOptions} $CMDLINE "/P" $PassiveMode',
+      '${GetOptions} $CMDLINE "/UPDATE" $UpdateMode',
+      'StrCpy $UninstallChoice "app-only"',
+    ],
+    "uninstall default selection",
+  );
+  assert(
+    !/\$\{GetOptions\}\s+\$CMDLINE\s+"\/(?:MODE|SCAN-TOOLS|ALL-DATA|DATA-DIR)\b/iu.test(uninit) &&
+      !uninit.includes("${GetParameters}"),
+    "uninstaller accepts a command-line cleanup selection instead of defaulting headless use to app-only",
+  );
+
+  const coordinator = extractFunction(vendored, "un.RunProductUninstallCoordinator").source;
+  const appOnlyCommand =
+    'nsExec::ExecToStack /TIMEOUT=600000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json product-uninstall --mode app-only --non-interactive --coordinator-envelope\'';
+  const scanToolsCommand =
+    'nsExec::ExecToStack /TIMEOUT=600000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json product-uninstall --mode scan-tools --non-interactive --coordinator-envelope\'';
+  const allDataCommand =
+    'nsExec::ExecToStack /TIMEOUT=600000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json product-uninstall --mode all-data --non-interactive --confirmation "REMOVE ALL AI-SECURITY-SCANNER DATA" --coordinator-envelope\'';
+  assertOrdered(
+    coordinator,
+    [
+      "${If} $UpdateMode = 1",
+      'StrCpy $UninstallChoice "app-only"',
+      "un_coordinator_retry:",
+      '${If} $UninstallChoice == "scan-tools"',
+      scanToolsCommand,
+      '${ElseIf} $UninstallChoice == "all-data"',
+      allDataCommand,
+      "${Else}",
+      appOnlyCommand,
+      "Pop $0",
+      "Pop $UninstallCoordinatorOutput",
+      'DetailPrint "$(unCoordinatorRecordLabel) $UninstallCoordinatorOutput"',
+      '${If} $0 == "error"',
+      'StrCpy $UninstallCoordinatorResult "fatal"',
+      '${If} $0 == "timeout"',
+      "Call un.PersistCoordinatorReceipt",
+      'StrCpy $UninstallCoordinatorResult "fatal"',
+      '${StrLoc} $1 $UninstallCoordinatorOutput \'"schema_version":"ai-security-scanner.product-uninstall/v1"\' ">"',
+      'StrCpy $2 \'"mode":"scan_tools"\'',
+      'StrCpy $2 \'"mode":"all_data"\'',
+      'StrCpy $2 \'"mode":"app_only"\'',
+      '${StrLoc} $1 $UninstallCoordinatorOutput \'"terminal":"complete"}\' ">"',
+      'StrCpy $2 \'"result_class":"completed","exit_code":0\'',
+      'StrCpy $2 \'"result_class":"completed_with_retained_state","exit_code":10\'',
+      'StrCpy $2 \'"result_class":"contact_not_stopped","exit_code":20\'',
+      "un_coordinator_invalid_record:",
+      'StrCpy $UninstallCoordinatorResult "fatal"',
+      "un_coordinator_record_valid:",
+      "${If} $0 = 0",
+      'StrCpy $UninstallCoordinatorResult "completed"',
+      "${If} $0 = 10",
+      'StrCpy $UninstallCoordinatorResult "retained-warning"',
+      "${If} $0 = 20",
+      "IDRETRY un_coordinator_retry",
+      'StrCpy $UninstallCoordinatorResult "contact-not-stopped"',
+      'StrCpy $UninstallCoordinatorResult "fatal"',
+    ],
+    "fixed product-uninstall coordinator",
+  );
+  for (const command of [appOnlyCommand, scanToolsCommand, allDataCommand]) {
+    assert(
+      coordinator.split(command).length === 2,
+      `fixed product-uninstall command is missing or duplicated: ${command}`,
+    );
+  }
+  assert(
+    !coordinator.includes("ExecWait") &&
+      coordinator.split("nsExec::ExecToStack /TIMEOUT=600000").length === 4 &&
+      coordinator.split("--coordinator-envelope").length === 4,
+    "uninstall coordinator is not limited to the three bounded stdout-capturing CLI forms",
+  );
+  assert(
+    coordinator.includes("exactly one fixed envelope at exit") &&
+      coordinator.includes('"terminal":"complete"}') &&
+      coordinator.includes('"result_class":"completed","exit_code":0') &&
+      coordinator.includes('"result_class":"completed_with_retained_state","exit_code":10') &&
+      coordinator.includes('"result_class":"contact_not_stopped","exit_code":20'),
+    "uninstall coordinator does not validate one complete mode/result/exit envelope",
+  );
+  assert(
+    coordinator.split('--confirmation "REMOVE ALL AI-SECURITY-SCANNER DATA"').length === 2,
+    "all-data confirmation token is missing, duplicated, or passed to another mode",
+  );
+  for (const forbidden of [
+    "--data-dir",
+    "--path",
+    "--runtime",
+    "--distro",
+    "$APPDATA",
+    "$LOCALAPPDATA",
+    "--unregister",
+  ]) {
+    assert(!coordinator.includes(forbidden), `coordinator accepts or derives an unreviewed target: ${forbidden}`);
+  }
+
+  const receipt = extractFunction(vendored, "un.PersistCoordinatorReceipt").source;
+  assertOrdered(
+    receipt,
+    [
+      '${If} $UninstallReceiptPath != ""',
+      '${If} $UninstallCoordinatorOutput == ""',
+      "GetTempFileName $UninstallReceiptPath $TEMP",
+      'FileOpen $1 "$UninstallReceiptPath" w',
+      'FileWrite $1 "$UninstallCoordinatorOutput$\\r$\\n"',
+      "FileClose $1",
+      'DetailPrint "$(unCoordinatorReceiptSaved) $UninstallReceiptPath"',
+    ],
+    "bounded unique uninstall receipt",
+  );
+  for (const forbidden of ["$APPDATA", "$LOCALAPPDATA", "$INSTDIR", "--output", "--receipt"] ) {
+    assert(!receipt.includes(forbidden), `uninstall receipt derives an unsafe or caller-selected path: ${forbidden}`);
+  }
+  assert(
+    receipt.split("GetTempFileName $UninstallReceiptPath $TEMP").length === 2 &&
+      receipt.split('FileOpen $1 "$UninstallReceiptPath" w').length === 2,
+    "uninstall receipt is not one unique Windows-temp file",
+  );
+
+  const postconditionReceipt = extractFunction(
+    vendored,
+    "un.AppendPostconditionReceipt",
+  ).source;
+  assertOrdered(
+    postconditionReceipt,
+    [
+      "Call un.PersistCoordinatorReceipt",
+      'FileOpen $1 "$UninstallReceiptPath" a',
+      '"result":"partial"',
+      '"reason_code":"known_app_or_registration_retained"',
+      "FileClose $1",
+    ],
+    "truthful NSIS postcondition receipt",
+  );
+
+  const localizedMessageIds = [
+    "unCoordinatorRecordLabel",
+    "unCoordinatorStartFailed",
+    "unCoordinatorTimedOut",
+    "unCoordinatorInvalidRecord",
+    "unCoordinatorFatal",
+    "unCoordinatorRetained",
+    "unCoordinatorReceiptSaved",
+    "unCoordinatorReceiptFailed",
+    "unCoordinatorContactNotStopped",
+    "unCoordinatorContactRetained",
+    "unPostconditionPartial",
+  ];
+  for (const id of localizedMessageIds) {
+    assert(
+      vendored.split(`LangString ${id} ${"${LANG_ENGLISH}"}`).length === 2 &&
+        vendored.split(`LangString ${id} ${"${LANG_TRADCHINESE}"}`).length === 2,
+      `uninstall message is not defined exactly once in English and Traditional Chinese: ${id}`,
+    );
+  }
+  for (const [label, source] of [
+    ["coordinator", coordinator],
+    ["receipt", receipt],
+  ]) {
+    for (const line of source.split("\n").filter((candidate) => /^\s*(?:DetailPrint|MessageBox)\b/u.test(candidate))) {
+      assert(line.includes("$("), `${label} has a non-localized uninstall message: ${line.trim()}`);
+    }
+  }
+
+  const sectionStart = vendored.indexOf("Section Uninstall\n");
+  const sectionEnd = vendored.indexOf("SectionEnd\n", sectionStart);
+  assert(sectionStart !== -1 && sectionEnd > sectionStart, "Uninstall section is missing");
+  const section = vendored.slice(sectionStart, sectionEnd);
+  const exactRegistrationStart = section.indexOf(
+    "  ; BEGIN AI SECURITY SCANNER EXACT REGISTRATION AND POSTCONDITIONS\n",
+  );
+  const exactRegistrationEnd = section.indexOf(
+    "  ; END AI SECURITY SCANNER EXACT REGISTRATION AND POSTCONDITIONS\n",
+    exactRegistrationStart,
+  );
+  assert(
+    exactRegistrationStart !== -1 && exactRegistrationEnd > exactRegistrationStart,
+    "exact registration and postcondition block is missing",
+  );
+  const exactRegistration = section.slice(exactRegistrationStart, exactRegistrationEnd);
+  for (const line of section.split("\n").filter((candidate) => /^\s*(?:DetailPrint|MessageBox)\b/u.test(candidate))) {
+    assert(line.includes("$("), `uninstall section has a non-localized message: ${line.trim()}`);
+  }
+  assertOrdered(
+    section,
+    [
+      '!insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"',
+      "Call un.RunProductUninstallCoordinator",
+      '${If} $UninstallCoordinatorResult == "contact-not-stopped"',
+      "SetErrorLevel 20",
+      "Quit",
+      '${ElseIf} $UninstallCoordinatorResult == "fatal"',
+      "SetErrorLevel 1",
+      "Quit",
+      "StrCpy $UninstallPartialOutcome 0",
+      '${If} $UninstallCoordinatorResult == "retained-warning"',
+      '${AndIf} $UpdateMode <> 1',
+      "StrCpy $UninstallPartialOutcome 1",
+      'ReadRegStr $UninstallInstallPathRegistration HKCU "${MANUPRODUCTKEY}" ""',
+      'ReadRegStr $UninstallInstallerLanguage HKCU "${MANUPRODUCTKEY}" "Installer Language"',
+      'Delete "$INSTDIR\\${MAINBINARYNAME}.exe"',
+      "; Delete external binaries",
+      "{{#each binaries}}",
+      'Delete "$INSTDIR\\\\{{this}}"',
+      'DeleteRegKey HKCU "${UNINSTKEY}"',
+      '${If} $UpdateMode <> 1',
+      '${If} $UninstallChoice == "all-data"',
+      'DeleteRegKey HKCU "${MANUPRODUCTKEY}"',
+      'DeleteRegKey /ifempty HKCU "${MANUKEY}"',
+      "${Else}",
+      'DeleteRegValue HKCU "${MANUPRODUCTKEY}" ""',
+      '${If} ${FileExists} "$INSTDIR\\${MAINBINARYNAME}.exe"',
+      "{{#each binaries}}",
+      '${If} ${FileExists} "$INSTDIR\\\\{{this}}"',
+      "{{/each}}",
+      '${If} ${FileExists} "$INSTDIR\\uninstall.exe"',
+      'EnumRegValue $0 HKCU "${UNINSTKEY}" 0',
+      'EnumRegKey $0 HKCU "${UNINSTKEY}" 0',
+      '${ElseIf} $UninstallChoice == "all-data"',
+      'EnumRegValue $0 HKCU "${MANUPRODUCTKEY}" 0',
+      'EnumRegKey $0 HKCU "${MANUPRODUCTKEY}" 0',
+      '${If} $UninstallPostconditionFailed = 1',
+      "Call un.AppendPostconditionReceipt",
+      'DetailPrint "$(unPostconditionPartial)"',
+      '${If} $UninstallPartialOutcome = 1',
+      "SetErrorLevel 10",
+    ],
+    "bounded coordinator before application deletion",
+  );
+  assert(
+    section.split("Call un.RunProductUninstallCoordinator").length === 2,
+    "uninstall invokes the coordinator more or less than once",
+  );
+  for (const forbidden of [
+    "RmDir /r",
+    "RMDir /r",
+    "$APPDATA\\${BUNDLEID}",
+    "$LOCALAPPDATA\\${BUNDLEID}",
+    "DeleteAppData",
+  ]) {
+    assert(!section.includes(forbidden), `NSIS still performs broad product-data cleanup: ${forbidden}`);
+  }
+  assert(section.split('DeleteRegValue HKCU "${MANUPRODUCTKEY}" ""').length === 2,
+    "app-only/scan-tools do not remove exactly one install-path registration");
+  assert(section.split('DeleteRegKey HKCU "${MANUPRODUCTKEY}"').length === 2,
+    "all-data does not remove exactly one exact product registration key");
+  assert(section.split('DeleteRegKey /ifempty HKCU "${MANUKEY}"').length === 2,
+    "all-data does not remove exactly one exact empty manufacturer key");
+  assert(!section.includes('DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"'),
+    "app-only or scan-tools can delete the preserved installer language");
+  assert(
+    !section.includes('DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run"'),
+    "uninstaller still deletes a name-only Windows Run value that the product does not create",
+  );
+  assert(
+    section.includes("/UPDATE preserves both product values.") &&
+      section.includes("App-only and scan-tools") &&
+      section.includes("All-data removes only the exact product key"),
+    "mode-specific exact registration behavior is no longer explicit",
+  );
+  assertOrdered(
+    exactRegistration,
+    [
+      '${If} $UpdateMode <> 1',
+      '${If} $UninstallChoice == "all-data"',
+      'DeleteRegKey HKCU "${MANUPRODUCTKEY}"',
+      'DeleteRegKey /ifempty HKCU "${MANUKEY}"',
+      "${Else}",
+      'DeleteRegValue HKCU "${MANUPRODUCTKEY}" ""',
+      'EnumRegValue $0 HKCU "${UNINSTKEY}" 0',
+      'EnumRegKey $0 HKCU "${UNINSTKEY}" 0',
+      '${ElseIf} $UninstallChoice == "all-data"',
+      'EnumRegValue $0 HKCU "${MANUPRODUCTKEY}" 0',
+      'EnumRegKey $0 HKCU "${MANUPRODUCTKEY}" 0',
+      '${If} $UninstallPostconditionFailed = 1',
+      "Call un.AppendPostconditionReceipt",
+      'DetailPrint "$(unPostconditionPartial)"',
+      '${If} $UninstallPartialOutcome = 1',
+      "SetErrorLevel 10",
+    ],
+    "mode-specific exact registration and postconditions",
+  );
 }
 
 function validateProductRepairPatch(vendored) {
@@ -464,6 +1029,119 @@ function validateMutationGuards(vendored) {
     rejected = true;
   }
   assert(rejected, "NSIS repair validator accepted execution of the old uninstaller");
+
+  for (const [before, after, label] of [
+    [
+      '  StrCpy $UninstallChoice "app-only"\nFunctionEnd\n\nFunction un.RunProductUninstallCoordinator',
+      '  StrCpy $UninstallChoice "all-data"\nFunctionEnd\n\nFunction un.RunProductUninstallCoordinator',
+      "headless default changed from app-only",
+    ],
+    [
+      '--mode all-data --non-interactive --confirmation "REMOVE ALL AI-SECURITY-SCANNER DATA"',
+      "--mode all-data --non-interactive",
+      "all-data confirmation token removed",
+    ],
+    [
+      "--mode scan-tools --non-interactive --coordinator-envelope'",
+      "--mode scan-tools --non-interactive --data-dir $LOCALAPPDATA --coordinator-envelope'",
+      "user-data path added to coordinator",
+    ],
+    [
+      'nsExec::ExecToStack /TIMEOUT=600000 \'"$INSTDIR\\ai-security-scanner-cli.exe" --json product-uninstall --mode app-only --non-interactive --coordinator-envelope\'',
+      'nsExec::ExecToStack \'"$INSTDIR\\ai-security-scanner-cli.exe" --json product-uninstall --mode app-only --non-interactive --coordinator-envelope\'',
+      "outer uninstall coordinator timeout removed",
+    ],
+    [
+      '  ${StrLoc} $1 $UninstallCoordinatorOutput \'"terminal":"complete"}\' ">"\n',
+      "",
+      "complete coordinator-envelope sentinel removed",
+    ],
+    [
+      "  Pop $UninstallCoordinatorOutput\n",
+      "",
+      "captured coordinator output discarded",
+    ],
+    [
+      "  GetTempFileName $UninstallReceiptPath $TEMP\n",
+      '  StrCpy $UninstallReceiptPath "$LOCALAPPDATA\\uninstall.json"\n',
+      "unique Windows-temp receipt replaced with a fixed data path",
+    ],
+    [
+      '    StrCpy $UninstallCoordinatorResult "retained-warning"\n',
+      '    StrCpy $UninstallCoordinatorResult "fatal"\n',
+      "retained cleanup warning changed into a global block",
+    ],
+    [
+      '  ${If} $UninstallCoordinatorResult == "contact-not-stopped"\n',
+      '  ${If} $UninstallCoordinatorResult == "retained-warning"\n',
+      "cleanup warning changed into a binary-deletion block",
+    ],
+    [
+      "  ; Product data and disposable runtime cleanup is coordinator-owned. NSIS\n",
+      '  RmDir /r "$LOCALAPPDATA\\${BUNDLEID}"\n  ; Product data and disposable runtime cleanup is coordinator-owned. NSIS\n',
+      "broad application-data recursion restored",
+    ],
+    [
+      '  ${If} $UpdateMode <> 1\n    ${If} $UninstallChoice == "all-data"\n',
+      '  ${If} $UpdateMode = 1\n    ${If} $UninstallChoice == "all-data"\n',
+      "updater registration preservation inverted",
+    ],
+    [
+      '      DeleteRegValue HKCU "${MANUPRODUCTKEY}" ""\n',
+      '      DeleteRegValue HKCU "${MANUPRODUCTKEY}" "Installer Language"\n',
+      "app-only deletes installer language instead of install path",
+    ],
+    [
+      '      DeleteRegKey HKCU "${MANUPRODUCTKEY}"\n',
+      '      DeleteRegKey HKCU "${MANUKEY}"\n',
+      "all-data broadens exact product registration deletion",
+    ],
+    [
+      '  EnumRegValue $0 HKCU "${UNINSTKEY}" 0\n',
+      "",
+      "uninstall registration value postcondition removed",
+    ],
+    [
+      '    EnumRegKey $0 HKCU "${MANUPRODUCTKEY}" 0\n',
+      "",
+      "all-data product registration subkey postcondition removed",
+    ],
+    [
+      '  ${If} ${FileExists} "$INSTDIR\\uninstall.exe"\n',
+      "",
+      "uninstaller binary postcondition removed",
+    ],
+    [
+      "    SetErrorLevel 10\n",
+      "",
+      "partial uninstall no longer returns nonzero",
+    ],
+    [
+      'LangString unPostconditionPartial ${LANG_TRADCHINESE} "Windows 無法移除所有應用程式檔案或登錄資料。無法確認的內容都保持原狀。請重新啟動 Windows，然後再次解除安裝。"\n',
+      "",
+      "Traditional Chinese partial-outcome message removed",
+    ],
+    [
+      "若要先匯出備份，請選擇「否」返回。",
+      "請選擇「否」返回。",
+      "Traditional Chinese all-data backup wording removed",
+    ],
+  ]) {
+    const first = vendored.indexOf(before);
+    assert(first !== -1, `uninstall mutation fixture is missing: ${label}`);
+    assert(
+      vendored.indexOf(before, first + before.length) === -1,
+      `uninstall mutation fixture is ambiguous: ${label}`,
+    );
+    const mutated = `${vendored.slice(0, first)}${after}${vendored.slice(first + before.length)}`;
+    let uninstallRejected = false;
+    try {
+      validateProductUninstallPatch(mutated);
+    } catch {
+      uninstallRejected = true;
+    }
+    assert(uninstallRejected, `NSIS uninstall validator accepted mutation: ${label}`);
+  }
 }
 
 export async function validateWindowsNsisTemplate() {
@@ -488,6 +1166,15 @@ export async function validateWindowsNsisTemplate() {
     "version-neutral NSIS repair requires the explicit current-user install mode",
   );
   assert(
+    JSON.stringify(tauri.bundle?.windows?.nsis?.languages) ===
+      JSON.stringify(["English", "TradChinese"]),
+    "NSIS must build exactly the reachable English and Traditional Chinese language paths",
+  );
+  assert(
+    tauri.bundle?.windows?.nsis?.displayLanguageSelector === true,
+    "NSIS must expose the configured English and Traditional Chinese language selector",
+  );
+  assert(
     packageLock.packages?.["node_modules/@tauri-apps/cli"]?.version === "2.11.4",
     "reviewed NSIS template is not paired with the pinned Tauri CLI 2.11.4",
   );
@@ -505,6 +1192,7 @@ export async function validateWindowsNsisTemplate() {
   }
   validateModeledDecisionTable();
   validateProductRepairPatch(vendored);
+  validateProductUninstallPatch(vendored);
   validateMutationGuards(vendored);
   const reconstructed = reconstructPinnedUpstream(vendored);
   assert(
@@ -512,7 +1200,7 @@ export async function validateWindowsNsisTemplate() {
     "reversing the reviewed patch does not reconstruct the pinned upstream template",
   );
   process.stdout.write(
-    `Validated version-neutral NSIS repair against ${provenance.upstreamTag} (${provenance.upstreamCommit})\n`,
+    `Source-validated version-neutral NSIS repair, bilingual bounded uninstall, and exact postconditions against ${provenance.upstreamTag} (${provenance.upstreamCommit}); this is not Windows installer qualification\n`,
   );
 }
 
