@@ -75,7 +75,7 @@ Use redacted diagnostics only. Explain:
 
 1. what stopped;
 2. which asset and engine were affected;
-3. whether the outcome is partial, failed, cancelled, or not executed;
+3. whether the user-visible outcome is partial, failed, cancelled, or not tested;
 4. what coverage remains unknown;
 5. the safest supported next action.
 
@@ -83,7 +83,7 @@ Do not paste raw evidence, tokens, provider caches, container environment, or ta
 
 ## Inspect and clean up
 
-Inspect the product's cleanup plan before any mutation. List containers, temporary files, capability expiry, provider identities, sessions, keys, role assignments, and unresolved obligations using the product CLI. Do not add a second confirmation for cleanup already authorized by Start, Cancel, automatic Repair, or an explicit cleanup request. Ask for explicit confirmation only before deleting cases/evidence, purging all product data, acting on ambiguous or unrelated state, or widening target/activity scope. Exact verified product-owned disposable cleanup uses the bounded product command and reports retained state.
+Inspect the product's cleanup plan before any mutation. List containers, temporary files, capability expiry, provider identities, sessions, keys, role assignments, and unresolved obligations using the product CLI. Do not add a second confirmation for cleanup already authorized by Start, Cancel, automatic Repair, or an explicit cleanup request. Ask for explicit confirmation only before deleting cases/evidence, purging all product data, or widening target/activity scope. Confirmation never turns ambiguous or unrelated state into product-owned state: preserve it unchanged and continue with a new isolated product-owned workspace. Exact verified product-owned disposable cleanup uses the bounded product command and reports retained state.
 
 Use `ai-security-scanner-cli runtime cleanup-plan --case-id CASE_ID --run-id RUN_ID`, then, when the user's instruction already authorizes that exact cleanup or the confirmation required above has been obtained, run `runtime cleanup --case-id CASE_ID --run-id RUN_ID --confirm-run-id RUN_ID`. This reconciles the exact recorded runtime container first and its exact managed network second. If either step fails, the durable obligation must remain visible.
 

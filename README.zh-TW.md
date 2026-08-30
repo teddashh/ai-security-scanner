@@ -71,7 +71,7 @@ npm run dev
 
 ## 開發者與技術資訊
 
-[正式產品規格](docs/product-spec.md) 是預期產品行為唯一的真相來源；[產品審計](docs/product-audit.md) 記錄目前實作仍有差異的地方。其他技術文件都是下位的實作參考資料。
+[正式產品規格](docs/product-spec.md) 是預期產品行為唯一的真相來源；[產品審計](docs/product-audit.md) 是綁定特定 commit 的基準審計與實作順序，不是第二份規格，也不是即時狀態面板。其他技術文件都是下位的實作參考資料。
 
 ### 本機開發
 
@@ -126,7 +126,7 @@ src-tauri/                   Rust/Tauri 本機案件服務與命令列介面
 engines/catalog.json         有版本的掃描引擎登錄表
 mappings/                    有版本的框架對照資料
 docs/product-spec.md         正式產品行為規格
-docs/product-audit.md        現有實作差距與證據
+docs/product-audit.md        基準審計與實作順序
 ```
 
 ### 授權

@@ -8,11 +8,11 @@ Normative status: this catalog is subordinate to the [canonical product specific
 
 This document explains the v0.2.0 planned engine set and records supporting repositories named in the product design. The machine-readable [`engines/catalog.json`](../engines/catalog.json) is authoritative for an engine's exact source revision, image digest, integration status, runnable state, blockers, provider applicability, knowledge window, and license disposition. It is not authoritative for product-wide readiness: this prose never upgrades a non-runnable entry, proves publication, or turns that entry into a gate for sibling engines and the beginner master report.
 
-Required-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting an earlier release decision.
+Cataloged-engine license identifiers and dispositions summarize the exact pinned artifacts recorded by the catalog and engine plans. Research-only identifiers were observed from upstream repository metadata on 2026-08-24 and still require evaluation before use. Every different source revision, dependency set, plugin, rule, template, feed, database, or image requires a new disposition rather than inheriting an earlier release decision.
 
 ## 1. Catalog states
 
-- **Required:** the v0.2.0 plan intends to support this engine or engine family through the full case lifecycle. This planning label does not make its availability a global product or release gate.
+- **Planned:** the v0.2.0 plan intends to support this engine or engine family through the full case lifecycle. This planning label does not make its availability a global product or release gate.
 - **Integrated and runnable:** the catalog records `status: integrated`, `compatibility.runnable: true`, no blockers, an exact `sha256:` artifact digest, and a completed `allow` or `source_offer` disposition. Validation rejects execution/distribution of an exact entry that lacks those conditions; the product may still ship with an explicit support matrix and that task reports `not_tested` while independent work continues.
 - **ALLOW:** the engineering plan records `allow` for the exact project-managed artifact with its license texts, notices, and dependency obligations; this is not blanket legal advice.
 - **SOURCE_OFFER:** the engineering plan records copyleft corresponding-source material and a source-offer path for the exact project-managed artifact.
@@ -55,9 +55,9 @@ SHA-256 values in the packaging plan; they are not native Prowler 5.39.1 behavio
 engine in this release acquires Azure or GCP coverage from Prowler's support: CloudQuery, Steampipe,
 ScoutSuite, and Cloudsplaining remain explicitly AWS-only.
 
-## 2. Required engine families
+## 2. Catalog engine families
 
-Every planned Required entry is admitted independently through the same manifest, pinned-artifact, runtime-policy, adapter, raw-output retention, canonical normalization, coverage-event, export-provenance, re-verification, and release-disposition contract. The final column below is a readable packaging summary; the current catalog record wins only for that engine's artifact facts if source and prose differ. The canonical product specification still controls user outcomes and release acceptance.
+Each planned catalog entry is admitted independently through the same manifest, pinned-artifact, runtime-policy, adapter, raw-output retention, canonical normalization, coverage-event, export-provenance, re-verification, and release-disposition contract. The final column below is a readable packaging summary; the current catalog record wins only for that engine's artifact facts if source and prose differ. The canonical product specification still controls user outcomes and release acceptance.
 
 | Domain | Engine / repository | Pinned license record | v0.2.0 integration mode | Required authorization and boundary | Release disposition |
 |---|---|---|---|---|---|

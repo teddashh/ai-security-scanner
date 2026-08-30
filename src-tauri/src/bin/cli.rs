@@ -1497,24 +1497,6 @@ fn execute_scan(
             )?;
         }
         ScanCommand::Start(args) => {
-            let case = service.show_case(&args.case_id)?;
-            let run = case
-                .scan_runs
-                .iter()
-                .find(|run| run.id == args.run_id)
-                .ok_or_else(|| {
-                    AppError::InvalidRequest(format!("scan run not found: {}", args.run_id))
-                })?;
-            if run
-                .engine_runs
-                .iter()
-                .all(|engine_run| engine_run.status == EngineRunStatus::NotExecuted)
-            {
-                return Err(AppError::NotAvailable(
-                    "every engine in this run is not_executed; inspect engine readiness and create a new plan after the catalog is release-approved"
-                        .into(),
-                ));
-            }
             return Err(out_of_process_scan_control_error(
                 "start",
                 &args.case_id,

@@ -71,7 +71,7 @@ Only scan systems you own or are authorized to assess. The app records the exact
 
 ## Developer and technical information
 
-The [canonical product specification](docs/product-spec.md) is the sole source of truth for intended product behavior. The [product audit](docs/product-audit.md) records where the current implementation still differs. Other technical documents are subordinate implementation references.
+The [canonical product specification](docs/product-spec.md) is the sole source of truth for intended product behavior. The [product audit](docs/product-audit.md) is a commit-pinned baseline audit and implementation sequence, not a second specification or a live status dashboard. Other technical documents are subordinate implementation references.
 
 ### Local development
 
@@ -126,7 +126,7 @@ src-tauri/                   Rust/Tauri local case service and CLI
 engines/catalog.json         Versioned engine registry
 mappings/                    Versioned framework mappings
 docs/product-spec.md         Canonical product behavior
-docs/product-audit.md        Current implementation gaps and evidence
+docs/product-audit.md        Baseline audit and implementation sequence
 ```
 
 ### License

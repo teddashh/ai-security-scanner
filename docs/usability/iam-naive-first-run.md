@@ -75,7 +75,7 @@ The checked-in evidence schema still uses the following legacy stable IDs. They 
 8. `prepare_handoff` — preview/export the master report and identify a reasonable next helper/action.
 9. `inspect_cleanup` — understand what access remains, disconnect when offered, and leave unrelated projects/results intact. It is not a task to clean up WSL or runtime internals.
 
-For the unconfigured variant, record the successful IT handoff and return to another scan as observations, and mark dependent AWS tasks `blocked`; never mark them completed merely because no scan could start. The current schema cannot call that a passing AWS scan. A future feature-scoped schema may represent a separate handoff-only pass without changing the universal product gate.
+For the unconfigured variant, record the successful IT handoff and return to another scan as observations. Mark the feature-study step `blocked`, while recording every corresponding product scan task as `not_tested` (or `failed`/`timed_out` only when it actually reached that outcome); never mark either layer completed merely because no scan could start. The current schema cannot call that a passing AWS scan. A future feature-scoped schema may represent a separate handoff-only pass without changing the universal product gate.
 
 Seeing or operating WSL, Podman, a gateway, engine manifests, runtime ownership, or Repair diagnostics is a critical UX observation; it is never a required participant task.
 

@@ -26,7 +26,7 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 
 `ALLOW`, `SOURCE_OFFER`, and `SOURCE_ARCHIVE` apply only to the exact recorded artifact and are engineering dispositions rather than legal advice. `UPSTREAM_PINNED` is not a blanket permission or a statement that the artifact is inside the desktop installer. `MANUAL`, `RESEARCH`, `ARCHIVED`, and `NOT_DISTRIBUTED` never imply release approval.
 
-## Required product engine inventory
+## Catalog engine inventory
 
 | Component | Official source | Pinned license record | Current relationship | Disposition |
 |---|---|---|---|---|
