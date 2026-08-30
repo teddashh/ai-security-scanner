@@ -9,7 +9,10 @@ use crate::adapters::{
     FINGERPRINT_SCHEMA_VERSION, control_mapping_provenance, control_mapping_version,
     is_mapping_independent_empty_json_lines, is_runtime_stream_capture_path,
 };
-use crate::artifact_store::inspect_raw_artifacts;
+use crate::artifact_store::{
+    ArtifactContext, LauncherV2OutputArtifact, classify_launcher_v2_output_artifact,
+    inspect_raw_artifacts, read_verified_raw_artifact,
+};
 use crate::beginner_report::{
     BeginnerReportSummary, ReportLifecycle, build_beginner_master_report,
 };
@@ -32,12 +35,17 @@ use crate::domain::{
     DistributionMode, EngineKnowledgeInput, EngineManifest, EngineRun, EngineRunStatus,
     EngineTaskKind, Finding, FindingDiffStatus, FindingGroup, FindingGroupAction,
     FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id,
-    MAX_NAABU_ATTEMPT_REQUESTS, ManifestStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
-    NaabuAttemptRequest, OrganizationProfile, RawArtifact, ScanPermission, ScanRequestOutcome,
-    ScanRequestOutcomeCode, ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind,
-    VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
+    MAX_NAABU_ATTEMPT_REQUESTS, MAX_NAABU_ATTEMPT_RESULTS, ManifestStatus,
+    NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NaabuAttemptRequest, NaabuAttemptResult,
+    OrganizationProfile, RawArtifact, ScanPermission, ScanRequestOutcome, ScanRequestOutcomeCode,
+    ScanRun, ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
+    valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
+use crate::execution_coverage::{
+    HostObservedFinalArtifact, MAX_JOURNAL_BYTES, RequestedWorkUnit, parse_launcher_v2_journal,
+    reduce_naabu_attempt_coverage,
+};
 use crate::export::{
     BundleVerification, ExportOptions, INTEGRITY_ONLY_NOTICE, case_for_export, create_case_bundle,
     verify_case_bundle_against,
@@ -1931,11 +1939,21 @@ impl<'a> CaseService<'a> {
             }
             if !plan_was_missing {
                 validate_naabu_attempt_history(plan, &engine_run.naabu_attempt_requests)?;
-            } else if !engine_run.naabu_attempt_requests.is_empty() {
+            } else if !engine_run.naabu_attempt_requests.is_empty()
+                || !engine_run.naabu_attempt_results.is_empty()
+            {
                 return Err(AppError::Conflict(
                     "Naabu attempt history exists without its immutable work plan".into(),
                 ));
             }
+            let cumulative = reduce_naabu_attempt_coverage(
+                plan,
+                &engine_run.naabu_attempt_requests,
+                &engine_run.naabu_attempt_results,
+            )
+            .map_err(|error| {
+                AppError::Conflict(format!("saved Naabu attempt history is invalid: {error}"))
+            })?;
 
             if engine_status_terminal(&engine_run.status) {
                 return Err(AppError::NotAuthorized(
@@ -1972,6 +1990,17 @@ impl<'a> CaseService<'a> {
             }
 
             validate_naabu_attempt_request(plan, request)?;
+            if let Some(completed_unit_id) = request.requested_unit_ids.iter().find(|unit_id| {
+                cumulative
+                    .tested_complete_unit_ids
+                    .contains(unit_id.as_str())
+            }) {
+                return Err(AppError::Conflict(format!(
+                    "Naabu attempt {} requests already tested-complete work unit {completed_unit_id}",
+                    request.execution_attempt
+                )));
+            }
+
             if engine_run.naabu_attempt_requests.len() >= MAX_NAABU_ATTEMPT_REQUESTS {
                 return Err(AppError::Conflict(format!(
                     "Naabu attempt history reached its {MAX_NAABU_ATTEMPT_REQUESTS}-entry bound"
@@ -1983,6 +2012,18 @@ impl<'a> CaseService<'a> {
                 engine_run,
                 request.execution_attempt,
             )?;
+            let mut candidate_requests = engine_run.naabu_attempt_requests.clone();
+            candidate_requests.push(request.clone());
+            reduce_naabu_attempt_coverage(
+                plan,
+                &candidate_requests,
+                &engine_run.naabu_attempt_results,
+            )
+            .map_err(|error| {
+                AppError::Conflict(format!(
+                    "Naabu attempt request conflicts with cumulative tested coverage: {error}"
+                ))
+            })?;
         }
 
         let engine_run = &mut case.scan_runs[run_index].engine_runs[engine_index];
@@ -1993,6 +2034,178 @@ impl<'a> CaseService<'a> {
         case.touch();
         self.storage
             .save_case(&mut case, "execution.naabu_attempt_requested")?;
+        Ok(case)
+    }
+
+    /// Persists one exact launcher-v2 journal result after binding its typed
+    /// coverage back to the actual no-follow verified journal bytes and every
+    /// captured final artifact. Result payloads are append-only. The only
+    /// permitted mutation is a false-to-true normalization promotion after
+    /// the exact same journal coverage is presented again.
+    pub fn persist_naabu_attempt_result(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        engine_run_id: &str,
+        result: &NaabuAttemptResult,
+    ) -> AppResult<AssessmentCase> {
+        retry_case_revision_conflicts(|| {
+            self.persist_naabu_attempt_result_once(case_id, scan_run_id, engine_run_id, result)
+        })
+    }
+
+    fn persist_naabu_attempt_result_once(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        engine_run_id: &str,
+        result: &NaabuAttemptResult,
+    ) -> AppResult<AssessmentCase> {
+        let mut case = self.mutable_case(case_id, "persist a Naabu attempt result")?;
+        let run_index = case
+            .scan_runs
+            .iter()
+            .position(|run| run.id == scan_run_id)
+            .ok_or_else(|| AppError::InvalidRequest("scan run not found".into()))?;
+        let engine_index = case.scan_runs[run_index]
+            .engine_runs
+            .iter()
+            .position(|engine_run| engine_run.id == engine_run_id)
+            .ok_or_else(|| AppError::InvalidRequest("engine run not found".into()))?;
+
+        let (candidate_results, event, exact_replay) = {
+            let run = &case.scan_runs[run_index];
+            let engine_run = &run.engine_runs[engine_index];
+            if run.case_id != case_id
+                || engine_run.scan_run_id != scan_run_id
+                || engine_run.engine_id != NAABU_ENGINE_ID
+                || !matches!(engine_run.task_kind, EngineTaskKind::CatalogEngine)
+            {
+                return Err(AppError::NotAuthorized(
+                    "Naabu attempt result does not belong to the persisted Naabu execution".into(),
+                ));
+            }
+            let plan = engine_run.naabu_work_plan.as_ref().ok_or_else(|| {
+                AppError::Conflict("Naabu attempt result has no immutable saved work plan".into())
+            })?;
+            if plan.identity.case_id != case_id
+                || plan.identity.scan_run_id != scan_run_id
+                || plan.identity.engine_run_id != engine_run_id
+                || plan.identity.engine_id != NAABU_ENGINE_ID
+            {
+                return Err(AppError::Conflict(
+                    "saved Naabu work plan does not match its persisted execution".into(),
+                ));
+            }
+            plan.validate().map_err(|error| {
+                AppError::Conflict(format!("saved Naabu work plan is invalid: {error}"))
+            })?;
+            validate_naabu_plan_membership(case_id, run, engine_run, plan)?;
+            validate_naabu_attempt_history(plan, &engine_run.naabu_attempt_requests)?;
+            reduce_naabu_attempt_coverage(
+                plan,
+                &engine_run.naabu_attempt_requests,
+                &engine_run.naabu_attempt_results,
+            )
+            .map_err(|error| {
+                AppError::Conflict(format!(
+                    "saved Naabu attempt-result history is invalid: {error}"
+                ))
+            })?;
+
+            let mut candidate = engine_run.naabu_attempt_results.clone();
+            let mut event = "execution.naabu_attempt_result_persisted";
+            let mut exact_replay = false;
+            if let Some(index) = candidate
+                .iter()
+                .position(|saved| saved.execution_attempt == result.execution_attempt)
+            {
+                let saved = &candidate[index];
+                if !same_naabu_attempt_result_payload(saved, result) {
+                    return Err(AppError::Conflict(format!(
+                        "Naabu attempt {} already has a different immutable result",
+                        result.execution_attempt
+                    )));
+                }
+                match (saved.normalization_complete, result.normalization_complete) {
+                    (false, true) => {
+                        candidate[index].normalization_complete = true;
+                        event = "execution.naabu_attempt_normalization_completed";
+                    }
+                    (true, false) => {
+                        return Err(AppError::Conflict(format!(
+                            "Naabu attempt {} normalization cannot regress",
+                            result.execution_attempt
+                        )));
+                    }
+                    _ => exact_replay = true,
+                }
+            } else {
+                if candidate.len() >= MAX_NAABU_ATTEMPT_RESULTS {
+                    return Err(AppError::Conflict(format!(
+                        "Naabu attempt-result history reached its {MAX_NAABU_ATTEMPT_RESULTS}-entry bound"
+                    )));
+                }
+                let request_index = engine_run
+                    .naabu_attempt_requests
+                    .iter()
+                    .position(|request| request.execution_attempt == result.execution_attempt)
+                    .ok_or_else(|| {
+                        AppError::NotAuthorized(
+                            "Naabu attempt result has no matching immutable attempt request".into(),
+                        )
+                    })?;
+                reduce_naabu_attempt_coverage(
+                    plan,
+                    &engine_run.naabu_attempt_requests[..=request_index],
+                    std::slice::from_ref(result),
+                )
+                .map_err(|error| {
+                    AppError::InvalidRequest(format!(
+                        "Naabu attempt result is invalid for its immutable request: {error}"
+                    ))
+                })?;
+                candidate.push(result.clone());
+            }
+
+            reduce_naabu_attempt_coverage(plan, &engine_run.naabu_attempt_requests, &candidate)
+                .map_err(|error| {
+                    AppError::Conflict(format!(
+                        "Naabu attempt result conflicts with its immutable history: {error}"
+                    ))
+                })?;
+            (candidate, event, exact_replay)
+        };
+
+        if exact_replay {
+            return Ok(case);
+        }
+        {
+            let run = &case.scan_runs[run_index];
+            let engine_run = &run.engine_runs[engine_index];
+            let plan = engine_run
+                .naabu_work_plan
+                .as_ref()
+                .expect("validated Naabu result persistence has an immutable plan");
+            let request = engine_run
+                .naabu_attempt_requests
+                .iter()
+                .find(|request| request.execution_attempt == result.execution_attempt)
+                .expect("validated Naabu result persistence has an exact request");
+            validate_naabu_attempt_result_provenance(
+                &self.artifact_root,
+                &case,
+                run,
+                engine_run,
+                plan,
+                request,
+                result,
+            )?;
+        }
+        case.scan_runs[run_index].engine_runs[engine_index].naabu_attempt_results =
+            candidate_results;
+        case.touch();
+        self.storage.save_case(&mut case, event)?;
         Ok(case)
     }
 
@@ -3564,7 +3777,11 @@ impl<'a> CaseService<'a> {
                     continue;
                 }
                 let validation = match engine_run.naabu_work_plan.as_ref() {
-                    None if engine_run.naabu_attempt_requests.is_empty() => continue,
+                    None if engine_run.naabu_attempt_requests.is_empty()
+                        && engine_run.naabu_attempt_results.is_empty() =>
+                    {
+                        continue;
+                    }
                     None => Err(AppError::InvalidRequest(
                         "saved Naabu attempt history has no adjacent immutable work plan".into(),
                     )),
@@ -3585,6 +3802,19 @@ impl<'a> CaseService<'a> {
                         })
                         .and_then(|()| {
                             validate_naabu_attempt_history(plan, &engine_run.naabu_attempt_requests)
+                        })
+                        .and_then(|()| {
+                            reduce_naabu_attempt_coverage(
+                                plan,
+                                &engine_run.naabu_attempt_requests,
+                                &engine_run.naabu_attempt_results,
+                            )
+                            .map(|_| ())
+                            .map_err(|error| {
+                                AppError::InvalidRequest(format!(
+                                    "saved Naabu attempt-result history is invalid: {error}"
+                                ))
+                            })
                         })
                         .and_then(|()| {
                             validate_saved_naabu_checkpoint_binding(&case, run, engine_run)
@@ -6691,7 +6921,10 @@ fn validate_naabu_report_attempt_binding(
             AppError::InvalidRequest("Naabu execution report has no engine run".into())
         })?;
 
-    if !engine_run.naabu_attempt_requests.is_empty() && engine_run.naabu_work_plan.is_none() {
+    if (!engine_run.naabu_attempt_requests.is_empty()
+        || !engine_run.naabu_attempt_results.is_empty())
+        && engine_run.naabu_work_plan.is_none()
+    {
         return Err(AppError::Conflict(
             "Naabu attempt history has no adjacent immutable work plan".into(),
         ));
@@ -6702,6 +6935,16 @@ fn validate_naabu_report_attempt_binding(
         })?;
         validate_naabu_plan_membership(&case.id, run, engine_run, plan)?;
         validate_naabu_attempt_history(plan, &engine_run.naabu_attempt_requests)?;
+        reduce_naabu_attempt_coverage(
+            plan,
+            &engine_run.naabu_attempt_requests,
+            &engine_run.naabu_attempt_results,
+        )
+        .map_err(|error| {
+            AppError::Conflict(format!(
+                "saved Naabu attempt-result history is invalid: {error}"
+            ))
+        })?;
     }
     let matching = engine_run
         .naabu_attempt_requests
@@ -7476,13 +7719,237 @@ fn validate_naabu_attempt_history(
     Ok(())
 }
 
+fn same_naabu_attempt_result_payload(
+    saved: &NaabuAttemptResult,
+    incoming: &NaabuAttemptResult,
+) -> bool {
+    saved.schema_version == incoming.schema_version
+        && saved.execution_attempt == incoming.execution_attempt
+        && saved.journal_raw_artifact_id == incoming.journal_raw_artifact_id
+        && saved.coverage == incoming.coverage
+}
+
+fn validate_naabu_attempt_result_provenance(
+    artifact_root: &Path,
+    case: &AssessmentCase,
+    run: &ScanRun,
+    engine_run: &EngineRun,
+    plan: &NaabuWorkPlanV1,
+    request: &NaabuAttemptRequest,
+    result: &NaabuAttemptResult,
+) -> AppResult<()> {
+    let engine_artifact_ids = engine_run
+        .raw_artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if engine_artifact_ids.len() != engine_run.raw_artifact_ids.len() {
+        return Err(AppError::Conflict(
+            "saved Naabu raw-artifact membership contains duplicate IDs".into(),
+        ));
+    }
+    let mut engine_artifacts_by_id = BTreeMap::<&str, &RawArtifact>::new();
+    for artifact in &case.raw_artifacts {
+        if engine_artifact_ids.contains(artifact.id.as_str())
+            && engine_artifacts_by_id
+                .insert(artifact.id.as_str(), artifact)
+                .is_some()
+        {
+            return Err(AppError::Conflict(format!(
+                "saved Naabu raw-artifact membership ID {} is ambiguous",
+                artifact.id
+            )));
+        }
+    }
+    for artifact_id in &engine_artifact_ids {
+        let artifact = engine_artifacts_by_id.get(artifact_id).ok_or_else(|| {
+            AppError::Conflict(format!(
+                "saved Naabu raw-artifact membership refers to missing artifact {artifact_id}"
+            ))
+        })?;
+        if artifact.case_id != case.id
+            || artifact.run_id != run.id
+            || artifact.engine_run_id != engine_run.id
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "saved Naabu raw artifact {artifact_id} does not belong to its exact case, run, and engine run"
+            )));
+        }
+    }
+    let referenced_artifact_ids = std::iter::once(result.journal_raw_artifact_id.as_str())
+        .chain(
+            result
+                .coverage
+                .validated_artifact_bindings
+                .iter()
+                .map(|binding| binding.raw_artifact_id.as_str()),
+        )
+        .chain(
+            result
+                .coverage
+                .unreferenced_final_artifacts
+                .iter()
+                .map(|artifact| artifact.raw_artifact_id.as_str()),
+        )
+        .collect::<BTreeSet<_>>();
+    for artifact_id in &referenced_artifact_ids {
+        if !engine_artifact_ids.contains(artifact_id) {
+            return Err(AppError::NotAuthorized(format!(
+                "Naabu attempt result artifact {artifact_id} is absent from its engine-run membership"
+            )));
+        }
+    }
+    let context = ArtifactContext {
+        case_id: case.id.clone(),
+        scan_run_id: run.id.clone(),
+        engine_run_id: engine_run.id.clone(),
+    };
+    let mut journal = None::<&RawArtifact>;
+    let mut final_artifacts = Vec::<RawArtifact>::new();
+    let mut observed_finals = Vec::<HostObservedFinalArtifact>::new();
+    let mut final_ordinal_by_path = BTreeMap::<String, usize>::new();
+    for artifact in &case.raw_artifacts {
+        if !engine_artifact_ids.contains(artifact.id.as_str())
+            && matches!(
+                classify_launcher_v2_output_artifact(&context, result.execution_attempt, artifact),
+                LauncherV2OutputArtifact::Journal { .. } | LauncherV2OutputArtifact::Final { .. }
+            )
+        {
+            return Err(AppError::Conflict(format!(
+                "Naabu attempt {} has a published journal or final artifact outside engine-run membership",
+                result.execution_attempt
+            )));
+        }
+    }
+    for artifact in engine_artifacts_by_id.values().copied() {
+        match classify_launcher_v2_output_artifact(&context, result.execution_attempt, artifact) {
+            LauncherV2OutputArtifact::Journal { .. } => {
+                if journal.replace(artifact).is_some() {
+                    return Err(AppError::Conflict(format!(
+                        "Naabu attempt {} has more than one durable launcher journal",
+                        result.execution_attempt
+                    )));
+                }
+            }
+            LauncherV2OutputArtifact::Final {
+                output_relative_path,
+                unit_ordinal,
+                ..
+            } => {
+                let unit_ordinal = usize::try_from(unit_ordinal).map_err(|_| {
+                    AppError::NotAuthorized(
+                        "Naabu final-artifact ordinal cannot be represented on this host".into(),
+                    )
+                })?;
+                if unit_ordinal >= request.requested_unit_ids.len() {
+                    return Err(AppError::NotAuthorized(format!(
+                        "Naabu final artifact {} is outside the exact requested work-unit order",
+                        artifact.id
+                    )));
+                }
+                if final_ordinal_by_path
+                    .insert(output_relative_path.to_owned(), unit_ordinal)
+                    .is_some()
+                {
+                    return Err(AppError::Conflict(
+                        "Naabu attempt has duplicate durable final-artifact paths".into(),
+                    ));
+                }
+                final_artifacts.push(artifact.clone());
+                observed_finals.push(HostObservedFinalArtifact {
+                    raw_artifact_id: artifact.id.clone(),
+                    relative_path: output_relative_path.to_owned(),
+                    sha256: artifact.sha256.clone(),
+                    byte_length: artifact.byte_length,
+                });
+            }
+            LauncherV2OutputArtifact::Quarantine { .. } | LauncherV2OutputArtifact::Other => {}
+        }
+    }
+    let journal = journal.ok_or_else(|| {
+        AppError::NotAuthorized(format!(
+            "Naabu attempt {} has no exact durable launcher journal",
+            result.execution_attempt
+        ))
+    })?;
+    if journal.id != result.journal_raw_artifact_id {
+        return Err(AppError::NotAuthorized(
+            "Naabu attempt result does not identify its exact durable launcher journal".into(),
+        ));
+    }
+
+    for binding in &result.coverage.validated_artifact_bindings {
+        let unit_ordinal = final_ordinal_by_path
+            .get(&binding.identity.relative_path)
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "Naabu validated binding has no exact captured final-artifact path".into(),
+                )
+            })?;
+        if request.requested_unit_ids.get(*unit_ordinal) != Some(&binding.identity.unit_id) {
+            return Err(AppError::NotAuthorized(
+                "Naabu final-artifact ordinal does not match its exact requested work unit".into(),
+            ));
+        }
+    }
+
+    inspect_raw_artifacts(artifact_root, &final_artifacts)?;
+    let journal_bytes = read_verified_raw_artifact(
+        artifact_root,
+        journal,
+        u64::try_from(MAX_JOURNAL_BYTES).expect("journal bound fits u64"),
+    )?;
+    let plan_units = plan
+        .work_units
+        .iter()
+        .map(|unit| (unit.unit_id.as_str(), unit.scope_sha256.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let requested = request
+        .requested_unit_ids
+        .iter()
+        .map(|unit_id| {
+            let scope_sha256 = plan_units.get(unit_id.as_str()).ok_or_else(|| {
+                AppError::Conflict(
+                    "saved Naabu attempt request refers to a unit outside its immutable plan"
+                        .into(),
+                )
+            })?;
+            Ok(RequestedWorkUnit {
+                unit_id: unit_id.clone(),
+                scope_sha256: (*scope_sha256).to_owned(),
+            })
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let parsed = parse_launcher_v2_journal(
+        &journal_bytes,
+        &engine_run.id,
+        request.execution_attempt,
+        &requested,
+        &observed_finals,
+    )
+    .map_err(|error| {
+        AppError::NotAuthorized(format!(
+            "durable Naabu launcher journal does not validate against its exact saved request and artifacts: {error}"
+        ))
+    })?;
+    if parsed != result.coverage {
+        return Err(AppError::NotAuthorized(
+            "Naabu attempt coverage does not exactly match the verified launcher journal bytes"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_saved_naabu_checkpoint_binding(
     case: &AssessmentCase,
     run: &ScanRun,
     engine_run: &EngineRun,
 ) -> AppResult<()> {
     let Some(token) = engine_run.resume_token.as_deref() else {
-        if engine_run.naabu_attempt_requests.is_empty() {
+        if engine_run.naabu_attempt_requests.is_empty()
+            && engine_run.naabu_attempt_results.is_empty()
+        {
             return Ok(());
         }
         return Err(AppError::Conflict(
@@ -9115,8 +9582,9 @@ mod tests {
         AssessmentActivity, AssetIdentifier, AssetKind, Confidence, CoverageStatus, DataClass,
         EngineCategory, EngineCompatibility, EngineExecutionContract, EngineExecutionResources,
         Evidence, EvidenceKind, FindingStatus, ImageReference, ManifestStatus,
-        ProviderExecutionContract, Severity,
+        NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, ProviderExecutionContract, Severity,
     };
+    use crate::execution_coverage::{FinalArtifactIdentity, IncompleteReason, WorkUnitOutcome};
     use crate::export::RedactionProfile;
     use crate::external_scope::{ResolvedExternalPlan, freeze_external_plan};
     use crate::naabu_work_plan::{NaabuWorkPlanIdentity, build_naabu_work_plan};
@@ -9486,6 +9954,738 @@ mod tests {
         }
     }
 
+    struct PreparedNaabuAttemptResult {
+        case_id: String,
+        scan_run_id: String,
+        engine_run_id: String,
+        plan: NaabuWorkPlanV1,
+        request: NaabuAttemptRequest,
+        result: NaabuAttemptResult,
+    }
+
+    fn prepared_naabu_attempt_result(
+        fixture: &Fixture,
+        outcome: WorkUnitOutcome,
+        normalization_complete: bool,
+    ) -> PreparedNaabuAttemptResult {
+        assert!(matches!(
+            outcome,
+            WorkUnitOutcome::TestedComplete | WorkUnitOutcome::TestedPartial
+        ));
+        let (case_id, scan_plan, _, plan) = prepared_naabu_work_plan(fixture);
+        let execution = scan_plan.executable.first().unwrap();
+        let unit = plan.work_units.first().unwrap();
+        let request = naabu_attempt_request(&plan, 1, vec![unit.unit_id.clone()]);
+        fixture
+            .service()
+            .persist_naabu_attempt_request(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                &plan,
+                &request,
+            )
+            .unwrap();
+
+        let final_bytes = b"{\"port\":9001}\n";
+        let final_relative = "launcher-v2/units/unit-000000/attempt-1.jsonl";
+        let final_identity = FinalArtifactIdentity {
+            engine_run_id: execution.engine_run_id.clone(),
+            unit_id: unit.unit_id.clone(),
+            scope_sha256: unit.scope_sha256.clone(),
+            attempt: 1,
+            relative_path: final_relative.into(),
+            sha256: sha256_bytes(final_bytes),
+            byte_length: final_bytes.len() as u64,
+        };
+        let requested = vec![RequestedWorkUnit {
+            unit_id: unit.unit_id.clone(),
+            scope_sha256: unit.scope_sha256.clone(),
+        }];
+        let mut journal = serde_json::to_vec(&serde_json::json!({
+            "record_type": "header",
+            "schema_version": 2,
+            "engine_run_id": execution.engine_run_id,
+            "execution_attempt": 1,
+            "requested_work_units": requested,
+        }))
+        .unwrap();
+        journal.push(b'\n');
+        journal.extend_from_slice(
+            &serde_json::to_vec(&serde_json::json!({
+                "record_type": "attempt_finished",
+                "unit_id": unit.unit_id,
+                "scope_sha256": unit.scope_sha256,
+                "attempt": 1,
+                "outcome": outcome,
+                "incomplete_reason": (outcome == WorkUnitOutcome::TestedPartial)
+                    .then_some(IncompleteReason::Failed),
+                "final_artifact": final_identity,
+            }))
+            .unwrap(),
+        );
+        journal.push(b'\n');
+
+        let artifact_prefix = format!(
+            "{}/{}/{}/attempt-1/output",
+            case_id, execution.scan_run_id, execution.engine_run_id
+        );
+        let journal_raw = RawArtifact {
+            id: "raw-naabu-journal-1".into(),
+            case_id: case_id.clone(),
+            run_id: execution.scan_run_id.clone(),
+            engine_run_id: execution.engine_run_id.clone(),
+            relative_path: format!("{artifact_prefix}/launcher-v2/journal.jsonl"),
+            media_type: "application/x-ndjson".into(),
+            sha256: sha256_bytes(&journal),
+            byte_length: journal.len() as u64,
+            created_at: Utc::now(),
+            contains_sensitive_data: true,
+        };
+        let final_raw = RawArtifact {
+            id: "raw-naabu-final-1".into(),
+            case_id: case_id.clone(),
+            run_id: execution.scan_run_id.clone(),
+            engine_run_id: execution.engine_run_id.clone(),
+            relative_path: format!("{artifact_prefix}/{final_relative}"),
+            media_type: "application/x-ndjson".into(),
+            sha256: sha256_bytes(final_bytes),
+            byte_length: final_bytes.len() as u64,
+            created_at: Utc::now(),
+            contains_sensitive_data: true,
+        };
+        let artifact_root = fixture.directory.path().join("artifacts");
+        for (artifact, bytes) in [
+            (&journal_raw, journal.as_slice()),
+            (&final_raw, final_bytes.as_slice()),
+        ] {
+            let path = artifact_root.join(&artifact.relative_path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let observed = vec![HostObservedFinalArtifact {
+            raw_artifact_id: final_raw.id.clone(),
+            relative_path: final_relative.into(),
+            sha256: final_raw.sha256.clone(),
+            byte_length: final_raw.byte_length,
+        }];
+        let coverage =
+            parse_launcher_v2_journal(&journal, &execution.engine_run_id, 1, &requested, &observed)
+                .unwrap();
+        let result = NaabuAttemptResult {
+            schema_version: NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
+            execution_attempt: 1,
+            journal_raw_artifact_id: journal_raw.id.clone(),
+            coverage,
+            normalization_complete,
+        };
+
+        let mut case = fixture.service().show_case(&case_id).unwrap();
+        case.raw_artifacts.push(journal_raw);
+        case.raw_artifacts.push(final_raw);
+        let engine_run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == execution.scan_run_id)
+            .unwrap()
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap();
+        engine_run.raw_artifact_ids =
+            vec!["raw-naabu-final-1".into(), "raw-naabu-journal-1".into()];
+        fixture
+            .storage
+            .save_case(&mut case, "test.naabu_launcher_v2_artifacts")
+            .unwrap();
+
+        PreparedNaabuAttemptResult {
+            case_id,
+            scan_run_id: execution.scan_run_id.clone(),
+            engine_run_id: execution.engine_run_id.clone(),
+            plan,
+            request,
+            result,
+        }
+    }
+
+    fn mark_naabu_attempt_clean_for_retry(
+        fixture: &Fixture,
+        prepared: &PreparedNaabuAttemptResult,
+    ) {
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        let engine_run = case
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == prepared.scan_run_id)
+            .unwrap()
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == prepared.engine_run_id)
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.stage = ExecutionStage::Failed;
+        checkpoint.cleanup_completed = true;
+        checkpoint.last_error = Some("attempt stopped after exact cleanup".into());
+        engine_run.status = EngineRunStatus::Queued;
+        engine_run.phase = "queued_for_resume".into();
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        fixture
+            .storage
+            .save_case(&mut case, "test.naabu_attempt_clean_for_retry")
+            .unwrap();
+    }
+
+    #[test]
+    fn naabu_attempt_result_appends_reopens_replays_and_promotes_once() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        let service = fixture.service();
+        let before = service.show_case(&prepared.case_id).unwrap();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+
+        let appended = service
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .unwrap();
+        assert_eq!(appended.storage_revision, before.storage_revision + 1);
+        assert_eq!(
+            appended.scan_runs[0].engine_runs[0].naabu_attempt_results,
+            [prepared.result.clone()]
+        );
+        let append_events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
+        assert_eq!(append_events.len(), events_before + 1);
+        assert_eq!(
+            append_events.last().unwrap().event_type,
+            "execution.naabu_attempt_result_persisted"
+        );
+        let append_revision = appended.storage_revision;
+
+        let replayed = service
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .expect("exact result replay");
+        assert_eq!(replayed.storage_revision, append_revision);
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            append_events.len()
+        );
+
+        let mut mutated = prepared.result.clone();
+        mutated.coverage.recovered_trailing_record = !mutated.coverage.recovered_trailing_record;
+        assert!(matches!(
+            service.persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &mutated,
+            ),
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(
+            service
+                .show_case(&prepared.case_id)
+                .unwrap()
+                .storage_revision,
+            append_revision
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            append_events.len()
+        );
+
+        let mut promoted_result = prepared.result.clone();
+        promoted_result.normalization_complete = true;
+        fixture.storage.inject_save_case_faults(
+            "execution.naabu_attempt_normalization_completed",
+            1,
+            crate::storage::SaveCaseFault::Storage,
+        );
+        assert!(matches!(
+            service.persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &promoted_result,
+            ),
+            Err(AppError::Storage(_))
+        ));
+        let unpromoted = service.show_case(&prepared.case_id).unwrap();
+        assert_eq!(unpromoted.storage_revision, append_revision);
+        assert!(
+            !unpromoted.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            append_events.len()
+        );
+        let promoted = service
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &promoted_result,
+            )
+            .unwrap();
+        assert_eq!(promoted.storage_revision, append_revision + 1);
+        assert!(
+            promoted.scan_runs[0].engine_runs[0].naabu_attempt_results[0].normalization_complete
+        );
+        let promoted_events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
+        assert_eq!(promoted_events.len(), append_events.len() + 1);
+        assert_eq!(
+            promoted_events.last().unwrap().event_type,
+            "execution.naabu_attempt_normalization_completed"
+        );
+
+        let retained_revision = promoted.storage_revision;
+        assert!(matches!(
+            service.persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            ),
+            Err(AppError::Conflict(_))
+        ));
+        let retained = service.show_case(&prepared.case_id).unwrap();
+        assert_eq!(retained.storage_revision, retained_revision);
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            promoted_events.len()
+        );
+    }
+
+    #[test]
+    fn naabu_attempt_result_rejects_coverage_not_emitted_by_real_journal() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        let service = fixture.service();
+        let before = service.show_case(&prepared.case_id).unwrap();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+        let mut forged = prepared.result.clone();
+        forged.coverage.recovered_trailing_record = !forged.coverage.recovered_trailing_record;
+
+        assert!(matches!(
+            service.persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &forged,
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+        let retained = service.show_case(&prepared.case_id).unwrap();
+        assert_eq!(retained.storage_revision, before.storage_revision);
+        assert!(
+            retained.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .is_empty()
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events_before
+        );
+
+        let mut unrequested = prepared.result.clone();
+        unrequested.execution_attempt = 2;
+        assert!(matches!(
+            service.persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &unrequested,
+            ),
+            Err(AppError::NotAuthorized(_))
+        ));
+        assert_eq!(
+            service
+                .show_case(&prepared.case_id)
+                .unwrap()
+                .storage_revision,
+            before.storage_revision
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events_before
+        );
+    }
+
+    #[test]
+    fn naabu_attempt_result_requires_exact_raw_artifact_membership() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        let mut case = fixture.service().show_case(&prepared.case_id).unwrap();
+        case.scan_runs[0].engine_runs[0]
+            .raw_artifact_ids
+            .retain(|artifact_id| artifact_id != "raw-naabu-final-1");
+        fixture
+            .storage
+            .save_case(&mut case, "test.naabu_missing_final_membership")
+            .unwrap();
+        let before = fixture.service().show_case(&prepared.case_id).unwrap();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+
+        assert!(matches!(
+            fixture.service().persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            ),
+            Err(AppError::NotAuthorized(_)) | Err(AppError::Conflict(_))
+        ));
+        let retained = fixture.service().show_case(&prepared.case_id).unwrap();
+        assert_eq!(retained.storage_revision, before.storage_revision);
+        assert!(
+            retained.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .is_empty()
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events_before
+        );
+    }
+
+    #[test]
+    fn naabu_attempt_result_rejects_tampered_final_bytes_without_writing() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        let before = fixture.service().show_case(&prepared.case_id).unwrap();
+        let final_artifact = before
+            .raw_artifacts
+            .iter()
+            .find(|artifact| artifact.id == "raw-naabu-final-1")
+            .unwrap();
+        fs::write(
+            fixture
+                .directory
+                .path()
+                .join("artifacts")
+                .join(&final_artifact.relative_path),
+            b"{\"port\":9002}\n",
+        )
+        .unwrap();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+
+        assert!(matches!(
+            fixture.service().persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            ),
+            Err(AppError::Runtime(_))
+        ));
+        let retained = fixture.service().show_case(&prepared.case_id).unwrap();
+        assert_eq!(retained.storage_revision, before.storage_revision);
+        assert!(
+            retained.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .is_empty()
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events_before
+        );
+    }
+
+    #[test]
+    fn naabu_attempt_result_save_failure_is_atomic_and_conflict_retries() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, false);
+        let before = fixture.service().show_case(&prepared.case_id).unwrap();
+        let events_before = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+        fixture.storage.inject_save_case_faults(
+            "execution.naabu_attempt_result_persisted",
+            1,
+            crate::storage::SaveCaseFault::Storage,
+        );
+        assert!(matches!(
+            fixture.service().persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            ),
+            Err(AppError::Storage(_))
+        ));
+        let retained = fixture.service().show_case(&prepared.case_id).unwrap();
+        assert_eq!(retained.storage_revision, before.storage_revision);
+        assert!(
+            retained.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .is_empty()
+        );
+        assert_eq!(
+            fixture
+                .storage
+                .list_case_events(&prepared.case_id)
+                .unwrap()
+                .len(),
+            events_before
+        );
+
+        fixture.storage.inject_save_case_faults(
+            "execution.naabu_attempt_result_persisted",
+            1,
+            crate::storage::SaveCaseFault::Conflict,
+        );
+        let applied = fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .expect("bounded revision retry");
+        assert_eq!(applied.storage_revision, before.storage_revision + 1);
+        let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
+        assert_eq!(events.len(), events_before + 1);
+        assert_eq!(
+            events.last().unwrap().event_type,
+            "execution.naabu_attempt_result_persisted"
+        );
+    }
+
+    #[test]
+    fn cumulative_complete_units_cannot_be_redispatched_but_partial_units_can() {
+        let complete_fixture = Fixture::new();
+        let complete =
+            prepared_naabu_attempt_result(&complete_fixture, WorkUnitOutcome::TestedComplete, true);
+        complete_fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &complete.case_id,
+                &complete.scan_run_id,
+                &complete.engine_run_id,
+                &complete.result,
+            )
+            .unwrap();
+        mark_naabu_attempt_clean_for_retry(&complete_fixture, &complete);
+        let completed_unit = complete.request.requested_unit_ids[0].clone();
+        let retryable_sibling = complete.plan.work_units[1].unit_id.clone();
+        let before_rejections = complete_fixture
+            .service()
+            .show_case(&complete.case_id)
+            .unwrap();
+        let events_before_rejections = complete_fixture
+            .storage
+            .list_case_events(&complete.case_id)
+            .unwrap()
+            .len();
+        for requested in [
+            vec![completed_unit.clone()],
+            vec![completed_unit.clone(), retryable_sibling],
+        ] {
+            let second = naabu_attempt_request(&complete.plan, 2, requested);
+            assert!(matches!(
+                complete_fixture.service().persist_naabu_attempt_request(
+                    &complete.case_id,
+                    &complete.scan_run_id,
+                    &complete.engine_run_id,
+                    &complete.plan,
+                    &second,
+                ),
+                Err(AppError::Conflict(_))
+            ));
+            assert_eq!(
+                complete_fixture
+                    .service()
+                    .show_case(&complete.case_id)
+                    .unwrap()
+                    .storage_revision,
+                before_rejections.storage_revision
+            );
+            assert_eq!(
+                complete_fixture
+                    .storage
+                    .list_case_events(&complete.case_id)
+                    .unwrap()
+                    .len(),
+                events_before_rejections
+            );
+        }
+        assert_eq!(
+            complete_fixture
+                .service()
+                .show_case(&complete.case_id)
+                .unwrap()
+                .scan_runs[0]
+                .engine_runs[0]
+                .naabu_attempt_requests,
+            [complete.request]
+        );
+
+        let partial_fixture = Fixture::new();
+        let partial =
+            prepared_naabu_attempt_result(&partial_fixture, WorkUnitOutcome::TestedPartial, true);
+        partial_fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &partial.case_id,
+                &partial.scan_run_id,
+                &partial.engine_run_id,
+                &partial.result,
+            )
+            .unwrap();
+        mark_naabu_attempt_clean_for_retry(&partial_fixture, &partial);
+        let second =
+            naabu_attempt_request(&partial.plan, 2, partial.request.requested_unit_ids.clone());
+        let retried = partial_fixture
+            .service()
+            .persist_naabu_attempt_request(
+                &partial.case_id,
+                &partial.scan_run_id,
+                &partial.engine_run_id,
+                &partial.plan,
+                &second,
+            )
+            .expect("tested-partial work remains retryable");
+        assert_eq!(
+            retried.scan_runs[0].engine_runs[0]
+                .naabu_attempt_requests
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn late_complete_result_survives_an_already_committed_retry_request() {
+        let fixture = Fixture::new();
+        let prepared =
+            prepared_naabu_attempt_result(&fixture, WorkUnitOutcome::TestedComplete, true);
+        mark_naabu_attempt_clean_for_retry(&fixture, &prepared);
+        let second = naabu_attempt_request(
+            &prepared.plan,
+            2,
+            prepared.request.requested_unit_ids.clone(),
+        );
+        let after_retry_request = fixture
+            .service()
+            .persist_naabu_attempt_request(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.plan,
+                &second,
+            )
+            .expect("retry may commit while the prior result is still in flight");
+        assert_eq!(
+            after_retry_request.scan_runs[0].engine_runs[0].naabu_attempt_requests,
+            [prepared.request.clone(), second]
+        );
+        assert!(
+            after_retry_request.scan_runs[0].engine_runs[0]
+                .naabu_attempt_results
+                .is_empty()
+        );
+
+        let events_before_result = fixture
+            .storage
+            .list_case_events(&prepared.case_id)
+            .unwrap()
+            .len();
+        let persisted = fixture
+            .service()
+            .persist_naabu_attempt_result(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                &prepared.engine_run_id,
+                &prepared.result,
+            )
+            .expect("valid late evidence must remain durable regardless of race order");
+        let engine_run = &persisted.scan_runs[0].engine_runs[0];
+        assert_eq!(engine_run.naabu_attempt_results, [prepared.result]);
+        let cumulative = reduce_naabu_attempt_coverage(
+            engine_run.naabu_work_plan.as_ref().unwrap(),
+            &engine_run.naabu_attempt_requests,
+            &engine_run.naabu_attempt_results,
+        )
+        .unwrap();
+        assert_eq!(cumulative.summary.tested_complete, 1);
+        assert!(cumulative.retryable_unit_ids.iter().all(|unit_id| {
+            !engine_run.naabu_attempt_requests[0]
+                .requested_unit_ids
+                .contains(unit_id)
+        }));
+        let events = fixture.storage.list_case_events(&prepared.case_id).unwrap();
+        assert_eq!(events.len(), events_before_result + 1);
+        assert_eq!(
+            events.last().unwrap().event_type,
+            "execution.naabu_attempt_result_persisted"
+        );
+    }
+
     fn naabu_planned_report(
         case_id: &str,
         execution: &PlannedEngineExecution,
@@ -9543,6 +10743,7 @@ mod tests {
         sibling.finished_at = None;
         sibling.naabu_work_plan = None;
         sibling.naabu_attempt_requests.clear();
+        sibling.naabu_attempt_results.clear();
         sibling.runtime_provider = None;
         sibling.runtime_version = None;
         sibling.runtime_security_options = None;

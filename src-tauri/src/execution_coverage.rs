@@ -511,6 +511,9 @@ pub fn parse_launcher_v2_journal(
 /// every non-complete unit remains retryable in immutable plan order. Invalid
 /// history returns a typed error instead of silently discarding a valid
 /// prefix; callers must isolate that engine run before activating scheduling.
+/// A later request may repeat a unit whose earlier completion arrived late:
+/// request admission rejects only work known complete at commit time, while
+/// this reducer preserves evidence regardless of persistence race order.
 pub fn reduce_naabu_attempt_coverage(
     plan: &NaabuWorkPlanV1,
     requests: &[NaabuAttemptRequest],
@@ -638,18 +641,6 @@ pub fn reduce_naabu_attempt_coverage(
     let mut all_validated_final_artifacts_normalized = true;
 
     for request in requests {
-        if let Some(completed_unit_id) = request
-            .requested_unit_ids
-            .iter()
-            .find(|unit_id| tested_complete_unit_ids.contains(unit_id.as_str()))
-        {
-            return Err(invalid_cumulative_request(
-                request.execution_attempt,
-                format!(
-                    "later attempt requests already tested-complete work unit {completed_unit_id}"
-                ),
-            ));
-        }
         let Some(result) = result_by_attempt.get(&request.execution_attempt) else {
             continue;
         };
@@ -1820,19 +1811,26 @@ mod tests {
     }
 
     #[test]
-    fn rejects_later_request_for_completed_unit() {
+    fn accepts_later_request_committed_before_late_completed_result() {
         let plan = cumulative_plan();
         let first = cumulative_request(&plan, 1, &[0]);
         let repeated = cumulative_request(&plan, 2, &[0]);
         let first_result =
             cumulative_result(&plan, &first, &[WorkUnitOutcome::TestedComplete], true);
 
-        let error = reduce_naabu_attempt_coverage(&plan, &[first, repeated], &[first_result])
-            .expect_err("completed work cannot be requested again");
-        assert!(matches!(
-            error,
-            NaabuCumulativeCoverageError::InvalidRequest { attempt: 2, .. }
-        ));
+        let cumulative = reduce_naabu_attempt_coverage(&plan, &[first, repeated], &[first_result])
+            .expect("late evidence must not be rejected by a previously committed retry");
+
+        assert_eq!(cumulative.summary.tested_complete, 1);
+        assert_eq!(
+            cumulative.tested_complete_unit_ids,
+            BTreeSet::from([plan.work_units[0].unit_id.clone()])
+        );
+        assert!(
+            !cumulative
+                .retryable_unit_ids
+                .contains(&plan.work_units[0].unit_id)
+        );
     }
 
     #[test]

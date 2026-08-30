@@ -236,123 +236,9 @@ pub struct ArtifactStore {
 /// again immediately before consuming the artifacts to close the ordinary
 /// time-of-check/time-of-use window as far as a portable path-based API can.
 pub fn inspect_raw_artifacts(artifact_root: &Path, artifacts: &[RawArtifact]) -> AppResult<()> {
-    let root_metadata = fs::symlink_metadata(artifact_root).map_err(|error| {
-        AppError::Runtime(format!(
-            "artifact root {} is unavailable: {error}",
-            artifact_root.display()
-        ))
-    })?;
-    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-        return Err(AppError::Runtime(format!(
-            "artifact root {} must be an existing non-symlink directory",
-            artifact_root.display()
-        )));
-    }
-    let root = fs::canonicalize(artifact_root).map_err(|error| {
-        AppError::Runtime(format!(
-            "artifact root {} could not be resolved: {error}",
-            artifact_root.display()
-        ))
-    })?;
-
+    let root = verified_artifact_root(artifact_root)?;
     for artifact in artifacts {
-        let relative = normalized_artifact_relative_path(artifact)?;
-        if artifact.sha256.len() != 64
-            || !artifact
-                .sha256
-                .chars()
-                .all(|character| character.is_ascii_hexdigit())
-        {
-            return Err(AppError::Runtime(format!(
-                "artifact {} has an invalid durable SHA-256 digest",
-                artifact.id
-            )));
-        }
-        if artifact.byte_length == u64::MAX {
-            return Err(AppError::Runtime(format!(
-                "artifact {} has an unsupported durable byte length",
-                artifact.id
-            )));
-        }
-
-        let mut path = root.clone();
-        let component_count = relative.components().count();
-        for (index, component) in relative.components().enumerate() {
-            let Component::Normal(component) = component else {
-                return Err(unsafe_artifact_path(artifact));
-            };
-            path.push(component);
-            let metadata = fs::symlink_metadata(&path).map_err(|error| {
-                AppError::Runtime(format!(
-                    "artifact {} is not available for durable reconciliation: {error}",
-                    artifact.id
-                ))
-            })?;
-            if metadata.file_type().is_symlink() {
-                return Err(AppError::Runtime(format!(
-                    "artifact {} path may not contain symlinks",
-                    artifact.id
-                )));
-            }
-            if index + 1 == component_count {
-                if !metadata.is_file() {
-                    return Err(AppError::Runtime(format!(
-                        "artifact {} must be a regular non-symlink file",
-                        artifact.id
-                    )));
-                }
-                if metadata.len() != artifact.byte_length {
-                    return Err(AppError::Runtime(format!(
-                        "artifact {} byte length differs from its durable record",
-                        artifact.id
-                    )));
-                }
-            } else if !metadata.is_dir() {
-                return Err(AppError::Runtime(format!(
-                    "artifact {} path contains a non-directory component",
-                    artifact.id
-                )));
-            }
-        }
-
-        let canonical = fs::canonicalize(&path).map_err(|error| {
-            AppError::Runtime(format!(
-                "artifact {} could not be resolved for durable reconciliation: {error}",
-                artifact.id
-            ))
-        })?;
-        if !canonical.starts_with(&root) {
-            return Err(AppError::Runtime(format!(
-                "artifact {} escapes the private artifact root",
-                artifact.id
-            )));
-        }
-
-        let file = open_readonly_no_follow(&path).map_err(|error| {
-            AppError::Runtime(format!(
-                "artifact {} could not be opened for durable reconciliation: {error}",
-                artifact.id
-            ))
-        })?;
-        let opened_metadata = file.metadata().map_err(|error| {
-            AppError::Runtime(format!(
-                "artifact {} metadata could not be read after opening: {error}",
-                artifact.id
-            ))
-        })?;
-        if opened_metadata.file_type().is_symlink() || !opened_metadata.is_file() {
-            return Err(AppError::Runtime(format!(
-                "artifact {} changed and is no longer a regular file",
-                artifact.id
-            )));
-        }
-        if opened_metadata.len() != artifact.byte_length {
-            return Err(AppError::Runtime(format!(
-                "artifact {} byte length differs from its durable record",
-                artifact.id
-            )));
-        }
-
+        let file = open_verified_raw_artifact_at_root(&root, artifact)?;
         let (observed_sha256, observed_length) =
             hash_opened_file_bounded(file, artifact.byte_length + 1).map_err(|error| {
                 AppError::Runtime(format!(
@@ -375,6 +261,54 @@ pub fn inspect_raw_artifacts(artifact_root: &Path, artifacts: &[RawArtifact]) ->
     }
 
     Ok(())
+}
+
+/// Reads one already-captured raw artifact through the same no-follow,
+/// bounded verification used by [`inspect_raw_artifacts`]. The returned bytes
+/// and digest come from the same opened handle, so a caller never validates a
+/// durable record and then consumes a separately reopened path.
+pub fn read_verified_raw_artifact(
+    artifact_root: &Path,
+    artifact: &RawArtifact,
+    maximum_bytes: u64,
+) -> AppResult<Vec<u8>> {
+    if artifact.byte_length > maximum_bytes {
+        return Err(AppError::Runtime(format!(
+            "artifact {} exceeds its bounded read limit",
+            artifact.id
+        )));
+    }
+    let root = verified_artifact_root(artifact_root)?;
+    let file = open_verified_raw_artifact_at_root(&root, artifact)?;
+    let capacity = usize::try_from(artifact.byte_length).map_err(|_| {
+        AppError::Runtime(format!(
+            "artifact {} byte length cannot be represented on this host",
+            artifact.id
+        ))
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            AppError::Runtime(format!(
+                "artifact {} could not be read for durable reconciliation: {error}",
+                artifact.id
+            ))
+        })?;
+    if bytes.len() as u64 != artifact.byte_length {
+        return Err(AppError::Runtime(format!(
+            "artifact {} byte length changed while it was being read",
+            artifact.id
+        )));
+    }
+    let observed_sha256 = hex::encode(Sha256::digest(&bytes));
+    if !observed_sha256.eq_ignore_ascii_case(&artifact.sha256) {
+        return Err(AppError::Runtime(format!(
+            "artifact {} hash differs from its durable record",
+            artifact.id
+        )));
+    }
+    Ok(bytes)
 }
 
 impl ArtifactStore {
@@ -849,6 +783,127 @@ fn unsafe_artifact_path(artifact: &RawArtifact) -> AppError {
         "artifact {} has an unsafe or non-normalized relative path",
         artifact.id
     ))
+}
+
+fn verified_artifact_root(artifact_root: &Path) -> AppResult<PathBuf> {
+    let root_metadata = fs::symlink_metadata(artifact_root).map_err(|error| {
+        AppError::Runtime(format!(
+            "artifact root {} is unavailable: {error}",
+            artifact_root.display()
+        ))
+    })?;
+    if !metadata_is_directory_non_reparse(&root_metadata) {
+        return Err(AppError::Runtime(format!(
+            "artifact root {} must be an existing non-symlink directory",
+            artifact_root.display()
+        )));
+    }
+    fs::canonicalize(artifact_root).map_err(|error| {
+        AppError::Runtime(format!(
+            "artifact root {} could not be resolved: {error}",
+            artifact_root.display()
+        ))
+    })
+}
+
+fn open_verified_raw_artifact_at_root(root: &Path, artifact: &RawArtifact) -> AppResult<File> {
+    let relative = normalized_artifact_relative_path(artifact)?;
+    if artifact.sha256.len() != 64
+        || !artifact
+            .sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(AppError::Runtime(format!(
+            "artifact {} has an invalid durable SHA-256 digest",
+            artifact.id
+        )));
+    }
+    if artifact.byte_length == u64::MAX {
+        return Err(AppError::Runtime(format!(
+            "artifact {} has an unsupported durable byte length",
+            artifact.id
+        )));
+    }
+
+    let mut path = root.to_path_buf();
+    let component_count = relative.components().count();
+    for (index, component) in relative.components().enumerate() {
+        let Component::Normal(component) = component else {
+            return Err(unsafe_artifact_path(artifact));
+        };
+        path.push(component);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            AppError::Runtime(format!(
+                "artifact {} is not available for durable reconciliation: {error}",
+                artifact.id
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::Runtime(format!(
+                "artifact {} path may not contain symlinks",
+                artifact.id
+            )));
+        }
+        if index + 1 == component_count {
+            if !metadata_is_regular_non_reparse(&metadata) {
+                return Err(AppError::Runtime(format!(
+                    "artifact {} must be a regular non-reparse file",
+                    artifact.id
+                )));
+            }
+            if metadata.len() != artifact.byte_length {
+                return Err(AppError::Runtime(format!(
+                    "artifact {} byte length differs from its durable record",
+                    artifact.id
+                )));
+            }
+        } else if !metadata_is_directory_non_reparse(&metadata) {
+            return Err(AppError::Runtime(format!(
+                "artifact {} path contains a non-directory or reparse component",
+                artifact.id
+            )));
+        }
+    }
+
+    let canonical = fs::canonicalize(&path).map_err(|error| {
+        AppError::Runtime(format!(
+            "artifact {} could not be resolved for durable reconciliation: {error}",
+            artifact.id
+        ))
+    })?;
+    if !canonical.starts_with(root) {
+        return Err(AppError::Runtime(format!(
+            "artifact {} escapes the private artifact root",
+            artifact.id
+        )));
+    }
+
+    let file = open_readonly_no_follow(&path).map_err(|error| {
+        AppError::Runtime(format!(
+            "artifact {} could not be opened for durable reconciliation: {error}",
+            artifact.id
+        ))
+    })?;
+    let opened_metadata = file.metadata().map_err(|error| {
+        AppError::Runtime(format!(
+            "artifact {} metadata could not be read after opening: {error}",
+            artifact.id
+        ))
+    })?;
+    if !metadata_is_regular_non_reparse(&opened_metadata) {
+        return Err(AppError::Runtime(format!(
+            "artifact {} changed and is no longer a regular non-reparse file",
+            artifact.id
+        )));
+    }
+    if opened_metadata.len() != artifact.byte_length {
+        return Err(AppError::Runtime(format!(
+            "artifact {} byte length differs from its durable record",
+            artifact.id
+        )));
+    }
+    Ok(file)
 }
 
 fn open_readonly_no_follow(path: &Path) -> std::io::Result<File> {
