@@ -151,6 +151,35 @@ pub enum JobActivationOutcome<T, E> {
     Failed(E),
 }
 
+/// Durable classification returned by the caller while one exact cancellation
+/// transition owns the per-job coordinator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DurableCancellationWrite<T> {
+    /// The durable store now contains the cancellation request.
+    Requested(T),
+    /// The durable store already contains an authoritative terminal result.
+    /// A lagging in-memory worker must preserve that payload even though the
+    /// one-way cancellation token has already been published.
+    TerminalWon(T),
+}
+
+/// Result of publishing one cancellation intent and serializing its durable
+/// projection with the exact live generation. `TerminalWon` means either the
+/// worker committed and marked its terminal result before this transition, or
+/// the durable closure found terminal truth while JobControl lagged. Callers
+/// must return that saved truth and must not claim a cancellation was saved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DurableCancellationOutcome<T> {
+    Requested {
+        snapshot: JobSnapshot,
+        durable: T,
+    },
+    TerminalWon {
+        snapshot: JobSnapshot,
+        durable: Option<T>,
+    },
+}
+
 /// Exact retained-terminal reconciliation result. `InProgress` is distinct
 /// from `NotCurrent`: callers must not mutate or restart the durable run while
 /// another owner is reconciling that same terminal generation.
@@ -426,6 +455,63 @@ impl JobManager {
         }
     }
 
+    /// Publishes cancellation immediately, then performs one short durable
+    /// cancel-request write under the same exact per-job coordinator used by
+    /// worker dispatch and terminal persistence. The durable closure must not
+    /// perform target work or wait on a scanner/connector.
+    ///
+    /// A worker that already committed its durable result and marked every
+    /// engine terminal wins permanently. In that case the just-published
+    /// intent is retracted before finalization and the caller receives the
+    /// exact terminal snapshot without invoking `durable`.
+    pub fn cancel_with_durable_transition<T, E, F>(
+        &self,
+        key: &JobKey,
+        durable: F,
+    ) -> Result<Result<DurableCancellationOutcome<T>, E>, JobManagerError>
+    where
+        F: FnOnce() -> Result<DurableCancellationWrite<T>, E>,
+    {
+        let record = self.live_record(key)?;
+        record.publish_cancel_intent();
+        let _control = lock(&record.control_transition);
+        if let Err(error) = self.require_current_live_record(key, &record) {
+            let snapshot = record.snapshot();
+            return if snapshot.is_terminal() {
+                Ok(Ok(DurableCancellationOutcome::TerminalWon {
+                    snapshot,
+                    durable: None,
+                }))
+            } else {
+                Err(error)
+            };
+        }
+        if record.all_engines_terminal() {
+            record.retract_cancel_intent_after_terminal();
+            return Ok(Ok(DurableCancellationOutcome::TerminalWon {
+                snapshot: record.snapshot(),
+                durable: None,
+            }));
+        }
+        Ok(durable().map(|write| match write {
+            DurableCancellationWrite::Requested(durable) => DurableCancellationOutcome::Requested {
+                snapshot: record.snapshot(),
+                durable,
+            },
+            DurableCancellationWrite::TerminalWon(durable) => {
+                // CancellationToken is deliberately one-way. Record this
+                // exceptional durable-truth precedence so the lagging worker
+                // and finalizer preserve the terminal payload rather than
+                // projecting the already-published control signal over it.
+                record.mark_durable_terminal_truth_won();
+                DurableCancellationOutcome::TerminalWon {
+                    snapshot: record.snapshot(),
+                    durable: Some(durable),
+                }
+            }
+        }))
+    }
+
     fn live_record(&self, key: &JobKey) -> Result<Arc<JobRecord>, JobManagerError> {
         lock(&self.inner.state)
             .live
@@ -657,6 +743,16 @@ impl JobContext {
         self.record.cancel_requested.load(Ordering::SeqCst)
     }
 
+    /// True only for the corruption/recovery edge where durable terminal data
+    /// was found after a one-way cancel token was published but before the
+    /// lagging in-memory JobControl reached terminal. Workers must preserve the
+    /// durable payload in this state.
+    pub fn durable_terminal_truth_won(&self) -> bool {
+        self.record
+            .durable_terminal_truth_won
+            .load(Ordering::SeqCst)
+    }
+
     pub fn is_pause_requested(&self) -> bool {
         self.record.pause_requested.load(Ordering::SeqCst)
     }
@@ -796,6 +892,7 @@ struct JobRecord {
     engines: BTreeMap<String, Arc<EngineRecord>>,
     pause_requested: AtomicBool,
     cancel_requested: AtomicBool,
+    durable_terminal_truth_won: AtomicBool,
     control_transition: Mutex<()>,
     gate: Mutex<()>,
     gate_changed: Condvar,
@@ -810,6 +907,7 @@ impl JobRecord {
             engines,
             pause_requested: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
+            durable_terminal_truth_won: AtomicBool::new(false),
             control_transition: Mutex::new(()),
             gate: Mutex::new(()),
             gate_changed: Condvar::new(),
@@ -862,6 +960,22 @@ impl JobRecord {
             }
         }
         self.gate_changed.notify_all();
+    }
+
+    fn all_engines_terminal(&self) -> bool {
+        self.engines
+            .values()
+            .all(|engine| engine.base_status().is_terminal())
+    }
+
+    fn retract_cancel_intent_after_terminal(&self) {
+        debug_assert!(self.all_engines_terminal());
+        self.cancel_requested.store(false, Ordering::SeqCst);
+    }
+
+    fn mark_durable_terminal_truth_won(&self) {
+        self.durable_terminal_truth_won
+            .store(true, Ordering::SeqCst);
     }
 
     fn wait_until_runnable(&self) -> bool {
@@ -937,7 +1051,8 @@ impl JobRecord {
         completion: JobCompletion,
         forced_failure: Option<JobFailureKind>,
     ) -> JobSnapshot {
-        let cancel_won = self.cancel_requested.load(Ordering::SeqCst);
+        let cancel_won = self.cancel_requested.load(Ordering::SeqCst)
+            && !self.durable_terminal_truth_won.load(Ordering::SeqCst);
         let persistence_pending = completion == JobCompletion::PersistencePending;
         let completion = if cancel_won && !persistence_pending {
             JobCompletion::Cancelled

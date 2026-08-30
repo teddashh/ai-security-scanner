@@ -16,6 +16,10 @@ use crate::domain::{
     ScopeGrant, SourceConnectionStatus, SourceKind, new_id,
 };
 use crate::error::{AppError, AppResult};
+use crate::job_manager::{
+    DurableCancellationWrite, EngineJobControl, JobActivationOutcome, JobCompletion, JobContext,
+    JobKey, JobSnapshot, JobStatus,
+};
 use crate::local_tcp_probe::{
     LocalTcpConnector, LocalTcpProbeFailure, LocalTcpProbeOutcome, probe_localhost_tcp_port_with,
 };
@@ -46,19 +50,12 @@ pub struct PreparedLocalhostQuickScanResult {
     pub prepared: PreparedLocalhostQuickScan,
 }
 
-/// Until the bounded localhost connector participates in `JobManager`, its
-/// durable task shape is the exact guard that prevents a concurrent generic
-/// Cancel command from overwriting the connector's eventual observation.
-pub fn run_has_in_flight_localhost_quick_scan(run: &ScanRun) -> bool {
-    run.engine_runs.iter().any(|engine_run| {
-        matches!(
-            engine_run.task_kind,
-            EngineTaskKind::BuiltInLocalhostTcp { .. }
-        ) && matches!(
-            engine_run.status,
-            EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Running
-        )
-    })
+pub fn run_is_exact_localhost_quick_scan(run: &ScanRun) -> bool {
+    run.engine_runs.len() == 1
+        && run.engine_runs[0].engine_id == LOCALHOST_TCP_ENGINE_ID
+        && run.engine_runs[0]
+            .task_kind
+            .is_exact_built_in_localhost_tcp_contract()
 }
 
 /// Create and select a complete minimal case, including its exact task and
@@ -230,67 +227,322 @@ pub fn prepare_localhost_quick_scan(
     })
 }
 
-/// Execute one previously persisted task. The running state is committed
-/// before the injected connector is called, which makes the persist-before-
-/// contact ordering directly testable.
-pub fn execute_prepared_localhost_quick_scan(
+pub fn prepared_localhost_quick_scan_for_job(
+    case: &AssessmentCase,
+    key: &JobKey,
+) -> AppResult<Option<PreparedLocalhostQuickScan>> {
+    if case.id != key.case_id {
+        return Err(AppError::NotAuthorized(
+            "localhost job key does not match its durable case".into(),
+        ));
+    }
+    let Some(run) = case.scan_runs.iter().find(|run| run.id == key.scan_run_id) else {
+        return Ok(None);
+    };
+    if !run_is_exact_localhost_quick_scan(run) {
+        return Ok(None);
+    }
+    let engine_run = &run.engine_runs[0];
+    let EngineTaskKind::BuiltInLocalhostTcp {
+        port,
+        timeout_ms,
+        payload_bytes,
+    } = engine_run.task_kind
+    else {
+        unreachable!("exact localhost task kind was validated")
+    };
+    if timeout_ms != crate::domain::BUILT_IN_LOCALHOST_TCP_TIMEOUT_MS
+        || payload_bytes != crate::domain::BUILT_IN_LOCALHOST_TCP_PAYLOAD_BYTES
+    {
+        return Err(AppError::NotAuthorized(
+            "localhost job no longer matches its fixed bounded task contract".into(),
+        ));
+    }
+    Ok(Some(PreparedLocalhostQuickScan {
+        case_id: case.id.clone(),
+        scan_run_id: run.id.clone(),
+        engine_run_id: engine_run.id.clone(),
+        port,
+    }))
+}
+
+/// Resolve one retained/live JobManager snapshot back to the exact durable
+/// localhost task it represents. Unrelated snapshots return `None`; identity
+/// mismatch is never guessed from a case name or port alone.
+pub fn localhost_quick_scan_for_snapshot(
+    storage: &Storage,
+    snapshot: &JobSnapshot,
+) -> AppResult<Option<(AssessmentCase, PreparedLocalhostQuickScan)>> {
+    let case = storage.get_case(&snapshot.key.case_id)?;
+    let Some(prepared) = prepared_localhost_quick_scan_for_job(&case, &snapshot.key)? else {
+        return Ok(None);
+    };
+    if snapshot.engines.len() != 1 || snapshot.engines[0].engine_id != prepared.engine_run_id {
+        return Err(AppError::NotAuthorized(
+            "localhost job engine identity does not match its durable task".into(),
+        ));
+    }
+    Ok(Some((case, prepared)))
+}
+
+/// Find the already-live exact task for one requested port. Snapshot or
+/// storage corruption is advisory here: it must not turn an unrelated old job
+/// into a global first-value gate, and JobManager still protects every exact
+/// `(case, run)` identity independently.
+pub fn live_localhost_quick_scan_for_port(
+    storage: &Storage,
+    snapshots: &[JobSnapshot],
+    port: u16,
+) -> Option<AssessmentCase> {
+    snapshots.iter().find_map(|snapshot| {
+        localhost_quick_scan_for_snapshot(storage, snapshot)
+            .ok()
+            .flatten()
+            .and_then(|(case, prepared)| (prepared.port == port).then_some(case))
+    })
+}
+
+/// Executes one exact localhost task as a `JobManager` worker. Every durable
+/// transition is short and serialized with Cancel, while the fixed three-
+/// second connector call runs outside the manager's control lock.
+pub fn execute_managed_localhost_quick_scan(
     storage: &Storage,
     manifests: &[EngineManifest],
     prepared: &PreparedLocalhostQuickScan,
     connector: &dyn LocalTcpConnector,
-) -> AppResult<AssessmentCase> {
-    if let Err(error) =
-        retry_localhost_persistence(|| persist_localhost_running_once(storage, manifests, prepared))
-    {
-        tracing::error!(
-            error = %error,
-            case_id = %prepared.case_id,
-            scan_run_id = %prepared.scan_run_id,
-            "localhost check could not persist its running state"
-        );
-        return reconcile_interrupted_localhost_quick_scan(storage, manifests, prepared).map_err(
-            |reconcile_error| {
-                tracing::error!(
-                    error = %reconcile_error,
-                    case_id = %prepared.case_id,
-                    scan_run_id = %prepared.scan_run_id,
-                    "localhost running-state failure could not be reconciled immediately"
-                );
-                AppError::Storage(
-                    "The localhost check could not save its status. It will be reconciled when the app starts again."
-                        .into(),
-                )
-            },
+    context: &JobContext,
+) -> JobCompletion {
+    execute_managed_localhost_quick_scan_with_hooks(
+        storage,
+        manifests,
+        prepared,
+        connector,
+        context,
+        &ManagedLocalhostExecutionHooks::default(),
+    )
+}
+
+#[derive(Default)]
+struct ManagedLocalhostExecutionHooks<'a> {
+    before_dispatch: Option<&'a dyn Fn()>,
+    after_terminal_mark: Option<&'a dyn Fn()>,
+}
+
+fn execute_managed_localhost_quick_scan_with_hooks(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    connector: &dyn LocalTcpConnector,
+    context: &JobContext,
+    hooks: &ManagedLocalhostExecutionHooks<'_>,
+) -> JobCompletion {
+    let Ok(control) = context.engine(&prepared.engine_run_id) else {
+        return JobCompletion::Failed;
+    };
+
+    if let Some(before_dispatch) = hooks.before_dispatch {
+        before_dispatch();
+    }
+
+    match context.coordinate_durable_write_if_not_cancelled(|| {
+        let case = retry_localhost_persistence(|| {
+            persist_localhost_running_once(storage, manifests, prepared)
+        })?;
+        control
+            .mark_running()
+            .map_err(|error| AppError::Runtime(error.to_string()))?;
+        Ok::<_, AppError>(case)
+    }) {
+        JobActivationOutcome::Cancelled => {
+            return persist_managed_localhost_cancelled(
+                storage, manifests, prepared, context, &control,
+            );
+        }
+        JobActivationOutcome::Failed(error) => {
+            tracing::error!(
+                error = %error,
+                case_id = %prepared.case_id,
+                scan_run_id = %prepared.scan_run_id,
+                "managed localhost worker could not persist its pre-contact state"
+            );
+            return persist_managed_localhost_interrupted(
+                storage, manifests, prepared, context, &control,
+            );
+        }
+        JobActivationOutcome::Activated(_) => {}
+    }
+
+    if context.is_cancelled() {
+        return persist_managed_localhost_cancelled(
+            storage, manifests, prepared, context, &control,
         );
     }
 
+    // Exactly one payload-free connection attempt. Production remains bounded
+    // by LOCAL_TCP_CONNECT_TIMEOUT; tests inject a barrier at this seam.
     let result = probe_localhost_tcp_port_with(connector, prepared.port);
-    match retry_localhost_persistence(|| {
-        complete_localhost_quick_scan_once(storage, manifests, prepared, result)
-    }) {
-        Ok(case) => Ok(case),
+    context.coordinate_durable_write(|| {
+        if context.is_cancelled() {
+            return persist_managed_localhost_cancelled_under_lock(
+                storage,
+                manifests,
+                prepared,
+                &control,
+                !context.durable_terminal_truth_won(),
+            );
+        }
+
+        let saved = retry_localhost_persistence(|| {
+            complete_localhost_quick_scan_once(storage, manifests, prepared, result)
+        });
+        match saved {
+            Ok(case) => {
+                // Cancel publishes before waiting for this lock. If it arrived
+                // while the result save was in progress, cancellation wins
+                // and the just-saved observation is replaced before the engine
+                // is marked terminal.
+                if context.is_cancelled() {
+                    return persist_managed_localhost_cancelled_under_lock(
+                        storage,
+                        manifests,
+                        prepared,
+                        &control,
+                        !context.durable_terminal_truth_won(),
+                    );
+                }
+                let completion = mark_managed_localhost_terminal(&case, prepared, &control);
+                if let Some(after_terminal_mark) = hooks.after_terminal_mark {
+                    after_terminal_mark();
+                }
+                completion
+            }
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    case_id = %prepared.case_id,
+                    scan_run_id = %prepared.scan_run_id,
+                    "managed localhost result could not be persisted"
+                );
+                if context.is_cancelled() {
+                    persist_managed_localhost_cancelled_under_lock(
+                        storage,
+                        manifests,
+                        prepared,
+                        &control,
+                        !context.durable_terminal_truth_won(),
+                    )
+                } else {
+                    persist_managed_localhost_interrupted_under_lock(
+                        storage, manifests, prepared, &control,
+                    )
+                }
+            }
+        }
+    })
+}
+
+fn persist_managed_localhost_cancelled(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    context: &JobContext,
+    control: &EngineJobControl,
+) -> JobCompletion {
+    context.coordinate_durable_write(|| {
+        persist_managed_localhost_cancelled_under_lock(
+            storage,
+            manifests,
+            prepared,
+            control,
+            !context.durable_terminal_truth_won(),
+        )
+    })
+}
+
+fn persist_managed_localhost_cancelled_under_lock(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    control: &EngineJobControl,
+    discard_unmarked_observation: bool,
+) -> JobCompletion {
+    match record_localhost_cancelled(storage, manifests, prepared, discard_unmarked_observation) {
+        Ok(case) => mark_managed_localhost_terminal(&case, prepared, control),
         Err(error) => {
             tracing::error!(
                 error = %error,
                 case_id = %prepared.case_id,
                 scan_run_id = %prepared.scan_run_id,
-                "localhost result could not be persisted after the target contact"
+                "localhost cancellation could not be saved"
             );
-            reconcile_interrupted_localhost_quick_scan(storage, manifests, prepared).map_err(
-                |reconcile_error| {
-                    tracing::error!(
-                        error = %reconcile_error,
-                        case_id = %prepared.case_id,
-                        scan_run_id = %prepared.scan_run_id,
-                        "localhost result persistence failure could not be reconciled immediately"
-                    );
-                    AppError::Storage(
-                        "The localhost check ran, but its result could not be saved. It will be reconciled when the app starts again."
-                            .into(),
-                    )
-                },
-            )
+            JobCompletion::PersistencePending
         }
+    }
+}
+
+fn persist_managed_localhost_interrupted(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    context: &JobContext,
+    control: &EngineJobControl,
+) -> JobCompletion {
+    context.coordinate_durable_write(|| {
+        persist_managed_localhost_interrupted_under_lock(storage, manifests, prepared, control)
+    })
+}
+
+fn persist_managed_localhost_interrupted_under_lock(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    control: &EngineJobControl,
+) -> JobCompletion {
+    match reconcile_interrupted_localhost_quick_scan(storage, manifests, prepared) {
+        Ok(case) => mark_managed_localhost_terminal(&case, prepared, control),
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                case_id = %prepared.case_id,
+                scan_run_id = %prepared.scan_run_id,
+                "localhost interruption could not be saved"
+            );
+            JobCompletion::PersistencePending
+        }
+    }
+}
+
+fn mark_managed_localhost_terminal(
+    case: &AssessmentCase,
+    prepared: &PreparedLocalhostQuickScan,
+    control: &EngineJobControl,
+) -> JobCompletion {
+    let status = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == prepared.scan_run_id)
+        .and_then(|run| {
+            run.engine_runs
+                .iter()
+                .find(|engine| engine.id == prepared.engine_run_id)
+        })
+        .map(|engine| engine.status.clone());
+    match status {
+        Some(EngineRunStatus::Completed | EngineRunStatus::PartiallyCompleted) => {
+            match control.mark_completed() {
+                Ok(()) => JobCompletion::Completed,
+                Err(_) => JobCompletion::PersistencePending,
+            }
+        }
+        Some(EngineRunStatus::Failed) => match control.mark_failed() {
+            Ok(()) => JobCompletion::Failed,
+            Err(_) => JobCompletion::PersistencePending,
+        },
+        Some(EngineRunStatus::Cancelled) => match control.mark_cancelled() {
+            Ok(()) => JobCompletion::Cancelled,
+            Err(_) => JobCompletion::PersistencePending,
+        },
+        _ => JobCompletion::PersistencePending,
     }
 }
 
@@ -429,6 +681,209 @@ fn complete_localhost_quick_scan_once(
     Ok(case)
 }
 
+pub fn record_localhost_cancel_requested(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+) -> AppResult<AssessmentCase> {
+    retry_localhost_persistence(|| {
+        record_localhost_cancel_requested_once(storage, manifests, prepared)
+    })
+}
+
+fn record_localhost_cancel_requested_once(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+) -> AppResult<AssessmentCase> {
+    let mut case = storage.get_case(&prepared.case_id)?;
+    let already_requested;
+    {
+        let engine_run = exact_prepared_task_mut(&mut case, prepared)?;
+        if matches!(
+            engine_run.status,
+            EngineRunStatus::Completed
+                | EngineRunStatus::PartiallyCompleted
+                | EngineRunStatus::Failed
+                | EngineRunStatus::Cancelled
+                | EngineRunStatus::NotExecuted
+        ) {
+            return Ok(case);
+        }
+        if !matches!(
+            engine_run.status,
+            EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Running
+        ) || !matches!(
+            engine_run.phase.as_str(),
+            "queued" | "connecting" | "cancel_requested"
+        ) {
+            return Err(AppError::Conflict(
+                "the localhost check cannot accept cancellation from its saved state".into(),
+            ));
+        }
+        already_requested = engine_run.phase == "cancel_requested";
+        if !already_requested {
+            engine_run.phase = "cancel_requested".into();
+            engine_run.error_message = Some(
+                "Stopping this localhost check. Any connection result that has not already been saved will be discarded."
+                    .into(),
+            );
+        }
+    }
+    if already_requested {
+        return Ok(case);
+    }
+    let now = Utc::now();
+    case.touch();
+    refresh_coverage_ledger(&mut case, manifests, now);
+    storage.save_case(&mut case, "scan.localhost_quick_cancel_requested")?;
+    Ok(case)
+}
+
+/// Persist a cancellation request and classify the exact durable truth while
+/// the caller owns the matching JobManager control transition. Returning
+/// `Requested` is intentionally narrow: the same task must remain active and
+/// its saved phase must be `cancel_requested`. Any already-terminal payload is
+/// authoritative and is returned as `TerminalWon` unchanged.
+pub fn record_localhost_cancel_transition(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+) -> AppResult<DurableCancellationWrite<AssessmentCase>> {
+    let case = record_localhost_cancel_requested(storage, manifests, prepared)?;
+    let engine_run = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == prepared.scan_run_id)
+        .and_then(|run| {
+            run.engine_runs
+                .iter()
+                .find(|engine| engine.id == prepared.engine_run_id)
+        })
+        .ok_or_else(|| AppError::Conflict("the localhost check disappeared".into()))?;
+    if matches!(
+        engine_run.status,
+        EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Running
+    ) && engine_run.phase == "cancel_requested"
+    {
+        return Ok(DurableCancellationWrite::Requested(case));
+    }
+    if matches!(
+        engine_run.status,
+        EngineRunStatus::Completed
+            | EngineRunStatus::PartiallyCompleted
+            | EngineRunStatus::Failed
+            | EngineRunStatus::Cancelled
+            | EngineRunStatus::NotExecuted
+    ) {
+        return Ok(DurableCancellationWrite::TerminalWon(case));
+    }
+    Err(AppError::Conflict(
+        "the saved localhost task did not confirm cancellation or a terminal result".into(),
+    ))
+}
+
+pub fn record_localhost_cancelled(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    discard_unmarked_observation: bool,
+) -> AppResult<AssessmentCase> {
+    retry_localhost_persistence(|| {
+        record_localhost_cancelled_once(storage, manifests, prepared, discard_unmarked_observation)
+    })
+}
+
+fn record_localhost_cancelled_once(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    discard_unmarked_observation: bool,
+) -> AppResult<AssessmentCase> {
+    let mut case = storage.get_case(&prepared.case_id)?;
+    let now = Utc::now();
+    {
+        let engine_run = exact_prepared_task_mut(&mut case, prepared)?;
+        let already_cancelled = engine_run.status == EngineRunStatus::Cancelled;
+        let other_terminal = matches!(
+            engine_run.status,
+            EngineRunStatus::Completed
+                | EngineRunStatus::PartiallyCompleted
+                | EngineRunStatus::Failed
+                | EngineRunStatus::NotExecuted
+        );
+        if already_cancelled || (other_terminal && !discard_unmarked_observation) {
+            return Ok(case);
+        }
+        if !discard_unmarked_observation
+            || (!other_terminal
+                && !matches!(
+                    engine_run.status,
+                    EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Running
+                ))
+        {
+            return Err(AppError::Conflict(
+                "the localhost cancellation no longer owns this exact task transition".into(),
+            ));
+        }
+        engine_run.status = EngineRunStatus::Cancelled;
+        engine_run.progress_percent = 100;
+        engine_run.phase = "cancelled".into();
+        engine_run.finished_at = Some(now);
+        engine_run.resume_token = None;
+        engine_run.localhost_tcp_observation = None;
+        engine_run.error_code = Some("cancelled_without_observation".into());
+        engine_run.error_message = Some(
+            "This localhost check was cancelled before its connection result was committed. No result was inferred."
+                .into(),
+        );
+    }
+    let run = case
+        .scan_runs
+        .iter_mut()
+        .find(|run| run.id == prepared.scan_run_id)
+        .ok_or_else(|| AppError::Conflict("the localhost scan run disappeared".into()))?;
+    run.completed_at = Some(now);
+    case.status = CaseStatus::NeedsAttention;
+    case.touch();
+    refresh_coverage_ledger(&mut case, manifests, now);
+    storage.save_case(&mut case, "scan.localhost_quick_cancelled")?;
+    Ok(case)
+}
+
+pub fn reconcile_managed_localhost_terminal(
+    storage: &Storage,
+    manifests: &[EngineManifest],
+    prepared: &PreparedLocalhostQuickScan,
+    job_status: JobStatus,
+) -> AppResult<AssessmentCase> {
+    let case = storage.get_case(&prepared.case_id)?;
+    let engine_run = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == prepared.scan_run_id)
+        .and_then(|run| {
+            run.engine_runs
+                .iter()
+                .find(|engine| engine.id == prepared.engine_run_id)
+        })
+        .ok_or_else(|| AppError::Conflict("the localhost check disappeared".into()))?;
+    if matches!(
+        engine_run.status,
+        EngineRunStatus::Completed
+            | EngineRunStatus::PartiallyCompleted
+            | EngineRunStatus::Failed
+            | EngineRunStatus::Cancelled
+            | EngineRunStatus::NotExecuted
+    ) {
+        return Ok(case);
+    }
+    if job_status == JobStatus::Cancelled || engine_run.phase == "cancel_requested" {
+        return record_localhost_cancelled(storage, manifests, prepared, true);
+    }
+    reconcile_interrupted_localhost_quick_scan(storage, manifests, prepared)
+}
+
 /// Terminalize one exact product-owned localhost task after a worker, process,
 /// or persistence interruption. This never repeats target contact. It is safe
 /// to call after any error and returns an existing terminal outcome unchanged.
@@ -551,12 +1006,17 @@ mod tests {
     use crate::case_service::CaseService;
     use crate::coverage::compute_coverage_ledger;
     use crate::domain::CoverageStatus;
+    use crate::job_manager::{
+        DurableCancellationOutcome, DurableCancellationWrite, JobManager, JobStatus,
+    };
     use crate::local_tcp_probe::LOCAL_TCP_CONNECT_TIMEOUT;
     use crate::storage::SaveCaseFault;
     use std::io;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
+    use std::time::Duration;
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -564,14 +1024,14 @@ mod tests {
         (directory, storage)
     }
 
-    struct PersistedBeforeContactConnector<'a> {
-        storage: &'a Storage,
-        prepared: &'a PreparedLocalhostQuickScan,
-        result: io::Result<()>,
-        calls: Mutex<Vec<(SocketAddr, std::time::Duration)>>,
+    struct PersistedBeforeContactConnector {
+        storage: Arc<Storage>,
+        prepared: PreparedLocalhostQuickScan,
+        result: Result<(), io::ErrorKind>,
+        calls: Arc<Mutex<Vec<(SocketAddr, std::time::Duration)>>>,
     }
 
-    impl LocalTcpConnector for PersistedBeforeContactConnector<'_> {
+    impl LocalTcpConnector for PersistedBeforeContactConnector {
         fn connect(&self, endpoint: SocketAddr, timeout: std::time::Duration) -> io::Result<()> {
             let persisted = self
                 .storage
@@ -581,9 +1041,9 @@ mod tests {
             assert_eq!(task.status, EngineRunStatus::Running);
             assert_eq!(task.phase, "connecting");
             self.calls.lock().expect("calls").push((endpoint, timeout));
-            match &self.result {
+            match self.result {
                 Ok(()) => Ok(()),
-                Err(error) => Err(io::Error::new(error.kind(), "test connector result")),
+                Err(kind) => Err(io::Error::new(kind, "test connector result")),
             }
         }
     }
@@ -591,14 +1051,82 @@ mod tests {
     struct BlockingConnector {
         entered: Arc<Barrier>,
         release: Arc<Barrier>,
+        calls: Arc<AtomicUsize>,
     }
 
     impl LocalTcpConnector for BlockingConnector {
         fn connect(&self, _endpoint: SocketAddr, _timeout: std::time::Duration) -> io::Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.entered.wait();
             self.release.wait();
             Ok(())
         }
+    }
+
+    type ManagedTerminal = (JobSnapshot, AppResult<AssessmentCase>);
+
+    fn start_managed_test_job(
+        storage: Arc<Storage>,
+        prepared: PreparedLocalhostQuickScan,
+        connector: Arc<dyn LocalTcpConnector>,
+        before_dispatch: Option<Arc<dyn Fn() + Send + Sync>>,
+        after_terminal_mark: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> (JobManager, JobKey, mpsc::Receiver<ManagedTerminal>) {
+        let manager = JobManager::default();
+        let key =
+            JobKey::new(prepared.case_id.clone(), prepared.scan_run_id.clone()).expect("job key");
+        let worker_storage = Arc::clone(&storage);
+        let worker_prepared = prepared.clone();
+        let callback_storage = Arc::clone(&storage);
+        let callback_prepared = prepared.clone();
+        let (terminal_tx, terminal_rx) = mpsc::channel();
+        manager
+            .start_job(
+                key.clone(),
+                [prepared.engine_run_id.clone()],
+                move |context| {
+                    let hooks = ManagedLocalhostExecutionHooks {
+                        before_dispatch: before_dispatch.as_deref().map(|hook| hook as &dyn Fn()),
+                        after_terminal_mark: after_terminal_mark
+                            .as_deref()
+                            .map(|hook| hook as &dyn Fn()),
+                    };
+                    execute_managed_localhost_quick_scan_with_hooks(
+                        &worker_storage,
+                        &[],
+                        &worker_prepared,
+                        connector.as_ref(),
+                        &context,
+                        &hooks,
+                    )
+                },
+                move |snapshot| {
+                    let reconciled = reconcile_managed_localhost_terminal(
+                        &callback_storage,
+                        &[],
+                        &callback_prepared,
+                        snapshot.status,
+                    );
+                    terminal_tx
+                        .send((snapshot, reconciled))
+                        .expect("terminal receiver");
+                },
+            )
+            .expect("managed job starts");
+        (manager, key, terminal_rx)
+    }
+
+    fn run_managed_test_job(
+        storage: Arc<Storage>,
+        prepared: PreparedLocalhostQuickScan,
+        connector: Arc<dyn LocalTcpConnector>,
+    ) -> AssessmentCase {
+        let (_manager, _key, terminal_rx) =
+            start_managed_test_job(storage, prepared, connector, None, None);
+        let (_snapshot, reconciled) = terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("managed terminal callback");
+        reconciled.expect("managed durable reconciliation")
     }
 
     #[test]
@@ -647,43 +1175,44 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_guard_covers_the_exact_queued_and_running_connector_window() {
+    fn managed_dispatch_returns_queued_immediately_and_refuses_pause_or_resume() {
         let (directory, storage) = storage();
         let storage = Arc::new(storage);
         let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
             .expect("prepare")
             .prepared;
-        let queued = storage.get_case(&prepared.case_id).expect("queued case");
-        assert!(run_has_in_flight_localhost_quick_scan(&queued.scan_runs[0]));
-
-        let entered = Arc::new(Barrier::new(2));
-        let release = Arc::new(Barrier::new(2));
-        let worker_storage = Arc::clone(&storage);
-        let worker_prepared = prepared.clone();
-        let worker_entered = Arc::clone(&entered);
-        let worker_release = Arc::clone(&release);
-        let worker = thread::spawn(move || {
-            execute_prepared_localhost_quick_scan(
-                &worker_storage,
-                &[],
-                &worker_prepared,
-                &BlockingConnector {
-                    entered: worker_entered,
-                    release: worker_release,
-                },
-            )
-            .expect("execute")
+        let before_entered = Arc::new(Barrier::new(2));
+        let before_release = Arc::new(Barrier::new(2));
+        let hook_entered = Arc::clone(&before_entered);
+        let hook_release = Arc::clone(&before_release);
+        let before_dispatch: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            hook_entered.wait();
+            hook_release.wait();
+        });
+        let connector_calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
+            result: Ok(()),
+            calls: Arc::clone(&connector_calls),
         });
 
-        entered.wait();
-        let running = storage.get_case(&prepared.case_id).expect("running case");
-        assert_eq!(
-            running.scan_runs[0].engine_runs[0].status,
-            EngineRunStatus::Running
+        let (_manager, _key, terminal_rx) = start_managed_test_job(
+            Arc::clone(&storage),
+            prepared.clone(),
+            connector,
+            Some(before_dispatch),
+            None,
         );
-        assert!(run_has_in_flight_localhost_quick_scan(
-            &running.scan_runs[0]
-        ));
+        // The worker cannot cross its injected pre-dispatch barrier until the
+        // test releases it, so returning here proves admission is detached.
+        let queued = storage.get_case(&prepared.case_id).expect("queued case");
+        assert_eq!(
+            queued.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Queued
+        );
+        before_entered.wait();
+
         let engines = crate::registry::EngineRegistry::load_builtin().expect("engine registry");
         let adapters = crate::adapters::builtin_adapter_registry().expect("adapter registry");
         let service = CaseService::new(
@@ -693,47 +1222,461 @@ mod tests {
             directory.path().join("artifacts"),
             directory.path().join("signing.key"),
         );
-        let cancel_error = service
-            .cancel_scan(&prepared.case_id, &prepared.scan_run_id)
-            .expect_err("generic cancel must not race the unmanaged connector");
-        assert!(matches!(cancel_error, AppError::NotAvailable(_)));
-        let preserved = storage
-            .get_case(&prepared.case_id)
-            .expect("preserved running case");
-        assert_eq!(
-            preserved.scan_runs[0].engine_runs[0].status,
-            EngineRunStatus::Running
-        );
-
-        release.wait();
-        let completed = worker.join().expect("connector worker");
-        assert!(!run_has_in_flight_localhost_quick_scan(
-            &completed.scan_runs[0]
+        assert!(matches!(
+            service
+                .pause_scan(&prepared.case_id, &prepared.scan_run_id)
+                .expect_err("built-in task cannot pause"),
+            AppError::NotAvailable(_)
         ));
+        assert!(matches!(
+            service
+                .resume_scan(&prepared.case_id, &prepared.scan_run_id)
+                .expect_err("built-in task cannot resume"),
+            AppError::NotAvailable(_)
+        ));
+
+        before_release.wait();
+        let (_snapshot, completed) = terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("completed callback");
         assert_eq!(
-            completed.scan_runs[0].engine_runs[0].status,
+            completed.expect("durable result").scan_runs[0].engine_runs[0].status,
             EngineRunStatus::Completed
         );
+        assert_eq!(connector_calls.lock().expect("calls").len(), 1);
+    }
+
+    #[test]
+    fn predispatch_cancel_saves_intent_makes_zero_contacts_and_finishes_cancelled() {
+        let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
+        let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("prepare")
+            .prepared;
+        let before_entered = Arc::new(Barrier::new(2));
+        let before_release = Arc::new(Barrier::new(2));
+        let hook_entered = Arc::clone(&before_entered);
+        let hook_release = Arc::clone(&before_release);
+        let before_dispatch: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            hook_entered.wait();
+            hook_release.wait();
+        });
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
+            result: Ok(()),
+            calls: Arc::clone(&calls),
+        });
+        let (manager, key, terminal_rx) = start_managed_test_job(
+            Arc::clone(&storage),
+            prepared.clone(),
+            connector,
+            Some(before_dispatch),
+            None,
+        );
+        before_entered.wait();
+
+        let outcome = manager
+            .cancel_with_durable_transition(&key, || {
+                record_localhost_cancel_transition(&storage, &[], &prepared)
+            })
+            .expect("manager cancellation")
+            .expect("durable cancellation");
+        let DurableCancellationOutcome::Requested { durable, .. } = outcome else {
+            panic!("active queued task must save cancel_requested")
+        };
+        let requested = &durable.scan_runs[0].engine_runs[0];
+        assert_eq!(requested.status, EngineRunStatus::Queued);
+        assert_eq!(requested.phase, "cancel_requested");
+
+        before_release.wait();
+        let (snapshot, reconciled) = terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancelled callback");
+        assert_eq!(snapshot.status, JobStatus::Cancelled);
+        let cancelled = reconciled.expect("durable cancellation terminal");
+        let task = &cancelled.scan_runs[0].engine_runs[0];
+        assert_eq!(task.status, EngineRunStatus::Cancelled);
+        assert_eq!(
+            task.error_code.as_deref(),
+            Some("cancelled_without_observation")
+        );
+        assert!(task.localhost_tcp_observation.is_none());
+        assert!(calls.lock().expect("calls").is_empty());
+    }
+
+    #[test]
+    fn cancel_during_connector_returns_before_release_and_discards_late_observation() {
+        let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
+        let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("prepare")
+            .prepared;
+        let connector_entered = Arc::new(Barrier::new(2));
+        let connector_release = Arc::new(Barrier::new(2));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(BlockingConnector {
+            entered: Arc::clone(&connector_entered),
+            release: Arc::clone(&connector_release),
+            calls: Arc::clone(&calls),
+        });
+        let (manager, key, terminal_rx) = start_managed_test_job(
+            Arc::clone(&storage),
+            prepared.clone(),
+            connector,
+            None,
+            None,
+        );
+        connector_entered.wait();
+
+        let cancel_manager = manager.clone();
+        let cancel_key = key.clone();
+        let cancel_storage = Arc::clone(&storage);
+        let cancel_prepared = prepared.clone();
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        let cancel_thread = thread::spawn(move || {
+            cancel_tx
+                .send(
+                    cancel_manager.cancel_with_durable_transition(&cancel_key, || {
+                        record_localhost_cancel_transition(&cancel_storage, &[], &cancel_prepared)
+                    }),
+                )
+                .expect("cancel receiver");
+        });
+        let outcome = cancel_rx
+            .recv_timeout(Duration::from_millis(250))
+            .expect("cancel must not wait for connector")
+            .expect("manager cancellation")
+            .expect("durable cancellation");
+        assert!(matches!(
+            outcome,
+            DurableCancellationOutcome::Requested { .. }
+        ));
+        let saved = storage.get_case(&prepared.case_id).expect("saved request");
+        assert_eq!(
+            saved.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Running
+        );
+        assert_eq!(saved.scan_runs[0].engine_runs[0].phase, "cancel_requested");
+
+        connector_release.wait();
+        cancel_thread.join().expect("cancel thread");
+        let (snapshot, reconciled) = terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancelled callback");
+        assert_eq!(snapshot.status, JobStatus::Cancelled);
+        let cancelled = reconciled.expect("durable cancellation terminal");
+        let task = &cancelled.scan_runs[0].engine_runs[0];
+        assert_eq!(task.status, EngineRunStatus::Cancelled);
+        assert_eq!(
+            task.error_code.as_deref(),
+            Some("cancelled_without_observation")
+        );
+        assert!(task.localhost_tcp_observation.is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn durable_result_and_terminal_mark_beat_a_late_cancel_forever() {
+        let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
+        let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("prepare")
+            .prepared;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
+            result: Ok(()),
+            calls: Arc::clone(&calls),
+        });
+        let terminal_marked = Arc::new(Barrier::new(2));
+        let terminal_release = Arc::new(Barrier::new(2));
+        let hook_marked = Arc::clone(&terminal_marked);
+        let hook_release = Arc::clone(&terminal_release);
+        let after_terminal_mark: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            hook_marked.wait();
+            hook_release.wait();
+        });
+        let (manager, key, terminal_rx) = start_managed_test_job(
+            Arc::clone(&storage),
+            prepared.clone(),
+            connector,
+            None,
+            Some(after_terminal_mark),
+        );
+        terminal_marked.wait();
+
+        let durable_writes = Arc::new(AtomicUsize::new(0));
+        let writes = Arc::clone(&durable_writes);
+        let cancel_manager = manager.clone();
+        let cancel_key = key.clone();
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        let cancel_thread = thread::spawn(move || {
+            cancel_tx
+                .send(
+                    cancel_manager.cancel_with_durable_transition(&cancel_key, move || {
+                        writes.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, AppError>(DurableCancellationWrite::Requested(()))
+                    }),
+                )
+                .expect("cancel receiver");
+        });
+        assert!(cancel_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        terminal_release.wait();
+
+        let outcome = cancel_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("late cancel returns")
+            .expect("manager transition")
+            .expect("typed outcome");
+        assert!(matches!(
+            outcome,
+            DurableCancellationOutcome::TerminalWon { durable: None, .. }
+        ));
+        assert_eq!(durable_writes.load(Ordering::SeqCst), 0);
+        cancel_thread.join().expect("cancel thread");
+        let (snapshot, reconciled) = terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("completed callback");
+        assert_eq!(snapshot.status, JobStatus::Completed);
+        let completed = reconciled.expect("durable result");
+        let task = &completed.scan_runs[0].engine_runs[0];
+        assert_eq!(task.status, EngineRunStatus::Completed);
+        assert_eq!(
+            task.localhost_tcp_observation
+                .as_ref()
+                .map(|observation| &observation.outcome),
+            Some(&LocalhostTcpOutcome::Reachable)
+        );
+        assert_eq!(calls.lock().expect("calls").len(), 1);
+    }
+
+    #[test]
+    fn durable_terminal_truth_beats_lagging_job_control_and_one_way_cancel_token() {
+        let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
+        let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("prepare")
+            .prepared;
+        let before_entered = Arc::new(Barrier::new(2));
+        let before_release = Arc::new(Barrier::new(2));
+        let hook_entered = Arc::clone(&before_entered);
+        let hook_release = Arc::clone(&before_release);
+        let before_dispatch: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            hook_entered.wait();
+            hook_release.wait();
+        });
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
+            result: Ok(()),
+            calls: Arc::clone(&calls),
+        });
+        let (manager, key, terminal_rx) = start_managed_test_job(
+            Arc::clone(&storage),
+            prepared.clone(),
+            connector,
+            Some(before_dispatch),
+            None,
+        );
+        before_entered.wait();
+
+        persist_localhost_running_once(&storage, &[], &prepared).expect("simulate durable running");
+        let durable_terminal = complete_localhost_quick_scan_once(
+            &storage,
+            &[],
+            &prepared,
+            Ok(LocalTcpProbeOutcome::Reachable),
+        )
+        .expect("simulate durable terminal truth");
+        let outcome = manager
+            .cancel_with_durable_transition(&key, || {
+                record_localhost_cancel_transition(&storage, &[], &prepared)
+            })
+            .expect("manager transition")
+            .expect("typed transition");
+        let DurableCancellationOutcome::TerminalWon {
+            durable: Some(returned),
+            ..
+        } = outcome
+        else {
+            panic!("durable terminal truth must win")
+        };
+        assert_eq!(returned.storage_revision, durable_terminal.storage_revision);
+        assert_eq!(returned.scan_runs[0].engine_runs[0].phase, "completed");
+        assert!(
+            returned.scan_runs[0].engine_runs[0]
+                .localhost_tcp_observation
+                .is_some()
+        );
+
+        before_release.wait();
+        let (snapshot, reconciled) = terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("terminal callback");
+        assert_eq!(snapshot.status, JobStatus::Completed);
+        let preserved = reconciled.expect("preserved durable truth");
+        assert_eq!(preserved.scan_runs[0].engine_runs[0].phase, "completed");
+        assert!(
+            preserved.scan_runs[0].engine_runs[0]
+                .localhost_tcp_observation
+                .is_some()
+        );
+        assert!(calls.lock().expect("calls").is_empty());
+    }
+
+    #[test]
+    fn cancel_persistence_fault_reconciles_without_recontact() {
+        let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
+        let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("prepare")
+            .prepared;
+        let connector_entered = Arc::new(Barrier::new(2));
+        let connector_release = Arc::new(Barrier::new(2));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(BlockingConnector {
+            entered: Arc::clone(&connector_entered),
+            release: Arc::clone(&connector_release),
+            calls: Arc::clone(&calls),
+        });
+        let (manager, key, terminal_rx) = start_managed_test_job(
+            Arc::clone(&storage),
+            prepared.clone(),
+            connector,
+            None,
+            None,
+        );
+        connector_entered.wait();
+        let outcome = manager
+            .cancel_with_durable_transition(&key, || {
+                record_localhost_cancel_transition(&storage, &[], &prepared)
+            })
+            .expect("manager cancellation")
+            .expect("durable request");
+        assert!(matches!(
+            outcome,
+            DurableCancellationOutcome::Requested { .. }
+        ));
+        storage.inject_save_case_faults(
+            "scan.localhost_quick_cancelled",
+            LOCALHOST_PERSISTENCE_ATTEMPTS,
+            SaveCaseFault::Storage,
+        );
+        connector_release.wait();
+        let (snapshot, reconciled) = terminal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("persistence-pending callback");
+        assert_eq!(snapshot.status, JobStatus::Failed);
+        let cancelled = reconciled.expect("callback retries exact durable cancellation");
+        assert_eq!(
+            cancelled.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Cancelled
+        );
+        assert!(
+            cancelled.scan_runs[0].engine_runs[0]
+                .localhost_tcp_observation
+                .is_none()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn exact_port_selector_dedupes_only_same_port_and_different_ports_each_run_once() {
+        let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
+        let first = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("first prepare")
+            .prepared;
+        let second = prepare_localhost_quick_scan(&storage, &[], 9_002)
+            .expect("second prepare")
+            .prepared;
+        let first_entered = Arc::new(Barrier::new(2));
+        let first_release = Arc::new(Barrier::new(2));
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let second_entered = Arc::new(Barrier::new(2));
+        let second_release = Arc::new(Barrier::new(2));
+        let second_calls = Arc::new(AtomicUsize::new(0));
+        let (first_manager, first_key, first_terminal) = start_managed_test_job(
+            Arc::clone(&storage),
+            first.clone(),
+            Arc::new(BlockingConnector {
+                entered: Arc::clone(&first_entered),
+                release: Arc::clone(&first_release),
+                calls: Arc::clone(&first_calls),
+            }),
+            None,
+            None,
+        );
+        let (second_manager, second_key, second_terminal) = start_managed_test_job(
+            Arc::clone(&storage),
+            second.clone(),
+            Arc::new(BlockingConnector {
+                entered: Arc::clone(&second_entered),
+                release: Arc::clone(&second_release),
+                calls: Arc::clone(&second_calls),
+            }),
+            None,
+            None,
+        );
+        first_entered.wait();
+        second_entered.wait();
+
+        let first_live = first_manager.live_snapshots();
+        let second_live = second_manager.live_snapshots();
+        assert_eq!(
+            live_localhost_quick_scan_for_port(&storage, &first_live, 9_001)
+                .expect("same-port live case")
+                .id,
+            first.case_id
+        );
+        assert!(live_localhost_quick_scan_for_port(&storage, &first_live, 9_002).is_none());
+        assert_eq!(
+            live_localhost_quick_scan_for_port(&storage, &second_live, 9_002)
+                .expect("different-port live case")
+                .id,
+            second.case_id
+        );
+        assert_ne!(first_key, second_key);
+
+        first_release.wait();
+        second_release.wait();
+        first_terminal
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first terminal")
+            .1
+            .expect("first durable terminal");
+        second_terminal
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second terminal")
+            .1
+            .expect("second durable terminal");
+        assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(second_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn execution_contacts_only_exact_loopback_after_running_state_is_durable() {
         let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
         let prepared = prepare_localhost_quick_scan(&storage, &[], 42_001)
             .expect("prepare")
             .prepared;
-        let connector = PersistedBeforeContactConnector {
-            storage: &storage,
-            prepared: &prepared,
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
             result: Ok(()),
-            calls: Mutex::new(Vec::new()),
-        };
+            calls: Arc::clone(&calls),
+        });
 
-        let completed = execute_prepared_localhost_quick_scan(&storage, &[], &prepared, &connector)
-            .expect("execute");
+        let completed = run_managed_test_job(Arc::clone(&storage), prepared, connector);
 
         assert_eq!(
-            connector.calls.into_inner().expect("calls"),
+            *calls.lock().expect("calls"),
             vec![(
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 42_001)),
                 LOCAL_TCP_CONNECT_TIMEOUT,
@@ -765,19 +1708,18 @@ mod tests {
             ),
         ] {
             let (_directory, storage) = storage();
+            let storage = Arc::new(storage);
             let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
                 .expect("prepare")
                 .prepared;
-            let connector = PersistedBeforeContactConnector {
-                storage: &storage,
-                prepared: &prepared,
-                result: Err(io::Error::new(kind, "raw platform text")),
-                calls: Mutex::new(Vec::new()),
-            };
+            let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+                storage: Arc::clone(&storage),
+                prepared: prepared.clone(),
+                result: Err(kind),
+                calls: Arc::new(Mutex::new(Vec::new())),
+            });
 
-            let completed =
-                execute_prepared_localhost_quick_scan(&storage, &[], &prepared, &connector)
-                    .expect("execute");
+            let completed = run_managed_test_job(storage, prepared, connector);
             let task = &completed.scan_runs[0].engine_runs[0];
             assert_eq!(task.status, expected_status);
             assert_eq!(
@@ -792,6 +1734,7 @@ mod tests {
     #[test]
     fn terminal_persistence_fault_is_bounded_and_reconciled_without_second_contact() {
         let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
         let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
             .expect("prepare")
             .prepared;
@@ -800,18 +1743,17 @@ mod tests {
             LOCALHOST_PERSISTENCE_ATTEMPTS,
             SaveCaseFault::Storage,
         );
-        let connector = PersistedBeforeContactConnector {
-            storage: &storage,
-            prepared: &prepared,
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
             result: Ok(()),
-            calls: Mutex::new(Vec::new()),
-        };
+            calls: Arc::clone(&calls),
+        });
 
-        let reconciled =
-            execute_prepared_localhost_quick_scan(&storage, &[], &prepared, &connector)
-                .expect("same-process reconciliation");
+        let reconciled = run_managed_test_job(Arc::clone(&storage), prepared.clone(), connector);
 
-        assert_eq!(connector.calls.lock().expect("calls").len(), 1);
+        assert_eq!(calls.lock().expect("calls").len(), 1);
         let task = &reconciled.scan_runs[0].engine_runs[0];
         assert_eq!(task.status, EngineRunStatus::Failed);
         assert_eq!(task.phase, "localhost_probe_interrupted");
@@ -835,6 +1777,7 @@ mod tests {
     #[test]
     fn running_persistence_fault_terminalizes_without_target_contact() {
         let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
         let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
             .expect("prepare")
             .prepared;
@@ -843,18 +1786,17 @@ mod tests {
             LOCALHOST_PERSISTENCE_ATTEMPTS,
             SaveCaseFault::Conflict,
         );
-        let connector = PersistedBeforeContactConnector {
-            storage: &storage,
-            prepared: &prepared,
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
             result: Ok(()),
-            calls: Mutex::new(Vec::new()),
-        };
+            calls: Arc::clone(&calls),
+        });
 
-        let reconciled =
-            execute_prepared_localhost_quick_scan(&storage, &[], &prepared, &connector)
-                .expect("same-process reconciliation");
+        let reconciled = run_managed_test_job(storage, prepared, connector);
 
-        assert!(connector.calls.lock().expect("calls").is_empty());
+        assert!(calls.lock().expect("calls").is_empty());
         let task = &reconciled.scan_runs[0].engine_runs[0];
         assert_eq!(task.status, EngineRunStatus::Failed);
         assert_eq!(task.phase, "localhost_probe_interrupted");
@@ -883,17 +1825,17 @@ mod tests {
     #[test]
     fn green_coverage_requires_the_complete_exact_target_and_permission_binding() {
         let (_directory, storage) = storage();
+        let storage = Arc::new(storage);
         let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
             .expect("prepare")
             .prepared;
-        let connector = PersistedBeforeContactConnector {
-            storage: &storage,
-            prepared: &prepared,
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
             result: Ok(()),
-            calls: Mutex::new(Vec::new()),
-        };
-        let completed = execute_prepared_localhost_quick_scan(&storage, &[], &prepared, &connector)
-            .expect("execute");
+            calls: Arc::new(Mutex::new(Vec::new())),
+        });
+        let completed = run_managed_test_job(storage, prepared, connector);
         assert_eq!(
             asset_coverage(&completed),
             CoverageStatus::DiscoveredAuthorizedScanned

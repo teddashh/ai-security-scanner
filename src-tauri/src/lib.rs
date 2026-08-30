@@ -427,8 +427,12 @@ mod desktop_nonblocking_source_invariants {
         assert!(admission < second_snapshot && second_snapshot < local_cancel);
         assert!(
             cancel[second_snapshot..local_cancel]
-                .contains("run_has_in_flight_localhost_quick_scan(run)")
+                .contains("run_is_exact_localhost_quick_scan(run)")
         );
+
+        assert!(live_helper.contains("cancel_with_durable_transition"));
+        assert!(live_helper.contains("record_localhost_cancel_transition"));
+        assert!(live_helper.contains("DurableCancellationOutcome::TerminalWon"));
 
         let scheduler_start = source
             .find("fn schedule_exact_runtime_cleanup_reconciliation(")
@@ -440,5 +444,41 @@ mod desktop_nonblocking_source_invariants {
         let scheduler = &source[scheduler_start..scheduler_end];
         assert!(scheduler.contains("tauri::async_runtime::spawn_blocking"));
         assert!(scheduler.contains("reconcile_interrupted_scan_resources("));
+    }
+
+    #[test]
+    fn localhost_first_value_path_has_one_managed_detached_lifecycle() {
+        let commands = include_str!("commands.rs");
+        let start = commands
+            .find("pub async fn start_localhost_quick_scan(")
+            .expect("localhost start command");
+        let end = commands[start..]
+            .find("\nfn requested_or_latest_run(")
+            .map(|offset| start + offset)
+            .expect("localhost start command end");
+        let start = &commands[start..end];
+        assert!(start.contains("state.jobs.coordinate_admission"));
+        assert!(start.contains("live_localhost_quick_scan_for_port("));
+        assert!(start.contains("state.jobs.start_job("));
+        assert!(start.contains("execute_managed_localhost_quick_scan("));
+        assert!(start.contains("Ok(queued_case)"));
+        assert!(!start.contains(".await"));
+        assert!(!start.contains("spawn_blocking"));
+
+        let retained = start
+            .find(".terminal_snapshots()")
+            .expect("retained terminal reconciliation");
+        let new_case = start
+            .find("prepare_localhost_quick_scan(")
+            .expect("new exact task preparation");
+        assert!(
+            retained < new_case,
+            "old terminals cannot replace the new action"
+        );
+
+        let localhost = include_str!("localhost_quick_scan.rs");
+        assert!(!localhost.contains("execute_prepared_localhost_quick_scan"));
+        assert!(localhost.contains("pub fn execute_managed_localhost_quick_scan("));
+        assert!(localhost.contains("cancelled_without_observation"));
     }
 }

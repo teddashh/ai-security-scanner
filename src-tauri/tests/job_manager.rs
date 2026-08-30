@@ -1,6 +1,7 @@
 use ai_security_scanner_lib::job_manager::{
-    EngineJobStatus, JobActivationOutcome, JobCompletion, JobFailureKind, JobKey, JobManager,
-    JobManagerError, JobStatus, TerminalReconciliationOutcome,
+    DurableCancellationOutcome, DurableCancellationWrite, EngineJobStatus, JobActivationOutcome,
+    JobCompletion, JobFailureKind, JobKey, JobManager, JobManagerError, JobStatus,
+    TerminalReconciliationOutcome,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
@@ -911,6 +912,120 @@ fn retained_terminal_generation_is_not_a_live_cancellation_target() {
     );
     assert_eq!(manager.snapshot(&key), Some(terminal.clone()));
     assert_eq!(manager.terminal_snapshots(), vec![terminal]);
+}
+
+#[test]
+fn durable_cancel_transition_is_short_while_worker_waits_outside_control_boundary() {
+    let manager = JobManager::default();
+    let key = key();
+    let entered_target = Arc::new(Barrier::new(2));
+    let release_target = Arc::new(Barrier::new(2));
+    let worker_entered = Arc::clone(&entered_target);
+    let worker_release = Arc::clone(&release_target);
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["engine"],
+            move |context| {
+                let engine = context.engine("engine").expect("engine");
+                context.coordinate_durable_write(|| engine.mark_running().expect("running"));
+                worker_entered.wait();
+                worker_release.wait();
+                context.coordinate_durable_write(|| {
+                    assert!(context.is_cancelled());
+                    engine.mark_cancelled().expect("cancelled");
+                });
+                JobCompletion::Cancelled
+            },
+            move |terminal| terminal_tx.send(terminal).expect("terminal"),
+        )
+        .expect("job starts");
+    entered_target.wait();
+
+    let durable_writes = Arc::new(AtomicUsize::new(0));
+    let writes = Arc::clone(&durable_writes);
+    let outcome = manager
+        .cancel_with_durable_transition(&key, move || {
+            writes.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(DurableCancellationWrite::Requested("saved"))
+        })
+        .expect("manager transition")
+        .expect("durable transition");
+    assert!(matches!(
+        outcome,
+        DurableCancellationOutcome::Requested {
+            durable: "saved",
+            ..
+        }
+    ));
+    assert_eq!(durable_writes.load(Ordering::SeqCst), 1);
+
+    release_target.wait();
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("cancelled terminal");
+    assert_eq!(terminal.status, JobStatus::Cancelled);
+}
+
+#[test]
+fn durable_terminal_mark_beats_a_late_cancel_without_invoking_its_write() {
+    let manager = JobManager::default();
+    let key = key();
+    let result_marked = Arc::new(Barrier::new(2));
+    let release_result = Arc::new(Barrier::new(2));
+    let worker_marked = Arc::clone(&result_marked);
+    let worker_release = Arc::clone(&release_result);
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["engine"],
+            move |context| {
+                let engine = context.engine("engine").expect("engine");
+                context.coordinate_durable_write(|| {
+                    engine.mark_running().expect("running");
+                    engine.mark_completed().expect("completed");
+                    worker_marked.wait();
+                    worker_release.wait();
+                });
+                JobCompletion::Completed
+            },
+            move |terminal| terminal_tx.send(terminal).expect("terminal"),
+        )
+        .expect("job starts");
+    result_marked.wait();
+
+    let cancel_manager = manager.clone();
+    let cancel_key = key.clone();
+    let durable_writes = Arc::new(AtomicUsize::new(0));
+    let writes = Arc::clone(&durable_writes);
+    let (cancel_tx, cancel_rx) = mpsc::channel();
+    let cancel = thread::spawn(move || {
+        let outcome = cancel_manager.cancel_with_durable_transition(&cancel_key, move || {
+            writes.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ()>(DurableCancellationWrite::Requested(()))
+        });
+        cancel_tx.send(outcome).expect("cancel outcome");
+    });
+    assert!(cancel_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    release_result.wait();
+
+    let outcome = cancel_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("late cancel returns")
+        .expect("manager transition")
+        .expect("typed outcome");
+    assert!(matches!(
+        outcome,
+        DurableCancellationOutcome::TerminalWon { durable: None, .. }
+    ));
+    assert_eq!(durable_writes.load(Ordering::SeqCst), 0);
+    cancel.join().expect("cancel thread");
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("completed terminal");
+    assert_eq!(terminal.status, JobStatus::Completed);
 }
 
 #[test]

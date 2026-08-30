@@ -27,8 +27,11 @@ use crate::external_scope::{ExternalScopeGrant, ResolvedExternalPlan, resolve_ex
 use crate::gateway_release::managed_egress_gateway_spec;
 use crate::local_tcp_probe::DesktopHostTcpConnector;
 use crate::localhost_quick_scan::{
-    execute_prepared_localhost_quick_scan, prepare_localhost_quick_scan,
-    reconcile_interrupted_localhost_quick_scan, run_has_in_flight_localhost_quick_scan,
+    execute_managed_localhost_quick_scan, live_localhost_quick_scan_for_port,
+    localhost_quick_scan_for_snapshot, prepare_localhost_quick_scan,
+    prepared_localhost_quick_scan_for_job, reconcile_interrupted_localhost_quick_scan,
+    reconcile_managed_localhost_terminal, record_localhost_cancel_transition,
+    record_localhost_cancelled, run_is_exact_localhost_quick_scan,
 };
 use crate::managed_network::{
     GatewayContainerSpec, ManagedNetworkCleanupOutcome, ManagedNetworkController,
@@ -62,8 +65,8 @@ use crate::{
         ScannerCredentialSet, cleanup_orphaned_credentials,
     },
     job_manager::{
-        EngineJobStatus, JobActivationOutcome, JobCompletion, JobContext, JobKey, JobManagerError,
-        JobSnapshot, TerminalReconciliationOutcome,
+        DurableCancellationOutcome, EngineJobStatus, JobActivationOutcome, JobCompletion,
+        JobContext, JobKey, JobManagerError, JobSnapshot, TerminalReconciliationOutcome,
     },
     orchestrator::{
         EngineExecutionRequest, ExecutionCheckpoint, ExecutionReport, ExecutionStage, Orchestrator,
@@ -3143,94 +3146,94 @@ pub async fn start_scan(
     })
 }
 
-/// The first-value path is deliberately independent of the managed runtime
-/// and catalog engines. The exact queued task is durable before this command
-/// enters the bounded, payload-free desktop-host connection attempt.
-#[tauri::command]
-pub async fn start_localhost_quick_scan(port: u16, app: AppHandle) -> AppResult<AssessmentCase> {
-    let prepared = {
-        let state = app.state::<AppState>();
-        prepare_localhost_quick_scan(&state.storage, state.engines.manifests(), port)?
-    };
-    if let Err(error) = emit(&app, RUN_PROGRESS_EVENT, &prepared.case) {
-        tracing::warn!(error = %error, "queued localhost check event could not be emitted");
-    }
-
-    let durable_queued_case = prepared.case.clone();
-    let exact_task = prepared.prepared;
-    let worker_task = exact_task.clone();
-    let worker_app = app.clone();
-    let worker_outcome = tauri::async_runtime::spawn_blocking(move || {
-        let state = worker_app.state::<AppState>();
-        execute_prepared_localhost_quick_scan(
-            &state.storage,
-            state.engines.manifests(),
-            &worker_task,
-            &DesktopHostTcpConnector,
-        )
-    })
-    .await;
-    let completed = match worker_outcome {
-        Ok(Ok(case)) => case,
-        Ok(Err(error)) => {
-            tracing::error!(
-                error = %error,
-                case_id = %exact_task.case_id,
-                scan_run_id = %exact_task.scan_run_id,
-                "localhost check worker returned before a durable terminal outcome"
-            );
-            reconcile_localhost_command_failure(&app, &exact_task, &durable_queued_case)
-        }
-        Err(error) => {
-            tracing::error!(
-                error = %error,
-                case_id = %exact_task.case_id,
-                scan_run_id = %exact_task.scan_run_id,
-                "localhost check worker ended unexpectedly"
-            );
-            reconcile_localhost_command_failure(&app, &exact_task, &durable_queued_case)
-        }
-    };
-
-    if let Err(error) = emit(&app, RUN_PROGRESS_EVENT, &completed) {
-        tracing::warn!(error = %error, "completed localhost check event could not be emitted");
-    }
-    if let Err(error) = emit(&app, RUN_FINISHED_EVENT, &completed) {
-        tracing::warn!(error = %error, "finished localhost check event could not be emitted");
-    }
-    Ok(completed)
+fn snapshot_localhost_quick_scan(
+    state: &AppState,
+    snapshot: &JobSnapshot,
+) -> Option<crate::localhost_quick_scan::PreparedLocalhostQuickScan> {
+    let (_, prepared) = localhost_quick_scan_for_snapshot(&state.storage, snapshot)
+        .ok()
+        .flatten()?;
+    Some(prepared)
 }
 
-fn reconcile_localhost_command_failure(
-    app: &AppHandle,
-    prepared: &crate::localhost_quick_scan::PreparedLocalhostQuickScan,
-    durable_fallback: &AssessmentCase,
-) -> AssessmentCase {
+/// The first-value path is deliberately independent of the managed runtime
+/// and catalog engines. Preparation and JobManager admission share one short
+/// boundary; the detached worker owns the only bounded, payload-free contact.
+#[tauri::command]
+pub async fn start_localhost_quick_scan(port: u16, app: AppHandle) -> AppResult<AssessmentCase> {
     let state = app.state::<AppState>();
-    match reconcile_interrupted_localhost_quick_scan(
-        &state.storage,
-        state.engines.manifests(),
-        prepared,
-    ) {
-        Ok(case) => case,
-        Err(error) => {
+    state.jobs.coordinate_admission(|| {
+        if let Some(case) =
+            live_localhost_quick_scan_for_port(&state.storage, &state.jobs.live_snapshots(), port)
+        {
+            return Ok(case);
+        }
+        // A retained result from an older localhost run needs durable
+        // reconciliation, but it must never turn a new user action into a
+        // replay of that old case. Reconcile it in the background and admit a
+        // newly persisted task below.
+        for snapshot in state
+            .jobs
+            .terminal_snapshots()
+            .into_iter()
+            .filter(|snapshot| snapshot_localhost_quick_scan(&state, snapshot).is_some())
+        {
+            schedule_exact_terminal_reconciliation(&app, snapshot.key.clone(), snapshot);
+        }
+
+        let prepared =
+            prepare_localhost_quick_scan(&state.storage, state.engines.manifests(), port)?;
+        let queued_case = prepared.case;
+        let exact_task = prepared.prepared;
+        let key = JobKey::new(exact_task.case_id.clone(), exact_task.scan_run_id.clone())
+            .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+        let worker_task = exact_task.clone();
+        let worker_app = app.clone();
+        let terminal_key = key.clone();
+        let terminal_app = app.clone();
+        if let Err(error) = state.jobs.start_job(
+            key,
+            [exact_task.engine_run_id.clone()],
+            move |context| {
+                let state = worker_app.state::<AppState>();
+                execute_managed_localhost_quick_scan(
+                    &state.storage,
+                    state.engines.manifests(),
+                    &worker_task,
+                    &DesktopHostTcpConnector,
+                    &context,
+                )
+            },
+            move |snapshot| {
+                if let Err(error) = reconcile_terminal_job(&terminal_app, &terminal_key, &snapshot)
+                {
+                    tracing::error!(
+                        error = %error,
+                        case_id = %terminal_key.case_id,
+                        scan_run_id = %terminal_key.scan_run_id,
+                        "localhost terminal outcome is waiting for background reconciliation"
+                    );
+                }
+            },
+        ) {
             tracing::error!(
                 error = %error,
-                case_id = %prepared.case_id,
-                scan_run_id = %prepared.scan_run_id,
-                "localhost worker failure could not be reconciled immediately"
+                case_id = %exact_task.case_id,
+                scan_run_id = %exact_task.scan_run_id,
+                "localhost worker thread could not be admitted"
             );
-            // Preparation already committed the exact queued task. Never turn
-            // a later worker/persistence problem into the UI's "did not
-            // start" path. Prefer the newest readable durable snapshot; if the
-            // database is temporarily unreadable, return the known committed
-            // queued snapshot and let startup reconciliation terminalize it.
-            state
-                .storage
-                .get_case(&prepared.case_id)
-                .unwrap_or_else(|_| durable_fallback.clone())
+            return reconcile_interrupted_localhost_quick_scan(
+                &state.storage,
+                state.engines.manifests(),
+                &exact_task,
+            );
         }
-    }
+
+        if let Err(error) = emit(&app, RUN_PROGRESS_EVENT, &queued_case) {
+            tracing::warn!(error = %error, "queued localhost check event could not be emitted");
+        }
+        Ok(queued_case)
+    })
 }
 
 fn requested_or_latest_run(
@@ -3276,7 +3279,7 @@ fn durable_run_needs_background_cleanup(run: &ScanRun) -> bool {
 enum NoWorkerCancelAdmission {
     LiveAppeared,
     TerminalAppeared(JobSnapshot),
-    UnmanagedBoundedTask(AssessmentCase),
+    ManagedLocalhost(AssessmentCase),
     CleanupPending(AssessmentCase),
     DurableFinal(AssessmentCase),
     Cancelled(AssessmentCase),
@@ -3287,6 +3290,10 @@ fn signal_live_cancel_or_preserve_terminal(
     state: &AppState,
     key: &JobKey,
 ) -> AppResult<AssessmentCase> {
+    let durable = state.case_service().show_case(&key.case_id)?;
+    if let Some(prepared) = prepared_localhost_quick_scan_for_job(&durable, key)? {
+        return signal_live_localhost_cancel(app, state, key, &prepared);
+    }
     match state.jobs.cancel(key) {
         Ok(_) | Err(JobManagerError::CancellationPending(_)) => {}
         Err(JobManagerError::LiveJobNotFound(_)) => {
@@ -3315,6 +3322,47 @@ fn signal_live_cancel_or_preserve_terminal(
     Ok(case)
 }
 
+fn signal_live_localhost_cancel(
+    app: &AppHandle,
+    state: &AppState,
+    key: &JobKey,
+    prepared: &crate::localhost_quick_scan::PreparedLocalhostQuickScan,
+) -> AppResult<AssessmentCase> {
+    match state.jobs.cancel_with_durable_transition(key, || {
+        record_localhost_cancel_transition(&state.storage, state.engines.manifests(), prepared)
+    }) {
+        Ok(Ok(DurableCancellationOutcome::Requested { durable, .. })) => {
+            let _ = emit(app, RUN_PROGRESS_EVENT, &durable);
+            Ok(durable)
+        }
+        Ok(Ok(DurableCancellationOutcome::TerminalWon { snapshot, durable })) => {
+            if snapshot.is_terminal() {
+                schedule_exact_terminal_reconciliation(app, key.clone(), snapshot);
+            }
+            let case = match durable {
+                Some(case) => case,
+                None => state.case_service().show_case(&key.case_id)?,
+            };
+            let _ = emit(app, RUN_FINISHED_EVENT, &case);
+            Ok(case)
+        }
+        Ok(Err(error)) => Err(error),
+        Err(JobManagerError::LiveJobNotFound(_)) => {
+            if let Some(snapshot) = state.jobs.snapshot(key)
+                && snapshot.is_terminal()
+            {
+                schedule_exact_terminal_reconciliation(app, key.clone(), snapshot);
+            }
+            let case = state.case_service().show_case(&key.case_id)?;
+            let _ = emit(app, RUN_PROGRESS_EVENT, &case);
+            Ok(case)
+        }
+        Err(error) => Err(AppError::Runtime(format!(
+            "localhost cancellation could not be coordinated: {error}"
+        ))),
+    }
+}
+
 #[tauri::command]
 pub fn pause_scan(
     case_id: String,
@@ -3324,6 +3372,17 @@ pub fn pause_scan(
 ) -> AppResult<AssessmentCase> {
     let service = state.case_service();
     let run_id = requested_or_latest_run(&service, &case_id, run_id.as_deref())?;
+    let durable = service.show_case(&case_id)?;
+    if durable
+        .scan_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .is_some_and(run_is_exact_localhost_quick_scan)
+    {
+        return Err(AppError::NotAvailable(
+            "the fixed three-second localhost check cannot be paused".into(),
+        ));
+    }
     let key = JobKey::new(case_id.clone(), run_id.clone())
         .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
     let case = state
@@ -3346,6 +3405,18 @@ pub async fn resume_scan(
 ) -> AppResult<AssessmentCase> {
     let state = app.state::<AppState>();
     let run_id = requested_or_latest_run(&state.case_service(), &case_id, run_id.as_deref())?;
+    let durable = state.case_service().show_case(&case_id)?;
+    if durable
+        .scan_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .is_some_and(run_is_exact_localhost_quick_scan)
+    {
+        return Err(AppError::NotAvailable(
+            "the fixed three-second localhost check cannot be resumed; start a new check after it finishes"
+                .into(),
+        ));
+    }
     let key = JobKey::new(case_id.clone(), run_id.clone())
         .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
 
@@ -3438,8 +3509,19 @@ pub fn cancel_scan(
             .iter()
             .find(|run| run.id == run_id)
             .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-        if run_has_in_flight_localhost_quick_scan(run) {
-            return Ok(NoWorkerCancelAdmission::UnmanagedBoundedTask(durable));
+        if run_is_exact_localhost_quick_scan(run) {
+            if durable_run_has_final_outcome(run) {
+                return Ok(NoWorkerCancelAdmission::DurableFinal(durable));
+            }
+            let prepared = prepared_localhost_quick_scan_for_job(&durable, &key)?
+                .ok_or_else(|| AppError::Internal("localhost task identity disappeared".into()))?;
+            let cancelled = record_localhost_cancelled(
+                &state.storage,
+                state.engines.manifests(),
+                &prepared,
+                true,
+            )?;
+            return Ok(NoWorkerCancelAdmission::ManagedLocalhost(cancelled));
         }
         if durable_run_needs_background_cleanup(run) {
             return Ok(NoWorkerCancelAdmission::CleanupPending(durable));
@@ -3466,13 +3548,8 @@ pub fn cancel_scan(
             let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
             Ok(case)
         }
-        NoWorkerCancelAdmission::UnmanagedBoundedTask(case) => {
-            // This product-owned connector is bounded to three seconds but is
-            // not yet registered in JobManager. Preserve its queued/running
-            // truth instead of racing its observation with a false durable
-            // Cancel. The next integration batch moves it behind the same
-            // exact live-worker coordinator as catalog engines.
-            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+        NoWorkerCancelAdmission::ManagedLocalhost(case) => {
+            let _ = emit(&app, RUN_FINISHED_EVENT, &case);
             Ok(case)
         }
         NoWorkerCancelAdmission::CleanupPending(case) => {
@@ -5808,6 +5885,19 @@ fn persist_terminal_job_reconciliation(
 ) -> AppResult<AssessmentCase> {
     let service = state.case_service();
     let case = service.show_case(&key.case_id)?;
+    if let Some(prepared) = prepared_localhost_quick_scan_for_job(&case, key)? {
+        if snapshot.engines.len() != 1 || snapshot.engines[0].engine_id != prepared.engine_run_id {
+            return Err(AppError::NotAuthorized(
+                "retained localhost job identity conflicts with its exact durable task".into(),
+            ));
+        }
+        return reconcile_managed_localhost_terminal(
+            &state.storage,
+            state.engines.manifests(),
+            &prepared,
+            snapshot.status,
+        );
+    }
     let run = case
         .scan_runs
         .iter()

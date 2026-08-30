@@ -2609,16 +2609,32 @@ impl<'a> CaseService<'a> {
                         // process ends before its observation is durable, the
                         // only truthful outcome is an interrupted failed
                         // attempt that the user may start again.
-                        engine_run.status = EngineRunStatus::Failed;
-                        engine_run.phase = "localhost_probe_interrupted".into();
+                        let cancellation_was_durable = engine_run.phase == "cancel_requested";
+                        engine_run.status = if cancellation_was_durable {
+                            EngineRunStatus::Cancelled
+                        } else {
+                            EngineRunStatus::Failed
+                        };
+                        engine_run.phase = if cancellation_was_durable {
+                            "cancelled".into()
+                        } else {
+                            "localhost_probe_interrupted".into()
+                        };
                         engine_run.finished_at = Some(Utc::now());
                         engine_run.resume_token = None;
                         engine_run.localhost_tcp_observation = None;
-                        engine_run.error_code = Some("localhost_probe_interrupted".into());
-                        engine_run.error_message = Some(
+                        engine_run.error_code = Some(if cancellation_was_durable {
+                            "cancelled_without_observation".into()
+                        } else {
+                            "localhost_probe_interrupted".into()
+                        });
+                        engine_run.error_message = Some(if cancellation_was_durable {
+                            "The saved cancellation was completed after the app restarted. No connection result was inferred."
+                                .into()
+                        } else {
                             "The app closed before this localhost check saved a result. This attempt has no usable result; start the check again."
-                                .into(),
-                        );
+                                .into()
+                        });
                         run_changed = true;
                         continue;
                     }
@@ -3714,7 +3730,7 @@ impl<'a> CaseService<'a> {
             .iter()
             .position(|run| run.id == run_id)
             .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-        if matches!(transition, ScanTransition::Cancel)
+        if matches!(transition, ScanTransition::Pause | ScanTransition::Resume)
             && case.scan_runs[run_index]
                 .engine_runs
                 .iter()
@@ -3731,7 +3747,7 @@ impl<'a> CaseService<'a> {
                 })
         {
             return Err(AppError::NotAvailable(
-                "the bounded localhost check is still in flight; keep its real observation instead of replacing it with a generic cancellation"
+                "the bounded localhost check does not support pause or resume; let this fixed three-second attempt finish or cancel it"
                     .into(),
             ));
         }
@@ -13132,6 +13148,44 @@ mod tests {
         assert!(engine.finished_at.is_some());
         assert!(run.completed_at.is_some());
         assert_eq!(recovered.status, CaseStatus::NeedsAttention);
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
+    }
+
+    #[test]
+    fn interrupted_builtin_localhost_cancel_request_finishes_without_claiming_contact() {
+        let fixture = Fixture::new();
+        let prepared = crate::localhost_quick_scan::prepare_localhost_quick_scan(
+            &fixture.storage,
+            fixture.engines.manifests(),
+            9001,
+        )
+        .unwrap();
+        let mut requested = fixture
+            .storage
+            .get_case(&prepared.prepared.case_id)
+            .unwrap();
+        let engine = &mut requested.scan_runs[0].engine_runs[0];
+        engine.phase = "cancel_requested".into();
+        engine.error_message = Some("Stopping this localhost check.".into());
+        fixture
+            .storage
+            .save_case(&mut requested, "test.localhost_cancel_before_restart")
+            .unwrap();
+
+        let service = fixture.service();
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+        let recovered = service.show_case(&prepared.prepared.case_id).unwrap();
+        let run = &recovered.scan_runs[0];
+        let engine = &run.engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Cancelled);
+        assert_eq!(engine.phase, "cancelled");
+        assert_eq!(
+            engine.error_code.as_deref(),
+            Some("cancelled_without_observation")
+        );
+        assert!(engine.localhost_tcp_observation.is_none());
+        assert!(engine.finished_at.is_some());
+        assert!(run.completed_at.is_some());
         assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
     }
 
