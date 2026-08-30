@@ -192,7 +192,7 @@ const manifest = (
 export const demoEngineManifests: EngineManifest[] = [
   manifest("cloudquery", "CloudQuery", "雲端盤點", "6.31.0", "MPL-2.0", ["aws"]),
   manifest("steampipe", "Steampipe", "雲端盤點", "2.1.0", "AGPL-3.0", ["aws"]),
-  manifest("prowler", "Prowler", "雲端設定", "5.14.0", "Apache-2.0", ["aws"]),
+  manifest("prowler", "Prowler", "雲端設定", "5.39.1", "Apache-2.0", ["aws", "azure", "gcp"]),
   manifest("scoutsuite", "ScoutSuite", "雲端設定", "5.14.0", "GPL-2.0", ["aws"]),
   manifest("cloudsplaining", "Cloudsplaining", "IAM", "0.8.2", "BSD-3-Clause", ["aws"]),
   manifest("scubagear", "ScubaGear", "M365", "1.6.0", "CC0-1.0", ["m365"]),

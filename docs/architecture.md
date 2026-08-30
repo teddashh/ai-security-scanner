@@ -494,8 +494,11 @@ An entry without a license disposition or artifact digest may be retained for re
 `supported_providers` is a fail-closed release declaration, not a summary of upstream features.
 Provider-bound engines require an exact provider value on every target asset. Missing provider
 identity and non-matching providers are incompatible in planning, coverage recomputation, and
-resume. The current five cloud launcher images declare only `aws`; ScubaGear and Maester declare
-only `microsoft365`; provider-agnostic local and external engines declare an empty list.
+resume. CloudQuery, Steampipe, ScoutSuite, and Cloudsplaining declare only `aws`. Prowler declares
+three exact profiles: `aws_iam_service_exact_account`,
+`azure_iam_service_static_token_exact_subscription`, and
+`gcp_iam_four_checks_exact_project`. ScubaGear and Maester declare only `microsoft365`;
+provider-agnostic local and external engines declare an empty list.
 
 The catalog and current research status are in [engine-catalog.md](engine-catalog.md). License obligations are summarized in [../THIRD_PARTY.md](../THIRD_PARTY.md).
 

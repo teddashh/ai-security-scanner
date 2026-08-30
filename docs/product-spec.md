@@ -10,6 +10,19 @@ This specification defines the intended product. It does not claim that every re
 
 When another repository document, test, release script, or current implementation conflicts with this specification, this specification controls the product decision. Architecture, runtime, threat-model, engine, and release documents may add implementation detail, but may not add a user-visible gate or change a user outcome without first changing this document. README files remain marketing and quick-start material; they are not a competing specification.
 
+### Document authority
+
+| Repository material | Authority |
+| --- | --- |
+| This canonical product specification | The only authority for intended product behavior, user outcomes, warning-versus-blocking decisions, and acceptance policy |
+| [Product audit](product-audit.md) | Evidence and implementation status at its stated baseline; it identifies gaps but does not add intended behavior |
+| Architecture, runtime, threat-model, engine, provider, usability, security, and release documents | Subordinate implementation detail; their body text must be corrected when it conflicts with this specification |
+| English and Traditional Chinese READMEs | Marketing, availability, and quick-start guidance; not a product contract |
+| `docs/release/v*.md` | Historical, non-normative records of what an earlier candidate claimed or planned |
+| Code, tests, schemas, workflows, and skills | Current implementation contracts and tooling; they reveal or prevent drift but never override this specification |
+
+A precedence banner is not enough to preserve alignment. When a subordinate body or machine-readable contract contradicts this specification, the contradiction is a defect and must be fixed in the same workline.
+
 ## 1. Product north star
 
 `ai-security-scanner` helps a Windows beginner go from “What should I check?” to a useful, understandable security report without learning Linux or selecting scanner engines.

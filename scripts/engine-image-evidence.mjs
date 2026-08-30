@@ -1505,7 +1505,7 @@ async function selfTest() {
         promotionAction.includes("run: docker logout ghcr.io"),
       "promotion action is not self-contained across anonymous-smoke credential state",
     );
-    process.stdout.write("Engine image evidence self-test passed (20 engines, immutable tag provenance, exact index, 5 attestations, 4 SBOMs, preserved gateway SPDX inventory with explicit unavailable-checksum status, negative scope/provenance/relationship/digest checks).\n");
+    process.stdout.write("Engine image evidence self-test passed (catalog-derived engine set, immutable tag provenance, artifact-scoped attestations and SBOMs, preserved gateway SPDX inventory with explicit unavailable-checksum status, and negative scope/provenance/relationship/digest checks).\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

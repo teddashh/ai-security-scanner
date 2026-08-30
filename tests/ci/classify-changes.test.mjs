@@ -26,6 +26,18 @@ test("documentation-only changes do not schedule product or release lanes", () =
   });
 });
 
+test("scanner skill copies are documentation contracts, not release triggers", () => {
+  const result = classifyChangedPaths([
+    ".claude/skills/ai-security-scanner/SKILL.md",
+    ".codex/skills/ai-security-scanner/SKILL.md",
+  ]);
+  assert.equal(result.docs_only, true);
+  assert.equal(result.frontend, false);
+  assert.equal(result.rust_core, false);
+  assert.equal(result.release_contract, false);
+  assert.equal(result.windows_runtime, false);
+});
+
 test("ordinary frontend changes schedule only the fast frontend lane", () => {
   assert.deepEqual(classifyChangedPaths([
     "src/pages/StartPage.tsx",

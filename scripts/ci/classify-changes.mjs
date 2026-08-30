@@ -74,6 +74,7 @@ const WINDOWS_RUNTIME_PATHS = [
 const DOCUMENTATION_PATHS = [
   /^docs\//,
   /^(?:README(?:\.[^/]+)?|CONTRIBUTING|CODE_OF_CONDUCT|SECURITY|THIRD_PARTY)\.md$/,
+  /^\.(?:claude|codex)\/skills\/ai-security-scanner\/SKILL\.md$/,
   /^\.github\/(?:ISSUE_TEMPLATE|PULL_REQUEST_TEMPLATE)(?:\/|\.)/,
 ];
 

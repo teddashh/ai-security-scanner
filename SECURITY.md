@@ -18,7 +18,7 @@ Do not test a report against infrastructure you do not own or have explicit perm
 
 ## Supported versions
 
-The project is currently pre-release. Security fixes are applied to the active development branch until the first supported release line is published. Every release will publish a support deadline and a scanner-knowledge cutoff. An expired release must show a visible warning and must not imply that its findings reflect current vulnerability knowledge.
+The project is currently pre-release. Security fixes are applied to the active development branch until the first supported release line is published. Every offered artifact publishes its support window, and every admitted engine records the applicable engine, rules, feed, or database knowledge date. An expired artifact or stale engine input must show a visible, scoped warning; neither may imply that unrelated findings share one global freshness date.
 
 ## Sensitive design invariants
 

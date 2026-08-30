@@ -1,12 +1,12 @@
 # Third-party inventory for ai-security-scanner
 
-Status: v0.1.0 source inventory; generated release evidence is artifact-specific
+Status: current source and artifact inventory; generated release evidence is artifact-specific
 
-Last updated: 2026-08-26
+Last updated: 2026-08-30
 
 Normative status: this is an artifact/license inventory, not a product specification. The [canonical product specification](docs/product-spec.md) controls user-visible behavior and release acceptance. A license, provenance, or admission problem may withhold the affected artifact or engine; it does not block the installed application, unaffected engines, saved reports, or an independently qualified platform.
 
-`ai-security-scanner` orchestrates independent upstream projects. This file explains their v0.1.0 packaging relationships and also retains research projects that are not release dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that a GitHub Release or image was published.
+`ai-security-scanner` orchestrates independent upstream projects. This file explains their current packaging relationships and also retains research projects that are not release dependencies. [`engines/catalog.json`](engines/catalog.json) is authoritative for the exact engine source, artifact digest, runnable state, blockers, and license disposition. The managed-runtime manifest is authoritative for platform-specific runtime files. This narrative cannot make a missing artifact runnable or prove that a GitHub Release or image was published.
 
 The applicable terms are those attached to each exact source revision and distributed artifact, including its dependencies, images, plugins, rules, templates, feeds, and databases. Every release generates locked dependency notices, engine notices, managed-runtime component inventories, and SPDX/CycloneDX SBOMs from the resolved artifacts. Those generated files describe the bytes in that release; this source inventory is not a substitute for them or for legal advice.
 
@@ -19,7 +19,7 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 - `SOURCE_ARCHIVE`: a managed-runtime record binds a distributed copyleft binary to an exact corresponding-source archive URL, digest, and size.
 - `UPSTREAM_PINNED`: the product retrieves an exact verified upstream artifact by digest and does not republish it as a project-managed engine image.
 - `GENERATED_INVENTORY`: the resolved release graph, notices, and SBOM—not this row—enumerate the artifact-specific dependency terms.
-- `NOT_DISTRIBUTED`: tracked or referenced source that is not shipped by the described v0.1.0 component.
+- `NOT_DISTRIBUTED`: tracked or referenced source that is not shipped by the described component.
 - `MANUAL`: repository metadata did not provide an unambiguous SPDX identifier or the project has special terms requiring manual review.
 - `RESEARCH`: tracked for evaluation; not a committed release dependency.
 - `ARCHIVED`: upstream is archived and requires a maintenance/replacement decision.
@@ -28,11 +28,11 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 
 ## Required product engine inventory
 
-| Component | Official source | Pinned license record | v0.1.0 relationship | Disposition |
+| Component | Official source | Pinned license record | Current relationship | Disposition |
 |---|---|---|---|---|
 | CloudQuery | [cloudquery/cloudquery](https://github.com/cloudquery/cloudquery) | MPL-2.0 | Project-managed image with exact public CLI and provider-plugin source closure | SOURCE_OFFER |
 | Steampipe | [turbot/steampipe](https://github.com/turbot/steampipe) | AGPL-3.0-only plus separately pinned plugin/FDW terms | Project-managed image with source and build material | SOURCE_OFFER |
-| Prowler | [prowler-cloud/prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Project-managed AWS-only image with required notices | ALLOW |
+| Prowler | [prowler-cloud/prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Project-managed image with exact AWS-account, Azure-subscription, and GCP-project IAM profiles and required notices | ALLOW |
 | ScoutSuite | [nccgroup/ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Project-managed image carrying exact source, patch, build recipe, and notices | SOURCE_OFFER |
 | Cloudsplaining | [salesforce/cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Project-managed image with the upstream notice | ALLOW |
 | ScubaGear | [cisagov/ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 plus pinned module terms | Project-managed image carrying module source and notices | ALLOW |
@@ -84,9 +84,9 @@ existing scanners; VibeScan itself is not a release dependency.
 
 ## Supporting standards and runtime inventory
 
-The platform-specific managed-runtime manifest records every bundled file, first-setup download, source revision, license expression, size, and SHA-256. The release pipeline emits that manifest plus runtime notices and SPDX/CycloneDX SBOMs for Linux, macOS, and Windows. The relationships below summarize that generated evidence rather than claiming that every research repository is packaged.
+The platform-specific managed-runtime manifest records every bundled file, first-setup download, source revision, license expression, size, and SHA-256. For each offered platform artifact, the release pipeline emits the applicable manifest plus runtime notices and SPDX/CycloneDX SBOMs. Platforms that are absent or unqualified remain explicitly `not-offered`; evidence for one platform does not stand in for another. The relationships below summarize generated evidence rather than claiming that every research repository is packaged.
 
-| Component | Official source | Pinned license record | v0.1.0 relationship | Disposition |
+| Component | Official source | Pinned license record | Current relationship | Disposition |
 |---|---|---|---|---|
 | OCSF schema | [ocsf/ocsf-schema](https://github.com/ocsf/ocsf-schema) | Apache-2.0 | Versioned interchange reference implemented by project-owned export code; no upstream schema artifact is bundled | NOT_DISTRIBUTED |
 | OSCAL | [usnistgov/OSCAL](https://github.com/usnistgov/OSCAL) | NIST publication terms | Versioned exchange reference implemented by project-owned export code; no upstream repository artifact is bundled | NOT_DISTRIBUTED |
@@ -124,7 +124,7 @@ The packaged path uses a private, versioned Podman machine runtime: QEMU on Linu
 
 ## Rules, feeds, plugins, and databases
 
-Rules, feeds, plugins, and databases remain independently identified artifacts even when they share an engine image. The desktop installers contain none of them. The separately published v0.1.0 engine artifacts use only the exact data closure recorded by their plans and catalog:
+Rules, feeds, plugins, and databases remain independently identified artifacts even when they share an engine image. The desktop installers contain none of them. Each currently admitted engine artifact uses only the exact data closure recorded by its plan and catalog; an unavailable or unadmitted entry is not implied to have been published:
 
 - CloudQuery and Steampipe carry only their pinned provider/plugin closure; Powerpipe and other compliance mods are not shipped.
 - Nuclei carries one exact allowlisted template snapshot; private, live, destructive, and out-of-band template packs are not shipped or automatically enabled.
