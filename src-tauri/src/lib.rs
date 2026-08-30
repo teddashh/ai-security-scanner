@@ -15,6 +15,7 @@ pub mod diff;
 pub mod discovery;
 pub mod domain;
 pub mod error;
+pub mod execution_coverage;
 pub mod export;
 pub mod export_identity;
 pub mod exporters;
