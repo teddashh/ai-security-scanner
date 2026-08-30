@@ -76,6 +76,24 @@ function assertOrderedTokens(source, tokens, label) {
   }
 }
 
+function assertSourceStringArray(source, startToken, endToken, expected, label) {
+  const start = source.indexOf(startToken);
+  const end = source.indexOf(endToken, start + startToken.length);
+  assert(start >= 0 && end > start, `${label} source array is missing or unbounded`);
+  const values = [...source.slice(start + startToken.length, end).matchAll(/"([^"\r\n]+)"/gu)].map((match) => match[1]);
+  assert(
+    JSON.stringify(values) === JSON.stringify(expected),
+    `${label} source array is not the exact ordered released set`,
+  );
+}
+
+function sourceFunction(source, name, label) {
+  const start = source.indexOf(`function ${name}(`);
+  const end = source.indexOf("\nfunction ", start + 1);
+  assert(start >= 0 && end > start, `${label} function is missing or unbounded`);
+  return source.slice(start, end);
+}
+
 function cargoPackageVersion(toml) {
   const packageStart = toml.indexOf("[package]");
   if (packageStart === -1) {
@@ -758,8 +776,9 @@ function validatePlatformQualificationSources(sources) {
     '$currentMachinePrefix = "assm2-win-x64"',
     '$candidateDistributionName = "podman-$candidateMachineName"',
     "Get-RetainedVhdIdentity",
-    "Start-WslSentinelProcess",
-    "Assert-WslSentinelProcess",
+    "Start-WslSentinelLease",
+    "Assert-WslSentinelLeaseCheckpoint",
+    "Stop-WslSentinelLease",
     "Qualification-only unrelated WSL rootfs export",
     "Qualification-only unrelated WSL import",
     "Candidate automatic side-by-side managed WSL initialization",
@@ -782,13 +801,19 @@ function validatePlatformQualificationSources(sources) {
     "integrity-signing-key.identity-anchor.json",
     "transitionReceiptSurvivedSameVersionReinstall = $true",
     "missingVersionsManifestExercised = $true",
-    "legacySentinelProcessSurvived = $true",
-    "unrelatedSentinelProcessSurvived = $true",
+    "schemaVersion = 2",
+    "sentinelLifecycle",
     "proofAbsentWhileRegistryReceiptPresent = $true",
     "proofValidatedBeforeRegistryAbsenceCheck = $true",
     "registryValueAbsentAfterDurableProof = $true",
     "public const uint FILE_READ_DATA = 0x00000001;",
   ]) assert(nsisGhost.includes(required), "registered-WSL side-by-side qualification is missing: " + required);
+  for (const obsolete of [
+    "Start-WslSentinelProcess",
+    "Assert-WslSentinelProcess",
+    "legacySentinelProcessSurvived",
+    "unrelatedSentinelProcessSurvived",
+  ]) assert(!nsisGhost.includes(obsolete), "registered-WSL side-by-side qualification retains obsolete sentinel evidence: " + obsolete);
 
   const retainedVhdStart = nsisGhost.indexOf("function Get-RetainedVhdIdentity(");
   const retainedVhdEnd = nsisGhost.indexOf("function Open-NoFollowSingleLinkFile(", retainedVhdStart);
@@ -825,6 +850,139 @@ function validatePlatformQualificationSources(sources) {
     "BasePath",
   ]) assert(wslRegistration.includes(required), "WSL registry proof is missing: " + required);
 
+  const exactProcess = sourceFunction(nsisGhost, "Invoke-ExactProcess", "exact process execution");
+  for (const required of [
+    '[bool]$KeepRunning = $false',
+    "$process = [Diagnostics.Process]::new()",
+    "$process.Start()",
+    "$process.HasExited",
+    "$process.StartTime.ToUniversalTime()",
+    "$processLeaseReturned = $true",
+    "Process = $process",
+    "ProcessId = [int]$process.Id",
+    "ProcessStartedAt = $processStartedAt",
+    "if (-not $processLeaseReturned)",
+    "$process.Dispose()",
+  ]) assert(exactProcess.includes(required), "foreground process lease support is missing: " + required);
+
+  const runningInventory = sourceFunction(
+    nsisGhost,
+    "Get-WslRunningDistributionNames",
+    "running WSL inventory",
+  );
+  for (const required of [
+    '"--list", "--running", "--quiet"',
+    "$TrustedWsl",
+    "running inventory",
+  ]) assert(runningInventory.includes(required), "running WSL inventory proof is missing: " + required);
+
+  const sentinelGuestIdentity = sourceFunction(
+    nsisGhost,
+    "Get-WslSentinelGuestIdentity",
+    "sentinel guest identity",
+  );
+  for (const required of [
+    'state="/run/assm-qc-sentinel-$token"',
+    'test -r "/proc/$pid/stat"',
+    'awk \'{ print $22 }\' "/proc/$pid/stat"',
+    "cat /proc/sys/kernel/random/boot_id",
+    'readlink "/proc/$pid/exe"',
+    '"/usr/bin/sleep"',
+    "LinuxPid",
+    "LinuxStartTicks",
+    "LinuxBootId",
+  ]) assert(sentinelGuestIdentity.includes(required), "sentinel guest identity proof is missing: " + required);
+
+  const sentinelProcessReproof = sourceFunction(
+    nsisGhost,
+    "Assert-WslSentinelLeaseProcess",
+    "foreground sentinel client reproof",
+  );
+  for (const required of [
+    "$process.Refresh()",
+    "$process.HasExited",
+    "$process.StartTime.ToUniversalTime()",
+    "$process.Id",
+    "$Lease.WindowsClientPid",
+    "$Lease.WindowsClientStartedAt",
+  ]) assert(sentinelProcessReproof.includes(required), "foreground sentinel client reproof is missing: " + required);
+
+  const sentinelStart = sourceFunction(nsisGhost, "Start-WslSentinelLease", "sentinel lease start");
+  for (const required of [
+    "Get-ExactWslRegistration $DistributionName $ExpectedBasePath",
+    'state="/run/assm-qc-sentinel-$token"',
+    'pid="$$"',
+    'awk \'{ print $22 }\' "/proc/$pid/stat"',
+    "cat /proc/sys/kernel/random/boot_id",
+    "exec /usr/bin/sleep 2147483647",
+    "Invoke-ExactProcess $TrustedWsl.executable",
+    "-ExpectedSystemExecutableProof $TrustedWsl.proof -KeepRunning $true",
+    "Process = $processLease.Process",
+    "RegistrationId = [string]$registration.RegistrationId",
+    "WindowsClientPid = [int]$processLease.ProcessId",
+    "WindowsClientStartedAt = [string]$processLease.ProcessStartedAt",
+    "TokenSha256",
+    "LinuxBootId",
+    "LinuxPid",
+    "LinuxStartTicks",
+    "$deadline.ElapsedMilliseconds -lt 30000",
+  ]) assert(sentinelStart.includes(required), "foreground sentinel lease start is missing: " + required);
+  assert(
+    !/\bnohup\b/iu.test(sentinelStart) &&
+      !sentinelStart.includes("$!") &&
+      !/(?:^|[;\s])&(?!&)(?=$|[;\s])/mu.test(sentinelStart) &&
+      !sentinelStart.includes("/tmp/assm-qc-"),
+    "sentinel lease start must retain a foreground process handle without a detached shell process",
+  );
+
+  const sentinelCheckpoint = sourceFunction(
+    nsisGhost,
+    "Assert-WslSentinelLeaseCheckpoint",
+    "sentinel lifecycle checkpoint",
+  );
+  for (const required of [
+    "$sentinelLifecycleRequiredPhases -ccontains $Phase",
+    "Assert-WslSentinelLeaseProcess $Lease",
+    "Get-WslRunningDistributionNames $TrustedWsl",
+    "Get-ExactWslRegistration $Lease.DistributionName $Lease.ExpectedBasePath",
+    "$registration.RegistrationId -cne [string]$Lease.RegistrationId",
+    "Get-WslSentinelGuestIdentity",
+    "$identity.LinuxBootId -cne [string]$Lease.LinuxBootId",
+    "$identity.LinuxPid -ne [uint64]$Lease.LinuxPid",
+    "$identity.LinuxStartTicks -ne [uint64]$Lease.LinuxStartTicks",
+    "$rebound.RegistrationId -cne [string]$Lease.RegistrationId",
+  ]) assert(sentinelCheckpoint.includes(required), "sentinel lifecycle checkpoint is missing: " + required);
+  assert(
+    (sentinelCheckpoint.match(/Get-ExactWslRegistration/gu) ?? []).length === 2,
+    "each sentinel checkpoint must re-prove its exact WSL registration before and after guest identity observation",
+  );
+  assertOrderedTokens(sentinelCheckpoint, [
+    "phase = $Phase",
+    "observedAt =",
+    "distributionName =",
+    "registrationId =",
+    "windowsClientPid =",
+    "windowsClientStartedAt =",
+    "linuxBootId =",
+    "linuxPid =",
+    "linuxStartTicks =",
+    "tokenSha256 =",
+  ], "sentinel lifecycle checkpoint record");
+
+  const sentinelStop = sourceFunction(nsisGhost, "Stop-WslSentinelLease", "sentinel lease stop");
+  for (const required of [
+    "Get-ExactWslRegistration $Lease.DistributionName $Lease.ExpectedBasePath",
+    'state="/run/assm-qc-sentinel-$token"',
+    "kill -TERM",
+    'test "$attempt" -lt 100',
+    ") 30000 \"$Label exact guest stop\"",
+    "$process.WaitForExit(15000)",
+    "$process.Kill($true)",
+    "$process.WaitForExit(5000)",
+    "$process.Dispose()",
+    "$Lease.Stopped = $true",
+  ]) assert(sentinelStop.includes(required), "bounded sentinel lease stop is missing: " + required);
+
   const sideBySideStart = nsisGhost.indexOf("$sideBySideProcess = Invoke-ExactProcess");
   const sideBySideEnd = nsisGhost.indexOf("$candidateCase = Invoke-CliJson", sideBySideStart);
   assert(
@@ -842,8 +1000,8 @@ function validatePlatformQualificationSources(sources) {
     "Get-ExactWslRegistration $oldDistributionName $oldWslBasePath",
     "Get-ExactWslRegistration $candidateDistributionName $candidateWslBasePath",
     "$unrelatedRegistrationAfter.RegistrationId -cne",
-    "Assert-WslSentinelProcess $trustedWsl $oldDistributionName",
-    "Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName",
+    "Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease",
+    "Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease",
     "Candidate changed legacy VHD identity field",
     "Retained legacy-workspace proof",
     "authorizes_cleanup",
@@ -924,9 +1082,219 @@ function validatePlatformQualificationSources(sources) {
     "qualification teardown must occur only after current-runtime purge and NSIS data-preservation proofs",
   );
 
+  const sentinelPhases = [
+    "fixture_ready",
+    "before_candidate_install",
+    "after_candidate_install",
+    "after_same_version_reinstall",
+    "before_candidate_runtime_start",
+    "after_candidate_runtime_running",
+    "after_current_runtime_purge",
+    "after_candidate_uninstall",
+  ];
+  const sentinelCheckpointFields = [
+    "phase",
+    "observedAt",
+    "distributionName",
+    "registrationId",
+    "windowsClientPid",
+    "windowsClientStartedAt",
+    "linuxBootId",
+    "linuxPid",
+    "linuxStartTicks",
+    "tokenSha256",
+  ];
+  const sentinelIdentityFields = sentinelCheckpointFields.slice(2);
+  assertSourceStringArray(
+    nsisGhost,
+    "$sentinelLifecycleRequiredPhases = @(",
+    ")",
+    sentinelPhases,
+    "registered-WSL qualification sentinel phases",
+  );
+
+  const sentinelFlowStart = nsisGhost.indexOf(
+    "$oldSentinelLease = Start-WslSentinelLease",
+    fixtureExport,
+  );
+  const sentinelFlowEnd = nsisGhost.indexOf("$observations = [ordered]@{", sentinelFlowStart);
+  assert(
+    sentinelFlowStart >= 0 && sentinelFlowEnd > sentinelFlowStart,
+    "registered-WSL qualification has no bounded sentinel lifecycle execution section",
+  );
+  const sentinelFlow = nsisGhost.slice(sentinelFlowStart, sentinelFlowEnd);
+  const observationsEnd = nsisGhost.indexOf("\n} catch {", sentinelFlowEnd);
+  assert(observationsEnd > sentinelFlowEnd, "registered-WSL observations source is unbounded");
+  const observationsSource = nsisGhost.slice(sentinelFlowEnd, observationsEnd);
+  const runtimeSideBySideObservation = observationsSource.indexOf(
+    "\n    runtimeSideBySide = [ordered]@{",
+  );
+  const nestedSentinelLifecycle = observationsSource.indexOf(
+    "\n      sentinelLifecycle = [ordered]@{",
+    runtimeSideBySideObservation,
+  );
+  const dataPreservationObservation = observationsSource.indexOf(
+    "\n    dataPreservation = [ordered]@{",
+    runtimeSideBySideObservation,
+  );
+  assert(
+    runtimeSideBySideObservation >= 0 &&
+      nestedSentinelLifecycle > runtimeSideBySideObservation &&
+      dataPreservationObservation > nestedSentinelLifecycle &&
+      (observationsSource.match(/^ {6}sentinelLifecycle = \[ordered\]@\{\r?$/gmu) ?? []).length === 1 &&
+      !/^ {4}sentinelLifecycle = \[ordered\]@\{\r?$/mu.test(observationsSource),
+    "sentinel lifecycle must be nested exactly once inside runtimeSideBySide before dataPreservation",
+  );
+  const checkpointEvents = [...sentinelFlow.matchAll(
+    /Assert-WslSentinelLeaseCheckpoint\s+\$trustedWsl\s+\$(old|unrelated)SentinelLease\s+(?:\(\s*)?"([a-z_]+)"/gu,
+  )].map((match) => ({
+    lease: match[1],
+    phase: match[2],
+    index: sentinelFlowStart + match.index,
+  }));
+  const expectedCheckpointEvents = sentinelPhases.flatMap((phase) => [
+    { lease: "old", phase },
+    { lease: "unrelated", phase },
+  ]);
+  assert(
+    JSON.stringify(checkpointEvents.map(({ lease, phase }) => ({ lease, phase }))) ===
+      JSON.stringify(expectedCheckpointEvents),
+    "registered-WSL qualification must capture both sentinel leases at exactly eight ordered phases",
+  );
+  const checkpointIndex = new Map(
+    checkpointEvents.filter(({ lease }) => lease === "old").map(({ phase, index }) => [phase, index]),
+  );
+  const oldSentinelStart = sentinelFlowStart;
+  const unrelatedSentinelStart = nsisGhost.indexOf(
+    "$unrelatedSentinelLease = Start-WslSentinelLease",
+    oldSentinelStart,
+  );
+  const firstCandidateInstall = nsisGhost.indexOf(
+    'Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate bounded ghost NSIS migration"',
+    sentinelFlowStart,
+  );
+  const secondCandidateInstall = nsisGhost.indexOf(
+    'Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate same-version silent reinstall before ghost recovery"',
+    firstCandidateInstall,
+  );
+  const candidateRuntimeStart = nsisGhost.indexOf(
+    "$sideBySideProcess = Invoke-ExactProcess $candidateCli",
+    secondCandidateInstall,
+  );
+  const candidateRunningProof = nsisGhost.indexOf(
+    "Candidate assm2 workspace did not reach the released running runtime identity.",
+    candidateRuntimeStart,
+  );
+  const lifecycleOrderProof = nsisGhost.indexOf(
+    "foreach ($checkpointSet in @(",
+    checkpointIndex.get("after_candidate_uninstall"),
+  );
+  const successStopOld = nsisGhost.indexOf(
+    'Stop-WslSentinelLease $trustedWsl $oldSentinelLease "Legacy assm1 WSL qualification teardown"',
+    lifecycleOrderProof,
+  );
+  const successStopUnrelated = nsisGhost.indexOf(
+    'Stop-WslSentinelLease $trustedWsl $unrelatedSentinelLease "Unrelated WSL qualification teardown"',
+    successStopOld,
+  );
+  assert(
+    oldSentinelStart < unrelatedSentinelStart &&
+      unrelatedSentinelStart < checkpointIndex.get("fixture_ready") &&
+      checkpointIndex.get("fixture_ready") < checkpointIndex.get("before_candidate_install") &&
+      checkpointIndex.get("before_candidate_install") < firstCandidateInstall &&
+      firstCandidateInstall < checkpointIndex.get("after_candidate_install") &&
+      checkpointIndex.get("after_candidate_install") < secondCandidateInstall &&
+      secondCandidateInstall < checkpointIndex.get("after_same_version_reinstall") &&
+      checkpointIndex.get("after_same_version_reinstall") < checkpointIndex.get("before_candidate_runtime_start") &&
+      checkpointIndex.get("before_candidate_runtime_start") < candidateRuntimeStart &&
+      candidateRuntimeStart < candidateRunningProof &&
+      candidateRunningProof < checkpointIndex.get("after_candidate_runtime_running") &&
+      checkpointIndex.get("after_candidate_runtime_running") < runtimePurge &&
+      runtimePurge < checkpointIndex.get("after_current_runtime_purge") &&
+      checkpointIndex.get("after_current_runtime_purge") < nsisUninstall &&
+      nsisUninstall < checkpointIndex.get("after_candidate_uninstall") &&
+      checkpointIndex.get("after_candidate_uninstall") < lifecycleOrderProof &&
+      lifecycleOrderProof < successStopOld &&
+      successStopOld < successStopUnrelated &&
+      successStopUnrelated < explicitOldTeardown &&
+      explicitOldTeardown < explicitUnrelatedTeardown,
+    "sentinel checkpoints must surround both installs, runtime start, runtime purge, uninstall, and final teardown",
+  );
+  assert(
+    (sentinelFlow.match(/Invoke-ExactProcess \$candidateInstallerPath @\("\/S"\)/gu) ?? []).length === 2 &&
+      (sentinelFlow.match(/= Start-WslSentinelLease/gu) ?? []).length === 2,
+    "registered-WSL qualification must run exactly two candidate installs under two retained sentinel leases",
+  );
+  const candidateSentinelSection = nsisGhost.slice(
+    firstCandidateInstall,
+    checkpointIndex.get("after_candidate_uninstall"),
+  );
+  assert(
+    !candidateSentinelSection.includes("Start-WslSentinelLease") &&
+      !candidateSentinelSection.includes("Stop-WslSentinelLease"),
+    "candidate install/runtime/purge/uninstall must not restart or stop either retained sentinel lease",
+  );
+  for (const required of [
+    "$legacySentinelCheckpoints = [Collections.Generic.List[object]]::new()",
+    "$unrelatedSentinelCheckpoints = [Collections.Generic.List[object]]::new()",
+    "$checkpointSet.Checkpoints.Count -ne $sentinelLifecycleRequiredPhases.Count",
+    "$checkpointSet.Checkpoints[$checkpointIndex].phase -cne",
+    "schemaVersion = 2",
+    "sentinelLifecycle = [ordered]@{",
+    "schemaVersion = 1",
+    "requiredPhases = @($sentinelLifecycleRequiredPhases)",
+    "legacyCheckpoints = @($legacySentinelCheckpoints | ForEach-Object { $_ })",
+    "unrelatedCheckpoints = @($unrelatedSentinelCheckpoints | ForEach-Object { $_ })",
+  ]) assert(nsisGhost.includes(required), "sentinel lifecycle observation source is missing: " + required);
+
   for (const required of [
     "windows_nsis_real_registered_wsl_n_minus_one_ghost_side_by_side",
+    "const SCHEMA_VERSION = 2",
+    "const SENTINEL_LIFECYCLE_SCHEMA_VERSION = 1",
+    "SENTINEL_PHASES",
+    '"fixture_ready"',
+    '"before_candidate_install"',
+    '"after_candidate_install"',
+    '"after_same_version_reinstall"',
+    '"before_candidate_runtime_start"',
+    '"after_candidate_runtime_running"',
+    '"after_current_runtime_purge"',
+    '"after_candidate_uninstall"',
+    "SENTINEL_CHECKPOINT_FIELDS",
+    '"phase"',
+    '"observedAt"',
+    '"distributionName"',
+    '"registrationId"',
+    '"windowsClientPid"',
+    '"windowsClientStartedAt"',
+    '"linuxBootId"',
+    '"linuxPid"',
+    '"linuxStartTicks"',
+    '"tokenSha256"',
+    "SENTINEL_IDENTITY_FIELDS",
+    "exactKeys(checkpoint, SENTINEL_CHECKPOINT_FIELDS",
+    "checkpoints.length === SENTINEL_PHASES.length",
+    "validateSentinelCheckpoints",
+    "checkpoint.phase === SENTINEL_PHASES[index]",
+    "observedAt >= previousObservedAt",
+    "checkpoint.distributionName === expectedDistribution",
+    "checkpoint.registrationId === expectedRegistration",
+    "bounded(checkpoint.windowsClientPid, 1, 0xffffffff",
+    "utcTimestampOrderKey(checkpoint.windowsClientStartedAt",
+    "canonicalUuid(checkpoint.linuxBootId",
+    "bounded(checkpoint.linuxPid, 1, 0x7fffffff",
+    "canonicalPositiveDecimal(checkpoint.linuxStartTicks",
+    "sha256(checkpoint.tokenSha256",
+    "JSON.stringify(identity) === JSON.stringify(baselineIdentity)",
+    "validateSentinelLifecycle",
+    '["schemaVersion", "requiredPhases", "legacyCheckpoints", "unrelatedCheckpoints"]',
+    "lifecycle.schemaVersion === SENTINEL_LIFECYCLE_SCHEMA_VERSION",
+    "JSON.stringify(lifecycle.requiredPhases) === JSON.stringify(SENTINEL_PHASES)",
+    "JSON.stringify(legacyIdentity) !== JSON.stringify(unrelatedIdentity)",
+    "legacy and unrelated sentinels share one token identity",
+    "legacy and unrelated sentinels share one Windows client process",
     "runtimeSideBySide",
+    '"sentinelLifecycle"',
     "CURRENT_MACHINE",
     "CURRENT_DISTRIBUTION",
     "legacyRegistrationIdBefore",
@@ -948,6 +1316,32 @@ function validatePlatformQualificationSources(sources) {
     "legacy_key_adopted",
     "validateWindowsNsisGhostRecoveryEvidenceFile",
   ]) assert(nsisGhostEvidence.includes(required), "registered-WSL side-by-side evidence contract is missing: " + required);
+  assertSourceStringArray(
+    nsisGhostEvidence,
+    "const SENTINEL_PHASES = Object.freeze([",
+    "]);",
+    sentinelPhases,
+    "registered-WSL evidence sentinel phases",
+  );
+  assertSourceStringArray(
+    nsisGhostEvidence,
+    "const SENTINEL_CHECKPOINT_FIELDS = Object.freeze([",
+    "]);",
+    sentinelCheckpointFields,
+    "registered-WSL evidence sentinel checkpoint fields",
+  );
+  assertSourceStringArray(
+    nsisGhostEvidence,
+    "const SENTINEL_IDENTITY_FIELDS = Object.freeze([",
+    "]);",
+    sentinelIdentityFields,
+    "registered-WSL evidence sentinel identity fields",
+  );
+  for (const obsolete of [
+    "legacySentinelProcessSurvived",
+    "unrelatedSentinelProcessSurvived",
+    "unrelatedDistributionRunning",
+  ]) assert(!nsisGhostEvidence.includes(obsolete), "registered-WSL evidence retains obsolete sentinel evidence: " + obsolete);
 
   for (const required of [
     "validateWindowsNsisUpgradeEvidenceFile",
@@ -980,6 +1374,29 @@ function validatePlatformQualificationSources(sources) {
     "ghost evidence with an unconsumed registry receipt",
     "ghost evidence with a mutated retained proof",
     "ghost evidence with an incomplete retained proof",
+    "ghost evidence with a missing required sentinel lifecycle phase",
+    "ghost evidence with a missing sentinel checkpoint phase",
+    "ghost evidence with reordered sentinel checkpoints",
+    "ghost evidence whose Linux sentinel PID changes",
+    "ghost evidence whose Linux sentinel start ticks change",
+    "ghost evidence whose Windows sentinel client PID changes",
+    "ghost evidence whose Windows sentinel client start time changes",
+    "ghost evidence whose distinct WSL sentinel leases share one token identity",
+    "ghost evidence whose distinct WSL sentinel leases share one Windows client identity",
+    "legacy ghost evidence with booleans instead of sentinel lifecycle checkpoints",
+    "lifecycle.requiredPhases.splice(3, 1)",
+    "lifecycle.unrelatedCheckpoints.splice(4, 1)",
+    "[lifecycle.legacyCheckpoints[2], lifecycle.legacyCheckpoints[3]]",
+    "lifecycle.legacyCheckpoints[5].linuxPid += 1",
+    'lifecycle.legacyCheckpoints[5].linuxStartTicks = "123456791"',
+    "lifecycle.unrelatedCheckpoints[6].windowsClientPid += 1",
+    "lifecycle.unrelatedCheckpoints[6].windowsClientStartedAt =",
+    "for (const checkpoint of lifecycle.unrelatedCheckpoints) checkpoint.tokenSha256 = sharedToken",
+    "checkpoint.windowsClientPid = legacy.windowsClientPid",
+    "checkpoint.windowsClientStartedAt = legacy.windowsClientStartedAt",
+    "sentinelLifecycle",
+    "legacyCheckpoints",
+    "unrelatedCheckpoints",
     "windows-nsis-upgrade-qualification.json",
     "windows-nsis-ghost-recovery-qualification.json",
     'schema_version: "3"',
@@ -988,6 +1405,13 @@ function validatePlatformQualificationSources(sources) {
     "commit-bound GitHub Actions QC artifact, not a public GitHub Release",
     "public GitHub artifact attestation before installing",
   ]) assert(selfTest.includes(required), `release self-test is missing Windows migration coverage: ${required}`);
+  assertSourceStringArray(
+    selfTest,
+    "const sentinelPhases = [",
+    "];",
+    sentinelPhases,
+    "release self-test sentinel phases",
+  );
   assertOrderedTokens(linux, [
     "Linux qualification did not begin with a fresh exact short XDG runtime directory.",
     "run_managed initial-status status",

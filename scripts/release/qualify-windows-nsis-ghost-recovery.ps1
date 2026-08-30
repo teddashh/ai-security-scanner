@@ -26,6 +26,16 @@ $maximumSnapshotBytes = 512 * 1024 * 1024
 $processLeaseRelativePath = ".exclusive-process.lock"
 $maximumWindowsPathUtf16CodeUnits = 32760
 $maximumVerbatimWindowsPathUtf16CodeUnits = 32766
+$sentinelLifecycleRequiredPhases = @(
+  "fixture_ready",
+  "before_candidate_install",
+  "after_candidate_install",
+  "after_same_version_reinstall",
+  "before_candidate_runtime_start",
+  "after_candidate_runtime_running",
+  "after_current_runtime_purge",
+  "after_candidate_uninstall"
+)
 
 if ($CurrentVersion -cne "0.1.8") {
   throw "The bounded v0.1.7 ghost migration qualification applies only to candidate 0.1.8."
@@ -562,7 +572,8 @@ function Invoke-ExactProcess(
   [bool]$CaptureOutput = $false,
   [Collections.Generic.Dictionary[string,string]]$Environment = $null,
   [object]$ExpectedExecutableProof = $null,
-  [object]$ExpectedSystemExecutableProof = $null
+  [object]$ExpectedSystemExecutableProof = $null,
+  [bool]$KeepRunning = $false
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 1800000) {
     throw "$Label timeout is outside its fixed bound."
@@ -573,6 +584,9 @@ function Invoke-ExactProcess(
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $CaptureOutput
   $startInfo.RedirectStandardError = $CaptureOutput
+  if ($KeepRunning -and $CaptureOutput) {
+    throw "$Label cannot keep a process lease while waiting to drain redirected output."
+  }
   foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
   if ($null -ne $Environment) {
     $startInfo.Environment.Clear()
@@ -580,6 +594,8 @@ function Invoke-ExactProcess(
   }
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $startInfo
+  $started = $false
+  $processLeaseReturned = $false
   try {
     if ($null -ne $ExpectedExecutableProof -and $null -ne $ExpectedSystemExecutableProof) {
       throw "$Label cannot use both product-file and Windows-system executable proofs."
@@ -653,6 +669,22 @@ function Invoke-ExactProcess(
       $executionGuard.Dispose()
     }
     if (-not $started) { throw "$Label did not start." }
+    if ($KeepRunning) {
+      $process.Refresh()
+      if ($process.HasExited) {
+        throw "$Label exited before its foreground process lease could be retained."
+      }
+      $processStartedAt = $process.StartTime.ToUniversalTime().ToString(
+        "o",
+        [Globalization.CultureInfo]::InvariantCulture
+      )
+      $processLeaseReturned = $true
+      return [PSCustomObject]@{
+        Process = $process
+        ProcessId = [int]$process.Id
+        ProcessStartedAt = $processStartedAt
+      }
+    }
     $stdoutTask = $null
     $stderrTask = $null
     if ($CaptureOutput) {
@@ -685,7 +717,18 @@ function Invoke-ExactProcess(
     }
     return [ordered]@{ stdout = $stdout; stderr = $stderr; exitCode = $process.ExitCode }
   } finally {
-    $process.Dispose()
+    if (-not $processLeaseReturned) {
+      if ($started) {
+        try {
+          $process.Refresh()
+          if (-not $process.HasExited) {
+            $process.Kill($true)
+            $process.WaitForExit(5000) | Out-Null
+          }
+        } catch {}
+      }
+      $process.Dispose()
+    }
   }
 }
 
@@ -1150,38 +1193,309 @@ function Invoke-TrustedWsl(
   $environment["WINDIR"] = $TrustedWsl.windows
   $environment["PATH"] = $TrustedWsl.system32
   $environment["NoDefaultCurrentDirectoryInExePath"] = "1"
+  $environment["WSL_UTF8"] = "1"
   return Invoke-ExactProcess $TrustedWsl.executable $Arguments $TimeoutMilliseconds $Label (
     $CaptureOutput
   ) $environment -ExpectedSystemExecutableProof $TrustedWsl.proof
 }
 
-function Start-WslSentinelProcess(
+function Get-WslRunningDistributionNames(
+  [object]$TrustedWsl,
+  [string]$Label
+) {
+  $result = Invoke-TrustedWsl $TrustedWsl @(
+    "--list", "--running", "--quiet"
+  ) 30000 "$Label running inventory" $true
+  $output = [string]$result.stdout
+  if ($output.IndexOf([char]0) -ge 0 -or
+      [Text.Encoding]::UTF8.GetByteCount($output) -gt 64 * 1024) {
+    throw "$Label running inventory is malformed or exceeded its byte bound."
+  }
+  $names = [Collections.Generic.List[string]]::new()
+  foreach ($rawLine in [Text.RegularExpressions.Regex]::Split($output, "\r?\n")) {
+    $line = $rawLine.Trim()
+    if ($line.Length -gt 0 -and $line[0] -eq [char]0xfeff) {
+      $line = $line.Substring(1)
+    }
+    if ($line.Length -eq 0) { continue }
+    if ($line.Length -gt 256 -or $line.IndexOfAny([char[]]@("`r", "`n", "`0")) -ge 0) {
+      throw "$Label running inventory contains an invalid distribution name."
+    }
+    $names.Add($line)
+    if ($names.Count -gt 256) { throw "$Label running inventory exceeded its entry bound." }
+  }
+  return @($names)
+}
+
+function Get-WslSentinelGuestIdentity(
   [object]$TrustedWsl,
   [string]$DistributionName,
+  [string]$Token,
+  [string]$Label,
+  [int]$TimeoutMilliseconds = 30000
+) {
+  if ($Token -cnotmatch '^[0-9a-f]{32}$') { throw "$Label sentinel token is malformed." }
+  $command = @'
+set -eu
+token='__TOKEN__'
+state="/run/assm-qc-sentinel-$token"
+test -f "$state"
+test ! -L "$state"
+test "$(wc -l < "$state")" -eq 4
+set -- $(cat "$state")
+test "$#" -eq 4
+test "$1" = "$token"
+pid="$2"
+start_ticks="$3"
+boot_id="$4"
+case "$pid" in ''|*[!0-9]*|0) exit 21;; esac
+case "$start_ticks" in ''|*[!0-9]*|0) exit 22;; esac
+case "$boot_id" in ????????-????-????-????-????????????) ;; *) exit 23;; esac
+test -r "/proc/$pid/stat"
+test "$(awk '{ print $22 }' "/proc/$pid/stat")" = "$start_ticks"
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$boot_id"
+test "$(readlink "/proc/$pid/exe")" = "/usr/bin/sleep"
+test "$(cat "/proc/$pid/comm")" = "sleep"
+kill -0 "$pid"
+printf '%s\n%s\n%s\n' "$pid" "$start_ticks" "$boot_id"
+'@.Replace("__TOKEN__", $Token)
+  $result = Invoke-TrustedWsl $TrustedWsl @(
+    "--distribution", $DistributionName, "--user", "root", "--exec", "sh", "-c", $command
+  ) $TimeoutMilliseconds "$Label guest identity" $true
+  $output = [string]$result.stdout
+  if ($output.IndexOf([char]0) -ge 0 -or
+      [Text.Encoding]::UTF8.GetByteCount($output) -gt 4096) {
+    throw "$Label guest identity output is malformed or exceeded its byte bound."
+  }
+  $lines = @(
+    [Text.RegularExpressions.Regex]::Split($output, "\r?\n") |
+      Where-Object { $_.Length -gt 0 }
+  )
+  if ($lines.Count -ne 3 -or
+      $lines[0] -cnotmatch '^[1-9][0-9]{0,9}$' -or
+      $lines[1] -cnotmatch '^[1-9][0-9]{0,19}$' -or
+      $lines[2] -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+    throw "$Label guest identity did not return its exact bounded shape."
+  }
+  return [PSCustomObject]@{
+    LinuxPid = [uint64]::Parse($lines[0], [Globalization.CultureInfo]::InvariantCulture)
+    LinuxStartTicks = [uint64]::Parse($lines[1], [Globalization.CultureInfo]::InvariantCulture)
+    LinuxBootId = $lines[2]
+  }
+}
+
+function Assert-WslSentinelLeaseProcess([object]$Lease, [string]$Label) {
+  if ($null -eq $Lease -or $null -eq $Lease.Process -or $Lease.Stopped) {
+    throw "$Label has no active foreground WSL process lease."
+  }
+  $process = $Lease.Process
+  $process.Refresh()
+  if ($process.HasExited) { throw "$Label foreground WSL client exited before reproof." }
+  $startedAt = $process.StartTime.ToUniversalTime().ToString(
+    "o",
+    [Globalization.CultureInfo]::InvariantCulture
+  )
+  if ([int]$process.Id -ne [int]$Lease.WindowsClientPid -or
+      $startedAt -cne [string]$Lease.WindowsClientStartedAt) {
+    throw "$Label foreground WSL client PID or start time changed."
+  }
+}
+
+function Start-WslSentinelLease(
+  [object]$TrustedWsl,
+  [string]$DistributionName,
+  [string]$ExpectedBasePath,
   [string]$Token,
   [string]$Label
 ) {
   if ($Token -cnotmatch '^[0-9a-f]{32}$') { throw "$Label sentinel token is malformed." }
-  $command = (
-    "printf '%s' '$Token' > /tmp/assm-qc-sentinel; " +
-    "nohup sh -c 'while :; do sleep 300; done' >/tmp/assm-qc-live.log 2>&1 & " +
-    "echo `$! > /tmp/assm-qc-pid"
-  )
-  Invoke-TrustedWsl $TrustedWsl @(
+  $registration = Get-ExactWslRegistration $DistributionName $ExpectedBasePath
+  $command = @'
+set -eu
+umask 077
+token='__TOKEN__'
+state="/run/assm-qc-sentinel-$token"
+temporary="$state.tmp.$$"
+test -x /usr/bin/sleep
+test ! -L /usr/bin/sleep
+test ! -e "$state"
+pid="$$"
+start_ticks="$(awk '{ print $22 }' "/proc/$pid/stat")"
+boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+printf '%s\n%s\n%s\n%s\n' "$token" "$pid" "$start_ticks" "$boot_id" > "$temporary"
+chmod 600 "$temporary"
+mv "$temporary" "$state"
+exec /usr/bin/sleep 2147483647
+'@.Replace("__TOKEN__", $Token)
+  $environment = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+  $environment["SystemRoot"] = $TrustedWsl.windows
+  $environment["WINDIR"] = $TrustedWsl.windows
+  $environment["PATH"] = $TrustedWsl.system32
+  $environment["NoDefaultCurrentDirectoryInExePath"] = "1"
+  $environment["WSL_UTF8"] = "1"
+  $processLease = Invoke-ExactProcess $TrustedWsl.executable @(
     "--distribution", $DistributionName, "--user", "root", "--exec", "sh", "-c", $command
-  ) 120000 "$Label sentinel start" | Out-Null
+  ) 120000 "$Label foreground sentinel start" $false $environment `
+    -ExpectedSystemExecutableProof $TrustedWsl.proof -KeepRunning $true
+  $lease = [PSCustomObject]@{
+    Process = $processLease.Process
+    DistributionName = $DistributionName
+    ExpectedBasePath = [IO.Path]::GetFullPath($ExpectedBasePath)
+    RegistrationId = [string]$registration.RegistrationId
+    WindowsClientPid = [int]$processLease.ProcessId
+    WindowsClientStartedAt = [string]$processLease.ProcessStartedAt
+    Token = $Token
+    TokenSha256 = Get-LowerSha256Bytes ([Text.Encoding]::UTF8.GetBytes($Token))
+    LinuxBootId = $null
+    LinuxPid = [uint64]0
+    LinuxStartTicks = [uint64]0
+    Stopped = $false
+    Disposed = $false
+  }
+  $deadline = [Diagnostics.Stopwatch]::StartNew()
+  $lastFailure = "sentinel readiness was not observed"
+  try {
+    while ($deadline.ElapsedMilliseconds -lt 30000) {
+      Assert-WslSentinelLeaseProcess $lease "$Label readiness"
+      try {
+        $identity = Get-WslSentinelGuestIdentity $TrustedWsl $DistributionName $Token (
+          "$Label readiness"
+        ) 5000
+        $lease.LinuxBootId = [string]$identity.LinuxBootId
+        $lease.LinuxPid = [uint64]$identity.LinuxPid
+        $lease.LinuxStartTicks = [uint64]$identity.LinuxStartTicks
+        return $lease
+      } catch {
+        $lastFailure = $_.Exception.Message
+      }
+      Start-Sleep -Milliseconds 200
+    }
+    if ($lastFailure.Length -gt 2048) { $lastFailure = $lastFailure.Substring(0, 2048) }
+    throw "$Label did not publish its foreground sentinel identity within 30 seconds: $lastFailure"
+  } catch {
+    try { Stop-WslSentinelLease $TrustedWsl $lease "$Label failed readiness cleanup" }
+    catch {}
+    throw
+  }
 }
 
-function Assert-WslSentinelProcess(
+function Assert-WslSentinelLeaseCheckpoint(
   [object]$TrustedWsl,
-  [string]$DistributionName,
-  [string]$Token,
+  [object]$Lease,
+  [string]$Phase,
   [string]$Label
 ) {
-  $command = 'test "$(cat /tmp/assm-qc-sentinel)" = "{0}" && kill -0 "$(cat /tmp/assm-qc-pid)"' -f $Token
-  Invoke-TrustedWsl $TrustedWsl @(
-    "--distribution", $DistributionName, "--user", "root", "--exec", "sh", "-c", $command
-  ) 120000 "$Label sentinel reproof" | Out-Null
+  if (-not ($sentinelLifecycleRequiredPhases -ccontains $Phase)) {
+    throw "$Label checkpoint phase is outside the fixed lifecycle."
+  }
+  Assert-WslSentinelLeaseProcess $Lease "$Label $Phase"
+  $running = @(Get-WslRunningDistributionNames $TrustedWsl "$Label $Phase")
+  $matches = @($running | Where-Object {
+    [String]::Equals($_, [string]$Lease.DistributionName, [StringComparison]::Ordinal)
+  })
+  if ($matches.Count -ne 1) {
+    throw "$Label $Phase running inventory did not contain exactly its expected distribution."
+  }
+  $registration = Get-ExactWslRegistration $Lease.DistributionName $Lease.ExpectedBasePath
+  if ([string]$registration.RegistrationId -cne [string]$Lease.RegistrationId) {
+    throw "$Label $Phase WSL registration GUID changed."
+  }
+  $identity = Get-WslSentinelGuestIdentity $TrustedWsl $Lease.DistributionName $Lease.Token (
+    "$Label $Phase"
+  )
+  if ([string]$identity.LinuxBootId -cne [string]$Lease.LinuxBootId -or
+      [uint64]$identity.LinuxPid -ne [uint64]$Lease.LinuxPid -or
+      [uint64]$identity.LinuxStartTicks -ne [uint64]$Lease.LinuxStartTicks) {
+    throw "$Label $Phase foreground guest identity changed."
+  }
+  Assert-WslSentinelLeaseProcess $Lease "$Label $Phase post-guest"
+  $rebound = Get-ExactWslRegistration $Lease.DistributionName $Lease.ExpectedBasePath
+  if ([string]$rebound.RegistrationId -cne [string]$Lease.RegistrationId) {
+    throw "$Label $Phase WSL registration changed during guest reproof."
+  }
+  return [ordered]@{
+    phase = $Phase
+    observedAt = [DateTimeOffset]::UtcNow.ToString(
+      "o",
+      [Globalization.CultureInfo]::InvariantCulture
+    )
+    distributionName = [string]$Lease.DistributionName
+    registrationId = [string]$Lease.RegistrationId
+    windowsClientPid = [int]$Lease.WindowsClientPid
+    windowsClientStartedAt = [string]$Lease.WindowsClientStartedAt
+    linuxBootId = [string]$Lease.LinuxBootId
+    linuxPid = [uint64]$Lease.LinuxPid
+    linuxStartTicks = ([uint64]$Lease.LinuxStartTicks).ToString(
+      [Globalization.CultureInfo]::InvariantCulture
+    )
+    tokenSha256 = [string]$Lease.TokenSha256
+  }
+}
+
+function Stop-WslSentinelLease(
+  [object]$TrustedWsl,
+  [object]$Lease,
+  [string]$Label
+) {
+  if ($null -eq $Lease -or $null -eq $Lease.Process -or $Lease.Stopped -or $Lease.Disposed) { return }
+  $process = $Lease.Process
+  $stopIdentityProven = $false
+  try {
+    Assert-WslSentinelLeaseProcess $Lease "$Label before stop"
+    $registration = Get-ExactWslRegistration $Lease.DistributionName $Lease.ExpectedBasePath
+    if ([string]$registration.RegistrationId -cne [string]$Lease.RegistrationId) {
+      throw "$Label refused to stop a sentinel after its WSL registration GUID changed."
+    }
+    $command = @'
+set -eu
+token='__TOKEN__'
+expected_pid='__PID__'
+expected_ticks='__TICKS__'
+expected_boot='__BOOT__'
+state="/run/assm-qc-sentinel-$token"
+test -f "$state"
+test ! -L "$state"
+set -- $(cat "$state")
+test "$#" -eq 4
+test "$1" = "$token"
+test "$2" = "$expected_pid"
+test "$3" = "$expected_ticks"
+test "$4" = "$expected_boot"
+test "$(awk '{ print $22 }' "/proc/$expected_pid/stat")" = "$expected_ticks"
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
+test "$(readlink "/proc/$expected_pid/exe")" = "/usr/bin/sleep"
+kill -TERM "$expected_pid"
+attempt=0
+while kill -0 "$expected_pid" 2>/dev/null; do
+  attempt=$((attempt + 1))
+  test "$attempt" -lt 100
+  sleep 0.1
+done
+rm -f "$state"
+'@
+    $command = $command.Replace("__TOKEN__", [string]$Lease.Token)
+    $command = $command.Replace("__PID__", ([uint64]$Lease.LinuxPid).ToString([Globalization.CultureInfo]::InvariantCulture))
+    $command = $command.Replace("__TICKS__", ([uint64]$Lease.LinuxStartTicks).ToString([Globalization.CultureInfo]::InvariantCulture))
+    $command = $command.Replace("__BOOT__", [string]$Lease.LinuxBootId)
+    Invoke-TrustedWsl $TrustedWsl @(
+      "--distribution", $Lease.DistributionName, "--user", "root", "--exec", "sh", "-c", $command
+    ) 30000 "$Label exact guest stop" | Out-Null
+    if (-not $process.WaitForExit(15000)) {
+      throw "$Label foreground WSL client did not exit after its exact guest stopped."
+    }
+    $stopIdentityProven = $true
+  } finally {
+    try {
+      $process.Refresh()
+      if (-not $process.HasExited) {
+        $process.Kill($true)
+        $process.WaitForExit(5000) | Out-Null
+      }
+    } catch {}
+    $process.Dispose()
+    $Lease.Disposed = $true
+    if ($stopIdentityProven) { $Lease.Stopped = $true }
+  }
 }
 
 function Get-ProvenFailureCleanupWslBasePath(
@@ -1460,6 +1774,10 @@ $primaryFailure = $null
 $cleanupFailures = [Collections.Generic.List[string]]::new()
 $observations = $null
 $cleanupComplete = $false
+$oldSentinelLease = $null
+$unrelatedSentinelLease = $null
+$legacySentinelCheckpoints = [Collections.Generic.List[object]]::new()
+$unrelatedSentinelCheckpoints = [Collections.Generic.List[object]]::new()
 
 try {
   $priorInstallerProof = Download-PinnedPriorInstaller $priorInstallerPath
@@ -1563,14 +1881,22 @@ try {
 
   $oldSentinelToken = [Guid]::NewGuid().ToString("N")
   $unrelatedSentinelToken = [Guid]::NewGuid().ToString("N")
-  Start-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
-  Start-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
-    "Unrelated WSL"
-  )
-  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
-  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
-    "Unrelated WSL"
-  )
+  $oldSentinelLease = Start-WslSentinelLease $trustedWsl $oldDistributionName $oldWslBasePath (
+    $oldSentinelToken
+  ) "Legacy assm1 WSL"
+  $unrelatedSentinelLease = Start-WslSentinelLease $trustedWsl $unrelatedDistributionName (
+    $unrelatedWslBasePath
+  ) $unrelatedSentinelToken "Unrelated WSL"
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease "fixture_ready" (
+      "Legacy assm1 WSL checkpoint fixture_ready"
+    )
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease "fixture_ready" (
+      "Unrelated WSL checkpoint fixture_ready"
+    )
+  ))
   $oldRegistrationBefore = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
   $unrelatedRegistrationBefore = Get-ExactWslRegistration (
     $unrelatedDistributionName
@@ -1598,10 +1924,16 @@ try {
   Get-ExactProductRegistry $priorVersion $installDirectory | Out-Null
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
   Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
-  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
-  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
-    "Unrelated WSL"
-  )
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease "before_candidate_install" (
+      "Legacy assm1 WSL checkpoint before_candidate_install"
+    )
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
+      "before_candidate_install"
+    ) "Unrelated WSL checkpoint before_candidate_install"
+  ))
   $beforeInstallerSnapshot = Get-PreservedDataSnapshot $dataDirectory
 
   Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate bounded ghost NSIS migration" -ExpectedExecutableProof $candidateInstaller | Out-Null
@@ -1617,6 +1949,16 @@ try {
       $candidateRegistry.InstallTransition -cne "recovered-ghost-v0.1.7") {
     throw "Candidate installer did not emit the bounded ghost migration receipt."
   }
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease "after_candidate_install" (
+      "Legacy assm1 WSL checkpoint after_candidate_install"
+    )
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
+      "after_candidate_install"
+    ) "Unrelated WSL checkpoint after_candidate_install"
+  ))
   Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate same-version silent reinstall before ghost recovery" -ExpectedExecutableProof $candidateInstaller | Out-Null
   $candidateDesktop = Find-OneInstalledFile $installDirectory "ai-security-scanner.exe"
   $candidateCli = Find-OneInstalledFile $installDirectory "ai-security-scanner-cli.exe"
@@ -1632,6 +1974,16 @@ try {
     throw "Same-version silent reinstall erased the bounded ghost migration receipt."
   }
   $installerTransitionReceipt = [string]$candidateRegistry.InstallTransition
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
+      "after_same_version_reinstall"
+    ) "Legacy assm1 WSL checkpoint after_same_version_reinstall"
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
+      "after_same_version_reinstall"
+    ) "Unrelated WSL checkpoint after_same_version_reinstall"
+  ))
   $installedCandidateRuntimeManifests = @(
     Get-ChildItem -LiteralPath $installDirectory -Filter "manifest.json" -File -Recurse -Force |
       Where-Object { $_.FullName -match '(?i)[\\/]managed-runtime[\\/]manifest\.json$' }
@@ -1744,6 +2096,16 @@ try {
       $preStartRegistry.InstallTransition -cne $installerTransitionReceipt) {
     throw "Candidate lost the exact transition receipt before the retained proof could be committed."
   }
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
+      "before_candidate_runtime_start"
+    ) "Legacy assm1 WSL checkpoint before_candidate_runtime_start"
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
+      "before_candidate_runtime_start"
+    ) "Unrelated WSL checkpoint before_candidate_runtime_start"
+  ))
 
   $sideBySideProcess = Invoke-ExactProcess $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "runtime", "managed", "start"
@@ -1771,10 +2133,16 @@ try {
       [string]$unrelatedRegistrationAfter.RegistrationId -cne [string]$unrelatedRegistrationBefore.RegistrationId) {
     throw "Candidate rebound a legacy or unrelated WSL registration."
   }
-  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
-  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
-    "Unrelated WSL"
-  )
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
+      "after_candidate_runtime_running"
+    ) "Legacy assm1 WSL checkpoint after_candidate_runtime_running"
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
+      "after_candidate_runtime_running"
+    ) "Unrelated WSL checkpoint after_candidate_runtime_running"
+  ))
   $oldVhdAfter = Get-RetainedVhdIdentity $oldVhdPath "Retained legacy assm1 WSL VHD"
   foreach ($identityField in @(
       "volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes"
@@ -2000,10 +2368,16 @@ try {
       [string]$unrelatedRegistrationAfterPurge.RegistrationId -cne [string]$unrelatedRegistrationBefore.RegistrationId) {
     throw "Current-runtime purge rebound a retained WSL registration."
   }
-  Assert-WslSentinelProcess $trustedWsl $oldDistributionName $oldSentinelToken "Legacy assm1 WSL"
-  Assert-WslSentinelProcess $trustedWsl $unrelatedDistributionName $unrelatedSentinelToken (
-    "Unrelated WSL"
-  )
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
+      "after_current_runtime_purge"
+    ) "Legacy assm1 WSL checkpoint after_current_runtime_purge"
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
+      "after_current_runtime_purge"
+    ) "Unrelated WSL checkpoint after_current_runtime_purge"
+  ))
   Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS cleanup uninstall" | Out-Null
   $activeCli = $null
   $postUninstallRetainedProof = Assert-OwnerOnlyFullControlFile $retainedProofPath (
@@ -2018,10 +2392,36 @@ try {
   }
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
   Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
+  $legacySentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
+      "after_candidate_uninstall"
+    ) "Legacy assm1 WSL checkpoint after_candidate_uninstall"
+  ))
+  $unrelatedSentinelCheckpoints.Add((
+    Assert-WslSentinelLeaseCheckpoint $trustedWsl $unrelatedSentinelLease (
+      "after_candidate_uninstall"
+    ) "Unrelated WSL checkpoint after_candidate_uninstall"
+  ))
+  foreach ($checkpointSet in @(
+    [PSCustomObject]@{ Label = "legacy"; Checkpoints = $legacySentinelCheckpoints },
+    [PSCustomObject]@{ Label = "unrelated"; Checkpoints = $unrelatedSentinelCheckpoints }
+  )) {
+    if ($checkpointSet.Checkpoints.Count -ne $sentinelLifecycleRequiredPhases.Count) {
+      throw "$($checkpointSet.Label) sentinel lifecycle did not capture every required phase."
+    }
+    for ($checkpointIndex = 0; $checkpointIndex -lt $sentinelLifecycleRequiredPhases.Count; $checkpointIndex++) {
+      if ([string]$checkpointSet.Checkpoints[$checkpointIndex].phase -cne
+          [string]$sentinelLifecycleRequiredPhases[$checkpointIndex]) {
+        throw "$($checkpointSet.Label) sentinel lifecycle phase order changed."
+      }
+    }
+  }
 
   # Explicit qualification teardown. Production never receives cleanup
   # authority from the retained proof; only these fixed test namespaces are
   # unregistered after every preservation assertion has passed.
+  Stop-WslSentinelLease $trustedWsl $oldSentinelLease "Legacy assm1 WSL qualification teardown"
+  Stop-WslSentinelLease $trustedWsl $unrelatedSentinelLease "Unrelated WSL qualification teardown"
   Unregister-ProvenExactWsl $trustedWsl $oldDistributionName $oldWslBasePath
   Unregister-ProvenExactWsl $trustedWsl $unrelatedDistributionName $unrelatedWslBasePath
   if (Test-Path -LiteralPath $installDirectory) {
@@ -2033,7 +2433,7 @@ try {
   $cleanupComplete = $true
 
   $observations = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     scenario = "real_registered_wsl_n_minus_one_ghost_install_side_by_side"
     platform = "windows-x86_64"
     runner = "windows-2025"
@@ -2076,7 +2476,6 @@ try {
       oldUninstallerRemoved = $true
       unrelatedDistributionName = $unrelatedDistributionName
       unrelatedRegistrationId = [string]$unrelatedRegistrationBefore.RegistrationId
-      unrelatedDistributionRunning = $true
     }
     installerMigration = [ordered]@{
       candidateInstallerCompleted = $true
@@ -2104,7 +2503,6 @@ try {
       legacyProviderNamespace = $priorProviderNamespace
       legacyVhdIdentityPreserved = $true
       legacyProviderProofFilesPreserved = $true
-      legacySentinelProcessSurvived = $true
       currentMachineName = $candidateMachineName
       currentDistributionName = $candidateDistributionName
       currentRegistrationId = [string]$currentRegistration.RegistrationId
@@ -2115,7 +2513,6 @@ try {
       unrelatedRegistrationIdBefore = [string]$unrelatedRegistrationBefore.RegistrationId
       unrelatedRegistrationIdAfter = [string]$unrelatedRegistrationAfter.RegistrationId
       unrelatedRegistrationBasePathExact = $true
-      unrelatedSentinelProcessSurvived = $true
       noQuarantineDistributionCreated = $true
       retainedProof = [ordered]@{
         pathBoundToLegacyRegistrationId = $true
@@ -2153,6 +2550,12 @@ try {
         proofAbsentWhileRegistryReceiptPresent = $true
         proofValidatedBeforeRegistryAbsenceCheck = $true
         registryValueAbsentAfterDurableProof = $true
+      }
+      sentinelLifecycle = [ordered]@{
+        schemaVersion = 1
+        requiredPhases = @($sentinelLifecycleRequiredPhases)
+        legacyCheckpoints = @($legacySentinelCheckpoints | ForEach-Object { $_ })
+        unrelatedCheckpoints = @($unrelatedSentinelCheckpoints | ForEach-Object { $_ })
       }
     }
     dataPreservation = [ordered]@{
@@ -2207,6 +2610,13 @@ try {
   $primaryFailure = $_
 } finally {
   if ($null -ne $primaryFailure) {
+    foreach ($sentinelCleanup in @(
+      [PSCustomObject]@{ Lease = $oldSentinelLease; Label = "Failure-path legacy sentinel stop" },
+      [PSCustomObject]@{ Lease = $unrelatedSentinelLease; Label = "Failure-path unrelated sentinel stop" }
+    )) {
+      try { Stop-WslSentinelLease $trustedWsl $sentinelCleanup.Lease $sentinelCleanup.Label }
+      catch { $cleanupFailures.Add($_.Exception.Message) }
+    }
     if ($null -ne $activeCli -and (Test-Path -LiteralPath $activeCli -PathType Leaf) -and
         (Test-Path -LiteralPath $dataDirectory -PathType Container)) {
       foreach ($cleanupArguments in @(
@@ -2269,8 +2679,21 @@ try {
 }
 
 if ($null -ne $primaryFailure) {
+  $scriptStack = [string]$primaryFailure.ScriptStackTrace
+  $scriptStack = $scriptStack.Replace("`r", " ").Replace("`n", " ")
+  if ($scriptStack.Length -gt 2048) {
+    $scriptStack = $scriptStack.Substring(0, 2048) + " (truncated)"
+  }
+  $stackSuffix = if ([String]::IsNullOrWhiteSpace($scriptStack)) {
+    ""
+  } else {
+    " Script stack: $scriptStack"
+  }
   $suffix = if ($cleanupFailures.Count -eq 0) { "" } else { " Cleanup failure(s): $([String]::Join('; ', $cleanupFailures))" }
-  throw [InvalidOperationException]::new($primaryFailure.Exception.Message + $suffix, $primaryFailure.Exception)
+  throw [InvalidOperationException]::new(
+    $primaryFailure.Exception.Message + $stackSuffix + $suffix,
+    $primaryFailure.Exception
+  )
 }
 if (-not $cleanupComplete -or $null -eq $observations) {
   throw "Real registered-WSL side-by-side ghost qualification did not reach its verified cleanup state."

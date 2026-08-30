@@ -13,7 +13,7 @@ import {
   writeJsonAtomic,
 } from "./lib.mjs";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const PLATFORM = "windows-x86_64";
 const RUNNER = "windows-2025";
 const INSTALLER_TYPE = "nsis";
@@ -26,6 +26,44 @@ const RETAINED_PROOF_SCHEMA = "ai-security-scanner.managed-wsl-legacy-workspace-
 const CANDIDATE_RUNTIME_MANIFEST_SHA256 =
   "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a";
 const SELF_TEST_SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const SENTINEL_LIFECYCLE_SCHEMA_VERSION = 1;
+const SENTINEL_PHASES = Object.freeze([
+  "fixture_ready",
+  "before_candidate_install",
+  "after_candidate_install",
+  "after_same_version_reinstall",
+  "before_candidate_runtime_start",
+  "after_candidate_runtime_running",
+  "after_current_runtime_purge",
+  "after_candidate_uninstall",
+]);
+const SENTINEL_CHECKPOINT_FIELDS = Object.freeze([
+  "phase",
+  "observedAt",
+  "distributionName",
+  "registrationId",
+  "windowsClientPid",
+  "windowsClientStartedAt",
+  "linuxBootId",
+  "linuxPid",
+  "linuxStartTicks",
+  "tokenSha256",
+]);
+const SENTINEL_IDENTITY_FIELDS = Object.freeze([
+  "distributionName",
+  "registrationId",
+  "windowsClientPid",
+  "windowsClientStartedAt",
+  "linuxBootId",
+  "linuxPid",
+  "linuxStartTicks",
+  "tokenSha256",
+]);
+const CANONICAL_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const UTC_TIMESTAMP_PATTERN =
+  /^([0-9]{4})-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]{1,9}))?(Z|\+00:00)$/u;
+const MAX_U64 = 18_446_744_073_709_551_615n;
 
 export const PRIOR_GHOST_RELEASE = Object.freeze({
   version: "0.1.7",
@@ -70,6 +108,145 @@ function yes(value, label) {
 
 function bounded(value, minimum, maximum, label) {
   assert(Number.isSafeInteger(value) && value >= minimum && value <= maximum, `${label} is outside its bound`);
+}
+
+function canonicalUuid(value, label) {
+  assert(typeof value === "string" && CANONICAL_UUID_PATTERN.test(value), `${label} is not a canonical UUID`);
+}
+
+function utcTimestampOrderKey(value, label) {
+  assert(typeof value === "string", `${label} is not a string`);
+  const match = value.match(UTC_TIMESTAMP_PATTERN);
+  assert(match, `${label} is not a canonical UTC timestamp`);
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = ""] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  assert(year >= 2000, `${label} is outside the supported UTC range`);
+  const epochMilliseconds = Date.UTC(year, month - 1, day, hour, minute, second);
+  const instant = new Date(epochMilliseconds);
+  assert(
+    instant.getUTCFullYear() === year &&
+      instant.getUTCMonth() === month - 1 &&
+      instant.getUTCDate() === day &&
+      instant.getUTCHours() === hour &&
+      instant.getUTCMinutes() === minute &&
+      instant.getUTCSeconds() === second,
+    `${label} is not a real UTC instant`,
+  );
+  const nanoseconds = BigInt(fraction.padEnd(9, "0"));
+  return BigInt(Math.trunc(epochMilliseconds / 1000)) * 1_000_000_000n + nanoseconds;
+}
+
+function canonicalPositiveDecimal(value, label) {
+  assert(
+    typeof value === "string" && /^[1-9][0-9]{0,19}$/u.test(value),
+    `${label} is not a canonical positive decimal string`,
+  );
+  const parsed = BigInt(value);
+  assert(parsed <= MAX_U64, `${label} exceeds the unsigned 64-bit bound`);
+}
+
+function sentinelIdentity(checkpoint) {
+  return SENTINEL_IDENTITY_FIELDS.map((field) => checkpoint[field]);
+}
+
+function validateSentinelCheckpoints(checkpoints, expectedDistribution, expectedRegistration, label) {
+  assert(Array.isArray(checkpoints), `${label} checkpoints must be an array`);
+  assert(checkpoints.length === SENTINEL_PHASES.length, `${label} checkpoints are incomplete`);
+  let baselineIdentity;
+  let previousObservedAt;
+  for (const [index, checkpoint] of checkpoints.entries()) {
+    exactKeys(checkpoint, SENTINEL_CHECKPOINT_FIELDS, `${label} checkpoint ${index + 1}`);
+    assert(checkpoint.phase === SENTINEL_PHASES[index], `${label} checkpoint phases are not exact and ordered`);
+    const observedAt = utcTimestampOrderKey(
+      checkpoint.observedAt,
+      `${label} ${checkpoint.phase} observation time`,
+    );
+    if (previousObservedAt !== undefined) {
+      assert(observedAt >= previousObservedAt, `${label} checkpoint timestamps are not monotonic`);
+    }
+    previousObservedAt = observedAt;
+    assert(
+      checkpoint.distributionName === expectedDistribution,
+      `${label} checkpoint distribution identity changed`,
+    );
+    assert(
+      checkpoint.registrationId === expectedRegistration,
+      `${label} checkpoint registration identity changed`,
+    );
+    canonicalUuid(checkpoint.registrationId, `${label} checkpoint registration ID`);
+    bounded(checkpoint.windowsClientPid, 1, 0xffffffff, `${label} Windows client PID`);
+    utcTimestampOrderKey(checkpoint.windowsClientStartedAt, `${label} Windows client start time`);
+    canonicalUuid(checkpoint.linuxBootId, `${label} Linux boot ID`);
+    bounded(checkpoint.linuxPid, 1, 0x7fffffff, `${label} Linux PID`);
+    canonicalPositiveDecimal(checkpoint.linuxStartTicks, `${label} Linux process start ticks`);
+    sha256(checkpoint.tokenSha256, `${label} token digest`);
+    const identity = sentinelIdentity(checkpoint);
+    if (baselineIdentity === undefined) {
+      baselineIdentity = identity;
+    } else {
+      assert(
+        JSON.stringify(identity) === JSON.stringify(baselineIdentity),
+        `${label} process identity changed across checkpoints`,
+      );
+    }
+  }
+  return baselineIdentity;
+}
+
+function validateSentinelLifecycle(lifecycle, fixture, sideBySide) {
+  exactKeys(
+    lifecycle,
+    ["schemaVersion", "requiredPhases", "legacyCheckpoints", "unrelatedCheckpoints"],
+    "sentinel lifecycle",
+  );
+  assert(
+    lifecycle.schemaVersion === SENTINEL_LIFECYCLE_SCHEMA_VERSION,
+    "sentinel lifecycle schema is unsupported",
+  );
+  assert(
+    JSON.stringify(lifecycle.requiredPhases) === JSON.stringify(SENTINEL_PHASES),
+    "sentinel lifecycle required phases changed",
+  );
+  const legacyIdentity = validateSentinelCheckpoints(
+    lifecycle.legacyCheckpoints,
+    sideBySide.legacyDistributionName,
+    sideBySide.legacyRegistrationIdBefore,
+    "legacy WSL sentinel",
+  );
+  const unrelatedIdentity = validateSentinelCheckpoints(
+    lifecycle.unrelatedCheckpoints,
+    sideBySide.unrelatedDistributionName,
+    sideBySide.unrelatedRegistrationIdBefore,
+    "unrelated WSL sentinel",
+  );
+  assert(
+    sideBySide.legacyDistributionName === fixture.distributionName &&
+      sideBySide.legacyRegistrationIdBefore === fixture.registrationId,
+    "legacy sentinel lifecycle is not bound to the ghost fixture",
+  );
+  assert(
+    sideBySide.unrelatedDistributionName === fixture.unrelatedDistributionName &&
+      sideBySide.unrelatedRegistrationIdBefore === fixture.unrelatedRegistrationId,
+    "unrelated sentinel lifecycle is not bound to the ghost fixture",
+  );
+  assert(
+    JSON.stringify(legacyIdentity) !== JSON.stringify(unrelatedIdentity),
+    "legacy and unrelated sentinels share one complete process identity",
+  );
+  assert(
+    lifecycle.legacyCheckpoints[0].tokenSha256 !== lifecycle.unrelatedCheckpoints[0].tokenSha256,
+    "legacy and unrelated sentinels share one token identity",
+  );
+  assert(
+    lifecycle.legacyCheckpoints[0].windowsClientPid !==
+      lifecycle.unrelatedCheckpoints[0].windowsClientPid,
+    "legacy and unrelated sentinels share one Windows client process",
+  );
 }
 
 function validateSigningIdentity(publicKeyBase64, keyId, label) {
@@ -211,7 +388,6 @@ function validateObservations(observations, identity, version) {
       "oldUninstallerRemoved",
       "unrelatedDistributionName",
       "unrelatedRegistrationId",
-      "unrelatedDistributionRunning",
     ],
     "real ghost fixture",
   );
@@ -230,7 +406,6 @@ function validateObservations(observations, identity, version) {
     "oldVersionPayloadDirectoryRemoved",
     "oldDesktopRemoved",
     "oldUninstallerRemoved",
-    "unrelatedDistributionRunning",
   ]) yes(fixture[field], "ghost fixture " + field);
   assert(
     fixture.oldProviderNamespace === PRIOR_GHOST_RELEASE.runtimeManifestSha256.slice(0, 16),
@@ -290,7 +465,6 @@ function validateObservations(observations, identity, version) {
       "legacyProviderNamespace",
       "legacyVhdIdentityPreserved",
       "legacyProviderProofFilesPreserved",
-      "legacySentinelProcessSurvived",
       "currentMachineName",
       "currentDistributionName",
       "currentRegistrationId",
@@ -301,8 +475,8 @@ function validateObservations(observations, identity, version) {
       "unrelatedRegistrationIdBefore",
       "unrelatedRegistrationIdAfter",
       "unrelatedRegistrationBasePathExact",
-      "unrelatedSentinelProcessSurvived",
       "noQuarantineDistributionCreated",
+      "sentinelLifecycle",
       "retainedProof",
       "receiptConsumption",
     ],
@@ -316,11 +490,9 @@ function validateObservations(observations, identity, version) {
     "legacyProviderRetained",
     "legacyVhdIdentityPreserved",
     "legacyProviderProofFilesPreserved",
-    "legacySentinelProcessSurvived",
     "currentRegistrationBasePathExact",
     "currentProviderCreated",
     "unrelatedRegistrationBasePathExact",
-    "unrelatedSentinelProcessSurvived",
     "noQuarantineDistributionCreated",
   ]) yes(sideBySide[field], "runtime side-by-side " + field);
   assert(sideBySide.legacyMachineName === OLD_MACHINE, "legacy machine epoch changed");
@@ -338,6 +510,7 @@ function validateObservations(observations, identity, version) {
   assert(sideBySide.unrelatedDistributionName === fixture.unrelatedDistributionName, "unrelated distribution identity changed");
   assert(sideBySide.unrelatedRegistrationIdBefore === fixture.unrelatedRegistrationId, "unrelated registration does not match fixture");
   assert(sideBySide.unrelatedRegistrationIdAfter === sideBySide.unrelatedRegistrationIdBefore, "unrelated registration GUID changed");
+  validateSentinelLifecycle(sideBySide.sentinelLifecycle, fixture, sideBySide);
 
   const proof = sideBySide.retainedProof;
   exactKeys(
