@@ -11,8 +11,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION: &str = "1.2.0";
-pub const MASTER_FRAMEWORK_REPORT_NOTICE: &str = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete.";
+pub const MASTER_FRAMEWORK_REPORT_SCHEMA_VERSION: &str = "1.3.0";
+pub const MASTER_FRAMEWORK_REPORT_NOTICE: &str = "This report groups preliminary scanner observations by related framework coordinate. It is not an audit, certification, attestation, compliance determination, implementation assessment, score, pass, or fail. Missing relationships are unknown whenever coverage is incomplete. The legacy knowledge_date is only a run-level compatibility timestamp; engine, rule, feed, database, and mapping freshness come from their own technical records.";
 
 const FRAMEWORKS: [(&str, &str); 3] = [
     ("NIST CSF", "2.0"),
@@ -31,7 +31,10 @@ pub struct MasterFrameworkReport {
     pub selected_run_id: String,
     pub selected_run_sequence: u32,
     pub selected_run_recorded_at: DateTime<Utc>,
-    pub knowledge_date: DateTime<Utc>,
+    /// Legacy v1.2 wire field. This aggregate timestamp is not engine, rule,
+    /// feed, database, or mapping freshness and never establishes coverage.
+    #[serde(rename = "knowledge_date")]
+    pub legacy_knowledge_date: DateTime<Utc>,
     pub notice: String,
     pub coverage: FrameworkCoverageSummary,
     pub declared_ai_context: DeclaredAiContext,
@@ -397,7 +400,7 @@ pub fn export_master_framework_report(
         selected_run_id: run.id.clone(),
         selected_run_sequence: run.sequence,
         selected_run_recorded_at: run.completed_at.unwrap_or(run.created_at),
-        knowledge_date: run.knowledge_cutoff,
+        legacy_knowledge_date: run.knowledge_cutoff,
         notice: MASTER_FRAMEWORK_REPORT_NOTICE.into(),
         coverage,
         declared_ai_context,
@@ -865,17 +868,12 @@ fn coverage_summary(
     limitations.push(
         "No related finding or framework coordinate is interpreted as a passed control or a complete environment.".into(),
     );
+    limitations.push(
+        "This optional framework-relationship export retains an engine/asset ledger, not exact requested-versus-executed host, address, port, protocol, path, stage, and task dimensions. It cannot establish complete scan coverage; use the beginner master report for coverage.".into(),
+    );
 
     FrameworkCoverageSummary {
-        state: if selected_run_checks_complete
-            && !selected_run_coverage_has_unknown_or_incomplete_entries
-            && selected_run_missing_snapshot_count == 0
-            && selected_run_observations_without_evidence_count == 0
-        {
-            "selected_run_checks_complete_with_no_known_coverage_gap".into()
-        } else {
-            "incomplete_or_unknown".into()
-        },
+        state: "incomplete_or_unknown".into(),
         selected_run_coverage_ledger_basis: "selected_run_entries_matching_frozen_planned_assets"
             .into(),
         selected_run_checks_complete,
@@ -1043,11 +1041,7 @@ fn framework_summary(
             "unknown_due_to_unanswered_context",
             "No AIDEFEND coordinate was inferred because at least one required AI-context answer is legacy or unanswered. This remains unknown, not not-applicable.",
         )
-    } else if !coverage.selected_run_checks_complete
-        || coverage.selected_run_coverage_has_unknown_or_incomplete_entries
-        || coverage.selected_run_missing_snapshot_count > 0
-        || coverage.selected_run_observations_without_evidence_count > 0
-    {
+    } else if coverage.state == "incomplete_or_unknown" {
         (
             "unknown_due_to_incomplete_coverage",
             "No related coordinate was observed, but coverage is incomplete or unknown. This cannot be interpreted as a passed or implemented control.",
@@ -1423,6 +1417,7 @@ fn finding_reference(
 
 fn severity_name(severity: &Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Informational => "informational",
         Severity::Low => "low",
         Severity::Medium => "medium",
@@ -1458,6 +1453,11 @@ mod tests {
 
     const DYNAMIC_CODE_RULE: &str = "ai-security-scanner.python.dynamic-code-execution";
     const SHELL_RULE: &str = "ai-security-scanner.python.shell-true";
+
+    #[test]
+    fn framework_export_preserves_unknown_severity() {
+        assert_eq!(severity_name(&Severity::Unknown), "unknown");
+    }
 
     fn bind_current_evidence_identity(
         evidence: &mut Evidence,
@@ -1701,6 +1701,9 @@ mod tests {
             assert!(!encoded.contains(prohibited));
         }
         assert!(report.notice.contains("not an audit"));
+        assert!(report.notice.contains("legacy knowledge_date"));
+        assert!(encoded.contains("\"knowledge_date\""));
+        assert!(!encoded.contains("legacy_knowledge_date"));
         assert!(
             report
                 .frameworks
@@ -1919,7 +1922,7 @@ mod tests {
     }
 
     #[test]
-    fn other_run_coverage_is_context_only_and_cannot_reduce_selected_run_completeness() {
+    fn completed_engine_and_asset_ledger_never_claim_exact_dimension_coverage() {
         let mut case = fixture();
         case.scan_runs[0].engine_runs[0].status = EngineRunStatus::Completed;
         case.scan_runs[0].engine_runs[0].progress_percent = 100;
@@ -1954,10 +1957,18 @@ mod tests {
             report.coverage.selected_run_coverage_states,
             BTreeMap::from([("discovered_authorized_scanned".into(), 1)])
         );
-        assert_eq!(
-            report.coverage.state,
-            "selected_run_checks_complete_with_no_known_coverage_gap"
-        );
+        assert_eq!(report.coverage.state, "incomplete_or_unknown");
+        assert!(report.coverage.limitations.iter().any(|limitation| {
+            limitation.contains("not exact requested-versus-executed host")
+                && limitation.contains("cannot establish complete scan coverage")
+        }));
+        for framework in &report.frameworks {
+            if framework.controls.is_empty()
+                && framework.state != "not_applicable_to_declared_context"
+            {
+                assert!(framework.state.starts_with("unknown_due_to_"));
+            }
+        }
     }
 
     #[test]
@@ -2671,6 +2682,14 @@ mod tests {
             "frozen_historical_catalog".into();
         assert!(
             validate_schema_value(&schema, &schema, &misleading_historical_state, "$").is_err()
+        );
+
+        let mut retired_coverage_state = report.clone();
+        retired_coverage_state["coverage"]["state"] =
+            "selected_run_checks_complete_with_no_known_coverage_gap".into();
+        assert!(
+            validate_schema_value(&schema, &schema, &retired_coverage_state, "$").is_err(),
+            "the 1.3 schema must not accept the retired engine/asset-ledger completeness claim"
         );
 
         let mut reordered = report;

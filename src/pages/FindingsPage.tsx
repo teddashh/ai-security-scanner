@@ -52,7 +52,7 @@ interface FindingsPageProps {
   onSelectRun?: (runId: string) => void;
 }
 
-const severityOrder: Severity[] = ["critical", "high", "medium", "low", "info"];
+const severityOrder: Severity[] = ["critical", "high", "medium", "low", "unknown", "info"];
 const activeRunStatuses = new Set<ScanRun["status"]>(["queued", "running", "paused"]);
 const workflowOrder = Object.keys(workflowMeta) as FindingWorkflowState[];
 const decisionStates = [

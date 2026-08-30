@@ -559,6 +559,49 @@ test("full cases combine asset and applicable source platforms without questionn
   assert.deepEqual(workspace.case.platforms, ["code", "azure", "kubernetes"]);
 });
 
+test("native findings keep unknown severity distinct from informational", () => {
+  const finding = (id: string, severity: string) => ({
+    id,
+    case_id: "case-platforms-1",
+    first_seen_run_id: "run-1",
+    last_seen_run_id: "run-1",
+    fingerprint: `fingerprint-${id}`,
+    title: id,
+    plain_language_summary: "Review this scanner observation.",
+    possible_impact: "Impact was not rated by the source.",
+    severity,
+    confidence: "medium",
+    priority: 20,
+    priority_reasons: [`Source severity: ${severity}`],
+    asset_ids: ["repository-asset"],
+    evidence: [],
+    control_references: [],
+    recommendation: "Ask a qualified reviewer.",
+    verification_guidance: "Review the source evidence.",
+    rollback_considerations: null,
+    official_references: [],
+    recommended_expert_type: "Security reviewer",
+    status: "unreviewed",
+    tags: [],
+  });
+  const workspace = adaptNativeCase(platformCaseFixture({
+    findings: [
+      finding("backend-unknown", "unknown"),
+      finding("unrecognized", "vendor-special"),
+      finding("explicit-info", "informational"),
+    ],
+  }));
+
+  assert.deepEqual(
+    workspace.findings.map(({ id, severity }: { id: string; severity: string }) => [id, severity]),
+    [
+      ["backend-unknown", "unknown"],
+      ["unrecognized", "unknown"],
+      ["explicit-info", "info"],
+    ],
+  );
+});
+
 test("draft full cases with no assets or applicable sources use the assessment route fallback", () => {
   const workspace = adaptNativeCase(platformCaseFixture({
     assessment_intent: "source_code",

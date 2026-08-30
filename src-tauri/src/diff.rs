@@ -855,6 +855,7 @@ fn valid_sha256_digest(value: &str) -> bool {
 
 fn severity_name(severity: &Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Informational => "informational",
         Severity::Low => "low",
         Severity::Medium => "medium",
@@ -881,6 +882,11 @@ mod tests {
         ScopeGrant,
     };
     use chrono::TimeZone;
+
+    #[test]
+    fn comparison_preserves_unknown_severity_name() {
+        assert_eq!(severity_name(&Severity::Unknown), "unknown");
+    }
 
     fn fixture() -> AssessmentCase {
         let mut case = AssessmentCase::new(

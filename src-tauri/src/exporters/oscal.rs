@@ -305,6 +305,7 @@ fn stable_uuid(seed: &str) -> String {
 
 fn severity_name(severity: &Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Informational => "informational",
         Severity::Low => "low",
         Severity::Medium => "medium",
@@ -327,6 +328,11 @@ mod tests {
     use super::*;
     use crate::domain::*;
     use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn oscal_export_preserves_unknown_severity() {
+        assert_eq!(severity_name(&Severity::Unknown), "unknown");
+    }
 
     fn fixture() -> AssessmentCase {
         let time = Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap();

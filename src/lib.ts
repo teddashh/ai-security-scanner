@@ -162,6 +162,7 @@ export const severityMeta: Record<Severity, { label: string; tone: string }> = {
   high: labelMeta("status.severity.high", "danger"),
   medium: labelMeta("status.severity.medium", "warning"),
   low: labelMeta("status.severity.low", "info"),
+  unknown: labelMeta("status.severity.unknown", "warning"),
   info: labelMeta("status.severity.info", "neutral"),
 };
 

@@ -1275,7 +1275,7 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 pointer,
                 rule_id,
                 title,
-                string_any(object, &["level", "severity"]).unwrap_or_else(|| "medium".into()),
+                string_any(object, &["level", "severity"]).unwrap_or_else(|| "unknown".into()),
                 string_any(object, &["resource", "path", "service"])
                     .unwrap_or_else(|| "cloud-resource".into()),
                 string_any(object, &["account_id", "subscription_id", "project_id"]),
@@ -1412,7 +1412,7 @@ fn extract_m365(
             rule_id.clone(),
             string_any(object, &["Name", "Title", "Requirement", "Description"])
                 .unwrap_or_else(|| format!("{engine} control {rule_id}")),
-            string_any(object, &["Severity", "severity"]).unwrap_or_else(|| "medium".into()),
+            string_any(object, &["Severity", "severity"]).unwrap_or_else(|| "unknown".into()),
             string_any(object, &["Service", "Product", "Resource", "TenantId"])
                 .unwrap_or_else(|| "microsoft-365-tenant".into()),
             string_any(object, &["asset_id", "AssetId"]),
@@ -1646,7 +1646,7 @@ fn extract_semgrep(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
                 nested_string(value, &["extra", "metadata", "shortlink"])
                     .map(|_| format!("Semgrep rule {rule_id}"))
                     .unwrap_or_else(|| format!("Semgrep rule {rule_id}")),
-                nested_string(value, &["extra", "severity"]).unwrap_or_else(|| "warning".into()),
+                nested_string(value, &["extra", "severity"]).unwrap_or_else(|| "unknown".into()),
                 path,
                 string_any(object, &["asset_id"]),
                 Confidence::High,
@@ -1794,7 +1794,7 @@ fn extract_checkov(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<S
                 rule_id.clone(),
                 string_any(object, &["check_name"])
                     .unwrap_or_else(|| format!("Checkov check {rule_id}")),
-                string_any(object, &["severity"]).unwrap_or_else(|| "medium".into()),
+                string_any(object, &["severity"]).unwrap_or_else(|| "unknown".into()),
                 string_any(object, &["file_path", "repo_file_path"])
                     .unwrap_or_else(|| "iac-resource".into()),
                 string_any(object, &["asset_id"]),
@@ -1825,7 +1825,7 @@ fn extract_kics(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sour
         };
         let title = string_any(query_object, &["query_name"])
             .unwrap_or_else(|| format!("KICS query {rule_id}"));
-        let severity = string_any(query_object, &["severity"]).unwrap_or_else(|| "medium".into());
+        let severity = string_any(query_object, &["severity"]).unwrap_or_else(|| "unknown".into());
         let Some(files) = query_object.get("files").and_then(Value::as_array) else {
             continue;
         };
@@ -1989,7 +1989,7 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             rule_id.clone(),
             string_any(object, &["name", "title", "controlName"])
                 .unwrap_or_else(|| format!("Kubescape control {rule_id}")),
-            string_any(object, &["severity", "baseScore"]).unwrap_or_else(|| "medium".into()),
+            string_any(object, &["severity", "baseScore"]).unwrap_or_else(|| "unknown".into()),
             string_any(object, &["resourceID", "resource", "object", "name"])
                 .unwrap_or_else(|| "kubernetes-resource".into()),
             string_any(object, &["asset_id"]),
@@ -2046,7 +2046,7 @@ fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                     rule_id.clone(),
                     string_any(object, &["test_desc", "desc"])
                         .unwrap_or_else(|| format!("kube-bench control {rule_id}")),
-                    string_any(object, &["severity"]).unwrap_or_else(|| "medium".into()),
+                    string_any(object, &["severity"]).unwrap_or_else(|| "unknown".into()),
                     string_any(object, &["resource", "node_type"])
                         .unwrap_or_else(|| "kubernetes-cluster".into()),
                     string_any(object, &["asset_id"]),
@@ -2094,7 +2094,7 @@ fn extract_steampipe(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
                 rule_id.clone(),
                 string_any(object, &["title", "reason"])
                     .unwrap_or_else(|| format!("Steampipe control {rule_id}")),
-                string_any(object, &["severity"]).unwrap_or_else(|| "medium".into()),
+                string_any(object, &["severity"]).unwrap_or_else(|| "unknown".into()),
                 string_any(object, &["resource", "resource_id", "title"])
                     .unwrap_or_else(|| "cloud-resource".into()),
                 string_any(object, &["asset_id"]),
@@ -2400,7 +2400,9 @@ pub(crate) fn stable_evidence_id(
 fn parse_severity(value: &str) -> Severity {
     let normalized = value.trim().to_ascii_lowercase();
     if let Ok(score) = normalized.parse::<f64>() {
-        return if score >= 9.0 {
+        return if !score.is_finite() || !(0.0..=10.0).contains(&score) {
+            Severity::Unknown
+        } else if score >= 9.0 {
             Severity::Critical
         } else if score >= 7.0 {
             Severity::High
@@ -2417,7 +2419,8 @@ fn parse_severity(value: &str) -> Severity {
         "high" | "error" => Severity::High,
         "medium" | "moderate" | "warning" | "warn" => Severity::Medium,
         "low" | "minor" => Severity::Low,
-        _ => Severity::Informational,
+        "informational" | "info" | "log" | "none" | "negligible" => Severity::Informational,
+        _ => Severity::Unknown,
     }
 }
 
@@ -2427,6 +2430,9 @@ fn priority_for(severity: &Severity) -> u8 {
         Severity::High => 80,
         Severity::Medium => 60,
         Severity::Low => 35,
+        // Unknown impact stays above a known informational observation so it
+        // is not buried as low risk, while never pretending to be Low/Medium.
+        Severity::Unknown => 20,
         Severity::Informational => 15,
     }
 }
@@ -2437,6 +2443,7 @@ fn severity_label(severity: &Severity) -> &'static str {
         Severity::High => "high",
         Severity::Medium => "medium",
         Severity::Low => "low",
+        Severity::Unknown => "unknown",
         Severity::Informational => "informational",
     }
 }
@@ -2747,6 +2754,21 @@ mod tests {
             references: vec![],
             tags: vec![],
         }
+    }
+
+    #[test]
+    fn absent_or_unrecognized_severity_is_unknown_without_erasing_explicit_informational() {
+        for value in ["", "unknown", "not-rated", "NaN", "-1", "11"] {
+            assert_eq!(parse_severity(value), Severity::Unknown, "{value}");
+        }
+        for value in ["informational", "INFO", "log", "none", "negligible", "0"] {
+            assert_eq!(parse_severity(value), Severity::Informational, "{value}");
+        }
+        assert_eq!(priority_for(&Severity::Unknown), 20);
+        assert!(
+            priority_for(&Severity::Unknown) > priority_for(&Severity::Informational),
+            "unknown impact must not be buried as a known informational observation"
+        );
     }
 
     #[test]

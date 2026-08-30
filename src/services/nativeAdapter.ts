@@ -1075,8 +1075,11 @@ const adaptExternalScope = (scope: NativeExternalScope): FrozenExternalScope => 
 });
 
 const mapSeverity = (severity: string): Severity => {
-  if (severity === "informational") return "info";
-  return (["critical", "high", "medium", "low"].includes(severity) ? severity : "info") as Severity;
+  const normalized = severity.trim().toLowerCase();
+  if (normalized === "informational" || normalized === "info") return "info";
+  return (["critical", "high", "medium", "low", "unknown"].includes(normalized)
+    ? normalized
+    : "unknown") as Severity;
 };
 
 const mapConfidence = (confidence: string): Confidence => {

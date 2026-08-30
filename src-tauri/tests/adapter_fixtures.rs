@@ -1,7 +1,7 @@
 use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, AdapterOutput};
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::domain::{
-    Asset, AssetIdentifier, AssetKind, FindingStatus, RawArtifact,
+    Asset, AssetIdentifier, AssetKind, FindingStatus, RawArtifact, Severity,
 };
 use ai_security_scanner_lib::registry::EngineRegistry;
 use chrono::{TimeZone, Utc};
@@ -396,6 +396,40 @@ fn native_fixtures_normalize_without_inventing_inventory_findings() {
             }));
         }
     }
+}
+
+#[test]
+fn checkov_missing_and_unrecognized_severity_stays_unknown() {
+    let bytes = br#"{
+      "results": {
+        "failed_checks": [
+          {"check_id":"missing", "check_name":"Missing rating", "file_path":"missing.tf"},
+          {"check_id":"custom", "check_name":"Custom rating", "file_path":"custom.tf", "severity":"vendor-special"},
+          {"check_id":"info", "check_name":"Information only", "file_path":"info.tf", "severity":"informational"}
+        ]
+      }
+    }"#;
+    let output = normalize_bytes(
+        "checkov",
+        bytes,
+        "checkov-severity.json",
+        "application/json",
+        "run-severity",
+    );
+    assert!(
+        output.complete,
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+
+    let by_title = output
+        .findings
+        .iter()
+        .map(|finding| (finding.title.as_str(), &finding.severity))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(by_title["Missing rating"], &Severity::Unknown);
+    assert_eq!(by_title["Custom rating"], &Severity::Unknown);
+    assert_eq!(by_title["Information only"], &Severity::Informational);
 }
 
 #[test]

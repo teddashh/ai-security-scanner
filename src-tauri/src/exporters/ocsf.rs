@@ -278,6 +278,7 @@ fn evidence_value(evidence: &Evidence) -> Value {
 
 fn ocsf_severity(severity: &Severity) -> (u8, &'static str) {
     match severity {
+        Severity::Unknown => (0, "Unknown"),
         Severity::Informational => (1, "Informational"),
         Severity::Low => (2, "Low"),
         Severity::Medium => (3, "Medium"),
@@ -320,6 +321,11 @@ mod tests {
     use crate::domain::*;
     use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn unknown_severity_uses_the_ocsf_unknown_identifier() {
+        assert_eq!(ocsf_severity(&Severity::Unknown), (0, "Unknown"));
+    }
 
     fn fixture() -> AssessmentCase {
         let time = Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap();

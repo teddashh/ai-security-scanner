@@ -998,6 +998,9 @@ impl ScanRun {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
+    /// The source did not provide a recognized impact rating. This is not an
+    /// informational or low-severity assertion and requires human review.
+    Unknown,
     Informational,
     Low,
     Medium,

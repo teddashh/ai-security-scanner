@@ -14,7 +14,6 @@
     "selected_run_id",
     "selected_run_sequence",
     "selected_run_recorded_at",
-    "knowledge_date",
     "notice",
     "coverage",
     "declared_ai_context",
@@ -23,7 +22,7 @@
     "unrecognized_relationships"
   ],
   "properties": {
-    "schema_version": { "const": "1.2.0" },
+    "schema_version": { "const": "1.3.0" },
     "product_name": { "const": "ai-security-scanner" },
     "product_version": { "type": "string", "minLength": 1 },
     "export_kind": {
@@ -34,7 +33,12 @@
     "selected_run_id": { "type": "string", "minLength": 1 },
     "selected_run_sequence": { "type": "integer", "minimum": 1 },
     "selected_run_recorded_at": { "type": "string", "format": "date-time" },
-    "knowledge_date": { "type": "string", "format": "date-time" },
+    "knowledge_date": {
+      "type": "string",
+      "format": "date-time",
+      "deprecated": true,
+      "$comment": "Optional legacy run-level timestamp retained for compatibility with v1.2 documents. It MUST NOT be interpreted as engine, rule, feed, database, or mapping freshness and MUST NOT establish scan coverage. Current technical records use per-engine knowledge inputs."
+    },
     "notice": { "type": "string", "minLength": 1 },
     "coverage": { "$ref": "#/$defs/coverage" },
     "declared_ai_context": { "$ref": "#/$defs/declaredAiContext" },
@@ -130,7 +134,10 @@
         "limitations"
       ],
       "properties": {
-        "state": { "enum": ["selected_run_checks_complete_with_no_known_coverage_gap", "incomplete_or_unknown"] },
+        "state": {
+          "const": "incomplete_or_unknown",
+          "$comment": "Version 1.3 cannot establish exact requested-versus-executed host, address, port, protocol, path, stage, and task coverage from this engine/asset ledger. Historical v1.2 documents retain their own schema; current producers and documents MUST NOT claim the retired no-known-gap state."
+        },
         "selected_run_coverage_ledger_basis": { "const": "selected_run_entries_matching_frozen_planned_assets" },
         "selected_run_checks_complete": { "type": "boolean" },
         "selected_run_coverage_ledger_available": { "type": "boolean" },
@@ -322,7 +329,7 @@
         "finding_id": { "type": "string", "minLength": 1 },
         "fingerprint": { "type": "string", "minLength": 1 },
         "title": { "type": "string", "minLength": 1 },
-        "severity": { "enum": ["informational", "low", "medium", "high", "critical"] },
+        "severity": { "enum": ["unknown", "informational", "low", "medium", "high", "critical"] },
         "confidence": { "enum": ["low", "medium", "high", "confirmed"] },
         "observed_at": { "type": "string", "format": "date-time" },
         "snapshot_source": { "const": "run_snapshot" },

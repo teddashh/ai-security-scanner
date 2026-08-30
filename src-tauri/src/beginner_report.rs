@@ -1574,10 +1574,11 @@ fn gap_rank(kind: CoverageGapKind) -> u8 {
 fn severity_rank(severity: &Severity) -> u8 {
     match severity {
         Severity::Informational => 0,
-        Severity::Low => 1,
-        Severity::Medium => 2,
-        Severity::High => 3,
-        Severity::Critical => 4,
+        Severity::Unknown => 1,
+        Severity::Low => 2,
+        Severity::Medium => 3,
+        Severity::High => 4,
+        Severity::Critical => 5,
     }
 }
 
@@ -1602,6 +1603,12 @@ mod tests {
     };
     use chrono::TimeZone;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn unknown_severity_sorts_after_known_low_but_before_informational() {
+        assert!(severity_rank(&Severity::Low) > severity_rank(&Severity::Unknown));
+        assert!(severity_rank(&Severity::Unknown) > severity_rank(&Severity::Informational));
+    }
 
     fn instant(seconds: i64) -> DateTime<Utc> {
         Utc.timestamp_opt(1_788_000_000 + seconds, 0).unwrap()

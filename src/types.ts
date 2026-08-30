@@ -927,7 +927,7 @@ export interface ScanReadiness {
   nextStep?: ScanReadinessNextStep;
 }
 
-export type Severity = "critical" | "high" | "medium" | "low" | "info";
+export type Severity = "critical" | "high" | "medium" | "low" | "unknown" | "info";
 export type Confidence = "high" | "medium" | "low";
 export type FindingWorkflowState =
   | "unreviewed"
