@@ -135,6 +135,10 @@ const nextStepCopy = {
     en: "Start a new scan to run this check with the installed release. The saved scan stays unchanged.",
     zhTW: "請開始新的掃描，以目前安裝的版本執行這項檢查；已保存的掃描不會變更。",
   },
+  savedPlanUnavailable: {
+    en: "Start a new scan for this check. Its older data was preserved, and no target was contacted.",
+    zhTW: "請為這項檢查開始新的掃描。較舊的資料已保留，而且這次沒有連線到任何目標。",
+  },
   cleanupIdentityUnavailable: {
     en: "This check ended safely, and its older data and results were kept. Start a new scan when you want fresh results; nothing else is required.",
     zhTW: "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
@@ -227,6 +231,7 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
   if (engine.failureKind === "gateway_preparation_failed") return nextStepCopy.gatewayPreparation;
   if (engine.errorCode === "provider_rate_limited") return nextStepCopy.providerBusy;
   if (engine.errorCode === "resume_release_incompatible") return nextStepCopy.releaseIncompatible;
+  if (engine.errorCode === "resume_work_plan_invalid") return nextStepCopy.savedPlanUnavailable;
   if (engine.errorCode === "runtime_cleanup_identity_unavailable") {
     return nextStepCopy.cleanupIdentityUnavailable;
   }

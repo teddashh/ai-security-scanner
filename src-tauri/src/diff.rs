@@ -969,6 +969,7 @@ mod tests {
                 support_until: Some("2026-11-22".into()),
             }),
             scope_contract_sha256: Some("d".repeat(64)),
+            naabu_work_plan: None,
             mapping_version: Some("2026-08-24.1".into()),
             mapping_provenance: Some(crate::domain::ControlMappingProvenance {
                 mapping_version: "2026-08-24.1".into(),

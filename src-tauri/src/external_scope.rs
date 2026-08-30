@@ -535,12 +535,23 @@ fn validate_resolved_address(grant: &ExternalScopeGrant, address: IpAddr) -> App
             "resolved address {address} is outside the approved target"
         )));
     }
+    validate_frozen_address_policy(address, grant.allow_sensitive_networks)
+}
+
+/// Re-applies the address safety boundary to an already-frozen DNS or network
+/// snapshot. Durable execution plans call this during intrinsic validation so
+/// deserialized or otherwise reconstructed snapshots cannot bypass the same
+/// metadata and sensitive-network rules used at resolution time.
+pub(crate) fn validate_frozen_address_policy(
+    address: IpAddr,
+    allow_sensitive_networks: bool,
+) -> AppResult<()> {
     if is_cloud_metadata(address) {
         return Err(AppError::NotAuthorized(format!(
             "cloud metadata address {address} is never accepted as an external target"
         )));
     }
-    if is_sensitive_address(address) && !grant.allow_sensitive_networks {
+    if is_sensitive_address(address) && !allow_sensitive_networks {
         return Err(AppError::NotAuthorized(format!(
             "sensitive, local, or non-routable address {address} requires an explicit internal-network grant"
         )));

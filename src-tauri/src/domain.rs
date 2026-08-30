@@ -1,6 +1,7 @@
 use crate::external_scope::{
     DirectNetworkTargetKind, ExternalScopeGrant, ExternalScopeRequest, TransportProtocol,
 };
+use crate::naabu_work_plan::NaabuWorkPlanV1;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -758,6 +759,11 @@ pub struct EngineRun {
     /// semantically identical re-approval remains comparable.
     #[serde(default)]
     pub scope_contract_sha256: Option<String>,
+    /// Exact host-frozen Naabu work units persisted before the first target
+    /// contact. Missing values identify legacy, non-Naabu, or not-yet-frozen
+    /// executions and never imply complete work-unit coverage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub naabu_work_plan: Option<NaabuWorkPlanV1>,
     /// Exact project-authored control-mapping catalog used while adapting this
     /// run. Missing values identify legacy runs and fail closed during diffing.
     #[serde(default)]

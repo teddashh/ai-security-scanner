@@ -172,6 +172,7 @@ pub fn prepare_localhost_quick_scan(
         execution_timeout_seconds: Some(3),
         knowledge_input: None,
         scope_contract_sha256: None,
+        naabu_work_plan: None,
         mapping_version: None,
         mapping_provenance: None,
         fingerprint_schema_version: None,

@@ -269,11 +269,15 @@ const scanStartIssueCopy = {
     en: "This unfinished scan was created by a different app release and cannot be continued safely. Nothing was rerun. Start a new scan; saved evidence and findings remain unchanged.",
     zhTW: "這個未完成的掃描由不同版本的應用程式建立，無法安全續跑。這次沒有重新執行任何檢查；請開始新的掃描，已保存的證據與問題不會變更。",
   },
+  resume_work_plan_invalid: {
+    en: "This saved check could not be matched to its original target plan. Nothing was rerun and no target was contacted. Start a new scan; existing data remains available.",
+    zhTW: "這項已保存的檢查無法對應到原本的目標計畫。這次沒有重新執行，也沒有連線到任何目標；請開始新的掃描，既有資料仍會保留。",
+  },
   execution_preflight_unavailable: {
     en: "The final readiness check could not finish. No scan started. Check again.",
     zhTW: "最後的準備狀態檢查尚未完成；掃描尚未開始。請重新檢查。",
   },
-} as const satisfies Partial<Record<ScanReadinessBlocker | "resume_release_incompatible", BilingualText>>;
+} as const satisfies Partial<Record<ScanReadinessBlocker | "resume_release_incompatible" | "resume_work_plan_invalid", BilingualText>>;
 
 const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);

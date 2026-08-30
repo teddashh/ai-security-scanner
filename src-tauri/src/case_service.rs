@@ -53,6 +53,7 @@ use crate::external_scope::{
     CanonicalTarget, ExternalActivity, ExternalScopeGrant, ExternalScopeRequest,
     explicit_target_requires_sensitive_network_allowance,
 };
+use crate::naabu_work_plan::{FrozenNaabuGrant, NAABU_ENGINE_ID, NaabuWorkPlanV1};
 use crate::orchestrator::{ExecutionCheckpoint, ExecutionReport, ExecutionStage};
 use crate::registry::EngineRegistry;
 use crate::source_authorization::PROVIDER_RESOURCE_SCOPE_METADATA_KEY;
@@ -185,6 +186,11 @@ pub struct PlannedEngineExecution {
     pub ai_generated_artifact: AiGeneratedArtifactAnswer,
     pub assets: Vec<Asset>,
     pub scope_grants: Vec<ScopeGrant>,
+    /// Exact durable Naabu plan when it has already been frozen. New runs leave
+    /// this absent until the host resolves and persists the plan before target
+    /// contact; resume reuses the stored identities instead of regenerating it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub naabu_work_plan: Option<NaabuWorkPlanV1>,
     #[serde(default)]
     pub resume_checkpoint: Option<ExecutionCheckpoint>,
 }
@@ -1726,6 +1732,113 @@ impl<'a> CaseService<'a> {
         })
     }
 
+    /// Freezes the exact host-resolved Naabu work units into the case before
+    /// any gateway, container, or target contact. The first durable plan can
+    /// only belong to attempt one. Later matching planned attempts may replay
+    /// the same plan, but no retry can replace its targets or unit identities.
+    pub fn persist_naabu_work_plan(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        engine_run_id: &str,
+        attempt: u32,
+        plan: &NaabuWorkPlanV1,
+    ) -> AppResult<AssessmentCase> {
+        retry_case_revision_conflicts(|| {
+            self.persist_naabu_work_plan_once(case_id, scan_run_id, engine_run_id, attempt, plan)
+        })
+    }
+
+    fn persist_naabu_work_plan_once(
+        &self,
+        case_id: &str,
+        scan_run_id: &str,
+        engine_run_id: &str,
+        attempt: u32,
+        plan: &NaabuWorkPlanV1,
+    ) -> AppResult<AssessmentCase> {
+        if attempt == 0 {
+            return Err(AppError::InvalidRequest(
+                "Naabu work-plan attempt must be at least one".into(),
+            ));
+        }
+        plan.validate().map_err(|error| {
+            AppError::InvalidRequest(format!("invalid Naabu work plan: {error}"))
+        })?;
+        if plan.identity.case_id != case_id
+            || plan.identity.scan_run_id != scan_run_id
+            || plan.identity.engine_run_id != engine_run_id
+            || plan.identity.engine_id != NAABU_ENGINE_ID
+        {
+            return Err(AppError::NotAuthorized(
+                "Naabu work plan does not match the requested case, run, and engine run".into(),
+            ));
+        }
+
+        let mut case = self.mutable_case(case_id, "persist a Naabu work plan")?;
+        let run_index = case
+            .scan_runs
+            .iter()
+            .position(|run| run.id == scan_run_id)
+            .ok_or_else(|| AppError::InvalidRequest("scan run not found".into()))?;
+        let engine_index = case.scan_runs[run_index]
+            .engine_runs
+            .iter()
+            .position(|engine_run| engine_run.id == engine_run_id)
+            .ok_or_else(|| AppError::InvalidRequest("engine run not found".into()))?;
+
+        {
+            let run = &case.scan_runs[run_index];
+            let engine_run = &run.engine_runs[engine_index];
+            if run.case_id != case_id
+                || engine_run.scan_run_id != scan_run_id
+                || engine_run.engine_id != NAABU_ENGINE_ID
+                || !matches!(engine_run.task_kind, EngineTaskKind::CatalogEngine)
+            {
+                return Err(AppError::NotAuthorized(
+                    "Naabu work plan does not belong to the persisted Naabu execution".into(),
+                ));
+            }
+            if engine_status_terminal(&engine_run.status) {
+                return Err(AppError::NotAuthorized(
+                    "a terminal or not-executed engine cannot accept a Naabu work plan".into(),
+                ));
+            }
+            let checkpoint = resource_free_planned_checkpoint(
+                case_id,
+                scan_run_id,
+                engine_run,
+                "persist Naabu work plan",
+            )?;
+            if checkpoint.attempt != attempt {
+                return Err(AppError::NotAuthorized(
+                    "Naabu work plan attempt does not match the durable planned checkpoint".into(),
+                ));
+            }
+            validate_naabu_plan_membership(case_id, run, engine_run, plan)?;
+
+            if let Some(saved) = engine_run.naabu_work_plan.as_ref() {
+                if saved == plan {
+                    return Ok(case);
+                }
+                return Err(AppError::Conflict(
+                    "the persisted Naabu work plan is immutable for this engine run".into(),
+                ));
+            }
+            if attempt != 1 {
+                return Err(AppError::NotAuthorized(
+                    "a missing Naabu work plan cannot be introduced after attempt one".into(),
+                ));
+            }
+        }
+
+        case.scan_runs[run_index].engine_runs[engine_index].naabu_work_plan = Some(plan.clone());
+        case.touch();
+        self.storage
+            .save_case(&mut case, "execution.naabu_work_plan_persisted")?;
+        Ok(case)
+    }
+
     fn transition_persisted_scan_pre_dispatch_once(
         &self,
         case_id: &str,
@@ -2421,6 +2534,7 @@ impl<'a> CaseService<'a> {
                     execution_timeout_seconds: Some(manifest.execution_timeout_seconds()),
                     knowledge_input: Some(dated_knowledge_input(manifest)),
                     scope_contract_sha256: Some(scope_contract_sha256),
+                    naabu_work_plan: None,
                     mapping_version: mapping_version.clone(),
                     mapping_provenance: mapping_provenance.clone(),
                     fingerprint_schema_version: Some(FINGERPRINT_SCHEMA_VERSION.to_owned()),
@@ -2448,6 +2562,7 @@ impl<'a> CaseService<'a> {
                     ai_generated_artifact,
                     assets: assets.into_iter().cloned().collect(),
                     scope_grants: relevant_grants,
+                    naabu_work_plan: None,
                     resume_checkpoint: None,
                 });
                 engine_runs.push(engine_run);
@@ -3266,6 +3381,76 @@ impl<'a> CaseService<'a> {
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
+
+        let is_resume_eligible = |engine_run: &EngineRun| {
+            engine_run.status == EngineRunStatus::Paused
+                || (matches!(
+                    engine_run.status,
+                    EngineRunStatus::Queued
+                        | EngineRunStatus::Preparing
+                        | EngineRunStatus::Running
+                        | EngineRunStatus::Failed
+                        | EngineRunStatus::PartiallyCompleted
+                        | EngineRunStatus::Cancelled
+                ) && engine_run.resume_token.is_some())
+        };
+        let invalid_plan_explanation = "This saved check could not be safely matched to its original target plan. Its existing data was preserved, and no new target contact was made during this resume attempt. Start a new scan for this check; other checks can continue.";
+        let invalid_plan_indices = {
+            let run = &case.scan_runs[run_index];
+            let mut invalid = Vec::new();
+            for (engine_index, engine_run) in run.engine_runs.iter().enumerate() {
+                if !is_resume_eligible(engine_run) {
+                    continue;
+                }
+                let Some(plan) = engine_run.naabu_work_plan.as_ref() else {
+                    continue;
+                };
+                let validation = if engine_run.engine_id != NAABU_ENGINE_ID {
+                    Err(AppError::InvalidRequest(
+                        "a non-Naabu execution contains a Naabu work plan".into(),
+                    ))
+                } else {
+                    plan.validate()
+                        .map_err(|error| {
+                            AppError::InvalidRequest(format!(
+                                "saved Naabu work plan is invalid: {error}"
+                            ))
+                        })
+                        .and_then(|()| {
+                            validate_naabu_plan_membership(case_id, run, engine_run, plan)
+                        })
+                };
+                if let Err(error) = validation {
+                    tracing::warn!(
+                        engine_run_id = %engine_run.id,
+                        error = %error,
+                        "saved Naabu work plan was preserved but excluded from resume"
+                    );
+                    invalid.push(engine_index);
+                }
+            }
+            invalid
+        };
+        let had_invalid_plan = !invalid_plan_indices.is_empty();
+        if had_invalid_plan {
+            for engine_index in &invalid_plan_indices {
+                let engine_run = &mut case.scan_runs[run_index].engine_runs[*engine_index];
+                if !engine_status_terminal(&engine_run.status) {
+                    engine_run.status = EngineRunStatus::Failed;
+                }
+                engine_run.phase = "resume_work_plan_invalid".into();
+                engine_run.finished_at.get_or_insert(now);
+                engine_run.error_code = Some("resume_work_plan_invalid".into());
+                engine_run.error_message = Some(invalid_plan_explanation.into());
+                engine_run.resume_token = None;
+            }
+            update_run_and_case_status(&mut case, run_index, now);
+            case.touch();
+            refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
+            self.storage
+                .save_case(&mut case, "scan.resume_work_plan_invalid")?;
+        }
+
         let frozen_effective_grants = case
             .scope_grants
             .iter()
@@ -3289,26 +3474,19 @@ impl<'a> CaseService<'a> {
             mapping_warning: Option<String>,
             captured_compatibility_warning: Option<String>,
         }
-        struct ResumeBlockedByRelease {
+        struct ResumeBlocked {
             engine_index: usize,
+            phase: &'static str,
+            error_code: String,
+            clear_resume_token: bool,
             explanation: String,
         }
         let mut candidates = Vec::<ResumeCandidate>::new();
-        let mut release_blocked = Vec::<ResumeBlockedByRelease>::new();
+        let mut blocked = Vec::<ResumeBlocked>::new();
         let (_, _, mapping_warning) = optional_control_mapping_identity();
         let run = &case.scan_runs[run_index];
         for (engine_index, engine_run) in run.engine_runs.iter().enumerate() {
-            let eligible = engine_run.status == EngineRunStatus::Paused
-                || (matches!(
-                    engine_run.status,
-                    EngineRunStatus::Queued
-                        | EngineRunStatus::Preparing
-                        | EngineRunStatus::Running
-                        | EngineRunStatus::Failed
-                        | EngineRunStatus::PartiallyCompleted
-                        | EngineRunStatus::Cancelled
-                ) && engine_run.resume_token.is_some());
-            if !eligible {
+            if !is_resume_eligible(engine_run) {
                 continue;
             }
             let previous = engine_run
@@ -3316,17 +3494,25 @@ impl<'a> CaseService<'a> {
                 .as_deref()
                 .map(ExecutionCheckpoint::from_resume_token)
                 .transpose()?;
-            let manifest = self.engines.get(&engine_run.engine_id).ok_or_else(|| {
-                AppError::NotAvailable(format!(
-                    "engine {} is no longer present in the installed catalog",
-                    engine_run.engine_id
-                ))
-            })?;
-            if let Some((_, explanation)) = engine_unavailable(manifest, self.adapters) {
-                return Err(AppError::NotAvailable(format!(
-                    "engine {} cannot be resumed: {explanation}",
-                    engine_run.engine_id
-                )));
+            let Some(manifest) = self.engines.get(&engine_run.engine_id) else {
+                blocked.push(ResumeBlocked {
+                    engine_index,
+                    phase: "resume_engine_unavailable",
+                    error_code: "manifest_unavailable".into(),
+                    clear_resume_token: true,
+                    explanation: "This check is not available in the installed version. No new target contact was made during this resume attempt. Start a new scan after updating the app; other checks can continue.".into(),
+                });
+                continue;
+            };
+            if let Some((reason_code, _)) = engine_unavailable(manifest, self.adapters) {
+                blocked.push(ResumeBlocked {
+                    engine_index,
+                    phase: "resume_engine_unavailable",
+                    error_code: reason_code,
+                    clear_resume_token: true,
+                    explanation: "This check is not available in the installed version. No new target contact was made during this resume attempt. Start a new scan after updating the app; other checks can continue.".into(),
+                });
+                continue;
             }
             let current_execution_timeout_seconds = manifest.execution_timeout_seconds();
             // Releases before the enforced execution-deadline contract did
@@ -3378,8 +3564,11 @@ impl<'a> CaseService<'a> {
                 } else {
                     "continuing it would execute a scanner or runtime under a different release identity"
                 };
-                release_blocked.push(ResumeBlockedByRelease {
+                blocked.push(ResumeBlocked {
                     engine_index,
+                    phase: "resume_release_incompatible",
+                    error_code: "resume_release_incompatible".into(),
+                    clear_resume_token: false,
                     explanation: format!(
                         "Engine {} was not resumed: its frozen release identity differs from the installed release ({release_differences}), and {reason}. Start a new scan to use the installed release; the historical evidence and findings remain unchanged.",
                         engine_run.engine_id
@@ -3480,26 +3669,30 @@ impl<'a> CaseService<'a> {
                     ai_generated_artifact: frozen_ai_generated_artifact,
                     assets,
                     scope_grants: relevant_grants,
+                    naabu_work_plan: engine_run.naabu_work_plan.clone(),
                     resume_checkpoint: previous,
                 },
             });
         }
         if candidates.is_empty() {
-            if let Some(blocked) = release_blocked.first() {
+            if let Some(first_blocked) = blocked.first() {
                 let error_message = format!(
-                    "scan_preflight:resume_release_incompatible: {} No scanner or runtime was started.",
-                    blocked.explanation
+                    "scan_preflight:{}: {} No scanner or runtime was started.",
+                    first_blocked.error_code, first_blocked.explanation
                 );
-                for blocked in &release_blocked {
+                for blocked in &blocked {
                     let engine_run =
                         &mut case.scan_runs[run_index].engine_runs[blocked.engine_index];
                     if !engine_status_terminal(&engine_run.status) {
                         engine_run.status = EngineRunStatus::Failed;
                     }
-                    engine_run.phase = "resume_release_incompatible".into();
+                    engine_run.phase = blocked.phase.into();
                     engine_run.finished_at.get_or_insert(now);
-                    engine_run.error_code = Some("resume_release_incompatible".into());
+                    engine_run.error_code = Some(blocked.error_code.clone());
                     engine_run.error_message = Some(blocked.explanation.clone());
+                    if blocked.clear_resume_token {
+                        engine_run.resume_token = None;
+                    }
                     if !engine_run.warnings.contains(&blocked.explanation) {
                         engine_run.warnings.push(blocked.explanation.clone());
                     }
@@ -3507,9 +3700,26 @@ impl<'a> CaseService<'a> {
                 update_run_and_case_status(&mut case, run_index, now);
                 case.touch();
                 refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
-                self.storage
-                    .save_case(&mut case, "scan.resume_release_incompatible")?;
+                let event = if blocked
+                    .iter()
+                    .all(|blocked| blocked.error_code == "resume_release_incompatible")
+                {
+                    "scan.resume_release_incompatible"
+                } else if blocked
+                    .iter()
+                    .all(|blocked| blocked.phase == "resume_engine_unavailable")
+                {
+                    "scan.resume_engine_unavailable"
+                } else {
+                    "scan.resume_blocked"
+                };
+                self.storage.save_case(&mut case, event)?;
                 return Err(AppError::NotAvailable(error_message));
+            }
+            if had_invalid_plan {
+                return Err(AppError::NotAvailable(format!(
+                    "scan_preflight:resume_work_plan_invalid: {invalid_plan_explanation} No scanner or runtime was started."
+                )));
             }
             return Err(AppError::InvalidRequest(
                 "scan has no interrupted or retryable engine runs".into(),
@@ -3537,15 +3747,18 @@ impl<'a> CaseService<'a> {
                 engine_run.warnings.push(warning.clone());
             }
         }
-        for blocked in &release_blocked {
+        for blocked in &blocked {
             let engine_run = &mut case.scan_runs[run_index].engine_runs[blocked.engine_index];
             if !engine_status_terminal(&engine_run.status) {
                 engine_run.status = EngineRunStatus::Failed;
             }
-            engine_run.phase = "resume_release_incompatible".into();
+            engine_run.phase = blocked.phase.into();
             engine_run.finished_at.get_or_insert(now);
-            engine_run.error_code = Some("resume_release_incompatible".into());
+            engine_run.error_code = Some(blocked.error_code.clone());
             engine_run.error_message = Some(blocked.explanation.clone());
+            if blocked.clear_resume_token {
+                engine_run.resume_token = None;
+            }
             if !engine_run.warnings.contains(&blocked.explanation) {
                 engine_run.warnings.push(blocked.explanation.clone());
             }
@@ -5791,6 +6004,7 @@ fn not_executed_run(
         execution_timeout_seconds: manifest.map(EngineManifest::execution_timeout_seconds),
         knowledge_input: manifest.map(dated_knowledge_input),
         scope_contract_sha256: None,
+        naabu_work_plan: None,
         mapping_version,
         mapping_provenance,
         fingerprint_schema_version: manifest.map(|_| FINGERPRINT_SCHEMA_VERSION.to_owned()),
@@ -6726,6 +6940,114 @@ fn cleanup_reconciled_partial_message(previous: Option<&str>) -> String {
         }
         None => RESOLUTION.into(),
     }
+}
+
+fn validate_naabu_plan_membership(
+    case_id: &str,
+    run: &ScanRun,
+    engine_run: &EngineRun,
+    plan: &NaabuWorkPlanV1,
+) -> AppResult<()> {
+    if plan.identity.frozen_at < run.created_at {
+        return Err(AppError::NotAuthorized(
+            "Naabu work plan was frozen before its scan run was created".into(),
+        ));
+    }
+    let asset_ids = engine_run
+        .asset_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if asset_ids.is_empty() || asset_ids.len() != engine_run.asset_ids.len() {
+        return Err(AppError::NotAuthorized(
+            "Naabu engine run has no exact unique target membership".into(),
+        ));
+    }
+
+    let expected_grant_ids = run
+        .scope_grant_snapshots
+        .iter()
+        .filter(|snapshot| {
+            asset_ids.contains(snapshot.asset_id.as_str())
+                && snapshot.permission == ScanPermission::LowImpactExternalConnection
+                && snapshot.external_scope.is_some()
+        })
+        .map(|snapshot| snapshot.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let planned_grant_ids = plan
+        .frozen_grants
+        .iter()
+        .map(|grant| grant.grant_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if planned_grant_ids != expected_grant_ids {
+        return Err(AppError::NotAuthorized(
+            "Naabu work plan does not cover the exact frozen grants for this engine run".into(),
+        ));
+    }
+
+    for grant in &plan.frozen_grants {
+        if grant.case_id != case_id || !asset_ids.contains(grant.asset_id.as_str()) {
+            return Err(AppError::NotAuthorized(
+                "Naabu work plan contains an asset outside this engine run".into(),
+            ));
+        }
+        let snapshot = run
+            .scope_grant_snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == grant.grant_id)
+            .ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "Naabu work plan contains a grant outside the frozen scan scope".into(),
+                )
+            })?;
+        if !frozen_naabu_grant_matches_snapshot(case_id, grant, snapshot) {
+            return Err(AppError::NotAuthorized(
+                "Naabu work plan changed the frozen target, port, transport, rate, or expiry contract"
+                    .into(),
+            ));
+        }
+    }
+    for unit in &plan.work_units {
+        let grant_index = usize::try_from(unit.grant_index).map_err(|_| {
+            AppError::InvalidRequest("Naabu work-unit grant index is not representable".into())
+        })?;
+        let grant = plan.frozen_grants.get(grant_index).ok_or_else(|| {
+            AppError::InvalidRequest("Naabu work unit refers to a missing frozen grant".into())
+        })?;
+        if !asset_ids.contains(grant.asset_id.as_str())
+            || !expected_grant_ids.contains(grant.grant_id.as_str())
+        {
+            return Err(AppError::NotAuthorized(
+                "Naabu work unit refers outside the engine run's frozen membership".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn frozen_naabu_grant_matches_snapshot(
+    case_id: &str,
+    frozen: &FrozenNaabuGrant,
+    snapshot: &ScopeGrant,
+) -> bool {
+    let Some(external) = snapshot.external_scope.as_ref() else {
+        return false;
+    };
+    snapshot.id == frozen.grant_id
+        && snapshot.asset_id == frozen.asset_id
+        && snapshot.permission == ScanPermission::LowImpactExternalConnection
+        && snapshot.expires_at == Some(frozen.expires_at)
+        && external.id == frozen.grant_id
+        && external.case_id == case_id
+        && external.asset_id == frozen.asset_id
+        && external.target == frozen.target
+        && external.ports == frozen.ports.iter().copied().collect::<BTreeSet<_>>()
+        && external.protocol == frozen.protocol
+        && external.activity == frozen.activity
+        && external.rate_policy == frozen.rate_policy
+        && external.template_policy == frozen.template_policy
+        && external.expires_at == frozen.expires_at
+        && external.allow_sensitive_networks == frozen.allow_sensitive_networks
 }
 
 fn resource_free_planned_checkpoint(
@@ -7957,6 +8279,8 @@ mod tests {
         ProviderExecutionContract, Severity,
     };
     use crate::export::RedactionProfile;
+    use crate::external_scope::{ResolvedExternalPlan, freeze_external_plan};
+    use crate::naabu_work_plan::{NaabuWorkPlanIdentity, build_naabu_work_plan};
     use chrono::Duration;
 
     struct Fixture {
@@ -8254,6 +8578,104 @@ mod tests {
             )
             .unwrap();
         asset_id
+    }
+
+    fn prepared_naabu_work_plan(
+        fixture: &Fixture,
+    ) -> (String, ScanPlan, ResolvedExternalPlan, NaabuWorkPlanV1) {
+        let created = fixture.create();
+        approve_direct_external_target(
+            fixture,
+            &created.id,
+            AssetKind::IpAddress,
+            "198.51.100.0/30",
+            ScanPermission::LowImpactExternalConnection,
+            crate::external_scope::TransportProtocol::Tcp,
+            true,
+        );
+        let scan_plan = fixture
+            .service()
+            .plan_scan_for_execution(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec![NAABU_ENGINE_ID.into()],
+                },
+            )
+            .unwrap();
+        let execution = scan_plan
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == NAABU_ENGINE_ID)
+            .unwrap();
+        let external = execution.scope_grants[0].external_scope.as_ref().unwrap();
+        let frozen_at = Utc::now();
+        let resolved = freeze_external_plan(
+            external,
+            [
+                "198.51.100.1".parse().unwrap(),
+                "198.51.100.2".parse().unwrap(),
+            ],
+            frozen_at,
+        )
+        .unwrap();
+        let identity = NaabuWorkPlanIdentity::new(
+            &created.id,
+            &execution.scan_run_id,
+            &execution.engine_run_id,
+            frozen_at,
+        );
+        let work_plan = build_naabu_work_plan(identity, &[resolved.clone()], None).unwrap();
+        (created.id, scan_plan, resolved, work_plan)
+    }
+
+    fn append_planned_resume_sibling(
+        case: &mut AssessmentCase,
+        source_engine_index: usize,
+        engine_id: &str,
+    ) -> String {
+        let scan_run = case.scan_runs.first_mut().unwrap();
+        let mut sibling = scan_run.engine_runs[source_engine_index].clone();
+        let sibling_id = new_id();
+        sibling.id = sibling_id.clone();
+        sibling.engine_id = engine_id.into();
+        sibling.status = EngineRunStatus::Queued;
+        sibling.progress_percent = 0;
+        sibling.phase = "queued".into();
+        sibling.started_at = None;
+        sibling.finished_at = None;
+        sibling.naabu_work_plan = None;
+        sibling.runtime_provider = None;
+        sibling.runtime_version = None;
+        sibling.runtime_security_options = None;
+        sibling.exit_code = None;
+        sibling.cleanup_removed = None;
+        sibling.cleanup_detail = None;
+        sibling.warnings.clear();
+        sibling.raw_artifact_ids.clear();
+        sibling.error_code = None;
+        sibling.error_message = None;
+        sibling.resume_token = Some(
+            ExecutionCheckpoint {
+                case_id: case.id.clone(),
+                scan_run_id: scan_run.id.clone(),
+                engine_run_id: sibling_id.clone(),
+                engine_id: engine_id.into(),
+                attempt: 1,
+                stage: ExecutionStage::Planned,
+                container_name: None,
+                scope_sha256: None,
+                artifact_ids: Vec::new(),
+                cleanup_completed: true,
+                last_error: None,
+                runtime_command_provenance: None,
+                runtime_provider: None,
+                managed_network: None,
+            }
+            .resume_token()
+            .unwrap(),
+        );
+        scan_run.engine_runs.push(sibling);
+        sibling_id
     }
 
     fn write_legacy_artifact_deletion_obligation(
@@ -9333,6 +9755,368 @@ mod tests {
                 blocker
             );
         }
+    }
+
+    #[test]
+    fn naabu_work_plan_persists_reopens_and_replays_without_a_second_write() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, _, work_plan) = prepared_naabu_work_plan(&fixture);
+        let execution = scan_plan.executable.first().unwrap();
+        let service = fixture.service();
+        let events_before = fixture.storage.list_case_events(&case_id).unwrap().len();
+
+        let persisted = service
+            .persist_naabu_work_plan(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                execution.attempt,
+                &work_plan,
+            )
+            .unwrap();
+        assert_eq!(
+            persisted.scan_runs[0].engine_runs[0]
+                .naabu_work_plan
+                .as_ref(),
+            Some(&work_plan)
+        );
+        assert_eq!(
+            fixture.storage.list_case_events(&case_id).unwrap().len(),
+            events_before + 1
+        );
+
+        let reopened = service.show_case(&case_id).unwrap();
+        assert_eq!(
+            reopened.scan_runs[0].engine_runs[0]
+                .naabu_work_plan
+                .as_ref(),
+            Some(&work_plan)
+        );
+        let replayed = service
+            .persist_naabu_work_plan(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                execution.attempt,
+                &work_plan,
+            )
+            .unwrap();
+        assert_eq!(
+            replayed.scan_runs[0].engine_runs[0]
+                .naabu_work_plan
+                .as_ref(),
+            Some(&work_plan)
+        );
+        assert_eq!(
+            fixture.storage.list_case_events(&case_id).unwrap().len(),
+            events_before + 1,
+            "an exact replay must not create a second case revision or event"
+        );
+    }
+
+    #[test]
+    fn naabu_work_plan_rejects_a_different_valid_plan_after_first_persistence() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, resolved, first) = prepared_naabu_work_plan(&fixture);
+        let execution = scan_plan.executable.first().unwrap();
+        let service = fixture.service();
+        service
+            .persist_naabu_work_plan(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                execution.attempt,
+                &first,
+            )
+            .unwrap();
+        let different = build_naabu_work_plan(first.identity.clone(), &[resolved], None).unwrap();
+        assert_ne!(first, different);
+
+        let result = service.persist_naabu_work_plan(
+            &case_id,
+            &execution.scan_run_id,
+            &execution.engine_run_id,
+            execution.attempt,
+            &different,
+        );
+        assert!(matches!(result, Err(AppError::Conflict(_))));
+        let reopened = service.show_case(&case_id).unwrap();
+        assert_eq!(
+            reopened.scan_runs[0].engine_runs[0]
+                .naabu_work_plan
+                .as_ref(),
+            Some(&first)
+        );
+    }
+
+    #[test]
+    fn naabu_work_plan_rejects_cross_run_asset_grant_and_stale_attempts() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, resolved, work_plan) = prepared_naabu_work_plan(&fixture);
+        let execution = scan_plan.executable.first().unwrap();
+        let service = fixture.service();
+
+        let stale_attempt = service.persist_naabu_work_plan(
+            &case_id,
+            &execution.scan_run_id,
+            &execution.engine_run_id,
+            2,
+            &work_plan,
+        );
+        assert!(matches!(stale_attempt, Err(AppError::NotAuthorized(_))));
+
+        let cross_run = build_naabu_work_plan(
+            NaabuWorkPlanIdentity::new(
+                &case_id,
+                "different-run",
+                &execution.engine_run_id,
+                work_plan.identity.frozen_at,
+            ),
+            &[resolved.clone()],
+            None,
+        )
+        .unwrap();
+        let result = service.persist_naabu_work_plan(
+            &case_id,
+            &execution.scan_run_id,
+            &execution.engine_run_id,
+            1,
+            &cross_run,
+        );
+        assert!(matches!(result, Err(AppError::NotAuthorized(_))));
+
+        let mut foreign_asset = resolved.clone();
+        foreign_asset.asset_id = "foreign-asset".into();
+        let cross_asset =
+            build_naabu_work_plan(work_plan.identity.clone(), &[foreign_asset], None).unwrap();
+        let result = service.persist_naabu_work_plan(
+            &case_id,
+            &execution.scan_run_id,
+            &execution.engine_run_id,
+            1,
+            &cross_asset,
+        );
+        assert!(matches!(result, Err(AppError::NotAuthorized(_))));
+
+        let mut foreign_grant = resolved;
+        foreign_grant.grant_id = "foreign-grant".into();
+        let cross_grant =
+            build_naabu_work_plan(work_plan.identity.clone(), &[foreign_grant], None).unwrap();
+        let result = service.persist_naabu_work_plan(
+            &case_id,
+            &execution.scan_run_id,
+            &execution.engine_run_id,
+            1,
+            &cross_grant,
+        );
+        assert!(matches!(result, Err(AppError::NotAuthorized(_))));
+
+        assert!(
+            service.show_case(&case_id).unwrap().scan_runs[0].engine_runs[0]
+                .naabu_work_plan
+                .is_none(),
+            "rejected plans must leave the durable run unchanged"
+        );
+    }
+
+    #[test]
+    fn legacy_case_without_naabu_work_plan_deserializes_as_unplanned() {
+        let fixture = Fixture::new();
+        let (case_id, _, _, _) = prepared_naabu_work_plan(&fixture);
+        let mut document = serde_json::to_value(fixture.service().show_case(&case_id).unwrap())
+            .expect("serialize current case");
+        for run in document["scan_runs"].as_array_mut().unwrap() {
+            for engine in run["engine_runs"].as_array_mut().unwrap() {
+                engine.as_object_mut().unwrap().remove("naabu_work_plan");
+            }
+        }
+
+        let legacy: AssessmentCase = serde_json::from_value(document).expect("decode legacy case");
+        assert!(legacy.scan_runs[0].engine_runs[0].naabu_work_plan.is_none());
+    }
+
+    #[test]
+    fn corrupt_saved_naabu_plan_is_preserved_but_becomes_a_no_contact_resume_gap() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, _, work_plan) = prepared_naabu_work_plan(&fixture);
+        let execution = scan_plan.executable.first().unwrap();
+        fixture
+            .service()
+            .persist_naabu_work_plan(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                1,
+                &work_plan,
+            )
+            .unwrap();
+
+        let mut corrupted = fixture.service().show_case(&case_id).unwrap();
+        let saved = corrupted.scan_runs[0].engine_runs[0]
+            .naabu_work_plan
+            .as_mut()
+            .unwrap();
+        saved.work_units[0].scope_sha256 = "0".repeat(64);
+        fixture
+            .storage
+            .save_case(&mut corrupted, "test.corrupt_saved_naabu_plan")
+            .unwrap();
+
+        let result = fixture
+            .service()
+            .persist_resume_before_execution_preflight(&case_id, &execution.scan_run_id);
+        assert!(matches!(&result, Err(AppError::NotAvailable(_))));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("resume_work_plan_invalid")
+        );
+
+        let reopened = fixture.service().show_case(&case_id).unwrap();
+        let engine_run = &reopened.scan_runs[0].engine_runs[0];
+        assert_eq!(engine_run.status, EngineRunStatus::Failed);
+        assert_eq!(engine_run.phase, "resume_work_plan_invalid");
+        assert!(engine_run.resume_token.is_none());
+        assert_eq!(
+            engine_run.naabu_work_plan.as_ref().unwrap().work_units[0].scope_sha256,
+            "0".repeat(64),
+            "the unreadable saved plan must be preserved for recovery instead of rewritten"
+        );
+        assert!(engine_run.started_at.is_none());
+        assert!(engine_run.raw_artifact_ids.is_empty());
+    }
+
+    #[test]
+    fn corrupt_naabu_plan_and_unavailable_sibling_are_both_durably_terminalized() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, _, work_plan) = prepared_naabu_work_plan(&fixture);
+        let execution = scan_plan.executable.first().unwrap();
+        fixture
+            .service()
+            .persist_naabu_work_plan(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                1,
+                &work_plan,
+            )
+            .unwrap();
+
+        let mut corrupted = fixture.service().show_case(&case_id).unwrap();
+        corrupted.scan_runs[0].engine_runs[0]
+            .naabu_work_plan
+            .as_mut()
+            .unwrap()
+            .work_units[0]
+            .scope_sha256 = "0".repeat(64);
+        let unavailable_id =
+            append_planned_resume_sibling(&mut corrupted, 0, "catalog-engine-not-installed");
+        fixture
+            .storage
+            .save_case(&mut corrupted, "test.corrupt_plan_with_unavailable_sibling")
+            .unwrap();
+
+        let result = fixture
+            .service()
+            .persist_resume_before_execution_preflight(&case_id, &execution.scan_run_id);
+        assert!(matches!(&result, Err(AppError::NotAvailable(_))));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("manifest_unavailable")
+        );
+
+        let reopened = fixture.service().show_case(&case_id).unwrap();
+        let invalid = reopened.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|run| run.id == execution.engine_run_id)
+            .unwrap();
+        assert_eq!(invalid.status, EngineRunStatus::Failed);
+        assert_eq!(invalid.phase, "resume_work_plan_invalid");
+        assert!(invalid.resume_token.is_none());
+        assert!(invalid.naabu_work_plan.is_some());
+        assert!(invalid.started_at.is_none());
+        assert!(invalid.raw_artifact_ids.is_empty());
+
+        let unavailable = reopened.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|run| run.id == unavailable_id)
+            .unwrap();
+        assert_eq!(unavailable.status, EngineRunStatus::Failed);
+        assert_eq!(unavailable.phase, "resume_engine_unavailable");
+        assert_eq!(
+            unavailable.error_code.as_deref(),
+            Some("manifest_unavailable")
+        );
+        assert!(unavailable.resume_token.is_none());
+        assert!(unavailable.started_at.is_none());
+        assert!(unavailable.raw_artifact_ids.is_empty());
+    }
+
+    #[test]
+    fn corrupt_naabu_plan_does_not_prevent_a_valid_sibling_from_resuming() {
+        let fixture = Fixture::new();
+        let (case_id, scan_plan, _, work_plan) = prepared_naabu_work_plan(&fixture);
+        let execution = scan_plan.executable.first().unwrap();
+        fixture
+            .service()
+            .persist_naabu_work_plan(
+                &case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                1,
+                &work_plan,
+            )
+            .unwrap();
+
+        let mut corrupted = fixture.service().show_case(&case_id).unwrap();
+        corrupted.scan_runs[0].engine_runs[0]
+            .naabu_work_plan
+            .as_mut()
+            .unwrap()
+            .work_units[0]
+            .scope_sha256 = "0".repeat(64);
+        let valid_sibling_id = append_planned_resume_sibling(&mut corrupted, 0, NAABU_ENGINE_ID);
+        fixture
+            .storage
+            .save_case(&mut corrupted, "test.corrupt_plan_with_valid_sibling")
+            .unwrap();
+
+        let resumed = fixture
+            .service()
+            .persist_resume_before_execution_preflight(&case_id, &execution.scan_run_id)
+            .unwrap();
+        assert_eq!(resumed.executable.len(), 1);
+        assert_eq!(resumed.executable[0].engine_run_id, valid_sibling_id);
+        assert!(resumed.executable[0].naabu_work_plan.is_none());
+
+        let reopened = fixture.service().show_case(&case_id).unwrap();
+        let invalid = reopened.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|run| run.id == execution.engine_run_id)
+            .unwrap();
+        assert_eq!(invalid.status, EngineRunStatus::Failed);
+        assert_eq!(invalid.phase, "resume_work_plan_invalid");
+        assert!(invalid.resume_token.is_none());
+        assert!(invalid.naabu_work_plan.is_some());
+        assert!(invalid.started_at.is_none());
+        assert!(invalid.raw_artifact_ids.is_empty());
+
+        let sibling = reopened.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|run| run.id == valid_sibling_id)
+            .unwrap();
+        assert_eq!(sibling.status, EngineRunStatus::Queued);
+        assert_eq!(sibling.phase, "queued_for_resume");
+        assert!(sibling.resume_token.is_some());
+        assert!(sibling.started_at.is_none());
+        assert!(sibling.raw_artifact_ids.is_empty());
     }
 
     #[test]
@@ -14324,6 +15108,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                naabu_work_plan: None,
                 mapping_version: None,
                 mapping_provenance: None,
                 fingerprint_schema_version: None,
@@ -14566,6 +15351,7 @@ mod tests {
                 support_until: Some("2026-11-22".into()),
             }),
             scope_contract_sha256: Some("d".repeat(64)),
+            naabu_work_plan: None,
             mapping_version: Some("2026-08-24.1".into()),
             mapping_provenance: Some(crate::domain::ControlMappingProvenance {
                 mapping_version: "2026-08-24.1".into(),

@@ -27,6 +27,7 @@ pub mod local_tcp_probe;
 pub mod localhost_quick_scan;
 pub mod managed_network;
 pub mod managed_runtime;
+pub mod naabu_work_plan;
 pub mod orchestrator;
 pub mod prioritization;
 pub mod process_lease;

@@ -1309,6 +1309,30 @@ test("release-incompatible saved work is static, redacted, and not resumable", (
   assert.doesNotMatch(JSON.stringify(failed), /RAW_BACKEND_SENTINEL|target-private/u);
 });
 
+test("an invalid saved work plan preserves data without offering another resume loop", () => {
+  const rawBackendText = "RAW_PLAN_SENTINEL 10.44.55.66 work-plan-secret.example.test";
+  const failed = adaptGatewayFailure(
+    rawBackendText,
+    "resume_work_plan_invalid",
+    "planned",
+    "resume_work_plan_invalid",
+    [rawBackendText],
+    rawBackendText,
+  ).runs[0]?.engineRuns[0];
+
+  assert.equal(failed?.errorCode, "resume_work_plan_invalid");
+  assert.equal(failed?.recoveryAction, "none");
+  assert.equal(failed?.resumable, false);
+  assert.equal(
+    failed?.message,
+    "這項已保存的檢查無法對應到原本的目標計畫。這次沒有重新執行，也沒有連線到任何目標；請開始新的掃描，既有資料仍會保留。",
+  );
+  assert.equal(failed?.checkpoint?.lastError, undefined);
+  assert.deepEqual(failed?.warnings, []);
+  assert.equal(failed?.cleanupDetail, undefined);
+  assert.doesNotMatch(JSON.stringify(failed), /RAW_PLAN_SENTINEL|10\.44\.55\.66|work-plan-secret/u);
+});
+
 test("ambiguous cleanup identity never offers an unsafe cleanup retry", () => {
   const rawBackendText = "RAW_CLEANUP_SENTINEL private-runtime-path";
   const failed = adaptGatewayFailure(

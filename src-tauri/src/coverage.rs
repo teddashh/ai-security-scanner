@@ -749,6 +749,7 @@ mod tests {
             execution_timeout_seconds: None,
             knowledge_input: None,
             scope_contract_sha256: None,
+            naabu_work_plan: None,
             mapping_version: None,
             mapping_provenance: None,
             fingerprint_schema_version: None,

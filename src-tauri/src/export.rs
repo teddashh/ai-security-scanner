@@ -1087,6 +1087,10 @@ pub(crate) fn case_for_export(
             }
             for engine_run in &mut run.engine_runs {
                 engine_run.resume_token = None;
+                // The private work plan contains exact resolved targets and
+                // ports. Standard exports retain the ordinary redacted run
+                // outcome, but never this execution-only target corpus.
+                engine_run.naabu_work_plan = None;
                 engine_run.error_message = engine_run
                     .error_message
                     .as_ref()
@@ -2068,8 +2072,10 @@ mod tests {
     use super::*;
     use crate::domain::*;
     use crate::external_scope::{
-        ExternalActivity, ExternalScopeGrant, RatePolicy, TemplatePolicy, TransportProtocol,
+        ExternalActivity, ExternalScopeGrant, RatePolicy, ResolutionSnapshot, ResolvedExternalPlan,
+        TemplatePolicy, TransportProtocol,
     };
+    use crate::naabu_work_plan::{NaabuWorkPlanIdentity, build_naabu_work_plan};
     use chrono::TimeZone;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
@@ -2148,6 +2154,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                naabu_work_plan: None,
                 mapping_version: None,
                 mapping_provenance: None,
                 fingerprint_schema_version: None,
@@ -2746,6 +2753,11 @@ mod tests {
     #[test]
     fn standard_redaction_removes_sensitive_sentinels_from_every_bundle_document() {
         const SENTINEL: &str = "SENSITIVE_SENTINEL_DO_NOT_EXPORT_8f7c2a";
+        const PLAN_HOSTNAME: &str = "work-plan-secret.example.test";
+        const PLAN_ADDRESS_ONE: &str = "10.44.55.66";
+        const PLAN_ADDRESS_TWO: &str = "10.44.55.67";
+        const PLAN_PORT_ONE: u16 = 49_151;
+        const PLAN_PORT_TWO: u16 = 49_152;
         let temp = tempdir().unwrap();
         let artifact_root = temp.path().join("artifacts");
         let mut case = fixture(&artifact_root, true);
@@ -2811,6 +2823,41 @@ mod tests {
         case.scan_runs[0].engine_runs[0].error_message = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].cleanup_detail = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].warnings = vec![SENTINEL.into()];
+        case.scan_runs[0].engine_runs[0].naabu_work_plan = Some(
+            build_naabu_work_plan(
+                NaabuWorkPlanIdentity::new("case-1", "run-1", "engine-run-1", time),
+                &[ResolvedExternalPlan {
+                    grant_id: "work-plan-grant".into(),
+                    case_id: "case-1".into(),
+                    asset_id: "asset-1".into(),
+                    target: CanonicalTarget::Hostname(PLAN_HOSTNAME.into()),
+                    resolution: ResolutionSnapshot {
+                        hostname: Some(PLAN_HOSTNAME.into()),
+                        addresses: [
+                            PLAN_ADDRESS_ONE.parse().unwrap(),
+                            PLAN_ADDRESS_TWO.parse().unwrap(),
+                        ]
+                        .into_iter()
+                        .collect(),
+                        resolved_at: time,
+                    },
+                    ports: [PLAN_PORT_ONE, PLAN_PORT_TWO].into_iter().collect(),
+                    protocol: TransportProtocol::Tcp,
+                    activity: ExternalActivity::LowImpactExternal,
+                    rate_policy: RatePolicy {
+                        requests_per_second: 2,
+                        concurrency: 1,
+                        timeout_seconds: 3,
+                    },
+                    template_policy: TemplatePolicy::conservative("not_applicable", Vec::new()),
+                    frozen_at: time,
+                    expires_at: time + chrono::Duration::hours(1),
+                    allow_sensitive_networks: true,
+                }],
+                None,
+            )
+            .unwrap(),
+        );
         case.coverage.push(CoverageEntry {
             id: "coverage-1".into(),
             scope_key: SENTINEL.into(),
@@ -2912,8 +2959,25 @@ mod tests {
             unredacted.contains(SENTINEL),
             "the sentinel fixture must be meaningful"
         );
+        for private_value in [
+            PLAN_HOSTNAME,
+            PLAN_ADDRESS_ONE,
+            PLAN_ADDRESS_TWO,
+            &PLAN_PORT_ONE.to_string(),
+            &PLAN_PORT_TWO.to_string(),
+        ] {
+            assert!(
+                unredacted.contains(private_value),
+                "the work-plan redaction fixture must contain {private_value}"
+            );
+        }
         let redacted = case_for_export(&case, RedactionProfile::Standard);
         assert!(!serde_json::to_string(&redacted).unwrap().contains(SENTINEL));
+        assert!(
+            redacted.scan_runs[0].engine_runs[0]
+                .naabu_work_plan
+                .is_none()
+        );
         assert!(
             !String::from_utf8(export_ocsf_finding_events_bytes(&redacted, "run-1").unwrap())
                 .unwrap()
@@ -2948,6 +3012,20 @@ mod tests {
                     .any(|window| window == SENTINEL.as_bytes()),
                 "standard-redacted bundle entry leaked the sentinel"
             );
+            for private_value in [
+                PLAN_HOSTNAME.to_owned(),
+                PLAN_ADDRESS_ONE.to_owned(),
+                PLAN_ADDRESS_TWO.to_owned(),
+                PLAN_PORT_ONE.to_string(),
+                PLAN_PORT_TWO.to_string(),
+            ] {
+                assert!(
+                    !bytes
+                        .windows(private_value.len())
+                        .any(|window| window == private_value.as_bytes()),
+                    "standard-redacted bundle entry leaked private Naabu work-plan data"
+                );
+            }
         }
     }
 

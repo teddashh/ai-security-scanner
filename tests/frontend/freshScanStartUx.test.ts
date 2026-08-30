@@ -163,6 +163,10 @@ test("release-incompatible saved checks offer a static safe fresh-scan path", as
     presentation,
     /if \(engine\.errorCode === "resume_release_incompatible"\) return nextStepCopy\.releaseIncompatible/u,
   );
+  assert.match(
+    presentation,
+    /if \(engine\.errorCode === "resume_work_plan_invalid"\) return nextStepCopy\.savedPlanUnavailable/u,
+  );
   assert.ok(
     presentation.includes("The saved scan stays unchanged."),
     "the per-check next step must not suggest retrying frozen work",

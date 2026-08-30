@@ -1265,7 +1265,7 @@ const engineRecoveryAction = (
   checkpoint: EngineCheckpoint | undefined,
   errorCode: string | null | undefined,
 ): EngineRecoveryAction => {
-  if (["resume_release_incompatible", "runtime_cleanup_identity_unavailable"].includes(errorCode ?? "")) {
+  if (["resume_release_incompatible", "resume_work_plan_invalid", "runtime_cleanup_identity_unavailable"].includes(errorCode ?? "")) {
     return "none";
   }
   if (!hasResumeToken || !checkpoint || !["paused", "failed", "partial", "cancelled"].includes(status)) {
@@ -1609,12 +1609,13 @@ export const adaptNativeCase = (
       const status = mapEngineStatus(engineRun.status);
       const checkpoint = parseCheckpoint(engineRun.resume_token, engineRun);
       const releaseIncompatible = engineRun.error_code === "resume_release_incompatible";
+      const savedWorkPlanUnavailable = engineRun.error_code === "resume_work_plan_invalid";
       const cleanupIdentityUnavailable = engineRun.error_code === "runtime_cleanup_identity_unavailable"
         || [
           "cleanup_identity_unavailable",
           "interrupted_restart_cleanup_identity_unavailable",
         ].includes(engineRun.phase);
-      const staticFailure = releaseIncompatible || cleanupIdentityUnavailable;
+      const staticFailure = releaseIncompatible || savedWorkPlanUnavailable || cleanupIdentityUnavailable;
       const failureKind = cleanupIdentityUnavailable ? undefined : engineFailureKind(engineRun, checkpoint);
       const publicErrorCode = cleanupIdentityUnavailable
         ? "runtime_cleanup_identity_unavailable"
@@ -1694,6 +1695,11 @@ export const adaptNativeCase = (
           ? adapterText(
             "This saved check was created by a different app release and cannot be continued safely. Start a new scan; saved evidence and findings remain unchanged.",
             "這項已保存的檢查由不同版本的應用程式建立，無法安全續跑。請開始新的掃描；已保存的證據與問題不會變更。",
+          )
+          : savedWorkPlanUnavailable
+          ? adapterText(
+            "This saved check could not be matched to its original target plan. Nothing was rerun and no target was contacted. Start a new scan; existing data remains available.",
+            "這項已保存的檢查無法對應到原本的目標計畫。這次沒有重新執行，也沒有連線到任何目標；請開始新的掃描，既有資料仍會保留。",
           )
           : cleanupIdentityUnavailable
           ? adapterText(

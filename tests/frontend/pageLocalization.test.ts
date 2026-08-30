@@ -204,6 +204,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
     ["The saved read-only data source is missing or changed", "已保存的唯讀資料來源已遺失或有變更"],
     ["The final readiness check could not finish", "最後的準備狀態檢查尚未完成"],
     ["The saved results needed to continue are missing or changed", "續跑所需的已保存結果已遺失或有變更"],
+    ["This saved check could not be matched to its original target plan", "這項已保存的檢查無法對應到原本的目標計畫"],
   ] as const) {
     assert.ok(app.includes(english), english);
     assert.ok(app.includes(traditionalChinese), traditionalChinese);
@@ -211,7 +212,7 @@ test("execution readiness failures have distinct bilingual fixes and typed desti
 
   assert.match(
     app,
-    /as const satisfies Partial<Record<ScanReadinessBlocker \| "resume_release_incompatible", BilingualText>>/u,
+    /as const satisfies Partial<Record<ScanReadinessBlocker \| "resume_release_incompatible" \| "resume_work_plan_invalid", BilingualText>>/u,
   );
   assert.match(app, /scannerSetupBlocker=\{scanReadiness && scanReadiness\.caseId === currentCaseId && isScannerSetupBlocker/u);
   assert.match(progress, /satisfies Record<ScanReadinessBlocker, BilingualText>/u);

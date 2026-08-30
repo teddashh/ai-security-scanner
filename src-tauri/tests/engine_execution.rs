@@ -16,5 +16,7 @@ mod external_scope;
 mod managed_network;
 #[path = "../src/managed_runtime.rs"]
 mod managed_runtime;
+#[path = "../src/naabu_work_plan.rs"]
+mod naabu_work_plan;
 #[path = "../src/orchestrator.rs"]
 mod orchestrator;
