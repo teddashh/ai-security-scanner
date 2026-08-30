@@ -82,6 +82,8 @@ export const zhTW = {
   "runtime.phase.failed.detail": "一項掃描工具沒有啟動成功。已保存的工作與其他可用檢查仍可使用。",
   "runtime.phase.failed.generic.label": "掃描工具設定已停止",
   "runtime.phase.failed.generic.detail": "自動設定未能完成。你的掃描專案沒有變更；請再試一次設定。",
+  "runtime.phase.failed.nonRetryable.label": "這個程式版本有一項本機檢查無法執行",
+  "runtime.phase.failed.nonRetryable.detail": "其他檢查、已保存的專案、報告與匯出仍可使用；結果會把這項檢查標示為「未測試」。",
   "runtime.phase.cancelled.label": "設定已暫停",
   "runtime.phase.cancelled.detail": "已下載的進度有保留，下次可以從中斷處繼續。",
   "runtime.download.progress": "掃描工具下載進度",

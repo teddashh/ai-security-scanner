@@ -127,11 +127,11 @@ pub struct IntegrityResponse {
 
 #[tauri::command]
 pub async fn setup_managed_runtime(state: State<'_, AppState>) -> AppResult<IntegrityResponse> {
-    let manager = state.managed_runtime().cloned().ok_or_else(|| {
-        AppError::NotAvailable(
-            "this installed application has no verified managed runtime bundle".into(),
-        )
-    })?;
+    ensure_verified_managed_runtime_for_setup(&state)?;
+    let manager = state
+        .managed_runtime()
+        .cloned()
+        .expect("the immutable setup guard verified a managed runtime manager");
     let worker_setup = state.managed_runtime_setup().clone();
     state.invalidate_runtime_health();
     let status =
@@ -159,6 +159,16 @@ pub async fn setup_managed_runtime(state: State<'_, AppState>) -> AppResult<Inte
             status.runtime_version
         ),
     })
+}
+
+fn ensure_verified_managed_runtime_for_setup(state: &AppState) -> AppResult<()> {
+    if state.managed_runtime().is_some() {
+        return Ok(());
+    }
+    Err(AppError::NotAvailable(
+        "verified scan tools are unavailable; independent checks and saved reports remain available"
+            .into(),
+    ))
 }
 
 #[tauri::command]
@@ -6203,6 +6213,49 @@ mod tests {
             directory.path().join("signing.key"),
         );
         (directory, state)
+    }
+
+    #[test]
+    fn rejected_packaged_runtime_cannot_create_or_reset_a_setup_operation() {
+        use crate::managed_runtime::{
+            ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupPhase,
+            PackagedManagedRuntimeAdmission,
+        };
+
+        for (admission, expected_reason) in [
+            (
+                PackagedManagedRuntimeAdmission::Missing,
+                ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing,
+            ),
+            (
+                PackagedManagedRuntimeAdmission::VerificationFailed,
+                ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed,
+            ),
+        ] {
+            let (_directory, state) = test_state();
+            let state = state.with_packaged_managed_runtime_admission(admission);
+            let before = state
+                .managed_runtime_setup()
+                .status()
+                .expect("terminal setup status");
+
+            let error = ensure_verified_managed_runtime_for_setup(&state)
+                .expect_err("rejected package cannot start setup");
+            assert!(matches!(error, AppError::NotAvailable(_)));
+
+            let after = state
+                .managed_runtime_setup()
+                .status()
+                .expect("stable terminal setup status");
+            assert_eq!(after, before);
+            assert_eq!(after.phase, ManagedRuntimeSetupPhase::Failed);
+            assert_eq!(after.failure_reason, Some(expected_reason));
+            assert!(after.operation_id.is_none());
+            assert!(!after.active);
+            assert!(!after.can_retry);
+            assert!(!after.can_cancel);
+            assert!(after.next_action.is_none());
+        }
     }
 
     fn create_test_case(state: &AppState, title: &str) -> AssessmentCase {

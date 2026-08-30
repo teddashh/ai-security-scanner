@@ -62,6 +62,8 @@ interface RuntimeAssistantCopy {
   resumed: string;
   failedTitle: string;
   failedDescription: string;
+  nonRetryableTitle: string;
+  nonRetryableDescription: string;
   scannerIssues: Partial<Record<ScannerSetupBlocker, {
     title: string;
     description: string;
@@ -102,6 +104,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     resumed: "Existing download reused",
     failedTitle: "One local check is unavailable",
     failedDescription: "Other checks, saved projects, reports, and readable exports remain available. Try automatic preparation again when ready.",
+    nonRetryableTitle: "One local check cannot run in this app version",
+    nonRetryableDescription: "Other checks, saved projects, reports, and exports remain available. Results will mark this check as not tested; install a newer complete app version when one is available.",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "This check is unavailable in the installed version",
@@ -185,6 +189,8 @@ const copy: Record<RuntimeSetupLocale, RuntimeAssistantCopy> = {
     resumed: "已沿用先前下載進度",
     failedTitle: "一項本機檢查目前無法使用",
     failedDescription: "其他檢查、已保存專案、報告與好讀匯出仍可使用；準備好時可再試一次自動準備。",
+    nonRetryableTitle: "這個程式版本有一項本機檢查無法執行",
+    nonRetryableDescription: "其他檢查、已保存的專案、報告與匯出仍可使用。結果會把這項檢查標示為「未測試」；有新版完整程式時再更新即可。",
     scannerIssues: {
       no_runnable_authorized_targets: {
         title: "目前安裝版本無法執行這項檢查",
@@ -275,6 +281,7 @@ export function RuntimeSetupAssistant({
     setupFailed,
     setupCancelled,
     setupIdleUnavailable,
+    setupNonRetryable,
   } = presentation;
   const nextAction = status?.nextAction ? text.actions[status.nextAction] : undefined;
   const technicalDetail = setupFailed ? "local_scan_tool_unavailable" : undefined;
@@ -307,44 +314,48 @@ export function RuntimeSetupAssistant({
     );
   }
 
-  const title = scannerIssue?.title ?? (setupFailed
-    ? nextAction?.title ?? text.failedTitle
-    : setupCancelled
-      ? text.cancelledTitle
-    : setupStale
-      ? text.staleTitle
-    : setupRecovering
-      ? text.recoveryTitle
-    : setupActive
-      ? text.progressTitle
-    : setupIdleUnavailable
-      ? text.idleTitle
-      : text.title);
-  const description = scannerIssue?.description ?? (setupFailed && nextAction
-    ? nextAction.description
+  const title = scannerIssue?.title ?? (setupNonRetryable
+    ? text.nonRetryableTitle
     : setupFailed
-      ? text.failedDescription
+      ? nextAction?.title ?? text.failedTitle
       : setupCancelled
-        ? text.cancelledDescription
-      : setupStale
-        ? text.staleDescription
-      : setupRecovering
-        ? text.recoveryDescription
-      : setupActive
-        ? text.progressDescription
-      : setupIdleUnavailable
-        ? text.idleDescription
-        : text.description);
+        ? text.cancelledTitle
+        : setupStale
+          ? text.staleTitle
+          : setupRecovering
+            ? text.recoveryTitle
+            : setupActive
+              ? text.progressTitle
+              : setupIdleUnavailable
+                ? text.idleTitle
+                : text.title);
+  const description = scannerIssue?.description ?? (setupNonRetryable
+    ? text.nonRetryableDescription
+    : setupFailed && nextAction
+      ? nextAction.description
+      : setupFailed
+        ? text.failedDescription
+        : setupCancelled
+          ? text.cancelledDescription
+          : setupStale
+            ? text.staleDescription
+            : setupRecovering
+              ? text.recoveryDescription
+              : setupActive
+                ? text.progressDescription
+                : setupIdleUnavailable
+                  ? text.idleDescription
+                  : text.description);
 
   return (
     <section
-      className={`runtime-assistant${setupFailed ? " runtime-assistant--failed" : ""}`}
+      className={`runtime-assistant${setupFailed || setupNonRetryable ? " runtime-assistant--failed" : ""}`}
       aria-labelledby="runtime-assistant-title"
       aria-live="polite"
     >
       <header className="runtime-assistant__header">
         <span className="runtime-assistant__icon">
-          <Icon name={setupFailed ? "warning" : "settings"} size={23} />
+          <Icon name={setupFailed || setupNonRetryable ? "warning" : "settings"} size={23} />
         </span>
         <div>
           <p className="eyebrow">{text.eyebrow}</p>
@@ -359,7 +370,7 @@ export function RuntimeSetupAssistant({
         </div>
       )}
 
-      {!scannerIssue && !setupStarting && status && status.phase !== "idle" && (
+      {!scannerIssue && !setupStarting && !setupNonRetryable && status && status.phase !== "idle" && (
         <div className="runtime-assistant__status" role="status">
           <strong>{text.phases[status.phase as ManagedRuntimeSetupPhase]}</strong>
           {progress !== undefined && status.totalBytes !== undefined && (
@@ -400,7 +411,7 @@ export function RuntimeSetupAssistant({
             <Icon name="close" size={16} />
             {status?.cancelRequested ? text.cancelling : text.cancel}
           </button>
-        ) : !setupFailed && !setupCancelled && !setupIdleUnavailable ? null : (
+        ) : setupNonRetryable || (!setupFailed && !setupCancelled && !setupIdleUnavailable) ? null : (
           <button className="button button--primary" type="button" disabled={busy} onClick={onSetup}>
             <Icon name="refresh" size={17} />
             {setupFailed ? text.retry : setupCancelled ? text.continue : text.start}

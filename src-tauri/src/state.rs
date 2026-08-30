@@ -10,6 +10,7 @@ use crate::job_manager::JobManager;
 use crate::managed_network::{ManagedNetworkReconciliationSummary, ManagedNetworkRegistry};
 use crate::managed_runtime::{
     ManagedRuntimeManager, ManagedRuntimeSetupController, ManagedRuntimeStatus,
+    PackagedManagedRuntimeAdmission,
 };
 use crate::process_lease::DataDirectoryExclusiveLease;
 use crate::registry::EngineRegistry;
@@ -72,6 +73,31 @@ impl AppState {
         self.managed_runtime = Some(Arc::new(manager));
         self.runtime_health
             .replace_cached(checking_runtime_health("managed_local"));
+        self
+    }
+
+    /// Applies the desktop's one-time admission decision without turning an
+    /// absent or rejected package into a startup gate. The rejected bytes are
+    /// never retained by state, while independent checks and compatibility
+    /// providers continue to use their existing paths.
+    pub(crate) fn with_packaged_managed_runtime_admission(
+        mut self,
+        admission: PackagedManagedRuntimeAdmission,
+    ) -> Self {
+        let failure_reason = admission.failure_reason();
+        match admission {
+            PackagedManagedRuntimeAdmission::Verified(manager) => {
+                self = self.with_managed_runtime(manager);
+            }
+            PackagedManagedRuntimeAdmission::Missing
+            | PackagedManagedRuntimeAdmission::VerificationFailed => {
+                self.managed_runtime_setup = Arc::new(
+                    ManagedRuntimeSetupController::for_packaged_runtime_admission_failure(
+                        failure_reason.expect("rejected admission has a stable failure reason"),
+                    ),
+                );
+            }
+        }
         self
     }
 

@@ -7,6 +7,7 @@ import {
   type TranslationKey,
 } from "../i18n";
 import { cx, phaseMeta } from "../lib";
+import { isManagedRuntimePackageAdmissionFailure } from "../runtimeSetupPresentation";
 import type {
   AppMode,
   AppSnapshot,
@@ -157,27 +158,35 @@ export function AppShell({
 
   const exactBytes = (value: number): string =>
     t(value === 1 ? "common.byte" : "common.bytes", { value: formatNumber(value) });
+  const runtimeSetupNonRetryable = isManagedRuntimePackageAdmissionFailure(runtimeSetup);
+  const runtimeSetupWorking = !runtimeSetupNonRetryable && (
+    runtimeBusy
+    || runtimeSetup?.active === true
+    || runtimeSetup?.prerequisiteRepairActive === true
+  );
   const runtimeIssue = runtimeIssueKeys[
-    runtimeSetup?.failureReason
+    runtimeSetup?.failureReason && !runtimeSetupNonRetryable
       ? "wsl"
       : classifyRuntimeIssue(runtime?.prerequisite, runtime?.detail, runtimeSetup?.detail)
   ];
-  const runtimeGuidance = runtimeSetup?.nextAction
-    ? runtimeRecoveryKeys[runtimeSetup.nextAction]
-    : runtimeIssue;
+  const runtimeGuidance: TranslationKey = runtimeSetupNonRetryable
+    ? "runtime.phase.failed.nonRetryable.detail"
+    : runtimeSetup?.nextAction
+      ? runtimeRecoveryKeys[runtimeSetup.nextAction]
+      : runtimeIssue;
   const runtimeSetupStarting = runtimeBusy
     && runtimeSetup?.active !== true
     && runtimeSetup?.prerequisiteRepairActive !== true;
-  const runtimeSetupWorking = runtimeBusy
-    || runtimeSetup?.active === true
-    || runtimeSetup?.prerequisiteRepairActive === true;
   const displayedRuntimeSetupPhase = runtimeSetupStarting ? "install" : runtimeSetup?.phase;
   const genericSetupFailure = !runtimeSetupWorking
+    && !runtimeSetupNonRetryable
     && runtimeSetup?.phase === "failed"
     && !runtimeSetup.nextAction;
-  const runtimeGuidanceTitle: TranslationKey = genericSetupFailure
-    ? "runtime.phase.failed.generic.label"
-    : "runtime.nextStep";
+  const runtimeGuidanceTitle: TranslationKey = runtimeSetupNonRetryable
+    ? "runtime.phase.failed.nonRetryable.label"
+    : genericSetupFailure
+      ? "runtime.phase.failed.generic.label"
+      : "runtime.nextStep";
   const runtimeSetupDetail: TranslationKey | undefined = displayedRuntimeSetupPhase
     ? genericSetupFailure
       ? "runtime.phase.failed.generic.detail"
@@ -289,7 +298,9 @@ export function AppShell({
             {mode === "native"
               ? runtime?.available
                 ? t("runtime.badge.ready")
-                : t("runtime.badge.needsSetup")
+                : runtimeSetupNonRetryable
+                  ? t("runtime.phase.failed.nonRetryable.label")
+                  : t("runtime.badge.needsSetup")
               : t("runtime.badge.demo")}
           </span>
           {mode === "native" && runtime && !runtime.available && (
@@ -300,7 +311,7 @@ export function AppShell({
                   <small>{t(runtimeGuidance)}</small>
                 </div>
               )}
-              {displayedRuntimeSetupPhase && displayedRuntimeSetupPhase !== "idle" && (
+              {!runtimeSetupNonRetryable && displayedRuntimeSetupPhase && displayedRuntimeSetupPhase !== "idle" && (
                 <div className="runtime-setup__progress" role="status">
                   <strong>{t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase])}</strong>
                   {runtimeSetupDetail && <small>{t(runtimeSetupDetail)}</small>}
@@ -339,7 +350,7 @@ export function AppShell({
                   <Icon name="progress" size={15} />
                   {t(runtimeSetupLabelKeys[displayedRuntimeSetupPhase ?? "install"])}
                 </button>
-              ) : !runtimeSetupWorking ? (
+              ) : !runtimeSetupWorking && !runtimeSetupNonRetryable ? (
                 <button
                   className="button button--small"
                   type="button"

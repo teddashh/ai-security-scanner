@@ -243,6 +243,30 @@ test("managed runtime setup adapter rejects the retired manual WSL distribution 
   assert.equal(adapted.nextAction, undefined);
 });
 
+test("managed runtime setup adapter preserves only the bounded non-retryable package failures", () => {
+  for (const failureReason of [
+    "packaged_runtime_missing",
+    "packaged_runtime_verification_failed",
+  ] as const) {
+    const adapted = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
+      can_retry: false,
+      failure_reason: failureReason,
+      next_action: null,
+    }));
+
+    assert.equal(adapted.failureReason, failureReason);
+    assert.equal(adapted.nextAction, undefined);
+    assert.equal(adapted.canRetry, false);
+  }
+
+  const retryableMismatch = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
+    can_retry: true,
+    failure_reason: "packaged_runtime_missing",
+    next_action: null,
+  }));
+  assert.equal(retryableMismatch.failureReason, undefined);
+});
+
 test("managed runtime setup adapter preserves active automatic workspace recovery", () => {
   const adapted = adaptManagedRuntimeSetupStatus(runtimeSetupDto({
     phase: "recovery",

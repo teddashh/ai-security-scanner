@@ -80,6 +80,8 @@ export const en = {
   "runtime.phase.failed.detail": "One scan tool did not start. Your saved work and other available checks remain usable.",
   "runtime.phase.failed.generic.label": "Scan-tool setup stopped",
   "runtime.phase.failed.generic.detail": "Automatic setup did not finish. Your scan project is unchanged; try setup again.",
+  "runtime.phase.failed.nonRetryable.label": "One local check cannot run in this app version",
+  "runtime.phase.failed.nonRetryable.detail": "Other checks, saved projects, reports, and exports remain available. Results will mark this check as not tested.",
   "runtime.phase.cancelled.label": "Setup paused",
   "runtime.phase.cancelled.detail": "Downloaded progress was kept, so the next attempt can continue where it stopped.",
   "runtime.download.progress": "Scan tool download progress",

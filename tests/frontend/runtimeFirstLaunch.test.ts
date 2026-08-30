@@ -16,7 +16,10 @@ const runtime = (
   detail: "test-only runtime detail",
 });
 
-const status = (phase: ManagedRuntimeSetupStatus["phase"]): ManagedRuntimeSetupStatus => ({
+const status = (
+  phase: ManagedRuntimeSetupStatus["phase"],
+  canRetry = phase === "idle" || phase === "failed" || phase === "cancelled",
+): ManagedRuntimeSetupStatus => ({
   phase,
   active: phase !== "idle" && !["completed", "failed", "cancelled"].includes(phase),
   prerequisiteRepairActive: false,
@@ -24,7 +27,7 @@ const status = (phase: ManagedRuntimeSetupStatus["phase"]): ManagedRuntimeSetupS
   receivedBytes: 0,
   resumedFromBytes: 0,
   canCancel: false,
-  canRetry: phase === "failed" || phase === "cancelled",
+  canRetry,
   detail: "test-only setup detail",
 });
 
@@ -63,12 +66,37 @@ test("automatic runtime preparation is single-flight and does not loop after a f
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("prerequisite"), true, false), false);
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("failed"), true, false), false);
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("completed"), true, false), true);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("completed", true), true, false), true);
+  assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("idle", false), true, false), true);
   assert.equal(shouldAutomaticallyPrepareRuntime("native", missing, status("completed"), true, true), false);
   assert.equal(shouldAutomaticallyPrepareRuntime("native", runtime("corrupt"), status("idle"), true, false), false);
   assert.equal(shouldAutomaticallyPrepareRuntime("demo", missing, status("idle"), true, false), false);
   assert.equal(
     shouldAutomaticallyPrepareRuntime("native", runtime("not_installed", false, "none"), status("idle"), true, false),
     false,
+  );
+  assert.match(
+    readFileSync(new URL("../../src/runtimeFirstLaunch.ts", import.meta.url), "utf8"),
+    /!isManagedRuntimePackageAdmissionFailure\(status\)/u,
+    "automatic preparation must stop only for an exact package admission failure",
+  );
+});
+
+test("automatic preparation excludes exact package admission failures, not every false canRetry flag", () => {
+  const missing = runtime("not_installed");
+  const packageFailure: ManagedRuntimeSetupStatus = {
+    ...status("failed", false),
+    failureReason: "packaged_runtime_verification_failed",
+  };
+
+  assert.equal(
+    shouldAutomaticallyPrepareRuntime("native", missing, packageFailure, true, false),
+    false,
+  );
+  assert.equal(
+    shouldAutomaticallyPrepareRuntime("native", runtime("stopped"), status("completed", false), true, false),
+    true,
+    "a later stopped managed runtime must reconcile after a completed setup status",
   );
 });
 

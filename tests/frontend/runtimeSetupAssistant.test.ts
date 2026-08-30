@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   hasManagedRuntimeSetupRequestStarted,
+  isManagedRuntimePackageAdmissionFailure,
   resolveRuntimeSetupPresentation,
 } from "../../src/runtimeSetupPresentation.ts";
 
@@ -52,7 +53,7 @@ test("an unproven older workspace never becomes a manual setup contract", () => 
       /resolve_wsl_distribution_manually|windows_wsl_distribution_requires_manual_action/u,
     );
   }
-  assert.match(source, /!setupFailed && !setupCancelled && !setupIdleUnavailable \? null/u);
+  assert.match(source, /setupNonRetryable \|\| \(!setupFailed && !setupCancelled && !setupIdleUnavailable\) \? null/u);
   assert.match(source, /<button[^>]*onClick=\{onSetup\}/u);
   assert.doesNotMatch(source, /unavailable in this session|這個掃描工具目前無法使用/u);
   assert.doesNotMatch(appSource, /onOpenRuntimeSetup/u);
@@ -99,6 +100,77 @@ test("a generic setup failure offers a retry without inventing an external actio
   );
   assert.match(shellSource, /genericSetupFailure = !runtimeSetupWorking[\s\S]*runtimeSetup\?\.phase === "failed"[\s\S]*!runtimeSetup\.nextAction/u);
   assert.match(shellSource, /runtimeSetup\?\.phase === "failed"[\s\S]*"runtime\.setup\.retry"/u);
+});
+
+test("an exact packaged-runtime admission failure degrades gracefully without another setup loop", () => {
+  const packageFailure = {
+    active: false,
+    prerequisiteRepairActive: false,
+    phase: "failed" as const,
+    canRetry: false,
+    failureReason: "packaged_runtime_missing" as const,
+    nextAction: undefined,
+  };
+  const state = resolveRuntimeSetupPresentation({
+    mode: "native",
+    runtimeAvailable: false,
+    status: packageFailure,
+  });
+
+  assert.equal(isManagedRuntimePackageAdmissionFailure(packageFailure), true);
+  assert.equal(state.setupNonRetryable, true);
+  assert.equal(state.setupFailed, true);
+  for (const phrase of [
+    "One local check cannot run in this app version",
+    "Other checks, saved projects, reports, and exports remain available",
+    "Results will mark this check as not tested",
+    "這個程式版本有一項本機檢查無法執行",
+    "其他檢查、已保存的專案、報告與匯出仍可使用",
+    "結果會把這項檢查標示為「未測試」",
+  ]) assert.ok(source.includes(phrase), phrase);
+
+  assert.match(source, /setupNonRetryable \|\| \(!setupFailed[\s\S]*\? null : \(/u);
+  assert.match(shellSource, /!runtimeSetupWorking && !runtimeSetupNonRetryable \? \(/u);
+  assert.match(appSource, /if \(isManagedRuntimePackageAdmissionFailure\(runtimeSetup\)\) return;/u);
+
+  const nonRetryableCopy = source.slice(
+    source.indexOf("nonRetryableTitle:"),
+    source.indexOf("scannerIssues:", source.indexOf("nonRetryableTitle:")),
+  );
+  assert.doesNotMatch(nonRetryableCopy, /WSL|Podman|gateway|manifest|provenance|package/iu);
+});
+
+test("canRetry false alone never masquerades as a package admission failure", () => {
+  const completed = {
+    active: false,
+    phase: "completed" as const,
+    canRetry: false,
+  };
+  const activeRepair = {
+    active: false,
+    prerequisiteRepairActive: true,
+    phase: "prerequisite" as const,
+    canRetry: false,
+  };
+  const unclassifiedFailure = {
+    active: false,
+    phase: "failed" as const,
+    canRetry: false,
+  };
+
+  assert.equal(isManagedRuntimePackageAdmissionFailure(completed), false);
+  assert.equal(isManagedRuntimePackageAdmissionFailure(activeRepair), false);
+  assert.equal(isManagedRuntimePackageAdmissionFailure(unclassifiedFailure), false);
+  assert.equal(resolveRuntimeSetupPresentation({
+    mode: "native",
+    runtimeAvailable: false,
+    status: activeRepair,
+  }).setupActive, true);
+  assert.equal(resolveRuntimeSetupPresentation({
+    mode: "native",
+    runtimeAvailable: false,
+    status: unclassifiedFailure,
+  }).setupNonRetryable, false);
 });
 
 test("a required Windows restart is explicit without exposing platform administration", () => {
@@ -196,8 +268,8 @@ test("idle unavailable runtime always offers an explicit retry fallback", () => 
     "一項本機檢查尚未準備好",
     "安全地繼續或重新開始自動準備",
   ]) assert.ok(source.includes(phrase), phrase);
-  assert.match(source, /!setupFailed && !setupCancelled && !setupIdleUnavailable \? null/u);
-  assert.match(shellSource, /\) : !runtimeSetupWorking \? \(/u);
+  assert.match(source, /setupNonRetryable \|\| \(!setupFailed && !setupCancelled && !setupIdleUnavailable\) \? null/u);
+  assert.match(shellSource, /\) : !runtimeSetupWorking && !runtimeSetupNonRetryable \? \(/u);
 });
 
 test("backend stale state is visible without the UI inventing a terminal failure", () => {

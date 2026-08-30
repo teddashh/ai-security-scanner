@@ -1,4 +1,5 @@
 import type { AppMode, AppSnapshot, ManagedRuntimeSetupStatus } from "./types";
+import { isManagedRuntimePackageAdmissionFailure } from "./runtimeSetupPresentation.ts";
 
 type RuntimeHealth = AppSnapshot["runtime"];
 
@@ -31,5 +32,6 @@ export const shouldAutomaticallyPrepareRuntime = (
   && status !== undefined
   && !alreadyAttempted
   && isUnavailableManagedRuntime(mode, runtime)
+  && !isManagedRuntimePackageAdmissionFailure(status)
   && (status.phase === "idle" || status.phase === "completed")
   && automaticallyRecoverablePhases.has(runtime?.phase ?? "");

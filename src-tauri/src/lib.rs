@@ -44,7 +44,7 @@ pub mod workspace_snapshot;
 #[cfg(feature = "desktop")]
 use artifact_store::ArtifactStore;
 #[cfg(feature = "desktop")]
-use managed_runtime::ManagedRuntimeManager;
+use managed_runtime::admit_packaged_managed_runtime;
 #[cfg(feature = "desktop")]
 use process_lease::DataDirectoryExclusiveLease;
 #[cfg(feature = "desktop")]
@@ -117,29 +117,14 @@ pub fn run() {
             let process_lease = DataDirectoryExclusiveLease::acquire(&app_data)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             let managed_bundle = app.path().resource_dir()?.join("managed-runtime");
-            let managed_manifest = managed_bundle.join("manifest.json");
-            let managed_runtime = if managed_manifest.exists() {
-                match ManagedRuntimeManager::open(
-                    &app_data,
-                    &managed_bundle,
-                    &managed_manifest,
-                ) {
-                    Ok(manager) => Some(manager),
-                    Err(error) => {
-                        tracing::error!(
-                            error = %error,
-                            "packaged managed-local runtime failed release verification"
-                        );
-                        None
-                    }
-                }
-            } else {
+            let managed_runtime_admission =
+                admit_packaged_managed_runtime(&app_data, &managed_bundle);
+            if let Some(reason) = managed_runtime_admission.failure_reason() {
                 tracing::warn!(
-                    path = %managed_manifest.display(),
-                    "managed-local runtime bundle is absent; compatibility providers remain available"
+                    failure_reason = reason.as_str(),
+                    "packaged scan tools are unavailable; independent checks and saved reports remain available"
                 );
-                None
-            };
+            }
             let storage = Storage::open(app_data.join("casework.db"))
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             let engines = EngineRegistry::load_builtin().unwrap_or_else(|error| {
@@ -167,17 +152,15 @@ pub fn run() {
             let artifact_store = ArtifactStore::open(app_data.join("artifacts"))
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             let artifact_root = artifact_store.root().to_path_buf();
-            let mut state = AppState::new(
+            let state = AppState::new(
                 storage,
                 engines,
                 adapters,
                 artifact_root,
                 app_data.join("integrity-signing-key"),
             )
-            .with_process_lease(process_lease);
-            if let Some(manager) = managed_runtime {
-                state = state.with_managed_runtime(manager);
-            }
+            .with_process_lease(process_lease)
+            .with_packaged_managed_runtime_admission(managed_runtime_admission);
             // Prepare and harden the local export identity early, but never
             // turn a damaged optional export identity into a scanner startup
             // gate. Signed bundle creation remains fail-closed and reports the

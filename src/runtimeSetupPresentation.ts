@@ -5,16 +5,40 @@ interface RuntimeSetupPresentationInput {
   mode: AppMode;
   runtimeAvailable: boolean;
   status?: Pick<ManagedRuntimeSetupStatus, "active" | "phase">
-    & Partial<Pick<ManagedRuntimeSetupStatus, "prerequisiteRepairActive" | "stale">>;
+    & Partial<Pick<ManagedRuntimeSetupStatus,
+      "prerequisiteRepairActive" | "stale" | "canRetry" | "failureReason" | "nextAction"
+    >>;
   requestPending?: boolean;
   blocker?: ScannerSetupBlocker;
 }
 
 const terminalSetupPhases = new Set(["completed", "failed", "cancelled"]);
+const packageAdmissionFailureReasons = new Set([
+  "packaged_runtime_missing",
+  "packaged_runtime_verification_failed",
+]);
 
 export interface ManagedRuntimeSetupRequestBaseline {
   operationId?: string;
 }
+
+/** Only immutable packaged-runtime admission failures are terminal without Retry. */
+export const isManagedRuntimePackageAdmissionFailure = (
+  status: Pick<ManagedRuntimeSetupStatus, "active" | "phase">
+    & Partial<Pick<ManagedRuntimeSetupStatus,
+      "prerequisiteRepairActive" | "canRetry" | "failureReason" | "nextAction"
+    >>
+    | undefined,
+): boolean => Boolean(
+  status
+  && status.phase === "failed"
+  && status.active === false
+  && status.prerequisiteRepairActive !== true
+  && status.canRetry === false
+  && status.failureReason !== undefined
+  && packageAdmissionFailureReasons.has(status.failureReason)
+  && status.nextAction === undefined,
+);
 
 /** Backend terminal truth must release a frontend request that lost its command reply. */
 export const isManagedRuntimeSetupTerminal = (
@@ -61,6 +85,9 @@ export const resolveRuntimeSetupPresentation = ({
   const cancelled = !active && status?.phase === "cancelled";
   const recovering = active && status?.phase === "recovery";
   const stale = active && status?.stale === true;
+  const nonRetryable = mode === "native"
+    && !runtimeAvailable
+    && isManagedRuntimePackageAdmissionFailure(status);
   const idleUnavailable = mode === "native"
     && !runtimeAvailable
     && !active
@@ -75,12 +102,13 @@ export const resolveRuntimeSetupPresentation = ({
   return {
     ready: mode === "native" && runtimeAvailable && !blocker,
     showPackagedComponentIssue,
-    setupStarting: setupStarting && !showPackagedComponentIssue,
-    setupActive: active && !showPackagedComponentIssue,
+    setupStarting: setupStarting && !nonRetryable && !showPackagedComponentIssue,
+    setupActive: active && !nonRetryable && !showPackagedComponentIssue,
     setupRecovering: recovering && !showPackagedComponentIssue,
     setupStale: stale && !showPackagedComponentIssue,
     setupFailed: failed && !showPackagedComponentIssue,
     setupCancelled: cancelled && !showPackagedComponentIssue,
     setupIdleUnavailable: idleUnavailable && !showPackagedComponentIssue,
+    setupNonRetryable: nonRetryable && !showPackagedComponentIssue,
   };
 };

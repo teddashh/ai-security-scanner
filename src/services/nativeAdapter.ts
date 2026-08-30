@@ -682,13 +682,20 @@ export const adaptManagedRuntimePrerequisiteRepairResult = (
   };
 };
 
-const managedRuntimeRecoveryActions = {
+const managedRuntimeRecoveryActions: Partial<
+  Record<ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupNextAction>
+> = {
   windows_wsl_not_installed: "install_wsl",
   windows_wsl_optional_feature_disabled: "enable_wsl_optional_features",
   windows_wsl_update_required: "update_wsl",
   windows_restart_required: "restart_windows",
   windows_wsl_command_failed: "retry_wsl_check",
-} as const satisfies Record<ManagedRuntimeSetupFailureReason, ManagedRuntimeSetupNextAction>;
+};
+
+const managedRuntimeNonRetryableFailures = new Set<ManagedRuntimeSetupFailureReason>([
+  "packaged_runtime_missing",
+  "packaged_runtime_verification_failed",
+]);
 
 const managedRuntimeSetupPhases = new Set<ManagedRuntimeSetupPhase>([
   "idle",
@@ -731,6 +738,11 @@ export const adaptManagedRuntimeSetupStatus = (
   const hasValidRecovery = phase === "failed"
     && status.failure_reason !== null
     && managedRuntimeRecoveryActions[status.failure_reason] === status.next_action;
+  const hasValidNonRetryableFailure = phase === "failed"
+    && status.can_retry === false
+    && status.failure_reason !== null
+    && managedRuntimeNonRetryableFailures.has(status.failure_reason)
+    && status.next_action === null;
   const operationId = boundedRuntimeOperationField(status.operation_id, 128);
   const startedAt = boundedRuntimeTimestamp(status.started_at);
   const lastHeartbeatAt = boundedRuntimeTimestamp(status.last_heartbeat_at);
@@ -749,7 +761,9 @@ export const adaptManagedRuntimeSetupStatus = (
     resumedFromBytes: status.resumed_from_bytes,
     canCancel: status.can_cancel,
     canRetry: status.can_retry,
-    failureReason: hasValidRecovery ? status.failure_reason ?? undefined : undefined,
+    failureReason: hasValidRecovery || hasValidNonRetryableFailure
+      ? status.failure_reason ?? undefined
+      : undefined,
     nextAction: hasValidRecovery ? status.next_action ?? undefined : undefined,
     detail: status.detail,
   };

@@ -1240,7 +1240,9 @@ export type ManagedRuntimeSetupFailureReason =
   | "windows_wsl_optional_feature_disabled"
   | "windows_wsl_update_required"
   | "windows_restart_required"
-  | "windows_wsl_command_failed";
+  | "windows_wsl_command_failed"
+  | "packaged_runtime_missing"
+  | "packaged_runtime_verification_failed";
 
 export type ManagedRuntimeSetupNextAction =
   | "install_wsl"

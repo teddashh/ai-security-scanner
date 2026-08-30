@@ -31,6 +31,7 @@ import { isExactBuiltInLocalhostQuickScanRun } from "./localhostQuickScan";
 import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
 import {
   hasManagedRuntimeSetupRequestStarted,
+  isManagedRuntimePackageAdmissionFailure,
   isManagedRuntimeSetupTerminal,
   type ManagedRuntimeSetupRequestBaseline,
 } from "./runtimeSetupPresentation";
@@ -685,6 +686,7 @@ export default function App() {
   }, [pushToast, text]);
 
   const setupManagedRuntime = async ({ automatic = false }: { automatic?: boolean } = {}) => {
+    if (isManagedRuntimePackageAdmissionFailure(runtimeSetup)) return;
     const commandGeneration = ++runtimeSetupCommandGeneration.current;
     const requestBaseline: ManagedRuntimeSetupRequestBaseline = {
       operationId: runtimeSetup?.operationId,
@@ -767,6 +769,7 @@ export default function App() {
       await refreshRuntimeSnapshot();
       const completed = setupStatus.phase === "completed";
       const cancelled = setupStatus.phase === "cancelled";
+      const nonRetryable = isManagedRuntimePackageAdmissionFailure(setupStatus);
       if (!automatic && !completed && !cancelled) {
         window.location.hash = "start";
         setPage("start");
@@ -775,7 +778,9 @@ export default function App() {
         tone: completed ? "success" : "warning",
         title: completed
           ? text({ en: "The private scan engine is ready", zhTW: "私有掃描引擎已就緒" })
-          : cancelled
+          : nonRetryable
+            ? text({ en: "One local check cannot run in this app version", zhTW: "這個程式版本有一項本機檢查無法執行" })
+            : cancelled
             ? text({ en: "Scan-tool setup paused", zhTW: "掃描工具設定已暫停" })
             : text({ en: "Scan-tool setup stopped", zhTW: "掃描工具設定已停止" }),
         detail: completed
@@ -787,6 +792,11 @@ export default function App() {
             : text({
               en: "You can continue with your chosen check.",
               zhTW: "現在可以繼續設定你選擇的檢查。",
+            })
+          : nonRetryable
+            ? text({
+              en: "Other checks, saved projects, reports, and exports remain available. Results will mark this check as not tested.",
+              zhTW: "其他檢查、已保存的專案、報告與匯出仍可使用；結果會把這項檢查標示為「未測試」。",
             })
           : cancelled
             ? text({
@@ -850,7 +860,7 @@ export default function App() {
     )) return;
     automaticRuntimeSetupAttempted.current = true;
     void setupManagedRuntime({ automatic: true });
-  }, [mode, runtimeSetup?.phase, runtimeSetupStatusLoaded, snapshot?.runtime?.available, snapshot?.runtime?.phase, snapshot?.runtime?.provider]);
+  }, [mode, runtimeSetup?.canRetry, runtimeSetup?.phase, runtimeSetupStatusLoaded, snapshot?.runtime?.available, snapshot?.runtime?.phase, snapshot?.runtime?.provider]);
 
   const cancelManagedRuntimeSetup = async () => {
     try {

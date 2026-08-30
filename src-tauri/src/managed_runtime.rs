@@ -701,10 +701,15 @@ pub enum ManagedRuntimeSetupPhase {
 /// Stable setup failure categories for UI localization and automation.
 ///
 /// These values deliberately describe only conclusions the product can prove
-/// from read-only prerequisite checks. They never imply that the product
-/// enabled a Windows feature or elevated itself.
+/// from packaged-resource admission or read-only prerequisite checks. They
+/// never imply that the product executed rejected bytes, enabled a Windows
+/// feature, or elevated itself.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ManagedRuntimeSetupFailureReason {
+    #[serde(rename = "packaged_runtime_missing")]
+    PackagedRuntimeMissing,
+    #[serde(rename = "packaged_runtime_verification_failed")]
+    PackagedRuntimeVerificationFailed,
     #[serde(rename = "windows_wsl_not_installed")]
     WslNotInstalled,
     #[serde(rename = "windows_wsl_optional_feature_disabled")]
@@ -715,6 +720,39 @@ pub enum ManagedRuntimeSetupFailureReason {
     RestartRequired,
     #[serde(rename = "windows_wsl_command_failed")]
     WslCommandFailed,
+}
+
+impl ManagedRuntimeSetupFailureReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PackagedRuntimeMissing => "packaged_runtime_missing",
+            Self::PackagedRuntimeVerificationFailed => "packaged_runtime_verification_failed",
+            Self::WslNotInstalled => "windows_wsl_not_installed",
+            Self::WslOptionalFeatureDisabled => "windows_wsl_optional_feature_disabled",
+            Self::WslUpdateRequired => "windows_wsl_update_required",
+            Self::RestartRequired => "windows_restart_required",
+            Self::WslCommandFailed => "windows_wsl_command_failed",
+        }
+    }
+
+    fn is_packaged_runtime_admission_failure(self) -> bool {
+        matches!(
+            self,
+            Self::PackagedRuntimeMissing | Self::PackagedRuntimeVerificationFailed
+        )
+    }
+
+    fn packaged_runtime_admission_detail(self) -> Option<&'static str> {
+        match self {
+            Self::PackagedRuntimeMissing => Some(
+                "The scan tools included with this installation are unavailable. Independent checks and saved reports remain available.",
+            ),
+            Self::PackagedRuntimeVerificationFailed => Some(
+                "The scan tools included with this installation did not pass verification and were not used. Independent checks and saved reports remain available.",
+            ),
+            _ => None,
+        }
+    }
 }
 
 /// Stable next actions paired with [`ManagedRuntimeSetupFailureReason`].
@@ -801,6 +839,34 @@ impl Default for ManagedRuntimeSetupStatus {
     }
 }
 
+impl ManagedRuntimeSetupStatus {
+    #[cfg(any(feature = "desktop", test))]
+    fn packaged_runtime_admission_failure(reason: ManagedRuntimeSetupFailureReason) -> Self {
+        let detail = reason
+            .packaged_runtime_admission_detail()
+            .expect("only packaged-runtime admission failures use this status");
+        Self {
+            operation_id: None,
+            started_at: None,
+            last_heartbeat_at: None,
+            stale: false,
+            phase: ManagedRuntimeSetupPhase::Failed,
+            active: false,
+            prerequisite_repair_active: false,
+            cancel_requested: false,
+            received_bytes: 0,
+            total_bytes: None,
+            progress_percent: None,
+            resumed_from_bytes: 0,
+            can_cancel: false,
+            can_retry: false,
+            failure_reason: Some(reason),
+            next_action: None,
+            detail: detail.into(),
+        }
+    }
+}
+
 /// Process-local coordinator for desktop setup. Its mutex is held only for
 /// small status mutations; cancellation uses an atomic flag so a second Tauri
 /// command can interrupt the bounded download loop without waiting on runtime
@@ -813,6 +879,19 @@ pub struct ManagedRuntimeSetupController {
 }
 
 impl ManagedRuntimeSetupController {
+    #[cfg(any(feature = "desktop", test))]
+    pub(crate) fn for_packaged_runtime_admission_failure(
+        reason: ManagedRuntimeSetupFailureReason,
+    ) -> Self {
+        Self {
+            status: Mutex::new(
+                ManagedRuntimeSetupStatus::packaged_runtime_admission_failure(reason),
+            ),
+            cancel_requested: AtomicBool::new(false),
+            prerequisite_repair_active: AtomicBool::new(false),
+        }
+    }
+
     pub fn status(&self) -> AppResult<ManagedRuntimeSetupStatus> {
         self.status
             .lock()
@@ -833,6 +912,16 @@ impl ManagedRuntimeSetupController {
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
         })?;
+        if status
+            .failure_reason
+            .is_some_and(ManagedRuntimeSetupFailureReason::is_packaged_runtime_admission_failure)
+            && !status.can_retry
+        {
+            return Err(AppError::NotAvailable(
+                "verified scan tools are unavailable; independent checks and saved reports remain available"
+                    .into(),
+            ));
+        }
         if self.prerequisite_repair_active.load(Ordering::Acquire) {
             return Err(AppError::Conflict(
                 "a Windows prerequisite repair is already active".into(),
@@ -1328,7 +1417,15 @@ fn public_managed_runtime_setup_status(
     let has_complete_failed_recovery = status.phase == ManagedRuntimeSetupPhase::Failed
         && status.failure_reason.is_some()
         && status.next_action.is_some();
-    if !has_complete_failed_recovery {
+    let has_terminal_packaged_runtime_admission_failure = status.phase
+        == ManagedRuntimeSetupPhase::Failed
+        && !status.active
+        && !status.can_retry
+        && status.next_action.is_none()
+        && status
+            .failure_reason
+            .is_some_and(ManagedRuntimeSetupFailureReason::is_packaged_runtime_admission_failure);
+    if !has_complete_failed_recovery && !has_terminal_packaged_runtime_admission_failure {
         status.failure_reason = None;
         status.next_action = None;
     }
@@ -2461,6 +2558,52 @@ pub struct ManagedRuntimeManager {
     bounded_ghost_fixture_manifest: bool,
     #[cfg(all(test, windows))]
     windows_wsl_vhd_release_timing: Option<(Duration, Duration)>,
+}
+
+/// Result of admitting the packaged runtime into the trusted execution path.
+/// Rejections intentionally carry no filesystem path, parser error, or
+/// attacker-controlled bytes; callers expose only the stable typed reason.
+#[cfg(any(feature = "desktop", test))]
+pub(crate) enum PackagedManagedRuntimeAdmission {
+    Verified(ManagedRuntimeManager),
+    Missing,
+    VerificationFailed,
+}
+
+#[cfg(any(feature = "desktop", test))]
+impl PackagedManagedRuntimeAdmission {
+    pub(crate) fn failure_reason(&self) -> Option<ManagedRuntimeSetupFailureReason> {
+        match self {
+            Self::Verified(_) => None,
+            Self::Missing => Some(ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing),
+            Self::VerificationFailed => {
+                Some(ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed)
+            }
+        }
+    }
+}
+
+/// Admits only the exact packaged manifest and payload accepted by
+/// [`ManagedRuntimeManager::open`]. Missing and rejected bundles remain data,
+/// never commands, and collapse to redacted stable outcomes for the desktop.
+#[cfg(any(feature = "desktop", test))]
+pub(crate) fn admit_packaged_managed_runtime(
+    app_local_data_directory: &Path,
+    resource_root: &Path,
+) -> PackagedManagedRuntimeAdmission {
+    let manifest_path = resource_root.join("manifest.json");
+    match manifest_path.try_exists() {
+        Ok(false) => PackagedManagedRuntimeAdmission::Missing,
+        Ok(true) => match ManagedRuntimeManager::open(
+            app_local_data_directory,
+            resource_root,
+            &manifest_path,
+        ) {
+            Ok(manager) => PackagedManagedRuntimeAdmission::Verified(manager),
+            Err(_) => PackagedManagedRuntimeAdmission::VerificationFailed,
+        },
+        Err(_) => PackagedManagedRuntimeAdmission::VerificationFailed,
+    }
 }
 
 impl std::fmt::Debug for ManagedRuntimeManager {
@@ -10536,7 +10679,14 @@ impl WindowsWslPrerequisiteFailure {
             .exit_code
             .map(|code| format!(" The read-only WSL check exited with code {code}."))
             .unwrap_or_default();
+        if let Some(detail) = self.reason.packaged_runtime_admission_detail() {
+            return detail.into();
+        }
         match self.reason {
+            ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing
+            | ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed => {
+                unreachable!("packaged-runtime failures returned above")
+            }
             ManagedRuntimeSetupFailureReason::WslNotInstalled => format!(
                 "Windows has not installed the component needed by the local scan tools.{status} Retry automatic preparation; ai-security-scanner will use the fixed Windows setup action and the standard Windows approval prompt when required. Saved work and checks that do not need this local tool remain available."
             ),
@@ -14810,6 +14960,90 @@ mod tests {
     use std::os::windows::process::ExitStatusExt;
     use std::sync::Mutex;
     use tempfile::TempDir;
+
+    fn assert_redacted_terminal_packaged_runtime_admission(
+        admission: PackagedManagedRuntimeAdmission,
+        expected_reason: ManagedRuntimeSetupFailureReason,
+        forbidden: &[&str],
+    ) {
+        assert_eq!(admission.failure_reason(), Some(expected_reason));
+        match admission {
+            PackagedManagedRuntimeAdmission::Verified(manager) => {
+                let _ = manager.manifest_sha256();
+                panic!("rejected fixture unexpectedly admitted a runtime manager");
+            }
+            PackagedManagedRuntimeAdmission::Missing
+            | PackagedManagedRuntimeAdmission::VerificationFailed => {}
+        }
+
+        let controller =
+            ManagedRuntimeSetupController::for_packaged_runtime_admission_failure(expected_reason);
+        let first = controller.status().expect("first admission status");
+        let second = controller.status().expect("stable admission status");
+        assert_eq!(second, first);
+        assert_eq!(first.phase, ManagedRuntimeSetupPhase::Failed);
+        assert_eq!(first.failure_reason, Some(expected_reason));
+        assert!(first.operation_id.is_none());
+        assert!(!first.active);
+        assert!(!first.can_cancel);
+        assert!(!first.can_retry);
+        assert!(first.next_action.is_none());
+
+        let begin_error = controller
+            .begin()
+            .expect_err("terminal admission failure cannot begin setup");
+        assert!(matches!(begin_error, AppError::NotAvailable(_)));
+        assert_eq!(
+            controller.status().expect("status after rejected begin"),
+            first
+        );
+
+        let public_json = serde_json::to_string(&first).expect("serialize public status");
+        assert!(public_json.contains(expected_reason.as_str()));
+        for sensitive in forbidden {
+            assert!(!public_json.contains(sensitive));
+            assert!(!begin_error.to_string().contains(sensitive));
+        }
+    }
+
+    #[test]
+    fn missing_packaged_runtime_has_a_stable_redacted_non_retryable_status() {
+        let temporary = tempfile::tempdir().expect("temporary admission fixture");
+        let app_data = temporary.path().join("private-app-data");
+        let resources = temporary.path().join("missing-runtime-bundle");
+        fs::create_dir(&resources).expect("empty resource directory");
+        let private_path = temporary.path().to_string_lossy().into_owned();
+
+        let admission = admit_packaged_managed_runtime(&app_data, &resources);
+        assert_redacted_terminal_packaged_runtime_admission(
+            admission,
+            ManagedRuntimeSetupFailureReason::PackagedRuntimeMissing,
+            &[&private_path],
+        );
+        assert!(
+            !app_data.exists(),
+            "a missing package must not initialize managed runtime state"
+        );
+    }
+
+    #[test]
+    fn rejected_packaged_runtime_has_a_stable_redacted_non_retryable_status() {
+        let temporary = tempfile::tempdir().expect("temporary admission fixture");
+        let app_data = temporary.path().join("private-app-data");
+        let resources = temporary.path().join("invalid-runtime-bundle");
+        fs::create_dir(&resources).expect("resource directory");
+        let rejected_bytes = r#"{"private":"DO-NOT-LEAK-REJECTED-BYTES"}"#;
+        fs::write(resources.join("manifest.json"), rejected_bytes)
+            .expect("invalid packaged manifest");
+        let private_path = temporary.path().to_string_lossy().into_owned();
+
+        let admission = admit_packaged_managed_runtime(&app_data, &resources);
+        assert_redacted_terminal_packaged_runtime_admission(
+            admission,
+            ManagedRuntimeSetupFailureReason::PackagedRuntimeVerificationFailed,
+            &[&private_path, rejected_bytes, "DO-NOT-LEAK-REJECTED-BYTES"],
+        );
+    }
 
     fn success(stdout: impl Into<Vec<u8>>) -> ManagedCommandOutput {
         ManagedCommandOutput {
