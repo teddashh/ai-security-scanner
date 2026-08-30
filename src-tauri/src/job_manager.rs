@@ -7,15 +7,13 @@
 
 use crate::container_runtime::CancellationToken;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use thiserror::Error;
-
-const TERMINAL_HISTORY_LIMIT: usize = 256;
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -115,6 +113,11 @@ pub struct JobSnapshot {
     pub status: JobStatus,
     pub engines: Vec<EngineJobSnapshot>,
     pub failure_kind: Option<JobFailureKind>,
+    /// Process-local identity used only to acknowledge the exact retained
+    /// outcome that was durably reconciled. It is deliberately omitted from
+    /// serialized product events and cannot become a user-visible contract.
+    #[serde(skip)]
+    pub(crate) generation: u64,
 }
 
 impl JobSnapshot {
@@ -156,6 +159,8 @@ pub enum JobManagerError {
     InvalidEngineSet,
     #[error("a live job already exists for {0:?}")]
     DuplicateLiveJob(JobKey),
+    #[error("the prior terminal job is still waiting for durable reconciliation for {0:?}")]
+    TerminalReconciliationPending(JobKey),
     #[error("no live job exists for {0:?}")]
     LiveJobNotFound(JobKey),
     #[error("job cancellation is already pending for {0:?}")]
@@ -185,9 +190,19 @@ impl fmt::Debug for JobManager {
 }
 
 impl JobManager {
+    /// Serializes the short durable-plan + worker-admission boundary. This is
+    /// deliberately separate from worker execution: the lock is released as
+    /// soon as a job is registered, so unrelated scans never wait for target
+    /// work or runtime preparation.
+    pub fn coordinate_admission<T>(&self, admit: impl FnOnce() -> T) -> T {
+        let _admission = lock(&self.inner.admission);
+        admit()
+    }
+
     /// Starts one owned worker on a dedicated thread. The callback is invoked
     /// after the live entry has been atomically replaced by its terminal
-    /// snapshot, so callback code may safely start a new job for the same key.
+    /// snapshot. The exact terminal generation must be durably reconciled
+    /// before the same key can start again.
     pub fn start_job<W, C, I, S>(
         &self,
         key: JobKey,
@@ -210,10 +225,11 @@ impl JobManager {
             if state.live.contains_key(&key) {
                 return Err(JobManagerError::DuplicateLiveJob(key));
             }
+            if state.terminal.contains_key(&key) {
+                return Err(JobManagerError::TerminalReconciliationPending(key));
+            }
             state.next_generation = state.next_generation.wrapping_add(1).max(1);
             let record = Arc::new(JobRecord::new(key.clone(), state.next_generation, engines));
-            state.terminal.remove(&key);
-            state.terminal_order.retain(|candidate| candidate != &key);
             state.live.insert(key.clone(), Arc::clone(&record));
             record
         };
@@ -267,6 +283,21 @@ impl JobManager {
             .values()
             .map(|record| record.snapshot())
             .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| {
+            (&left.key.case_id, &left.key.scan_run_id)
+                .cmp(&(&right.key.case_id, &right.key.scan_run_id))
+        });
+        snapshots
+    }
+
+    /// Returns retained terminal outcomes that callers may need to reconcile
+    /// into their durable store. A terminal callback is best-effort, so the
+    /// manager retains each small, closure-free snapshot until the persistence
+    /// owner confirms the exact job can be forgotten. Undurable truth is never
+    /// evicted merely because other jobs finished.
+    pub fn terminal_snapshots(&self) -> Vec<JobSnapshot> {
+        let state = lock(&self.inner.state);
+        let mut snapshots = state.terminal.values().cloned().collect::<Vec<_>>();
         snapshots.sort_by(|left, right| {
             (&left.key.case_id, &left.key.scan_run_id)
                 .cmp(&(&right.key.case_id, &right.key.scan_run_id))
@@ -409,14 +440,26 @@ impl JobManager {
         }
     }
 
-    /// Removes a retained terminal snapshot. Live jobs cannot be forgotten.
-    pub fn forget_terminal(&self, key: &JobKey) -> bool {
+    /// Runs one persistence acknowledgement only while this exact retained
+    /// generation is still current. The manager lock serializes a delayed
+    /// callback with same-key restart planning, so an old worker cannot derive
+    /// a terminal report from a newer attempt's checkpoint.
+    pub fn reconcile_terminal_snapshot<T, E>(
+        &self,
+        acknowledged: &JobSnapshot,
+        reconcile: impl FnOnce() -> Result<T, E>,
+    ) -> Result<Option<T>, E> {
         let mut state = lock(&self.inner.state);
-        if state.live.contains_key(key) {
-            return false;
+        if !state
+            .terminal
+            .get(&acknowledged.key)
+            .is_some_and(|snapshot| snapshot.generation == acknowledged.generation)
+        {
+            return Ok(None);
         }
-        state.terminal_order.retain(|candidate| candidate != key);
-        state.terminal.remove(key).is_some()
+        let reconciled = reconcile()?;
+        state.terminal.remove(&acknowledged.key);
+        Ok(Some(reconciled))
     }
 
     fn finalize_job(
@@ -437,13 +480,6 @@ impl JobManager {
         let terminal = record.finalize(completion, forced_failure);
         state.live.remove(&record.key);
         state.terminal.insert(record.key.clone(), terminal.clone());
-        state.terminal_order.retain(|key| key != &record.key);
-        state.terminal_order.push_back(record.key.clone());
-        while state.terminal_order.len() > TERMINAL_HISTORY_LIMIT {
-            if let Some(expired) = state.terminal_order.pop_front() {
-                state.terminal.remove(&expired);
-            }
-        }
         terminal
     }
 }
@@ -632,13 +668,13 @@ impl EngineJobControl {
 #[derive(Default)]
 struct ManagerInner {
     state: Mutex<ManagerState>,
+    admission: Mutex<()>,
 }
 
 #[derive(Default)]
 struct ManagerState {
     live: HashMap<JobKey, Arc<JobRecord>>,
     terminal: HashMap<JobKey, JobSnapshot>,
-    terminal_order: VecDeque<JobKey>,
     next_generation: u64,
 }
 
@@ -781,6 +817,7 @@ impl JobRecord {
             status,
             engines,
             failure_kind,
+            generation: self.generation,
         }
     }
 

@@ -62,7 +62,8 @@ use crate::{
         ScannerCredentialSet, cleanup_orphaned_credentials,
     },
     job_manager::{
-        EngineJobStatus, JobActivationOutcome, JobCompletion, JobContext, JobKey, JobSnapshot,
+        EngineJobStatus, JobActivationOutcome, JobCompletion, JobContext, JobKey, JobManagerError,
+        JobSnapshot,
     },
     orchestrator::{
         EngineExecutionRequest, ExecutionCheckpoint, ExecutionReport, ExecutionStage, Orchestrator,
@@ -128,8 +129,7 @@ pub async fn setup_managed_runtime(state: State<'_, AppState>) -> AppResult<Inte
             "this installed application has no verified managed runtime bundle".into(),
         )
     })?;
-    let setup = state.managed_runtime_setup().clone();
-    let worker_setup = setup.clone();
+    let worker_setup = state.managed_runtime_setup().clone();
     let status =
         match tauri::async_runtime::spawn_blocking(move || manager.setup(worker_setup.as_ref()))
             .await
@@ -137,7 +137,6 @@ pub async fn setup_managed_runtime(state: State<'_, AppState>) -> AppResult<Inte
             Ok(result) => result?,
             Err(_) => {
                 let message = "managed runtime setup worker terminated unexpectedly";
-                let _ = setup.finish_worker_failure(message);
                 return Err(AppError::Internal(message.into()));
             }
         };
@@ -442,6 +441,43 @@ struct ReadableDesktopCases {
     recovery_diagnostics: Vec<crate::storage::CaseRecoveryDiagnostic>,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RetainedTerminalReconciliationSummary {
+    reconciled: usize,
+    pending: usize,
+}
+
+/// Replays retained in-process terminal outcomes into durable case state.
+///
+/// The worker callback normally performs this write immediately. If that one
+/// write loses a storage race or hits a transient I/O error, frontend polling
+/// must still converge without restarting the app or contacting the target a
+/// second time. The JobManager's terminal snapshot contains no
+/// executable closure, so replay only applies the existing checkpoint result.
+fn reconcile_retained_terminal_jobs(state: &AppState) -> RetainedTerminalReconciliationSummary {
+    let mut summary = RetainedTerminalReconciliationSummary::default();
+    for snapshot in state.jobs.terminal_snapshots() {
+        match state.jobs.reconcile_terminal_snapshot(&snapshot, || {
+            persist_terminal_job_reconciliation(state, &snapshot.key, &snapshot)
+        }) {
+            Ok(Some(_)) => {
+                summary.reconciled = summary.reconciled.saturating_add(1);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                summary.pending = summary.pending.saturating_add(1);
+                tracing::warn!(
+                    error = %error,
+                    case_id = %snapshot.key.case_id,
+                    scan_run_id = %snapshot.key.scan_run_id,
+                    "retained terminal scan outcome is still waiting for durable reconciliation"
+                );
+            }
+        }
+    }
+    summary
+}
+
 fn load_readable_desktop_cases(state: &AppState) -> AppResult<ReadableDesktopCases> {
     let listing = state.storage.list_cases_with_recovery_diagnostics()?;
     let mut recovery_diagnostics = listing.recovery_diagnostics;
@@ -489,6 +525,14 @@ fn load_readable_desktop_cases(state: &AppState) -> AppResult<ReadableDesktopCas
 
 #[tauri::command]
 pub async fn get_app_snapshot(state: State<'_, AppState>) -> AppResult<DesktopAppSnapshot> {
+    let terminal_reconciliation = reconcile_retained_terminal_jobs(&state);
+    if terminal_reconciliation.reconciled > 0 || terminal_reconciliation.pending > 0 {
+        tracing::info!(
+            reconciled = terminal_reconciliation.reconciled,
+            pending = terminal_reconciliation.pending,
+            "retained terminal scan outcomes were reconciled during snapshot refresh"
+        );
+    }
     let service = state.case_service();
     let readable = load_readable_desktop_cases(&state)?;
     let selected_case = readable.selected_case;
@@ -2539,25 +2583,43 @@ fn start_persisted_scan_job(app: &AppHandle, plan: ScanPlan) -> AppResult<Assess
             }
         },
     );
-    if started.is_err() {
-        let state = app.state::<AppState>();
-        let task_outcomes = plan
-            .executable
-            .iter()
-            .map(|execution| PersistedPreDispatchTaskOutcome::Failed {
-                engine_run_id: execution.engine_run_id.clone(),
-                reason: ScanReadinessBlocker::ExecutionPreflightUnavailable,
-            })
-            .collect();
-        let case = state
-            .case_service()
-            .transition_persisted_scan_pre_dispatch(
-                &plan.scan_run.case_id,
-                &plan.scan_run.id,
-                &PersistedPreDispatchTransition::ApplyOutcome { task_outcomes },
-            )?;
-        emit_inactive_scan_terminal(app, &case);
-        return Ok(case);
+    match started {
+        Ok(_) => {}
+        Err(
+            JobManagerError::DuplicateLiveJob(_)
+            | JobManagerError::TerminalReconciliationPending(_),
+        ) => {
+            // Concurrent Start/Resume is idempotent. Never turn an admission
+            // race into a durable failure for the worker that already owns the
+            // exact run; return the newest saved truth and let normal polling
+            // follow it.
+            let current = app
+                .state::<AppState>()
+                .case_service()
+                .show_case(&plan.scan_run.case_id)?;
+            let _ = emit(app, RUN_PROGRESS_EVENT, &current);
+            return Ok(current);
+        }
+        Err(_admission_error) => {
+            let state = app.state::<AppState>();
+            let task_outcomes = plan
+                .executable
+                .iter()
+                .map(|execution| PersistedPreDispatchTaskOutcome::Failed {
+                    engine_run_id: execution.engine_run_id.clone(),
+                    reason: ScanReadinessBlocker::ExecutionPreflightUnavailable,
+                })
+                .collect();
+            let case = state
+                .case_service()
+                .transition_persisted_scan_pre_dispatch(
+                    &plan.scan_run.case_id,
+                    &plan.scan_run.id,
+                    &PersistedPreDispatchTransition::ApplyOutcome { task_outcomes },
+                )?;
+            emit_inactive_scan_terminal(app, &case);
+            return Ok(case);
+        }
     }
 
     let queued_case = app
@@ -2582,30 +2644,32 @@ pub async fn start_scan(
     // fail independently, or be cancelled belongs after this boundary. An
     // omitted decision list is the explicit repeat-scan path: it reuses the
     // current grants without manufacturing a second consent record.
-    let expires_at = Utc::now() + Duration::days(30);
-    let plan = app
-        .state::<AppState>()
-        .case_service()
-        .authorize_and_persist_scan_before_execution_preflight(
-            &case_id,
-            decisions
-                .unwrap_or_default()
-                .into_iter()
-                .map(|decision| ScopeApprovalRequest {
-                    asset_id: decision.asset_id,
-                    permissions: decision.permissions,
-                    confirmed_by: decision.confirmed_by,
-                    expires_at: Some(expires_at),
-                    authorization_reference: decision.authorization_reference,
-                    notes: decision.notes,
-                    external_scope: decision.external_scope,
-                })
-                .collect(),
-            ScanPlanRequest {
-                engine_ids: engine_ids.unwrap_or_default(),
-            },
-        )?;
-    start_persisted_scan_job(&app, plan)
+    let state = app.state::<AppState>();
+    state.jobs.coordinate_admission(|| {
+        let expires_at = Utc::now() + Duration::days(30);
+        let plan = state
+            .case_service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &case_id,
+                decisions
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|decision| ScopeApprovalRequest {
+                        asset_id: decision.asset_id,
+                        permissions: decision.permissions,
+                        confirmed_by: decision.confirmed_by,
+                        expires_at: Some(expires_at),
+                        authorization_reference: decision.authorization_reference,
+                        notes: decision.notes,
+                        external_scope: decision.external_scope,
+                    })
+                    .collect(),
+                ScanPlanRequest {
+                    engine_ids: engine_ids.unwrap_or_default(),
+                },
+            )?;
+        start_persisted_scan_job(&app, plan)
+    })
 }
 
 /// The first-value path is deliberately independent of the managed runtime
@@ -2743,36 +2807,35 @@ pub async fn resume_scan(
     run_id: Option<String>,
     app: AppHandle,
 ) -> AppResult<AssessmentCase> {
-    let run_id = {
-        let state = app.state::<AppState>();
-        requested_or_latest_run(&state.case_service(), &case_id, run_id.as_deref())?
-    };
-    let key = JobKey::new(case_id.clone(), run_id.clone())
-        .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
-    {
-        let state = app.state::<AppState>();
-        if state
-            .jobs
-            .snapshot(&key)
-            .is_some_and(|snapshot| !snapshot.is_terminal())
-        {
-            let service = state.case_service();
-            let case = state
-                .jobs
-                .resume_with_durable_transition(&key, || service.resume_scan(&case_id, &run_id))
-                .map_err(|error| {
-                    AppError::Runtime(format!("live scan resume could not be signalled: {error}"))
-                })??;
-            emit(&app, RUN_PROGRESS_EVENT, &case)?;
-            return Ok(case);
+    let state = app.state::<AppState>();
+    state.jobs.coordinate_admission(|| {
+        let run_id = requested_or_latest_run(&state.case_service(), &case_id, run_id.as_deref())?;
+        let key = JobKey::new(case_id.clone(), run_id.clone())
+            .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
+        if let Some(snapshot) = state.jobs.snapshot(&key) {
+            if !snapshot.is_terminal() {
+                let service = state.case_service();
+                let case = state
+                    .jobs
+                    .resume_with_durable_transition(&key, || service.resume_scan(&case_id, &run_id))
+                    .map_err(|error| {
+                        AppError::Runtime(format!(
+                            "live scan resume could not be signalled: {error}"
+                        ))
+                    })??;
+                emit(&app, RUN_PROGRESS_EVENT, &case)?;
+                return Ok(case);
+            }
+            // The terminal callback is best-effort and may still be waiting
+            // to persist. Reconcile the exact retained generation before a
+            // retry changes its checkpoint; this never reruns target work.
+            reconcile_terminal_job(&app, &key, &snapshot)?;
         }
-    }
-
-    let plan = app
-        .state::<AppState>()
-        .case_service()
-        .persist_resume_before_execution_preflight(&case_id, &run_id)?;
-    start_persisted_scan_job(&app, plan)
+        let plan = state
+            .case_service()
+            .persist_resume_before_execution_preflight(&case_id, &run_id)?;
+        start_persisted_scan_job(&app, plan)
+    })
 }
 
 #[tauri::command]
@@ -2822,15 +2885,17 @@ pub async fn start_rescan(
     baseline_run_id: String,
     app: AppHandle,
 ) -> AppResult<AssessmentCase> {
-    let rescan = app
-        .state::<AppState>()
-        .case_service()
-        .persist_rescan_before_execution_preflight(
-            &case_id,
-            &baseline_run_id,
-            ScanPlanRequest::default(),
-        )?;
-    start_persisted_scan_job(&app, rescan.plan)
+    let state = app.state::<AppState>();
+    state.jobs.coordinate_admission(|| {
+        let rescan = state
+            .case_service()
+            .persist_rescan_before_execution_preflight(
+                &case_id,
+                &baseline_run_id,
+                ScanPlanRequest::default(),
+            )?;
+        start_persisted_scan_job(&app, rescan.plan)
+    })
 }
 
 #[tauri::command]
@@ -5098,9 +5163,14 @@ fn reconcile_terminal_job(
     app: &AppHandle,
     key: &JobKey,
     snapshot: &JobSnapshot,
-) -> AppResult<AssessmentCase> {
+) -> AppResult<Option<AssessmentCase>> {
     let state = app.state::<AppState>();
-    let case = persist_terminal_job_reconciliation(&state, key, snapshot)?;
+    let Some(case) = state.jobs.reconcile_terminal_snapshot(snapshot, || {
+        persist_terminal_job_reconciliation(&state, key, snapshot)
+    })?
+    else {
+        return Ok(None);
+    };
     if let Err(error) = emit(app, RUN_FINISHED_EVENT, &case) {
         tracing::warn!(
             error = %error,
@@ -5109,7 +5179,7 @@ fn reconcile_terminal_job(
             "terminal scan was persisted but its finished event was not emitted"
         );
     }
-    Ok(case)
+    Ok(Some(case))
 }
 
 fn persist_terminal_job_reconciliation(
@@ -6807,6 +6877,7 @@ mod tests {
                 status: EngineJobStatus::Failed,
             }],
             failure_kind: Some(crate::job_manager::JobFailureKind::WorkerPanicked),
+            generation: 0,
         };
 
         let stored = persist_terminal_job_reconciliation(&state, &key, &snapshot).unwrap();
@@ -6827,6 +6898,85 @@ mod tests {
         assert_eq!(
             engine_run.error_message.as_deref(),
             Some("background scan worker stopped before a durable terminal report")
+        );
+    }
+
+    #[test]
+    fn snapshot_refresh_replays_a_retained_terminal_outcome_without_rerunning_work() {
+        let (_directory, state, case_id) = ready_repository_state();
+        let plan = state
+            .case_service()
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        let execution = plan.executable.first().unwrap();
+        let engine_run_id = execution.engine_run_id.clone();
+        let worker_engine_run_id = engine_run_id.clone();
+        let key = JobKey::new(&case_id, &plan.scan_run.id).unwrap();
+        let (terminal_tx, terminal_rx) = std::sync::mpsc::channel();
+
+        state
+            .jobs
+            .start_job(
+                key.clone(),
+                [engine_run_id.clone()],
+                move |context| {
+                    context
+                        .engine(&worker_engine_run_id)
+                        .unwrap()
+                        .mark_failed()
+                        .unwrap();
+                    JobCompletion::Failed
+                },
+                move |snapshot| terminal_tx.send(snapshot).unwrap(),
+            )
+            .unwrap();
+        terminal_rx
+            .recv_timeout(StdDuration::from_secs(2))
+            .expect("worker reaches its in-memory terminal outcome");
+
+        let before = state.case_service().show_case(&case_id).unwrap();
+        let before_engine = before
+            .scan_runs
+            .iter()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine| engine.id == engine_run_id)
+            .unwrap();
+        assert!(!matches!(before_engine.status, EngineRunStatus::Failed));
+        assert_eq!(state.jobs.terminal_snapshots().len(), 1);
+
+        assert_eq!(
+            reconcile_retained_terminal_jobs(&state),
+            RetainedTerminalReconciliationSummary {
+                reconciled: 1,
+                pending: 0,
+            }
+        );
+        assert!(state.jobs.terminal_snapshots().is_empty());
+
+        let after = state.case_service().show_case(&case_id).unwrap();
+        let after_engine = after
+            .scan_runs
+            .iter()
+            .find(|run| run.id == plan.scan_run.id)
+            .unwrap()
+            .engine_runs
+            .iter()
+            .find(|engine| engine.id == engine_run_id)
+            .unwrap();
+        assert_eq!(after_engine.status, EngineRunStatus::Failed);
+        assert!(after_engine.finished_at.is_some());
+        assert_eq!(
+            reconcile_retained_terminal_jobs(&state),
+            RetainedTerminalReconciliationSummary::default(),
+            "a second refresh is idempotent and has no work to replay"
         );
     }
 
@@ -6901,6 +7051,7 @@ mod tests {
                 status: EngineJobStatus::Failed,
             }],
             failure_kind: Some(crate::job_manager::JobFailureKind::WorkerPanicked),
+            generation: 0,
         };
 
         let reconciled = persist_terminal_job_reconciliation(&state, &key, &snapshot).unwrap();

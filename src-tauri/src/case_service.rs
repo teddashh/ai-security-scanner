@@ -2570,8 +2570,10 @@ impl<'a> CaseService<'a> {
             if case.status == CaseStatus::Archived || case.is_demo {
                 continue;
             }
+            let case_id = case.id.clone();
             let mut case_changed = false;
             for run in &mut case.scan_runs {
+                let run_id = run.id.clone();
                 let mut run_changed = false;
                 for engine_run in &mut run.engine_runs {
                     // Migrate the earlier projection that left a reconciled or
@@ -2619,6 +2621,55 @@ impl<'a> CaseService<'a> {
                         );
                         run_changed = true;
                         continue;
+                    }
+                    if engine_run.resume_token.is_none() {
+                        let provably_resource_free_pre_dispatch =
+                            matches!(
+                                engine_run.phase.as_str(),
+                                "queued" | "preflight_preparing" | "dispatch_activated"
+                            ) && engine_run.raw_artifact_ids.is_empty()
+                                && engine_run.runtime_provider.is_none()
+                                && engine_run.runtime_version.is_none()
+                                && engine_run.runtime_security_options.is_none()
+                                && engine_run.exit_code.is_none()
+                                && engine_run.cleanup_removed.is_none()
+                                && engine_run.cleanup_detail.is_none();
+                        if !provably_resource_free_pre_dispatch {
+                            terminalize_untrusted_interrupted_checkpoint(
+                                engine_run,
+                                "The saved recovery record is missing outside a proven pre-scan phase.",
+                            );
+                            run_changed = true;
+                            continue;
+                        }
+                    }
+                    if let Some(token) = engine_run.resume_token.as_deref() {
+                        let checkpoint_problem = match ExecutionCheckpoint::from_resume_token(token)
+                        {
+                            Ok(checkpoint)
+                                if checkpoint.case_id == case_id
+                                    && checkpoint.scan_run_id == run_id
+                                    && checkpoint.engine_run_id == engine_run.id
+                                    && checkpoint.engine_id == engine_run.engine_id =>
+                            {
+                                None
+                            }
+                            Ok(_) => Some(
+                                "The saved recovery record does not belong to this exact check.",
+                            ),
+                            Err(_) => Some("The saved recovery record could not be read."),
+                        };
+                        if let Some(problem) = checkpoint_problem {
+                            // The user-work lifecycle must not remain paused
+                            // forever merely because product housekeeping lost
+                            // its trustworthy identity. Never rewrite the bad
+                            // token or infer a runtime object from names: retain
+                            // every ambiguous byte, perform no cleanup, and let
+                            // the user continue with a new isolated attempt.
+                            terminalize_untrusted_interrupted_checkpoint(engine_run, problem);
+                            run_changed = true;
+                            continue;
+                        }
                     }
                     let resource_free_pre_dispatch = matches!(
                         engine_run.phase.as_str(),
@@ -6253,6 +6304,21 @@ fn update_run_and_case_status(case: &mut AssessmentCase, run_index: usize, now: 
             CaseStatus::Scanning
         };
     }
+}
+
+fn terminalize_untrusted_interrupted_checkpoint(engine_run: &mut EngineRun, problem: &str) {
+    let explanation = format!(
+        "{problem} This attempt was stopped after the app restarted. Existing runtime state was left unchanged because the product could not prove what belonged to this check; a new isolated scan can still be started."
+    );
+    engine_run.status = EngineRunStatus::Failed;
+    engine_run.phase = "interrupted_restart_cleanup_identity_unavailable".into();
+    engine_run.finished_at.get_or_insert_with(Utc::now);
+    engine_run.cleanup_removed.get_or_insert(false);
+    engine_run.cleanup_detail.get_or_insert(explanation.clone());
+    engine_run
+        .error_code
+        .get_or_insert_with(|| "runtime_cleanup_identity_unavailable".into());
+    engine_run.error_message.get_or_insert(explanation);
 }
 
 /// Updates a historical interrupted run without letting a later independent
@@ -12395,6 +12461,214 @@ mod tests {
         assert!(engine.finished_at.is_some());
         assert!(run.completed_at.is_some());
         assert_eq!(recovered.status, CaseStatus::NeedsAttention);
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
+    }
+
+    #[test]
+    fn unreadable_interrupted_checkpoint_terminalizes_without_touching_ambiguous_runtime_state() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+
+        let unreadable_token = "{this-is-not-a-checkpoint".to_owned();
+        let mut running = service.show_case(&case_id).unwrap();
+        let engine = &mut running.scan_runs[0].engine_runs[0];
+        let prior_finished_at = Utc::now() - chrono::Duration::minutes(5);
+        engine.status = EngineRunStatus::Running;
+        engine.phase = "running".into();
+        engine.started_at = Some(Utc::now());
+        engine.finished_at = Some(prior_finished_at);
+        engine.resume_token = Some(unreadable_token.clone());
+        engine.runtime_provider = Some("preserved-ambiguous-provider".into());
+        engine.raw_artifact_ids = vec!["preserved-ambiguous-artifact".into()];
+        engine.cleanup_removed = Some(true);
+        engine.cleanup_detail = Some("preserved prior cleanup evidence".into());
+        engine.error_code = Some("preserved_prior_error_code".into());
+        engine.error_message = Some("preserved prior error evidence".into());
+        fixture
+            .storage
+            .save_case(&mut running, "test.unreadable_checkpoint_before_restart")
+            .unwrap();
+
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+        let recovered = service.show_case(&case_id).unwrap();
+        let run = &recovered.scan_runs[0];
+        let engine = &run.engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Failed);
+        assert_eq!(
+            engine.phase,
+            "interrupted_restart_cleanup_identity_unavailable"
+        );
+        assert_eq!(
+            engine.error_code.as_deref(),
+            Some("preserved_prior_error_code")
+        );
+        assert_eq!(
+            engine.error_message.as_deref(),
+            Some("preserved prior error evidence")
+        );
+        assert_eq!(
+            engine.resume_token.as_deref(),
+            Some(unreadable_token.as_str())
+        );
+        assert_eq!(
+            engine.runtime_provider.as_deref(),
+            Some("preserved-ambiguous-provider")
+        );
+        assert_eq!(
+            engine.raw_artifact_ids,
+            vec!["preserved-ambiguous-artifact"]
+        );
+        assert_eq!(engine.cleanup_removed, Some(true));
+        assert_eq!(
+            engine.cleanup_detail.as_deref(),
+            Some("preserved prior cleanup evidence")
+        );
+        assert_eq!(engine.finished_at, Some(prior_finished_at));
+        assert!(run.completed_at.is_some());
+        assert_eq!(recovered.status, CaseStatus::NeedsAttention);
+
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
+        let isolated = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(isolated.scan_run.sequence, 2);
+        assert_ne!(isolated.scan_run.id, plan.scan_run.id);
+    }
+
+    #[test]
+    fn identity_conflicting_interrupted_checkpoint_is_preserved_and_terminalized_once() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+
+        let mut running = service.show_case(&case_id).unwrap();
+        let engine = &mut running.scan_runs[0].engine_runs[0];
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.case_id = "different-case-identity".into();
+        checkpoint.stage = ExecutionStage::Running;
+        checkpoint.cleanup_completed = false;
+        checkpoint.container_name = Some(
+            crate::container_runtime::planned_container_name(
+                &checkpoint.engine_id,
+                &checkpoint.engine_run_id,
+                checkpoint.attempt,
+            )
+            .unwrap(),
+        );
+        checkpoint.runtime_command_provenance =
+            Some(crate::container_runtime::RuntimeCommandProvenance::Compatibility);
+        checkpoint.runtime_provider = Some(crate::container_runtime::RuntimeProvider::Podman);
+        let conflicting_token = checkpoint.resume_token().unwrap();
+        engine.status = EngineRunStatus::Running;
+        engine.phase = "running".into();
+        engine.resume_token = Some(conflicting_token.clone());
+        fixture
+            .storage
+            .save_case(
+                &mut running,
+                "test.identity_conflicting_checkpoint_before_restart",
+            )
+            .unwrap();
+
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+        let recovered = service.show_case(&case_id).unwrap();
+        let engine = &recovered.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Failed);
+        assert_eq!(
+            engine.phase,
+            "interrupted_restart_cleanup_identity_unavailable"
+        );
+        assert_eq!(
+            engine.error_code.as_deref(),
+            Some("runtime_cleanup_identity_unavailable")
+        );
+        assert_eq!(
+            engine.resume_token.as_deref(),
+            Some(conflicting_token.as_str())
+        );
+        let preserved =
+            ExecutionCheckpoint::from_resume_token(engine.resume_token.as_deref().unwrap())
+                .unwrap();
+        assert_eq!(preserved.case_id, "different-case-identity");
+        assert_eq!(preserved.stage, ExecutionStage::Running);
+        assert!(!preserved.cleanup_completed);
+        assert!(preserved.container_name.is_some());
+        assert_eq!(engine.cleanup_removed, Some(false));
+        assert!(recovered.scan_runs[0].completed_at.is_some());
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
+    }
+
+    #[test]
+    fn missing_checkpoint_after_dispatch_never_becomes_a_synthetic_clean_plan() {
+        let fixture = Fixture::new();
+        let case_id = repository_case_ready_for_execution(&fixture);
+        let service = fixture.service();
+        service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec!["gitleaks".into()],
+                },
+            )
+            .unwrap();
+
+        let mut capturing = service.show_case(&case_id).unwrap();
+        let engine = &mut capturing.scan_runs[0].engine_runs[0];
+        engine.status = EngineRunStatus::Running;
+        engine.phase = "capturing_artifacts".into();
+        engine.started_at = Some(Utc::now());
+        engine.resume_token = None;
+        engine.runtime_provider = Some("preserved-unknown-runtime".into());
+        engine.cleanup_removed = None;
+        engine.cleanup_detail = None;
+        fixture
+            .storage
+            .save_case(&mut capturing, "test.missing_checkpoint_after_dispatch")
+            .unwrap();
+
+        assert_eq!(service.recover_interrupted_scans().unwrap(), 1);
+        let recovered = service.show_case(&case_id).unwrap();
+        let engine = &recovered.scan_runs[0].engine_runs[0];
+        assert_eq!(engine.status, EngineRunStatus::Failed);
+        assert_eq!(
+            engine.phase,
+            "interrupted_restart_cleanup_identity_unavailable"
+        );
+        assert!(engine.resume_token.is_none());
+        assert_eq!(
+            engine.runtime_provider.as_deref(),
+            Some("preserved-unknown-runtime")
+        );
+        assert_eq!(engine.cleanup_removed, Some(false));
+        assert!(engine.cleanup_detail.as_deref().is_some_and(|detail| {
+            detail.contains("missing outside a proven pre-scan phase")
+                && detail.contains("Existing runtime state was left unchanged")
+        }));
+        assert!(recovered.scan_runs[0].completed_at.is_some());
         assert_eq!(service.recover_interrupted_scans().unwrap(), 0);
     }
 

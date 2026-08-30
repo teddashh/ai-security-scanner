@@ -8,6 +8,7 @@
 //! Docker and a user-installed Podman remain compatibility providers elsewhere.
 
 use crate::error::{AppError, AppResult};
+use chrono::{DateTime, Utc};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, RANGE};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -53,6 +54,10 @@ const WINDOWS_WSL_PROVIDER_DELETE_POLL: Duration = Duration::from_millis(100);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const DOWNLOAD_CHUNK_BYTES: usize = 128 * 1024;
+// The longest single command in setup is the bounded one-hour WSL recovery
+// export/import. Allow that command to reach its own deadline before declaring
+// that the worker stopped reporting liveness.
+const MANAGED_RUNTIME_SETUP_STALE_AFTER: Duration = Duration::from_secs(65 * 60);
 const MACHINE_PREFIX: &str = "assm1";
 const WINDOWS_MACHINE_PREFIX: &str = "assm2";
 const MAX_MACHINE_NAME_BYTES: usize = 30;
@@ -746,6 +751,13 @@ pub struct ManagedRuntimePrerequisiteRepairResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ManagedRuntimeSetupStatus {
+    /// Identity of the active or most recently completed setup episode.
+    pub operation_id: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    /// Backend-derived liveness conclusion. This is never inferred by a UI
+    /// timer and is false for terminal episodes.
+    pub stale: bool,
     pub phase: ManagedRuntimeSetupPhase,
     pub active: bool,
     /// A separate Windows servicing operation is waiting for UAC or WSL to
@@ -771,6 +783,10 @@ pub struct ManagedRuntimeSetupStatus {
 impl Default for ManagedRuntimeSetupStatus {
     fn default() -> Self {
         Self {
+            operation_id: None,
+            started_at: None,
+            last_heartbeat_at: None,
+            stale: false,
             phase: ManagedRuntimeSetupPhase::Idle,
             active: false,
             prerequisite_repair_active: false,
@@ -803,13 +819,20 @@ impl ManagedRuntimeSetupController {
     pub fn status(&self) -> AppResult<ManagedRuntimeSetupStatus> {
         self.status
             .lock()
-            .map(|status| public_managed_runtime_setup_status(status.clone()))
+            .map(|mut status| {
+                self.reconcile_staleness(&mut status, Utc::now());
+                public_managed_runtime_setup_status(status.clone())
+            })
             .map_err(|_| {
                 AppError::Internal("managed runtime setup status lock was poisoned".into())
             })
     }
 
-    pub fn begin(&self) -> AppResult<()> {
+    pub fn begin(&self) -> AppResult<String> {
+        self.begin_at(Utc::now())
+    }
+
+    fn begin_at(&self, now: DateTime<Utc>) -> AppResult<String> {
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
         })?;
@@ -824,7 +847,12 @@ impl ManagedRuntimeSetupController {
             ));
         }
         self.cancel_requested.store(false, Ordering::Release);
+        let operation_id = Uuid::new_v4().hyphenated().to_string();
         *status = ManagedRuntimeSetupStatus {
+            operation_id: Some(operation_id.clone()),
+            started_at: Some(now),
+            last_heartbeat_at: Some(now),
+            stale: false,
             phase: ManagedRuntimeSetupPhase::Install,
             active: true,
             prerequisite_repair_active: false,
@@ -839,13 +867,56 @@ impl ManagedRuntimeSetupController {
             next_action: None,
             detail: "installing and verifying the release-managed runtime payload".into(),
         };
-        Ok(())
+        Ok(operation_id)
     }
 
-    pub(crate) fn begin_prerequisite_repair(&self) -> AppResult<ManagedRuntimeSetupNextAction> {
+    #[cfg(test)]
+    fn begin_prerequisite_repair(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<ManagedRuntimeSetupNextAction> {
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
         })?;
+        self.reserve_prerequisite_repair(&mut status, operation_id)
+    }
+
+    fn begin_automatic_prerequisite_repair(
+        &self,
+        operation_id: &str,
+        attempted_actions: &[ManagedRuntimeSetupNextAction],
+    ) -> AppResult<Option<ManagedRuntimeSetupNextAction>> {
+        let mut status = self.status.lock().map_err(|_| {
+            AppError::Internal("managed runtime setup status lock was poisoned".into())
+        })?;
+        self.reconcile_staleness(&mut status, Utc::now());
+        if status.cancel_requested {
+            return Err(setup_cancelled_error());
+        }
+        let Some(action) = automatic_windows_wsl_prerequisite_action(&status) else {
+            return Ok(None);
+        };
+        if attempted_actions.len() >= MAX_AUTOMATIC_WINDOWS_WSL_PREREQUISITE_REPAIRS
+            || attempted_actions.contains(&action)
+        {
+            return Ok(None);
+        }
+        let reserved = self.reserve_prerequisite_repair(&mut status, operation_id)?;
+        debug_assert_eq!(reserved, action);
+        Ok(Some(reserved))
+    }
+
+    fn reserve_prerequisite_repair(
+        &self,
+        status: &mut ManagedRuntimeSetupStatus,
+        operation_id: &str,
+    ) -> AppResult<ManagedRuntimeSetupNextAction> {
+        if status.operation_id.as_deref() != Some(operation_id) {
+            return Err(AppError::Conflict(
+                "the managed runtime setup operation changed before Windows preparation began"
+                    .into(),
+            ));
+        }
         let action = status.next_action.ok_or_else(|| {
             AppError::Conflict("there is no current Windows prerequisite action to repair".into())
         })?;
@@ -867,7 +938,10 @@ impl ManagedRuntimeSetupController {
                 "this managed runtime prerequisite cannot be changed automatically".into(),
             ));
         }
-        if status.active || status.phase != ManagedRuntimeSetupPhase::Failed {
+        if status.cancel_requested || self.cancel_requested.load(Ordering::Acquire) {
+            return Err(setup_cancelled_error());
+        }
+        if !status.active && status.phase != ManagedRuntimeSetupPhase::Failed {
             return Err(AppError::Conflict(
                 "the Windows prerequisite no longer needs automatic repair".into(),
             ));
@@ -880,11 +954,30 @@ impl ManagedRuntimeSetupController {
         status.prerequisite_repair_active = true;
         status.can_cancel = false;
         status.can_retry = false;
+        record_managed_runtime_setup_heartbeat(status, Utc::now());
         Ok(action)
+    }
+
+    fn reconcile_staleness(&self, status: &mut ManagedRuntimeSetupStatus, now: DateTime<Utc>) {
+        refresh_managed_runtime_setup_staleness(status, now);
+        if status.stale {
+            // Do not detach or supersede a worker that may still own an OS
+            // command. Request its existing cooperative cancellation path and
+            // keep Retry disabled until that exact worker terminalizes. This
+            // is a persistent backend outcome, not a UI timer changing copy
+            // over an otherwise active spinner.
+            self.cancel_requested.store(true, Ordering::Release);
+            status.cancel_requested = true;
+            status.can_cancel = false;
+            status.can_retry = false;
+            status.detail = "scan-tool preparation stopped reporting progress; the app is stopping that exact attempt safely"
+                .into();
+        }
     }
 
     pub(crate) fn finish_prerequisite_repair(
         &self,
+        operation_id: &str,
         result: Option<&ManagedRuntimePrerequisiteRepairResult>,
     ) {
         let Ok(mut status) = self.status.lock() else {
@@ -892,8 +985,12 @@ impl ManagedRuntimeSetupController {
                 .store(false, Ordering::Release);
             return;
         };
+        if status.operation_id.as_deref() != Some(operation_id) {
+            return;
+        }
         status.prerequisite_repair_active = false;
-        status.can_retry = true;
+        status.can_retry = !status.active;
+        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
         if let Some(result) = result {
             if result.restart_required {
                 status.phase = ManagedRuntimeSetupPhase::Failed;
@@ -909,6 +1006,35 @@ impl ManagedRuntimeSetupController {
         }
         self.prerequisite_repair_active
             .store(false, Ordering::Release);
+    }
+
+    fn continue_after_prerequisite_repair(&self, operation_id: &str) -> AppResult<()> {
+        self.check_cancelled()?;
+        let mut status = self.status.lock().map_err(|_| {
+            AppError::Internal("managed runtime setup status lock was poisoned".into())
+        })?;
+        if status.operation_id.as_deref() != Some(operation_id) || !status.active {
+            return Err(AppError::Conflict(
+                "the managed runtime setup operation changed before preparation could continue"
+                    .into(),
+            ));
+        }
+        if status.prerequisite_repair_active
+            || self.prerequisite_repair_active.load(Ordering::Acquire)
+        {
+            return Err(AppError::Conflict(
+                "Windows preparation has not reached a terminal result".into(),
+            ));
+        }
+        status.phase = ManagedRuntimeSetupPhase::Install;
+        status.can_cancel = true;
+        status.can_retry = false;
+        status.failure_reason = None;
+        status.next_action = None;
+        status.detail =
+            "checking the isolated scan tools after automatic Windows preparation".into();
+        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
+        Ok(())
     }
 
     pub fn request_cancel(&self) -> AppResult<ManagedRuntimeSetupStatus> {
@@ -927,9 +1053,15 @@ impl ManagedRuntimeSetupController {
             // make the next launch harder to explain, so finish the coherent
             // recovery step before accepting cancellation again.
             status.detail = "finishing the safe recovery copy before setup can be stopped".into();
+        } else if status.prerequisite_repair_active {
+            status.detail =
+                "Windows preparation is finishing its bounded step before setup can stop".into();
         } else {
             // A stale cancel must never poison the next setup attempt.
             self.cancel_requested.store(false, Ordering::Release);
+        }
+        if status.active || status.prerequisite_repair_active {
+            record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
         }
         Ok(public_managed_runtime_setup_status(status.clone()))
     }
@@ -946,6 +1078,7 @@ impl ManagedRuntimeSetupController {
         status.phase = phase;
         status.can_cancel = phase != ManagedRuntimeSetupPhase::Recovery;
         status.detail = detail.into();
+        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
         drop(status);
         self.check_cancelled()
     }
@@ -973,6 +1106,7 @@ impl ManagedRuntimeSetupController {
         } else {
             format!("downloading managed runtime image: {received} of {total} bytes")
         };
+        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
         drop(status);
         self.check_cancelled()
     }
@@ -994,22 +1128,42 @@ impl ManagedRuntimeSetupController {
         status.progress_percent = Some(percent);
         status.resumed_from_bytes = 0;
         status.detail = format!("{action}: {percent:.0}%");
+        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
         Ok(())
     }
 
     fn check_cancelled(&self) -> AppResult<()> {
+        self.record_heartbeat()?;
         if self.cancel_requested.load(Ordering::Acquire) {
             return Err(setup_cancelled_error());
         }
         Ok(())
     }
 
-    fn finish_completed(&self, detail: impl Into<String>) -> AppResult<()> {
-        self.finish(ManagedRuntimeSetupPhase::Completed, detail.into())
+    fn record_heartbeat(&self) -> AppResult<()> {
+        let mut status = self.status.lock().map_err(|_| {
+            AppError::Internal("managed runtime setup status lock was poisoned".into())
+        })?;
+        if status.active || status.prerequisite_repair_active {
+            record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
+        }
+        Ok(())
     }
 
-    fn finish_failed(&self, detail: impl Into<String>) -> AppResult<()> {
-        self.finish(ManagedRuntimeSetupPhase::Failed, detail.into())
+    fn finish_completed(&self, operation_id: &str, detail: impl Into<String>) -> AppResult<()> {
+        self.finish(
+            operation_id,
+            ManagedRuntimeSetupPhase::Completed,
+            detail.into(),
+        )
+    }
+
+    fn finish_failed(&self, operation_id: &str, detail: impl Into<String>) -> AppResult<()> {
+        self.finish(
+            operation_id,
+            ManagedRuntimeSetupPhase::Failed,
+            detail.into(),
+        )
     }
 
     fn record_failure(
@@ -1024,30 +1178,45 @@ impl ManagedRuntimeSetupController {
         status.failure_reason = Some(reason);
         status.next_action = Some(action);
         status.detail = detail.into();
+        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
         Ok(())
     }
 
-    fn finish_cancelled(&self) -> AppResult<()> {
+    fn finish_cancelled(&self, operation_id: &str) -> AppResult<()> {
         self.finish(
+            operation_id,
             ManagedRuntimeSetupPhase::Cancelled,
             "managed runtime setup was cancelled; partial download retained for retry".into(),
         )
     }
 
-    #[cfg(feature = "desktop")]
-    pub(crate) fn finish_worker_failure(&self, detail: impl Into<String>) -> AppResult<()> {
-        self.finish_failed(detail)
+    fn finish_worker_failure(
+        &self,
+        operation_id: &str,
+        detail: impl Into<String>,
+    ) -> AppResult<()> {
+        self.finish_failed(operation_id, detail)
     }
 
-    fn finish(&self, phase: ManagedRuntimeSetupPhase, detail: String) -> AppResult<()> {
+    fn finish(
+        &self,
+        operation_id: &str,
+        phase: ManagedRuntimeSetupPhase,
+        detail: String,
+    ) -> AppResult<()> {
         let mut status = self.status.lock().map_err(|_| {
             AppError::Internal("managed runtime setup status lock was poisoned".into())
         })?;
+        if status.operation_id.as_deref() != Some(operation_id) {
+            return Ok(());
+        }
         status.phase = phase;
         status.active = false;
+        status.prerequisite_repair_active = false;
         status.cancel_requested = false;
         status.can_cancel = false;
         status.can_retry = phase != ManagedRuntimeSetupPhase::Completed;
+        status.stale = false;
         if phase != ManagedRuntimeSetupPhase::Failed {
             status.failure_reason = None;
             status.next_action = None;
@@ -1056,7 +1225,78 @@ impl ManagedRuntimeSetupController {
             status.detail = detail;
         }
         self.cancel_requested.store(false, Ordering::Release);
+        self.prerequisite_repair_active
+            .store(false, Ordering::Release);
+        record_managed_runtime_setup_heartbeat(&mut status, Utc::now());
         Ok(())
+    }
+}
+
+fn chrono_duration(duration: Duration) -> chrono::Duration {
+    chrono::Duration::seconds(
+        i64::try_from(duration.as_secs()).expect("fixed managed-runtime duration fits in i64"),
+    )
+}
+
+fn record_managed_runtime_setup_heartbeat(
+    status: &mut ManagedRuntimeSetupStatus,
+    now: DateTime<Utc>,
+) {
+    status.last_heartbeat_at = Some(now);
+}
+
+fn refresh_managed_runtime_setup_staleness(
+    status: &mut ManagedRuntimeSetupStatus,
+    now: DateTime<Utc>,
+) {
+    if !status.active && !status.prerequisite_repair_active {
+        status.stale = false;
+        return;
+    }
+    if status.stale && status.cancel_requested {
+        // Staleness is a latched cancellation outcome. A late heartbeat from
+        // the same worker cannot turn it back into an apparently healthy
+        // spinner; only that operation's terminal transition clears it.
+        return;
+    }
+    let missed_heartbeat = status.last_heartbeat_at.is_none_or(|heartbeat| {
+        heartbeat + chrono_duration(MANAGED_RUNTIME_SETUP_STALE_AFTER) <= now
+    });
+    status.stale = missed_heartbeat;
+}
+
+/// Worker-owned terminalizer. It is constructed immediately after `begin` and
+/// therefore runs during unwinding even if the originating webview invocation
+/// has already disappeared. The operation identity prevents an old worker from
+/// overwriting a newer retry.
+struct ManagedRuntimeSetupWorkerGuard<'a> {
+    controller: &'a ManagedRuntimeSetupController,
+    operation_id: String,
+    armed: bool,
+}
+
+impl<'a> ManagedRuntimeSetupWorkerGuard<'a> {
+    fn new(controller: &'a ManagedRuntimeSetupController, operation_id: String) -> Self {
+        Self {
+            controller,
+            operation_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ManagedRuntimeSetupWorkerGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.controller.finish_worker_failure(
+                &self.operation_id,
+                "managed runtime setup worker terminated unexpectedly",
+            );
+        }
     }
 }
 
@@ -2524,31 +2764,54 @@ impl ManagedRuntimeManager {
         F: FnMut() -> AppResult<ManagedRuntimeStatus>,
     {
         let mut attempted_prerequisite_repairs = Vec::new();
-        controller.begin()?;
+        let operation_id = controller.begin()?;
+        let mut worker_guard =
+            ManagedRuntimeSetupWorkerGuard::new(controller, operation_id.clone());
         loop {
             match attempt() {
                 Ok(status) => {
-                    controller.finish_completed(format!(
-                        "managed rootless runtime {} is running and verified",
-                        status.runtime_version
-                    ))?;
+                    controller.finish_completed(
+                        &operation_id,
+                        format!(
+                            "managed rootless runtime {} is running and verified",
+                            status.runtime_version
+                        ),
+                    )?;
+                    worker_guard.disarm();
                     return Ok(status);
                 }
                 Err(_error) if controller.cancel_requested.load(Ordering::Acquire) => {
-                    controller.finish_cancelled()?;
+                    controller.finish_cancelled(&operation_id)?;
+                    worker_guard.disarm();
                     return Err(setup_cancelled_error());
                 }
                 Err(error) => {
-                    // Publish the worker's exact typed WSL failure before
-                    // deciding whether it is one of the three actions the
-                    // product can safely perform itself.
-                    controller.finish_failed(error.to_string())?;
-                    let Some((action, repair)) = self
-                        .run_automatic_windows_wsl_prerequisite_repair(
-                            controller,
-                            &attempted_prerequisite_repairs,
-                        )?
-                    else {
+                    // Keep the original operation active while atomically
+                    // reserving an eligible automatic Windows repair. A user
+                    // retry cannot replace this worker between the typed
+                    // failure and its repair decision.
+                    let automatic_repair = self.run_automatic_windows_wsl_prerequisite_repair(
+                        controller,
+                        &operation_id,
+                        &attempted_prerequisite_repairs,
+                    );
+                    let Some((action, repair)) = (match automatic_repair {
+                        Ok(repair) => repair,
+                        Err(_repair_error)
+                            if controller.cancel_requested.load(Ordering::Acquire) =>
+                        {
+                            controller.finish_cancelled(&operation_id)?;
+                            worker_guard.disarm();
+                            return Err(setup_cancelled_error());
+                        }
+                        Err(repair_error) => {
+                            controller.finish_failed(&operation_id, repair_error.to_string())?;
+                            worker_guard.disarm();
+                            return Err(repair_error);
+                        }
+                    }) else {
+                        controller.finish_failed(&operation_id, error.to_string())?;
+                        worker_guard.disarm();
                         return Err(error);
                     };
                     attempted_prerequisite_repairs.push(action);
@@ -2560,14 +2823,21 @@ impl ManagedRuntimeManager {
                         // failure. The workspace, saved projects, reports, and
                         // independent tasks remain available because no
                         // lifecycle lock is held while Windows services WSL.
+                        controller.finish_failed(&operation_id, repair.detail.clone())?;
+                        worker_guard.disarm();
                         return Err(AppError::NotAvailable(repair.detail));
+                    }
+                    if controller.cancel_requested.load(Ordering::Acquire) {
+                        controller.finish_cancelled(&operation_id)?;
+                        worker_guard.disarm();
+                        return Err(setup_cancelled_error());
                     }
 
                     // A successful Windows change is reconciled through the
-                    // normal read-only checks. Never assume the requested
-                    // feature or update became usable merely from its exit
-                    // code.
-                    controller.begin()?;
+                    // normal read-only checks under the same operation
+                    // identity. Never assume the requested feature or update
+                    // became usable merely from its exit code.
+                    controller.continue_after_prerequisite_repair(&operation_id)?;
                 }
             }
         }
@@ -2576,6 +2846,7 @@ impl ManagedRuntimeManager {
     fn run_automatic_windows_wsl_prerequisite_repair(
         &self,
         controller: &ManagedRuntimeSetupController,
+        operation_id: &str,
         attempted_actions: &[ManagedRuntimeSetupNextAction],
     ) -> AppResult<
         Option<(
@@ -2583,23 +2854,11 @@ impl ManagedRuntimeManager {
             ManagedRuntimePrerequisiteRepairResult,
         )>,
     > {
-        let status = controller.status()?;
-        let Some(action) = automatic_windows_wsl_prerequisite_action(&status) else {
+        let Some(action) =
+            controller.begin_automatic_prerequisite_repair(operation_id, attempted_actions)?
+        else {
             return Ok(None);
         };
-        if attempted_actions.len() >= MAX_AUTOMATIC_WINDOWS_WSL_PREREQUISITE_REPAIRS
-            || attempted_actions.contains(&action)
-        {
-            return Ok(None);
-        }
-
-        let active_action = controller.begin_prerequisite_repair()?;
-        if active_action != action {
-            controller.finish_prerequisite_repair(None);
-            return Err(AppError::Conflict(
-                "the Windows prerequisite changed before automatic repair began".into(),
-            ));
-        }
         let repair = self
             .prerequisite_repairer
             .repair(action)
@@ -2609,7 +2868,7 @@ impl ManagedRuntimeManager {
                 detail: "ai-security-scanner could not finish the automatic Windows setup. You can retry; your projects and saved results remain available."
                     .into(),
             });
-        controller.finish_prerequisite_repair(Some(&repair));
+        controller.finish_prerequisite_repair(operation_id, Some(&repair));
         Ok(Some((action, repair)))
     }
 
@@ -16313,7 +16572,7 @@ mod tests {
             .commands
             .push(success(utf16le(&format!("{distribution}\r\n"))));
         let setup = ManagedRuntimeSetupController::default();
-        setup.begin().expect("begin failed recovery fixture setup");
+        let operation_id = setup.begin().expect("begin failed recovery fixture setup");
 
         let error = fixture
             .manager
@@ -16325,7 +16584,7 @@ mod tests {
             )
             .expect_err("invalid pending recovery must require manual action");
         setup
-            .finish_failed(error.to_string())
+            .finish_failed(&operation_id, error.to_string())
             .expect("finish failed recovery fixture setup");
 
         assert!(
@@ -17833,7 +18092,7 @@ mod tests {
     #[test]
     fn surviving_wsl_distribution_has_a_typed_manual_recovery_that_cannot_be_repaired() {
         let controller = ManagedRuntimeSetupController::default();
-        controller.begin().expect("begin setup");
+        let operation_id = controller.begin().expect("begin setup");
         let distribution = "podman-assm1-win-x64-0123456789ab";
         let error = fail_windows_wsl_distribution_requires_manual_action::<()>(
             Some(&controller),
@@ -17841,7 +18100,7 @@ mod tests {
         )
         .expect_err("a surviving distribution requires manual review");
         controller
-            .finish_failed(error.to_string())
+            .finish_failed(&operation_id, error.to_string())
             .expect("finish failed setup");
 
         let status = controller.status().expect("typed manual recovery status");
@@ -17860,7 +18119,7 @@ mod tests {
                 .detail
                 .contains("official backup and removal process")
         );
-        assert!(controller.begin_prerequisite_repair().is_err());
+        assert!(controller.begin_prerequisite_repair(&operation_id).is_err());
         assert!(
             windows_wsl_repair_parameters(
                 ManagedRuntimeSetupNextAction::ResolveWslDistributionManually
@@ -18154,56 +18413,60 @@ mod tests {
     #[test]
     fn windows_wsl_repair_is_derived_from_exact_failed_pair_and_single_flight() {
         let controller = ManagedRuntimeSetupController::default();
+        let operation_id = controller.begin().expect("begin setup");
         {
             let mut status = controller.status.lock().expect("setup status");
             status.phase = ManagedRuntimeSetupPhase::Failed;
+            status.active = false;
             status.failure_reason = Some(ManagedRuntimeSetupFailureReason::WslUpdateRequired);
             status.next_action = Some(ManagedRuntimeSetupNextAction::UpdateWsl);
         }
         assert_eq!(
-            controller.begin_prerequisite_repair().unwrap(),
+            controller.begin_prerequisite_repair(&operation_id).unwrap(),
             ManagedRuntimeSetupNextAction::UpdateWsl
         );
         let repairing = controller.status().expect("repairing status");
         assert!(repairing.prerequisite_repair_active);
         assert!(!repairing.can_retry);
-        assert!(controller.begin_prerequisite_repair().is_err());
+        assert!(controller.begin_prerequisite_repair(&operation_id).is_err());
         assert!(controller.begin().is_err());
 
         let completed = windows_wsl_repair_result_from_exit_code(0);
-        controller.finish_prerequisite_repair(Some(&completed));
+        controller.finish_prerequisite_repair(&operation_id, Some(&completed));
         let repaired = controller.status().expect("repaired status");
         assert!(!repaired.prerequisite_repair_active);
         assert!(repaired.can_retry);
         assert_eq!(
-            controller.begin_prerequisite_repair().unwrap(),
+            controller.begin_prerequisite_repair(&operation_id).unwrap(),
             ManagedRuntimeSetupNextAction::UpdateWsl
         );
-        controller.finish_prerequisite_repair(None);
+        controller.finish_prerequisite_repair(&operation_id, None);
 
         {
             let mut status = controller.status.lock().expect("setup status");
             status.failure_reason = Some(ManagedRuntimeSetupFailureReason::WslNotInstalled);
             status.next_action = Some(ManagedRuntimeSetupNextAction::UpdateWsl);
         }
-        assert!(controller.begin_prerequisite_repair().is_err());
+        assert!(controller.begin_prerequisite_repair(&operation_id).is_err());
     }
 
     #[test]
     fn windows_wsl_repair_restart_result_becomes_the_only_next_action() {
         let controller = ManagedRuntimeSetupController::default();
+        let operation_id = controller.begin().expect("begin setup");
         {
             let mut status = controller.status.lock().expect("setup status");
             status.phase = ManagedRuntimeSetupPhase::Failed;
+            status.active = false;
             status.failure_reason = Some(ManagedRuntimeSetupFailureReason::WslNotInstalled);
             status.next_action = Some(ManagedRuntimeSetupNextAction::InstallWsl);
         }
         assert_eq!(
-            controller.begin_prerequisite_repair().unwrap(),
+            controller.begin_prerequisite_repair(&operation_id).unwrap(),
             ManagedRuntimeSetupNextAction::InstallWsl
         );
         let restart = windows_wsl_repair_result_from_exit_code(3010);
-        controller.finish_prerequisite_repair(Some(&restart));
+        controller.finish_prerequisite_repair(&operation_id, Some(&restart));
 
         let status = controller.status().expect("restart status");
         assert_eq!(
@@ -18214,13 +18477,13 @@ mod tests {
             status.next_action,
             Some(ManagedRuntimeSetupNextAction::RestartWindows)
         );
-        assert!(controller.begin_prerequisite_repair().is_err());
+        assert!(controller.begin_prerequisite_repair(&operation_id).is_err());
     }
 
     #[test]
     fn windows_wsl_prerequisite_failure_persists_machine_readable_recovery() {
         let controller = ManagedRuntimeSetupController::default();
-        controller.begin().expect("begin setup");
+        let operation_id = controller.begin().expect("begin setup");
         controller
             .set_phase(
                 ManagedRuntimeSetupPhase::Prerequisite,
@@ -18245,7 +18508,7 @@ mod tests {
         assert_eq!(encoded_unwinding["next_action"], serde_json::Value::Null);
 
         controller
-            .finish_failed(error.to_string())
+            .finish_failed(&operation_id, error.to_string())
             .expect("finish failed setup");
 
         let status = controller.status().expect("failed status");
@@ -20196,7 +20459,7 @@ mod tests {
             .commands
             .push(success(utf16le(&format!("{distribution}\r\n"))));
         let setup = ManagedRuntimeSetupController::default();
-        setup.begin().expect("begin failed recovery fixture setup");
+        let operation_id = setup.begin().expect("begin failed recovery fixture setup");
 
         let error = fixture
             .manager
@@ -20208,7 +20471,7 @@ mod tests {
             )
             .expect_err("a stale v0.1.7 registry name is not an ownership receipt");
         setup
-            .finish_failed(error.to_string())
+            .finish_failed(&operation_id, error.to_string())
             .expect("finish failed recovery fixture setup");
 
         assert!(
@@ -22970,9 +23233,206 @@ mod tests {
     }
 
     #[test]
+    fn setup_terminal_paths_clear_every_process_local_activity_flag() {
+        for phase in [
+            ManagedRuntimeSetupPhase::Completed,
+            ManagedRuntimeSetupPhase::Failed,
+            ManagedRuntimeSetupPhase::Cancelled,
+        ] {
+            let controller = ManagedRuntimeSetupController::default();
+            let operation_id = controller.begin().expect("begin setup");
+            {
+                let mut status = controller.status.lock().expect("setup status");
+                status.prerequisite_repair_active = true;
+                status.cancel_requested = true;
+                status.stale = true;
+            }
+            controller
+                .prerequisite_repair_active
+                .store(true, Ordering::Release);
+            controller.cancel_requested.store(true, Ordering::Release);
+
+            controller
+                .finish(&operation_id, phase, "terminal fixture".into())
+                .expect("terminalize setup");
+
+            let status = controller.status().expect("terminal setup status");
+            assert!(!status.active, "{phase:?}");
+            assert!(!status.prerequisite_repair_active, "{phase:?}");
+            assert!(!status.cancel_requested, "{phase:?}");
+            assert!(!status.can_cancel, "{phase:?}");
+            assert!(!status.stale, "{phase:?}");
+            assert!(
+                !controller
+                    .prerequisite_repair_active
+                    .load(Ordering::Acquire),
+                "{phase:?}"
+            );
+            assert!(
+                !controller.cancel_requested.load(Ordering::Acquire),
+                "{phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_guard_terminalizes_a_panicking_prerequisite_repair_without_clobbering_retry() {
+        let controller = ManagedRuntimeSetupController::default();
+        let operation_id = controller.begin().expect("begin setup");
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _worker_guard =
+                ManagedRuntimeSetupWorkerGuard::new(&controller, operation_id.clone());
+            controller
+                .record_failure(
+                    ManagedRuntimeSetupFailureReason::WslUpdateRequired,
+                    ManagedRuntimeSetupNextAction::UpdateWsl,
+                    "Windows WSL needs an update",
+                )
+                .expect("record typed failure");
+            controller
+                .finish_failed(&operation_id, "failed prerequisite")
+                .expect("publish failed prerequisite");
+            controller
+                .begin_prerequisite_repair(&operation_id)
+                .expect("begin automatic prerequisite repair");
+            panic!("injected prerequisite repair panic");
+        }));
+        assert!(panic_result.is_err());
+
+        let failed = controller.status().expect("worker failure status");
+        assert_eq!(failed.operation_id.as_deref(), Some(operation_id.as_str()));
+        assert_eq!(failed.phase, ManagedRuntimeSetupPhase::Failed);
+        assert!(!failed.active);
+        assert!(!failed.prerequisite_repair_active);
+        assert!(!failed.cancel_requested);
+        assert!(failed.can_retry);
+        assert!(
+            !controller
+                .prerequisite_repair_active
+                .load(Ordering::Acquire)
+        );
+
+        let retry_operation_id = controller.begin().expect("begin retry");
+        controller
+            .finish_worker_failure(&operation_id, "late old worker failure")
+            .expect("ignore old terminal write");
+        let retried = controller.status().expect("retry remains active");
+        assert_eq!(
+            retried.operation_id.as_deref(),
+            Some(retry_operation_id.as_str())
+        );
+        assert_eq!(retried.phase, ManagedRuntimeSetupPhase::Install);
+        assert!(retried.active);
+    }
+
+    #[test]
+    fn automatic_prerequisite_reservation_blocks_retry_and_keeps_one_operation_identity() {
+        let controller = ManagedRuntimeSetupController::default();
+        let operation_id = controller.begin().expect("begin setup");
+        controller
+            .record_failure(
+                ManagedRuntimeSetupFailureReason::WslNotInstalled,
+                ManagedRuntimeSetupNextAction::InstallWsl,
+                "Windows WSL needs installation",
+            )
+            .expect("record typed prerequisite failure");
+
+        assert_eq!(
+            controller
+                .begin_automatic_prerequisite_repair(&operation_id, &[])
+                .expect("reserve automatic prerequisite repair"),
+            Some(ManagedRuntimeSetupNextAction::InstallWsl)
+        );
+        let repairing = controller.status().expect("reserved repair status");
+        assert_eq!(
+            repairing.operation_id.as_deref(),
+            Some(operation_id.as_str())
+        );
+        assert!(repairing.active);
+        assert!(repairing.prerequisite_repair_active);
+        assert!(!repairing.can_retry);
+        assert!(
+            controller.begin().is_err(),
+            "a retry cannot replace the worker while its automatic repair is active"
+        );
+
+        let completed = ManagedRuntimePrerequisiteRepairResult {
+            outcome: ManagedRuntimePrerequisiteRepairOutcome::Completed,
+            restart_required: false,
+            detail: "Windows preparation completed".into(),
+        };
+        controller.finish_prerequisite_repair(&operation_id, Some(&completed));
+        controller
+            .continue_after_prerequisite_repair(&operation_id)
+            .expect("continue the same setup operation");
+
+        let continued = controller.status().expect("continued setup status");
+        assert_eq!(
+            continued.operation_id.as_deref(),
+            Some(operation_id.as_str())
+        );
+        assert!(continued.active);
+        assert!(!continued.prerequisite_repair_active);
+        assert!(!continued.can_retry);
+        assert_eq!(continued.failure_reason, None);
+        assert_eq!(continued.next_action, None);
+    }
+
+    #[test]
+    fn setup_liveness_is_backend_derived_and_stale_requests_bounded_cancellation() {
+        let controller = ManagedRuntimeSetupController::default();
+        let now = Utc::now();
+        let operation_id = controller.begin_at(now).expect("begin setup");
+        let started = controller.status().expect("started setup status");
+        assert_eq!(started.operation_id.as_deref(), Some(operation_id.as_str()));
+        assert_eq!(started.started_at, Some(now));
+        assert_eq!(started.last_heartbeat_at, Some(now));
+        assert!(!started.stale);
+
+        let missed_heartbeat =
+            now - chrono_duration(MANAGED_RUNTIME_SETUP_STALE_AFTER) - chrono::Duration::seconds(1);
+        {
+            let mut status = controller.status.lock().expect("setup status");
+            status.last_heartbeat_at = Some(missed_heartbeat);
+        }
+        controller
+            .record_heartbeat()
+            .expect("record worker heartbeat before the stale threshold is observed");
+        let alive = controller.status().expect("live setup status");
+        assert!(!alive.stale);
+        assert!(
+            alive
+                .last_heartbeat_at
+                .is_some_and(|heartbeat| heartbeat > missed_heartbeat)
+        );
+
+        {
+            let mut status = controller.status.lock().expect("setup status");
+            status.last_heartbeat_at = Some(missed_heartbeat);
+        }
+        let stale = controller.status().expect("stale setup status");
+        assert!(stale.stale);
+        assert!(stale.active);
+        assert!(stale.cancel_requested);
+        assert!(!stale.can_cancel);
+        assert!(!stale.can_retry);
+        assert!(controller.cancel_requested.load(Ordering::Acquire));
+        assert!(controller.check_cancelled().is_err());
+
+        controller
+            .finish_cancelled(&operation_id)
+            .expect("stale worker reaches its bounded cancellation point");
+        let terminal = controller.status().expect("terminal stale setup status");
+        assert_eq!(terminal.phase, ManagedRuntimeSetupPhase::Cancelled);
+        assert!(!terminal.active);
+        assert!(!terminal.stale);
+        assert!(terminal.can_retry);
+    }
+
+    #[test]
     fn setup_controller_rejects_parallel_attempts_and_allows_retry_after_cancel() {
         let controller = ManagedRuntimeSetupController::default();
-        controller.begin().expect("first setup");
+        let operation_id = controller.begin().expect("first setup");
         let error = controller.begin().expect_err("parallel setup rejected");
         assert!(error.to_string().contains("already active"));
 
@@ -22980,7 +23440,9 @@ mod tests {
         assert!(requested.active);
         assert!(requested.cancel_requested);
         assert!(controller.check_cancelled().is_err());
-        controller.finish_cancelled().expect("finish cancelled");
+        controller
+            .finish_cancelled(&operation_id)
+            .expect("finish cancelled");
         let cancelled = controller.status().expect("cancelled status");
         assert_eq!(cancelled.phase, ManagedRuntimeSetupPhase::Cancelled);
         assert!(!cancelled.active);
@@ -23020,7 +23482,7 @@ mod tests {
             .map(|index| (index % 251) as u8)
             .collect::<Vec<_>>();
         let controller = ManagedRuntimeSetupController::default();
-        controller.begin().expect("begin download");
+        let operation_id = controller.begin().expect("begin download");
         controller
             .report_download(0, total, 0)
             .expect("initial progress");
@@ -23057,7 +23519,9 @@ mod tests {
         assert_eq!(cancelled_progress.received_bytes, retained);
         assert_eq!(cancelled_progress.total_bytes, Some(total));
         assert_eq!(cancelled_progress.resumed_from_bytes, 0);
-        controller.finish_cancelled().expect("finish cancellation");
+        controller
+            .finish_cancelled(&operation_id)
+            .expect("finish cancellation");
 
         controller.begin().expect("begin resume");
         controller

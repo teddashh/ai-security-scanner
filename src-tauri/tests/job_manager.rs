@@ -665,58 +665,168 @@ fn worker_durable_write_is_serialized_with_pause_transition() {
 }
 
 #[test]
-fn terminal_job_is_removed_before_callback_and_same_key_can_restart() {
+fn same_key_restart_waits_for_exact_terminal_reconciliation() {
     let manager = JobManager::default();
     let key = key();
-    let callback_manager = manager.clone();
-    let callback_key = key.clone();
-    let (restart_tx, restart_rx) = mpsc::channel();
-    let (second_terminal_tx, second_terminal_rx) = mpsc::channel();
-
+    let (first_terminal_tx, first_terminal_rx) = mpsc::channel();
     manager
         .start_job(
             key.clone(),
             ["first"],
             |context| {
-                let engine = context.engine("first").expect("engine");
-                engine.mark_running().expect("running");
-                engine.mark_completed().expect("completed");
+                context
+                    .engine("first")
+                    .expect("engine")
+                    .mark_completed()
+                    .expect("complete");
                 JobCompletion::Completed
             },
-            move |_| {
-                let result = callback_manager.start_job(
-                    callback_key,
-                    ["second"],
-                    |context| {
-                        let engine = context.engine("second").expect("engine");
-                        engine.mark_running().expect("running");
-                        engine.mark_completed().expect("completed");
-                        JobCompletion::Completed
-                    },
-                    move |snapshot| {
-                        second_terminal_tx
-                            .send(snapshot)
-                            .expect("second terminal event")
-                    },
-                );
-                restart_tx.send(result.is_ok()).expect("restart result");
+            move |terminal| {
+                first_terminal_tx
+                    .send(terminal)
+                    .expect("first terminal event")
             },
         )
         .expect("first job starts");
+    let first_terminal = first_terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first terminal callback snapshot");
 
+    let error = manager
+        .start_job(
+            key.clone(),
+            ["second"],
+            |_| JobCompletion::Completed,
+            |_| {},
+        )
+        .expect_err("unacknowledged terminal truth blocks only the same key");
+    assert_eq!(
+        error,
+        JobManagerError::TerminalReconciliationPending(key.clone())
+    );
+    assert!(
+        manager
+            .reconcile_terminal_snapshot(&first_terminal, || Ok::<_, ()>(()))
+            .unwrap()
+            .is_some()
+    );
+
+    let (second_terminal_tx, second_terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["second"],
+            |context| {
+                context
+                    .engine("second")
+                    .expect("engine")
+                    .mark_completed()
+                    .expect("complete");
+                JobCompletion::Completed
+            },
+            move |terminal| {
+                second_terminal_tx
+                    .send(terminal)
+                    .expect("second terminal event")
+            },
+        )
+        .expect("same key starts after reconciliation");
+    let second_terminal = second_terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("second terminal callback");
+    assert_eq!(second_terminal.engines[0].engine_id, "second");
+    assert!(
+        manager
+            .reconcile_terminal_snapshot(&first_terminal, || Ok::<_, ()>(()))
+            .unwrap()
+            .is_none(),
+        "a delayed old acknowledgement cannot remove the newer generation"
+    );
+    assert_eq!(manager.terminal_snapshots(), vec![second_terminal.clone()]);
+    assert!(
+        manager
+            .reconcile_terminal_snapshot(&second_terminal, || Ok::<_, ()>(()))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn terminal_reconciliation_serializes_same_key_restart_until_persistence_finishes() {
+    let manager = JobManager::default();
+    let key = key();
+    let (terminal_tx, terminal_rx) = mpsc::channel();
+    manager
+        .start_job(
+            key.clone(),
+            ["first"],
+            |context| {
+                context
+                    .engine("first")
+                    .expect("engine")
+                    .mark_completed()
+                    .expect("complete");
+                JobCompletion::Completed
+            },
+            move |terminal| terminal_tx.send(terminal).expect("terminal event"),
+        )
+        .expect("first job starts");
+    let terminal = terminal_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first job terminal");
+
+    let reconcile_manager = manager.clone();
+    let reconcile_terminal = terminal.clone();
+    let persistence_entered = Arc::new(Barrier::new(2));
+    let persistence_release = Arc::new(Barrier::new(2));
+    let entered_for_reconcile = Arc::clone(&persistence_entered);
+    let release_for_reconcile = Arc::clone(&persistence_release);
+    let reconciliation = thread::spawn(move || {
+        reconcile_manager
+            .reconcile_terminal_snapshot(&reconcile_terminal, || {
+                entered_for_reconcile.wait();
+                release_for_reconcile.wait();
+                Ok::<_, ()>(())
+            })
+            .expect("reconcile terminal")
+    });
+    persistence_entered.wait();
+
+    let restart_manager = manager.clone();
+    let restart_key = key.clone();
+    let (restart_tx, restart_rx) = mpsc::channel();
+    let restart = thread::spawn(move || {
+        let result = restart_manager.start_job(
+            restart_key,
+            ["second"],
+            |context| {
+                context
+                    .engine("second")
+                    .expect("engine")
+                    .mark_completed()
+                    .expect("complete");
+                JobCompletion::Completed
+            },
+            |_| {},
+        );
+        restart_tx.send(result.is_ok()).expect("restart result");
+    });
+    assert!(
+        restart_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "same-key restart must wait until the exact old outcome is persisted"
+    );
+
+    persistence_release.wait();
+    assert_eq!(
+        reconciliation.join().expect("reconciliation thread"),
+        Some(())
+    );
     assert!(
         restart_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("restart callback")
+            .expect("restart admitted after reconciliation")
     );
-    let terminal = second_terminal_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("second terminal callback");
-    assert_eq!(terminal.status, JobStatus::Completed);
-    assert_eq!(terminal.engines[0].engine_id, "second");
-    assert_eq!(manager.live_count(), 0);
-    assert!(manager.forget_terminal(&key));
-    assert!(manager.snapshot(&key).is_none());
+    restart.join().expect("restart thread");
 }
 
 #[test]
