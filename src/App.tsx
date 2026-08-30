@@ -22,6 +22,7 @@ import {
   isCurrentScanReadinessRequest,
   isCurrentScanReadinessResponse,
 } from "./scanReadinessRequest";
+import { hasActiveScanWork } from "./freshScanSelection";
 import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
 import {
   checkForAppUpdate,
@@ -258,6 +259,8 @@ const scanStartIssueCopy = {
 
 const isTerminalRun = (run: ScanRun): boolean =>
   ["completed", "partial", "failed", "cancelled"].includes(run.status);
+
+const ACTIVE_SCAN_REFRESH_INTERVAL_MS = 5_000;
 
 export default function App() {
   const { locale, t, text, formatNumber } = useI18n();
@@ -940,6 +943,46 @@ export default function App() {
   };
 
   const workspace = snapshot?.workspace;
+  const activeScanCaseId = mode === "native"
+    && !loading
+    && workspace
+    && hasActiveScanWork(workspace.runs)
+    ? workspace.case.id
+    : undefined;
+
+  useEffect(() => {
+    if (!activeScanCaseId) return undefined;
+    let disposed = false;
+    let refreshInFlight = false;
+
+    const reconcileActiveScan = () => {
+      if (
+        disposed
+        || refreshInFlight
+        || selectedCaseIdRef.current !== activeScanCaseId
+      ) return;
+      refreshInFlight = true;
+      void loadSnapshot(activeScanCaseId, true).finally(() => {
+        refreshInFlight = false;
+      });
+    };
+    const onWindowFocus = () => reconcileActiveScan();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcileActiveScan();
+    };
+
+    const interval = window.setInterval(reconcileActiveScan, ACTIVE_SCAN_REFRESH_INTERVAL_MS);
+    window.addEventListener("focus", onWindowFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onWindowFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [activeScanCaseId, loadSnapshot]);
+
   const selectedCase = useMemo(
     () => snapshot?.cases.find((assessmentCase) => assessmentCase.id === snapshot.selectedCaseId) ?? workspace?.case,
     [snapshot, workspace],
