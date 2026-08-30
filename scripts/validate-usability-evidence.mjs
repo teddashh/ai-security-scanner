@@ -233,7 +233,7 @@ export function validateEvidence(value, label = "evidence") {
     "attestations",
   ]);
   assert(evidence.schemaVersion === "1.0.0", `${label}.schemaVersion must be 1.0.0`);
-  assert(evidence.studyId === "iam-naive-first-run/v1", `${label}.studyId is incorrect`);
+  assert(evidence.studyId === "advanced-aws-iam-naive/v1", `${label}.studyId is incorrect`);
   id(evidence.sessionId, `${label}.sessionId`);
   validateProduct(evidence.product, `${label}.product`);
   validateParticipant(evidence.participant, `${label}.participant`);
@@ -259,7 +259,7 @@ export function validateEvidence(value, label = "evidence") {
   assert(session.cleanInstall === true, `${label}.session.cleanInstall must be true`);
   assert(session.emptyDataDirectory === true, `${label}.session.emptyDataDirectory must be true`);
   assert(session.disposableAwsAccount === true, `${label}.session.disposableAwsAccount must be true`);
-  assert(session.promptVersion === "iam-naive-first-run/v1", `${label}.session.promptVersion is incorrect`);
+  assert(session.promptVersion === "advanced-aws-iam-naive/v1", `${label}.session.promptVersion is incorrect`);
 
   assert(Array.isArray(evidence.tasks) && evidence.tasks.length === TASK_IDS.length, `${label}.tasks must contain exactly nine tasks`);
   const tasks = evidence.tasks.map((task, index) => validateTask(task, index, sessionStart, sessionEnd));

@@ -124,14 +124,16 @@ AssessmentCase
   name
   created_at
   updated_at
-  status: draft | discovering | ready | running | partial | completed | archived
   assessment_profile
   data_source_ids[]
   selected_baseline_run_id?
   provenance: user | demo
 ```
 
-`completed` means a particular case run reached its terminal state. It is not a claim that the product, organization, or security assessment is complete.
+Project status is a read-time projection of its selected run and durable task outcomes; it is not a
+second persisted lifecycle or a readiness input. Legacy rows may retain a case-status compatibility
+field while migration is pending, but the backend and UI must ignore it when deciding whether work
+can start, whether coverage is complete, or whether a report is final.
 
 ### 5.2 DataSource
 
@@ -305,7 +307,10 @@ Evidence
 
 The stable fingerprint is adapter-versioned. It should combine engine-independent problem identity, stable asset identity, and material location while excluding volatile prose and timestamps. A fingerprint change must be explainable during re-verification.
 
-Related findings are grouped, not discarded. The original one-to-one mapping between engine output and evidence remains reconstructable.
+Related findings may be grouped in an optional Advanced presentation. The beginner report does not
+depend on manual groups, and the original one-to-one mapping between engine output and evidence
+always remains reconstructable. The structures below are deferred until that Advanced workflow has
+a demonstrated human need; they are not part of the minimal durable product model.
 
 ```text
 FindingGroup
@@ -422,12 +427,12 @@ The initial command surface is:
 | `start_discovery` | Persist the run/discovery task, then capture bounded provider-native inventory or consume preserved snapshots, persist raw pages first, and run attributable candidate-asset discovery. |
 | `cancel_discovery` | Cancel the active case-bound provider capture while retaining already-preserved partial evidence. |
 | `update_finding_workflow` | Append a human handling decision without altering scanner evidence. |
-| `group_findings` | Create one reversible presentation group for two or more case-owned canonical findings. |
-| `ungroup_findings` | Remove only the active group projection and append a removal event. |
+| `group_findings` | **Advanced/deferred:** create one reversible presentation group for two or more case-owned canonical findings. |
+| `ungroup_findings` | **Advanced/deferred:** remove only the active group projection and append a removal event. |
 | `start_scan` | In one durable mutation, apply the inline target assertion, freeze requested coverage, and persist known target-stage-engine tasks; only then preflight and start independently runnable tasks. |
 | `pause_scan` | Request a safe checkpoint and pause where supported. |
 | `resume_scan` | Resume a paused or recoverable run. |
-| `cancel_scan` | Cancel remaining work and perform credential/container cleanup. |
+| `cancel_scan` | Persist the stop request, prevent new dispatch, and acknowledge after target contact has stopped or within the task's displayed bound. Non-contacting resource cleanup continues in the background. |
 | `export_case` | Create an explicit, optionally redacted portable package. |
 | `verify_case_export` | Recompute package hashes and signature integrity without asserting result correctness. |
 | `start_rescan` | Create a new run from an existing case and selected baseline. |
@@ -548,7 +553,12 @@ The durable orchestrator schedules independent target-stage-engine jobs with res
 
 Every checkpoint that can leave a container or managed egress resource behind also persists a typed, non-secret runtime record sufficient for exact cleanup and historical explanation. Compatibility providers record their exact provider; the managed-local provider records the verified runtime generation and artifact identities actually used. Recovery first reconciles the exact product-owned container/network identity. If that exact generation is unavailable, historical results remain readable and the product may create a new attempt on a current verified generation. It never selects or deletes a runtime by a resource-name prefix or whichever executable happens to be on `PATH`, and it never makes byte-identical historical runtime recovery a prerequisite for a current attempt.
 
-Pause is cooperative. Cancel sends a graceful request, waits a bounded interval, terminates remaining engine processes, revokes capability handles, and asks the runtime provider to remove job containers and mounts. A cleanup failure becomes a visible diagnostic and retryable cleanup task.
+Pause is cooperative. Cancel first publishes a durable stop request, prevents new dispatch, and
+terminates active target contact or revokes its contact capability within the task contract's
+displayed acknowledgement bound. Container, mount, temporary-file, and other non-contacting cleanup
+then continues in the background. Cleanup failure becomes a visible retained obligation; it never
+holds the Cancel command open, suppresses saved results, or changes a completed observation into a
+cancellation.
 
 Rate-limited cloud APIs use bounded exponential backoff and provider hints. A rate limit may yield `partial`; it does not silently retry forever.
 
@@ -642,7 +652,10 @@ The canonical internal priority uses a single direction: a higher value sorts ea
 
 Questionnaire context can add only bounded, named ordering factors. An internet-exposure factor requires the affected asset itself to carry source-derived `internet_exposed=true`; a sensitive-data factor requires both a source-derived `contains_sensitive_data=true` asset attribute and a matching case data context. Questionnaire answers alone never create a finding, asset attribute, scope grant, severity, confidence, or evidence claim. Applying the projection is idempotent and preserves the scanner report and observation fingerprint. Requested activities may preselect an applicable mode. Direct target contact still requires the canonical bounded assertion and backend grant check, but the ordinary combined **Start** action records them inline and atomically; it never turns them into a separate pre-scan ceremony.
 
-Grouping joins related findings under a user-facing issue while retaining all source findings and evidence. Cross-engine corroboration raises confidence or priority; it does not duplicate a control failure or erase distinct technical problems.
+When the optional Advanced grouping workflow is enabled, it joins related findings under a
+user-facing issue while retaining all source findings and evidence. Cross-engine corroboration may
+raise confidence or priority; it does not duplicate a control failure or erase distinct technical
+problems. Grouping is not required for the beginner master report or first value.
 
 ## 15. Export package
 
@@ -655,7 +668,7 @@ scope.json
 coverage.json
 assets.json
 findings.json
-finding-grouping.json         # active reversible groups plus immutable create/remove history
+advanced/finding-grouping.json # optional; only when the Advanced grouping feature was used
 runs.json
 mappings.json
 evidence/<sha256>

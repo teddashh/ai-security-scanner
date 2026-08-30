@@ -26,7 +26,7 @@ const artifactRoles = [
 function validEvidence() {
   return {
     schemaVersion: "1.0.0",
-    studyId: "iam-naive-first-run/v1",
+    studyId: "advanced-aws-iam-naive/v1",
     sessionId: "session-test-001",
     product: {
       name: "ai-security-scanner",
@@ -59,7 +59,7 @@ function validEvidence() {
       cleanInstall: true,
       emptyDataDirectory: true,
       disposableAwsAccount: true,
-      promptVersion: "iam-naive-first-run/v1",
+      promptVersion: "advanced-aws-iam-naive/v1",
     },
     tasks: taskIds.map((id, index) => ({
       id,

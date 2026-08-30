@@ -302,9 +302,10 @@ They must not:
   executions are never pooled.
 - Legacy or unanswered AI context remains unknown; it is not converted to an AIDEFEND
   not-applicable statement.
-- If a connected source returns no assets, the source inventory remains incomplete/unknown; zero
-  returned inventory is not treated as proof that the source is empty. Framework relationships do
-  not define scan coverage.
+- A zero-asset capture is `confirmed_empty` only when the bounded source operation completed,
+  exhausted every required page/parent, and durably recorded that completeness. A missing,
+  interrupted, expired, or otherwise incomplete capture remains unknown; a zero count by itself is
+  never proof that the source is empty. Framework relationships do not define scan coverage.
 - If a runtime provider cannot enforce a manifest boundary, the affected engine does not run through that provider; unaffected tasks continue and a partial/no-checks master report is saved.
 - If product-owned disposable runtime state is corrupt, bounded automatic repair or side-by-side replacement runs. If ownership is ambiguous, the old object is preserved and a uniquely named generation is created; no name-only mutation is allowed.
 - If a lifecycle event is missed, authoritative startup/focus/resume/watchdog polling reconciles the durable journal within the canonical refresh bound or exposes Retry/offline-with-last-known-data.

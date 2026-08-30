@@ -22,10 +22,9 @@ body:
   - type: dropdown
     id: runtime
     attributes:
-      label: Runtime provider
-      options: [Docker, Podman, None, Unknown]
-    validations:
-      required: true
+      label: Scan tools (optional technical detail)
+      description: Choose only if you know. Most Windows users should select Managed scan tools or Not sure.
+      options: [Managed scan tools, Docker (advanced), Podman (advanced), Not sure]
   - type: textarea
     id: behavior
     attributes:

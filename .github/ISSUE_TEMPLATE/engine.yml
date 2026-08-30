@@ -20,7 +20,7 @@ body:
     id: lifecycle
     attributes:
       label: Complete case lifecycle
-      description: Explain manifest, scope permissions, runtime, parser, raw evidence, canonical mapping, coverage, export, and verification behavior.
+      description: Explain manifest, scope permissions, runtime, parser, raw evidence, finding normalization, coverage, export, and verification behavior. NIST, ISO, and AIDEFEND relationships are optional after-the-finding metadata, not engine admission requirements.
     validations:
       required: true
   - type: textarea

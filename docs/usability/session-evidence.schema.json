@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/teddashh/ai-security-scanner/blob/main/docs/usability/session-evidence.schema.json",
-  "title": "ai-security-scanner IAM-naive first-run session evidence",
+  "title": "ai-security-scanner Advanced AWS IAM-naive session evidence",
+  "description": "Feature-specific evidence for the optional Advanced AWS journey. It is not first-value, universal first-run, or whole-product release evidence.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -21,7 +22,7 @@
   ],
   "properties": {
     "schemaVersion": { "const": "1.0.0" },
-    "studyId": { "const": "iam-naive-first-run/v1" },
+    "studyId": { "const": "advanced-aws-iam-naive/v1" },
     "sessionId": { "$ref": "#/$defs/id" },
     "product": {
       "type": "object",
@@ -73,7 +74,7 @@
         "cleanInstall": { "const": true },
         "emptyDataDirectory": { "const": true },
         "disposableAwsAccount": { "const": true },
-        "promptVersion": { "const": "iam-naive-first-run/v1" }
+        "promptVersion": { "const": "advanced-aws-iam-naive/v1" }
       }
     },
     "tasks": {
