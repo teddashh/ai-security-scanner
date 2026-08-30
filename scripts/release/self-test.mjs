@@ -1162,8 +1162,57 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
   expectFailure(validateUpgradeEvidence, "signed case bundle whose frozen AI answers contradict the report");
   await writeFile(candidateBundleFile, validCandidateBundle);
 
-  const ghostObservations = {
+  const sentinelPhases = [
+    "fixture_ready",
+    "before_candidate_install",
+    "after_candidate_install",
+    "after_same_version_reinstall",
+    "before_candidate_runtime_start",
+    "after_candidate_runtime_running",
+    "after_current_runtime_purge",
+    "after_candidate_uninstall",
+  ];
+  const sentinelObservationTimes = [
+    "2026-08-30T00:00:00.0000000Z",
+    "2026-08-30T00:00:01.0000000Z",
+    "2026-08-30T00:00:02.0000000Z",
+    "2026-08-30T00:00:03.0000000Z",
+    "2026-08-30T00:00:04.0000000Z",
+    "2026-08-30T00:00:05.0000000Z",
+    "2026-08-30T00:00:06.0000000Z",
+    "2026-08-30T00:00:07.0000000Z",
+  ];
+  const sentinelCheckpoints = (identity) => sentinelPhases.map((phase, index) => ({
+    phase,
+    observedAt: sentinelObservationTimes[index],
+    ...identity,
+  }));
+  const sentinelLifecycle = {
     schemaVersion: 1,
+    requiredPhases: [...sentinelPhases],
+    legacyCheckpoints: sentinelCheckpoints({
+      distributionName: "podman-assm1-win-x64-e2b6cbcadd8b",
+      registrationId: "00112233-4455-6677-8899-aabbccddeeff",
+      windowsClientPid: 4101,
+      windowsClientStartedAt: "2026-08-29T23:59:58.0000000Z",
+      linuxBootId: "33445566-7788-49aa-bbcc-ddeeff001122",
+      linuxPid: 101,
+      linuxStartTicks: "123456789",
+      tokenSha256: "12".repeat(32),
+    }),
+    unrelatedCheckpoints: sentinelCheckpoints({
+      distributionName: "ai-security-scanner-unrelated-0123456789abcdef0123456789abcdef",
+      registrationId: "11223344-5566-7788-99aa-bbccddeeff00",
+      windowsClientPid: 4102,
+      windowsClientStartedAt: "2026-08-29T23:59:59.0000000Z",
+      linuxBootId: "44556677-8899-4abb-8cdd-eeff00112233",
+      linuxPid: 102,
+      linuxStartTicks: "123456790",
+      tokenSha256: "34".repeat(32),
+    }),
+  };
+  const ghostObservations = {
+    schemaVersion: 2,
     scenario: "real_registered_wsl_n_minus_one_ghost_install_side_by_side",
     platform: "windows-x86_64",
     runner: "windows-2025",
@@ -1194,7 +1243,6 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       oldUninstallerRemoved: true,
       unrelatedDistributionName: "ai-security-scanner-unrelated-0123456789abcdef0123456789abcdef",
       unrelatedRegistrationId: "11223344-5566-7788-99aa-bbccddeeff00",
-      unrelatedDistributionRunning: true,
     },
     installerMigration: {
       candidateInstallerCompleted: true,
@@ -1222,7 +1270,6 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       legacyProviderNamespace: "8b2257ace33ecb14",
       legacyVhdIdentityPreserved: true,
       legacyProviderProofFilesPreserved: true,
-      legacySentinelProcessSurvived: true,
       currentMachineName: "assm2-win-x64-e2b6cbcadd8b",
       currentDistributionName: "podman-assm2-win-x64-e2b6cbcadd8b",
       currentRegistrationId: "22334455-6677-8899-aabb-ccddeeff0011",
@@ -1233,8 +1280,8 @@ async function createWindowsNsisMigrationQualificationFixtures(output) {
       unrelatedRegistrationIdBefore: "11223344-5566-7788-99aa-bbccddeeff00",
       unrelatedRegistrationIdAfter: "11223344-5566-7788-99aa-bbccddeeff00",
       unrelatedRegistrationBasePathExact: true,
-      unrelatedSentinelProcessSurvived: true,
       noQuarantineDistributionCreated: true,
+      sentinelLifecycle,
       retainedProof: {
         pathBoundToLegacyRegistrationId: true,
         proofPresent: true,
@@ -1642,6 +1689,81 @@ async function main() {
     await writeFile(ghostQualification, `${JSON.stringify(incompleteRetainedProof, null, 2)}\n`);
     expectFailure(() => run("finalize-release.mjs", finalizeArguments), "ghost evidence with an incomplete retained proof");
     await writeFile(ghostQualification, validGhostQualification);
+    const expectInvalidSentinelLifecycle = async (mutate, label) => {
+      const qualification = JSON.parse(validGhostQualification.toString("utf8"));
+      mutate(qualification.observations.runtimeSideBySide.sentinelLifecycle, qualification.observations);
+      await writeFile(ghostQualification, `${JSON.stringify(qualification, null, 2)}\n`);
+      try {
+        expectFailure(() => run("finalize-release.mjs", finalizeArguments), label);
+      } finally {
+        await writeFile(ghostQualification, validGhostQualification);
+      }
+    };
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => { lifecycle.requiredPhases.splice(3, 1); },
+      "ghost evidence with a missing required sentinel lifecycle phase",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => { lifecycle.unrelatedCheckpoints.splice(4, 1); },
+      "ghost evidence with a missing sentinel checkpoint phase",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => {
+        [lifecycle.legacyCheckpoints[2], lifecycle.legacyCheckpoints[3]] =
+          [lifecycle.legacyCheckpoints[3], lifecycle.legacyCheckpoints[2]];
+      },
+      "ghost evidence with reordered sentinel checkpoints",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => {
+        lifecycle.legacyCheckpoints[5].linuxPid += 1;
+      },
+      "ghost evidence whose Linux sentinel PID changes",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => {
+        lifecycle.legacyCheckpoints[5].linuxStartTicks = "123456791";
+      },
+      "ghost evidence whose Linux sentinel start ticks change",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => {
+        lifecycle.unrelatedCheckpoints[6].windowsClientPid += 1;
+      },
+      "ghost evidence whose Windows sentinel client PID changes",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => {
+        lifecycle.unrelatedCheckpoints[6].windowsClientStartedAt = "2026-08-30T00:00:00.5000000Z";
+      },
+      "ghost evidence whose Windows sentinel client start time changes",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => {
+        const sharedToken = lifecycle.legacyCheckpoints[0].tokenSha256;
+        for (const checkpoint of lifecycle.unrelatedCheckpoints) checkpoint.tokenSha256 = sharedToken;
+      },
+      "ghost evidence whose distinct WSL sentinel leases share one token identity",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle) => {
+        const legacy = lifecycle.legacyCheckpoints[0];
+        for (const checkpoint of lifecycle.unrelatedCheckpoints) {
+          checkpoint.windowsClientPid = legacy.windowsClientPid;
+          checkpoint.windowsClientStartedAt = legacy.windowsClientStartedAt;
+        }
+      },
+      "ghost evidence whose distinct WSL sentinel leases share one Windows client identity",
+    );
+    await expectInvalidSentinelLifecycle(
+      (lifecycle, observations) => {
+        delete observations.runtimeSideBySide.sentinelLifecycle;
+        observations.ghostFixture.unrelatedDistributionRunning = true;
+        observations.runtimeSideBySide.legacySentinelProcessSurvived = true;
+        observations.runtimeSideBySide.unrelatedSentinelProcessSurvived = true;
+      },
+      "legacy ghost evidence with booleans instead of sentinel lifecycle checkpoints",
+    );
     const macQualification = path.join(release, "platform-qualification-macos-universal-dmg.json");
     const hiddenMacQualification = `${macQualification}.missing`;
     await rename(macQualification, hiddenMacQualification);
