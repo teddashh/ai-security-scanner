@@ -40,7 +40,7 @@ An engine's admission failure blocks only execution/distribution of that exact a
 For a source change that affects the corresponding full frontend/backend boundaries, the baseline commands are:
 
 ```bash
-npm install
+npm ci
 npm run typecheck
 npm run build
 cargo fmt --all -- --check

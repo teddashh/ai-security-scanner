@@ -18,7 +18,7 @@ Required-engine license identifiers and dispositions summarize the exact pinned 
 - **SOURCE_OFFER:** the engineering plan records copyleft corresponding-source material and a source-offer path for the exact project-managed artifact.
 - **UPSTREAM_PINNED:** the product retrieves an exact verified upstream image by digest rather than republishing it as a project-managed image. Its license and notices still apply.
 - **Research:** the repository remains available for evaluation but is not a v0.2.0 adapter commitment.
-- **Blocked or non-runnable:** the catalog condition prevents release use, regardless of any friendlier wording in this document.
+- **Blocked or non-runnable:** the catalog condition prevents execution, distribution, or promotion of that exact engine artifact only, regardless of any friendlier wording in this document. Independent tasks and readable reports continue.
 
 An upstream source checkout is research material. It does not make an engine installed, integrated, safe, supported, or redistributable.
 
