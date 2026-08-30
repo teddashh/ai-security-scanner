@@ -424,6 +424,11 @@ pub const DEFAULT_ENGINE_EXECUTION_TIMEOUT_SECONDS: u64 = 3_600;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EngineExecutionContract {
     pub resources: EngineExecutionResources,
+    /// Optional reviewed launcher-journal wire version. It is absent for
+    /// legacy aggregate engines. Version 2 is currently valid only for the
+    /// immutable Naabu image/command that contains the matching launcher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_journal_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

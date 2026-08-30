@@ -157,6 +157,30 @@ func TestNaabuAcceptsDomainAssetsAndScansOnlyFrozenAddresses(t *testing.T) {
 	}
 }
 
+func TestNaabuHostnameContractAcceptsExactLocalhostButRejectsOtherSingleLabels(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	document := fixtureDocument("naabu", now)
+	asset := &document.Assets[0]
+	asset.Name = "localhost"
+	asset.Identifiers[0].Value = "localhost"
+	asset.Grants[0].ResolvedAddresses = []string{"127.0.0.1"}
+	asset.Grants[0].ExternalScope.Target = canonicalTarget{Kind: "hostname", Value: "localhost"}
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatalf("exact localhost must match the Rust target contract: %v", err)
+	}
+	if !reflect.DeepEqual(units[0].ResolvedAddresses, []string{"127.0.0.1"}) {
+		t.Fatalf("localhost did not retain its frozen loopback address: %#v", units[0])
+	}
+
+	asset.Name = "router"
+	asset.Identifiers[0].Value = "router"
+	asset.Grants[0].ExternalScope.Target.Value = "router"
+	if _, err := validateAndPlan(document, "naabu", now); err == nil {
+		t.Fatal("an arbitrary single-label hostname escaped the canonical target contract")
+	}
+}
+
 func TestFrozenAddressSetIsCanonicalBoundedAndInsideStaticTarget(t *testing.T) {
 	valid := []struct {
 		addresses []string
@@ -611,10 +635,54 @@ func launcherV2TestPlan(attempt uint32, units ...launcherV2PlannedUnit) *launche
 	return &launcherV2Plan{
 		SchemaVersion:      launcherV2SchemaVersion,
 		EngineID:           "naabu",
-		EngineRunID:        "run:opaque-1",
+		EngineRunID:        "run-opaque-1",
 		ExecutionAttempt:   attempt,
+		FrozenGrants: []launcherV2FrozenGrant{
+			{ScopeGrantID: "grant-a", Addresses: []string{"192.0.2.10"}, Ports: []uint16{443, 8443}},
+			{ScopeGrantID: "grant-b", Addresses: []string{"192.0.2.20"}, Ports: []uint16{9443}},
+		},
 		RequestedWorkUnits: units,
 	}
+}
+
+func launcherV2TestPlannedUnit(grantIndex uint32, unitID, scopeSHA256 string) launcherV2PlannedUnit {
+	return launcherV2PlannedUnit{
+		UnitID:                      unitID,
+		ScopeSHA256:                 scopeSHA256,
+		GrantIndex:                  grantIndex,
+		AddressStart:                0,
+		AddressLen:                  1,
+		PortStart:                   0,
+		PortLen:                     1,
+		EndpointPairCount:           1,
+		ConservativeDeadlineSeconds: 36,
+	}
+}
+
+func writeLauncherV2TestPlan(t *testing.T, plan *launcherV2Plan) string {
+	t.Helper()
+	value, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "execution-journal-v2.json")
+	if err := os.WriteFile(path, value, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func cloneLauncherV2TestPlan(t *testing.T, plan *launcherV2Plan) *launcherV2Plan {
+	t.Helper()
+	value, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cloned launcherV2Plan
+	if err := json.Unmarshal(value, &cloned); err != nil {
+		t.Fatal(err)
+	}
+	return &cloned
 }
 
 func launcherV2TestUnits(t *testing.T, now time.Time) []scanUnit {
@@ -648,12 +716,226 @@ func launcherV2Records(t *testing.T, outputRoot string) []map[string]any {
 	return records
 }
 
+func TestLauncherV2SameGrantQuickAndFullUseExactSidecarSlicesInOrder(t *testing.T) {
+	now := time.Now().UTC()
+	document := fixtureDocument("naabu", now)
+	document.Assets[0].Grants[0].ResolvedAddresses = []string{"192.0.2.10", "192.0.2.11"}
+	document.Assets[0].Grants[0].ExternalScope.Ports = []uint16{22, 443}
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := launcherV2TestPlan(4,
+		launcherV2PlannedUnit{
+			UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA, GrantIndex: 0,
+			AddressStart: 0, AddressLen: 1, PortStart: 0, PortLen: 1,
+			EndpointPairCount: 1, ConservativeDeadlineSeconds: 36,
+		},
+		launcherV2PlannedUnit{
+			UnitID: launcherV2UnitB, ScopeSHA256: launcherV2ScopeB, GrantIndex: 0,
+			AddressStart: 0, AddressLen: 2, PortStart: 1, PortLen: 1,
+			EndpointPairCount: 2, ConservativeDeadlineSeconds: 36,
+		},
+	)
+	// scope.json uses numeric port order. The frozen sidecar deliberately uses a
+	// different, host-authoritative order while remaining set-equal.
+	plan.FrozenGrants[0] = launcherV2FrozenGrant{
+		ScopeGrantID: "grant-a",
+		Addresses:    []string{"192.0.2.11", "192.0.2.10"},
+		Ports:        []uint16{443, 22},
+	}
+	loaded, err := loadLauncherV2Plan(writeLauncherV2TestPlan(t, plan), "naabu", units)
+	if err != nil {
+		t.Fatalf("same-grant quick and full slices were rejected: %v", err)
+	}
+
+	var targetLists, ports, outputNames []string
+	var deadlines []time.Duration
+	runner := func(command invocation) launcherV2RunResult {
+		targetsPath, ok := argumentValue(command.Args, "-list")
+		if !ok {
+			t.Fatal("Naabu invocation has no exact target-list path")
+		}
+		portList, ok := argumentValue(command.Args, "-port")
+		if !ok {
+			t.Fatal("Naabu invocation has no exact port list")
+		}
+		outputPath, ok := argumentValue(command.Args, "-output")
+		if !ok {
+			t.Fatal("Naabu invocation has no output path")
+		}
+		targetLists = append(targetLists, strings.TrimSpace(string(mustReadFile(t, targetsPath))))
+		ports = append(ports, portList)
+		outputNames = append(outputNames, filepath.Base(outputPath))
+		deadlines = append(deadlines, command.Timeout)
+		return launcherV2RunResult{Outcome: launcherV2RunSucceeded}
+	}
+	outputRoot := t.TempDir()
+	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), loaded, units, "172.30.0.1:1080", nil, now, runner); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"192.0.2.11", "192.0.2.11\n192.0.2.10"}; !reflect.DeepEqual(targetLists, want) {
+		t.Fatalf("launcher changed sidecar address slices or order: got %v want %v", targetLists, want)
+	}
+	if want := []string{"443", "22"}; !reflect.DeepEqual(ports, want) {
+		t.Fatalf("launcher changed sidecar port slices or order: got %v want %v", ports, want)
+	}
+	if want := []string{"result-000000.jsonl", "result-000001.jsonl"}; !reflect.DeepEqual(outputNames, want) {
+		t.Fatalf("launcher did not use requested ordinals for temporary output: got %v want %v", outputNames, want)
+	}
+	if want := []time.Duration{36 * time.Second, 36 * time.Second}; !reflect.DeepEqual(deadlines, want) {
+		t.Fatalf("launcher did not preserve exact conservative deadlines: got %v want %v", deadlines, want)
+	}
+	records := launcherV2Records(t, outputRoot)
+	for index, record := range records[1:] {
+		artifact := record["final_artifact"].(map[string]any)
+		want := fmt.Sprintf("launcher-v2/units/unit-%06d/attempt-4.jsonl", index)
+		if artifact["relative_path"] != want {
+			t.Fatalf("final artifact did not use requested ordinal: got %v want %s", artifact["relative_path"], want)
+		}
+	}
+	journal := mustReadFile(t, filepath.Join(outputRoot, launcherV2Directory, launcherV2JournalName))
+	for _, target := range []string{"grant-a", "192.0.2.10", "192.0.2.11", "443", "22"} {
+		if bytes.Contains(journal, []byte(target)) {
+			t.Fatalf("target-free journal exposed sidecar material %q", target)
+		}
+	}
+}
+
+func TestLauncherV2RejectsAlteredCorpusSliceDeadlineOverlapAndDuplicates(t *testing.T) {
+	units := launcherV2TestUnits(t, time.Now().UTC())
+	valid := launcherV2TestPlan(1,
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
+	)
+	tests := []struct {
+		name   string
+		mutate func(*launcherV2Plan)
+	}{
+		{
+			name: "altered address corpus",
+			mutate: func(plan *launcherV2Plan) {
+				plan.FrozenGrants[0].Addresses[0] = "192.0.2.99"
+			},
+		},
+		{
+			name: "altered port corpus",
+			mutate: func(plan *launcherV2Plan) {
+				plan.FrozenGrants[0].Ports[0] = 80
+			},
+		},
+		{
+			name: "duplicate frozen address",
+			mutate: func(plan *launcherV2Plan) {
+				plan.FrozenGrants[0].Addresses = []string{"192.0.2.10", "192.0.2.10"}
+			},
+		},
+		{
+			name: "out of bounds slice",
+			mutate: func(plan *launcherV2Plan) {
+				plan.RequestedWorkUnits[0].AddressStart = 1
+			},
+		},
+		{
+			name: "empty slice",
+			mutate: func(plan *launcherV2Plan) {
+				plan.RequestedWorkUnits[0].PortLen = 0
+				plan.RequestedWorkUnits[0].EndpointPairCount = 0
+			},
+		},
+		{
+			name: "wrong endpoint pair count",
+			mutate: func(plan *launcherV2Plan) {
+				plan.RequestedWorkUnits[0].EndpointPairCount = 2
+			},
+		},
+		{
+			name: "wrong conservative deadline",
+			mutate: func(plan *launcherV2Plan) {
+				plan.RequestedWorkUnits[0].ConservativeDeadlineSeconds++
+			},
+		},
+		{
+			name: "overlapping same-grant rectangles",
+			mutate: func(plan *launcherV2Plan) {
+				plan.RequestedWorkUnits = append(plan.RequestedWorkUnits,
+					launcherV2TestPlannedUnit(0, launcherV2UnitB, launcherV2ScopeB))
+			},
+		},
+		{
+			name: "duplicate frozen grant",
+			mutate: func(plan *launcherV2Plan) {
+				plan.FrozenGrants[1] = plan.FrozenGrants[0]
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := cloneLauncherV2TestPlan(t, valid)
+			test.mutate(plan)
+			if _, err := loadLauncherV2Plan(writeLauncherV2TestPlan(t, plan), "naabu", units); err == nil {
+				t.Fatal("invalid launcher-v2 sidecar was accepted")
+			}
+		})
+	}
+}
+
+func TestLauncherV2PlanDecoderRejectsUnknownFieldsAndOversizeInput(t *testing.T) {
+	units := launcherV2TestUnits(t, time.Now().UTC())
+	plan := launcherV2TestPlan(1,
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
+	)
+	value, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := bytes.Replace(value, []byte(`{"schema_version":2,`), []byte(`{"schema_version":2,"unexpected":true,`), 1)
+	if bytes.Equal(unknown, value) {
+		t.Fatal("test could not inject an unknown launcher-v2 field")
+	}
+	unknownPath := filepath.Join(t.TempDir(), "execution-journal-v2.json")
+	if err := os.WriteFile(unknownPath, unknown, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadLauncherV2Plan(unknownPath, "naabu", units); err == nil {
+		t.Fatal("launcher-v2 decoder accepted an unknown field")
+	}
+
+	oversizePath := filepath.Join(t.TempDir(), "execution-journal-v2.json")
+	if err := os.WriteFile(oversizePath, bytes.Repeat([]byte{' '}, maxLauncherV2PlanBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadLauncherV2Plan(oversizePath, "naabu", units); err == nil {
+		t.Fatal("launcher-v2 decoder accepted a plan larger than one MiB")
+	}
+}
+
+func TestLauncherV2ReadsTheSharedRustWireFixture(t *testing.T) {
+	units := launcherV2TestUnits(t, time.Now().UTC())
+	path := filepath.Join("testdata", "naabu-launcher-plan-v2.json")
+	plan, err := loadLauncherV2Plan(path, "naabu", units)
+	if err != nil {
+		t.Fatalf("shared Rust launcher-v2 fixture was rejected: %v", err)
+	}
+	materialized, err := materializeLauncherV2Plan(plan, "naabu", units)
+	if err != nil {
+		t.Fatalf("shared Rust launcher-v2 fixture could not be materialized: %v", err)
+	}
+	if plan.EngineRunID != "run-opaque" || plan.ExecutionAttempt != 7 {
+		t.Fatalf("shared fixture identity drifted: %#v", plan)
+	}
+	if len(materialized) != 1 ||
+		!reflect.DeepEqual(materialized[0].ResolvedAddresses, []string{"192.0.2.10"}) ||
+		!reflect.DeepEqual(materialized[0].Grant.Ports, []uint16{443}) {
+		t.Fatalf("shared fixture did not preserve the exact first rectangle: %#v", materialized)
+	}
+}
+
 func TestLauncherV2KeepsCompletedSiblingWhenLaterUnitFails(t *testing.T) {
 	now := time.Now().UTC()
 	units := launcherV2TestUnits(t, now)
 	plan := launcherV2TestPlan(1,
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
-		launcherV2PlannedUnit{ScopeGrantID: "grant-b", UnitID: launcherV2UnitB, ScopeSHA256: launcherV2ScopeB},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
+		launcherV2TestPlannedUnit(1, launcherV2UnitB, launcherV2ScopeB),
 	)
 	outputRoot := t.TempDir()
 	temporaryRoot := t.TempDir()
@@ -710,7 +992,7 @@ func TestLauncherV2PublishesCompletedEmptyEvidenceWithExactDigest(t *testing.T) 
 	now := time.Now().UTC()
 	units := launcherV2TestUnits(t, now)
 	plan := launcherV2TestPlan(^uint32(0),
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
 	)
 	runner := func(invocation) launcherV2RunResult {
 		return launcherV2RunResult{Outcome: launcherV2RunSucceeded}
@@ -734,7 +1016,7 @@ func TestLauncherV2PreservesValidObservationsFromFailedScannerAsTestedPartial(t 
 	now := time.Now().UTC()
 	units := launcherV2TestUnits(t, now)
 	plan := launcherV2TestPlan(3,
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
 	)
 	runner := func(command invocation) launcherV2RunResult {
 		output, _ := argumentValue(command.Args, "-output")
@@ -760,7 +1042,7 @@ func TestLauncherV2PreservesValidObservationsFromFailedScannerAsTestedPartial(t 
 func TestLauncherV2DoesNotClaimEmptyInterruptedRunAsTestedPartial(t *testing.T) {
 	now := time.Now().UTC()
 	plan := launcherV2TestPlan(2,
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
 	)
 	runner := func(invocation) launcherV2RunResult {
 		return launcherV2RunResult{Outcome: launcherV2RunTimedOut, Err: errors.New("fixture timeout")}
@@ -779,7 +1061,7 @@ func TestLauncherV2QuarantinesExactRawOutputWhenNormalizationFails(t *testing.T)
 	now := time.Now().UTC()
 	units := launcherV2TestUnits(t, now)
 	plan := launcherV2TestPlan(1,
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
 	)
 	raw := []byte("not-json\n")
 	runner := func(command invocation) launcherV2RunResult {
@@ -805,7 +1087,7 @@ func TestLauncherV2QuarantinesExactRawOutputWhenNormalizationFails(t *testing.T)
 
 func TestLauncherV2HeaderAloneModelsInterruptionWithoutInventedTerminal(t *testing.T) {
 	plan := launcherV2TestPlan(7,
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
 	)
 	outputRoot := t.TempDir()
 	journal, err := createLauncherV2Journal(outputRoot, plan, &launcherV2ByteBudget{})
@@ -823,7 +1105,7 @@ func TestLauncherV2HeaderAloneModelsInterruptionWithoutInventedTerminal(t *testi
 
 func TestLauncherV2EmitsTheRustGoldenJournalContract(t *testing.T) {
 	plan := launcherV2TestPlan(7,
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
 	)
 	plan.EngineRunID = "run-opaque"
 	outputRoot := t.TempDir()
@@ -862,7 +1144,7 @@ func TestLauncherV2EmitsTheRustGoldenJournalContract(t *testing.T) {
 
 func TestLauncherV2OneJournalCannotAmbiguouslyMergeHostRetries(t *testing.T) {
 	plan := launcherV2TestPlan(7,
-		launcherV2PlannedUnit{ScopeGrantID: "grant-a", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
 	)
 	journal, err := createLauncherV2Journal(t.TempDir(), plan, &launcherV2ByteBudget{})
 	if err != nil {
@@ -904,34 +1186,23 @@ func TestLauncherV2PlanAndPathsRequireGeneratedWorkUnitIdentity(t *testing.T) {
 		}
 	}
 
-	writePlan := func(plan *launcherV2Plan) string {
-		value, err := json.Marshal(plan)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(t.TempDir(), "execution-journal-v2.json")
-		if err := os.WriteFile(path, value, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
 	valid := launcherV2TestPlan(^uint32(0),
-		launcherV2PlannedUnit{ScopeGrantID: "grant-b", UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA},
+		launcherV2TestPlannedUnit(1, launcherV2UnitA, launcherV2ScopeA),
 	)
-	if _, err := loadLauncherV2Plan(writePlan(valid), "naabu", units); err != nil {
+	if _, err := loadLauncherV2Plan(writeLauncherV2TestPlan(t, valid), "naabu", units); err != nil {
 		t.Fatalf("valid host-frozen subset rejected: %v", err)
 	}
 	invalidID := *valid
 	invalidID.RequestedWorkUnits = append([]launcherV2PlannedUnit(nil), valid.RequestedWorkUnits...)
 	invalidID.RequestedWorkUnits[0].UnitID = "a.example.test"
-	if _, err := loadLauncherV2Plan(writePlan(&invalidID), "naabu", units); err == nil {
+	if _, err := loadLauncherV2Plan(writeLauncherV2TestPlan(t, &invalidID), "naabu", units); err == nil {
 		t.Fatal("target-shaped unsafe unit identity was accepted")
 	}
 	invalidGrant := *valid
 	invalidGrant.RequestedWorkUnits = append([]launcherV2PlannedUnit(nil), valid.RequestedWorkUnits...)
-	invalidGrant.RequestedWorkUnits[0].ScopeGrantID = "grant-missing"
-	if _, err := loadLauncherV2Plan(writePlan(&invalidGrant), "naabu", units); err == nil {
-		t.Fatal("host sidecar grant outside the validated scope was accepted")
+	invalidGrant.RequestedWorkUnits[0].GrantIndex = uint32(len(valid.FrozenGrants))
+	if _, err := loadLauncherV2Plan(writeLauncherV2TestPlan(t, &invalidGrant), "naabu", units); err == nil {
+		t.Fatal("host sidecar grant index outside the frozen corpus was accepted")
 	}
 }
 

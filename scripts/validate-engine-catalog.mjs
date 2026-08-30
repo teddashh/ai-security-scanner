@@ -24,6 +24,17 @@ const managedExternalContracts = new Map([
   ["nuclei", { tag: "3.11.1-4" }],
 ]);
 const managedExternalIds = new Set(managedExternalContracts.keys());
+const naabuLauncherJournalVersion = 2;
+const legacyNaabuLauncherCommand = [
+  "--engine", "naabu",
+  "--scope", "/run/ai-security-scanner/scope.json",
+  "--output", "/output",
+];
+const naabuLauncherJournalV2Command = [
+  ...legacyNaabuLauncherCommand,
+  "--journal-version", "2",
+  "--journal-plan", "/run/ai-security-scanner/execution-journal-v2.json",
+];
 const managedM365Contracts = new Map([
   ["scubagear", {
     tag: "1.8.0-2",
@@ -1815,10 +1826,9 @@ function validateManagedExternalImage(plan, planRelative, engine) {
   if (!dockerfileText.includes(`ENTRYPOINT ${JSON.stringify([plan.wrapper?.entrypoint])}`)) {
     errors.push(`${planRelative}: managed external image lacks its direct non-shell entrypoint`);
   }
-  const expectedCommand = [
-    "--engine", engine.id,
-    "--scope", "/run/ai-security-scanner/scope.json", "--output", "/output",
-  ];
+  const expectedCommand = engine.id === "naabu" && engine.execution?.launcher_journal_version === naabuLauncherJournalVersion
+    ? naabuLauncherJournalV2Command
+    : ["--engine", engine.id, "--scope", "/run/ai-security-scanner/scope.json", "--output", "/output"];
   if (!deepEqual(plan.command, expectedCommand)) {
     errors.push(`${planRelative}: external command is not the fixed launcher contract`);
   }
@@ -2057,6 +2067,23 @@ const lockedRepositories = new Map((upstreamLock?.repositories ?? []).map((entry
 for (const engine of Array.isArray(catalog) ? catalog : []) {
   const label = `catalog:${engine.id}`;
   validateStaticCommand(engine);
+  const launcherJournalVersion = engine.execution?.launcher_journal_version;
+  const hasLauncherJournalFlag = (flag) => (engine.command ?? []).some(
+    (token) => token === flag || token.startsWith(`${flag}=`),
+  );
+  const hasJournalVersionFlag = hasLauncherJournalFlag("--journal-version");
+  const hasJournalPlanFlag = hasLauncherJournalFlag("--journal-plan");
+  if (launcherJournalVersion !== undefined) {
+    if (launcherJournalVersion !== naabuLauncherJournalVersion) {
+      errors.push(`${label}: unsupported launcher journal version`);
+    } else if (engine.id !== "naabu") {
+      errors.push(`${label}: launcher journal version 2 is supported only by the reviewed Naabu launcher`);
+    } else if (!deepEqual(engine.command, naabuLauncherJournalV2Command)) {
+      errors.push(`${label}: launcher journal version 2 requires the exact reviewed Naabu launcher command`);
+    }
+  } else if (hasJournalVersionFlag || hasJournalPlanFlag) {
+    errors.push(`${label}: launcher journal command flags require the declared version 2 execution contract`);
+  }
   const knowledgeDate = engine.compatibility?.knowledge_date;
   const supportUntil = engine.compatibility?.support_until;
   const maintenanceOwner = engine.compatibility?.maintenance_owner;

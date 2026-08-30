@@ -4410,6 +4410,7 @@ fn execute_planned_engine(
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations,
+        naabu_launcher_plan: None,
         workspace: resolved_workspace
             .as_ref()
             .map(|workspace| workspace.tree_path.as_path()),
@@ -4561,6 +4562,7 @@ fn resume_captured_execution(
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations: None,
+        naabu_launcher_plan: None,
         workspace: None,
         network_policy: &network,
         resource_limits: &limits,

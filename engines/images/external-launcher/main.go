@@ -53,6 +53,8 @@ const (
 	maxNucleiRequestsPerTemplate = 20
 	launcherV2SchemaVersion      = 2
 	maxLauncherV2Units           = 512
+	maxLauncherV2FrozenGrants    = 128
+	maxLauncherV2EndpointPairs   = 10_000
 	maxLauncherV2JournalBytes    = 4 * 1024 * 1024
 	maxLauncherV2RecordBytes     = 1024 * 1024
 	maxLauncherV2OpaqueIDBytes   = 128
@@ -172,18 +174,31 @@ type launcherV2Header struct {
 	RequestedWorkUnits []launcherV2RequestedUnit `json:"requested_work_units"`
 }
 
+type launcherV2FrozenGrant struct {
+	ScopeGrantID string   `json:"scope_grant_id"`
+	Addresses    []string `json:"addresses"`
+	Ports        []uint16 `json:"ports"`
+}
+
 type launcherV2PlannedUnit struct {
-	ScopeGrantID string `json:"scope_grant_id"`
-	UnitID       string `json:"unit_id"`
-	ScopeSHA256  string `json:"scope_sha256"`
+	UnitID                      string `json:"unit_id"`
+	ScopeSHA256                 string `json:"scope_sha256"`
+	GrantIndex                  uint32 `json:"grant_index"`
+	AddressStart                uint32 `json:"address_start"`
+	AddressLen                  uint32 `json:"address_len"`
+	PortStart                   uint32 `json:"port_start"`
+	PortLen                     uint32 `json:"port_len"`
+	EndpointPairCount           uint64 `json:"endpoint_pair_count"`
+	ConservativeDeadlineSeconds uint64 `json:"conservative_deadline_seconds"`
 }
 
 type launcherV2Plan struct {
-	SchemaVersion      int                     `json:"schema_version"`
-	EngineID           string                  `json:"engine_id"`
-	EngineRunID        string                  `json:"engine_run_id"`
-	ExecutionAttempt   uint32                  `json:"execution_attempt"`
-	RequestedWorkUnits []launcherV2PlannedUnit `json:"requested_work_units"`
+	SchemaVersion      int                       `json:"schema_version"`
+	EngineID           string                    `json:"engine_id"`
+	EngineRunID        string                    `json:"engine_run_id"`
+	ExecutionAttempt   uint32                    `json:"execution_attempt"`
+	FrozenGrants       []launcherV2FrozenGrant   `json:"frozen_grants"`
+	RequestedWorkUnits []launcherV2PlannedUnit   `json:"requested_work_units"`
 }
 
 type launcherV2FinalArtifact struct {
@@ -444,48 +459,216 @@ func loadLauncherV2Plan(planPath, expectedEngine string, units []scanUnit) (*lau
 	if err := decoder.Decode(&plan); err != nil || requireJSONEOF(decoder) != nil {
 		return nil, errors.New("launcher-v2 host-frozen plan is malformed")
 	}
-	if plan.SchemaVersion != launcherV2SchemaVersion || plan.EngineID != expectedEngine || expectedEngine != "naabu" {
+	if _, err := materializeLauncherV2Plan(&plan, expectedEngine, units); err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+type launcherV2Rectangle struct {
+	grantIndex               uint32
+	addressStart, addressEnd uint64
+	portStart, portEnd       uint64
+}
+
+// materializeLauncherV2Plan closes the strict host-frozen sidecar over the
+// independently validated scope document. The host controls both corpus and
+// work-unit order; Go compares sets for authorization, then slices in exactly
+// the sidecar order instead of trying to reproduce Rust's ordering rules.
+func materializeLauncherV2Plan(plan *launcherV2Plan, expectedEngine string, units []scanUnit) ([]scanUnit, error) {
+	if plan == nil || plan.SchemaVersion != launcherV2SchemaVersion || plan.EngineID != expectedEngine || expectedEngine != "naabu" {
 		return nil, errors.New("launcher-v2 host-frozen plan version or engine is invalid")
 	}
 	if !launcherV2OpaqueID(plan.EngineRunID) {
 		return nil, errors.New("launcher-v2 engine run identity is not a bounded opaque identifier")
 	}
-	if len(units) < 1 || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxLauncherV2Units || len(plan.RequestedWorkUnits) > len(units) {
-		return nil, errors.New("launcher-v2 requested work-unit subset does not fit the validated Naabu plan")
-	}
 	if plan.ExecutionAttempt == 0 {
 		return nil, errors.New("launcher-v2 execution attempt must be non-zero")
 	}
-	seen := make(map[string]struct{}, len(plan.RequestedWorkUnits))
-	availableGrants := make(map[string]struct{}, len(units))
-	for _, unit := range units {
-		availableGrants[unit.Grant.ID] = struct{}{}
+	if len(units) < 1 || len(plan.FrozenGrants) < 1 || len(plan.FrozenGrants) > maxLauncherV2FrozenGrants {
+		return nil, errors.New("launcher-v2 requires a bounded non-empty frozen-grant corpus")
 	}
-	seenGrants := make(map[string]struct{}, len(plan.RequestedWorkUnits))
-	for _, requested := range plan.RequestedWorkUnits {
+	if len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxLauncherV2Units {
+		return nil, errors.New("launcher-v2 requires a bounded non-empty requested work-unit subset")
+	}
+
+	validatedByGrant := make(map[string]scanUnit, len(units))
+	for _, unit := range units {
+		if unit.Grant.ID == "" {
+			return nil, errors.New("launcher-v2 validated Naabu scope contains an empty grant identity")
+		}
+		if _, exists := validatedByGrant[unit.Grant.ID]; exists {
+			return nil, errors.New("launcher-v2 validated Naabu scope contains a duplicate grant identity")
+		}
+		validatedByGrant[unit.Grant.ID] = unit
+	}
+	if len(plan.FrozenGrants) != len(validatedByGrant) {
+		return nil, errors.New("launcher-v2 frozen grants are not set-equal to the validated Naabu scope")
+	}
+
+	frozenUnits := make([]scanUnit, len(plan.FrozenGrants))
+	seenFrozenGrants := make(map[string]struct{}, len(plan.FrozenGrants))
+	for index, frozen := range plan.FrozenGrants {
+		if !safeText(frozen.ScopeGrantID, 256) {
+			return nil, errors.New("launcher-v2 frozen grant identity is invalid")
+		}
+		if _, exists := seenFrozenGrants[frozen.ScopeGrantID]; exists {
+			return nil, errors.New("launcher-v2 frozen grant identities are not unique")
+		}
+		seenFrozenGrants[frozen.ScopeGrantID] = struct{}{}
+		validated, exists := validatedByGrant[frozen.ScopeGrantID]
+		if !exists {
+			return nil, errors.New("launcher-v2 frozen grant is outside the validated Naabu scope")
+		}
+		if err := validateResolvedAddresses(frozen.Addresses, validated.Grant.Target); err != nil {
+			return nil, fmt.Errorf("launcher-v2 frozen grant %d address corpus is invalid: %w", index, err)
+		}
+		if err := validateLauncherV2Ports(frozen.Ports); err != nil {
+			return nil, fmt.Errorf("launcher-v2 frozen grant %d port corpus is invalid: %w", index, err)
+		}
+		if !sameLauncherV2StringSet(frozen.Addresses, validated.ResolvedAddresses) || !sameLauncherV2PortSet(frozen.Ports, validated.Grant.Ports) {
+			return nil, errors.New("launcher-v2 frozen grant corpus changed the validated Naabu scope")
+		}
+		validated.ResolvedAddresses = append([]string(nil), frozen.Addresses...)
+		validated.Grant.Ports = append([]uint16(nil), frozen.Ports...)
+		frozenUnits[index] = validated
+	}
+
+	materialized := make([]scanUnit, 0, len(plan.RequestedWorkUnits))
+	rectangles := make([]launcherV2Rectangle, 0, len(plan.RequestedWorkUnits))
+	seenUnitIDs := make(map[string]struct{}, len(plan.RequestedWorkUnits))
+	seenScopeHashes := make(map[string]struct{}, len(plan.RequestedWorkUnits))
+	for ordinal, requested := range plan.RequestedWorkUnits {
 		if !launcherV2WorkUnitID(requested.UnitID) || !launcherV2SHA256(requested.ScopeSHA256) {
 			return nil, errors.New("launcher-v2 requested work-unit identity is invalid")
 		}
-		if _, exists := availableGrants[requested.ScopeGrantID]; !exists {
-			return nil, errors.New("launcher-v2 requested work unit is outside the validated Naabu grants")
-		}
-		if _, exists := seen[requested.UnitID]; exists {
+		if _, exists := seenUnitIDs[requested.UnitID]; exists {
 			return nil, errors.New("launcher-v2 requested work-unit identities are not unique")
 		}
-		if _, exists := seenGrants[requested.ScopeGrantID]; exists {
-			return nil, errors.New("launcher-v2 requested Naabu grants are not unique")
+		if _, exists := seenScopeHashes[requested.ScopeSHA256]; exists {
+			return nil, errors.New("launcher-v2 requested work-unit scope hashes are not unique")
 		}
-		seen[requested.UnitID] = struct{}{}
-		seenGrants[requested.ScopeGrantID] = struct{}{}
+		seenUnitIDs[requested.UnitID] = struct{}{}
+		seenScopeHashes[requested.ScopeSHA256] = struct{}{}
+
+		grantIndex := uint64(requested.GrantIndex)
+		if grantIndex >= uint64(len(frozenUnits)) {
+			return nil, fmt.Errorf("launcher-v2 requested work unit %d refers to a missing frozen grant", ordinal)
+		}
+		frozen := frozenUnits[grantIndex]
+		addressStart := uint64(requested.AddressStart)
+		addressLen := uint64(requested.AddressLen)
+		portStart := uint64(requested.PortStart)
+		portLen := uint64(requested.PortLen)
+		addressEnd := addressStart + addressLen
+		portEnd := portStart + portLen
+		if addressLen == 0 || portLen == 0 || addressEnd > uint64(len(frozen.ResolvedAddresses)) || portEnd > uint64(len(frozen.Grant.Ports)) {
+			return nil, fmt.Errorf("launcher-v2 requested work unit %d has an empty or out-of-bounds corpus slice", ordinal)
+		}
+		endpointPairs := addressLen * portLen
+		if endpointPairs == 0 || endpointPairs > maxLauncherV2EndpointPairs || requested.EndpointPairCount != endpointPairs {
+			return nil, fmt.Errorf("launcher-v2 requested work unit %d has an invalid endpoint-pair count", ordinal)
+		}
+		expectedDeadlineSeconds, err := launcherV2ConservativeDeadlineSeconds(frozen.Grant.RatePolicy, endpointPairs)
+		if err != nil || requested.ConservativeDeadlineSeconds != expectedDeadlineSeconds {
+			return nil, fmt.Errorf("launcher-v2 requested work unit %d has an invalid conservative deadline", ordinal)
+		}
+
+		rectangle := launcherV2Rectangle{
+			grantIndex:   requested.GrantIndex,
+			addressStart: addressStart,
+			addressEnd:   addressEnd,
+			portStart:    portStart,
+			portEnd:      portEnd,
+		}
+		for _, previous := range rectangles {
+			if launcherV2RectanglesOverlap(previous, rectangle) {
+				return nil, errors.New("launcher-v2 requested work-unit rectangles overlap")
+			}
+		}
+		rectangles = append(rectangles, rectangle)
+
+		unit := frozen
+		unit.ResolvedAddresses = append([]string(nil), frozen.ResolvedAddresses[int(addressStart):int(addressEnd)]...)
+		unit.Grant.Ports = append([]uint16(nil), frozen.Grant.Ports[int(portStart):int(portEnd)]...)
+		materialized = append(materialized, unit)
 	}
-	return &plan, nil
+	return materialized, nil
+}
+
+func validateLauncherV2Ports(ports []uint16) error {
+	if len(ports) == 0 || len(ports) > 65535 {
+		return errors.New("port corpus must be bounded and non-empty")
+	}
+	seen := make(map[uint16]struct{}, len(ports))
+	for _, port := range ports {
+		if port == 0 {
+			return errors.New("port corpus contains zero")
+		}
+		if _, exists := seen[port]; exists {
+			return errors.New("port corpus contains a duplicate")
+		}
+		seen[port] = struct{}{}
+	}
+	return nil
+}
+
+func launcherV2ConservativeDeadlineSeconds(policy ratePolicy, endpointPairs uint64) (uint64, error) {
+	effectiveRate := uint64(naabuEffectiveProxyRate(policy))
+	if effectiveRate == 0 || endpointPairs == 0 || endpointPairs > maxLauncherV2EndpointPairs {
+		return 0, errors.New("launcher-v2 deadline inputs are invalid")
+	}
+	waves := (endpointPairs + effectiveRate - 1) / effectiveRate
+	seconds := waves*(uint64(policy.TimeoutSeconds)+1) + uint64(scannerProcessAllowance/time.Second)
+	if seconds == 0 || seconds > uint64(naabuEngineCeiling/time.Second) {
+		return 0, errors.New("launcher-v2 deadline exceeds the hard Naabu ceiling")
+	}
+	return seconds, nil
+}
+
+func sameLauncherV2StringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	values := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		values[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, exists := values[value]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func sameLauncherV2PortSet(left, right []uint16) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	values := make(map[uint16]struct{}, len(left))
+	for _, value := range left {
+		values[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, exists := values[value]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func launcherV2RectanglesOverlap(left, right launcherV2Rectangle) bool {
+	return left.grantIndex == right.grantIndex &&
+		left.addressStart < right.addressEnd && right.addressStart < left.addressEnd &&
+		left.portStart < right.portEnd && right.portStart < left.portEnd
 }
 
 // runNaabuLauncherV2 is deliberately separate from the legacy aggregate
 // writer. The host owns the ordered unit identities and scope digests in the
-// sidecar plan; the launcher only maps that exact order to the already
-// validated Naabu units. This avoids a second cross-language canonicalization
-// algorithm while keeping target names and addresses out of journal IDs.
+// sidecar plan. The launcher proves the frozen corpora are set-equal to the
+// validated scope and executes each exact rectangular slice in sidecar order,
+// while keeping target names and addresses out of journal IDs.
 func runNaabuLauncherV2(
 	outputRoot string,
 	temporaryRoot string,
@@ -496,8 +679,12 @@ func runNaabuLauncherV2(
 	now time.Time,
 	runner func(invocation) launcherV2RunResult,
 ) error {
-	if plan == nil || runner == nil || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > len(units) {
+	if plan == nil || runner == nil {
 		return errors.New("launcher-v2 execution plan is unavailable or mismatched")
+	}
+	materialized, err := materializeLauncherV2Plan(plan, "naabu", units)
+	if err != nil {
+		return err
 	}
 	budget := &launcherV2ByteBudget{}
 	journal, err := createLauncherV2Journal(outputRoot, plan, budget)
@@ -514,16 +701,8 @@ func runNaabuLauncherV2(
 	incompleteUnits := 0
 	quarantineFailures := 0
 	diagnostics := &launcherV2Diagnostics{}
-	unitByGrant := make(map[string]int, len(units))
-	for index, unit := range units {
-		unitByGrant[unit.Grant.ID] = index
-	}
-	for _, planned := range plan.RequestedWorkUnits {
-		planIndex, exists := unitByGrant[planned.ScopeGrantID]
-		if !exists {
-			return errors.New("launcher-v2 work unit escaped the validated Naabu grants")
-		}
-		unit := units[planIndex]
+	for planIndex, planned := range plan.RequestedWorkUnits {
+		unit := materialized[planIndex]
 		requested := launcherV2RequestedUnit{UnitID: planned.UnitID, ScopeSHA256: planned.ScopeSHA256}
 		attempt := plan.ExecutionAttempt
 		temporaryOutput := filepath.Join(temporaryRoot, fmt.Sprintf("result-%06d.jsonl", planIndex))
@@ -561,6 +740,7 @@ func runNaabuLauncherV2(
 			}
 			continue
 		}
+		command.Timeout = time.Duration(planned.ConservativeDeadlineSeconds) * time.Second
 		runResult := runner(command)
 		if !validLauncherV2RunOutcome(runResult) {
 			runResult = launcherV2RunResult{Outcome: launcherV2RunFailed, Err: errors.New("invalid runner outcome")}
@@ -1290,7 +1470,7 @@ func validateCanonicalTarget(target canonicalTarget) (string, error) {
 	}
 	switch target.Kind {
 	case "hostname":
-		if target.Value != strings.ToLower(target.Value) || strings.HasSuffix(target.Value, ".") || len(target.Value) > 253 || !strings.Contains(target.Value, ".") {
+		if target.Value != strings.ToLower(target.Value) || strings.HasSuffix(target.Value, ".") || len(target.Value) > 253 || (target.Value != "localhost" && !strings.Contains(target.Value, ".")) {
 			return "", errors.New("external hostname is not canonical")
 		}
 		for _, label := range strings.Split(target.Value, ".") {

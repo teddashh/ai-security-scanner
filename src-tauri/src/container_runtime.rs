@@ -4,6 +4,9 @@ use crate::domain::{
     ScanPermission,
 };
 use crate::error::{AppError, AppResult};
+use crate::naabu_work_plan::{
+    MAX_NAABU_LAUNCHER_PLAN_BYTES, NAABU_ENGINE_ID, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -22,6 +25,9 @@ use std::time::Duration as StdDuration;
 use zeroize::Zeroizing;
 
 const CONTAINER_SCOPE_PATH: &str = "/run/ai-security-scanner/scope.json";
+pub(crate) const NAABU_LAUNCHER_PLAN_CONTROL_FILE: &str = "execution-journal-v2.json";
+pub(crate) const CONTAINER_NAABU_LAUNCHER_PLAN_PATH: &str =
+    "/run/ai-security-scanner/execution-journal-v2.json";
 const CONTAINER_CREDENTIAL_PATH: &str = "/run/ai-security-scanner/credentials.json";
 const CONTAINER_WORKSPACE_PATH: &str = "/workspace";
 const CONTAINER_OUTPUT_PATH: &str = "/output";
@@ -54,6 +60,18 @@ const CONTAINER_ENGINE_LABEL_KEY: &str = "ai.security-scanner.engine";
 const CONTAINER_ENGINE_RUN_LABEL_KEY: &str = "ai.security-scanner.engine-run";
 const CONTAINER_ATTEMPT_LABEL_KEY: &str = "ai.security-scanner.attempt";
 const CONTAINER_SCOPE_LABEL_KEY: &str = "ai.security-scanner.scope-sha256";
+const NAABU_LAUNCHER_V2_COMMAND: [&str; 10] = [
+    "--engine",
+    "naabu",
+    "--scope",
+    CONTAINER_SCOPE_PATH,
+    "--output",
+    CONTAINER_OUTPUT_PATH,
+    "--journal-version",
+    "2",
+    "--journal-plan",
+    CONTAINER_NAABU_LAUNCHER_PLAN_PATH,
+];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -989,6 +1007,8 @@ pub struct ContainerRunPlan {
     output: PathBuf,
     scope_file: PathBuf,
     scope_sha256: String,
+    launcher_plan_file: Option<PathBuf>,
+    launcher_plan_sha256: Option<String>,
     credential_control_dir: PathBuf,
     network_policy: NetworkPolicy,
     output_bytes: u64,
@@ -1029,6 +1049,14 @@ impl ContainerRunPlan {
         &self.scope_sha256
     }
 
+    pub fn launcher_plan_file(&self) -> Option<&Path> {
+        self.launcher_plan_file.as_deref()
+    }
+
+    pub fn launcher_plan_sha256(&self) -> Option<&str> {
+        self.launcher_plan_sha256.as_deref()
+    }
+
     fn credential_control_dir(&self) -> &Path {
         &self.credential_control_dir
     }
@@ -1055,6 +1083,7 @@ pub struct ContainerPlanBuilder<'a> {
     image: &'a PinnedImage,
     directories: &'a RunDirectories,
     scope_file: &'a Path,
+    launcher_plan_file: Option<&'a Path>,
     limits: &'a ResourceLimits,
     network_policy: &'a NetworkPolicy,
     credential_set: &'a ScannerCredentialSet,
@@ -1084,6 +1113,7 @@ impl<'a> ContainerPlanBuilder<'a> {
             image,
             directories,
             scope_file,
+            launcher_plan_file: None,
             limits,
             network_policy,
             credential_set,
@@ -1092,6 +1122,14 @@ impl<'a> ContainerPlanBuilder<'a> {
             engine_run_id,
             attempt,
         }
+    }
+
+    /// Adds the private launcher-v2 execution document. The builder accepts
+    /// this only for an explicitly reviewed Naabu v2 manifest and only at the
+    /// product-owned fixed control-file location.
+    pub fn with_launcher_plan_file(mut self, launcher_plan_file: Option<&'a Path>) -> Self {
+        self.launcher_plan_file = launcher_plan_file;
+        self
     }
 
     pub fn build(&self) -> AppResult<ContainerRunPlan> {
@@ -1115,6 +1153,10 @@ impl<'a> ContainerPlanBuilder<'a> {
         validate_mount_directory(&self.directories.output, "output")?;
         validate_mount_directory(&self.directories.control, "control")?;
         validate_mount_file(self.scope_file, "scope document")?;
+        validate_naabu_launcher_manifest_contract(
+            self.manifest,
+            self.launcher_plan_file.is_some(),
+        )?;
         let manifest_requires_network = self.manifest.active_external
             || !self.manifest.network_destinations.is_empty()
             || self.manifest.required_permissions.iter().any(|permission| {
@@ -1147,6 +1189,25 @@ impl<'a> ContainerPlanBuilder<'a> {
         let credential_control_dir = canonical_mount_path(&self.directories.control, "control")?;
         let scope_file = canonical_mount_path(self.scope_file, "scope document")?;
         let scope_sha256 = hash_control_file(&scope_file)?;
+        let (launcher_plan_file, launcher_plan_sha256) = match self.launcher_plan_file {
+            Some(path) => {
+                validate_mount_file(path, "Naabu launcher plan")?;
+                let canonical = canonical_mount_path(path, "Naabu launcher plan")?;
+                let expected = credential_control_dir.join(NAABU_LAUNCHER_PLAN_CONTROL_FILE);
+                if canonical != expected {
+                    return Err(AppError::NotAuthorized(
+                        "Naabu launcher plan must use the fixed product-owned control path".into(),
+                    ));
+                }
+                let digest = hash_bounded_control_file(
+                    &canonical,
+                    MAX_NAABU_LAUNCHER_PLAN_BYTES as u64,
+                    "Naabu launcher plan",
+                )?;
+                (Some(canonical), Some(digest))
+            }
+            None => (None, None),
+        };
         let rootless_user = runtime_user_mapping()?;
         let mut runtime_args = vec![
             "run".into(),
@@ -1229,6 +1290,13 @@ impl<'a> ContainerPlanBuilder<'a> {
             }
         }
 
+        if let Some(path) = &launcher_plan_file {
+            runtime_args.extend([
+                "--mount".into(),
+                bind_mount(path, CONTAINER_NAABU_LAUNCHER_PLAN_PATH, true)?,
+            ]);
+        }
+
         runtime_args.push(self.image.reference());
         runtime_args.extend(self.manifest.command.iter().cloned());
 
@@ -1242,6 +1310,8 @@ impl<'a> ContainerPlanBuilder<'a> {
             output,
             scope_file,
             scope_sha256: scope_sha256.clone(),
+            launcher_plan_file,
+            launcher_plan_sha256,
             credential_control_dir,
             network_policy: self.network_policy.clone(),
             output_bytes: self.limits.output_bytes,
@@ -3168,6 +3238,68 @@ fn validate_static_manifest_command(command: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_naabu_launcher_manifest_contract(
+    manifest: &EngineManifest,
+    has_launcher_plan: bool,
+) -> AppResult<()> {
+    let version = manifest
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.launcher_journal_version);
+    let has_any_launcher_flag = manifest.command.iter().any(|part| {
+        ["--journal-version", "--journal-plan"].iter().any(|flag| {
+            part == flag
+                || part
+                    .strip_prefix(flag)
+                    .is_some_and(|suffix| suffix.starts_with('='))
+        })
+    });
+    match version {
+        Some(version) if version == NAABU_LAUNCHER_PLAN_SCHEMA_VERSION => {
+            if manifest.id != NAABU_ENGINE_ID {
+                return Err(AppError::EngineRegistry(
+                    "launcher journal v2 is supported only by the reviewed Naabu contract".into(),
+                ));
+            }
+            if manifest
+                .command
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                != NAABU_LAUNCHER_V2_COMMAND
+            {
+                return Err(AppError::EngineRegistry(
+                    "Naabu launcher journal v2 requires the exact reviewed static command".into(),
+                ));
+            }
+            if !has_launcher_plan {
+                return Err(AppError::InvalidRequest(
+                    "Naabu launcher journal v2 requires its private execution plan".into(),
+                ));
+            }
+        }
+        Some(_) => {
+            return Err(AppError::EngineRegistry(
+                "engine declares an unsupported launcher journal version".into(),
+            ));
+        }
+        None => {
+            if has_any_launcher_flag {
+                return Err(AppError::EngineRegistry(
+                    "launcher journal flags require an explicit reviewed launcher version".into(),
+                ));
+            }
+            if has_launcher_plan {
+                return Err(AppError::InvalidRequest(
+                    "a launcher execution plan cannot be mounted for a legacy engine contract"
+                        .into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_mount_directory(path: &Path, label: &str) -> AppResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         AppError::Runtime(format!(
@@ -3220,11 +3352,70 @@ fn validate_run_plan_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
     validate_run_plan_user_integrity(plan)?;
     validate_run_plan_network_integrity(plan)?;
     validate_run_plan_output_integrity(plan)?;
+    validate_run_plan_launcher_integrity(plan)?;
     let current_scope_sha256 = hash_control_file(&plan.scope_file)?;
     if current_scope_sha256 != plan.scope_sha256 {
         return Err(AppError::NotAuthorized(
             "scope document changed after the immutable run plan was built".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_run_plan_launcher_integrity(plan: &ContainerRunPlan) -> AppResult<()> {
+    let image_reference = plan.image.reference();
+    let image_index = plan
+        .runtime_args
+        .iter()
+        .position(|argument| argument == &image_reference)
+        .ok_or_else(|| {
+            AppError::Runtime("container run plan lost its pinned image reference".into())
+        })?;
+    let launch_arguments = &plan.runtime_args[..image_index];
+    match (&plan.launcher_plan_file, &plan.launcher_plan_sha256) {
+        (None, None) => {
+            if launch_arguments
+                .iter()
+                .any(|argument| argument.contains(CONTAINER_NAABU_LAUNCHER_PLAN_PATH))
+            {
+                return Err(AppError::NotAuthorized(
+                    "legacy run plan gained an unbound Naabu launcher mount".into(),
+                ));
+            }
+        }
+        (Some(path), Some(expected_sha256)) => {
+            validate_mount_file(path, "Naabu launcher plan")?;
+            let current_sha256 = hash_bounded_control_file(
+                path,
+                MAX_NAABU_LAUNCHER_PLAN_BYTES as u64,
+                "Naabu launcher plan",
+            )?;
+            if &current_sha256 != expected_sha256 {
+                return Err(AppError::NotAuthorized(
+                    "Naabu launcher plan changed after the immutable run plan was built".into(),
+                ));
+            }
+            let expected_mount = bind_mount(path, CONTAINER_NAABU_LAUNCHER_PLAN_PATH, true)?;
+            let mount_values = launch_arguments
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--mount"
+                        && arguments[1].contains(CONTAINER_NAABU_LAUNCHER_PLAN_PATH))
+                    .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>();
+            if mount_values != [expected_mount.as_str()] {
+                return Err(AppError::NotAuthorized(
+                    "container run plan did not preserve the exact read-only Naabu launcher mount"
+                        .into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(AppError::NotAuthorized(
+                "Naabu launcher plan identity is incomplete".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -4098,6 +4289,20 @@ esac
         (temp, store, directories, scope, manifest, image)
     }
 
+    fn enable_naabu_launcher_v2(manifest: &mut EngineManifest) {
+        manifest.id = NAABU_ENGINE_ID.into();
+        manifest.command = NAABU_LAUNCHER_V2_COMMAND
+            .iter()
+            .map(|part| (*part).to_owned())
+            .collect();
+        manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: 14_400,
+            },
+            launcher_journal_version: Some(NAABU_LAUNCHER_PLAN_SCHEMA_VERSION),
+        });
+    }
+
     fn owned_cleanup_request(scope: &Path, image: &PinnedImage) -> OwnedContainerCleanupRequest {
         OwnedContainerCleanupRequest {
             case_id: "case-1".into(),
@@ -4321,6 +4526,7 @@ esac\n",
             resources: EngineExecutionResources {
                 timeout_seconds: 7_200,
             },
+            launcher_journal_version: None,
         });
         let plan = ContainerPlanBuilder::new(
             &manifest,
@@ -4365,6 +4571,7 @@ esac\n",
                 resources: EngineExecutionResources {
                     timeout_seconds: invalid,
                 },
+                launcher_journal_version: None,
             });
             let error = ContainerPlanBuilder::new(
                 &manifest,
@@ -4759,6 +4966,195 @@ esac\n",
                 .all(|argument| !argument.contains("do-not-put-this-in-argv"))
         );
         assert!(!plan.runtime_args.iter().any(|argument| argument == "--env"));
+    }
+
+    #[test]
+    fn naabu_launcher_v2_plan_has_one_exact_read_only_control_mount() {
+        let (_temp, store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        enable_naabu_launcher_v2(&mut manifest);
+        let image = PinnedImage::from_manifest(&manifest).expect("Naabu image");
+        let launcher_plan = store
+            .write_control_json(
+                &directories,
+                NAABU_LAUNCHER_PLAN_CONTROL_FILE,
+                &serde_json::json!({
+                    "schema_version": 2,
+                    "engine_id": "naabu",
+                    "engine_run_id": "engine-run-1",
+                    "execution_attempt": 1,
+                    "frozen_grants": [],
+                    "requested_work_units": []
+                }),
+            )
+            .expect("launcher plan");
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_launcher_plan_file(Some(&launcher_plan.path))
+        .build()
+        .expect("launcher-v2 run plan");
+
+        let canonical = fs::canonicalize(&launcher_plan.path).expect("canonical plan");
+        assert_eq!(plan.launcher_plan_file(), Some(canonical.as_path()));
+        let expected_digest = hash_bounded_control_file(
+            &canonical,
+            MAX_NAABU_LAUNCHER_PLAN_BYTES as u64,
+            "Naabu launcher plan",
+        )
+        .expect("launcher digest");
+        assert_eq!(plan.launcher_plan_sha256(), Some(expected_digest.as_str()));
+        let expected_mount =
+            bind_mount(&canonical, CONTAINER_NAABU_LAUNCHER_PLAN_PATH, true).expect("mount");
+        assert_eq!(
+            plan.runtime_args
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--mount"
+                        && arguments[1].contains(CONTAINER_NAABU_LAUNCHER_PLAN_PATH))
+                    .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>(),
+            [expected_mount.as_str()]
+        );
+        let image_index = plan
+            .runtime_args
+            .iter()
+            .position(|argument| argument == &image.reference())
+            .expect("image argument");
+        assert_eq!(
+            plan.runtime_args[image_index + 1..],
+            NAABU_LAUNCHER_V2_COMMAND.map(str::to_owned)
+        );
+        validate_run_plan_integrity(&plan).expect("immutable launcher plan");
+    }
+
+    #[test]
+    fn launcher_plan_and_manifest_must_opt_in_together() {
+        let (_temp, store, directories, scope, mut manifest, image) =
+            plan_fixture(vec!["scanner".into()]);
+        let launcher_plan = store
+            .write_control_json(
+                &directories,
+                NAABU_LAUNCHER_PLAN_CONTROL_FILE,
+                &serde_json::json!({"schema_version": 2}),
+            )
+            .expect("launcher plan");
+
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_launcher_plan_file(Some(&launcher_plan.path))
+        .build()
+        .expect_err("legacy engine cannot gain a sidecar");
+        assert!(error.to_string().contains("legacy engine contract"));
+
+        let mut undeclared = manifest.clone();
+        undeclared.command.push("--journal-version=2".into());
+        let undeclared_image = PinnedImage::from_manifest(&undeclared).expect("legacy image");
+        let error = ContainerPlanBuilder::new(
+            &undeclared,
+            &undeclared_image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect_err("undeclared equals-form launcher flag rejected");
+        assert!(error.to_string().contains("require an explicit reviewed"));
+
+        enable_naabu_launcher_v2(&mut manifest);
+        let image = PinnedImage::from_manifest(&manifest).expect("Naabu image");
+        let error = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .build()
+        .expect_err("v2 manifest requires a sidecar");
+        assert!(
+            error
+                .to_string()
+                .contains("requires its private execution plan")
+        );
+    }
+
+    #[test]
+    fn changed_naabu_launcher_plan_is_rejected_before_runtime_creation() {
+        let (_temp, store, directories, scope, mut manifest, _) =
+            plan_fixture(vec!["scanner".into()]);
+        enable_naabu_launcher_v2(&mut manifest);
+        let image = PinnedImage::from_manifest(&manifest).expect("Naabu image");
+        let launcher_plan = store
+            .write_control_json(
+                &directories,
+                NAABU_LAUNCHER_PLAN_CONTROL_FILE,
+                &serde_json::json!({"schema_version": 2}),
+            )
+            .expect("launcher plan");
+        let plan = ContainerPlanBuilder::new(
+            &manifest,
+            &image,
+            &directories,
+            &scope,
+            &ResourceLimits::default(),
+            &NetworkPolicy::Disabled,
+            &ScannerCredentialSet::default(),
+            "case-1",
+            "run-1",
+            "engine-run-1",
+            1,
+        )
+        .with_launcher_plan_file(Some(&launcher_plan.path))
+        .build()
+        .expect("launcher-v2 run plan");
+
+        restrict_secret_file(&launcher_plan.path, false).expect("make test sidecar writable");
+        fs::write(
+            &launcher_plan.path,
+            br#"{"schema_version":2,"changed":true}"#,
+        )
+        .expect("mutate sidecar");
+        let error = validate_run_plan_integrity(&plan).expect_err("changed sidecar rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("changed after the immutable run plan")
+        );
     }
 
     #[test]

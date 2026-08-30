@@ -296,7 +296,11 @@
       "properties": {
         "output": { "$ref": "#/$defs/output" },
         "resources": { "$ref": "#/$defs/resources" },
-        "network": { "$ref": "#/$defs/network" }
+        "network": { "$ref": "#/$defs/network" },
+        "launcher_journal_version": {
+          "type": "integer",
+          "const": 2
+        }
       }
     },
     "inputContract": {

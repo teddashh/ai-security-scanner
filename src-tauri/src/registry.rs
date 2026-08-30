@@ -33,6 +33,19 @@ const KNOWN_ENGINE_IDS: [&str; 21] = [
 
 const AWS_ONLY_ENGINE_IDS: [&str; 4] = ["cloudquery", "steampipe", "scoutsuite", "cloudsplaining"];
 const MICROSOFT365_ONLY_ENGINE_IDS: [&str; 2] = ["scubagear", "maester"];
+const NAABU_LAUNCHER_JOURNAL_VERSION: u32 = 2;
+const NAABU_LAUNCHER_JOURNAL_COMMAND: [&str; 10] = [
+    "--engine",
+    "naabu",
+    "--scope",
+    "/run/ai-security-scanner/scope.json",
+    "--output",
+    "/output",
+    "--journal-version",
+    "2",
+    "--journal-plan",
+    "/run/ai-security-scanner/execution-journal-v2.json",
+];
 
 const BUILTIN_CATALOG: &str = include_str!("../../engines/catalog.json");
 
@@ -263,6 +276,44 @@ fn validate_release_contract(manifest: &EngineManifest) -> AppResult<()> {
         return Err(fail(
             "execution timeout must be between 30 and 86400 seconds",
         ));
+    }
+    let command_contains_journal_flag = |flag: &str| {
+        manifest.command.iter().any(|token| {
+            token == flag
+                || token
+                    .strip_prefix(flag)
+                    .is_some_and(|suffix| suffix.starts_with('='))
+        })
+    };
+    let has_journal_version_flag = command_contains_journal_flag("--journal-version");
+    let has_journal_plan_flag = command_contains_journal_flag("--journal-plan");
+    match execution.launcher_journal_version {
+        Some(NAABU_LAUNCHER_JOURNAL_VERSION) => {
+            if manifest.id != "naabu" {
+                return Err(fail(
+                    "launcher journal version 2 is supported only by the reviewed Naabu launcher",
+                ));
+            }
+            if !manifest
+                .command
+                .iter()
+                .map(String::as_str)
+                .eq(NAABU_LAUNCHER_JOURNAL_COMMAND.iter().copied())
+            {
+                return Err(fail(
+                    "launcher journal version 2 requires the exact reviewed Naabu launcher command",
+                ));
+            }
+        }
+        Some(_) => {
+            return Err(fail("unsupported launcher journal version"));
+        }
+        None if has_journal_version_flag || has_journal_plan_flag => {
+            return Err(fail(
+                "launcher journal command flags require the declared version 2 execution contract",
+            ));
+        }
+        None => {}
     }
     let supported_providers = manifest
         .supported_providers
@@ -768,6 +819,117 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("resource contract is missing")
+        );
+    }
+
+    #[test]
+    fn naabu_launcher_journal_v2_accepts_only_the_exact_reviewed_command() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        let mut manifest = registry.get("naabu").unwrap().clone();
+
+        validate_release_contract(&manifest).expect("legacy Naabu remains admissible");
+
+        manifest
+            .execution
+            .as_mut()
+            .expect("execution contract")
+            .launcher_journal_version = Some(NAABU_LAUNCHER_JOURNAL_VERSION);
+        manifest.command = NAABU_LAUNCHER_JOURNAL_COMMAND
+            .iter()
+            .map(|token| (*token).to_owned())
+            .collect();
+
+        validate_release_contract(&manifest)
+            .expect("the exact reviewed Naabu launcher-journal command is admissible");
+
+        let mut missing_plan = manifest.clone();
+        missing_plan
+            .command
+            .truncate(missing_plan.command.len() - 2);
+        let mut missing_version = manifest.clone();
+        missing_version.command.drain(6..8);
+        let mut extra_argument = manifest.clone();
+        extra_argument.command.push("--unexpected".into());
+        for (name, malformed) in [
+            ("missing journal plan", missing_plan),
+            ("missing journal version", missing_version),
+            ("extra argument", extra_argument),
+        ] {
+            assert!(
+                validate_release_contract(&malformed)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires the exact reviewed Naabu launcher command"),
+                "{name} must be rejected"
+            );
+        }
+
+        for (index, replacement) in [(7, "3"), (9, "/tmp/journal.json")] {
+            let mut malformed = manifest.clone();
+            malformed.command[index] = replacement.into();
+            assert!(
+                validate_release_contract(&malformed)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires the exact reviewed Naabu launcher command")
+            );
+        }
+    }
+
+    #[test]
+    fn launcher_journal_flags_and_versions_cannot_escape_the_naabu_v2_contract() {
+        let registry = EngineRegistry::load_builtin().expect("valid catalog");
+        let legacy = registry.get("naabu").unwrap().clone();
+
+        for injected in [
+            vec!["--journal-version", "2"],
+            vec![
+                "--journal-plan",
+                "/run/ai-security-scanner/execution-journal-v2.json",
+            ],
+            vec!["--journal-version=2"],
+            vec!["--journal-plan=/run/ai-security-scanner/execution-journal-v2.json"],
+        ] {
+            let mut undeclared = legacy.clone();
+            undeclared
+                .command
+                .extend(injected.into_iter().map(str::to_owned));
+            assert!(
+                validate_release_contract(&undeclared)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("flags require the declared version 2")
+            );
+        }
+
+        let mut unsupported = legacy.clone();
+        unsupported
+            .execution
+            .as_mut()
+            .expect("execution contract")
+            .launcher_journal_version = Some(3);
+        assert!(
+            validate_release_contract(&unsupported)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported launcher journal version")
+        );
+
+        let mut wrong_engine = registry.get("httpx").unwrap().clone();
+        wrong_engine
+            .execution
+            .as_mut()
+            .expect("execution contract")
+            .launcher_journal_version = Some(NAABU_LAUNCHER_JOURNAL_VERSION);
+        wrong_engine.command = NAABU_LAUNCHER_JOURNAL_COMMAND
+            .iter()
+            .map(|token| (*token).to_owned())
+            .collect();
+        assert!(
+            validate_release_contract(&wrong_engine)
+                .unwrap_err()
+                .to_string()
+                .contains("supported only by the reviewed Naabu launcher")
         );
     }
 

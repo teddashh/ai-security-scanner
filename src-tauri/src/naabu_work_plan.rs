@@ -8,8 +8,8 @@
 //! scope, regenerates unit identities, or resolves a hostname again.
 
 use crate::external_scope::{
-    CanonicalTarget, ExternalActivity, RatePolicy, ResolvedExternalPlan, TemplatePolicy,
-    TransportProtocol, validate_frozen_address_policy,
+    CanonicalTarget, ExternalActivity, RatePolicy, ResolutionSnapshot, ResolvedExternalPlan,
+    TemplatePolicy, TransportProtocol, validate_frozen_address_policy,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const NAABU_WORK_PLAN_SCHEMA_VERSION: u32 = 1;
+pub const NAABU_LAUNCHER_PLAN_SCHEMA_VERSION: u32 = 2;
 pub const NAABU_ENGINE_ID: &str = "naabu";
 pub const MAX_NAABU_WORK_UNITS: usize = 512;
 pub const MAX_NAABU_FROZEN_GRANTS: usize = 128;
@@ -29,6 +30,7 @@ pub const QUICK_DISCOVERY_WINDOW_SECONDS: u64 = 120;
 pub const PREFERRED_WORK_UNIT_WINDOW_SECONDS: u64 = 30 * 60;
 pub const HARD_WORK_UNIT_WINDOW_SECONDS: u64 = 4 * 60 * 60;
 pub const SCANNER_PROCESS_ALLOWANCE_SECONDS: u64 = 5;
+pub const MAX_NAABU_LAUNCHER_PLAN_BYTES: usize = 1024 * 1024;
 const WORK_UNIT_ID_PREFIX: &str = "wu_";
 const WORK_UNIT_ID_HEX_CHARACTERS: usize = 32;
 const SCOPE_HASH_SCHEMA_VERSION: u32 = 1;
@@ -142,6 +144,44 @@ pub struct NaabuWorkPlanV1 {
     pub work_units: Vec<NaabuWorkUnit>,
 }
 
+/// Private, read-only control document mounted into the reviewed Naabu
+/// launcher. The frozen corpora appear once, while each requested unit carries
+/// compact slice coordinates. This avoids expanding the address/port Cartesian
+/// product and avoids relying on Rust and Go to independently choose the same
+/// corpus order.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NaabuLauncherPlanV2 {
+    pub schema_version: u32,
+    pub engine_id: String,
+    pub engine_run_id: String,
+    pub execution_attempt: u32,
+    pub frozen_grants: Vec<NaabuLauncherFrozenGrant>,
+    pub requested_work_units: Vec<NaabuLauncherWorkUnit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NaabuLauncherFrozenGrant {
+    pub scope_grant_id: String,
+    pub addresses: Vec<IpAddr>,
+    pub ports: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NaabuLauncherWorkUnit {
+    pub unit_id: String,
+    pub scope_sha256: String,
+    pub grant_index: u32,
+    pub address_start: u32,
+    pub address_len: u32,
+    pub port_start: u32,
+    pub port_len: u32,
+    pub endpoint_pair_count: u64,
+    pub conservative_deadline_seconds: u64,
+}
+
 impl NaabuWorkPlanV1 {
     /// Intrinsically validates one saved plan without consulting DNS, a live
     /// grant, a gateway, or disposable runtime state.
@@ -149,6 +189,120 @@ impl NaabuWorkPlanV1 {
         validate_identity(&self.identity)?;
         validate_frozen_grants(&self.identity, &self.frozen_grants)?;
         validate_saved_work_units(self)
+    }
+
+    /// Reconstructs the exact gateway input from durable frozen values. Resume
+    /// callers use this path instead of consulting DNS again.
+    pub fn resolved_plans(&self) -> Result<Vec<ResolvedExternalPlan>, NaabuWorkPlanError> {
+        self.validate()?;
+        Ok(self
+            .frozen_grants
+            .iter()
+            .map(|grant| ResolvedExternalPlan {
+                grant_id: grant.grant_id.clone(),
+                case_id: grant.case_id.clone(),
+                asset_id: grant.asset_id.clone(),
+                target: grant.target.clone(),
+                resolution: ResolutionSnapshot {
+                    hostname: grant.resolved_hostname.clone(),
+                    addresses: grant.addresses.iter().copied().collect(),
+                    resolved_at: grant.resolved_at,
+                },
+                ports: grant.ports.iter().copied().collect(),
+                protocol: grant.protocol,
+                activity: grant.activity,
+                rate_policy: grant.rate_policy.clone(),
+                template_policy: grant.template_policy.clone(),
+                frozen_at: grant.grant_frozen_at,
+                expires_at: grant.expires_at,
+                allow_sensitive_networks: grant.allow_sensitive_networks,
+            })
+            .collect())
+    }
+
+    /// Projects either every saved unit or one explicit subset into the exact
+    /// launcher-v2 wire contract. A subset is emitted in original plan order;
+    /// missing IDs fail before a sidecar can be written or mounted.
+    pub fn launcher_plan_v2(
+        &self,
+        execution_attempt: u32,
+        selected_unit_ids: Option<&BTreeSet<String>>,
+    ) -> Result<NaabuLauncherPlanV2, NaabuWorkPlanError> {
+        self.validate()?;
+        if execution_attempt == 0 {
+            return Err(NaabuWorkPlanError::InvalidIdentity(
+                "launcher execution attempt must be nonzero".into(),
+            ));
+        }
+        if selected_unit_ids.is_some_and(BTreeSet::is_empty) {
+            return Err(NaabuWorkPlanError::InvalidScope(
+                "launcher work-unit selection is empty".into(),
+            ));
+        }
+        if let Some(selected) = selected_unit_ids {
+            let available = self
+                .work_units
+                .iter()
+                .map(|unit| unit.unit_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if selected.len() > self.work_units.len()
+                || selected
+                    .iter()
+                    .any(|unit_id| !available.contains(unit_id.as_str()))
+            {
+                return Err(NaabuWorkPlanError::InvalidScope(
+                    "launcher work-unit selection is not a subset of the saved plan".into(),
+                ));
+            }
+        }
+
+        let requested_work_units = self
+            .work_units
+            .iter()
+            .filter(|unit| {
+                selected_unit_ids.is_none_or(|selected| selected.contains(&unit.unit_id))
+            })
+            .map(|unit| NaabuLauncherWorkUnit {
+                unit_id: unit.unit_id.clone(),
+                scope_sha256: unit.scope_sha256.clone(),
+                grant_index: unit.grant_index,
+                address_start: unit.address_start,
+                address_len: unit.address_len,
+                port_start: unit.port_start,
+                port_len: unit.port_len,
+                endpoint_pair_count: unit.endpoint_pair_count,
+                conservative_deadline_seconds: unit.conservative_deadline_seconds,
+            })
+            .collect::<Vec<_>>();
+        if requested_work_units.is_empty() {
+            return Err(NaabuWorkPlanError::InvalidScope(
+                "launcher work-unit selection did not match the saved plan".into(),
+            ));
+        }
+        let plan = NaabuLauncherPlanV2 {
+            schema_version: NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+            engine_id: NAABU_ENGINE_ID.into(),
+            engine_run_id: self.identity.engine_run_id.clone(),
+            execution_attempt,
+            frozen_grants: self
+                .frozen_grants
+                .iter()
+                .map(|grant| NaabuLauncherFrozenGrant {
+                    scope_grant_id: grant.grant_id.clone(),
+                    addresses: grant.addresses.clone(),
+                    ports: grant.ports.clone(),
+                })
+                .collect(),
+            requested_work_units,
+        };
+        let encoded = serde_json::to_vec(&plan)
+            .map_err(|error| NaabuWorkPlanError::Hashing(error.to_string()))?;
+        if encoded.len() > MAX_NAABU_LAUNCHER_PLAN_BYTES {
+            return Err(NaabuWorkPlanError::InvalidScope(format!(
+                "launcher sidecar exceeds its {MAX_NAABU_LAUNCHER_PLAN_BYTES}-byte limit"
+            )));
+        }
+        Ok(plan)
     }
 }
 
@@ -1212,6 +1366,182 @@ mod tests {
                 && unit.conservative_deadline_seconds <= PREFERRED_WORK_UNIT_WINDOW_SECONDS
         }));
         assert_eq!(expanded_pairs(&plan), expected);
+    }
+
+    #[test]
+    fn launcher_v2_preserves_the_exact_four_unit_slash_24_rectangle_plan() {
+        let resolved = network_plan("192.168.50.0/24", 40, default_policy());
+        let expected_pairs = resolved
+            .resolution
+            .addresses
+            .iter()
+            .flat_map(|address| resolved.ports.iter().map(move |port| (*address, *port)))
+            .collect::<BTreeSet<_>>();
+        let saved = build_naabu_work_plan(identity(), &[resolved], None).expect("work plan");
+        let launcher = saved.launcher_plan_v2(1, None).expect("launcher plan");
+
+        assert_eq!(launcher.schema_version, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION);
+        assert_eq!(launcher.engine_id, NAABU_ENGINE_ID);
+        assert_eq!(launcher.engine_run_id, saved.identity.engine_run_id);
+        assert_eq!(launcher.execution_attempt, 1);
+        assert_eq!(launcher.frozen_grants.len(), 1);
+        assert_eq!(launcher.frozen_grants[0].addresses.len(), 254);
+        assert_eq!(launcher.frozen_grants[0].ports.len(), 40);
+        assert_eq!(launcher.requested_work_units.len(), 4);
+        assert!(
+            launcher
+                .requested_work_units
+                .iter()
+                .all(|unit| unit.grant_index == 0)
+        );
+
+        let mut actual_pairs = BTreeSet::new();
+        for (saved_unit, launcher_unit) in
+            saved.work_units.iter().zip(&launcher.requested_work_units)
+        {
+            assert_eq!(launcher_unit.unit_id, saved_unit.unit_id);
+            assert_eq!(launcher_unit.scope_sha256, saved_unit.scope_sha256);
+            assert_eq!(launcher_unit.address_start, saved_unit.address_start);
+            assert_eq!(launcher_unit.address_len, saved_unit.address_len);
+            assert_eq!(launcher_unit.port_start, saved_unit.port_start);
+            assert_eq!(launcher_unit.port_len, saved_unit.port_len);
+            assert_eq!(
+                launcher_unit.endpoint_pair_count,
+                saved_unit.endpoint_pair_count
+            );
+            assert_eq!(
+                launcher_unit.conservative_deadline_seconds,
+                saved_unit.conservative_deadline_seconds
+            );
+
+            let grant = &launcher.frozen_grants[launcher_unit.grant_index as usize];
+            let addresses = &grant.addresses[launcher_unit.address_start as usize
+                ..(launcher_unit.address_start + launcher_unit.address_len) as usize];
+            let ports = &grant.ports[launcher_unit.port_start as usize
+                ..(launcher_unit.port_start + launcher_unit.port_len) as usize];
+            for address in addresses {
+                for port in ports {
+                    assert!(
+                        actual_pairs.insert((*address, *port)),
+                        "launcher units must be disjoint"
+                    );
+                }
+            }
+        }
+        assert_eq!(actual_pairs, expected_pairs);
+        assert!(
+            serde_json::to_vec(&launcher).expect("launcher JSON").len()
+                <= MAX_NAABU_LAUNCHER_PLAN_BYTES
+        );
+    }
+
+    #[test]
+    fn launcher_v2_subset_is_closed_and_retains_saved_plan_order() {
+        let saved = build_naabu_work_plan(
+            identity(),
+            &[network_plan("192.168.51.0/24", 40, default_policy())],
+            None,
+        )
+        .expect("work plan");
+        let selected = [
+            saved.work_units[2].unit_id.clone(),
+            saved.work_units[0].unit_id.clone(),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        let launcher = saved
+            .launcher_plan_v2(7, Some(&selected))
+            .expect("selected launcher plan");
+        assert_eq!(launcher.execution_attempt, 7);
+        assert_eq!(
+            launcher
+                .requested_work_units
+                .iter()
+                .map(|unit| unit.unit_id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                saved.work_units[0].unit_id.as_str(),
+                saved.work_units[2].unit_id.as_str(),
+            ]
+        );
+
+        let empty = BTreeSet::new();
+        assert!(matches!(
+            saved.launcher_plan_v2(1, Some(&empty)),
+            Err(NaabuWorkPlanError::InvalidScope(_))
+        ));
+        let unknown = [format!("wu_{}", "f".repeat(32))]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert!(matches!(
+            saved.launcher_plan_v2(1, Some(&unknown)),
+            Err(NaabuWorkPlanError::InvalidScope(_))
+        ));
+        assert!(matches!(
+            saved.launcher_plan_v2(0, None),
+            Err(NaabuWorkPlanError::InvalidIdentity(_))
+        ));
+    }
+
+    #[test]
+    fn launcher_v2_wire_contract_matches_the_shared_go_fixture() {
+        let fixture = include_str!(
+            "../../engines/images/external-launcher/testdata/naabu-launcher-plan-v2.json"
+        )
+        .trim();
+        let plan: NaabuLauncherPlanV2 =
+            serde_json::from_str(fixture).expect("shared launcher-v2 fixture");
+
+        assert_eq!(plan.schema_version, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION);
+        assert_eq!(plan.engine_id, NAABU_ENGINE_ID);
+        assert_eq!(plan.engine_run_id, "run-opaque");
+        assert_eq!(plan.execution_attempt, 7);
+        assert_eq!(plan.frozen_grants.len(), 2);
+        assert_eq!(plan.requested_work_units.len(), 1);
+        assert_eq!(plan.requested_work_units[0].grant_index, 0);
+        assert_eq!(plan.requested_work_units[0].endpoint_pair_count, 1);
+        assert_eq!(
+            plan.requested_work_units[0].conservative_deadline_seconds,
+            36
+        );
+        assert_eq!(serde_json::to_string(&plan).unwrap(), fixture);
+
+        let mut unknown: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<NaabuLauncherPlanV2>(unknown).is_err());
+    }
+
+    #[test]
+    fn saved_plan_reconstructs_frozen_gateway_inputs_without_resolution() {
+        let original = resolved_plan(
+            CanonicalTarget::Hostname("app.example.test".into()),
+            Some("app.example.test"),
+            ["192.0.2.11".parse().unwrap(), "192.0.2.10".parse().unwrap()]
+                .into_iter()
+                .collect(),
+            [8_443, 443, 80],
+            default_policy(),
+        );
+        let saved = build_naabu_work_plan(identity(), &[original.clone()], None).expect("plan");
+        let reconstructed = saved.resolved_plans().expect("frozen gateway plan");
+
+        assert_eq!(reconstructed.len(), 1);
+        let reconstructed = &reconstructed[0];
+        assert_eq!(reconstructed.grant_id, original.grant_id);
+        assert_eq!(reconstructed.target, original.target);
+        assert_eq!(
+            reconstructed.resolution.hostname,
+            original.resolution.hostname
+        );
+        assert_eq!(
+            reconstructed.resolution.addresses,
+            original.resolution.addresses
+        );
+        assert_eq!(reconstructed.resolution.resolved_at, frozen_at());
+        assert_eq!(reconstructed.ports, original.ports);
+        assert_eq!(reconstructed.rate_policy, original.rate_policy);
+        assert_eq!(reconstructed.frozen_at, original.frozen_at);
+        assert_eq!(reconstructed.expires_at, original.expires_at);
     }
 
     #[test]

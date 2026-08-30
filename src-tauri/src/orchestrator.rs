@@ -1,15 +1,19 @@
 use crate::adapter::{AdapterAssetIdentifierMap, AdapterInput, AdapterRegistry};
 use crate::artifact_store::{ArtifactContext, ArtifactStore, RunDirectories};
 use crate::container_runtime::{
-    CancellationToken, CleanupOutcome, ContainerPlanBuilder, ContainerRuntime, NetworkPolicy,
-    PinnedImage, ResourceLimits, RuntimeCommandProvenance, RuntimePreflight, ScannerCredentialSet,
-    planned_container_name,
+    CancellationToken, CleanupOutcome, ContainerPlanBuilder, ContainerRuntime,
+    NAABU_LAUNCHER_PLAN_CONTROL_FILE, NetworkPolicy, PinnedImage, ResourceLimits,
+    RuntimeCommandProvenance, RuntimePreflight, ScannerCredentialSet, planned_container_name,
 };
 use crate::domain::{
     Asset, AssetIdentifier, EngineManifest, Finding, RawArtifact, ScanPermission, ScopeGrant,
 };
 use crate::error::{AppError, AppResult};
 use crate::managed_network::{GatewayDestination, ManagedNetworkIdentity};
+use crate::naabu_work_plan::{
+    MAX_NAABU_LAUNCHER_PLAN_BYTES, NAABU_ENGINE_ID, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+    NaabuLauncherPlanV2,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -244,11 +248,74 @@ pub struct EngineExecutionRequest<'a> {
     /// addresses in its scope document; every other engine keeps its existing
     /// strict scope schema.
     pub frozen_destinations: Option<&'a [GatewayDestination]>,
+    /// Private, exact launcher-v2 work-unit document. Production planning does
+    /// not populate this yet: only a future immutable Naabu manifest that
+    /// explicitly opts into launcher journal v2 may supply it.
+    pub naabu_launcher_plan: Option<&'a NaabuLauncherPlanV2>,
     pub workspace: Option<&'a Path>,
     pub network_policy: &'a NetworkPolicy,
     pub resource_limits: &'a ResourceLimits,
     pub credentials: &'a ScannerCredentialSet,
     pub attempt: u32,
+}
+
+fn validate_naabu_launcher_request(request: &EngineExecutionRequest<'_>) -> AppResult<()> {
+    let declared_version = request
+        .manifest
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.launcher_journal_version);
+    match declared_version {
+        Some(version) if version != NAABU_LAUNCHER_PLAN_SCHEMA_VERSION => {
+            return Err(AppError::EngineRegistry(format!(
+                "engine {} declares unsupported launcher journal version {version}",
+                request.manifest.id
+            )));
+        }
+        Some(_) if request.naabu_launcher_plan.is_none() => {
+            return Err(AppError::InvalidRequest(
+                "Naabu launcher journal v2 requires its private execution plan".into(),
+            ));
+        }
+        None if request.naabu_launcher_plan.is_some() => {
+            return Err(AppError::InvalidRequest(
+                "a launcher execution plan requires an explicit reviewed launcher version".into(),
+            ));
+        }
+        _ => {}
+    }
+
+    let Some(plan) = request.naabu_launcher_plan else {
+        return Ok(());
+    };
+    if request.manifest.id != NAABU_ENGINE_ID
+        || plan.schema_version != NAABU_LAUNCHER_PLAN_SCHEMA_VERSION
+        || plan.engine_id != NAABU_ENGINE_ID
+    {
+        return Err(AppError::InvalidRequest(
+            "launcher journal v2 is valid only for the reviewed Naabu contract".into(),
+        ));
+    }
+    if plan.engine_run_id != request.engine_run_id || plan.execution_attempt != request.attempt {
+        return Err(AppError::InvalidRequest(
+            "Naabu launcher plan identity does not match this engine execution".into(),
+        ));
+    }
+    if plan.frozen_grants.is_empty() || plan.requested_work_units.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "Naabu launcher plan must contain frozen grants and requested work units".into(),
+        ));
+    }
+    let encoded = serde_json::to_vec(plan).map_err(|error| {
+        AppError::InvalidRequest(format!("invalid Naabu launcher plan: {error}"))
+    })?;
+    if encoded.len() > MAX_NAABU_LAUNCHER_PLAN_BYTES {
+        return Err(AppError::InvalidRequest(format!(
+            "Naabu launcher plan exceeds the {}-byte private control limit",
+            MAX_NAABU_LAUNCHER_PLAN_BYTES
+        )));
+    }
+    Ok(())
 }
 
 pub struct Orchestrator<'a, R: ContainerRuntime> {
@@ -310,6 +377,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 "execution attempt must start at one".into(),
             ));
         }
+        validate_naabu_launcher_request(request)?;
         if request
             .manifest
             .required_permissions
@@ -336,6 +404,16 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         let scope_file =
             self.artifacts
                 .write_control_json(&directories, "scope.json", &scope_document)?;
+        let launcher_plan_file = request
+            .naabu_launcher_plan
+            .map(|launcher_plan| {
+                self.artifacts.write_control_json(
+                    &directories,
+                    NAABU_LAUNCHER_PLAN_CONTROL_FILE,
+                    launcher_plan,
+                )
+            })
+            .transpose()?;
         let plan_directories = run_directories_with_workspace(
             &directories,
             request.workspace.unwrap_or(&directories.workspace),
@@ -352,6 +430,11 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             request.scan_run_id,
             request.engine_run_id,
             request.attempt,
+        )
+        .with_launcher_plan_file(
+            launcher_plan_file
+                .as_ref()
+                .map(|control_file| control_file.path.as_path()),
         )
         .build()?;
 
@@ -1050,18 +1133,23 @@ fn run_directories_with_workspace(
 mod tests {
     use super::*;
     use crate::adapter::{AdapterOutput, EngineAdapter};
-    use crate::container_runtime::{FakeContainerRuntime, FakeRunBehavior, RuntimeCall};
+    use crate::artifact_store::CapturePaths;
+    use crate::container_runtime::{
+        ContainerRunPlan, CreatedContainer, FakeContainerRuntime, FakeRunBehavior,
+        OwnedContainerCleanupRequest, RuntimeCall, RuntimeOutcome,
+    };
     use crate::domain::{
         AssetIdentifier, AssetKind, DistributionMode, EngineCategory, EngineCompatibility,
-        ImageReference, ManifestStatus,
+        EngineExecutionContract, EngineExecutionResources, ImageReference, ManifestStatus,
     };
     use crate::external_scope::{
         CanonicalTarget, ExternalActivity, ExternalScopeGrant, RatePolicy, TemplatePolicy,
         TransportProtocol,
     };
+    use crate::naabu_work_plan::{NaabuLauncherFrozenGrant, NaabuLauncherWorkUnit};
     use chrono::Duration;
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     struct IncompleteAdapter;
 
@@ -1080,6 +1168,82 @@ mod tests {
                 warnings: vec!["one malformed record was retained only as raw evidence".into()],
                 complete: false,
             })
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ObservedLauncherPlan {
+        path: PathBuf,
+        bytes: Vec<u8>,
+        runtime_args: Vec<String>,
+    }
+
+    #[derive(Default)]
+    struct LauncherPlanCaptureRuntime {
+        observed: Mutex<Option<ObservedLauncherPlan>>,
+    }
+
+    impl LauncherPlanCaptureRuntime {
+        fn observed(&self) -> Option<ObservedLauncherPlan> {
+            self.observed.lock().expect("observed plan lock").clone()
+        }
+
+        fn preflight_result() -> RuntimePreflight {
+            RuntimePreflight {
+                provider: crate::container_runtime::RuntimeProvider::Docker,
+                server_version: "launcher-plan-test".into(),
+                security_options: "test-seccomp".into(),
+                command_provenance: RuntimeCommandProvenance::Compatibility,
+            }
+        }
+    }
+
+    impl ContainerRuntime for LauncherPlanCaptureRuntime {
+        fn preflight(&self) -> AppResult<RuntimePreflight> {
+            Ok(Self::preflight_result())
+        }
+
+        fn execution_preflight(&self) -> AppResult<RuntimePreflight> {
+            Ok(Self::preflight_result())
+        }
+
+        fn verify_network(&self, _policy: &NetworkPolicy) -> AppResult<()> {
+            Ok(())
+        }
+
+        fn pull(&self, _image: &PinnedImage) -> AppResult<()> {
+            Ok(())
+        }
+
+        fn run(
+            &self,
+            plan: &ContainerRunPlan,
+            _credentials: &ScannerCredentialSet,
+            _cancellation: &CancellationToken,
+            _capture: &CapturePaths,
+            _created_container: &mut Option<CreatedContainer>,
+        ) -> AppResult<RuntimeOutcome> {
+            let path = plan.launcher_plan_file().ok_or_else(|| {
+                AppError::Internal("launcher-v2 plan was not mounted into the run plan".into())
+            })?;
+            *self.observed.lock().expect("observed plan lock") = Some(ObservedLauncherPlan {
+                path: path.to_path_buf(),
+                bytes: std::fs::read(path)?,
+                runtime_args: plan.runtime_args().to_vec(),
+            });
+            Err(AppError::Runtime(
+                "test runtime stopped after observing the run plan".into(),
+            ))
+        }
+
+        fn cleanup(
+            &self,
+            _ownership: &OwnedContainerCleanupRequest,
+            _created_container: Option<&CreatedContainer>,
+        ) -> AppResult<CleanupOutcome> {
+            Err(AppError::Internal(
+                "launcher-plan capture runtime must not create a container".into(),
+            ))
         }
     }
 
@@ -1146,6 +1310,59 @@ mod tests {
                 ..EngineCompatibility::default()
             },
             execution: None,
+        }
+    }
+
+    fn naabu_launcher_v2_manifest() -> EngineManifest {
+        let mut manifest = manifest(true);
+        manifest.id = NAABU_ENGINE_ID.into();
+        manifest.display_name = "Naabu".into();
+        manifest.required_permissions = vec![ScanPermission::LowImpactExternalConnection];
+        manifest.command = [
+            "--engine",
+            "naabu",
+            "--scope",
+            "/run/ai-security-scanner/scope.json",
+            "--output",
+            "/output",
+            "--journal-version",
+            "2",
+            "--journal-plan",
+            "/run/ai-security-scanner/execution-journal-v2.json",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: 3_600,
+            },
+            launcher_journal_version: Some(NAABU_LAUNCHER_PLAN_SCHEMA_VERSION),
+        });
+        manifest
+    }
+
+    fn naabu_launcher_plan(engine_run_id: &str, attempt: u32) -> NaabuLauncherPlanV2 {
+        NaabuLauncherPlanV2 {
+            schema_version: NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+            engine_id: NAABU_ENGINE_ID.into(),
+            engine_run_id: engine_run_id.into(),
+            execution_attempt: attempt,
+            frozen_grants: vec![NaabuLauncherFrozenGrant {
+                scope_grant_id: "grant-one".into(),
+                addresses: vec!["192.0.2.10".parse().expect("test address")],
+                ports: vec![443],
+            }],
+            requested_work_units: vec![NaabuLauncherWorkUnit {
+                unit_id: "wu_0123456789abcdef0123456789abcdef".into(),
+                scope_sha256: "b".repeat(64),
+                grant_index: 0,
+                address_start: 0,
+                address_len: 1,
+                port_start: 0,
+                port_len: 1,
+                endpoint_pair_count: 1,
+                conservative_deadline_seconds: 36,
+            }],
         }
     }
 
@@ -1412,6 +1629,172 @@ mod tests {
     }
 
     #[test]
+    fn naabu_launcher_v2_sidecar_reaches_the_exact_read_only_run_plan_mount() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = LauncherPlanCaptureRuntime::default();
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = naabu_launcher_v2_manifest();
+        let assets = vec![asset("one", true)];
+        let grants = vec![grant(
+            "one",
+            ScanPermission::LowImpactExternalConnection,
+            true,
+        )];
+        let frozen_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: ["192.0.2.10".parse().expect("test address")]
+                .into_iter()
+                .collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let launcher_plan = naabu_launcher_plan("engine-run-1", 1);
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: Some(&frozen_destinations),
+            naabu_launcher_plan: Some(&launcher_plan),
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("captured launcher plan report");
+        assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
+        assert!(
+            report
+                .checkpoint
+                .last_error
+                .as_deref()
+                .is_some_and(|message| message.contains("stopped after observing"))
+        );
+
+        let observed = runtime
+            .observed()
+            .expect("run plan reached runtime boundary");
+        let expected_path = std::fs::canonicalize(
+            temp.path()
+                .join("artifacts/case-1/run-1/engine-run-1/attempt-1/control")
+                .join(NAABU_LAUNCHER_PLAN_CONTROL_FILE),
+        )
+        .expect("canonical launcher plan");
+        assert_eq!(observed.path, expected_path);
+        assert!(
+            std::fs::metadata(&observed.path)
+                .expect("launcher plan metadata")
+                .permissions()
+                .readonly()
+        );
+        assert_eq!(
+            serde_json::from_slice::<NaabuLauncherPlanV2>(&observed.bytes)
+                .expect("typed launcher plan"),
+            launcher_plan
+        );
+        let expected_mount = format!(
+            "type=bind,src={},dst=/run/ai-security-scanner/execution-journal-v2.json,readonly",
+            observed.path.display()
+        );
+        assert_eq!(
+            observed
+                .runtime_args
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--mount"
+                        && arguments[1]
+                            .contains("/run/ai-security-scanner/execution-journal-v2.json"))
+                    .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>(),
+            [expected_mount.as_str()]
+        );
+    }
+
+    #[test]
+    fn mismatched_naabu_launcher_identity_is_rejected_before_runtime_or_sidecar_write() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = naabu_launcher_v2_manifest();
+        let assets = vec![asset("one", true)];
+        let grants = vec![grant(
+            "one",
+            ScanPermission::LowImpactExternalConnection,
+            true,
+        )];
+        let frozen_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: ["192.0.2.10".parse().expect("test address")]
+                .into_iter()
+                .collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let launcher_plan = naabu_launcher_plan("another-engine-run", 1);
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: Some(&frozen_destinations),
+            naabu_launcher_plan: Some(&launcher_plan),
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let error = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect_err("mismatched launcher identity must fail closed");
+        assert!(error.to_string().contains("identity does not match"));
+        assert!(runtime.calls().is_empty());
+        assert!(
+            !temp
+                .path()
+                .join("artifacts/case-1/run-1/engine-run-1/attempt-1/control")
+                .join(NAABU_LAUNCHER_PLAN_CONTROL_FILE)
+                .exists()
+        );
+    }
+
+    #[test]
     fn successful_runtime_without_adapter_stops_at_captured_artifacts() {
         let temp = tempfile::tempdir().expect("temp directory");
         let workspace = temp.path().join("workspace");
@@ -1449,6 +1832,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1510,6 +1894,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1585,6 +1970,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1641,6 +2027,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1700,6 +2087,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1770,6 +2158,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: None,
             network_policy: &policy,
             resource_limits: &limits,
@@ -1824,6 +2213,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1868,6 +2258,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1933,6 +2324,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,
@@ -1988,6 +2380,7 @@ mod tests {
             assets: &assets,
             scope_grants: &grants,
             frozen_destinations: None,
+            naabu_launcher_plan: None,
             workspace: Some(&workspace),
             network_policy: &policy,
             resource_limits: &limits,

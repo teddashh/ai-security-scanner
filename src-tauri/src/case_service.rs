@@ -8775,6 +8775,7 @@ mod tests {
             resources: EngineExecutionResources {
                 timeout_seconds: 7_200,
             },
+            launcher_journal_version: None,
         });
         let engine_run = not_executed_run(
             "scan-1",
@@ -8870,6 +8871,7 @@ mod tests {
             resources: EngineExecutionResources {
                 timeout_seconds: 3_600,
             },
+            launcher_journal_version: None,
         });
         let error = validate_resume_manifest_identity(
             &legacy,
