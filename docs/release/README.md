@@ -200,7 +200,7 @@ The release page must say when an attestation or OS signature is absent rather t
 
 ## 8. Historical release notes
 
-Release-line files preserve what a candidate/release claimed or planned at that time. They are historical, non-normative records and cannot reintroduce current runtime, consent, recovery, or global-release requirements:
+Release-line files preserve what a candidate/release claimed or planned at that time. They are historical, non-normative records and cannot reintroduce current runtime, consent, recovery, or global-release requirements. A section labeled **superseded** records a design that must not be copied into current code, tests, workflows, or user guidance; use the canonical specification and current implementation references instead:
 
 - [v0.1.1](v0.1.1.md)
 - [v0.1.2](v0.1.2.md)
@@ -212,4 +212,4 @@ Release-line files preserve what a candidate/release claimed or planned at that 
 - [v0.1.8](v0.1.8.md)
 - [v0.2.0](v0.2.0.md)
 
-Where a historical note conflicts with the canonical product specification, the canonical specification controls. Current implementation gaps remain in the product audit until code and real-boundary evidence close them.
+Where a historical note conflicts with the canonical product specification, the conflicting behavior is identified in that note as superseded rather than left as an apparently reusable requirement. Current implementation gaps remain in the product audit until code and real-boundary evidence close them.
