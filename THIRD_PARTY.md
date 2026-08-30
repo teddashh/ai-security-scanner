@@ -35,8 +35,8 @@ The `ai-security-scanner` repository currently carries the Apache License 2.0 in
 | Prowler | [prowler-cloud/prowler](https://github.com/prowler-cloud/prowler) | Apache-2.0 | Project-managed image with exact AWS-account, Azure-subscription, and GCP-project IAM profiles and required notices | ALLOW |
 | ScoutSuite | [nccgroup/ScoutSuite](https://github.com/nccgroup/ScoutSuite) | GPL-2.0-only | Project-managed image carrying exact source, patch, build recipe, and notices | SOURCE_OFFER |
 | Cloudsplaining | [salesforce/cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Project-managed image with the upstream notice | ALLOW |
-| ScubaGear | [cisagov/ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 plus pinned module terms | Project-managed image carrying module source and notices | ALLOW |
-| Maester | [maester365/maester](https://github.com/maester365/maester) | MIT plus pinned module terms | Project-managed image carrying module source and notices | ALLOW |
+| ScubaGear | [cisagov/ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 plus pinned module terms | Wrapper-hardened project-managed image candidate with module source and notices; no immutable current image is offered until independent publication evidence is recorded | ALLOW for the candidate's recorded license closure; currently not runnable |
+| Maester | [maester365/maester](https://github.com/maester365/maester) | MIT plus pinned module terms | Wrapper-hardened project-managed image candidate with module source and notices; no immutable current image is offered until independent publication evidence is recorded | ALLOW for the candidate's recorded license closure; currently not runnable |
 | Naabu | [projectdiscovery/naabu](https://github.com/projectdiscovery/naabu) | MIT upstream; Apache-2.0 launcher | Project-managed image with fixed bounded launcher | ALLOW |
 | httpx | [projectdiscovery/httpx](https://github.com/projectdiscovery/httpx) | MIT upstream; Apache-2.0 launcher | Project-managed image with fixed bounded launcher | ALLOW |
 | Nuclei and selected templates | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei), [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) | MIT upstream; Apache-2.0 launcher | Project-managed image with one exact allowlisted template snapshot | ALLOW |
@@ -182,4 +182,6 @@ The release workflow enforces the mechanical evidence requirements below. They s
 8. Record the decision in the engine catalog, plan, generated notices, and release evidence.
 9. Exclude only the exact engine artifact from distribution and execution when its catalog entry is non-runnable, blocked, lacks an immutable artifact digest, or lacks an `allow`/`source_offer` disposition. The stable application and unaffected admitted engines may still ship with an explicit support matrix and coverage gap.
 
-This file must be updated whenever a required engine, runtime component, ruleset, feed, database, plugin, or license changes.
+This file must be updated whenever a catalog engine, offered runtime component, ruleset, feed,
+database, plugin, or license relationship changes. That maintenance obligation does not make every
+catalog entry a product-wide release requirement.
