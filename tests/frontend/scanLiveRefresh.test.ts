@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   mergeWorkspaceIntoSnapshot,
   reconcileAuthoritativeSnapshot,
+  selectNewerWorkspaceByRevision,
 } from "../../src/snapshotWorkspace.ts";
 import type { AppSnapshot, AssessmentCase, CaseWorkspace } from "../../src/types.ts";
 
@@ -186,16 +187,53 @@ test("unorderable case timestamps fail closed", () => {
   assert.equal(validIncoming, current);
 });
 
+test("a delayed older post-action event cannot replace newer render-time truth", () => {
+  const newerRenderTime = workspace(
+    "case-a",
+    "Already failed",
+    "2026-08-27T12:00:00.000000004Z",
+    "failed-run",
+  );
+  const delayedProgressEvent = workspace(
+    "case-a",
+    "Old queued event",
+    "2026-08-27T12:00:00.000000002Z",
+    "queued-run",
+  );
+
+  const selected = selectNewerWorkspaceByRevision(delayedProgressEvent, newerRenderTime);
+  assert.equal(selected, newerRenderTime);
+  assert.equal(selected.runs[0]?.id, "failed-run");
+});
+
 test("scan lifecycle actions and events carry the authoritative workspace into App state", () => {
   const scannerSource = readFileSync(new URL("../../src/services/scanner.ts", import.meta.url), "utf8");
   const appSource = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
 
   assert.match(scannerSource, /workspace: returnWorkspace \? workspace : undefined/u);
+  const actionResultStart = scannerSource.indexOf("const actionResult = async");
+  const actionResultEnd = scannerSource.indexOf("const employeeRanges", actionResultStart);
+  const actionResultSource = scannerSource.slice(actionResultStart, actionResultEnd);
+  assert.ok(actionResultStart >= 0 && actionResultEnd > actionResultStart);
+  assert.match(actionResultSource, /adaptNativeCase\(returnedCase, \[\]\)/u);
+  assert.doesNotMatch(actionResultSource, /getNativeManifests|listEngineManifests/u);
   assert.match(scannerSource, /eventNames: \[EVENTS\.runProgress, EVENTS\.runFinished\]/u);
   assert.match(scannerSource, /subscribeBufferedEvents/u);
   assert.match(scannerSource, /adapt:[\s\S]*?adaptNativeCase\(event\.payload, manifests\)/u);
   assert.match(appSource, /scannerService\.subscribeScanWorkspace/u);
   assert.match(appSource, /applyScanWorkspaceEvent\(workspace\)/u);
+  assert.match(appSource, /observedScanWorkspaces\.current\.get\(lifecycleCaseId\)[\s\S]*const eventTruth = selectNewerWorkspaceByRevision\([\s\S]*observed\.workspace,[\s\S]*observed\.freshestWorkspace[\s\S]*observed\.generation > workspaceEventGenerationAtRequest[\s\S]*selectNewerWorkspaceByRevision\(eventTruth, selectedWorkspace\)[\s\S]*: eventTruth[\s\S]*: selectNewerWorkspaceByRevision\(selectedWorkspace, observed\.freshestWorkspace\)/u);
+  assert.match(appSource, /observedScanWorkspaces\.current\.set\(workspace\.case\.id, \{[\s\S]*generation,[\s\S]*workspace,[\s\S]*freshestWorkspace/u);
+  assert.match(appSource, /deriveScanLifecycleDisposition\([\s\S]*selectedWorkspace[\s\S]*lifecycleDisposition\.runId/u);
+  assert.match(appSource, /scanLifecycleToastPresentation\(lifecycleDisposition\)/u);
+  assert.match(appSource, /lifecycleDisposition\?\.outcome === "unconfirmed"[\s\S]*void loadSnapshot/u);
+  const unconfirmedRefreshStart = appSource.indexOf('if (lifecycleDisposition?.outcome === "unconfirmed"');
+  const unconfirmedRefreshEnd = appSource.indexOf("\n      }", unconfirmedRefreshStart);
+  const unconfirmedRefresh = appSource.slice(unconfirmedRefreshStart, unconfirmedRefreshEnd);
+  assert.ok(unconfirmedRefreshStart >= 0 && unconfirmedRefreshEnd > unconfirmedRefreshStart);
+  assert.equal([...unconfirmedRefresh.matchAll(/loadSnapshot\(/gu)].length, 1);
+  assert.match(unconfirmedRefresh, /void loadSnapshot/u);
+  assert.doesNotMatch(unconfirmedRefresh, /await loadSnapshot/u);
   assert.match(appSource, /reconcileAuthoritativeSnapshot/u);
   assert.match(appSource, /observed\.generation > workspaceEventGenerationAtRequest/u);
   const registrationStart = appSource.indexOf("const subscriptions = subscribeAllThenReconcile");

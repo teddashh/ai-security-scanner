@@ -767,6 +767,9 @@ const adaptGatewayFailure = (
   message: string,
   errorCode = "execution_failed",
   checkpointStage = "failed",
+  phase = "failed",
+  warnings = errorCode === "resume_release_incompatible" ? [message] : [],
+  cleanupDetail?: string,
 ) => {
   const checkpoint = JSON.stringify({
     case_id: "case-1",
@@ -813,7 +816,7 @@ const adaptGatewayFailure = (
         asset_ids: ["private-asset-id"],
         status: "failed",
         progress_percent: 0,
-        phase: "failed",
+        phase,
         started_at: "2026-08-26T12:02:00Z",
         finished_at: "2026-08-26T12:02:01Z",
         resume_token: checkpoint,
@@ -825,7 +828,8 @@ const adaptGatewayFailure = (
         raw_artifact_ids: [],
         error_code: errorCode,
         error_message: message,
-        warnings: errorCode === "resume_release_incompatible" ? [message] : [],
+        cleanup_detail: cleanupDetail,
+        warnings,
       }],
     }],
     findings: [],
@@ -966,6 +970,7 @@ test("built-in localhost work exposes its exact task and observation without cat
 const adaptLocalhostCoverageFixture = (
   engineOverrides: Record<string, unknown>,
   assetOverrides: Record<string, unknown> = {},
+  manifests: Array<Record<string, unknown>> = [],
 ) => adaptNativeCase(platformCaseFixture({
   data_sources: [],
   assets: [{
@@ -1016,7 +1021,7 @@ const adaptLocalhostCoverageFixture = (
       ...engineOverrides,
     }],
   }],
-}));
+}), manifests);
 
 test("completed status alone never gives a built-in localhost task covered-target credit", () => {
   assert.equal(adaptLocalhostCoverageFixture({}).runs[0]?.coveredAssetCount, 0);
@@ -1041,6 +1046,32 @@ test("completed status alone never gives a built-in localhost task covered-targe
       observed_at: "2026-08-30T12:00:01Z",
     },
   }).runs[0]?.coveredAssetCount, 0);
+});
+
+test("a lookalike engine cannot claim built-in localhost provenance or coverage", () => {
+  const workspace = adaptLocalhostCoverageFixture({
+    engine_id: "lookalike-localhost-engine",
+    engine_version: "1.2.3",
+    image_digest: "sha256:lookalike",
+    localhost_tcp_observation: {
+      outcome: "reachable",
+      observed_at: "2026-08-30T12:00:01Z",
+    },
+  }, {}, [{
+    id: "lookalike-localhost-engine",
+    name: "Catalog lookalike",
+    category: "network",
+    version: "1.2.3",
+    imageDigest: "sha256:lookalike",
+  }]);
+
+  const task = workspace.runs[0]?.engineRuns[0];
+  assert.equal(task?.engineName, "Catalog lookalike");
+  assert.equal(task?.category, "network");
+  assert.equal(task?.version, "1.2.3");
+  assert.equal(task?.digest, "sha256:lookalike");
+  assert.equal(task?.localhostTcpObservation, undefined);
+  assert.equal(workspace.runs[0]?.coveredAssetCount, 0);
 });
 
 test("a durable no-checks request is terminal and excludes the raw backend explanation", () => {
@@ -1176,7 +1207,44 @@ test("ambiguous cleanup identity never offers an unsafe cleanup retry", () => {
   assert.equal(failed?.resumable, false);
   assert.equal(failed?.checkpoint?.lastError, undefined);
   assert.deepEqual(failed?.warnings, []);
+  assert.equal(
+    failed?.message,
+    "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
+  );
+  assert.doesNotMatch(failed?.message ?? "", /runtime|identity|cleanup|執行環境|識別|清理/iu);
   assert.doesNotMatch(JSON.stringify(failed), /RAW_CLEANUP_SENTINEL|private-runtime-path/u);
+});
+
+test("preserved-cleanup phases override a legacy error code without leaking or offering restart", () => {
+  for (const phase of [
+    "cleanup_identity_unavailable",
+    "interrupted_restart_cleanup_identity_unavailable",
+  ]) {
+    const rawBackendText = `egress gateway exited before becoming ready RAW_PHASE_SENTINEL ${phase}`;
+    const failed = adaptGatewayFailure(
+      rawBackendText,
+      "execution_failed",
+      "cleanup_pending",
+      phase,
+      [rawBackendText],
+      rawBackendText,
+    ).runs[0]?.engineRuns[0];
+
+    assert.equal(failed?.phase, phase);
+    assert.equal(failed?.errorCode, "runtime_cleanup_identity_unavailable");
+    assert.equal(failed?.failureKind, undefined);
+    assert.equal(failed?.recoveryAction, "none");
+    assert.equal(failed?.resumable, false);
+    assert.equal(failed?.checkpoint?.lastError, undefined);
+    assert.equal(failed?.cleanupDetail, undefined);
+    assert.deepEqual(failed?.warnings, []);
+    assert.equal(
+      failed?.message,
+      "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
+    );
+    assert.doesNotMatch(failed?.message ?? "", /runtime|identity|cleanup|執行環境|識別|清理/iu);
+    assert.doesNotMatch(JSON.stringify(failed), /RAW_PHASE_SENTINEL|egress gateway exited/u);
+  }
 });
 
 test("every product-owned gateway preparation marker maps to one redacted failure category", () => {

@@ -13,6 +13,10 @@ import {
   DEFAULT_LOCALHOST_QUICK_SCAN_PORT,
   isValidLocalhostQuickScanPort,
 } from "../localhostQuickScan";
+import {
+  deriveScanLifecycleDisposition,
+  type ScanLifecycleDisposition,
+} from "../scanLifecycleDisposition";
 import type {
   AppSnapshot,
   AttachWorkspaceSnapshotInput,
@@ -228,22 +232,36 @@ const actionResult = async (
   demoMessage: string,
   returnWorkspace = false,
 ): Promise<ServiceResult<ActionResponse>> => {
+  const runId = typeof args.runId === "string" ? args.runId : undefined;
+  const lifecycleAction = command === COMMANDS.cancelScan
+    ? "cancel"
+    : command === COMMANDS.resumeScan
+      ? "resume"
+      : undefined;
   if (!isNativeSurface()) {
     return demoResult({ accepted: false, message: demoMessage });
   }
   try {
     const returnedCase = await invoke<NativeAssessmentCase>(command, args);
-    const workspace = adaptNativeCase(
-      returnedCase,
-      returnWorkspace ? (await getNativeManifests()).map(adaptNativeManifest) : [],
-    );
+    // Mutation acknowledgement must never wait for the optional catalog read.
+    // Events and the next bounded snapshot refresh can enrich engine metadata.
+    const workspace = adaptNativeCase(returnedCase, []);
     return nativeResult({
       accepted: true,
       message: nativeMessage,
       workspace: returnWorkspace ? workspace : undefined,
+      lifecycleDisposition: lifecycleAction && runId
+        ? deriveScanLifecycleDisposition(lifecycleAction, workspace, runId)
+        : undefined,
     });
   } catch (error) {
-    return nativeResult({ accepted: false, message: errorMessage(error) });
+    return nativeResult({
+      accepted: false,
+      message: errorMessage(error),
+      lifecycleDisposition: lifecycleAction && runId
+        ? deriveScanLifecycleDisposition(lifecycleAction, undefined, runId)
+        : undefined,
+    });
   }
 };
 
@@ -303,6 +321,7 @@ export interface ActionResponse {
   message: string;
   snapshot?: AppSnapshot;
   workspace?: CaseWorkspace;
+  lifecycleDisposition?: ScanLifecycleDisposition;
 }
 
 export type CaseExportVerificationResult =
@@ -707,19 +726,31 @@ export const scannerService = {
       };
       return isNativeSurface() ? nativeResult(response) : demoResult(response);
     }
-    return actionResult(
-      COMMANDS.startLocalhostQuickScan,
-      { port },
-      serviceText(
-        "The localhost check was saved and started.",
-        "本機連接埠檢查已儲存並開始。",
-      ),
-      serviceText(
-        "Browser demo mode did not contact this computer or start a real scan.",
-        "瀏覽器展示模式沒有連線這台電腦，也沒有開始真實掃描。",
-      ),
-      true,
-    );
+    if (!isNativeSurface()) {
+      return demoResult({
+        accepted: false,
+        message: serviceText(
+          "Browser demo mode did not contact this computer or start a real scan.",
+          "瀏覽器展示模式沒有連線這台電腦，也沒有開始真實掃描。",
+        ),
+      });
+    }
+    try {
+      // The returned case contains only the product-owned localhost task, so it
+      // needs no catalog context. Waiting for engine manifests here would put an
+      // unrelated optional read back on the first-value path.
+      const returnedCase = await invoke<NativeAssessmentCase>(COMMANDS.startLocalhostQuickScan, { port });
+      return nativeResult({
+        accepted: true,
+        message: serviceText(
+          "The localhost check was saved. Scan progress will show when the connection begins.",
+          "本機連接埠檢查已儲存；開始連線時會顯示在掃描進度。",
+        ),
+        workspace: adaptNativeCase(returnedCase, []),
+      });
+    } catch (error) {
+      return nativeResult({ accepted: false, message: errorMessage(error) });
+    }
   },
 
   async updateFindingWorkflow(input: FindingWorkflowUpdateInput): Promise<ServiceResult<ActionResponse>> {
@@ -802,7 +833,7 @@ export const scannerService = {
     return actionResult(
       COMMANDS.resumeScan,
       { caseId, runId },
-      serviceText("The selected scan was queued to continue.", "選定的掃描已排入佇列，準備繼續。"),
+      serviceText("The latest saved scan state was returned.", "已傳回最新保存的掃描狀態。"),
       serviceText("Demo mode has no real scan to resume.", "展示模式沒有可繼續的真實掃描。"),
       true,
     );
@@ -812,7 +843,10 @@ export const scannerService = {
     return actionResult(
       COMMANDS.cancelScan,
       { caseId, runId },
-      serviceText("The selected scan was cancelled and the case now needs attention.", "選定的掃描已取消，案件現在需要處理。"),
+      serviceText(
+        "The latest saved scan state was returned.",
+        "已傳回最新保存的掃描狀態。",
+      ),
       serviceText("Demo mode has no real scan to cancel.", "展示模式沒有可取消的真實掃描。"),
       true,
     );

@@ -5,6 +5,10 @@ import { EmptyState, InlineNotice, MetricCard, PageHeader, ProgressBar } from ".
 import { StatusPill } from "../components/StatusPill";
 import { useI18n, type BilingualText } from "../i18n";
 import { engineStatusMeta, executionStageMeta, runStatusMeta } from "../lib";
+import {
+  isExactBuiltInLocalhostQuickScanRun,
+  isLocalhostQuickScanCancelRequested,
+} from "../localhostQuickScan";
 import { localhostTcpBeginnerSummary } from "../localhostTcpPresentation";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import {
@@ -403,9 +407,12 @@ const copy = {
   retry: { en: "Retry stopped checks", zhTW: "重試已停止的檢查" },
   recoverMixed: { en: "Continue or retry unfinished checks", zhTW: "繼續或重試未完成的檢查" },
   cancel: { en: "Cancel this run", zhTW: "取消這一輪" },
+  stopping: { en: "Stopping…", zhTW: "正在停止…" },
   pauseAria: { en: "Pause scan run {id}", zhTW: "暫停掃描輪次 {id}" },
   resumeAria: { en: "Resume scan run {id}", zhTW: "續跑掃描輪次 {id}" },
   cancelAria: { en: "Cancel scan run {id}", zhTW: "取消掃描輪次 {id}" },
+  stoppingAria: { en: "Stopping scan run {id}", zhTW: "正在停止掃描輪次 {id}" },
+  cancelRequestedPhase: { en: "Stopping the connection", zhTW: "正在停止連線" },
   chooseRun: { en: "Choose a scan run", zhTW: "選擇掃描輪次" },
   viewRun: { en: "View run", zhTW: "查看輪次" },
   latest: { en: "Latest · ", zhTW: "最新 · " },
@@ -783,6 +790,7 @@ export function ProgressPage({
   const phaseLabel = (engine: EngineRun): string => {
     if (engine.phase === "interrupted_restart") return text(copy.interruptedPhase);
     if (engine.phase === "queued_for_resume") return text(copy.queuedResumePhase);
+    if (engine.phase === "cancel_requested") return text(copy.cancelRequestedPhase);
     if (isExecutionStage(engine.phase)) return executionStageMeta[engine.phase].label;
     return text(copy.unknownPhase);
   };
@@ -932,7 +940,9 @@ export function ProgressPage({
   const visibleWorkCount = sharedInfrastructureFailure
     ? 1 + (skipped && !blocked ? 1 : 0)
     : visibleEngineRuns.length + (skipped && !blocked ? 1 : 0);
-  const canPause = selectedRun.status === "running";
+  const exactLocalhostQuickScan = isExactBuiltInLocalhostQuickScanRun(selectedRun);
+  const localhostCancelRequested = isLocalhostQuickScanCancelRequested(selectedRun);
+  const canPause = selectedRun.status === "running" && !exactLocalhostQuickScan;
   const recoverableEngines = selectedRun.engineRuns.filter((engine) => engine.resumable);
   const hasResumableEngine = recoverableEngines.length > 0;
   const recoveryActions = new Set(recoverableEngines.map((engine) =>
@@ -946,8 +956,10 @@ export function ProgressPage({
   const canResume = !startFreshScan && (
     selectedRun.status === "paused"
     || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine)
+  ) && !exactLocalhostQuickScan;
+  const canCancel = !localhostCancelRequested && (
+    selectedRun.status === "running" || selectedRun.status === "paused" || selectedRun.status === "queued"
   );
-  const canCancel = selectedRun.status === "running" || selectedRun.status === "paused" || selectedRun.status === "queued";
   const hasReleaseIncompatibleWork = selectedRun.engineRuns.some(
     (engine) => engine.errorCode === "resume_release_incompatible",
   );
@@ -1001,6 +1013,11 @@ export function ProgressPage({
               <button className="button button--danger-ghost" type="button" disabled={busy} aria-label={text(copy.cancelAria, { id: selectedRun.id })} onClick={() => void onCancel(selectedRun.id)}>
                 <Icon name="stop" size={17} />{text(copy.cancel)}
               </button>
+            )}
+            {localhostCancelRequested && (
+              <span className="button button--danger-ghost" role="status" aria-live="polite" aria-label={text(copy.stoppingAria, { id: selectedRun.id })}>
+                <Icon name="progress" size={17} />{text(copy.stopping)}
+              </span>
             )}
           </div>
         )}
@@ -1346,7 +1363,7 @@ export function ProgressPage({
                   ? "info"
                   : localhostSummary.outcome === "failed"
                     ? "danger"
-                    : localhostSummary.outcome === "in_progress"
+                    : localhostSummary.outcome === "in_progress" || localhostSummary.outcome === "cancelling"
                       ? meta.tone
                       : "warning";
               return (

@@ -135,6 +135,10 @@ const nextStepCopy = {
     en: "Start a new scan to run this check with the installed release. The saved scan stays unchanged.",
     zhTW: "請開始新的掃描，以目前安裝的版本執行這項檢查；已保存的掃描不會變更。",
   },
+  cleanupIdentityUnavailable: {
+    en: "This check ended safely, and its older data and results were kept. Start a new scan when you want fresh results; nothing else is required.",
+    zhTW: "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
+  },
   mixedSkippedSetup: {
     en: "Finish the target or cloud step shown, then try the unfinished checks again. The app prepares its scan tools automatically.",
     zhTW: "請完成畫面上的目標或雲端步驟，再重試未完成的檢查；程式會自動準備掃描工具。",
@@ -223,6 +227,9 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
   if (engine.failureKind === "gateway_preparation_failed") return nextStepCopy.gatewayPreparation;
   if (engine.errorCode === "provider_rate_limited") return nextStepCopy.providerBusy;
   if (engine.errorCode === "resume_release_incompatible") return nextStepCopy.releaseIncompatible;
+  if (engine.errorCode === "runtime_cleanup_identity_unavailable") {
+    return nextStepCopy.cleanupIdentityUnavailable;
+  }
   if (engine.status === "partial") return nextStepCopy.partial;
   if (targetSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.targetSetup;
   if (providerSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.providerSetup;

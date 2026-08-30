@@ -87,6 +87,31 @@ test("missing observations never turn completed, failed, or cancelled work into 
   }
 });
 
+test("a durable stop request remains non-terminal until the connection has stopped", () => {
+  const stopping = localhostTcpBeginnerSummary(engine({
+    status: "running",
+    phase: "cancel_requested",
+    localhostTcpObservation: undefined,
+  }));
+  assert.ok(stopping);
+  assert.equal(stopping.outcome, "cancelling");
+  assert.match(stopping.title.en, /Stopping/u);
+  assert.match(stopping.outcomeLabel.en, /no observation yet/u);
+  assert.match(stopping.nextStep.en, /three-second maximum/u);
+  assert.match(stopping.nextStep.en, /only after the connection has stopped/u);
+  assert.doesNotMatch(`${stopping.nextStep.en} ${stopping.nextStep.zhTW}`, /target contact|目標連線/u);
+  assert.doesNotMatch(`${stopping.title.en} ${stopping.outcomeLabel.en}`, /\bCancelled\b/iu);
+
+  const cancelled = localhostTcpBeginnerSummary(engine({
+    status: "cancelled",
+    phase: "cancelled",
+    localhostTcpObservation: undefined,
+  }));
+  assert.ok(cancelled);
+  assert.equal(cancelled.outcome, "cancelled");
+  assert.match(cancelled.outcomeLabel.en, /^Cancelled/u);
+});
+
 test("a conflicting terminal status and observation is disclosed instead of presented as reachability", () => {
   for (const mismatch of [
     engine({
@@ -128,6 +153,9 @@ test("catalog work is not relabeled as a localhost result", () => {
     taskKind: { kind: "catalog_engine" },
     localhostTcpObservation: undefined,
   })), undefined);
+  assert.equal(localhostTcpBeginnerSummary(engine({
+    engineId: "lookalike-localhost-engine",
+  })), undefined, "a built-in-shaped task still needs the product-owned engine identity");
 });
 
 test("result pages use the bounded summary and keep catalog provenance out of the built-in branch", async () => {
@@ -142,6 +170,7 @@ test("result pages use the bounded summary and keep catalog provenance out of th
     progress,
     /localhostSummary\.outcome === "reachable"[\s\S]*?\? "info"/u,
   );
+  assert.match(progress, /localhostSummary\.outcome === "in_progress" \|\| localhostSummary\.outcome === "cancelling"/u);
   assert.doesNotMatch(
     progress,
     /localhostSummary\.outcome === "reachable"[\s\S]{0,80}\? "positive"/u,

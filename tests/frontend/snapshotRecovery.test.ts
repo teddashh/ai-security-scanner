@@ -60,6 +60,77 @@ const { scannerService: packagedScannerService } = await import(
   `data:text/javascript;base64,${Buffer.from(packagedBundleSource).toString("base64")}`
 );
 
+const queuedLocalhostNativeCase = () => ({
+  id: "localhost-case",
+  title: "This computer · 127.0.0.1:9001",
+  assessment_intent: "internal_it_environment",
+  profile: {
+    organization_name: "This computer",
+    employee_range: "Not provided",
+    data_classes: ["general"],
+    notes: null,
+  },
+  status: "scanning",
+  created_at: "2026-08-30T12:00:00.000000001Z",
+  updated_at: "2026-08-30T12:00:00.000000002Z",
+  is_demo: false,
+  requested_activities: ["low_impact_external_checks"],
+  data_sources: [],
+  assets: [{
+    id: "localhost-asset",
+    kind: "web_service",
+    name: "127.0.0.1:9001",
+    provider: null,
+    region: null,
+    identifiers: [{ namespace: "localhost_tcp_endpoint", value: "127.0.0.1:9001" }],
+    discovered_from: [],
+    candidate: false,
+    owner_confirmed: true,
+    internet_exposed: false,
+    contains_sensitive_data: false,
+    metadata: {},
+  }],
+  scope_grants: [],
+  coverage: [],
+  scan_runs: [{
+    id: "localhost-run",
+    case_id: "localhost-case",
+    sequence: 1,
+    created_at: "2026-08-30T12:00:00.000000001Z",
+    completed_at: null,
+    knowledge_cutoff: "2026-08-30T00:00:00Z",
+    engine_runs: [{
+      id: "localhost-task",
+      engine_id: "built-in-localhost-tcp",
+      task_kind: {
+        kind: "built_in_localhost_tcp",
+        port: 9001,
+        timeout_ms: 3000,
+        payload_bytes: 0,
+      },
+      localhost_tcp_observation: null,
+      asset_ids: ["localhost-asset"],
+      status: "queued",
+      progress_percent: 0,
+      phase: "queued",
+      started_at: null,
+      finished_at: null,
+      resume_token: null,
+      engine_version: null,
+      image_digest: null,
+      rule_version: null,
+      adapter_version: "built-in",
+      raw_artifact_ids: [],
+      error_code: null,
+      error_message: null,
+      warnings: [],
+    }],
+  }],
+  findings: [],
+  exports: [],
+  comparisons: [],
+});
+
 test("native snapshot failures reject instead of returning synthetic demo projects", async () => {
   setTestWindow({
     __TAURI_INTERNALS__: {
@@ -120,6 +191,190 @@ test("the native localhost quick scan invokes its command once with the default 
     assert.equal(result.data.accepted, false);
     assert.equal(result.data.workspace, undefined);
   }
+});
+
+test("queued localhost first value does not wait for an unrelated manifest read", async () => {
+  let manifestReads = 0;
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string, args: unknown) => {
+        if (command === COMMANDS.startLocalhostQuickScan) {
+          assert.deepEqual(args, { port: 9001 });
+          return queuedLocalhostNativeCase();
+        }
+        if (command === COMMANDS.listEngineManifests) {
+          manifestReads += 1;
+          return new Promise<never>(() => undefined);
+        }
+        throw new Error(`unexpected command: ${command}`);
+      },
+    },
+  });
+
+  const result = await Promise.race([
+    scannerService.startLocalhostQuickScan(),
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error("localhost start waited for engine manifests")), 250);
+    }),
+  ]);
+
+  assert.equal(result.mode, "native");
+  assert.equal(result.data.accepted, true);
+  assert.equal(result.data.workspace?.case.id, "localhost-case");
+  assert.equal(result.data.workspace?.runs[0]?.status, "queued");
+  assert.deepEqual(result.data.workspace?.runs[0]?.engineRuns[0]?.taskKind, {
+    kind: "built_in_localhost_tcp",
+    port: 9001,
+    timeoutMs: 3000,
+    payloadBytes: 0,
+  });
+  assert.equal(manifestReads, 0);
+});
+
+test("scan lifecycle mutation acknowledgements never read optional manifests", async () => {
+  const mutations = [
+    {
+      command: COMMANDS.startScan,
+      run: () => scannerService.startScan({ caseId: "localhost-case" }),
+    },
+    {
+      command: COMMANDS.pauseScan,
+      run: () => scannerService.pauseScan("localhost-case", "localhost-run"),
+    },
+    {
+      command: COMMANDS.resumeScan,
+      run: () => scannerService.resumeScan("localhost-case", "localhost-run"),
+      lifecycleOutcome: "queued",
+    },
+    {
+      command: COMMANDS.cancelScan,
+      run: () => scannerService.cancelScan("localhost-case", "localhost-run"),
+      lifecycleOutcome: "requested",
+    },
+    {
+      command: COMMANDS.startRescan,
+      run: () => scannerService.startRescan("localhost-case", "localhost-run"),
+    },
+  ] as const;
+
+  for (const mutation of mutations) {
+    let manifestReads = 0;
+    let commandCalls = 0;
+    setTestWindow({
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          if (command === mutation.command) {
+            commandCalls += 1;
+            const nativeCase = queuedLocalhostNativeCase();
+            if (command === COMMANDS.cancelScan) {
+              nativeCase.scan_runs[0]!.engine_runs[0]!.phase = "cancel_requested";
+            }
+            return nativeCase;
+          }
+          if (command === COMMANDS.listEngineManifests) {
+            manifestReads += 1;
+            return new Promise<never>(() => undefined);
+          }
+          throw new Error(`unexpected command: ${command}`);
+        },
+      },
+    });
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        mutation.run(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(`${mutation.command} waited for engine manifests`)),
+            250,
+          );
+        }),
+      ]);
+      assert.equal(result.mode, "native", mutation.command);
+      assert.equal(result.data.accepted, true, mutation.command);
+      assert.equal(result.data.workspace?.case.id, "localhost-case", mutation.command);
+      if ("lifecycleOutcome" in mutation) {
+        assert.equal(result.data.lifecycleDisposition?.outcome, mutation.lifecycleOutcome, mutation.command);
+      } else {
+        assert.equal(result.data.lifecycleDisposition, undefined, mutation.command);
+      }
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+    assert.equal(commandCalls, 1, mutation.command);
+    assert.equal(manifestReads, 0, mutation.command);
+  }
+});
+
+test("a retained terminal Resume response reports the saved result instead of a queued restart", async () => {
+  let manifestReads = 0;
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string) => {
+        if (command === COMMANDS.resumeScan) {
+          const nativeCase = queuedLocalhostNativeCase();
+          nativeCase.status = "completed";
+          const nativeRun = nativeCase.scan_runs[0]!;
+          nativeRun.completed_at = "2026-08-30T12:00:01Z";
+          const nativeEngine = nativeRun.engine_runs[0]!;
+          nativeEngine.status = "completed";
+          nativeEngine.progress_percent = 100;
+          nativeEngine.phase = "completed";
+          nativeEngine.started_at = "2026-08-30T12:00:00Z";
+          nativeEngine.finished_at = "2026-08-30T12:00:01Z";
+          nativeEngine.localhost_tcp_observation = {
+            outcome: "reachable",
+            observed_at: "2026-08-30T12:00:01Z",
+          };
+          return nativeCase;
+        }
+        if (command === COMMANDS.listEngineManifests) {
+          manifestReads += 1;
+          return new Promise<never>(() => undefined);
+        }
+        throw new Error(`unexpected command: ${command}`);
+      },
+    },
+  });
+
+  const result = await scannerService.resumeScan("localhost-case", "localhost-run");
+  assert.equal(result.data.accepted, true);
+  assert.equal(result.data.lifecycleDisposition?.outcome, "result_already_final");
+  assert.equal(
+    result.data.lifecycleDisposition?.outcome === "result_already_final"
+      ? result.data.lifecycleDisposition.resultStatus
+      : undefined,
+    "completed",
+  );
+  assert.doesNotMatch(result.data.message, /queued|started|排入佇列|開始/u);
+  assert.equal(manifestReads, 0);
+});
+
+test("an uncertain native Cancel outcome is typed unconfirmed and does not read manifests", async () => {
+  let manifestReads = 0;
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string) => {
+        if (command === COMMANDS.cancelScan) throw new Error("command response was lost");
+        if (command === COMMANDS.listEngineManifests) {
+          manifestReads += 1;
+          return new Promise<never>(() => undefined);
+        }
+        throw new Error(`unexpected command: ${command}`);
+      },
+    },
+  });
+
+  const result = await scannerService.cancelScan("localhost-case", "localhost-run");
+  assert.equal(result.mode, "native");
+  assert.equal(result.data.accepted, false);
+  assert.deepEqual(result.data.lifecycleDisposition, {
+    action: "cancel",
+    outcome: "unconfirmed",
+    runId: "localhost-run",
+  });
+  assert.equal(manifestReads, 0);
 });
 
 test("a packaged surface with a missing bridge stays native and fails visibly", async () => {

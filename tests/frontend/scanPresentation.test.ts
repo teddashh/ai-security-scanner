@@ -107,6 +107,22 @@ test("known setup failures lead to the matching automatic next step", () => {
   assert.match(tools.zhTW, /自動準備/u);
 });
 
+test("preserved older data recommends a new scan without first-layer infrastructure jargon", () => {
+  const action = engineNextStepFor(engine({
+    status: "failed",
+    phase: "cleanup_identity_unavailable",
+    errorCode: "runtime_cleanup_identity_unavailable",
+    recoveryAction: "none",
+    resumable: false,
+  }));
+
+  assert.match(action.en, /older data and results were kept/u);
+  assert.match(action.en, /Start a new scan/u);
+  assert.match(action.en, /nothing else is required/u);
+  assert.match(action.zhTW, /較舊的資料與結果都已保留/u);
+  assert.doesNotMatch(`${action.en} ${action.zhTW}`, /runtime|identity|cleanup|執行環境|識別|清理/iu);
+});
+
 test("execution_failed only recommends tool setup with explicit pre-start evidence", () => {
   const missingCheckpoint = engineNextStepFor(engine({
     status: "failed",

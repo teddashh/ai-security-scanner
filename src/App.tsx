@@ -22,7 +22,12 @@ import {
   isCurrentScanReadinessRequest,
   isCurrentScanReadinessResponse,
 } from "./scanReadinessRequest";
+import {
+  deriveScanLifecycleDisposition,
+  scanLifecycleToastPresentation,
+} from "./scanLifecycleDisposition";
 import { findRunCreatedAfterStart, hasActiveScanWork } from "./freshScanSelection";
+import { isExactBuiltInLocalhostQuickScanRun } from "./localhostQuickScan";
 import { shouldAutomaticallyPrepareRuntime } from "./runtimeFirstLaunch";
 import {
   hasManagedRuntimeSetupRequestStarted,
@@ -318,6 +323,7 @@ export default function App() {
   const observedScanWorkspaces = useRef(new Map<string, {
     generation: number;
     workspace: CaseWorkspace;
+    freshestWorkspace: CaseWorkspace;
   }>());
   const automaticRuntimeSetupAttempted = useRef(false);
   const runtimeSetupStatusRequestGeneration = useRef(0);
@@ -353,10 +359,18 @@ export default function App() {
   const applyScanWorkspaceEvent = useCallback((workspace: CaseWorkspace) => {
     const generation = ++scanWorkspaceEventGeneration.current;
     const existing = observedScanWorkspaces.current.get(workspace.case.id);
-    const latest = selectNewerWorkspaceByRevision(existing?.workspace, workspace);
-    if (latest === workspace) {
-      observedScanWorkspaces.current.set(workspace.case.id, { generation, workspace });
-    }
+    const freshestWorkspace = selectNewerWorkspaceByRevision(
+      existing?.freshestWorkspace,
+      workspace,
+    );
+    // Keep the payload received by this generation separate from the freshest
+    // provable event payload. Pairing a new generation with an older payload
+    // would let an unrelated stale event fabricate a post-action outcome.
+    observedScanWorkspaces.current.set(workspace.case.id, {
+      generation,
+      workspace,
+      freshestWorkspace,
+    });
     setSnapshot((current) => mergeWorkspaceIntoSnapshot(current, workspace));
   }, []);
 
@@ -400,7 +414,10 @@ export default function App() {
         result.data,
         [...observedScanWorkspaces.current.values()]
           .filter((observed) => observed.generation > workspaceEventGenerationAtRequest)
-          .map((observed) => observed.workspace),
+          .map((observed) => selectNewerWorkspaceByRevision(
+            observed.workspace,
+            observed.freshestWorkspace,
+          )),
       ));
       const readinessCaseId = result.data.workspace?.case.id;
       const readinessResponseGeneration = ++scanReadinessResponseGeneration.current;
@@ -1106,6 +1123,7 @@ export default function App() {
 
   const startLocalhostQuickScan = async (port: number): Promise<void> => {
     setBusyAction("localhost-quick-scan");
+    const workspaceEventGenerationAtRequest = scanWorkspaceEventGeneration.current;
     try {
       const result = await scannerService.startLocalhostQuickScan(port);
       applyServiceMeta(result);
@@ -1129,9 +1147,16 @@ export default function App() {
         return;
       }
 
-      const observedQuickWorkspace = observedScanWorkspaces.current.get(quickWorkspace.case.id)?.workspace;
-      const selectedQuickWorkspace = observedQuickWorkspace
-        ? selectNewerWorkspaceByRevision(quickWorkspace, observedQuickWorkspace)
+      const observedQuick = observedScanWorkspaces.current.get(quickWorkspace.case.id);
+      const selectedQuickWorkspace = observedQuick
+        && observedQuick.generation > workspaceEventGenerationAtRequest
+        ? selectNewerWorkspaceByRevision(
+          selectNewerWorkspaceByRevision(
+            observedQuick.workspace,
+            observedQuick.freshestWorkspace,
+          ),
+          quickWorkspace,
+        )
         : quickWorkspace;
       selectedCaseIdRef.current = selectedQuickWorkspace.case.id;
       setCaseSelectionUnavailableId(undefined);
@@ -1152,7 +1177,10 @@ export default function App() {
         return mergeWorkspaceIntoSnapshot(selectedSnapshot, selectedQuickWorkspace) ?? selectedSnapshot;
       });
       navigate("progress");
-      await loadSnapshot(selectedQuickWorkspace.case.id, true);
+      // The queued workspace is enough to make Progress and Cancel usable.
+      // Optional manifest enrichment must not keep this first-value action
+      // busy longer than the fixed three-second target contact.
+      void loadSnapshot(selectedQuickWorkspace.case.id, true);
     } catch (error) {
       recordTechnicalError("start localhost quick scan", error);
       pushToast({
@@ -1174,23 +1202,86 @@ export default function App() {
     onResult?: (response: ActionResponse) => void,
   ): Promise<boolean> => {
     setBusyAction(key);
+    const workspaceEventGenerationAtRequest = scanWorkspaceEventGeneration.current;
+    const workspaceBeforeAction = snapshot?.workspace;
     const nonExecutionCopy = nonExecutionActionToastCopy[key as keyof typeof nonExecutionActionToastCopy];
     try {
       const result = await action();
       applyServiceMeta(result);
-      onResult?.(result.data);
-      if (!result.data.accepted) recordTechnicalError(`action ${key} did not start`, result.data.message);
+      const returnedWorkspace = result.data.workspace;
+      let selectedWorkspace = returnedWorkspace;
+      const lifecycleRunId = result.data.lifecycleDisposition?.runId;
+      const lifecycleCaseId = returnedWorkspace?.case.id
+        ?? (lifecycleRunId && workspaceBeforeAction?.runs.some((run) => run.id === lifecycleRunId)
+          ? workspaceBeforeAction.case.id
+          : undefined);
+      if (!selectedWorkspace && lifecycleCaseId === workspaceBeforeAction?.case.id) {
+        selectedWorkspace = workspaceBeforeAction;
+      }
+      if (returnedWorkspace) {
+        const currentWorkspace = snapshot?.workspace?.case.id === returnedWorkspace.case.id
+          ? snapshot.workspace
+          : undefined;
+        if (currentWorkspace) {
+          selectedWorkspace = selectNewerWorkspaceByRevision(
+            currentWorkspace,
+            selectedWorkspace ?? returnedWorkspace,
+          );
+        }
+      }
+      const observed = lifecycleCaseId
+        ? observedScanWorkspaces.current.get(lifecycleCaseId)
+        : undefined;
+      if (observed) {
+        const eventTruth = selectNewerWorkspaceByRevision(
+          observed.workspace,
+          observed.freshestWorkspace,
+        );
+        if (!returnedWorkspace) {
+          selectedWorkspace = observed.generation > workspaceEventGenerationAtRequest
+            ? selectedWorkspace
+              ? selectNewerWorkspaceByRevision(eventTruth, selectedWorkspace)
+              : eventTruth
+            : selectNewerWorkspaceByRevision(selectedWorkspace, observed.freshestWorkspace);
+        } else {
+          const protectedWorkspace = selectedWorkspace ?? returnedWorkspace;
+          selectedWorkspace = observed.generation > workspaceEventGenerationAtRequest
+            ? selectNewerWorkspaceByRevision(eventTruth, protectedWorkspace)
+            : selectNewerWorkspaceByRevision(protectedWorkspace, observed.freshestWorkspace);
+        }
+      }
+      const lifecycleDisposition = result.data.lifecycleDisposition && selectedWorkspace
+        ? deriveScanLifecycleDisposition(
+          result.data.lifecycleDisposition.action,
+          selectedWorkspace,
+          result.data.lifecycleDisposition.runId,
+        )
+        : result.data.lifecycleDisposition;
+      const response: ActionResponse = selectedWorkspace || lifecycleDisposition
+        ? { ...result.data, workspace: selectedWorkspace, lifecycleDisposition }
+        : result.data;
+      onResult?.(response);
+      if (!response.accepted) recordTechnicalError(`action ${key} did not start`, response.message);
       const preflightCode = Object.keys(scanStartIssueCopy).find((code) => result.data.message.includes(`scan_preflight:${code}`)) as keyof typeof scanStartIssueCopy | undefined;
+      const lifecycleToast = lifecycleDisposition
+        ? scanLifecycleToastPresentation(lifecycleDisposition)
+        : undefined;
       pushToast({
-        tone: result.data.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
-        title: result.data.accepted
+        tone: lifecycleToast
+          ? lifecycleToast.tone
+          : response.accepted ? "success" : result.mode === "demo" ? "info" : "warning",
+        title: lifecycleToast
+          ? text(lifecycleToast.title)
+          : response.accepted
           ? text(nonExecutionCopy?.acceptedTitle ?? { en: "Local work started", zhTW: "本機工作已開始" })
           : nonExecutionCopy
             ? text(nonExecutionCopy.failedTitle)
           : result.mode === "demo"
             ? text({ en: "Demo mode did not run a scan", zhTW: "展示模式沒有執行掃描" })
             : text({ en: "The work did not start", zhTW: "工作尚未開始" }),
-        detail: result.data.accepted
+        detail: lifecycleToast
+          ? text(lifecycleToast.detail)
+          : response.accepted
           ? text(nonExecutionCopy?.acceptedDetail ?? { en: "Open Scan progress to follow each scanner.", zhTW: "可到「掃描進度」查看每個工具的狀態。" })
           : nonExecutionCopy
             ? text(nonExecutionCopy.failedDetail)
@@ -1198,12 +1289,20 @@ export default function App() {
             ? text(scanStartIssueCopy[preflightCode])
           : text({ en: "No target was contacted. Check the current step and try again.", zhTW: "沒有接觸任何目標；請確認目前步驟後再試一次。" }),
       });
-      if (result.data.snapshot) setSnapshot(result.data.snapshot);
-      else if (result.data.workspace) {
-        const workspace = result.data.workspace;
+      if (response.snapshot) setSnapshot(response.snapshot);
+      else if (response.workspace) {
+        const workspace = response.workspace;
         setSnapshot((current) => mergeWorkspaceIntoSnapshot(current, workspace));
-      } else if (result.mode === "native") await loadSnapshot(snapshot?.selectedCaseId, true);
-      return result.data.accepted;
+      } else if (result.mode === "native" && lifecycleDisposition?.outcome !== "unconfirmed") {
+        await loadSnapshot(snapshot?.selectedCaseId, true);
+      }
+      if (lifecycleDisposition?.outcome === "unconfirmed" && result.mode === "native") {
+        // Reconcile exactly once in the background. Optional manifest
+        // enrichment in a full snapshot must not keep a failed Cancel/Resume
+        // action busy.
+        void loadSnapshot(lifecycleCaseId ?? snapshot?.selectedCaseId, true);
+      }
+      return response.accepted;
     } catch (error) {
       recordTechnicalError(`run action ${key}`, error);
       pushToast({
@@ -1217,10 +1316,33 @@ export default function App() {
     }
   };
 
+  const refuseUnsupportedLocalhostPauseOrResume = (runId: string): boolean => {
+    const run = snapshot?.workspace?.runs.find((candidate) => candidate.id === runId);
+    if (!run || !isExactBuiltInLocalhostQuickScanRun(run)) return false;
+    pushToast({
+      tone: "info",
+      title: text({
+        en: "This quick check cannot be paused or resumed",
+        zhTW: "這項快速檢查不能暫停或續跑",
+      }),
+      detail: text({
+        en: "Its connection attempt has a three-second maximum. Let it finish, or cancel it and start a new check later.",
+        zhTW: "這次連線嘗試最長三秒。請讓它完成，或取消後再開始一次新的檢查。",
+      }),
+    });
+    return true;
+  };
+
   const runAction = async (
     key: string,
     action: () => Promise<ServiceResult<ActionResponse>>,
+    runId?: string,
   ): Promise<void> => {
+    if (
+      runId
+      && (key === "pause-scan" || key === "resume-scan")
+      && refuseUnsupportedLocalhostPauseOrResume(runId)
+    ) return;
     await executeAction(key, action);
   };
 
@@ -1730,8 +1852,8 @@ export default function App() {
               }
               navigate(scanReadiness?.nextStep === "cases" ? "cases" : "coverage");
             }}
-            onPause={(runId) => runAction("pause-scan", () => scannerService.pauseScan(currentCaseId, runId))}
-            onResume={(runId) => runAction("resume-scan", () => scannerService.resumeScan(currentCaseId, runId))}
+            onPause={(runId) => runAction("pause-scan", () => scannerService.pauseScan(currentCaseId, runId), runId)}
+            onResume={(runId) => runAction("resume-scan", () => scannerService.resumeScan(currentCaseId, runId), runId)}
             onCancel={(runId) => runAction("cancel-scan", () => scannerService.cancelScan(currentCaseId, runId))}
             onSelectRun={setSelectedReportRunId}
           />

@@ -54,6 +54,7 @@ import type {
 } from "../types";
 import { getActiveLocale } from "../i18n/core";
 import { explicitTargetRequiresSensitiveNetworkAllowance } from "../caseForm";
+import { isExactBuiltInLocalhostQuickScanEngine } from "../localhostQuickScan";
 import { useCaseById } from "../useCases";
 import type { UseCaseId } from "../useCases";
 
@@ -1133,7 +1134,8 @@ const exactCompletedLocalhostBinding = (
   assetId: string,
   nativeAssets: readonly NativeAsset[],
 ): boolean => {
-  if (engineRun.taskKind.kind !== "built_in_localhost_tcp") return false;
+  if (!isExactBuiltInLocalhostQuickScanEngine(engineRun)
+    || engineRun.taskKind.kind !== "built_in_localhost_tcp") return false;
   const endpoint = `127.0.0.1:${engineRun.taskKind.port}`;
   const asset = nativeAssets.find((candidate) => candidate.id === assetId);
   const exactLoopbackAsset = asset?.kind === "web_service"
@@ -1573,23 +1575,36 @@ export const adaptNativeCase = (
     );
     const engineRuns: EngineRun[] = run.engine_runs.map((engineRun) => {
       const taskKind = mapEngineTaskKind(engineRun.task_kind);
-      const isBuiltInLocalhostTcp = taskKind.kind === "built_in_localhost_tcp";
+      const builtInLocalhostTask = isExactBuiltInLocalhostQuickScanEngine({
+        engineId: engineRun.engine_id,
+        taskKind,
+      }) && taskKind.kind === "built_in_localhost_tcp" ? taskKind : undefined;
+      const isBuiltInLocalhostTcp = Boolean(builtInLocalhostTask);
       const manifest = isBuiltInLocalhostTcp ? undefined : manifestById.get(engineRun.engine_id);
       const status = mapEngineStatus(engineRun.status);
       const checkpoint = parseCheckpoint(engineRun.resume_token, engineRun);
-      const failureKind = engineFailureKind(engineRun, checkpoint);
       const releaseIncompatible = engineRun.error_code === "resume_release_incompatible";
-      const cleanupIdentityUnavailable = engineRun.error_code === "runtime_cleanup_identity_unavailable";
+      const cleanupIdentityUnavailable = engineRun.error_code === "runtime_cleanup_identity_unavailable"
+        || [
+          "cleanup_identity_unavailable",
+          "interrupted_restart_cleanup_identity_unavailable",
+        ].includes(engineRun.phase);
       const staticFailure = releaseIncompatible || cleanupIdentityUnavailable;
+      const failureKind = cleanupIdentityUnavailable ? undefined : engineFailureKind(engineRun, checkpoint);
+      const publicErrorCode = cleanupIdentityUnavailable
+        ? "runtime_cleanup_identity_unavailable"
+        : engineRun.error_code;
       const publicCheckpoint = (failureKind === "gateway_preparation_failed" || staticFailure) && checkpoint
         ? { ...checkpoint, lastError: undefined }
         : checkpoint;
-      const recoveryAction = engineRecoveryAction(
-        status,
-        Boolean(engineRun.resume_token),
-        checkpoint,
-        engineRun.error_code,
-      );
+      const recoveryAction = staticFailure
+        ? "none"
+        : engineRecoveryAction(
+          status,
+          Boolean(engineRun.resume_token),
+          checkpoint,
+          publicErrorCode,
+        );
       const exactFindingCount = nativeCase.findings.filter((finding) =>
         finding.evidence.some((evidence) => evidence.engine_run_id === engineRun.id)
       ).length;
@@ -1604,7 +1619,7 @@ export const adaptNativeCase = (
         id: engineRun.id,
         engineId: engineRun.engine_id,
         engineName: isBuiltInLocalhostTcp
-          ? `127.0.0.1:${taskKind.port} TCP`
+          ? `127.0.0.1:${builtInLocalhostTask!.port} TCP`
           : manifest?.name ?? engineRun.engine_id,
         category: isBuiltInLocalhostTcp ? "built_in_localhost_tcp" : manifest?.category ?? "unknown",
         version: isBuiltInLocalhostTcp
@@ -1639,7 +1654,7 @@ export const adaptNativeCase = (
         runtimeSecurityOptions: isBuiltInLocalhostTcp ? undefined : engineRun.runtime_security_options ?? undefined,
         exitCode: isBuiltInLocalhostTcp ? undefined : engineRun.exit_code ?? undefined,
         cleanupRemoved: isBuiltInLocalhostTcp ? undefined : engineRun.cleanup_removed ?? undefined,
-        cleanupDetail: isBuiltInLocalhostTcp ? undefined : engineRun.cleanup_detail ?? undefined,
+        cleanupDetail: isBuiltInLocalhostTcp || staticFailure ? undefined : engineRun.cleanup_detail ?? undefined,
         warnings: staticFailure ? [] : engineRun.warnings ?? [],
         status,
         progress: engineRun.progress_percent,
@@ -1657,8 +1672,8 @@ export const adaptNativeCase = (
           )
           : cleanupIdentityUnavailable
           ? adapterText(
-            "The older cleanup identity could not be verified, so it was preserved without cleanup. Saved results remain available; start a new scan for fresh results.",
-            "無法驗證舊的清理識別，因此程式保留原狀且未執行清理。已保存的結果仍可查看；請開始新的掃描取得新結果。",
+            "This check ended safely, and its older data and results were kept. Start a new scan when you want fresh results; nothing else is required.",
+            "這項檢查已安全結束，較舊的資料與結果都已保留。需要新結果時請開始新的掃描；不需要做其他處理。",
           )
           : failureKind === "gateway_preparation_failed"
           ? adapterText(
@@ -1668,7 +1683,7 @@ export const adaptNativeCase = (
           : engineRun.error_message ?? (engineRun.error_code
             ? adapterText(`Error code: ${engineRun.error_code}`, `錯誤代碼：${engineRun.error_code}`)
             : engineRun.phase),
-        errorCode: engineRun.error_code ?? undefined,
+        errorCode: publicErrorCode ?? undefined,
         checkpoint: publicCheckpoint,
         scopeContractBound: typeof engineRun.scope_contract_sha256 === "string"
           && engineRun.scope_contract_sha256.length > 0,

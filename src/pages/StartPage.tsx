@@ -71,7 +71,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     localhostQuickScanAction: "Scan this computer at 127.0.0.1:9001",
     localhostQuickScanBusy: "Starting this check…",
     localhostQuickScanBoundary:
-      "This quick check attempts one TCP connection to 127.0.0.1:9001. It sends no payload and is not a security guarantee.",
+      "This quick check attempts one TCP connection to 127.0.0.1:9001 and waits no more than 3 seconds. It sends no payload and is not a security guarantee.",
     localhostQuickScanOptions: "Use a different local port",
     localhostQuickScanPortLabel: "Local port",
     localhostQuickScanPortHelp: "Enter a port from 1 to 65535.",
@@ -166,7 +166,7 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     localhostQuickScanAction: "掃描這台電腦的 127.0.0.1:9001",
     localhostQuickScanBusy: "正在開始檢查…",
     localhostQuickScanBoundary:
-      "這項快速檢查只會嘗試連線一次到 127.0.0.1:9001 的 TCP 連接埠，不會傳送內容，也不代表這台電腦一定安全。",
+      "這項快速檢查只會嘗試連線一次到 127.0.0.1:9001 的 TCP 連接埠，最長等待 3 秒。它不會傳送內容，也不代表這台電腦一定安全。",
     localhostQuickScanOptions: "改用其他本機連接埠",
     localhostQuickScanPortLabel: "本機連接埠",
     localhostQuickScanPortHelp: "請輸入 1 到 65535 的連接埠。",

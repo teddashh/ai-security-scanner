@@ -1,4 +1,8 @@
 import type { BilingualText } from "./i18n";
+import {
+  BUILT_IN_LOCALHOST_QUICK_SCAN_ENGINE_ID,
+  isExactBuiltInLocalhostQuickScanEngine,
+} from "./localhostQuickScan";
 import type { EngineRun, LocalhostTcpOutcome } from "./types";
 
 export type LocalhostTcpDisplayedOutcome =
@@ -6,6 +10,7 @@ export type LocalhostTcpDisplayedOutcome =
   | "missing"
   | "inconsistent"
   | "in_progress"
+  | "cancelling"
   | "cancelled"
   | "failed";
 
@@ -97,6 +102,18 @@ const summaryForOutcome = (
           zhTW: "程式繼續處理或等待繼續這項工作時，不需要操作。",
         },
       };
+    case "cancelling":
+      return {
+        title: {
+          en: `Stopping the port ${port} connection check`,
+          zhTW: `正在停止連接埠 ${port} 的連線檢查`,
+        },
+        outcomeLabel: { en: "Stopping; no observation yet", zhTW: "正在停止；尚無觀察結果" },
+        nextStep: {
+          en: "The current connection attempt has a three-second maximum. It will show Cancelled only after the connection has stopped.",
+          zhTW: "目前的連線嘗試最長三秒。只有在連線停止後，才會顯示「已取消」。",
+        },
+      };
     case "cancelled":
       return {
         title: {
@@ -153,17 +170,17 @@ const summaryForOutcome = (
  * scanners deliberately return undefined and keep their existing presentation.
  */
 export const localhostTcpBeginnerSummary = (
-  engine: Pick<EngineRun, "taskKind" | "localhostTcpObservation" | "status">,
+  engine: Pick<EngineRun, "engineId" | "taskKind" | "localhostTcpObservation" | "status" | "phase">,
 ): LocalhostTcpBeginnerSummary | undefined => {
-  if (engine.taskKind?.kind !== "built_in_localhost_tcp") return undefined;
+  if (
+    engine.engineId !== BUILT_IN_LOCALHOST_QUICK_SCAN_ENGINE_ID
+    || engine.taskKind?.kind !== "built_in_localhost_tcp"
+  ) return undefined;
 
   const observation = engine.localhostTcpObservation;
-  const exactContract = Number.isInteger(engine.taskKind.port)
-    && engine.taskKind.port >= 1
-    && engine.taskKind.port <= 65_535
-    && engine.taskKind.timeoutMs === 3_000
-    && engine.taskKind.payloadBytes === 0;
+  const exactContract = isExactBuiltInLocalhostQuickScanEngine(engine);
   const active = ["pending", "running", "paused"].includes(engine.status);
+  const cancellationRequested = exactContract && active && engine.phase === "cancel_requested";
   const observationTimestampIsValid = Boolean(
     observation && Number.isFinite(Date.parse(observation.observedAt)),
   );
@@ -171,17 +188,19 @@ export const localhostTcpBeginnerSummary = (
     engine.status === "completed" && ["reachable", "closed"].includes(observation?.outcome ?? "")
       || engine.status === "partial" && observation?.outcome === "timed_out"
   );
-  const outcome: LocalhostTcpDisplayedOutcome = active
-    ? "in_progress"
-    : engine.status === "cancelled"
-      ? "cancelled"
-      : engine.status === "failed" || engine.status === "not_executed"
-        ? "failed"
-        : coherentObservedOutcome && observation
-          ? observation.outcome
-          : !observation
-            ? "missing"
-            : "inconsistent";
+  const outcome: LocalhostTcpDisplayedOutcome = cancellationRequested
+    ? "cancelling"
+    : active
+      ? "in_progress"
+      : engine.status === "cancelled"
+        ? "cancelled"
+        : engine.status === "failed" || engine.status === "not_executed"
+          ? "failed"
+          : coherentObservedOutcome && observation
+            ? observation.outcome
+            : !observation
+              ? "missing"
+              : "inconsistent";
   const wording = summaryForOutcome(outcome, engine.taskKind.port);
   return {
     port: engine.taskKind.port,
