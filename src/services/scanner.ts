@@ -9,6 +9,10 @@ import {
   getDemoWorkspace,
 } from "../data/demo";
 import { getActiveLocale } from "../i18n/core";
+import {
+  DEFAULT_LOCALHOST_QUICK_SCAN_PORT,
+  isValidLocalhostQuickScanPort,
+} from "../localhostQuickScan";
 import type {
   AppSnapshot,
   AttachWorkspaceSnapshotInput,
@@ -81,6 +85,7 @@ export const COMMANDS = {
   updateFindingWorkflow: "update_finding_workflow",
   groupFindings: "group_findings",
   ungroupFindings: "ungroup_findings",
+  startLocalhostQuickScan: "start_localhost_quick_scan",
   startScan: "start_scan",
   pauseScan: "pause_scan",
   resumeScan: "resume_scan",
@@ -665,6 +670,34 @@ export const scannerService = {
       serviceText(
         "Demo mode does not start a container or contact a target.",
         "展示模式不會啟動容器，也不會接觸任何目標。",
+      ),
+      true,
+    );
+  },
+
+  async startLocalhostQuickScan(
+    port = DEFAULT_LOCALHOST_QUICK_SCAN_PORT,
+  ): Promise<ServiceResult<ActionResponse>> {
+    if (!isValidLocalhostQuickScanPort(port)) {
+      const response = {
+        accepted: false,
+        message: serviceText(
+          "Enter a whole-number local port from 1 to 65535.",
+          "請輸入 1 到 65535 的整數本機連接埠。",
+        ),
+      };
+      return isNativeSurface() ? nativeResult(response) : demoResult(response);
+    }
+    return actionResult(
+      COMMANDS.startLocalhostQuickScan,
+      { port },
+      serviceText(
+        "The localhost check was saved and started.",
+        "本機連接埠檢查已儲存並開始。",
+      ),
+      serviceText(
+        "Browser demo mode did not contact this computer or start a real scan.",
+        "瀏覽器展示模式沒有連線這台電腦，也沒有開始真實掃描。",
       ),
       true,
     );

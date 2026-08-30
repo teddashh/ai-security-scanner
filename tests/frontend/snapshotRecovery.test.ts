@@ -86,6 +86,42 @@ test("the browser development preview remains explicitly demo", async () => {
   assert.ok(result.notice);
 });
 
+test("the browser preview never runs or claims a localhost quick scan", async () => {
+  setTestWindow({});
+
+  const result = await scannerService.startLocalhostQuickScan();
+
+  assert.equal(result.mode, "demo");
+  assert.equal(result.data.accepted, false);
+  assert.equal(result.data.workspace, undefined);
+  assert.ok(result.notice);
+});
+
+test("the native localhost quick scan invokes its command once with the default and exact edited ports", async () => {
+  const invocations: { command: string; args: unknown }[] = [];
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string, args: unknown) => {
+        invocations.push({ command, args });
+        throw new Error("test-only quick-scan stop");
+      },
+    },
+  });
+
+  const defaultResult = await scannerService.startLocalhostQuickScan();
+  const editedResult = await scannerService.startLocalhostQuickScan(43_123);
+
+  assert.deepEqual(invocations, [
+    { command: COMMANDS.startLocalhostQuickScan, args: { port: 9001 } },
+    { command: COMMANDS.startLocalhostQuickScan, args: { port: 43_123 } },
+  ]);
+  for (const result of [defaultResult, editedResult]) {
+    assert.equal(result.mode, "native");
+    assert.equal(result.data.accepted, false);
+    assert.equal(result.data.workspace, undefined);
+  }
+});
+
 test("a packaged surface with a missing bridge stays native and fails visibly", async () => {
   setTestWindow({});
 

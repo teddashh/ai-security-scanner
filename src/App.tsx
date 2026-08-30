@@ -86,6 +86,7 @@ const busyActionCopy = {
   "attach-workspace": { en: "local-file attachment", zhTW: "附加本機檔案" },
   discovery: { en: "asset discovery", zhTW: "盤點資產" },
   scope: { en: "permission confirmation", zhTW: "確認授權範圍" },
+  "localhost-quick-scan": { en: "checking this computer", zhTW: "檢查這台電腦" },
   "start-scan": { en: "starting the scan", zhTW: "開始掃描" },
   "pause-scan": { en: "pausing the scan", zhTW: "暫停掃描" },
   "resume-scan": { en: "resuming the scan", zhTW: "繼續掃描" },
@@ -798,6 +799,69 @@ export default function App() {
     }
   };
 
+  const startLocalhostQuickScan = async (port: number): Promise<void> => {
+    setBusyAction("localhost-quick-scan");
+    try {
+      const result = await scannerService.startLocalhostQuickScan(port);
+      applyServiceMeta(result);
+      const quickWorkspace = result.data.workspace;
+      if (result.mode !== "native" || !result.data.accepted || !quickWorkspace) {
+        pushToast({
+          tone: result.mode === "demo" ? "info" : "warning",
+          title: result.mode === "demo"
+            ? text({ en: "Browser demo did not run a real check", zhTW: "瀏覽器展示模式沒有執行真實檢查" })
+            : text({ en: "This computer check did not start", zhTW: "這台電腦的檢查沒有開始" }),
+          detail: result.mode === "demo"
+            ? text({
+              en: "Nothing on this computer was contacted or changed.",
+              zhTW: "沒有連線或更動這台電腦上的任何內容。",
+            })
+            : text({
+              en: "Your saved scan projects and results were kept. Try again in a moment.",
+              zhTW: "已儲存的掃描專案與結果都已保留；請稍後再試一次。",
+            }),
+        });
+        return;
+      }
+
+      const observedQuickWorkspace = observedScanWorkspaces.current.get(quickWorkspace.case.id)?.workspace;
+      const selectedQuickWorkspace = observedQuickWorkspace
+        ? selectNewerWorkspaceByRevision(quickWorkspace, observedQuickWorkspace)
+        : quickWorkspace;
+      selectedCaseIdRef.current = selectedQuickWorkspace.case.id;
+      setCaseSelectionUnavailableId(undefined);
+      setSnapshotRefreshUnavailable(false);
+      setScanReadiness(undefined);
+      setScanReadinessErrorCaseId(undefined);
+      setSelectedUseCase(undefined);
+      setSnapshot((current) => {
+        if (!current) return current;
+        const selectedSnapshot = {
+          ...current,
+          selectedCaseId: selectedQuickWorkspace.case.id,
+          workspace: current.workspace?.case.id === selectedQuickWorkspace.case.id
+            ? current.workspace
+            : undefined,
+        };
+        return mergeWorkspaceIntoSnapshot(selectedSnapshot, selectedQuickWorkspace) ?? selectedSnapshot;
+      });
+      navigate("progress");
+      await loadSnapshot(selectedQuickWorkspace.case.id, true);
+    } catch (error) {
+      recordTechnicalError("start localhost quick scan", error);
+      pushToast({
+        tone: "danger",
+        title: text({ en: "This computer check did not start", zhTW: "這台電腦的檢查沒有開始" }),
+        detail: text({
+          en: "Your saved scan projects and results were kept. Try again in a moment.",
+          zhTW: "已儲存的掃描專案與結果都已保留；請稍後再試一次。",
+        }),
+      });
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
   const executeAction = async (
     key: string,
     action: () => Promise<ServiceResult<ActionResponse>>,
@@ -1137,6 +1201,9 @@ export default function App() {
         <StartPage
           locale={locale}
           copy={startPageCopy[locale]}
+          nativeMode={mode === "native"}
+          localhostQuickScanBusy={busyAction === "localhost-quick-scan"}
+          onStartLocalhostQuickScan={(port) => void startLocalhostQuickScan(port)}
           setupFocusKey={runtimeSetupFocusKey}
           setup={
             <RuntimeSetupAssistant

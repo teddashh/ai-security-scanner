@@ -1,6 +1,10 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Icon } from "../components/Icon";
+import {
+  DEFAULT_LOCALHOST_QUICK_SCAN_PORT,
+  parseLocalhostQuickScanPort,
+} from "../localhostQuickScan";
 import {
   useCaseDefinitions,
   type StartPageCopy,
@@ -15,6 +19,9 @@ interface StartPageProps {
   copy: StartPageCopy;
   setup?: ReactNode;
   setupFocusKey?: number;
+  nativeMode: boolean;
+  localhostQuickScanBusy?: boolean;
+  onStartLocalhostQuickScan: (port: number) => void;
   onChoose: (useCase: UseCaseDefinition) => void;
   onOpenExistingCase?: () => void;
 }
@@ -24,6 +31,13 @@ interface MarketingCopy {
   title: string;
   description: string;
   primaryAction: string;
+  localhostQuickScanAction: string;
+  localhostQuickScanBusy: string;
+  localhostQuickScanBoundary: string;
+  localhostQuickScanOptions: string;
+  localhostQuickScanPortLabel: string;
+  localhostQuickScanPortHelp: string;
+  localhostQuickScanPortError: string;
   benefitsTitle: string;
   benefits: readonly {
     icon: "spark" | "check" | "lock";
@@ -57,6 +71,14 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     description:
       "Choose what you want to protect. AI Security Scanner brings the right checks together and turns the results into one clear, prioritized action list.",
     primaryAction: "Start a security check",
+    localhostQuickScanAction: "Scan this computer at 127.0.0.1:9001",
+    localhostQuickScanBusy: "Starting this check…",
+    localhostQuickScanBoundary:
+      "This quick check attempts one TCP connection to 127.0.0.1:9001. It sends no payload and is not a security guarantee.",
+    localhostQuickScanOptions: "Use a different local port",
+    localhostQuickScanPortLabel: "Local port",
+    localhostQuickScanPortHelp: "Enter a port from 1 to 65535.",
+    localhostQuickScanPortError: "Enter a whole-number port from 1 to 65535.",
     benefitsTitle: "What you get",
     benefits: [
       {
@@ -147,6 +169,14 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
     description:
       "選擇你想保護的地方。AI Security Scanner 會整合適合的檢查，把結果變成一份清楚、有優先順序的改善清單。",
     primaryAction: "開始資安檢查",
+    localhostQuickScanAction: "掃描這台電腦的 127.0.0.1:9001",
+    localhostQuickScanBusy: "正在開始檢查…",
+    localhostQuickScanBoundary:
+      "這項快速檢查只會嘗試連線一次到 127.0.0.1:9001 的 TCP 連接埠，不會傳送內容，也不代表這台電腦一定安全。",
+    localhostQuickScanOptions: "改用其他本機連接埠",
+    localhostQuickScanPortLabel: "本機連接埠",
+    localhostQuickScanPortHelp: "請輸入 1 到 65535 的連接埠。",
+    localhostQuickScanPortError: "請輸入 1 到 65535 的整數連接埠。",
     benefitsTitle: "你會得到",
     benefits: [
       {
@@ -233,10 +263,31 @@ const marketingCopy: Record<"en" | "zh-TW", MarketingCopy> = {
   },
 };
 
-export function StartPage({ locale, copy, setup, setupFocusKey, onChoose, onOpenExistingCase }: StartPageProps) {
+export function StartPage({
+  locale,
+  copy,
+  setup,
+  setupFocusKey,
+  nativeMode,
+  localhostQuickScanBusy = false,
+  onStartLocalhostQuickScan,
+  onChoose,
+  onOpenExistingCase,
+}: StartPageProps) {
   const marketing = marketingCopy[locale];
   const primaryUseCases = useCaseDefinitions.slice(0, 4);
   const additionalUseCases = useCaseDefinitions.slice(4);
+  const [localhostPortInput, setLocalhostPortInput] = useState(String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT));
+  const localhostPort = parseLocalhostQuickScanPort(localhostPortInput);
+  const localhostPortDisplay = localhostPortInput.trim() || "—";
+  const localhostQuickScanAction = marketing.localhostQuickScanAction.replace(
+    String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT),
+    localhostPortDisplay,
+  );
+  const localhostQuickScanBoundary = marketing.localhostQuickScanBoundary.replace(
+    String(DEFAULT_LOCALHOST_QUICK_SCAN_PORT),
+    localhostPortDisplay,
+  );
 
   useEffect(() => {
     if (!setupFocusKey) return undefined;
@@ -305,16 +356,63 @@ export function StartPage({ locale, copy, setup, setupFocusKey, onChoose, onOpen
           <h1 id="start-page-title">{marketing.title}</h1>
           <p className="start-page__hero-description">{marketing.description}</p>
           <div className="start-page__hero-actions">
-            <a className="button button--primary start-page__primary-action" href="#start-a-check">
-              {marketing.primaryAction}
-              <Icon name="arrow" size={18} />
-            </a>
-            {onOpenExistingCase && (
-              <button className="button button--secondary" type="button" onClick={onOpenExistingCase}>
-                <Icon name="cases" size={18} />
-                {copy.existingCaseAction}
-              </button>
+            {nativeMode && (
+              <div className="start-page__localhost-quick-scan">
+                <button
+                  className="button button--primary start-page__primary-action"
+                  type="button"
+                  disabled={localhostQuickScanBusy || localhostPort === undefined}
+                  aria-busy={localhostQuickScanBusy}
+                  onClick={() => {
+                    if (localhostPort !== undefined) onStartLocalhostQuickScan(localhostPort);
+                  }}
+                >
+                  {localhostQuickScanBusy ? marketing.localhostQuickScanBusy : localhostQuickScanAction}
+                  <Icon name="arrow" size={18} />
+                </button>
+                <p className="start-page__localhost-boundary">{localhostQuickScanBoundary}</p>
+                <details className="start-page__localhost-options">
+                  <summary>{marketing.localhostQuickScanOptions}</summary>
+                  <label htmlFor="localhost-quick-scan-port">{marketing.localhostQuickScanPortLabel}</label>
+                  <input
+                    id="localhost-quick-scan-port"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={65535}
+                    step={1}
+                    required
+                    value={localhostPortInput}
+                    aria-invalid={localhostPort === undefined}
+                    aria-describedby="localhost-quick-scan-port-help"
+                    onChange={(event) => setLocalhostPortInput(event.currentTarget.value)}
+                  />
+                  <small
+                    id="localhost-quick-scan-port-help"
+                    className={localhostPort === undefined ? "start-page__localhost-port-error" : undefined}
+                  >
+                    {localhostPort === undefined
+                      ? marketing.localhostQuickScanPortError
+                      : marketing.localhostQuickScanPortHelp}
+                  </small>
+                </details>
+              </div>
             )}
+            <div className="start-page__hero-secondary-actions">
+              <a
+                className={`button ${nativeMode ? "button--secondary" : "button--primary"} ${nativeMode ? "" : "start-page__primary-action"}`.trim()}
+                href="#start-a-check"
+              >
+                {marketing.primaryAction}
+                <Icon name="arrow" size={18} />
+              </a>
+              {onOpenExistingCase && (
+                <button className="button button--secondary" type="button" onClick={onOpenExistingCase}>
+                  <Icon name="cases" size={18} />
+                  {copy.existingCaseAction}
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
