@@ -107,7 +107,7 @@ crates/normalization/        canonical model and exporters
 crates/case-export/          package, redaction, hash, and verification
 engines/                     declarative manifests and adapter fixtures
 mappings/                    versioned NIST/ISO/AIDEFEND relationships
-skills/                      Claude/Codex setup and operations guidance
+.codex/skills/, .claude/skills/  Codex/Claude setup and operations guidance
 ```
 
 Third-party source checkouts used for research are not runtime imports and must not be compiled into the application merely because they exist in the workspace.

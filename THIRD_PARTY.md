@@ -180,6 +180,6 @@ The release workflow enforces the mechanical evidence requirements below. They s
 6. Confirm whether each artifact is bundled, built by the project, or downloaded on demand.
 7. Confirm that on-demand download terms allow the proposed use; downloading later is not a license bypass.
 8. Record the decision in the engine catalog, plan, generated notices, and release evidence.
-9. Reject a Required engine from a stable release when its catalog entry is non-runnable, blocked, lacks an immutable artifact digest, or lacks an `allow`/`source_offer` disposition.
+9. Exclude only the exact engine artifact from distribution and execution when its catalog entry is non-runnable, blocked, lacks an immutable artifact digest, or lacks an `allow`/`source_offer` disposition. The stable application and unaffected admitted engines may still ship with an explicit support matrix and coverage gap.
 
 This file must be updated whenever a required engine, runtime component, ruleset, feed, database, plugin, or license changes.

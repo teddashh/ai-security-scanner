@@ -1,4 +1,4 @@
 interface:
   display_name: "AI Security Scanner"
   short_description: "Operate local security assessment cases safely"
-  default_prompt: "Use $ai-security-scanner to inspect prerequisites and guide a local assessment case safely."
+  default_prompt: "Use $ai-security-scanner to guide the selected assessment task safely; inspect technical prerequisites only when the affected task cannot continue."

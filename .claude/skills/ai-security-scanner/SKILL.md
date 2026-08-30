@@ -1,6 +1,6 @@
 ---
 name: ai-security-scanner
-description: Operate the ai-security-scanner repository and local assessment-case CLI for prerequisite checks, pinned dependency setup, application startup, scan status inspection, plain-language error explanation, and cleanup inspection. Use when an agent is asked to install, start, diagnose, inspect, resume, export, or clean up this product or one of its local cases; never use it to handle credentials, approve or widen scan scope, contact an unapproved target, or execute remediation.
+description: Operate the ai-security-scanner product and local assessment-case CLI for human-path startup, scan status inspection, plain-language error explanation, export, and exact cleanup inspection. Use when an agent is asked to install, start, diagnose, inspect, resume, export, or clean up this product or one of its local cases; never use it to handle credentials, approve or widen scan scope, contact an unapproved target, or execute remediation.
 ---
 
 # AI Security Scanner
@@ -19,9 +19,11 @@ If Cargo is unavailable, run `npm run tauri info` and explain the missing suppor
 
 Never call Docker or Podman directly. Never pass a credential through chat, a command argument, an environment variable, a file you create, or an AI tool.
 
-## Inspect before acting
+## Start with the user's task
 
-Run the supported read-only commands first:
+For an installed release, begin with the desktop human path. The desktop prepares or repairs its verified disposable runtime automatically behind the selected task. Do not make runtime readiness a prerequisite for opening the workspace, preserving a run, or viewing a report.
+
+Use CLI prerequisite inspection only when the user explicitly requests maintainer diagnosis or when the affected task cannot continue. The supported read-only commands are:
 
 ```sh
 ai-security-scanner-cli doctor
@@ -45,9 +47,9 @@ Never interpret zero findings as full coverage.
 
 Use `npm ci` for the locked frontend dependencies. Use `npm run tauri dev` for a development desktop session. Use release artifacts and their bundled compatibility manifest when operating an installed build.
 
-For an installed release, let the product manage its private, pinned runtime through `ai-security-scanner-cli runtime managed install` and `runtime managed start`. Do not supply a custom bundle path unless maintaining a verified release bundle in a trusted development checkout.
+For an installed release, let the desktop manage its private, pinned runtime automatically. Use `ai-security-scanner-cli runtime managed install` or `runtime managed start` only for an explicitly requested maintainer diagnosis or recovery action. Do not supply a custom bundle path unless maintaining a verified release bundle in a trusted development checkout.
 
-Allow the product CLI to retrieve only manifests whose version and digest are pinned and whose license disposition is allowed. Stop and report the exact engine if the product rejects an unpinned image, unsupported runtime boundary, license disposition, or signature.
+Allow the product CLI to retrieve only manifests whose version and digest are pinned and whose license disposition is allowed. If an image, runtime boundary, license disposition, or signature is rejected, do not execute that exact engine or package. Mark only its affected tasks unavailable or `not_tested`, continue admitted independent work, preserve completed evidence, and report the coverage gap in the partial or no-checks-completed report.
 
 Do not substitute an upstream scanner command when a product adapter is unavailable.
 
@@ -62,7 +64,7 @@ ai-security-scanner-cli case seed-demo
 
 A demo case is synthetic and must remain marked as demo.
 
-Never approve ownership, external activity, a CIDR, a redirect, or a template on the user's behalf. A human must record the scope grant in the desktop application. Live scan start, pause, resume, cancel, and retry require the desktop's in-process capability session; the standalone CLI deliberately refuses them. Use the CLI for credential-free planning, status, export, verification records, and exact cleanup only through commands it exposes. If a command is not supported, report that limitation; do not recreate it with shell commands or direct database edits.
+Never approve ownership, external activity, a CIDR, a redirect, or a template on the user's behalf. A human records the required intent in the desktop application; for the exact localhost quick check, pressing the combined Start action is that record and must not be followed by a second consent ceremony. Live scan start, pause, resume, cancel, and retry require the desktop's in-process capability session; the standalone CLI deliberately refuses them. Use the CLI for credential-free planning, status, export, verification records, and exact cleanup only through commands it exposes. If a command is not supported, report that limitation; do not recreate it with shell commands or direct database edits.
 
 ## Explain failures
 
