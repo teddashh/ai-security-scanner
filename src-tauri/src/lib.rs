@@ -21,6 +21,7 @@ pub mod external_scope;
 #[cfg(any(feature = "desktop", feature = "cli"))]
 pub mod gateway_release;
 pub mod job_manager;
+pub mod local_tcp_probe;
 pub mod managed_network;
 pub mod managed_runtime;
 pub mod orchestrator;
