@@ -20,8 +20,8 @@ const PINNED_UPSTREAM = Object.freeze({
     "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   upstreamSha256: "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
   patchContract:
-    "ai-security-scanner.windows-prerequisite-version-neutral-repair-and-bounded-uninstall/v5",
-  vendoredSha256: "8396df85b36ce8c4778ae50097ae50593f55548e665604cf1bd86de37a8f0f1d",
+    "ai-security-scanner.windows-prerequisite-version-neutral-repair-and-bounded-uninstall/v6",
+  vendoredSha256: "65193fea065cadd55c38db08e63486694bce897dfd3d5f0908123db8a4edf043",
 });
 
 function assert(condition, message) {
@@ -133,6 +133,23 @@ function reconstructPinnedUpstream(vendored) {
         "Var RegistrationOverlayMode",
       ]),
       upstream: block(["Var OldMainBinaryName"]),
+    },
+    {
+      label: "uninstaller string search helper",
+      patched: block(["${StrLoc}", "${UnStrLoc}"]),
+      upstream: block(["${StrLoc}"]),
+    },
+    {
+      label: "early Traditional Chinese language identifier",
+      patched: block([
+        "; LoadLanguageFile defines ${LANG_TRADCHINESE} later, when Tauri expands the",
+        "; configured MUI_LANGUAGE entries. These custom-page functions are compiled",
+        "; before that point, so use the stable Windows/NSIS Traditional Chinese LCID",
+        "; here instead of referencing a not-yet-defined preprocessor symbol.",
+        "!define PRODUCT_LANG_TRADCHINESE 1028",
+        "",
+      ]),
+      upstream: "",
     },
     {
       label: "maintenance-page repair bypass",
@@ -761,11 +778,11 @@ function validateProductUninstallPatch(vendored) {
       '${If} $0 == "timeout"',
       "Call un.PersistCoordinatorReceipt",
       'StrCpy $UninstallCoordinatorResult "fatal"',
-      '${StrLoc} $1 $UninstallCoordinatorOutput \'"schema_version":"ai-security-scanner.product-uninstall/v1"\' ">"',
+      '${UnStrLoc} $1 $UninstallCoordinatorOutput \'"schema_version":"ai-security-scanner.product-uninstall/v1"\' ">"',
       'StrCpy $2 \'"mode":"scan_tools"\'',
       'StrCpy $2 \'"mode":"all_data"\'',
       'StrCpy $2 \'"mode":"app_only"\'',
-      '${StrLoc} $1 $UninstallCoordinatorOutput \'"terminal":"complete"}\' ">"',
+      '${UnStrLoc} $1 $UninstallCoordinatorOutput \'"terminal":"complete"}\' ">"',
       'StrCpy $2 \'"result_class":"completed","exit_code":0\'',
       'StrCpy $2 \'"result_class":"completed_with_retained_state","exit_code":10\'',
       'StrCpy $2 \'"result_class":"contact_not_stopped","exit_code":20\'',
@@ -806,6 +823,23 @@ function validateProductUninstallPatch(vendored) {
   assert(
     coordinator.split('--confirmation "REMOVE ALL AI-SECURITY-SCANNER DATA"').length === 2,
     "all-data confirmation token is missing, duplicated, or passed to another mode",
+  );
+  assert(
+    vendored.split("\n${UnStrLoc}\n").length === 2 &&
+      coordinator.split("${UnStrLoc}").length === 5 &&
+      !coordinator.includes("${StrLoc}"),
+    "uninstall string searches are not compiled and dispatched through the uninstaller helper",
+  );
+  assert(
+    vendored.split("!define PRODUCT_LANG_TRADCHINESE 1028").length === 2 &&
+      vendored.split("$LANGUAGE == ${PRODUCT_LANG_TRADCHINESE}").length === 5,
+    "custom uninstall pages do not use the reviewed Traditional Chinese language identifier",
+  );
+  const languageActivation = vendored.indexOf("!insertmacro MUI_LANGUAGE");
+  assert(languageActivation !== -1, "NSIS language activation is missing");
+  assert(
+    !vendored.slice(0, languageActivation).includes("$LANGUAGE == ${LANG_TRADCHINESE}"),
+    "custom NSIS code references LANG_TRADCHINESE before LoadLanguageFile defines it",
   );
   for (const forbidden of [
     "--data-dir",
@@ -1255,7 +1289,7 @@ function validateMutationGuards(vendored) {
       "outer uninstall coordinator timeout removed",
     ],
     [
-      '  ${StrLoc} $1 $UninstallCoordinatorOutput \'"terminal":"complete"}\' ">"\n',
+      '  ${UnStrLoc} $1 $UninstallCoordinatorOutput \'"terminal":"complete"}\' ">"\n',
       "",
       "complete coordinator-envelope sentinel removed",
     ],

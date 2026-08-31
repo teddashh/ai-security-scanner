@@ -44,6 +44,7 @@ ManifestDPIAwareness PerMonitorV2
 !include "StrFunc.nsh"
 ${StrCase}
 ${StrLoc}
+${UnStrLoc}
 
 {{#if installer_hooks}}
 !include "{{installer_hooks}}"
@@ -475,6 +476,12 @@ Var UninstallInstallerLanguagePresent
 
 UninstPage custom un.UninstallChoicePage un.UninstallChoiceLeave
 
+; LoadLanguageFile defines ${LANG_TRADCHINESE} later, when Tauri expands the
+; configured MUI_LANGUAGE entries. These custom-page functions are compiled
+; before that point, so use the stable Windows/NSIS Traditional Chinese LCID
+; here instead of referencing a not-yet-defined preprocessor symbol.
+!define PRODUCT_LANG_TRADCHINESE 1028
+
 Function un.UninstallChoicePage
   ${If} $PassiveMode = 1
   ${OrIf} $UpdateMode = 1
@@ -482,7 +489,7 @@ Function un.UninstallChoicePage
     Abort
   ${EndIf}
 
-  ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+  ${If} $LANGUAGE == ${PRODUCT_LANG_TRADCHINESE}
     !insertmacro MUI_HEADER_TEXT "選擇要移除的內容" "未明確選擇刪除的資料都會保留。"
   ${Else}
     !insertmacro MUI_HEADER_TEXT "Choose what to remove" "Anything you do not explicitly choose to delete is preserved."
@@ -495,7 +502,7 @@ Function un.UninstallChoicePage
   ${EndIf}
   ${IfThen} $(^RTL) = 1 ${|} nsDialogs::SetRTL $(^RTL) ${|}
 
-  ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+  ${If} $LANGUAGE == ${PRODUCT_LANG_TRADCHINESE}
     ${NSD_CreateRadioButton} 0 4u 100% 14u "僅移除應用程式（預設）"
     Pop $UninstallAppOnlyRadio
     ${NSD_CreateLabel} 16u 20u -16u 22u "保留專案、證據、匯出、偏好設定、簽章身分與掃描工具。"
@@ -536,7 +543,7 @@ Function un.UninstallChoicePage
   ${EndIf}
 
   GetDlgItem $0 $HWNDPARENT 1
-  ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+  ${If} $LANGUAGE == ${PRODUCT_LANG_TRADCHINESE}
     SendMessage $0 ${WM_SETTEXT} 0 "STR:解除安裝"
   ${Else}
     SendMessage $0 ${WM_SETTEXT} 0 "STR:Uninstall"
@@ -553,7 +560,7 @@ Function un.UninstallChoiceLeave
 
   ${NSD_GetState} $UninstallAllDataRadio $0
   ${If} $0 == ${BST_CHECKED}
-    ${If} $LANGUAGE == ${LANG_TRADCHINESE}
+    ${If} $LANGUAGE == ${PRODUCT_LANG_TRADCHINESE}
       MessageBox MB_ICONSTOP|MB_YESNO|MB_DEFBUTTON2 "這會永久移除專案、證據、匯出、偏好設定、簽章身分，以及本產品能安全辨識的掃描工具，且無法復原。若要先匯出備份，請選擇「否」返回。確定要移除所有 ai-security-scanner 資料嗎？" IDYES un_all_data_confirmed
     ${Else}
       MessageBox MB_ICONSTOP|MB_YESNO|MB_DEFBUTTON2 "This permanently removes projects, evidence, exports, preferences, signing identity, and scan tools this app can safely identify. It cannot be undone. Choose No to return and export a backup first. Remove all ai-security-scanner data?" IDYES un_all_data_confirmed
@@ -1064,7 +1071,7 @@ Function un.RunProductUninstallCoordinator
   ; so nsExec's idle timeout is also the operation's outer bound. Accept an exit
   ; code only when schema, selected mode, result class, embedded exit code, and
   ; terminal sentinel are all present in that complete bounded envelope.
-  ${StrLoc} $1 $UninstallCoordinatorOutput '"schema_version":"ai-security-scanner.product-uninstall/v1"' ">"
+  ${UnStrLoc} $1 $UninstallCoordinatorOutput '"schema_version":"ai-security-scanner.product-uninstall/v1"' ">"
   ${If} $1 != 1
     Goto un_coordinator_invalid_record
   ${EndIf}
@@ -1075,11 +1082,11 @@ Function un.RunProductUninstallCoordinator
   ${Else}
     StrCpy $2 '"mode":"app_only"'
   ${EndIf}
-  ${StrLoc} $1 $UninstallCoordinatorOutput $2 ">"
+  ${UnStrLoc} $1 $UninstallCoordinatorOutput $2 ">"
   ${If} $1 == ""
     Goto un_coordinator_invalid_record
   ${EndIf}
-  ${StrLoc} $1 $UninstallCoordinatorOutput '"terminal":"complete"}' ">"
+  ${UnStrLoc} $1 $UninstallCoordinatorOutput '"terminal":"complete"}' ">"
   ${If} $1 == ""
     Goto un_coordinator_invalid_record
   ${EndIf}
@@ -1092,7 +1099,7 @@ Function un.RunProductUninstallCoordinator
   ${Else}
     Goto un_coordinator_invalid_record
   ${EndIf}
-  ${StrLoc} $1 $UninstallCoordinatorOutput $2 ">"
+  ${UnStrLoc} $1 $UninstallCoordinatorOutput $2 ">"
   ${If} $1 == ""
     Goto un_coordinator_invalid_record
   ${EndIf}
