@@ -13,6 +13,7 @@ ENV CGO_ENABLED=0 \
 
 WORKDIR /src/launcher
 COPY engines/images/external-launcher/go.mod engines/images/external-launcher/main.go engines/images/external-launcher/main_test.go ./
+COPY engines/images/external-launcher/testdata ./testdata/
 RUN go test ./... \
     && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \

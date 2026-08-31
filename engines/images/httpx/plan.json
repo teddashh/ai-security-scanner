@@ -50,7 +50,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/httpx/Dockerfile",
-    "sha256": "sha256:ecd2f12d0ff0a8ce28d5575b6991e769f65653dcb8020e79a8ec96cbcea48e3d"
+    "sha256": "sha256:829a45f4124d3f74a710d90781d077e72c934919ac0208a9926b6eca3be2cf5c"
   },
   "wrapper": {
     "required": true,

@@ -59,7 +59,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/nuclei/Dockerfile",
-    "sha256": "sha256:95c1e60ee8b745ee3b4b6c39ca7bc8df4d26bc953311c3bf604669fb362c0e5b"
+    "sha256": "sha256:5853f2344dd45905f5baf61810288411d77faadd0da812f9b01c84a674173d7f"
   },
   "wrapper": {
     "required": true,

@@ -50,7 +50,7 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/naabu/Dockerfile",
-    "sha256": "sha256:53e50344580c81773a9145f7fcf272d41e10f9d8cef12c1df175397027a7b1aa"
+    "sha256": "sha256:cdb75f70033f4e3fc99acd2da8cecd2e6736176914b8a2dda566ef5a111e7fdb"
   },
   "wrapper": {
     "required": true,
