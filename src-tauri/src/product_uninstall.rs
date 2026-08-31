@@ -436,6 +436,46 @@ impl LocalProductUninstallBackend {
         result
     }
 
+    fn record_unclaimed_provider_state(
+        managed_root: &Path,
+        inventory: &mut ProductRuntimeInventory,
+    ) {
+        let provider_root = managed_root.join(MANAGED_RUNTIME_PROVIDER_DIRECTORY);
+        let _provider_guard = match open_directory_no_follow(&provider_root) {
+            Ok(guard) => guard,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(_) => {
+                inventory.retained.push(ProductUninstallRetainedItem::new(
+                    "managed_runtime_entry",
+                    "ambiguous_runtime_entry_preserved",
+                ));
+                return;
+            }
+        };
+
+        let first_entry = match fs::read_dir(&provider_root) {
+            Ok(mut entries) => entries.next(),
+            Err(_) => {
+                inventory.retained.push(ProductUninstallRetainedItem::new(
+                    "managed_runtime_entry",
+                    "ambiguous_runtime_entry_preserved",
+                ));
+                return;
+            }
+        };
+        match first_entry {
+            Some(Ok(_)) => inventory.retained.push(ProductUninstallRetainedItem::new(
+                "managed_runtime_state",
+                "runtime_ownership_unavailable",
+            )),
+            Some(Err(_)) => inventory.retained.push(ProductUninstallRetainedItem::new(
+                "managed_runtime_entry",
+                "ambiguous_runtime_entry_preserved",
+            )),
+            None => {}
+        }
+    }
+
     fn inspect_remaining_runtime_state(&self) -> Vec<ProductUninstallRetainedItem> {
         let root = self.managed_root();
         let mut retained = Vec::new();
@@ -546,24 +586,7 @@ impl ProductUninstallBackend for LocalProductUninstallBackend {
         let version_metadata = match fs::symlink_metadata(&versions) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let provider_root = managed_root.join(MANAGED_RUNTIME_PROVIDER_DIRECTORY);
-                match open_directory_no_follow(&provider_root) {
-                    Ok(_guard) => {
-                        if fs::read_dir(&provider_root)
-                            .is_ok_and(|mut entries| entries.next().is_some())
-                        {
-                            inventory.retained.push(ProductUninstallRetainedItem::new(
-                                "managed_runtime_state",
-                                "runtime_ownership_unavailable",
-                            ));
-                        }
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(_) => inventory.retained.push(ProductUninstallRetainedItem::new(
-                        "managed_runtime_entry",
-                        "ambiguous_runtime_entry_preserved",
-                    )),
-                }
+                Self::record_unclaimed_provider_state(&managed_root, &mut inventory);
                 return Ok(inventory);
             }
             Err(_) => {
@@ -666,6 +689,9 @@ impl ProductUninstallBackend for LocalProductUninstallBackend {
             }
         }
         inventory.verified_manifest_sha256.sort();
+        if inventory.verified_manifest_sha256.is_empty() {
+            Self::record_unclaimed_provider_state(&managed_root, &mut inventory);
+        }
         Ok(inventory)
     }
 
@@ -1806,6 +1832,72 @@ mod tests {
             item.item_class == "managed_runtime_state"
                 && item.reason_code == "runtime_inventory_limit_reached"
         }));
+    }
+
+    #[test]
+    fn empty_versions_with_legacy_provider_is_reported_and_preserved() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+        let managed = root.join(MANAGED_RUNTIME_DIRECTORY);
+        let versions = managed.join(MANAGED_RUNTIME_VERSIONS_DIRECTORY);
+        let provider = managed
+            .join(MANAGED_RUNTIME_PROVIDER_DIRECTORY)
+            .join("8b2257ace33ecb14");
+        let sentinel = provider.join("must-remain");
+        fs::create_dir_all(&versions).unwrap();
+        fs::create_dir_all(&provider).unwrap();
+        fs::write(&sentinel, b"ambiguous legacy runtime").unwrap();
+
+        let mut inventory_backend = LocalProductUninstallBackend::new(root.clone());
+        let inventory = inventory_backend.inventory_runtimes().unwrap();
+
+        assert!(inventory.verified_manifest_sha256.is_empty());
+        assert!(!inventory.contact_inventory_incomplete);
+        assert!(inventory.retained.iter().any(|item| {
+            item.item_class == "managed_runtime_state"
+                && item.reason_code == "runtime_ownership_unavailable"
+        }));
+        assert_eq!(fs::read(&sentinel).unwrap(), b"ambiguous legacy runtime");
+
+        let mut uninstall_backend = LocalProductUninstallBackend::new(root);
+        let result = coordinate_product_uninstall(
+            &request(ProductUninstallMode::AppOnly),
+            &mut uninstall_backend,
+        )
+        .unwrap();
+
+        assert_eq!(result.exit_code, PRODUCT_UNINSTALL_RETAINED_EXIT_CODE);
+        assert_eq!(
+            result.result_class,
+            ProductUninstallResultClass::CompletedWithRetainedState
+        );
+        assert!(result.retained_items.iter().any(|item| {
+            item.item_class == "managed_runtime_state"
+                && item.reason_code == "runtime_ownership_unavailable"
+        }));
+        assert_eq!(fs::read(&sentinel).unwrap(), b"ambiguous legacy runtime");
+    }
+
+    #[test]
+    fn empty_versions_without_provider_residue_remains_completed() {
+        for create_empty_provider in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().join(PRODUCT_DATA_DIRECTORY_NAME);
+            let managed = root.join(MANAGED_RUNTIME_DIRECTORY);
+            fs::create_dir_all(managed.join(MANAGED_RUNTIME_VERSIONS_DIRECTORY)).unwrap();
+            if create_empty_provider {
+                fs::create_dir(managed.join(MANAGED_RUNTIME_PROVIDER_DIRECTORY)).unwrap();
+            }
+
+            let mut backend = LocalProductUninstallBackend::new(root);
+            let result =
+                coordinate_product_uninstall(&request(ProductUninstallMode::AppOnly), &mut backend)
+                    .unwrap();
+
+            assert_eq!(result.exit_code, PRODUCT_UNINSTALL_COMPLETED_EXIT_CODE);
+            assert_eq!(result.result_class, ProductUninstallResultClass::Completed);
+            assert!(result.retained_items.is_empty());
+        }
     }
 
     #[cfg(unix)]
