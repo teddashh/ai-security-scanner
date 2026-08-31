@@ -20,8 +20,8 @@ const PINNED_UPSTREAM = Object.freeze({
     "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
   upstreamSha256: "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
   patchContract:
-    "ai-security-scanner.windows-prerequisite-version-neutral-repair-and-bounded-uninstall/v6",
-  vendoredSha256: "65193fea065cadd55c38db08e63486694bce897dfd3d5f0908123db8a4edf043",
+    "ai-security-scanner.windows-prerequisite-version-neutral-repair-and-bounded-uninstall/v7",
+  vendoredSha256: "48d1865797eadba261fca35711b37c6f0cc662d8293da5bbc974b7b6e5a399d6",
 });
 
 function assert(condition, message) {
@@ -116,7 +116,8 @@ function reconstructPinnedUpstream(vendored) {
         "; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079",
         "; Upstream license: Apache-2.0 OR MIT",
         "; Local patch: version-neutral stale-registration and same-version repair,",
-        "; data-preserving upgrade overlays, fixed Windows-prerequisite preparation with",
+        "; data-preserving upgrade overlays, synchronous copied-uninstaller execution,",
+        "; fixed Windows-prerequisite preparation with",
         "; durable restart/resume state, and a bilingual three-choice uninstall",
         "; delegated to the fixed product CLI with bounded, visible coordinator records",
         "; and exact registration postconditions.",
@@ -187,16 +188,61 @@ function reconstructPinnedUpstream(vendored) {
       upstream: block(["  ${NSD_GetState} $R2 $R1"]),
     },
     {
-      label: "old-uninstaller unattended-mode propagation",
+      label: "synchronous copied old-uninstaller execution",
       patched: block([
-        "      ${If} $PassiveMode = 1",
-        '        StrCpy $R1 "$R1 /P" ; preserve passive mode in the old uninstaller',
-        "      ${ElseIf} ${Silent}",
-        '        StrCpy $R1 "$R1 /S" ; preserve silent mode in the old uninstaller',
+        '      ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""',
+        '      ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"',
+        "      StrCpy $R3 '$\\\"$4\\uninstall.exe$\\\"'",
+        '      ${If} $4 == ""',
+        "        StrCpy $0 2",
+        "      ${ElseIf} $R1 != $R3",
+        "        ; Never execute a command taken from an inconsistent registration.",
+        "        StrCpy $0 2",
+        "      ${Else}",
+        '        ${IfNot} ${FileExists} "$4\\uninstall.exe"',
+        "          StrCpy $0 2",
+        "        ${Else}",
+        "          ; NSIS uninstallers normally launch a temporary child and return before",
+        "          ; that child finishes. _?= makes execution synchronous, but also runs",
+        "          ; the named executable in place. Copy the exact registered uninstaller",
+        "          ; into this installer's private temp directory first so the original can",
+        "          ; delete itself and its install directory before ExecWait returns.",
+        "          InitPluginsDir",
+        '          StrCpy $R2 "$PLUGINSDIR\\ai-security-scanner-previous-uninstaller.exe"',
+        "          ClearErrors",
+        '          CopyFiles /SILENT "$4\\uninstall.exe" "$R2"',
+        "          ${If} ${Errors}",
+        "            StrCpy $0 2",
+        "          ${Else}",
+        '            ${IfNot} ${FileExists} "$R2"',
+        "              StrCpy $0 2",
+        "            ${Else}",
+        "              StrCpy $R1 '$\\\"$R2$\\\"'",
+        '              ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE',
+        "              ${If} $PassiveMode = 1",
+        '                StrCpy $R1 "$R1 /P" ; preserve passive mode in the old uninstaller',
+        "              ${ElseIf} ${Silent}",
+        '                StrCpy $R1 "$R1 /S" ; preserve silent mode in the old uninstaller',
+        "              ${EndIf}",
+        '              StrCpy $R1 "$R1 _?=$4" ; _?= must be the final argument',
+        "              ClearErrors",
+        "              ExecWait '$R1' $0",
+        "              ${If} ${Errors}",
+        "                StrCpy $0 2",
+        "              ${EndIf}",
+        "            ${EndIf}",
+        "          ${EndIf}",
+        '          Delete "$R2"',
+        "        ${EndIf}",
         "      ${EndIf}",
       ]),
       upstream: block([
+        '      ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""',
+        '      ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"',
+        '      ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE',
         '      ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P',
+        '      StrCpy $R1 "$R1 _?=$4" ; append uninstall directory',
+        "      ExecWait '$R1' $0",
       ]),
     },
     {
@@ -1041,6 +1087,63 @@ function validateProductUninstallPatch(vendored) {
   );
 }
 
+function validateSynchronousPreviousUninstallerPatch(vendored) {
+  const pageLeave = extractFunction(vendored, "PageLeaveReinstall").source;
+  const branchStart = pageLeave.indexOf(
+    '      ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""',
+  );
+  const branchEnd = pageLeave.indexOf("\n    ${EndIf}\n\n    BringToFront", branchStart);
+  assert(
+    branchStart !== -1 && branchEnd > branchStart,
+    "NSIS previous-uninstaller branch is missing",
+  );
+  const branch = pageLeave.slice(branchStart, branchEnd);
+  assertOrdered(
+    branch,
+    [
+      'ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""',
+      'ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"',
+      "StrCpy $R3 '$\\\"$4\\uninstall.exe$\\\"'",
+      '${If} $4 == ""',
+      "${ElseIf} $R1 != $R3",
+      '${IfNot} ${FileExists} "$4\\uninstall.exe"',
+      "InitPluginsDir",
+      'StrCpy $R2 "$PLUGINSDIR\\ai-security-scanner-previous-uninstaller.exe"',
+      'CopyFiles /SILENT "$4\\uninstall.exe" "$R2"',
+      '${IfNot} ${FileExists} "$R2"',
+      "StrCpy $R1 '$\\\"$R2$\\\"'",
+      '${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|}',
+      "${If} $PassiveMode = 1",
+      'StrCpy $R1 "$R1 /P"',
+      "${ElseIf} ${Silent}",
+      'StrCpy $R1 "$R1 /S"',
+      'StrCpy $R1 "$R1 _?=$4" ; _?= must be the final argument',
+      "ClearErrors",
+      "ExecWait '$R1' $0",
+      "${If} ${Errors}",
+      'Delete "$R2"',
+    ],
+    "synchronous copied previous-uninstaller execution",
+  );
+  assert(
+    branch.split("InitPluginsDir").length === 2 &&
+      branch.split("CopyFiles /SILENT").length === 2 &&
+      branch.split("              ExecWait '$R1' $0").length === 2 &&
+      branch.split('Delete "$R2"').length === 2,
+    "previous-uninstaller execution must have one private copy, one synchronous wait, and one exact cleanup",
+  );
+  assert(
+    branch.split("$PLUGINSDIR\\ai-security-scanner-previous-uninstaller.exe").length === 2,
+    "previous-uninstaller copy path is not one fixed child of the private NSIS plugin directory",
+  );
+  assert(
+    !branch.includes("ExecWait '$R3'") &&
+      !branch.includes('ExecWait \'"$4\\uninstall.exe"') &&
+      branch.indexOf("StrCpy $R1 '$\\\"$R2$\\\"'") < branch.indexOf("ExecWait '$R1' $0"),
+    "previous-uninstaller execution can still launch the registered in-place executable",
+  );
+}
+
 function validateProductRepairPatch(vendored) {
   const detector = extractFunction(vendored, "DetectVersionNeutralProductRepair").source;
   assertOrdered(
@@ -1269,6 +1372,54 @@ function validateMutationGuards(vendored) {
 
   for (const [before, after, label] of [
     [
+      "      ${ElseIf} $R1 != $R3\n",
+      "      ${ElseIf} $R1 == $R3\n",
+      "registered uninstall command consistency check inverted",
+    ],
+    [
+      '          StrCpy $R2 "$PLUGINSDIR\\ai-security-scanner-previous-uninstaller.exe"\n',
+      '          StrCpy $R2 "$4\\uninstall.exe"\n',
+      "private previous-uninstaller copy replaced with in-place execution",
+    ],
+    [
+      "              StrCpy $R1 '$\\\"$R2$\\\"'\n",
+      "              StrCpy $R1 $R3\n",
+      "copied previous-uninstaller command replaced with registered command",
+    ],
+    [
+      '              StrCpy $R1 "$R1 _?=$4" ; _?= must be the final argument\n',
+      '              StrCpy $R1 "$R1"\n',
+      "synchronous previous-uninstaller mode removed",
+    ],
+    [
+      '          Delete "$R2"\n',
+      "",
+      "private previous-uninstaller copy cleanup removed",
+    ],
+  ]) {
+    const scope = extractFunction(vendored, "PageLeaveReinstall");
+    const first = scope.source.indexOf(before);
+    assert(first !== -1, `previous-uninstaller mutation fixture is missing: ${label}`);
+    assert(
+      scope.source.indexOf(before, first + before.length) === -1,
+      `previous-uninstaller mutation fixture is ambiguous: ${label}`,
+    );
+    const mutatedFunction = `${scope.source.slice(0, first)}${after}${scope.source.slice(first + before.length)}`;
+    const mutated = `${vendored.slice(0, scope.start)}${mutatedFunction}${vendored.slice(scope.end)}`;
+    let previousUninstallerRejected = false;
+    try {
+      validateSynchronousPreviousUninstallerPatch(mutated);
+    } catch {
+      previousUninstallerRejected = true;
+    }
+    assert(
+      previousUninstallerRejected,
+      `NSIS previous-uninstaller validator accepted mutation: ${label}`,
+    );
+  }
+
+  for (const [before, after, label] of [
+    [
       '  StrCpy $UninstallChoice "app-only"\nFunctionEnd\n\nFunction un.RunProductUninstallCoordinator',
       '  StrCpy $UninstallChoice "all-data"\nFunctionEnd\n\nFunction un.RunProductUninstallCoordinator',
       "headless default changed from app-only",
@@ -1433,6 +1584,7 @@ export async function validateWindowsNsisTemplate() {
   }
   validateModeledDecisionTable();
   validateWindowsPrerequisitePatch(vendored);
+  validateSynchronousPreviousUninstallerPatch(vendored);
   validateProductRepairPatch(vendored);
   validateProductUninstallPatch(vendored);
   validateMutationGuards(vendored);

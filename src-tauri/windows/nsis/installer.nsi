@@ -5,7 +5,8 @@
 ; Upstream SHA-256: 20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079
 ; Upstream license: Apache-2.0 OR MIT
 ; Local patch: version-neutral stale-registration and same-version repair,
-; data-preserving upgrade overlays, fixed Windows-prerequisite preparation with
+; data-preserving upgrade overlays, synchronous copied-uninstaller execution,
+; fixed Windows-prerequisite preparation with
 ; durable restart/resume state, and a bilingual three-choice uninstall
 ; delegated to the fixed product CLI with bounded, visible coordinator records
 ; and exact registration postconditions.
@@ -387,14 +388,49 @@ Function PageLeaveReinstall
     ${Else}
       ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
       ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
-      ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
-      ${If} $PassiveMode = 1
-        StrCpy $R1 "$R1 /P" ; preserve passive mode in the old uninstaller
-      ${ElseIf} ${Silent}
-        StrCpy $R1 "$R1 /S" ; preserve silent mode in the old uninstaller
+      StrCpy $R3 '$\"$4\uninstall.exe$\"'
+      ${If} $4 == ""
+        StrCpy $0 2
+      ${ElseIf} $R1 != $R3
+        ; Never execute a command taken from an inconsistent registration.
+        StrCpy $0 2
+      ${Else}
+        ${IfNot} ${FileExists} "$4\uninstall.exe"
+          StrCpy $0 2
+        ${Else}
+          ; NSIS uninstallers normally launch a temporary child and return before
+          ; that child finishes. _?= makes execution synchronous, but also runs
+          ; the named executable in place. Copy the exact registered uninstaller
+          ; into this installer's private temp directory first so the original can
+          ; delete itself and its install directory before ExecWait returns.
+          InitPluginsDir
+          StrCpy $R2 "$PLUGINSDIR\ai-security-scanner-previous-uninstaller.exe"
+          ClearErrors
+          CopyFiles /SILENT "$4\uninstall.exe" "$R2"
+          ${If} ${Errors}
+            StrCpy $0 2
+          ${Else}
+            ${IfNot} ${FileExists} "$R2"
+              StrCpy $0 2
+            ${Else}
+              StrCpy $R1 '$\"$R2$\"'
+              ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
+              ${If} $PassiveMode = 1
+                StrCpy $R1 "$R1 /P" ; preserve passive mode in the old uninstaller
+              ${ElseIf} ${Silent}
+                StrCpy $R1 "$R1 /S" ; preserve silent mode in the old uninstaller
+              ${EndIf}
+              StrCpy $R1 "$R1 _?=$4" ; _?= must be the final argument
+              ClearErrors
+              ExecWait '$R1' $0
+              ${If} ${Errors}
+                StrCpy $0 2
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+          Delete "$R2"
+        ${EndIf}
       ${EndIf}
-      StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
-      ExecWait '$R1' $0
     ${EndIf}
 
     BringToFront
