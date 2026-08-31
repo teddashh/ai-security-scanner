@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+
+import { validateSynchronousNsisQualificationFixture } from "../../scripts/release/validate-release.mjs";
 
 import {
   validateWindowsNsisUpgradeFixtureScope,
@@ -39,6 +42,70 @@ function finalizedManifest() {
     updaters: [],
   };
 }
+
+test("Windows preservation fixtures run verified NSIS copies and prove retained-state app removal", async () => {
+  for (const [relative, label] of [
+    ["../../scripts/release/qualify-windows-nsis-upgrade.ps1", "N-1 NSIS qualification"],
+    [
+      "../../scripts/release/qualify-windows-nsis-ghost-recovery.ps1",
+      "ghost-install NSIS qualification",
+    ],
+  ]) {
+    const source = await readFile(new URL(relative, import.meta.url), "utf8");
+    const registryRemovalProof = source.includes("Get-CurrentUserUninstallEntries")
+      ? '  if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstall left its current-user product registration behind."\n  }\n'
+      : '  if (@(Get-ProductRegistryEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstaller left the product registry entry."\n  }\n';
+    const afterSnapshotAssignment = source.includes("Get-CompletePrivateDataSnapshot")
+      ? "  $appOnlyUninstallSnapshotAfter = Get-CompletePrivateDataSnapshot $dataDirectory\n"
+      : "  $appOnlyUninstallSnapshotAfter = Get-PrivateDataSnapshot $dataDirectory\n";
+    assert.notEqual(source.indexOf(registryRemovalProof), -1);
+    assert.notEqual(source.indexOf(afterSnapshotAssignment), -1);
+    assert.doesNotThrow(() =>
+      validateSynchronousNsisQualificationFixture(source, label, {
+        allowsRetainedState: true,
+      }),
+    );
+    assert.throws(
+      () =>
+        validateSynchronousNsisQualificationFixture(
+          source.replace("      Remove-Item -LiteralPath $copyPath -Force\n", ""),
+          label,
+          { allowsRetainedState: true },
+        ),
+      /missing copied-uninstaller invariant|one copied-uninstaller helper/u,
+    );
+    assert.throws(
+      () =>
+        validateSynchronousNsisQualificationFixture(
+          source.replace(
+            /^    throw "Candidate NSIS(?: cleanup)? uninstall retained the exact application installation directory\."\n/mu,
+            "",
+          ),
+          label,
+          { allowsRetainedState: true },
+        ),
+      /independently proving application removal/u,
+    );
+    assert.throws(
+      () =>
+        validateSynchronousNsisQualificationFixture(
+          source.replace(registryRemovalProof, ""),
+          label,
+          { allowsRetainedState: true },
+        ),
+      /independently proving application removal/u,
+    );
+    assert.throws(
+      () =>
+        validateSynchronousNsisQualificationFixture(
+          source.replace(afterSnapshotAssignment, ""),
+          label,
+          { allowsRetainedState: true },
+        ),
+      /independently proving application removal/u,
+    );
+  }
+});
 
 test("Windows data-preservation fixtures cannot claim public lifecycle coverage", () => {
   for (const validate of [validateWindowsNsisUpgradeFixtureScope, validateWindowsNsisGhostFixtureScope]) {

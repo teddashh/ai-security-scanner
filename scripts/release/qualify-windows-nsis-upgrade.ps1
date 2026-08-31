@@ -84,6 +84,13 @@ function Assert-ExactChildPath([string]$Parent, [string]$Child, [string]$Expecte
   return $childPath
 }
 
+function Test-ExactChildEntryExists([string]$Parent, [string]$ExpectedName) {
+  return @(
+    Get-ChildItem -LiteralPath $Parent -Force |
+      Where-Object { [String]::Equals($_.Name, $ExpectedName, [StringComparison]::OrdinalIgnoreCase) }
+  ).Count -ne 0
+}
+
 function Get-OpenFileIdentity([IO.FileStream]$Stream) {
   $information = [NsisUpgradeQualificationByHandleFileInformation]::new()
   if (-not [NsisUpgradeQualificationNativeMethods]::GetFileInformationByHandle($Stream.SafeFileHandle, [ref]$information)) {
@@ -247,7 +254,11 @@ function Assert-SameFileProof([object]$Expected, [object]$Actual, [string]$Label
       $Expected.Sha256 -cne $Actual.Sha256 -or
       $Expected.Volume -ne $Actual.Volume -or
       $Expected.FileIndex -ne $Actual.FileIndex -or
-      -not [String]::Equals($Expected.FullName, $Actual.FullName, [StringComparison]::OrdinalIgnoreCase)) {
+      -not [String]::Equals(
+        (Get-VerbatimWindowsPath ([string]$Expected.FullName) "$Label expected path"),
+        (Get-VerbatimWindowsPath ([string]$Actual.FullName) "$Label actual path"),
+        [StringComparison]::OrdinalIgnoreCase
+      )) {
     throw "$Label changed file bytes or NTFS identity."
   }
 }
@@ -293,20 +304,39 @@ function Assert-HtmlExportReceipt(
   Assert-CanonicalUuid ([string]$Receipt.case_id) "$Label case ID"
   Assert-CanonicalUuid ([string]$Receipt.run_id) "$Label run ID"
   if ([string]$Receipt.case_id -cne $ExpectedCaseId -or
-      [string]$Receipt.run_id -cne $ExpectedRunId -or
-      [string]$Receipt.format -cne "html" -or
-      -not [String]::Equals(
-        [IO.Path]::GetFullPath([string]$Receipt.path),
-        [IO.Path]::GetFullPath($ExpectedDestination),
-        [StringComparison]::OrdinalIgnoreCase
-      ) -or
-      [string]$Receipt.sha256 -cne [string]$IndependentProof.Sha256 -or
-      $null -ne $Receipt.signature -or $null -ne $Receipt.public_key -or
-      $null -ne $Receipt.coverage_manifest_path -or $null -ne $Receipt.coverage_manifest_sha256 -or
-      [string]$Receipt.redaction_profile -cne "standard" -or
-      [int]$Receipt.raw_artifacts_included -ne 0 -or
-      [String]::IsNullOrWhiteSpace([string]$Receipt.integrity_only_notice)) {
-    throw "$Label does not bind the exact unsigned HTML export."
+      [string]$Receipt.run_id -cne $ExpectedRunId) {
+    throw "$Label is for the wrong case or scan run."
+  }
+  if ([string]$Receipt.format -cne "html") {
+    throw "$Label is not an HTML export receipt."
+  }
+  if (-not [String]::Equals(
+      (Get-VerbatimWindowsPath ([string]$Receipt.path) "$Label receipt path"),
+      (Get-VerbatimWindowsPath $ExpectedDestination "$Label expected destination"),
+      [StringComparison]::OrdinalIgnoreCase
+    )) {
+    throw "$Label does not name the selected Windows destination."
+  }
+  $receiptPathProof = Get-NoFollowFileSha256Proof ([string]$Receipt.path) (
+    "$Label receipt-path file"
+  ) (16 * 1024 * 1024)
+  Assert-SameFileProof $IndependentProof $receiptPathProof "$Label receipt-path file"
+  if ([string]$Receipt.sha256 -cne [string]$IndependentProof.Sha256) {
+    throw "$Label SHA-256 does not bind the exact HTML bytes."
+  }
+  if ($null -ne $Receipt.signature -or $null -ne $Receipt.public_key) {
+    throw "$Label unexpectedly claims a signature."
+  }
+  if ($null -ne $Receipt.coverage_manifest_path -or
+      $null -ne $Receipt.coverage_manifest_sha256) {
+    throw "$Label unexpectedly claims a coverage sidecar."
+  }
+  if ([string]$Receipt.redaction_profile -cne "standard" -or
+      [int]$Receipt.raw_artifacts_included -ne 0) {
+    throw "$Label does not preserve the standard no-raw-evidence export contract."
+  }
+  if ([String]::IsNullOrWhiteSpace([string]$Receipt.integrity_only_notice)) {
+    throw "$Label omits the unsigned integrity-only notice."
   }
 }
 
@@ -354,7 +384,8 @@ function Invoke-ExactProcess(
   [string]$Label,
   [bool]$CaptureOutput = $false,
   [object]$ExpectedExecutableProof = $null,
-  [switch]$AllowRestartRequired
+  [switch]$AllowRestartRequired,
+  [switch]$AllowRetainedState
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 900000) {
     throw "$Label timeout is outside its fixed bound."
@@ -447,7 +478,8 @@ function Invoke-ExactProcess(
       }
     }
     if ($process.ExitCode -ne 0 -and
-        (-not $AllowRestartRequired -or $process.ExitCode -ne 3010)) {
+        (-not $AllowRestartRequired -or $process.ExitCode -ne 3010) -and
+        (-not $AllowRetainedState -or $process.ExitCode -ne 10)) {
       $boundedError = if ($stderr.Length -gt 2048) { $stderr.Substring(0, 2048) + " (truncated)" } else { $stderr }
       throw "$Label failed with status $($process.ExitCode): $boundedError"
     }
@@ -455,6 +487,54 @@ function Invoke-ExactProcess(
   } finally {
     $process.Dispose()
   }
+}
+
+function Invoke-BoundedCopiedNsisUninstaller(
+  [string]$SourceUninstaller,
+  [string]$InstallDirectory,
+  [string]$WorkRoot,
+  [string]$Label,
+  [switch]$AllowRetainedState
+) {
+  $copyName = "bounded-nsis-uninstaller-copy.exe"
+  $copyPath = Assert-ExactChildPath $WorkRoot (
+    Join-Path $WorkRoot $copyName
+  ) $copyName "$Label execution copy"
+  Assert-RealDirectory $WorkRoot "$Label work root" | Out-Null
+  Assert-RealDirectory $InstallDirectory "$Label install directory" | Out-Null
+  if (Test-ExactChildEntryExists $WorkRoot $copyName) {
+    throw "$Label refused a pre-existing execution copy."
+  }
+
+  $sourceBefore = Get-NoFollowFileSha256Proof $SourceUninstaller "$Label source" (512 * 1024 * 1024)
+  $copyProof = $null
+  $result = $null
+  try {
+    Copy-Item -LiteralPath $SourceUninstaller -Destination $copyPath
+    $sourceAfter = Get-NoFollowFileSha256Proof $SourceUninstaller "$Label source after copy" (512 * 1024 * 1024)
+    Assert-SameFileProof $sourceBefore $sourceAfter "$Label source copy"
+    $copyProof = Get-NoFollowFileSha256Proof $copyPath "$Label execution copy" (512 * 1024 * 1024)
+    if ([int64]$copyProof.Length -ne [int64]$sourceBefore.Length -or
+        [string]$copyProof.Sha256 -cne [string]$sourceBefore.Sha256) {
+      throw "$Label execution copy differs from its verified source."
+    }
+
+    $result = Invoke-ExactProcess $copyPath @(
+      "/S", "_?=$InstallDirectory"
+    ) 180000 $Label -ExpectedExecutableProof $copyProof -AllowRetainedState:$AllowRetainedState
+  } finally {
+    if (Test-ExactChildEntryExists $WorkRoot $copyName) {
+      $copyAfter = Get-NoFollowFileSha256Proof $copyPath "$Label execution copy cleanup" (512 * 1024 * 1024)
+      if ($null -ne $copyProof) {
+        Assert-SameFileProof $copyProof $copyAfter "$Label execution copy cleanup"
+      }
+      Remove-Item -LiteralPath $copyPath -Force
+    }
+    if (Test-ExactChildEntryExists $WorkRoot $copyName) {
+      throw "$Label execution copy remains after bounded cleanup."
+    }
+  }
+  return $result
 }
 
 function Invoke-CliJson([string]$Cli, [string[]]$Arguments, [string]$Label) {
@@ -894,14 +974,26 @@ try {
 
   $appOnlyUninstallSnapshotBefore = Get-PrivateDataSnapshot $dataDirectory
 
-  # A normal NSIS uninstaller copies itself to a temporary directory and lets
-  # the original process exit before that copy finishes. `_?=` is NSIS's
-  # documented synchronous automation contract: it fixes $INSTDIR, prevents
-  # the temporary copy, and must remain the final argument. This automated
-  # fixture observes invocation and registry removal only. It deliberately does
-  # not claim the full installed-app uninstall/reinstall lifecycle; the exact
-  # test tree is removed separately during bounded fixture teardown below.
-  Invoke-ExactProcess $candidateUninstaller @("/S", "_?=$installDirectory") 180000 "Candidate NSIS uninstall" | Out-Null
+  # `_?=` makes NSIS synchronous but also disables its own temporary self-copy.
+  # Run a byte-verified copy outside $INSTDIR so the original uninstaller can be
+  # deleted and its exact postconditions can complete before this fixture moves
+  # on. The helper deletes only its fixed execution copy afterward.
+  $uninstallResult = Invoke-BoundedCopiedNsisUninstaller $candidateUninstaller (
+    $installDirectory
+  ) $workRoot (
+    "Candidate NSIS uninstall"
+  ) -AllowRetainedState
+  if ([int]$uninstallResult.exitCode -notin @(0, 10)) {
+    throw "Candidate NSIS uninstall returned an unreviewed status."
+  }
+  if (Test-Path -LiteralPath $installDirectory) {
+    throw "Candidate NSIS uninstall retained the exact application installation directory."
+  }
+  foreach ($removedProductFile in @($priorDesktop, $candidateCli, $candidateUninstaller)) {
+    if (Test-Path -LiteralPath $removedProductFile) {
+      throw "Candidate NSIS uninstall retained a product application binary."
+    }
+  }
   if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {
     throw "Candidate NSIS uninstall left its current-user product registration behind."
   }
@@ -1035,7 +1127,9 @@ try {
     }
     if ($null -ne $activeUninstaller -and (Test-Path -LiteralPath $activeUninstaller -PathType Leaf)) {
       try {
-        Invoke-ExactProcess $activeUninstaller @("/S", "_?=$installDirectory") 180000 "Failure-path NSIS uninstall" | Out-Null
+        Invoke-BoundedCopiedNsisUninstaller $activeUninstaller $installDirectory $workRoot (
+          "Failure-path NSIS uninstall"
+        ) -AllowRetainedState | Out-Null
       } catch {
         $cleanupFailures.Add("NSIS uninstall: $($_.Exception.Message)")
       }

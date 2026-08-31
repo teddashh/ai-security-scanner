@@ -466,6 +466,116 @@ function Invoke-BoundedCleanupProcess(
   }
 }
 
+function Get-QualificationFileProof(
+  [string]$Path,
+  [string]$Label,
+  [uint64]$MaximumBytes = 512 * 1024 * 1024
+) {
+  $fullPath = [IO.Path]::GetFullPath($Path)
+  $item = Get-Item -LiteralPath $fullPath -Force
+  if ($item.PSIsContainer -or
+      ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "$Label is not one no-reparse regular file."
+  }
+  $before = Get-ManagedFileIdentity $fullPath
+  if (($before.attributes -band [uint32][IO.FileAttributes]::Directory) -ne 0 -or
+      ($before.attributes -band [uint32][IO.FileAttributes]::ReparsePoint) -ne 0 -or
+      $before.links -ne 1 -or $before.size -lt 1 -or $before.size -gt $MaximumBytes) {
+    throw "$Label is not one bounded single-link regular file."
+  }
+  $sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $after = Get-ManagedFileIdentity $fullPath
+  $itemAfter = Get-Item -LiteralPath $fullPath -Force
+  if ($itemAfter.PSIsContainer -or
+      ($itemAfter.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+      $before.attributes -ne $after.attributes -or $before.volume -ne $after.volume -or
+      $before.index -ne $after.index -or $before.links -ne $after.links -or
+      $before.size -ne $after.size -or $sha256 -cnotmatch '^[0-9a-f]{64}$') {
+    throw "$Label changed while its exact file identity was hashed."
+  }
+  return [PSCustomObject]@{
+    FullName = $fullPath
+    Length = [uint64]$before.size
+    Sha256 = $sha256
+    Attributes = [uint32]$before.attributes
+    Volume = [uint32]$before.volume
+    FileIndex = [uint64]$before.index
+    Links = [uint32]$before.links
+  }
+}
+
+function Assert-SameQualificationFileProof([object]$Expected, [object]$Actual, [string]$Label) {
+  if (-not [String]::Equals(
+      [string]$Expected.FullName,
+      [string]$Actual.FullName,
+      [StringComparison]::OrdinalIgnoreCase
+    ) -or [uint64]$Expected.Length -ne [uint64]$Actual.Length -or
+    [string]$Expected.Sha256 -cne [string]$Actual.Sha256 -or
+    [uint32]$Expected.Attributes -ne [uint32]$Actual.Attributes -or
+    [uint32]$Expected.Volume -ne [uint32]$Actual.Volume -or
+    [uint64]$Expected.FileIndex -ne [uint64]$Actual.FileIndex -or
+    [uint32]$Expected.Links -ne [uint32]$Actual.Links) {
+    throw "$Label changed file bytes or NTFS identity."
+  }
+}
+
+function Invoke-BoundedCopiedNsisUninstaller(
+  [string]$SourceUninstaller,
+  [string]$InstallDirectory,
+  [string]$WorkRoot,
+  [string]$Label
+) {
+  $copyName = "bounded-nsis-uninstaller-copy.exe"
+  $boundedWorkRoot = [IO.Path]::GetFullPath($WorkRoot)
+  $copyPath = [IO.Path]::GetFullPath((Join-Path $boundedWorkRoot $copyName))
+  if (-not [String]::Equals(
+      [IO.Path]::GetDirectoryName($copyPath),
+      $boundedWorkRoot,
+      [StringComparison]::OrdinalIgnoreCase
+    ) -or [IO.Path]::GetFileName($copyPath) -cne $copyName) {
+    throw "$Label execution copy escaped its fixed work root."
+  }
+  $workRootItem = Get-Item -LiteralPath $boundedWorkRoot -Force
+  $installDirectoryItem = Get-Item -LiteralPath $InstallDirectory -Force
+  if (-not $workRootItem.PSIsContainer -or
+      ($workRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+      -not $installDirectoryItem.PSIsContainer -or
+      ($installDirectoryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "$Label requires real work and installation directories."
+  }
+  if (Test-ExactEntryExists $copyPath) {
+    throw "$Label refused a pre-existing execution copy."
+  }
+
+  $sourceBefore = Get-QualificationFileProof $SourceUninstaller "$Label source"
+  $copyProof = $null
+  try {
+    Copy-Item -LiteralPath $SourceUninstaller -Destination $copyPath
+    $sourceAfter = Get-QualificationFileProof $SourceUninstaller "$Label source after copy"
+    Assert-SameQualificationFileProof $sourceBefore $sourceAfter "$Label source copy"
+    $copyProof = Get-QualificationFileProof $copyPath "$Label execution copy"
+    if ([uint64]$copyProof.Length -ne [uint64]$sourceBefore.Length -or
+        [string]$copyProof.Sha256 -cne [string]$sourceBefore.Sha256) {
+      throw "$Label execution copy differs from its verified source."
+    }
+
+    Invoke-BoundedCleanupProcess $copyPath @(
+      "/S", "_?=$InstallDirectory"
+    ) 180000 $Label
+  } finally {
+    if (Test-ExactEntryExists $copyPath) {
+      $copyAfter = Get-QualificationFileProof $copyPath "$Label execution copy cleanup"
+      if ($null -ne $copyProof) {
+        Assert-SameQualificationFileProof $copyProof $copyAfter "$Label execution copy cleanup"
+      }
+      Remove-Item -LiteralPath $copyPath -Force
+    }
+    if (Test-ExactEntryExists $copyPath) {
+      throw "$Label execution copy remains after bounded cleanup."
+    }
+  }
+}
+
 function Remove-BoundedQualificationTree([string]$Path, [string]$Label) {
   $job = Start-Job -ScriptBlock {
     param([string]$ExactPath)
@@ -535,22 +645,23 @@ if (-not $localApplicationDataItem.PSIsContainer -or
   throw "OS-resolved LocalApplicationData is not a real directory."
 }
 $dataDirectory = [IO.Path]::GetFullPath(
-  (Join-Path $localApplicationData "ai-security-scanner-platform-qualification-windows-$InstallerType-data")
+  (Join-Path $localApplicationData "dev.teddashh.ai-security-scanner")
 )
 if (-not [String]::Equals(
     [IO.Path]::GetDirectoryName($dataDirectory),
     $localApplicationData,
     [StringComparison]::OrdinalIgnoreCase
-  )) {
+  ) -or [IO.Path]::GetFileName($dataDirectory) -cne "dev.teddashh.ai-security-scanner") {
   throw "Qualification data directory escaped OS-resolved LocalApplicationData."
 }
-foreach ($boundedPath in @($installDirectory, $dataDirectory)) {
-  if (-not ([IO.Path]::GetFileName($boundedPath)).StartsWith("ai-security-scanner-platform-qualification-", [StringComparison]::Ordinal)) {
-    throw "Refusing an unexpected qualification cleanup path."
-  }
+if (-not ([IO.Path]::GetFileName($installDirectory)).StartsWith(
+    "ai-security-scanner-platform-qualification-",
+    [StringComparison]::Ordinal
+  )) {
+  throw "Refusing an unexpected qualification installation path."
 }
 if (Test-ExactEntryExists $dataDirectory) {
-  throw "Qualification requires a fresh LocalApplicationData namespace."
+  throw "Qualification requires a fresh default product LocalApplicationData namespace."
 }
 
 $installed = $false
@@ -666,14 +777,6 @@ try {
   if ($LASTEXITCODE -ne 0) {
     throw "Installed casework CLI failed its help probe."
   }
-  $desktopProcess = Start-Process -FilePath $desktop -PassThru
-  Start-Sleep -Seconds 12
-  if ($desktopProcess.HasExited) {
-    throw "Installed Windows desktop exited before the 12-second observation window with status $($desktopProcess.ExitCode)."
-  }
-  Stop-Process -Id $desktopProcess.Id -Force
-  $desktopProcess.WaitForExit()
-
   New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
   function Invoke-Managed([string]$OutputName, [string[]]$Arguments) {
     $stdout = Join-Path $workRoot "$OutputName.json"
@@ -718,6 +821,18 @@ try {
   $runningStatus = Invoke-Managed "running-status" @("status")
   $egressQualification = Invoke-Managed "egress-qualification" @("qualify-egress")
   $containerQualification = Invoke-Managed "container-qualification" @("qualify")
+
+  # The desktop uses this exact default LocalAppData root. Observe it only
+  # after the same managed runtime is healthy, so first-launch automation sees
+  # Ready instead of racing a second setup in another namespace.
+  $desktopProcess = Start-Process -FilePath $desktop -PassThru
+  Start-Sleep -Seconds 12
+  if ($desktopProcess.HasExited) {
+    throw "Installed Windows desktop exited before the 12-second observation window with status $($desktopProcess.ExitCode)."
+  }
+  Stop-Process -Id $desktopProcess.Id -Force
+  $desktopProcess.WaitForExit()
+
   $stopStatus = Invoke-Managed "stop" @("stop")
   $stoppedStatus = Invoke-Managed "stopped-status" @("status")
   $uninstallStatus = Invoke-Managed "uninstall-purge" @("uninstall", "--force", "--purge-image-cache")
@@ -746,14 +861,16 @@ try {
     $uninstall = Start-Process -FilePath "msiexec.exe" -ArgumentList @(
       "/x", $installerPath, "/qn", "/norestart"
     ) -Wait -PassThru
+    if ($uninstall.ExitCode -ne 0) {
+      throw "$InstallerType uninstall failed with status $($uninstall.ExitCode)."
+    }
   } else {
     if ($null -eq $uninstallerPath) {
       throw "Installed NSIS uninstaller is unavailable."
     }
-    $uninstall = Start-Process -FilePath $uninstallerPath -ArgumentList "/S" -Wait -PassThru
-  }
-  if ($uninstall.ExitCode -ne 0) {
-    throw "$InstallerType uninstall failed with status $($uninstall.ExitCode)."
+    Invoke-BoundedCopiedNsisUninstaller $uninstallerPath $installDirectory $workRoot (
+      "NSIS uninstall"
+    )
   }
   $installed = $false
   if (Test-Path -LiteralPath $installDirectory) {
@@ -873,7 +990,9 @@ try {
         if ($null -eq $uninstallerPath) {
           throw "Installed NSIS uninstaller is unavailable for bounded cleanup."
         }
-        Invoke-BoundedCleanupProcess $uninstallerPath @("/S") 120000 "NSIS uninstall"
+        Invoke-BoundedCopiedNsisUninstaller $uninstallerPath $installDirectory $workRoot (
+          "NSIS uninstall"
+        )
       }
     } catch {
       $cleanupFailures.Add((Get-BoundedCleanupFailure $_ "$InstallerType uninstall"))

@@ -618,6 +618,104 @@ export function validateWindowsQualificationLifecycle(source) {
       source.indexOf(start, startIndex + start.length) === -1,
     "Windows qualification must start the managed provider before inspecting its private namespace",
   );
+
+  const defaultDataRoot =
+    '(Join-Path $localApplicationData "dev.teddashh.ai-security-scanner")';
+  const containerQualification =
+    '  $containerQualification = Invoke-Managed "container-qualification" @("qualify")\n';
+  const desktopObservation =
+    "  $desktopProcess = Start-Process -FilePath $desktop -PassThru\n";
+  const stop = '  $stopStatus = Invoke-Managed "stop" @("stop")\n';
+  const containerIndex = source.indexOf(containerQualification);
+  const desktopIndex = source.indexOf(desktopObservation);
+  const stopIndex = source.indexOf(stop);
+  assert(
+    source.split(defaultDataRoot).length === 2 &&
+      source.includes(
+        '[IO.Path]::GetFileName($dataDirectory) -cne "dev.teddashh.ai-security-scanner"',
+      ),
+    "Windows qualification must exercise the desktop and CLI through the exact product LocalAppData root",
+  );
+  assert(
+    containerIndex !== -1 &&
+      desktopIndex > containerIndex &&
+      stopIndex > desktopIndex &&
+      source.indexOf(desktopObservation, desktopIndex + desktopObservation.length) === -1,
+    "Windows desktop observation must occur once while the already-qualified managed runtime is healthy",
+  );
+  validateSynchronousNsisQualificationFixture(source, "ordinary Windows qualification");
+}
+
+export function validateSynchronousNsisQualificationFixture(
+  source,
+  label,
+  { allowsRetainedState = false } = {},
+) {
+  for (const required of [
+    'function Invoke-BoundedCopiedNsisUninstaller(',
+    '$copyName = "bounded-nsis-uninstaller-copy.exe"',
+    'Copy-Item -LiteralPath $SourceUninstaller -Destination $copyPath',
+    '[string]$copyProof.Sha256 -cne [string]$sourceBefore.Sha256',
+    '"/S", "_?=$InstallDirectory"',
+    'Remove-Item -LiteralPath $copyPath -Force',
+    'throw "$Label execution copy remains after bounded cleanup."',
+  ]) {
+    assert(source.includes(required), `${label} is missing copied-uninstaller invariant: ${required}`);
+  }
+  assert(
+    source.split("Invoke-BoundedCopiedNsisUninstaller").length === 4 &&
+      source.split("_?=$InstallDirectory").length === 2 &&
+      source.split("bounded-nsis-uninstaller-copy.exe").length === 2,
+    `${label} must define one copied-uninstaller helper and use it in exactly the happy and failure paths`,
+  );
+  for (const forbidden of [
+    'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=',
+    'Invoke-ExactProcess $activeUninstaller @("/S", "_?=',
+    'Start-Process -FilePath $uninstallerPath -ArgumentList "/S"',
+    'Invoke-BoundedCleanupProcess $uninstallerPath @("/S")',
+  ]) {
+    assert(
+      !source.includes(forbidden),
+      `${label} still invokes an installed NSIS uninstaller in place: ${forbidden}`,
+    );
+  }
+  if (allowsRetainedState) {
+    assert(
+      source.includes("[switch]$AllowRetainedState") &&
+      source.includes("$process.ExitCode -ne 10") &&
+        source.split("-AllowRetainedState").length === 4 &&
+        source.includes("$uninstallResult.exitCode -notin @(0, 10)") &&
+        source.includes("retained the exact application installation directory") &&
+        source.includes("retained a product application binary") &&
+        source.includes(
+          'Get-VerbatimWindowsPath ([string]$Receipt.path) "$Label receipt path"',
+        ) &&
+        source.includes("$receiptPathProof = Get-NoFollowFileSha256Proof") &&
+        !source.includes("[IO.Path]::GetFullPath([string]$Receipt.path)") &&
+        /if \(@\(Get-(?:CurrentUserUninstallEntries|ProductRegistryEntries)\)\.Count -ne 0\) \{\r?\n\s+throw "Candidate NSIS (?:uninstall left its current-user product registration behind|uninstaller left the product registry entry)\."\r?\n\s+\}/u.test(
+          source,
+        ) &&
+        source.includes("$appOnlyUninstallSnapshotBefore") &&
+        /\$appOnlyUninstallSnapshotAfter = Get-(?:Complete)?PrivateDataSnapshot \$dataDirectory/u.test(
+          source,
+        ) &&
+        source.includes(
+          "$appOnlyUninstallSnapshotAfter.digest -cne $appOnlyUninstallSnapshotBefore.digest",
+        ) &&
+        source.includes(
+          "$appOnlyUninstallSnapshotAfter.fileCount -ne $appOnlyUninstallSnapshotBefore.fileCount",
+        ) &&
+        source.includes(
+          "$appOnlyUninstallSnapshotAfter.totalBytes -ne $appOnlyUninstallSnapshotBefore.totalBytes",
+        ),
+      `${label} must accept retained-state status only while independently proving application removal and exact report identity`,
+    );
+  } else {
+    assert(
+      !source.includes("AllowRetainedState"),
+      `${label} must keep fresh-install uninstallation strict`,
+    );
+  }
 }
 
 async function main() {
