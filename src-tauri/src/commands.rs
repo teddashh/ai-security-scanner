@@ -645,7 +645,7 @@ where
                         summary.reconciled = summary.reconciled.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: exact ownership proof was unavailable; no runtime resource was changed or deleted",
+                                "{} / {}: exact ownership proof was unavailable. No runtime resource was changed or deleted.",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
