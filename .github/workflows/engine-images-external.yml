@@ -34,7 +34,7 @@ jobs:
             -v "${PWD}/engines/images/external-launcher:/src:ro" \
             -w /src \
             golang:1.26.0-alpine@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 \
-            sh -ceu 'test -z "$(gofmt -d main.go main_test.go)"; go test ./...'
+            sh -ceu 'formatted="$(gofmt -d main.go main_test.go)"; if test -n "${formatted}"; then printf "%s\n" "${formatted}"; exit 1; fi; go test ./...'
 
   publish:
     name: Publish ${{ matrix.engine }} for amd64 + arm64
