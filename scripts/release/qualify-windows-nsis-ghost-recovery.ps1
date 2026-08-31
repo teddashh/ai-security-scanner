@@ -1735,6 +1735,62 @@ function Get-WslRunningDistributionNames(
   return @($names)
 }
 
+function Assert-ExactFixtureWslRegistrationSet(
+  [object[]]$ExpectedRegistrations,
+  [string]$Label
+) {
+  if ($ExpectedRegistrations.Count -ne 2) {
+    throw "$Label requires exactly two fixture-owned WSL registrations."
+  }
+  $actualRegistrations = @(Get-WslRegistrations)
+  if ($actualRegistrations.Count -ne $ExpectedRegistrations.Count) {
+    throw "$Label refused a WSL registration set outside the two exact fixtures."
+  }
+  $seenNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  foreach ($expected in $ExpectedRegistrations) {
+    $name = [string]$expected.Name
+    $basePath = [string]$expected.BasePath
+    $registrationId = [string]$expected.RegistrationId
+    if ([String]::IsNullOrWhiteSpace($name) -or
+        [String]::IsNullOrWhiteSpace($basePath) -or
+        $registrationId -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
+        -not $seenNames.Add($name)) {
+      throw "$Label received a malformed or duplicate expected WSL registration."
+    }
+    $actual = Get-ExactWslRegistration $name $basePath
+    if ([string]$actual.RegistrationId -cne $registrationId) {
+      throw "$Label found a rebound fixture WSL registration."
+    }
+  }
+  return @($actualRegistrations)
+}
+
+function Invoke-FixtureOnlyWslShutdown(
+  [object]$TrustedWsl,
+  [object[]]$ExpectedRegistrations,
+  [string]$Label
+) {
+  Assert-ExactFixtureWslRegistrationSet $ExpectedRegistrations (
+    "$Label before shutdown"
+  ) | Out-Null
+  $runningBefore = @(Get-WslRunningDistributionNames $TrustedWsl "$Label before shutdown")
+  if ($runningBefore.Count -ne 0) {
+    throw "$Label refused to stop a running WSL distribution."
+  }
+  $shutdown = Invoke-TrustedWsl $TrustedWsl @("--shutdown") 90000 $Label
+  if (-not [String]::IsNullOrWhiteSpace([string]$shutdown.stdout) -or
+      -not [String]::IsNullOrWhiteSpace([string]$shutdown.stderr)) {
+    throw "$Label emitted unexpected output."
+  }
+  Assert-ExactFixtureWslRegistrationSet $ExpectedRegistrations (
+    "$Label after shutdown"
+  ) | Out-Null
+  $runningAfter = @(Get-WslRunningDistributionNames $TrustedWsl "$Label after shutdown")
+  if ($runningAfter.Count -ne 0) {
+    throw "$Label left a WSL distribution running."
+  }
+}
+
 function Get-WslSentinelGuestIdentity(
   [object]$TrustedWsl,
   [string]$DistributionName,
@@ -2778,6 +2834,13 @@ try {
   ) 90000 "Exact unrelated WSL termination before app-only uninstall proof" | Out-Null
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
   Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
+  $fixtureWslRegistrations = @(
+    $oldRegistrationAfterPurge,
+    $unrelatedRegistrationAfterPurge
+  )
+  Invoke-FixtureOnlyWslShutdown $trustedWsl $fixtureWslRegistrations (
+    "Fixture-only WSL quiescence before VHD preservation proof"
+  )
   $oldVhdBeforeUninstall = Get-QuiescedVhdSha256Proof $oldVhdPath (
     "Legacy WSL VHD immediately before app-only uninstall"
   ) $maximumCompleteSnapshotBytes
@@ -2849,7 +2912,11 @@ try {
   $oldVhdAfterUninstall = Get-RetainedVhdIdentity $oldVhdPath (
     "Retained legacy assm1 WSL VHD after app-only uninstall"
   )
-  foreach ($identityField in @("sizeBytes", "volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes")) {
+  # WSL may flush and resize its dynamic VHD while the fixture-only shutdown
+  # establishes the stable pre-uninstall baseline. Byte length is therefore
+  # compared only to $oldVhdBeforeUninstall below; NTFS object identity must
+  # remain unchanged across the complete lifecycle.
+  foreach ($identityField in @("volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes")) {
     if ([uint64]$oldVhdAfterUninstall[$identityField] -ne [uint64]$oldVhdAfter[$identityField]) {
       throw "App-only NSIS uninstall changed legacy VHD identity field $identityField."
     }

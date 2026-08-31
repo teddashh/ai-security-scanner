@@ -116,7 +116,7 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
             label,
             { allowsRetainedState: true },
           ),
-        /bounded time only for WSL VHD/u,
+        /quiesce only its two stopped fixtures/u,
       );
       assert.throws(
         () =>
@@ -128,7 +128,54 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
             label,
             { allowsRetainedState: true },
           ),
-        /bounded time only for WSL VHD/u,
+        /quiesce only its two stopped fixtures/u,
+      );
+      assert.throws(
+        () =>
+          validateSynchronousNsisQualificationFixture(
+            source.replace(
+              "  Invoke-FixtureOnlyWslShutdown $trustedWsl $fixtureWslRegistrations (\n" +
+                "    \"Fixture-only WSL quiescence before VHD preservation proof\"\n" +
+                "  )\n",
+              "",
+            ),
+            label,
+            { allowsRetainedState: true },
+          ),
+        /quiesce only its two stopped fixtures/u,
+      );
+      assert.throws(
+        () =>
+          validateSynchronousNsisQualificationFixture(
+            source.replace("$runningBefore.Count -ne 0", "$runningBefore.Count -gt 2"),
+            label,
+            { allowsRetainedState: true },
+          ),
+        /quiesce only its two stopped fixtures/u,
+      );
+      assert.throws(
+        () =>
+          validateSynchronousNsisQualificationFixture(
+            source.replace(
+              "[string]$actual.RegistrationId -cne $registrationId",
+              "[string]$actual.Name -cne $name",
+            ),
+            label,
+            { allowsRetainedState: true },
+          ),
+        /quiesce only its two stopped fixtures/u,
+      );
+      assert.throws(
+        () =>
+          validateSynchronousNsisQualificationFixture(
+            source.replace(
+              'foreach ($identityField in @("volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes"))',
+              'foreach ($identityField in @("sizeBytes", "volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes"))',
+            ),
+            label,
+            { allowsRetainedState: true },
+          ),
+        /quiesce only its two stopped fixtures/u,
       );
     }
     assert.throws(

@@ -737,8 +737,30 @@ export function validateSynchronousNsisQualificationFixture(
           source.includes("Start-Sleep -Milliseconds 500") &&
           source.split("Get-QuiescedVhdSha256Proof $oldVhdPath").length === 3 &&
           source.split("Get-QuiescedVhdSha256Proof $unrelatedVhdPath").length === 3 &&
+          source.includes("function Assert-ExactFixtureWslRegistrationSet(") &&
+          source.includes("function Invoke-FixtureOnlyWslShutdown(") &&
+          source.includes("$ExpectedRegistrations.Count -ne 2") &&
+          source.includes("$actualRegistrations.Count -ne $ExpectedRegistrations.Count") &&
+          source.includes("$actual = Get-ExactWslRegistration $name $basePath") &&
+          source.includes("[string]$actual.RegistrationId -cne $registrationId") &&
+          source.split("Assert-ExactFixtureWslRegistrationSet $ExpectedRegistrations").length === 3 &&
+          source.includes("$runningBefore.Count -ne 0") &&
+          source.includes("$runningAfter.Count -ne 0") &&
+          source.includes("[String]::IsNullOrWhiteSpace([string]$shutdown.stdout)") &&
+          source.includes("$oldRegistrationAfterPurge,") &&
+          source.includes("$unrelatedRegistrationAfterPurge") &&
+          source.split('@("--shutdown")').length === 2 &&
+          source.split("Invoke-FixtureOnlyWslShutdown $trustedWsl $fixtureWslRegistrations").length === 2 &&
+          source.indexOf("Invoke-FixtureOnlyWslShutdown $trustedWsl $fixtureWslRegistrations") >
+            source.indexOf('"--terminate", $unrelatedDistributionName') &&
+          source.indexOf("Invoke-FixtureOnlyWslShutdown $trustedWsl $fixtureWslRegistrations") <
+            source.indexOf("$oldVhdBeforeUninstall = Get-QuiescedVhdSha256Proof") &&
+          source.includes('foreach ($identityField in @("volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes"))') &&
+          !source.includes('foreach ($identityField in @("sizeBytes", "volumeSerialNumber", "fileIndex", "numberOfLinks", "attributes"))') &&
+          source.includes("Assert-SameFileProof $oldVhdBeforeUninstall $oldVhdFileAfterUninstall") &&
+          source.includes("Assert-SameFileProof $unrelatedVhdBeforeUninstall $unrelatedVhdAfterUninstall") &&
           source.includes("Assert-SameFileProof $processLeaseBeforeUninstall $processLeaseAfterUninstall"),
-        `${label} must wait a bounded time only for WSL VHD sharing and lock violations before exact no-follow hashing`,
+        `${label} must quiesce only its two stopped fixtures, then wait a bounded time only for WSL VHD sharing and lock violations before exact no-follow hashing`,
       );
     } else {
       assert(
