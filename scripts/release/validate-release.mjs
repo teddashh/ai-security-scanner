@@ -278,18 +278,45 @@ export function validateReleaseWorkflow(workflow) {
       "Windows data-preservation fixtures must bind the exact identity and Windows installer bytes",
     );
     const scenarios = job.strategy?.matrix?.include;
+    const expectedScenarios = {
+      "n-minus-one-upgrade": {
+        fixture_script: "scripts/release/qualify-windows-nsis-upgrade.ps1",
+        evidence_script: "scripts/release/windows-nsis-upgrade-evidence.mjs",
+        work_name: "ai-security-scanner-nsis-upgrade-evidence",
+      },
+      "ghost-repair-uninstall": {
+        fixture_script: "scripts/release/qualify-windows-nsis-ghost-recovery.ps1",
+        evidence_script: "scripts/release/windows-nsis-ghost-recovery-evidence.mjs",
+        work_name: "ai-security-scanner-nsis-ghost-recovery-evidence",
+      },
+    };
     assert(
       Array.isArray(scenarios) && scenarios.length === 2 &&
         JSON.stringify(scenarios.map(({ scenario }) => scenario).sort()) ===
           JSON.stringify(["ghost-repair-uninstall", "n-minus-one-upgrade"]),
       "Windows data-preservation fixtures must keep N-1 and ambiguous-runtime evidence separate",
     );
+    for (const scenario of scenarios) {
+      const expected = expectedScenarios[scenario.scenario];
+      assert(
+        expected &&
+          JSON.stringify(Object.keys(scenario).sort()) ===
+            JSON.stringify(["evidence_script", "fixture_script", "scenario", "work_name"]) &&
+          scenario.fixture_script === expected.fixture_script &&
+          scenario.evidence_script === expected.evidence_script &&
+          scenario.work_name === expected.work_name,
+        `Windows supporting fixture contract drifted: ${scenario.scenario}`,
+      );
+    }
     const jobSource = JSON.stringify(job);
     for (const required of [
       "qualify-windows-nsis-upgrade.ps1",
       "qualify-windows-nsis-ghost-recovery.ps1",
       "windows-nsis-upgrade-evidence.mjs",
       "windows-nsis-ghost-recovery-evidence.mjs",
+      "ai-security-scanner-nsis-upgrade-evidence",
+      "ai-security-scanner-nsis-ghost-recovery-evidence",
+      "${{ matrix.work_name }}",
       "windows-nsis-supporting-data-preservation-${{ matrix.scenario }}",
       "supporting-evidence/",
     ]) {
@@ -573,6 +600,26 @@ export function validateProductEngineRegistry(catalog) {
   };
 }
 
+export function validateWindowsQualificationLifecycle(source) {
+  const install = '  $installStatus = Invoke-Managed "install" @("install")\n';
+  const preStartAbsence =
+    '    throw "Managed runtime install/status created a provider namespace before start."\n';
+  const start = '  $startStatus = Invoke-Managed "start" @("start")\n';
+  const namespaceInspection = "  $podmanNamespaceDirectories = @(\n";
+  const installIndex = source.indexOf(install);
+  const absenceIndex = source.indexOf(preStartAbsence);
+  const startIndex = source.indexOf(start);
+  const namespaceIndex = source.indexOf(namespaceInspection);
+  assert(
+    installIndex !== -1 &&
+      absenceIndex > installIndex &&
+      startIndex > absenceIndex &&
+      namespaceIndex > startIndex &&
+      source.indexOf(start, startIndex + start.length) === -1,
+    "Windows qualification must start the managed provider before inspecting its private namespace",
+  );
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const packageJson = await readJson(path.join(PROJECT_ROOT, "package.json"));
@@ -688,6 +735,11 @@ async function main() {
 
   const releaseWorkflow = await readReleaseWorkflow();
   validateReleaseWorkflow(releaseWorkflow);
+  const windowsQualification = await readFile(
+    path.join(PROJECT_ROOT, "scripts/release/qualify-windows.ps1"),
+    "utf8",
+  );
+  validateWindowsQualificationLifecycle(windowsQualification);
 
   if (typeof args.get("metadata") === "string") {
     const publicationMode = requireString(args, "publication-mode");

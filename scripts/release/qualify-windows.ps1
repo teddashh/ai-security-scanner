@@ -695,6 +695,13 @@ try {
   $initialStatus = Invoke-Managed "initial-status" @("status")
   $installStatus = Invoke-Managed "install" @("install")
   $installedStatus = Invoke-Managed "installed-status" @("status")
+  if (Test-ExactEntryExists $providerReleaseHome) {
+    throw "Managed runtime install/status created a provider namespace before start."
+  }
+  # Install verifies and stages only the immutable runtime payload. The
+  # provider-owned namespace is deliberately created by start, so inspect its
+  # directories only after that lifecycle transition has completed.
+  $startStatus = Invoke-Managed "start" @("start")
   $podmanNamespaceDirectories = @(
     (Join-Path $providerReleaseHome "run\podman"),
     (Join-Path $providerReleaseHome "config\containers\podman\machine\wsl"),
@@ -707,7 +714,6 @@ try {
   }
   $wslDistributionDirectory = Join-Path $providerReleaseHome "data\containers\podman\machine\wsl\wsldist"
   Assert-ManagedWslDistributionDirectory $wslDistributionDirectory "Managed WSL distribution directory"
-  $startStatus = Invoke-Managed "start" @("start")
   Assert-ManagedSshIdentity $providerReleaseHome
   $runningStatus = Invoke-Managed "running-status" @("status")
   $egressQualification = Invoke-Managed "egress-qualification" @("qualify-egress")

@@ -632,9 +632,11 @@ jobs:
           - scenario: n-minus-one-upgrade
             fixture_script: scripts/release/qualify-windows-nsis-upgrade.ps1
             evidence_script: scripts/release/windows-nsis-upgrade-evidence.mjs
+            work_name: ai-security-scanner-nsis-upgrade-evidence
           - scenario: ghost-repair-uninstall
             fixture_script: scripts/release/qualify-windows-nsis-ghost-recovery.ps1
             evidence_script: scripts/release/windows-nsis-ghost-recovery-evidence.mjs
+            work_name: ai-security-scanner-nsis-ghost-recovery-evidence
     runs-on: windows-2025
     permissions:
       contents: read
@@ -661,7 +663,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
-          $work = Join-Path $env:RUNNER_TEMP "ai-security-scanner-${{ matrix.scenario }}-data-preservation"
+          $work = Join-Path $env:RUNNER_TEMP "${{ matrix.work_name }}"
           & "${{ matrix.fixture_script }}" `
             -ArtifactDirectory release-input `
             -WorkDirectory $work `
@@ -675,7 +677,7 @@ jobs:
           SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
         run: |
           $ErrorActionPreference = "Stop"
-          $work = Join-Path $env:RUNNER_TEMP "ai-security-scanner-${{ matrix.scenario }}-data-preservation"
+          $work = Join-Path $env:RUNNER_TEMP "${{ matrix.work_name }}"
           $root = Join-Path $PWD "supporting-evidence/windows-nsis-data-preservation/${{ matrix.scenario }}"
           New-Item -ItemType Directory -Path $root -Force | Out-Null
           $report = Join-Path $root "beginner-report.html"
