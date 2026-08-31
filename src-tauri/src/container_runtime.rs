@@ -2909,6 +2909,13 @@ impl ContainerRuntime for ProcessContainerRuntime {
             let capture_drain_timeout = self
                 .test_capture_drain_timeout
                 .unwrap_or(capture_drain_timeout);
+            // A deliberately short test deadline may be used to prove that an
+            // inherited pipe is detected. Do not reuse that detection deadline
+            // after terminating the process tree: the capture workers still
+            // need a bounded scheduling window to observe EOF, sync their
+            // files, and drop the tracked writers before this call returns.
+            let post_termination_capture_drain_timeout =
+                capture_drain_timeout.max(RUNTIME_PIPE_DRAIN_TIMEOUT);
             let execution_started = std::time::Instant::now();
             let mut command = Command::new(&self.context.binary);
             command.args(&runtime_args);
@@ -2967,8 +2974,9 @@ impl ContainerRuntime for ProcessContainerRuntime {
                     .as_ref()
                     .is_err_and(|error| error.kind() == io::ErrorKind::TimedOut)
                 {
-                    let post_termination = capture_workers
-                        .finish_by(std::time::Instant::now() + capture_drain_timeout);
+                    let post_termination = capture_workers.finish_by(
+                        std::time::Instant::now() + post_termination_capture_drain_timeout,
+                    );
                     if let Err(post_termination) = post_termination {
                         let initial =
                             capture_result.expect_err("capture result was checked as an error");
