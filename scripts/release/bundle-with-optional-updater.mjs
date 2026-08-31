@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { lstat, readFile, readdir, unlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +14,8 @@ const SUPPORTED = new Map([
   ["nsis", { updaterEligible: true, platform: "windows-x86_64", directory: "nsis" }],
   ["msi", { updaterEligible: false }],
 ]);
+const require = createRequire(import.meta.url);
+const TAURI_CLI = require.resolve("@tauri-apps/cli/tauri.js");
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -20,9 +23,7 @@ function assert(condition, message) {
 
 function tauriBundleArguments(bundleTypes, target, createUpdaterArtifacts) {
   const arguments_ = [
-    "run",
-    "tauri",
-    "--",
+    TAURI_CLI,
     "bundle",
     "--ci",
     "--verbose",
@@ -35,14 +36,27 @@ function tauriBundleArguments(bundleTypes, target, createUpdaterArtifacts) {
   return arguments_;
 }
 
+export function tauriBundleInvocation(bundleTypes, target, createUpdaterArtifacts) {
+  return {
+    executable: process.execPath,
+    arguments: tauriBundleArguments(bundleTypes, target, createUpdaterArtifacts),
+  };
+}
+
 function runTauriBundle(bundleTypes, target, createUpdaterArtifacts) {
-  const executable = process.platform === "win32" ? "npm.cmd" : "npm";
-  return spawnSync(executable, tauriBundleArguments(bundleTypes, target, createUpdaterArtifacts), {
+  const invocation = tauriBundleInvocation(bundleTypes, target, createUpdaterArtifacts);
+  const result = spawnSync(invocation.executable, invocation.arguments, {
     cwd: process.cwd(),
     env: process.env,
     stdio: "inherit",
     shell: false,
   });
+  if (result.error) {
+    process.stderr.write(
+      `release tooling: Tauri ${bundleTypes} bundler could not start: ${result.error.message}\n`,
+    );
+  }
+  return result;
 }
 
 function updaterCandidateName(name, bundleTypes, version) {
