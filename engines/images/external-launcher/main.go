@@ -197,12 +197,12 @@ type launcherV2PlannedUnit struct {
 }
 
 type launcherV2Plan struct {
-	SchemaVersion      int                       `json:"schema_version"`
-	EngineID           string                    `json:"engine_id"`
-	EngineRunID        string                    `json:"engine_run_id"`
-	ExecutionAttempt   uint32                    `json:"execution_attempt"`
-	FrozenGrants       []launcherV2FrozenGrant   `json:"frozen_grants"`
-	RequestedWorkUnits []launcherV2PlannedUnit   `json:"requested_work_units"`
+	SchemaVersion      int                     `json:"schema_version"`
+	EngineID           string                  `json:"engine_id"`
+	EngineRunID        string                  `json:"engine_run_id"`
+	ExecutionAttempt   uint32                  `json:"execution_attempt"`
+	FrozenGrants       []launcherV2FrozenGrant `json:"frozen_grants"`
+	RequestedWorkUnits []launcherV2PlannedUnit `json:"requested_work_units"`
 }
 
 type launcherV2FinalArtifact struct {

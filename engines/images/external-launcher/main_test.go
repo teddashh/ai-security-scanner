@@ -634,10 +634,10 @@ const launcherV2RustGoldenJournal = `{"record_type":"header","schema_version":2,
 
 func launcherV2TestPlan(attempt uint32, units ...launcherV2PlannedUnit) *launcherV2Plan {
 	return &launcherV2Plan{
-		SchemaVersion:      launcherPlanCurrentVersion,
-		EngineID:           "naabu",
-		EngineRunID:        "run-opaque-1",
-		ExecutionAttempt:   attempt,
+		SchemaVersion:    launcherPlanCurrentVersion,
+		EngineID:         "naabu",
+		EngineRunID:      "run-opaque-1",
+		ExecutionAttempt: attempt,
 		FrozenGrants: []launcherV2FrozenGrant{
 			{ScopeGrantID: "grant-a", Addresses: []string{"192.0.2.10"}, Ports: []uint16{443, 8443}},
 			{ScopeGrantID: "grant-b", Addresses: []string{"192.0.2.20"}, Ports: []uint16{9443}},
