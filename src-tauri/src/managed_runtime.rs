@@ -2848,10 +2848,23 @@ impl ManagedRuntimeManager {
             initial_machines
         };
         if let Some(machine) = machines.iter().find(|machine| machine.name == machine_name) {
-            self.require_existing_machine_ssh_identity_locked()?;
-            self.prove_machine_named(machine, target, &machine_name)?;
             if target.operating_system == ManagedOperatingSystem::Windows {
+                self.prove_machine_named(machine, target, &machine_name)?;
                 self.verify_current_windows_wsl_machine_registration_binding(&machine_name)?;
+                if let Err(identity_error) = self.require_existing_machine_ssh_identity_locked() {
+                    // The selected workspace may still trust the original key,
+                    // so never rotate or remove its inconsistent pair in
+                    // place. Preserve the entire generation and continue once
+                    // in a fresh isolated provider home instead.
+                    return self.rebuild_unhealthy_windows_machine_once_locked(
+                        &command,
+                        target,
+                        &machine_name,
+                        identity_error,
+                        setup,
+                        readiness_timeout,
+                    );
+                }
                 self.ensure_windows_wsl_ownership_proof_locked(
                     target,
                     &machine_name,
@@ -2862,6 +2875,9 @@ impl ManagedRuntimeManager {
                     &machine_name,
                     WindowsWslOwnershipBasis::InitIntent,
                 )?;
+            } else {
+                self.require_existing_machine_ssh_identity_locked()?;
+                self.prove_machine_named(machine, target, &machine_name)?;
             }
         } else {
             self.remove_windows_wsl_ownership_proof_locked(target, &machine_name)?;
@@ -2951,11 +2967,12 @@ impl ManagedRuntimeManager {
         self.wait_for_server(command, readiness_timeout, setup)
     }
 
-    /// A verified product-owned Windows machine can still become unusable at
-    /// start or server preflight. Preserve that complete generation exactly as
-    /// it stands, append one fresh isolated generation, and try the replacement
-    /// once. This path never unregisters, exports, imports, or deletes WSL
-    /// state, and it does not recurse if the replacement is also unhealthy.
+    /// A selected Windows machine can still become unusable because its SSH
+    /// identity, start, or server preflight failed. Preserve that complete
+    /// generation exactly as it stands, append one fresh isolated generation,
+    /// and try the replacement once. This path never unregisters, exports,
+    /// imports, or deletes WSL state, and it does not recurse if the replacement
+    /// is also unhealthy.
     fn rebuild_unhealthy_windows_machine_once_locked(
         &self,
         failed_command: &ManagedRuntimeCommand,
@@ -3033,7 +3050,7 @@ impl ManagedRuntimeManager {
         })();
         replacement.map_err(|replacement_error| {
             AppError::Runtime(format!(
-                "the verified Windows scan workspace became unavailable and was preserved ({first_detail}); its one automatic isolated replacement also did not finish: {replacement_error}"
+                "the selected Windows scan workspace became unavailable and was preserved ({first_detail}); its one automatic isolated replacement also did not finish: {replacement_error}"
             ))
         })
     }
@@ -12933,6 +12950,7 @@ mod tests {
     enum FakeCommandSideEffect {
         CreateManagedWslVhd { path: PathBuf, bytes: Vec<u8> },
         ReplaceFileWithDirectory { path: PathBuf },
+        WriteFile { path: PathBuf, bytes: Vec<u8> },
     }
 
     struct FakeCommandResponse {
@@ -13026,6 +13044,9 @@ mod tests {
                     FakeCommandSideEffect::ReplaceFileWithDirectory { path } => {
                         fs::remove_file(&path)?;
                         fs::create_dir(&path)?;
+                    }
+                    FakeCommandSideEffect::WriteFile { path, bytes } => {
+                        fs::write(path, bytes)?;
                     }
                 }
             }
@@ -17734,7 +17755,7 @@ mod tests {
     }
 
     #[test]
-    fn initialized_machine_rejects_an_inconsistent_ssh_identity_without_rotating_it() {
+    fn existing_machine_ssh_identity_guard_preserves_an_inconsistent_pair() {
         let mut fixture = fixture();
         fixture.manager.install().expect("install");
         seed_owned_windows_lifecycle_fixture(
@@ -17769,6 +17790,146 @@ mod tests {
         assert!(error.to_string().contains("refusing to rotate"));
         assert_eq!(fs::read(&identity).unwrap(), private_before);
         assert!(fixture.commands.calls().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn inconsistent_windows_machine_ssh_identity_is_preserved_and_rebuilt_side_by_side() {
+        let mut fixture = fixture();
+        let (target, existing_machine, existing_vhd, existing_registration) =
+            seed_verified_existing_windows_machine(&mut fixture);
+        let existing_vhd_bytes = fs::read(&existing_vhd).expect("existing VHD snapshot");
+        let existing_provider = fixture.manager.provider_home();
+        let provider_sentinel = existing_provider.join("preserve-on-identity-recovery");
+        fs::write(&provider_sentinel, b"existing-provider-bytes").expect("provider sentinel");
+        let existing_identity = fixture.manager.machine_ssh_identity_path();
+        let existing_private = fs::read(&existing_identity).expect("existing private identity");
+        let existing_public = managed_ssh_public_key_path(&existing_identity);
+        let existing_proof = fixture.manager.windows_wsl_ownership_proof_path(
+            &existing_machine,
+            WindowsWslOwnershipBasis::ProvenMachine,
+        );
+        let existing_proof_bytes = fs::read(&existing_proof).expect("existing ownership proof");
+        let corrupt_public = b"not-an-openssh-public-key\n";
+
+        let replacement_machine = fixture.manager.isolated_windows_machine_name(&target, 1);
+        let replacement_storage =
+            fixture
+                .manager
+                .windows_wsl_distribution_storage_path(&target, &replacement_machine, 1);
+        let replacement_vhd = replacement_storage.join("ext4.vhdx");
+        let replacement_registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000054".into(),
+            distribution_name: format!("podman-{replacement_machine}"),
+            base_path: replacement_storage,
+        };
+        fixture.manager.wsl_registrations = Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+            VecDeque::from([
+                vec![existing_registration.clone()],
+                vec![existing_registration.clone()],
+                vec![existing_registration.clone()],
+                vec![existing_registration.clone()],
+                vec![existing_registration.clone()],
+                vec![existing_registration, replacement_registration],
+            ]),
+        )));
+
+        let existing_distribution = format!("podman-{existing_machine}");
+        push_windows_wsl_ready(&fixture.commands);
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &existing_machine,
+            false,
+        )));
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        fixture.commands.push_with_side_effect(
+            success(machine_json_named(
+                &fixture.manager,
+                &existing_machine,
+                false,
+            )),
+            FakeCommandSideEffect::WriteFile {
+                path: existing_public.clone(),
+                bytes: corrupt_public.to_vec(),
+            },
+        );
+        fixture
+            .commands
+            .push(success(utf16le(&format!("{existing_distribution}\r\n"))));
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &existing_machine,
+            false,
+        )));
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: replacement_vhd.clone(),
+                bytes: b"replacement-after-identity-failure".to_vec(),
+            },
+        );
+        fixture.commands.push(success(machine_json_named(
+            &fixture.manager,
+            &replacement_machine,
+            false,
+        )));
+        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push(success(b"5.8.2\n".to_vec()));
+
+        let command = fixture
+            .manager
+            .start()
+            .expect("identity failure is reconciled with one isolated replacement");
+
+        assert_eq!(command.runtime_version(), "5.8.2");
+        assert_eq!(fs::read(&existing_vhd).unwrap(), existing_vhd_bytes);
+        assert_eq!(
+            fs::read(&provider_sentinel).unwrap(),
+            b"existing-provider-bytes"
+        );
+        assert_eq!(fs::read(&existing_identity).unwrap(), existing_private);
+        assert_eq!(fs::read(&existing_public).unwrap(), corrupt_public);
+        assert_eq!(fs::read(&existing_proof).unwrap(), existing_proof_bytes);
+        assert_eq!(
+            fs::read(&replacement_vhd).unwrap(),
+            b"replacement-after-identity-failure"
+        );
+        let selection = fixture
+            .manager
+            .read_windows_wsl_generation_selection_locked(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.generation_index, 1);
+        assert_eq!(selection.selected_machine_name, replacement_machine);
+        assert_eq!(selection.preserved_collision_names, vec![existing_machine]);
+        assert_eq!(
+            inspect_managed_ssh_identity(&fixture.manager.machine_ssh_identity_path()).unwrap(),
+            ManagedSshIdentityState::Valid
+        );
+        let calls = fixture.commands.calls();
+        assert_eq!(calls.len(), 12);
+        assert_eq!(calls[5], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[6], ["--list", "--quiet"]);
+        assert_eq!(calls[7], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[8][..2], ["machine", "init"]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.len() >= 2 && call[0] == "machine" && call[1] == "init")
+                .count(),
+            1
+        );
+        assert!(calls.iter().all(|call| {
+            !(call.len() >= 2 && call[0] == "machine" && matches!(call[1].as_str(), "rm" | "stop"))
+        }));
+        assert!(calls.iter().flatten().all(|argument| {
+            argument != "--unregister" && argument != "--export" && argument != "--import"
+        }));
     }
 
     #[cfg(unix)]
