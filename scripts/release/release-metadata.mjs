@@ -23,6 +23,12 @@ const WINDOWS_NSIS_DATA_PRESERVATION_FILES = Object.freeze([
   ["ghost-repair-uninstall-report", "windows-nsis-data-preservation/ghost-repair-uninstall/beginner-report.html"],
 ]);
 
+export function requiresStablePublicWindowsEvidence({ publicationMode, releaseChannel, platform }) {
+  return publicationMode === "public-github-release" &&
+    releaseChannel === "stable" &&
+    platform === "windows-x86_64";
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -184,7 +190,7 @@ function validateWindowsDataPreservation(outcome, platform, installerType, label
   );
 }
 
-function validateArtifact(artifact, platform, installerType, publicationMode) {
+function validateArtifact(artifact, platform, installerType, publicationMode, releaseChannel) {
   exactKeys(
     artifact,
     [
@@ -215,7 +221,7 @@ function validateArtifact(artifact, platform, installerType, publicationMode) {
     assert(artifact.operatingSystemSigning.evidenceFile === null, `${platform}/${artifact.file} unsigned artifact must not claim signing evidence`);
     assert(typeof artifact.operatingSystemSigning.reason === "string" && artifact.operatingSystemSigning.reason.length > 0, `${platform}/${artifact.file} unsigned artifact needs a reason`);
   }
-  if (publicationMode === "public-github-release" && platform === "windows-x86_64") {
+  if (requiresStablePublicWindowsEvidence({ publicationMode, releaseChannel, platform })) {
     assert(
       artifact.humanPath.state === "verified",
       `${platform}/${artifact.file} public Windows artifact has no exact-candidate beginner human path`,
@@ -268,9 +274,42 @@ function validateArtifact(artifact, platform, installerType, publicationMode) {
     new Set(artifact.knownLimitations).size === artifact.knownLimitations.length,
     `${platform}/${artifact.file} known limitations contain duplicates`,
   );
+  if (artifact.humanPath.state === "not-observed") {
+    assert(
+      artifact.knownLimitations.includes("beginner-human-path-not-observed"),
+      `${platform}/${artifact.file} does not disclose its unobserved beginner human path`,
+    );
+  }
+  if (artifact.operatingSystemSigning.state === "not-configured") {
+    assert(
+      artifact.knownLimitations.includes("operating-system-signing-not-configured"),
+      `${platform}/${artifact.file} does not disclose its missing operating-system signature`,
+    );
+  }
+  if (platform === "windows-x86_64" && artifact.windowsLifecycle.state === "not-observed") {
+    assert(
+      artifact.knownLimitations.includes("windows-lifecycle-not-observed"),
+      `${platform}/${artifact.file} does not disclose its unobserved Windows lifecycle`,
+    );
+  }
+  if (platform === "windows-x86_64" && artifact.windowsDataPreservation.state === "not-observed") {
+    assert(
+      artifact.knownLimitations.includes("windows-data-preservation-not-observed"),
+      `${platform}/${artifact.file} does not disclose its unobserved Windows data preservation`,
+    );
+  }
+  if (
+    platform === "windows-x86_64" &&
+    artifact.windowsDataPreservation.state === "supporting-data-preservation-only"
+  ) {
+    assert(
+      artifact.knownLimitations.includes("windows-data-preservation-fixtures-only"),
+      `${platform}/${artifact.file} overstates its supporting Windows data-preservation fixtures`,
+    );
+  }
 }
 
-function validatePlatform(platformRecord, releaseState, publicationMode) {
+function validatePlatform(platformRecord, releaseState, publicationMode, releaseChannel) {
   exactKeys(platformRecord, ["platform", "availability", "reason", "installers"], `platform ${String(platformRecord?.platform)}`);
   const contract = PLATFORM_BY_ID.get(platformRecord.platform);
   assert(contract, `release metadata has an unsupported platform: ${String(platformRecord.platform)}`);
@@ -291,7 +330,13 @@ function validatePlatform(platformRecord, releaseState, publicationMode) {
     if (installer.availability === "offered") {
       offeredCount += 1;
       assert(installer.reason === null, `${platformRecord.platform}/${installer.installerType} offered record has a reason`);
-      validateArtifact(installer.artifact, platformRecord.platform, installer.installerType, publicationMode);
+      validateArtifact(
+        installer.artifact,
+        platformRecord.platform,
+        installer.installerType,
+        publicationMode,
+        releaseChannel,
+      );
     } else {
       assert(installer.artifact === null, `${platformRecord.platform}/${installer.installerType} unavailable record claims an artifact`);
       if (installer.availability === "pending") {
@@ -342,7 +387,12 @@ export function validateReleaseMetadataV3(metadata, expected = {}) {
     "release metadata platform support matrix is incomplete or out of order",
   );
   for (const platformRecord of metadata.distribution.platforms) {
-    validatePlatform(platformRecord, metadata.releaseState, metadata.publicationMode);
+    validatePlatform(
+      platformRecord,
+      metadata.releaseState,
+      metadata.publicationMode,
+      metadata.releaseChannel,
+    );
   }
   assert(Array.isArray(metadata.distribution.bundledEngines) && metadata.distribution.bundledEngines.length === 0, "release metadata must not claim bundled engines");
   assert(JSON.stringify(metadata.distribution.bundledAuxiliaryExecutables) === JSON.stringify(AUXILIARY_EXECUTABLES), "release metadata auxiliary executable inventory is invalid");

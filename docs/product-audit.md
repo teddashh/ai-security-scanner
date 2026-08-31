@@ -358,7 +358,7 @@ This compact inventory records the current semantics for paths not all represent
 - **Evidence:** baseline `7e0f0de:docs/product-spec.md:151-227`; `.github/workflows/ci.yml:16-35,53-121`; `.github/workflows/release.yml:92-108,650-810`; mapping behavior/non-certification foundation `src-tauri/src/exporters/framework_report.rs:14-20,304-320,373-381`.
 - **Real user impact:** UI/docs/product changes inherit unrelated release/image/provenance failures; mapping/signing issues appear more important than scan value.
 - **Wrong design belief:** Maximum global qualification is one universal definition of product correctness.
-- **Simpler behavior:** Separate product CI, engine admission, platform installer qualification, and publication. Mapping failure removes only relationships; Authenticode/provenance block only affected public artifact/update/engine.
+- **Simpler behavior:** Separate product CI, engine admission, platform installer qualification, and publication. Mapping failure removes only relationships; Authenticode/provenance block only the affected signed/stable artifact claim, update, or engine. A technically qualified public testing prerelease may disclose missing Authenticode without claiming it passed.
 - **Acceptance test:** A docs/UI change runs fast product checks without installer build; an AIDEFEND mapping failure leaves findings/report usable; an engine admission failure disables only that engine; invalid update never applies.
 
 ### A25 — Release evidence does not qualify the human path
@@ -504,7 +504,7 @@ This is a P0 program, not one monolithic implementation goal. Start with one nar
 
 Acceptance for this first vertical goal is an installed Windows path with prerequisites ready: one actual localhost quick task reaches reachable/closed/timeout and a saved report within ten minutes, survives reopen, and never displays demo data. A zero-completed-task report is required fallback evidence but cannot pass first value.
 
-Proceed in parallel or immediately afterward with the remaining release-blocking P0 safety tracks; they must all pass before promoting the Windows artifact:
+Proceed in parallel or immediately afterward with the remaining P0 safety tracks; they must all pass before calling the Windows artifact beginner-ready or stable. A public testing prerelease may expose a technically qualified exact installer with the missing paths prominently disclosed:
 
 1. Move fixed WSL detection/preparation into the signed install/resume flow; cover no-WSL and restart without Terminal or an installation rollback.
 2. Replace deterministic-name/manual WSL collision handling with unique side-by-side runtime creation; do not execute legacy export/import/unregister. **Implemented in source on the integration line:** a missing or rejected packaged component is never executed, produces no Repair/Retry loop, and disables only dependent work while the shell and independent outcomes remain usable. A verified automatic component-repair source and removal of the legacy migration transaction remain open.

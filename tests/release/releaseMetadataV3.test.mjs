@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   createPreparedReleaseMetadata,
+  requiresStablePublicWindowsEvidence,
   validateReleaseMetadataV3,
 } from "../../scripts/release/release-metadata.mjs";
 
@@ -85,6 +86,7 @@ function artifact() {
       "beginner-human-path-not-observed",
       "operating-system-signing-not-configured",
       "windows-lifecycle-not-observed",
+      "windows-data-preservation-not-observed",
     ],
   };
 }
@@ -147,23 +149,13 @@ test("finalized v3 metadata can offer one qualified artifact while siblings stay
   assert.equal(metadata.distribution.platforms[2].installers[0].availability, "offered");
 });
 
-test("public Windows cannot omit real installed-app lifecycle evidence", () => {
+test("public prerelease Windows discloses missing promotion evidence while stable stays fail closed", () => {
   const metadata = windowsOnlyPrepared();
   metadata.publicationMode = "public-github-release";
   metadata.releaseState = "finalized";
   const windows = metadata.distribution.platforms[2];
   windows.availability = "offered";
   const publicArtifact = artifact();
-  publicArtifact.humanPath = {
-    state: "verified",
-    evidenceFile: "human-path-qualification-windows-x86_64-msi.json",
-    reason: null,
-  };
-  publicArtifact.operatingSystemSigning = {
-    state: "verified",
-    evidenceFile: "os-signing-windows-x86_64-msi.json",
-    reason: null,
-  };
   publicArtifact.provenanceAttestation = {
     state: "required-before-publication",
     provider: "GitHub artifact attestations",
@@ -181,19 +173,42 @@ test("public Windows cannot omit real installed-app lifecycle evidence", () => {
     reason: "beginner-human-path-not-observed;authenticode-not-verified",
     artifact: null,
   };
-  assert.throws(
+  assert.doesNotThrow(
     () => validateReleaseMetadataV3(metadata, { releaseState: "finalized" }),
-    /Windows lifecycle state is unsupported|no real installed-app lifecycle evidence/u,
   );
-  metadata.publicationMode = "commit-bound-qc";
-  publicArtifact.provenanceAttestation = artifact().provenanceAttestation;
-  assert.doesNotThrow(() => validateReleaseMetadataV3(metadata, { releaseState: "finalized" }));
-  metadata.publicationMode = "public-github-release";
-  publicArtifact.provenanceAttestation = artifact().provenanceAttestation;
+
+  for (const [limitation, expectedError] of [
+    ["beginner-human-path-not-observed", /does not disclose its unobserved beginner human path/u],
+    ["operating-system-signing-not-configured", /does not disclose its missing operating-system signature/u],
+    ["windows-lifecycle-not-observed", /does not disclose its unobserved Windows lifecycle/u],
+    ["windows-data-preservation-not-observed", /does not disclose its unobserved Windows data preservation/u],
+  ]) {
+    const undisclosedPrerelease = structuredClone(metadata);
+    const candidate = undisclosedPrerelease.distribution.platforms[2].installers[0].artifact;
+    candidate.knownLimitations = candidate.knownLimitations.filter((item) => item !== limitation);
+    assert.throws(
+      () => validateReleaseMetadataV3(undisclosedPrerelease, { releaseState: "finalized" }),
+      expectedError,
+    );
+  }
+
+  const stable = structuredClone(metadata);
+  stable.releaseChannel = "stable";
+  stable.stableTarget = stable.version;
   assert.throws(
-    () => validateReleaseMetadataV3(metadata, { releaseState: "finalized" }),
-    /no real installed-app lifecycle evidence/u,
+    () => validateReleaseMetadataV3(stable, { releaseState: "finalized" }),
+    /no exact-candidate beginner human path/u,
   );
+  assert.equal(requiresStablePublicWindowsEvidence({
+    publicationMode: "public-github-release",
+    releaseChannel: "stable",
+    platform: "windows-x86_64",
+  }), true);
+  assert.equal(requiresStablePublicWindowsEvidence({
+    publicationMode: "public-github-release",
+    releaseChannel: "prerelease",
+    platform: "windows-x86_64",
+  }), false);
 });
 
 test("MSI cannot claim an updater target the desktop runtime cannot consume", () => {
@@ -236,6 +251,9 @@ test("NSIS fixture evidence is retained only as supporting data preservation and
   nsisArtifact.file = "ai-security-scanner_0.1.8_x64-setup.exe";
   nsisArtifact.technicalQualification.evidenceFile = "platform-qualification-windows-x86_64-nsis.json";
   nsisArtifact.windowsDataPreservation = supportingNsisDataPreservation();
+  nsisArtifact.knownLimitations = nsisArtifact.knownLimitations
+    .filter((limitation) => limitation !== "windows-data-preservation-not-observed");
+  nsisArtifact.knownLimitations.push("windows-data-preservation-fixtures-only");
   windows.installers[0] = {
     installerType: "msi",
     availability: "not-offered",
@@ -301,4 +319,8 @@ test("JSON schema fixes the same ordered platform/installer tuples and lifecycle
   assert.equal(releaseSchema.$defs.supportingWindowsNsisDataPreservation.properties.evidenceFiles.minItems, 4);
   assert.equal(releaseSchema.$defs.supportingWindowsNsisDataPreservation.properties.reason.const,
     "real-installed-app-localhost-lifecycle-not-observed");
+  const stablePublicWindowsConditional = releaseSchema.allOf[2].if;
+  assert.equal(stablePublicWindowsConditional.properties.publicationMode.const, "public-github-release");
+  assert.equal(stablePublicWindowsConditional.properties.releaseChannel.const, "stable");
+  assert.deepEqual(stablePublicWindowsConditional.required, ["publicationMode", "releaseChannel"]);
 });

@@ -42,13 +42,15 @@ NIST CSF, ISO/IEC 27001, and AIDEFEND references help you understand how a findi
 
 ## Current availability
 
-The repository is in active development. **There is currently no installer we recommend to beginners for testing the new experience.** The `v0.1.8` source line still contains implementation gaps against the rewritten product specification, so a version number or source checkout is not an install recommendation.
+Want to try the real Windows app? Use the **v0.1.8 public testing prerelease** on the [GitHub Releases page](https://github.com/teddashh/ai-security-scanner/releases). It is a test build, not a stable or beginner-ready release yet.
 
-When a qualified installer is ready, it will appear on the [GitHub Releases page](https://github.com/teddashh/ai-security-scanner/releases) with a plain statement of the supported platform and what was actually tested. Until then:
+Before installing:
 
-- use the browser demo below only to explore the interface;
-- do not treat the demo as a real security assessment; and
-- follow development through the [canonical product specification](docs/product-spec.md) and [product audit](docs/product-audit.md).
+- Windows may show an **Unknown publisher** warning because Authenticode signing has not been verified;
+- the complete first-time setup and localhost-report journey is still being tested on this exact build; and
+- the release page says exactly what was and was not tested. Please report the screen or step where you get stuck.
+
+If you only want to explore the interface, use the browser demo below. It does not perform a real security assessment.
 
 ### Explore the browser demo
 

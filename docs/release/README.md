@@ -17,7 +17,7 @@ Release work has four independent layers:
 | Platform qualification | Does this exact installer work on this platform and preserve its data? | That platform/installer artifact | Another independently qualified platform or installer |
 | Publication/channel policy | May this exact artifact be offered through this channel? | That artifact in that channel | Source work, local scans, existing safe installs, or another channel |
 
-No layer may be used as a substitute for the installed human path. No global “release ready” bit may erase the narrower outcome of a qualified platform or admitted engine.
+No layer may be used as a substitute for the installed human path. A public testing prerelease can expose an exact technically qualified installer to obtain that evidence, but it must disclose the missing observation and cannot claim beginner-ready or stable status. No global “release ready” bit may erase the narrower outcome of a qualified platform or admitted engine.
 
 ## 1. Product CI
 
@@ -64,7 +64,7 @@ Every platform qualification must verify only claims made for that artifact, inc
 
 ### Windows beginner qualification
 
-Every Windows artifact promoted as a beginner prerelease or stable release requires the exact-candidate human record defined by the canonical specification:
+Every Windows artifact promoted as beginner-ready or stable requires the exact-candidate human record defined by the canonical specification:
 
 1. install the candidate;
 2. enter the main screen;
@@ -73,11 +73,11 @@ Every Windows artifact promoted as a beginner prerelease or stable release requi
 5. reopen the project; and
 6. export a readable report.
 
-The participant must be a qualifying beginner and the facilitator may observe but not take over. Modeled records, contributor walkthroughs, source checkouts, CLI-created cases, and a process that merely remains open do not pass this path.
+The participant must be a qualifying beginner and the facilitator may observe but not take over. Modeled records, contributor walkthroughs, source checkouts, CLI-created cases, and a process that merely remains open do not pass this path. A technically qualified Windows installer may be offered first as a public testing prerelease only when the release page and artifact metadata explicitly state that this path has not been observed and that the artifact is not beginner-ready or stable.
 
 Separate real-Windows integration/operator fixtures cover WSL absent/restart, unrelated WSL, healthy/damaged/ambiguous/ghost/interrupted runtime, Repair, N-1 upgrade, supported downgrade behavior, and the three uninstall choices. Those fixtures do not require a new novice session unless they change a user decision in the core path.
 
-The current NSIS N-1 and registered-WSL ghost fixtures are supporting data-preservation evidence only. They use a seeded case and CLI export to prove retained bytes; they do not prove the canonical installed-desktop `127.0.0.1:9001` report, reopen, and readable-export journey. Public NSIS therefore remains unavailable until a separate exact-artifact lifecycle record proves that real app path. MSI remains unavailable for public promotion until equivalent MSI lifecycle evidence exists. Commit-bound QC may retain either installer with the missing lifecycle observation disclosed.
+The current NSIS N-1 and registered-WSL ghost fixtures are supporting data-preservation evidence only. They use a seeded case and CLI export to prove retained bytes; they do not prove the canonical installed-desktop `127.0.0.1:9001` report, reopen, and readable-export journey. NSIS and MSI may therefore be offered only as clearly labeled public testing prereleases while their exact-artifact human/lifecycle evidence is absent. They remain ineligible for beginner-ready or stable promotion until the applicable real app path passes. Commit-bound QC retains the same missing observations without making public-provenance claims.
 
 ### Feature-specific qualification
 
@@ -109,7 +109,7 @@ Rules are scoped:
 - An invalid updater signature blocks applying that update. The current installed version continues to open, scan with admitted engines, show reports, and export readable data.
 - A missing platform artifact is marked unavailable in the support matrix. It does not prevent publication of another independently qualified platform.
 - A checksum, signature, or provenance failure blocks only the affected bytes and claims. It does not become managed-runtime readiness.
-- Stable and prerelease channels may have different per-artifact requirements, but neither may waive honest coverage or data-preservation evidence for the claims it makes.
+- A public testing prerelease may expose a technically qualified artifact while human, lifecycle, data-preservation, or OS-signing evidence is missing, but every gap must remain explicit in release notes and artifact metadata. Beginner-ready and stable channels may not waive those requirements.
 
 A release index may list several platform artifacts for convenience. The index represents independent outcomes; it must not require an unrelated absent platform entry merely to validate or update the current platform.
 
@@ -120,11 +120,11 @@ A release index may list several platform artifacts for convenience. The index r
 | One engine package fails admission | Keep it unavailable; report coverage gap | That engine package only |
 | Optional framework mapping is missing or stale | Findings/report remain; mapping unavailable warning | No scan or report block |
 | Signing identity for an export is unavailable | Offer unsigned readable export | Requested signed export only |
-| One platform installer fails its human/integration path | Do not promote that artifact | That platform/installer/channel only |
+| One platform installer lacks or fails its human/integration path | It may remain an explicitly limited public testing prerelease | Beginner-ready/stable promotion of that platform/installer only |
 | One platform artifact is not built | Mark platform unavailable | Missing platform only |
 | AWS/IAM study is missing or fails | Do not claim the Advanced AWS path is qualified | AWS feature claim only |
 | Update signature/digest is invalid | Keep current installed version | That update payload only |
-| OS publisher signing required by a channel is absent | Do not publish the affected artifact there | That artifact/channel only |
+| OS publisher signing is absent | Public testing prerelease may warn; do not claim signed/recommended status | Stable or another channel that requires publisher signing |
 | Proven shared-core data-loss defect | Stop every artifact demonstrated to contain the defect | Evidence-based affected artifacts |
 | Documentation-only change | Run low-cost document/static checks | No installer/release qualification |
 
@@ -139,7 +139,7 @@ The intended sequence is:
 3. admit only the engines claimed by those artifacts;
 4. build each platform artifact independently;
 5. qualify each exact installer on its real platform;
-6. retain the exact-candidate human record when promoting a Windows beginner artifact;
+6. retain the exact-candidate human record when promoting a Windows beginner-ready or stable artifact, or prominently disclose its absence for a testing prerelease;
 7. apply that channel's signing, integrity, notices, and provenance policy to each artifact; and
 8. publish only the artifacts that passed, with an explicit support/coverage matrix.
 
@@ -167,11 +167,11 @@ retained only as supporting preservation evidence; missing or one-sided records 
 There is not yet a protected same-run producer for the exact-candidate Windows beginner record,
 real installed-app lifecycle record, or Authenticode verification record with an approved publisher
 identity and protected run/job identity. `v0.1.8` therefore accepts no generic observation or
-promotion artifact namespace. A future path must add its reviewed producer, bounded parser, and
-promotion policy together before the workflow may consume it. Until those parts exist and pass,
-public Windows artifacts remain unavailable.
-This does not withhold an independently qualified Linux or macOS artifact, block source work, or make
-an installed product unusable.
+promotion artifact namespace and makes no claim that those paths passed. A technically qualified
+Windows installer may still be offered as a public testing prerelease when the finalizer records
+`not-observed`/`not-configured`, the release page lists the affected installer and gaps, and public
+provenance is created for the exact bytes. Those gaps continue to block beginner-ready and stable
+promotion, not testing, another platform, source work, or an installed product.
 
 The `v0.1.8` source line is not currently a recommended beginner installer. This status is an honest
 artifact/channel gap, not a product-wide gate.

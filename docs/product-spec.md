@@ -102,7 +102,7 @@ The following rules apply across installer, desktop, runtime, engines, reports, 
 
 ## 3. Ten-minute first-value gate
 
-The first P0 release gate is a real installed-Windows journey, not a source-checkout test.
+The first P0 beginner-ready and stable-release gate is a real installed-Windows journey, not a source-checkout test. A clearly labeled public testing prerelease may be used to obtain this evidence before the gate passes; it is not a claim that the beginner journey is qualified.
 
 ### 3.1 Reference journey
 
@@ -127,7 +127,9 @@ The report is useful whether the service is reachable, closed, times out, or lat
 
 ### 3.3 First-value acceptance record
 
-Every Windows candidate promoted beyond internal developer QC—including every public prerelease or stable Windows artifact—must preserve a redacted passing human-path record bound to the exact candidate. The participant is a qualifying Windows beginner who did not build the product, contribute to it, or rehearse its setup; the facilitator may observe but may not take over, dictate operational steps, or administer WSL. The record includes installer identity, Windows version, timings, decisions, visible errors, final coverage, and report outcome. It must not contain target data, credentials, or raw evidence. A maintainer walkthrough, CI simulation, or synthetic declaration cannot be substituted for this record. A failed path blocks that Windows promotion until the product is corrected and a new human path passes; it does not block unrelated source work or another independently qualified platform.
+Every Windows candidate promoted as beginner-ready or stable must preserve a redacted passing human-path record bound to the exact candidate. The participant is a qualifying Windows beginner who did not build the product, contribute to it, or rehearse its setup; the facilitator may observe but may not take over, dictate operational steps, or administer WSL. The record includes installer identity, Windows version, timings, decisions, visible errors, final coverage, and report outcome. It must not contain target data, credentials, or raw evidence. A maintainer walkthrough, CI simulation, or synthetic declaration cannot be substituted for this record.
+
+A technically qualified Windows artifact may be offered earlier as a **public testing prerelease** so users can test the real installer. Its release page and machine-readable metadata must prominently identify every unobserved human path, installed-app lifecycle, data-preservation path, and unverified OS signature. It must not be described as beginner-ready, recommended, stable, signed, or fully qualified. A failed human path blocks beginner-ready/stable promotion until corrected and retested; it does not block an honestly labeled testing prerelease, unrelated source work, or another independently qualified platform.
 
 ## 4. Beginner journey and information architecture
 
@@ -581,7 +583,7 @@ Passing levels 2–4 never authorizes a claim that level 1 passed.
 
 ### 15.2 Required Windows qualification paths
 
-One qualifying beginner human path on the exact installed candidate is mandatory: clean Windows → combined localhost Start → master report → reopen → readable export. Signed bundle creation and independent verification are qualified on the real installed application as a separate integration/operator path; signer failure cannot invalidate the beginner path. A targeted additional human session is required only when a changed UI decision cannot be evaluated in the core path.
+One qualifying beginner human path on the exact installed candidate is mandatory before a Windows artifact is called beginner-ready or stable: clean Windows → combined localhost Start → master report → reopen → readable export. A public testing prerelease may be used to obtain that real-world evidence while its missing observation remains prominently disclosed. Signed bundle creation and independent verification are qualified on the real installed application as a separate integration/operator path; signer failure cannot invalidate the beginner path. A targeted additional human session is required only when a changed UI decision cannot be evaluated in the core path.
 
 Real Windows integration/operator qualification—not a separate novice session for every fixture—covers:
 
@@ -627,7 +629,7 @@ Source-text/regex tests can guard wiring but are not UX, installer, or recovery 
 
 ### 16.1 Product acceptance
 
-A beginner release is acceptable only when:
+A beginner-ready or stable release is acceptable only when:
 
 - the ten-minute first-value human path passes on the reference Windows setup;
 - requested and executed scope are both visible and no tested gap is silently green;
@@ -637,7 +639,7 @@ A beginner release is acceptable only when:
 - ambiguous runtime state is preserved while a new isolated generation continues;
 - bilingual primary paths and baseline accessibility pass;
 - no known path risks deleting unrelated/user data without explicit confirmation;
-- the Windows candidate has a passing human-path record for the exact promoted build; stable/public promotion cannot waive it with modeled CI evidence.
+- the Windows candidate has a passing human-path record for the exact promoted build; beginner-ready/stable promotion cannot waive it with modeled CI evidence. A public testing prerelease remains explicitly outside this claim until the record exists.
 
 ### 16.2 Warning versus hard block
 
@@ -648,7 +650,7 @@ A beginner release is acceptable only when:
 | Framework mapping missing/stale | Yes; findings remain | Never blocks scan/report |
 | Export signing identity unavailable | Yes; offer unsigned readable export | Only the requested signed-export operation |
 | Update signature/provenance invalid | Continue current version | Applying that update |
-| Windows Authenticode unavailable | Does not affect local development or an already installed build | Public distribution channel may withhold that unsigned Windows artifact |
+| Windows Authenticode unavailable | A public testing prerelease may offer the technically qualified artifact with a prominent “Authenticode not verified” warning | Stable or signed/recommended distribution of that Windows artifact |
 | Platform artifact missing | Other platforms/channels may proceed with explicit support matrix | The missing platform artifact only |
 | Scope partially unsupported or too large | Offer honest subset or revised scope | Starting undisclosed or prohibited activity |
 | Product-owned disposable runtime corrupt | Automatic rebuild | Only mutation if ownership cannot be proven; side-by-side creation still proceeds |

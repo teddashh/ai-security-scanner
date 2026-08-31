@@ -969,12 +969,40 @@ async function main() {
       publicWithoutPromotionFinal.distribution.platforms.map(({ platform, availability }) =>
         [platform, availability]),
     );
+    const publicWindowsPrerelease = publicWithoutPromotionFinal.distribution.platforms.find(
+      ({ platform }) => platform === "windows-x86_64",
+    );
     if (
       publicAvailability.get("linux-x86_64") !== "offered" ||
       publicAvailability.get("macos-universal") !== "offered" ||
-      publicAvailability.get("windows-x86_64") !== "not-offered"
+      publicAvailability.get("windows-x86_64") !== "offered" ||
+      publicWindowsPrerelease.installers.some(({ artifact, availability }) =>
+        availability === "offered" && (
+          artifact.humanPath.state !== "not-observed" ||
+          artifact.operatingSystemSigning.state !== "not-configured" ||
+          artifact.windowsLifecycle.state !== "not-observed" ||
+          !artifact.knownLimitations.includes("beginner-human-path-not-observed") ||
+          !artifact.knownLimitations.includes("operating-system-signing-not-configured") ||
+          !artifact.knownLimitations.includes("windows-lifecycle-not-observed")
+        ))
     ) {
-      throw new Error("missing Windows promotion evidence blocked an unrelated qualified platform");
+      throw new Error("public prerelease did not retain qualified platforms with exact limitations");
+    }
+    const publicPrereleaseNotes = await readFile(
+      path.join(publicWithoutPromotionOutput, "RELEASE_NOTES.md"),
+      "utf8",
+    );
+    if (
+      !publicPrereleaseNotes.includes("Windows pre-release testing notice") ||
+      !publicPrereleaseNotes.includes("public testing pre-release, not a stable deployment") ||
+      !publicPrereleaseNotes.includes("Authenticode not verified") ||
+      !publicPrereleaseNotes.includes("exact-candidate beginner path not observed") ||
+      !publicPrereleaseNotes.includes("installed-app lifecycle not observed") ||
+      !publicPrereleaseNotes.includes("data-preservation path not observed") ||
+      !publicPrereleaseNotes.includes("- MSI:") ||
+      !publicPrereleaseNotes.includes("- NSIS:")
+    ) {
+      throw new Error("public Windows prerelease did not disclose its exact testing limitations");
     }
 
     const scopedWindowsInput = path.join(temporary, "windows-only-input");
@@ -1151,20 +1179,34 @@ async function main() {
       path.join(scopedPublicInput, "release-metadata.json"),
       `${JSON.stringify(preparedWindowsMetadata("public-github-release"), null, 2)}\n`,
     );
-    expectFailure(
-      () => run("finalize-release.mjs", [
-        "--input", scopedPublicInput,
-        "--out", path.join(temporary, "windows-public-blocked-output"),
-        "--version", VERSION,
-        "--tag", TAG,
-        "--commit", COMMIT,
-        "--publication-mode", "public-github-release",
-        "--tauri-config", tauriConfig,
-      ]),
-      "public Windows artifacts without protected signing, exact beginner, and real-app lifecycle evidence",
-    );
+    const scopedPublicOutput = path.join(temporary, "windows-public-prerelease-output");
+    run("finalize-release.mjs", [
+      "--input", scopedPublicInput,
+      "--out", scopedPublicOutput,
+      "--version", VERSION,
+      "--tag", TAG,
+      "--commit", COMMIT,
+      "--publication-mode", "public-github-release",
+      "--tauri-config", tauriConfig,
+    ]);
+    run("verify-finalized-release.mjs", [
+      "--dir", scopedPublicOutput,
+      "--version", VERSION,
+      "--tag", TAG,
+      "--commit", COMMIT,
+      "--publication-mode", "public-github-release",
+      "--tauri-config", tauriConfig,
+    ]);
+    const scopedPublicWindows = (await readJson(path.join(scopedPublicOutput, "release-metadata.json")))
+      .distribution.platforms.find(({ platform }) => platform === "windows-x86_64");
+    if (
+      scopedPublicWindows.availability !== "offered" ||
+      scopedPublicWindows.installers.some(({ availability }) => availability !== "offered")
+    ) {
+      throw new Error("technically qualified Windows prerelease installers were not offered");
+    }
     process.stdout.write(
-      "Release tooling self-test passed artifact-scoped v3, optional-updater, sibling-failure, and public-Windows-unavailable fixtures.\n",
+      "Release tooling self-test passed artifact-scoped v3, optional-updater, sibling-failure, and disclosed public-Windows-prerelease fixtures.\n",
     );
     return;
   } finally {

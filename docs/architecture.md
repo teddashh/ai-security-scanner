@@ -743,5 +743,5 @@ The architecture is implemented only when evidence demonstrates:
 - export verification distinguishes integrity from correctness;
 - re-verification does not mark an unrun check as resolved;
 - demo provenance cannot be confused with a real case;
-- the exact-candidate human path passes before Windows promotion; modeled tests remain supporting evidence;
+- the exact-candidate human path passes before beginner-ready/stable Windows promotion; a public testing prerelease discloses that it remains unobserved, and modeled tests remain supporting evidence;
 - every added gate, durable state, or recovery transaction satisfies the canonical complexity budget with a reproducible harm and a simpler-alternative analysis.

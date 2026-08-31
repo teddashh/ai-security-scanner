@@ -210,7 +210,7 @@ Source and binary identities are updated only through the lock file. A version u
 
 ## Runtime acceptance summary
 
-A Windows candidate containing runtime changes is promoted only after the canonical exact-candidate human path and the applicable focused real-boundary fixtures pass. Ordinary development may run narrower checks, but cannot claim candidate acceptance. Promotion evidence demonstrates:
+A Windows candidate containing runtime changes is promoted as beginner-ready or stable only after the canonical exact-candidate human path and the applicable focused real-boundary fixtures pass. An earlier technically qualified public testing prerelease may expose the exact installer while clearly recording every unobserved path; it cannot claim candidate acceptance. Promotion evidence demonstrates:
 
 - fresh Windows with WSL absent reaches the main shell and resumes after the fixed signed-installer action/restart without Terminal;
 - `127.0.0.1:9001` reaches the Windows host and produces a saved report;

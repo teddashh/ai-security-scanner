@@ -21,6 +21,7 @@ import { verifyWindowsNsisSupportingDataPreservationEvidence } from "./windows-d
 import {
   platformContract,
   provenanceForArtifact,
+  requiresStablePublicWindowsEvidence,
   validateReleaseMetadataV3,
 } from "./release-metadata.mjs";
 
@@ -545,8 +546,11 @@ async function scopedFinalizeMain() {
       // work, while this candidate records the exact claim as not configured.
       const signingEvidence = null;
       if (
-        publicationMode === "public-github-release" &&
-        platformRecord.platform === "windows-x86_64" &&
+        requiresStablePublicWindowsEvidence({
+          publicationMode,
+          releaseChannel: metadata.releaseChannel,
+          platform: platformRecord.platform,
+        }) &&
         (!humanEvidence || !signingEvidence || !installedAppLifecycleEvidence)
       ) {
         const missing = [
@@ -587,11 +591,12 @@ async function scopedFinalizeMain() {
       if (!humanEvidence) limitations.push("beginner-human-path-not-observed");
       if (!signingEvidence) limitations.push("operating-system-signing-not-configured");
       if (platformRecord.platform === "windows-x86_64") {
-        limitations.push(
-          installerSupport.installerType === "nsis" && dataPreservationEvidence
-            ? "data-preservation-fixtures-only;real-installed-app-localhost-lifecycle-not-observed"
-            : "windows-lifecycle-not-observed",
-        );
+        limitations.push("windows-lifecycle-not-observed");
+        if (installerSupport.installerType === "nsis" && dataPreservationEvidence) {
+          limitations.push("windows-data-preservation-fixtures-only");
+        } else {
+          limitations.push("windows-data-preservation-not-observed");
+        }
       }
       if (platformRecord.platform === "macos-universal" && !notarizationEvidence) {
         limitations.push("apple-notarization-not-configured");
@@ -810,11 +815,41 @@ async function scopedFinalizeMain() {
   const distributionVerification = publicationMode === "public-github-release"
     ? "Verify the selected file against SHA256SUMS.txt and its artifact-specific public provenance before installing."
     : "These are commit-bound QC artifacts, not a public release; public provenance has not been created.";
+  const offeredWindowsPrereleaseInstallers =
+    publicationMode === "public-github-release" &&
+    metadata.releaseChannel === "prerelease" &&
+    finalized.distribution.platforms
+      .find(({ platform }) => platform === "windows-x86_64")
+      ?.installers.filter(({ availability }) => availability === "offered");
+  const windowsPrereleaseNotice = offeredWindowsPrereleaseInstallers?.length > 0
+    ? [
+        "## Windows pre-release testing notice",
+        "",
+        "> This is a public testing pre-release, not a stable deployment. The Windows installers",
+        "> are intentionally available so this build can be tested now. Windows may show an",
+        "> Unknown publisher warning.",
+        "",
+        ...offeredWindowsPrereleaseInstallers.map(({ installerType, artifact }) => {
+          const limitations = [];
+          if (artifact.operatingSystemSigning.state !== "verified") limitations.push("Authenticode not verified");
+          if (artifact.humanPath.state !== "verified") limitations.push("exact-candidate beginner path not observed");
+          if (artifact.windowsLifecycle.state !== "verified") limitations.push("installed-app lifecycle not observed");
+          if (artifact.windowsDataPreservation.state === "not-observed") {
+            limitations.push("data-preservation path not observed");
+          } else if (artifact.windowsDataPreservation.state === "supporting-data-preservation-only") {
+            limitations.push("data-preservation fixtures only");
+          }
+          return `- ${installerType.toUpperCase()}: ${limitations.join("; ")}.`;
+        }),
+        "",
+      ]
+    : [];
   await writeTextAtomic(path.join(output, "RELEASE_NOTES.md"), [
     `# ai-security-scanner ${version}`,
     "",
     `Source: \`${commit}\``,
     "",
+    ...windowsPrereleaseNotice,
     ...releaseCopyFor(version).releaseNotes,
     "Artifacts offered by this finalized set:",
     ...offeredLines,

@@ -198,8 +198,11 @@
     },
     {
       "if": {
-        "properties": { "publicationMode": { "const": "public-github-release" } },
-        "required": ["publicationMode"]
+        "properties": {
+          "publicationMode": { "const": "public-github-release" },
+          "releaseChannel": { "const": "stable" }
+        },
+        "required": ["publicationMode", "releaseChannel"]
       },
       "then": {
         "properties": {

@@ -154,6 +154,12 @@ async function main() {
     sourceCommit: commit,
     publicationMode,
   });
+  const packageJson = await readJson(path.join(PROJECT_ROOT, "package.json"));
+  assert(
+    releaseMetadata.releaseChannel === packageJson.release?.channel &&
+      releaseMetadata.stableTarget === packageJson.release?.target,
+    "finalized release channel does not match the exact source package",
+  );
   const latest = await readJson(path.join(directory, "latest.json"));
   assert(
     latest.version === version && latest.tag === tag && latest.platforms &&

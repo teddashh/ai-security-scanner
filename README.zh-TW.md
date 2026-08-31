@@ -42,13 +42,15 @@ NIST CSF、ISO/IEC 27001 與 AIDEFEND 關聯只是幫助你理解發現項目與
 
 ## 目前可以怎麼試？
 
-本程式庫仍在積極開發。**目前沒有建議一般新手安裝測試新流程的安裝程式。** `v0.1.8` 原始碼版本線仍有尚未依新版產品規格完成的實作差距，因此版本號或原始碼簽出版本都不代表可安裝推薦。
+想直接試真正的 Windows App？請到 [GitHub Releases 頁面](https://github.com/teddashh/ai-security-scanner/releases)下載 **v0.1.8 公開測試預發布版**。這是讓大家實機測試的版本，目前還不是穩定版或新手正式推薦版。
 
-通過驗證的安裝程式準備好後，會出現在 [GitHub Releases 頁面](https://github.com/teddashh/ai-security-scanner/releases)，並用簡單文字說明支援的平台與實際測過的內容。在那之前：
+安裝前先知道三件事：
 
-- 下方瀏覽器展示版只適合預覽介面；
-- 不要把展示版當成真正的安全掃描；
-- 開發方向請以 [正式產品規格](docs/product-spec.md) 與 [產品審計](docs/product-audit.md) 為準。
+- Authenticode 簽章尚未完成驗證，因此 Windows 可能顯示「未知的發行者」；
+- 這個精確版本的完整首次設定到 localhost 報告流程仍在實機測試；
+- Release 頁面會清楚列出已測與未測內容。卡住時請回報畫面與步驟。
+
+如果只想先看介面，可以使用下方瀏覽器展示版；它不會執行真正的安全掃描。
 
 ### 預覽瀏覽器展示版
 
