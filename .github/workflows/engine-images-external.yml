@@ -28,13 +28,20 @@ jobs:
     steps:
       - name: Check out the exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Run formatting and unit tests in the pinned toolchain
+      - name: Check formatting in the pinned toolchain
         run: |
           docker run --rm \
             -v "${PWD}/engines/images/external-launcher:/src:ro" \
             -w /src \
             golang:1.26.0-alpine@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 \
-            sh -ceu 'formatted="$(gofmt -d main.go main_test.go)"; if test -n "${formatted}"; then printf "%s\n" "${formatted}"; exit 1; fi; go test ./...'
+            sh -ceu 'gofmt -d main.go main_test.go | tee /tmp/gofmt.diff; test ! -s /tmp/gofmt.diff'
+      - name: Run unit tests in the pinned toolchain
+        run: |
+          docker run --rm \
+            -v "${PWD}/engines/images/external-launcher:/src:ro" \
+            -w /src \
+            golang:1.26.0-alpine@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 \
+            go test -v ./...
 
   publish:
     name: Publish ${{ matrix.engine }} for amd64 + arm64
