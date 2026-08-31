@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/projectdiscovery/httpx",
     "revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
@@ -16,9 +16,22 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
     "tag": "1.10.0-5",
-    "digest": null
+    "digest": "sha256:37468b8bbecc6438681d9fd7e87d09d9375fc496b1c53a369fa95ddef62bc6d4"
   },
-  "publication": null,
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33369797046",
+    "source_revision": "7514fd0642b28fe73ebdd2d48f0149b40f6eec17",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:e613d40aa9e9795d8b49a5c5c79c3b34adb434d06e9468710530e8d9425d7172",
+      "linux/arm64": "sha256:adbeea89c523424a4939402f0018dddc43c743a9c253f38318b69eaadca0bae0"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "httpx-image-evidence-33369797046-1"
+  },
   "build_recipe": {
     "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
     "source_archive": {
@@ -87,7 +100,5 @@
     "rationale": "MIT upstream code and the Apache-2.0 project launcher permit redistribution with notices.",
     "source_offer_path": null
   },
-  "blockers": [
-    "The bounded work-unit launcher revision has not yet been published and independently verified as immutable image tag 1.10.0-5."
-  ]
+  "blockers": []
 }

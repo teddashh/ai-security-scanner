@@ -990,7 +990,12 @@
     "homepage_url": "https://projectdiscovery.io/",
     "license_spdx": "Apache-2.0 AND MIT",
     "distribution_mode": "pull_pinned_image",
-    "image": null,
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
+      "tag": "2.6.1-5",
+      "digest": "sha256:4195916c522f5b64476acaac67c8694cc42c078f549744e9310f211d5f32dffc",
+      "signature_identity": null
+    },
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
     "engine_version": "2.6.1",
     "rule_version": null,
@@ -1038,11 +1043,10 @@
       "--journal-plan",
       "/run/ai-security-scanner/execution-journal-v2.json"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
       "The project-owned launcher executes one TCP connect scan per exact, unexpired asset grant through the managed SOCKS gateway.",
-      "The staged managed-image recipe is closed over the exact upstream source commit and accepts no arbitrary scanner arguments.",
-      "The bounded work-unit launcher is awaiting immutable image publication at tag 2.6.1-5; this engine remains independently unavailable until its exact digest and evidence are verified.",
+      "The managed image is built from the exact upstream source commit and accepts no arbitrary scanner arguments.",
       "MIT upstream code and the Apache-2.0 project launcher permit redistribution with notices."
     ],
     "license": {
@@ -1057,8 +1061,8 @@
         "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
         "source_ref": "v2.6.1",
         "acquisition_source": "https://github.com/projectdiscovery/naabu/commit/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
-        "artifact_source_revision": null,
-        "source_association": "source_build_required"
+        "artifact_source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "not_applicable",
@@ -1085,11 +1089,9 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "The bounded work-unit Naabu image has not yet been published and independently verified."
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "authorized target reachability",
@@ -1139,7 +1141,12 @@
     "homepage_url": "https://projectdiscovery.io/",
     "license_spdx": "Apache-2.0 AND MIT",
     "distribution_mode": "pull_pinned_image",
-    "image": null,
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
+      "tag": "1.10.0-5",
+      "digest": "sha256:37468b8bbecc6438681d9fd7e87d09d9375fc496b1c53a369fa95ddef62bc6d4",
+      "signature_identity": null
+    },
     "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
     "engine_version": "1.10.0",
     "rule_version": null,
@@ -1180,11 +1187,10 @@
       "--output",
       "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
       "The project-owned launcher executes one low-impact HTTP probe per exact grant port through the managed SOCKS gateway.",
-      "The staged managed-image recipe is closed over the exact upstream source commit and accepts no arbitrary scanner arguments.",
-      "The bounded work-unit launcher is awaiting immutable image publication at tag 1.10.0-5; this engine remains independently unavailable until its exact digest and evidence are verified.",
+      "The managed image is built from the exact upstream source commit and accepts no arbitrary scanner arguments.",
       "MIT upstream code and the Apache-2.0 project launcher permit redistribution with notices."
     ],
     "license": {
@@ -1199,8 +1205,8 @@
         "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
         "source_ref": "v1.10.0",
         "acquisition_source": "https://github.com/projectdiscovery/httpx/commit/13037dd08b9715cfbd960a70ae1edfef6686a857",
-        "artifact_source_revision": null,
-        "source_association": "source_build_required"
+        "artifact_source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "not_applicable",
@@ -1227,11 +1233,9 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "The bounded work-unit httpx image has not yet been published and independently verified."
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "authorized HTTP service observations",
@@ -1280,7 +1284,12 @@
     "homepage_url": "https://nuclei.projectdiscovery.io/",
     "license_spdx": "Apache-2.0 AND MIT",
     "distribution_mode": "pull_pinned_image",
-    "image": null,
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
+      "tag": "3.11.1-5",
+      "digest": "sha256:2bd1e15a0ffdf450cdf85acd75bca2fb7f3cf4f9bc1d1fce80d5f8a659bc7488",
+      "signature_identity": null
+    },
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
     "engine_version": "3.11.1",
     "rule_version": "24858b4bfabfa86f0bcfd36aea24fb535152b012",
@@ -1322,11 +1331,10 @@
       "--output",
       "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
       "Template selection, rate limits, and authorization are enforced by the project-owned capability-boundary launcher.",
       "Only exact embedded HTTP templates that pass the conservative read-only policy can execute.",
-      "The bounded work-unit launcher is awaiting immutable image publication at tag 3.11.1-5; this engine remains independently unavailable until its exact digest and evidence are verified.",
       "MIT upstream code/templates and the Apache-2.0 project launcher permit redistribution with notices."
     ],
     "license": {
@@ -1341,8 +1349,8 @@
         "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
         "source_ref": "v3.11.1",
         "acquisition_source": "https://github.com/projectdiscovery/nuclei/commit/a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
-        "artifact_source_revision": null,
-        "source_association": "source_build_required"
+        "artifact_source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "embedded",
@@ -1369,11 +1377,9 @@
       "support_until": "2026-11-22",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "The bounded work-unit Nuclei image has not yet been published and independently verified."
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "authorized service responses",

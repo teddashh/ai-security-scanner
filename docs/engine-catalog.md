@@ -1,6 +1,6 @@
 # ai-security-scanner engine catalog
 
-Status: v0.2.0 catalog companion and research inventory; 16 artifacts are currently runnable. The bounded-launcher Naabu, httpx, and Nuclei revisions plus the ScubaGear and Maester wrapper-hardened images await independent publication.
+Status: v0.2.0 catalog companion and research inventory; 19 artifacts are currently runnable. The ScubaGear and Maester wrapper-hardened images await independent publication.
 
 Last updated: 2026-08-31
 
@@ -68,9 +68,9 @@ Each planned catalog entry is admitted independently through the same manifest, 
 | AWS IAM | [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | BSD-3-Clause | Managed OCI image over bounded IAM evidence | AWS IAM read only or explicit local policy input | ALLOW |
 | Microsoft 365 | [ScubaGear](https://github.com/cisagov/ScubaGear) | CC0-1.0 | Managed PowerShell/OCI candidate that retains source criticality and leaves unknown values unknown; unavailable independently until the new immutable image is published and recorded | Short-lived Microsoft Graph/service-specific read-only permission set | ALLOW |
 | Microsoft 365 | [Maester](https://github.com/maester365/maester) | MIT | Managed PowerShell/OCI candidate that retains source severity and leaves unknown values unknown; unavailable independently until the new immutable image is published and recorded | Short-lived Microsoft Graph read-only permission set | ALLOW |
-| External surface | [Naabu](https://github.com/projectdiscovery/naabu) | MIT | Bounded-launcher managed OCI revision staged for immutable publication | `low_impact_external` grant, concrete target allowlist, and rate limits | ALLOW |
-| External surface | [httpx](https://github.com/projectdiscovery/httpx) | MIT | Bounded-launcher managed OCI revision staged for immutable publication | `low_impact_external` grant plus redirect and resolved-IP enforcement | ALLOW |
-| Active external testing | [Nuclei](https://github.com/projectdiscovery/nuclei) | MIT | Bounded-launcher managed OCI revision with an exact allowlisted template snapshot, staged for immutable publication | `active_external` grant, target allowlist, rate/time limits, and denied template classes | ALLOW |
+| External surface | [Naabu](https://github.com/projectdiscovery/naabu) | MIT | Published bounded-launcher managed OCI revision | `low_impact_external` grant, concrete target allowlist, and rate limits | ALLOW |
+| External surface | [httpx](https://github.com/projectdiscovery/httpx) | MIT | Published bounded-launcher managed OCI revision | `low_impact_external` grant plus redirect and resolved-IP enforcement | ALLOW |
+| Active external testing | [Nuclei](https://github.com/projectdiscovery/nuclei) | MIT | Published bounded-launcher managed OCI revision with an exact allowlisted template snapshot | `active_external` grant, target allowlist, rate/time limits, and denied template classes | ALLOW |
 | Network vulnerability | [OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) and pinned Greenbone feed data | GPL-2.0-only plus feed GPL/ODbL terms | Managed `openvasd` OCI image with scanner source and a digest-pinned feed snapshot | `active_external` grant, exact per-target relay, and target/rate limits | SOURCE_OFFER |
 | Source analysis | [Semgrep](https://github.com/semgrep/semgrep) | LGPL-2.1-or-later | Managed OCI image built from the open source closure with a small offline project rule pack | Explicit read-only local source scope; no engine network path | SOURCE_OFFER |
 | Secret scanning | [Gitleaks](https://github.com/gitleaks/gitleaks) | MIT | Project-managed OCI image built from pinned source with a fixed offline launcher | Explicit repository/path scope; findings marked highly sensitive | ALLOW |

@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/projectdiscovery/nuclei",
     "revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
@@ -16,9 +16,22 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
     "tag": "3.11.1-5",
-    "digest": null
+    "digest": "sha256:2bd1e15a0ffdf450cdf85acd75bca2fb7f3cf4f9bc1d1fce80d5f8a659bc7488"
   },
-  "publication": null,
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33369797046",
+    "source_revision": "7514fd0642b28fe73ebdd2d48f0149b40f6eec17",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:7f194a346b1f609613d2e1d30d590b4a393ed106ff1b4c6539e6892358b7a845",
+      "linux/arm64": "sha256:7d3705c3555140f4126b76d239e4bc76da83f77e7b8b581c991ea1902e321410"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "nuclei-image-evidence-33369797046-1"
+  },
   "build_recipe": {
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
     "source_archive": {
@@ -108,7 +121,5 @@
     "rationale": "MIT upstream code/templates and the Apache-2.0 project launcher permit redistribution with notices.",
     "source_offer_path": null
   },
-  "blockers": [
-    "The bounded work-unit launcher revision has not yet been published and independently verified as immutable image tag 3.11.1-5."
-  ]
+  "blockers": []
 }

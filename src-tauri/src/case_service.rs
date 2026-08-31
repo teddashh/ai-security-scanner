@@ -12717,11 +12717,6 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            // Keep Naabu lifecycle tests independent from the short interval
-            // between staging a reviewed launcher revision and adopting its
-            // real immutable publication evidence. The helper uses an
-            // unmistakably test-only image coordinate; final adoption removes
-            // this override and returns the suite to the built-in catalog.
             Self::with_engines(current_launcher_engine_registry())
         }
 
@@ -12938,43 +12933,7 @@ mod tests {
     }
 
     fn current_launcher_engine_registry() -> EngineRegistry {
-        let mut catalog: Value =
-            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
-        let naabu = catalog
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|entry| entry["id"] == NAABU_ENGINE_ID)
-            .unwrap();
-        naabu["execution"]["launcher_journal_version"] =
-            Value::from(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION);
-        // Launcher lifecycle tests must not depend on whether the production
-        // catalog is temporarily staged before or after immutable image
-        // publication. This unmistakably synthetic, cfg(test)-only image
-        // coordinate admits the reviewed static launcher contract without
-        // making a production digest or provenance claim.
-        naabu["image"] = serde_json::json!({
-            "repository": "example.invalid/ai-security-scanner-test-naabu",
-            "tag": "test-only",
-            "digest": format!("sha256:{}", "a".repeat(64)),
-            "signature_identity": null
-        });
-        naabu["status"] = Value::String("integrated".into());
-        naabu["compatibility"]["runnable"] = Value::Bool(true);
-        naabu["compatibility"]["blocked_by"] = serde_json::json!([]);
-        naabu["command"] = serde_json::json!([
-            "--engine",
-            "naabu",
-            "--scope",
-            "/run/ai-security-scanner/scope.json",
-            "--output",
-            "/output",
-            "--journal-version",
-            "2",
-            "--journal-plan",
-            "/run/ai-security-scanner/execution-journal-v2.json"
-        ]);
-        EngineRegistry::load_catalog(&serde_json::to_string(&catalog).unwrap()).unwrap()
+        EngineRegistry::load_builtin().unwrap()
     }
 
     fn approve_direct_external_target(

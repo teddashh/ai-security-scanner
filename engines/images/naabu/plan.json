@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/projectdiscovery/naabu",
     "revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
@@ -16,9 +16,22 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
     "tag": "2.6.1-5",
-    "digest": null
+    "digest": "sha256:4195916c522f5b64476acaac67c8694cc42c078f549744e9310f211d5f32dffc"
   },
-  "publication": null,
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33369797046",
+    "source_revision": "7514fd0642b28fe73ebdd2d48f0149b40f6eec17",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:39bc411d34aef7d17a29b4cd16e5562c61907f2d92b8e769067c5ff6c6f32405",
+      "linux/arm64": "sha256:f8e5c7bb7e4d8995416ffc7d6de096802f454d40a62817d25b095b81d99e40d3"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "naabu-image-evidence-33369797046-1"
+  },
   "build_recipe": {
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
     "source_archive": {
@@ -91,7 +104,5 @@
     "rationale": "MIT upstream code and the Apache-2.0 project launcher permit redistribution with notices.",
     "source_offer_path": null
   },
-  "blockers": [
-    "The bounded work-unit launcher revision has not yet been published and independently verified as immutable image tag 2.6.1-5."
-  ]
+  "blockers": []
 }
