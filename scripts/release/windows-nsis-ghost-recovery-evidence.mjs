@@ -12,7 +12,7 @@ import {
   writeJsonAtomic,
 } from "./lib.mjs";
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const PLATFORM = "windows-x86_64";
 const RUNNER = "windows-2025";
 const INSTALLER_TYPE = "nsis";
@@ -21,7 +21,7 @@ const OLD_DISTRIBUTION = "podman-assm1-win-x64-e2b6cbcadd8b";
 const CURRENT_MACHINE = "assm2-win-x64-e2b6cbcadd8b";
 const CURRENT_DISTRIBUTION = "podman-assm2-win-x64-e2b6cbcadd8b";
 const OLD_VERSION_DIRECTORY = "podman-machine-5.8.2-8b2257ace33ecb14";
-const RETAINED_PROOF_SCHEMA = "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1";
+const GENERATION_SELECTION_SCHEMA = "ai-security-scanner.managed-wsl-generation-selection/v1";
 const CANDIDATE_RUNTIME_MANIFEST_SHA256 =
   "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a";
 const SELF_TEST_SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -169,17 +169,61 @@ function validateVhdFileProof(value, label) {
   bounded(value.attributes, 0, 0xffff_ffff, `${label} attributes`);
 }
 
-export function validateWindowsNsisUnrelatedVhdPreservation(before, after) {
-  validateVhdFileProof(before, "unrelated VHD before app-only uninstall");
-  validateVhdFileProof(after, "unrelated VHD after app-only uninstall");
+function validateWindowsNsisVhdPreservation(before, after, label) {
+  validateVhdFileProof(before, `${label} before app-only uninstall`);
+  validateVhdFileProof(after, `${label} after app-only uninstall`);
   for (const field of [
     "length", "sha256", "volume", "fileIndex", "numberOfLinks", "attributes",
   ]) {
     assert(
       after[field] === before[field],
-      `app-only uninstall changed unrelated WSL VHD ${field}`,
+      `app-only uninstall changed ${label} ${field}`,
     );
   }
+}
+
+export function validateWindowsNsisUnrelatedVhdPreservation(before, after) {
+  validateWindowsNsisVhdPreservation(before, after, "unrelated WSL VHD");
+}
+
+export function validateWindowsNsisGenerationSelection(selection, identity) {
+  exactKeys(selection, [
+    "pathBoundToCandidateManifestGenerationZero",
+    "recordPresent",
+    "recordProtected",
+    "recordBytes",
+    "recordSha256",
+    "schemaVersion",
+    "authorizesCleanup",
+    "manifestSha256",
+    "machineImageSha256",
+    "defaultMachineName",
+    "selectedMachineName",
+    "generationIndex",
+    "preservedCollisionNames",
+    "recordPreservedAfterCurrentRuntimePurge",
+    "recordPreservedThroughAppOnlyUninstall",
+  ], "generation-zero routing record");
+  for (const field of [
+    "pathBoundToCandidateManifestGenerationZero",
+    "recordPresent",
+    "recordProtected",
+    "recordPreservedAfterCurrentRuntimePurge",
+    "recordPreservedThroughAppOnlyUninstall",
+  ]) yes(selection[field], `generation-zero routing record ${field}`);
+  assert(selection.schemaVersion === GENERATION_SELECTION_SCHEMA, "generation selection schema changed");
+  assert(selection.authorizesCleanup === false, "generation selection incorrectly grants cleanup authority");
+  assert(selection.manifestSha256 === identity.runtimeManifestSha256, "generation selection is not bound to the candidate manifest");
+  assert(selection.machineImageSha256 === identity.machineImageSha256, "generation selection is not bound to the candidate image");
+  assert(selection.defaultMachineName === CURRENT_MACHINE, "generation selection default machine is not assm2");
+  assert(selection.selectedMachineName === CURRENT_MACHINE, "generation selection did not select the default assm2 machine");
+  assert(selection.generationIndex === 0, "generation selection did not use generation zero");
+  assert(
+    Array.isArray(selection.preservedCollisionNames) && selection.preservedCollisionNames.length === 0,
+    "generation-zero routing record unexpectedly claims a preserved current-generation collision",
+  );
+  bounded(selection.recordBytes, 1, 64 * 1024, "generation selection bytes");
+  sha256(selection.recordSha256, "generation selection digest");
 }
 
 export function validateWindowsNsisGhostFixtureScope(scope) {
@@ -395,7 +439,7 @@ function validateObservations(observations, identity, version) {
       "candidate",
       "fixtureScope",
       "ghostFixture",
-      "installerMigration",
+      "candidateInstallation",
       "runtimeSideBySide",
       "dataPreservation",
       "cleanup",
@@ -404,7 +448,7 @@ function validateObservations(observations, identity, version) {
   );
   assert(observations.schemaVersion === SCHEMA_VERSION, "side-by-side ghost schema is unsupported");
   assert(
-    observations.scenario === "automated_registered_wsl_n_minus_one_ghost_data_preservation_fixture",
+    observations.scenario === "automated_registered_wsl_n_minus_one_ghost_isolated_generation_fixture",
     "ghost data-preservation fixture scenario is incorrect",
   );
   assert(observations.platform === PLATFORM && observations.runner === RUNNER, "ghost runner is incorrect");
@@ -481,37 +525,37 @@ function validateObservations(observations, identity, version) {
   assert(/^ai-security-scanner-unrelated-[0-9a-f]{32}$/u.test(fixture.unrelatedDistributionName), "unrelated WSL fixture name is malformed");
   assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(fixture.unrelatedRegistrationId), "unrelated registration ID is not canonical");
 
-  const migration = observations.installerMigration;
+  const installation = observations.candidateInstallation;
   exactKeys(
-    migration,
+    installation,
     [
       "candidateInstallerCompleted",
-      "transitionReceipt",
       "candidateCliVersion",
       "registryVersionUpdated",
       "registryIdentityExact",
+      "versionNeutralInstallCompleted",
       "candidateDesktopRestored",
       "candidateUninstallerRestored",
       "candidateRuntimeResourceMatchesRelease",
       "exactPrivateDataSnapshotPreserved",
       "sameVersionSilentReinstallCompleted",
-      "transitionReceiptSurvivedSameVersionReinstall",
+      "sameVersionReinstallRemainedVersionNeutral",
     ],
-    "installer migration",
+    "candidate installation",
   );
   for (const field of [
     "candidateInstallerCompleted",
     "registryVersionUpdated",
     "registryIdentityExact",
+    "versionNeutralInstallCompleted",
     "candidateDesktopRestored",
     "candidateUninstallerRestored",
     "candidateRuntimeResourceMatchesRelease",
     "exactPrivateDataSnapshotPreserved",
     "sameVersionSilentReinstallCompleted",
-    "transitionReceiptSurvivedSameVersionReinstall",
-  ]) yes(migration[field], "installer migration " + field);
-  assert(migration.transitionReceipt === "recovered-ghost-v0.1.7", "bounded ghost installer branch was not observed");
-  assert(migration.candidateCliVersion === version, "ghost migration did not install the candidate CLI");
+    "sameVersionReinstallRemainedVersionNeutral",
+  ]) yes(installation[field], "candidate installation " + field);
+  assert(installation.candidateCliVersion === version, "version-neutral installation did not install the candidate CLI");
 
   const sideBySide = observations.runtimeSideBySide;
   exactKeys(
@@ -541,8 +585,8 @@ function validateObservations(observations, identity, version) {
       "unrelatedRegistrationBasePathExact",
       "noQuarantineDistributionCreated",
       "sentinelLifecycle",
-      "retainedProof",
-      "receiptConsumption",
+      "generationSelection",
+      "noVersionedReceipt",
       "legacyWorkspaceAfterAppOnlyUninstall",
       "unrelatedWorkspaceAfterAppOnlyUninstall",
     ],
@@ -578,116 +622,48 @@ function validateObservations(observations, identity, version) {
   assert(sideBySide.unrelatedRegistrationIdAfter === sideBySide.unrelatedRegistrationIdBefore, "unrelated registration GUID changed");
   validateSentinelLifecycle(sideBySide.sentinelLifecycle, fixture, sideBySide);
 
-  const proof = sideBySide.retainedProof;
-  exactKeys(
-    proof,
-    [
-      "pathBoundToLegacyRegistrationId",
-      "proofPresent",
-      "proofProtected",
-      "proofBytes",
-      "proofSha256",
-      "schemaVersion",
-      "authorizesCleanup",
-      "transitionEvidenceSource",
-      "installTransitionReceipt",
-      "previousManifestSha256",
-      "currentManifestSha256",
-      "machineImageSha256",
-      "legacyMachineName",
-      "legacyDistributionName",
-      "currentMachineName",
-      "currentDistributionName",
-      "legacyRegistrationId",
-      "currentRegistrationId",
-      "legacyProviderNamespace",
-      "legacyVhdSizeBytes",
-      "legacyVhdVolumeSerialNumber",
-      "legacyVhdFileIndex",
-      "legacyVhdNumberOfLinks",
-      "legacyVhdAttributes",
-      "legacyProviderConfigSha256",
-      "legacySshPublicKeySha256",
-      "proofRetainedAfterCurrentRuntimePurge",
-      "proofRetainedUntilExplicitPrivateDataCleanup",
-    ],
-    "retained legacy-workspace proof",
-  );
-  for (const field of [
-    "pathBoundToLegacyRegistrationId",
-    "proofPresent",
-    "proofProtected",
-    "proofRetainedAfterCurrentRuntimePurge",
-    "proofRetainedUntilExplicitPrivateDataCleanup",
-  ]) yes(proof[field], "retained proof " + field);
-  assert(proof.authorizesCleanup === false, "retained proof incorrectly grants cleanup authority");
-  assert(proof.schemaVersion === RETAINED_PROOF_SCHEMA, "retained proof schema changed");
-  assert(proof.transitionEvidenceSource === "nsis_install_transition", "live ghost fixture did not use the exact NSIS receipt");
-  assert(proof.installTransitionReceipt === migration.transitionReceipt, "retained proof lost the exact transition receipt");
-  assert(proof.previousManifestSha256 === PRIOR_GHOST_RELEASE.runtimeManifestSha256, "retained proof is not bound to N-1");
-  assert(proof.currentManifestSha256 === identity.runtimeManifestSha256, "retained proof is not bound to candidate manifest");
-  assert(proof.machineImageSha256 === identity.machineImageSha256, "retained proof is not bound to machine image");
-  assert(proof.legacyMachineName === OLD_MACHINE && proof.legacyDistributionName === OLD_DISTRIBUTION, "retained proof legacy identity changed");
-  assert(proof.currentMachineName === CURRENT_MACHINE && proof.currentDistributionName === CURRENT_DISTRIBUTION, "retained proof current identity changed");
-  assert(proof.legacyRegistrationId === sideBySide.legacyRegistrationIdBefore, "retained proof legacy GUID changed");
-  assert(proof.currentRegistrationId === sideBySide.currentRegistrationId, "retained proof current GUID changed");
-  assert(proof.legacyProviderNamespace === PRIOR_GHOST_RELEASE.runtimeManifestSha256.slice(0, 16), "retained proof provider namespace changed");
-  bounded(proof.proofBytes, 1, 64 * 1024, "retained proof bytes");
-  sha256(proof.proofSha256, "retained proof digest");
-  bounded(proof.legacyVhdSizeBytes, 1, 64 * 1024 * 1024 * 1024, "legacy VHD bytes");
-  bounded(proof.legacyVhdVolumeSerialNumber, 0, 0xffffffff, "legacy VHD volume serial");
-  assert(typeof proof.legacyVhdFileIndex === "string" && /^[0-9]{1,20}$/u.test(proof.legacyVhdFileIndex), "legacy VHD file index is not a bounded decimal string");
-  bounded(proof.legacyVhdNumberOfLinks, 1, 1024, "legacy VHD link count");
-  bounded(proof.legacyVhdAttributes, 0, 0xffffffff, "legacy VHD attributes");
-  sha256(proof.legacyProviderConfigSha256, "legacy provider config digest");
-  sha256(proof.legacySshPublicKeySha256, "legacy SSH public-key digest");
+  validateWindowsNsisGenerationSelection(sideBySide.generationSelection, identity);
 
-  exactKeys(
-    sideBySide.receiptConsumption,
-    [
-      "proofAbsentWhileRegistryReceiptPresent",
-      "proofValidatedBeforeRegistryAbsenceCheck",
-      "registryValueAbsentAfterDurableProof",
-    ],
-    "side-by-side receipt consumption",
-  );
-  for (const [name, value] of Object.entries(sideBySide.receiptConsumption)) {
-    yes(value, "side-by-side receipt consumption " + name);
+  exactKeys(sideBySide.noVersionedReceipt, [
+    "beforeCandidateInstall",
+    "afterCandidateInstall",
+    "afterSameVersionReinstall",
+    "beforeRuntimeStart",
+    "afterRuntimeStart",
+  ], "version-neutral installation state");
+  for (const [name, value] of Object.entries(sideBySide.noVersionedReceipt)) {
+    yes(value, `version-neutral installation state ${name}`);
   }
 
   const afterUninstall = sideBySide.legacyWorkspaceAfterAppOnlyUninstall;
   exactKeys(afterUninstall, [
-    "legacyRegistrationId",
-    "unrelatedRegistrationId",
-    "legacyVhdSizeBytes",
-    "legacyVhdVolumeSerialNumber",
-    "legacyVhdFileIndex",
-    "legacyVhdNumberOfLinks",
-    "legacyVhdAttributes",
-    "legacyProviderConfigSha256",
-    "legacySshPublicKeySha256",
+    "registrationIdBefore",
+    "registrationIdAfter",
+    "providerConfigSha256Before",
+    "providerConfigSha256After",
+    "sshPublicKeySha256Before",
+    "sshPublicKeySha256After",
+    "vhdBeforeAppOnlyUninstall",
+    "vhdAfterAppOnlyUninstall",
   ], "legacy workspace after app-only uninstall");
   assert(
-    afterUninstall.legacyRegistrationId === fixture.registrationId &&
-      afterUninstall.legacyRegistrationId === proof.legacyRegistrationId,
+    afterUninstall.registrationIdBefore === fixture.registrationId &&
+      afterUninstall.registrationIdAfter === afterUninstall.registrationIdBefore,
     "app-only uninstall changed the legacy registration GUID",
   );
+  sha256(afterUninstall.providerConfigSha256Before, "legacy provider config digest before uninstall");
+  sha256(afterUninstall.providerConfigSha256After, "legacy provider config digest after uninstall");
+  sha256(afterUninstall.sshPublicKeySha256Before, "legacy SSH public-key digest before uninstall");
+  sha256(afterUninstall.sshPublicKeySha256After, "legacy SSH public-key digest after uninstall");
   assert(
-    afterUninstall.unrelatedRegistrationId === fixture.unrelatedRegistrationId,
-    "app-only uninstall changed the unrelated registration GUID",
-  );
-  assert(
-    afterUninstall.legacyVhdSizeBytes === proof.legacyVhdSizeBytes &&
-      afterUninstall.legacyVhdVolumeSerialNumber === proof.legacyVhdVolumeSerialNumber &&
-      afterUninstall.legacyVhdFileIndex === proof.legacyVhdFileIndex &&
-      afterUninstall.legacyVhdNumberOfLinks === proof.legacyVhdNumberOfLinks &&
-      afterUninstall.legacyVhdAttributes === proof.legacyVhdAttributes,
-    "app-only uninstall changed the retained legacy VHD identity",
-  );
-  assert(
-    afterUninstall.legacyProviderConfigSha256 === proof.legacyProviderConfigSha256 &&
-      afterUninstall.legacySshPublicKeySha256 === proof.legacySshPublicKeySha256,
+    afterUninstall.providerConfigSha256After === afterUninstall.providerConfigSha256Before &&
+      afterUninstall.sshPublicKeySha256After === afterUninstall.sshPublicKeySha256Before,
     "app-only uninstall changed the retained provider config or machine.pub digest",
+  );
+  validateWindowsNsisVhdPreservation(
+    afterUninstall.vhdBeforeAppOnlyUninstall,
+    afterUninstall.vhdAfterAppOnlyUninstall,
+    "legacy WSL VHD",
   );
 
   const unrelatedAfterUninstall = sideBySide.unrelatedWorkspaceAfterAppOnlyUninstall;
@@ -793,7 +769,8 @@ function validateObservations(observations, identity, version) {
       "currentDistributionAbsent",
       "legacyDistributionRetainedThroughRuntimePurge",
       "unrelatedDistributionRetainedThroughRuntimePurge",
-      "retainedProofPreservedThroughRuntimePurge",
+      "generationSelectionPreservedThroughRuntimePurge",
+      "generationSelectionPreservedThroughAppOnlyUninstall",
       "legacyDataPreservedThroughNsisUninstall",
       "uninstallerInvoked",
       "productRegistryRemovedByUninstaller",
@@ -835,7 +812,7 @@ async function identityFromArgs(args) {
   const version = requireString(args, "version");
   const tag = requireString(args, "tag");
   const commit = requireString(args, "commit");
-  assert(isSemver(version) && version === "0.1.8" && tag === `v${version}`, "candidate version/tag is not the bounded 0.1.8 migration");
+  assert(isSemver(version) && version === "0.1.8" && tag === `v${version}`, "candidate version/tag is not the bounded 0.1.8 isolation fixture");
   assert(/^[0-9a-f]{40}$/u.test(commit), "candidate commit is not a full lowercase Git object ID");
   const testOnlyRuntimeManifestSha256 = args.get("test-only-runtime-manifest-sha256");
   let expectedRuntimeManifestSha256 = CANDIDATE_RUNTIME_MANIFEST_SHA256;
@@ -879,7 +856,7 @@ async function create(args) {
   await validateBeginnerReport(requireString(args, "beginner-report"), observations.dataPreservation.beginnerReportExport);
   const evidence = {
     schemaVersion: SCHEMA_VERSION,
-    qualification: "windows_nsis_registered_wsl_ghost_data_preservation_fixture",
+    qualification: "windows_nsis_registered_wsl_ghost_isolated_generation_fixture",
     releaseIdentity: {
       product: "ai-security-scanner",
       version: identity.version,
@@ -924,11 +901,11 @@ async function validate(args) {
       "priorReleasePin",
       "observations",
     ],
-    "ghost-recovery evidence",
+    "ghost-isolation evidence",
   );
   assert(evidence.schemaVersion === SCHEMA_VERSION, "ghost evidence schema is unsupported");
   assert(
-    evidence.qualification === "windows_nsis_registered_wsl_ghost_data_preservation_fixture",
+    evidence.qualification === "windows_nsis_registered_wsl_ghost_isolated_generation_fixture",
     "ghost data-preservation fixture evidence ID is wrong",
   );
   exactKeys(evidence.releaseIdentity, ["product", "version", "tag", "sourceCommit"], "ghost release identity");

@@ -6,6 +6,7 @@ import {
   validateWindowsNsisUpgradeInstallerManifestShape,
 } from "../../scripts/release/windows-nsis-upgrade-evidence.mjs";
 import {
+  validateWindowsNsisGenerationSelection,
   validateWindowsNsisGhostFixtureScope,
   validateWindowsNsisGhostInstallerManifestShape,
   validateWindowsNsisUnrelatedVhdPreservation,
@@ -103,5 +104,41 @@ test("app-only uninstall cannot change unrelated WSL VHD bytes or NTFS identity"
   assert.throws(
     () => validateWindowsNsisUnrelatedVhdPreservation(before, identityChanged),
     /changed unrelated WSL VHD fileIndex/u,
+  );
+});
+
+test("ghost qualification accepts only the exact non-authorizing generation-zero routing record", () => {
+  const identity = {
+    runtimeManifestSha256: "a8112473e5d87655e6145ea5f6cff569c872329d2ec14bfb9463078abcb60e3a",
+    machineImageSha256: "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b575f77eba968",
+  };
+  const selection = {
+    pathBoundToCandidateManifestGenerationZero: true,
+    recordPresent: true,
+    recordProtected: true,
+    recordBytes: 512,
+    recordSha256: "ab".repeat(32),
+    schemaVersion: "ai-security-scanner.managed-wsl-generation-selection/v1",
+    authorizesCleanup: false,
+    manifestSha256: identity.runtimeManifestSha256,
+    machineImageSha256: identity.machineImageSha256,
+    defaultMachineName: "assm2-win-x64-e2b6cbcadd8b",
+    selectedMachineName: "assm2-win-x64-e2b6cbcadd8b",
+    generationIndex: 0,
+    preservedCollisionNames: [],
+    recordPreservedAfterCurrentRuntimePurge: true,
+    recordPreservedThroughAppOnlyUninstall: true,
+  };
+  assert.doesNotThrow(() => validateWindowsNsisGenerationSelection(selection, identity));
+  assert.throws(
+    () => validateWindowsNsisGenerationSelection({ ...selection, authorizesCleanup: true }, identity),
+    /incorrectly grants cleanup authority/u,
+  );
+  assert.throws(
+    () => validateWindowsNsisGenerationSelection({
+      ...selection,
+      preservedCollisionNames: [selection.defaultMachineName],
+    }, identity),
+    /unexpectedly claims a preserved current-generation collision/u,
   );
 });

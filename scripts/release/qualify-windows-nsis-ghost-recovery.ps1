@@ -43,7 +43,7 @@ $sentinelLifecycleRequiredPhases = @(
 )
 
 if ($CurrentVersion -cne "0.1.8") {
-  throw "The bounded v0.1.7 ghost-migration data-preservation fixture applies only to candidate 0.1.8."
+  throw "The bounded v0.1.7 ghost-isolation data-preservation fixture applies only to candidate 0.1.8."
 }
 
 if ($null -eq ("GhostQualificationNativeMethods" -as [type])) {
@@ -914,7 +914,8 @@ function Invoke-ExactProcess(
   [Collections.Generic.Dictionary[string,string]]$Environment = $null,
   [object]$ExpectedExecutableProof = $null,
   [object]$ExpectedSystemExecutableProof = $null,
-  [bool]$KeepRunning = $false
+  [bool]$KeepRunning = $false,
+  [switch]$AllowRestartRequired
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 1800000) {
     throw "$Label timeout is outside its fixed bound."
@@ -1068,7 +1069,8 @@ function Invoke-ExactProcess(
       $stdout = [string]$output.stdout
       $stderr = [string]$output.stderr
     }
-    if ($process.ExitCode -ne 0) {
+    if ($process.ExitCode -ne 0 -and
+        (-not $AllowRestartRequired -or $process.ExitCode -ne 3010)) {
       $bounded = Get-SingleLineProcessDiagnostic ([PSCustomObject]@{
         stdout = $stdout
         stderr = $stderr
@@ -1180,6 +1182,10 @@ function Get-ProductRegistryEntries {
     $children | ForEach-Object {
       $properties = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction Stop
       if ((Get-OptionalRegistryString $properties "DisplayName") -ceq "ai-security-scanner") {
+        $versionedReceiptProperties = @(
+          $properties.PSObject.Properties.Name |
+            Where-Object { $_ -cmatch '(?i)(transition|migration|receipt)' }
+        )
         [PSCustomObject]@{
           KeyPath = $_.PSPath
           KeyName = $_.PSChildName
@@ -1189,8 +1195,7 @@ function Get-ProductRegistryEntries {
           InstallLocation = Get-OptionalRegistryString $properties "InstallLocation"
           UninstallString = Get-OptionalRegistryString $properties "UninstallString"
           MainBinaryName = Get-OptionalRegistryString $properties "MainBinaryName"
-          InstallTransitionPresent = ($null -ne $properties.PSObject.Properties["InstallTransition"])
-          InstallTransition = Get-OptionalRegistryString $properties "InstallTransition"
+          NoVersionedReceipt = ($versionedReceiptProperties.Count -eq 0)
         }
       }
     }
@@ -2139,7 +2144,7 @@ $oldWslBasePath = Join-Path $oldProviderHome "data\containers\podman\machine\wsl
 $oldVersionRoot = Join-Path $managedRuntimeRoot "versions"
 $oldVersionDirectory = Join-Path $oldVersionRoot $oldVersionDirectoryName
 $workspaceRoot = Join-Path $managedRuntimeRoot "wsl-recovery-workspaces"
-$retainedProofRoot = Join-Path $managedRuntimeRoot "wsl-legacy-retained"
+$generationSelectionRoot = Join-Path $managedRuntimeRoot "wsl-generations"
 $oldVhdPath = Join-Path $oldWslBasePath "ext4.vhdx"
 $oldProviderConfigPath = Join-Path $oldProviderHome "config\containers\containers.conf"
 $oldSshPublicKeyPath = Join-Path $oldProviderHome "data\containers\podman\machine\machine.pub"
@@ -2188,6 +2193,10 @@ $candidateDistributionName = "podman-$candidateMachineName"
 $candidateProviderHome = Join-Path $managedRuntimeRoot "provider-home\$candidateProviderNamespace"
 $candidateWslBasePath = Join-Path $candidateProviderHome "data\containers\podman\machine\wsl\wsldist\$candidateMachineName"
 $candidateVersionDirectory = Join-Path $managedRuntimeRoot "versions\podman-machine-5.8.2-$candidateProviderNamespace"
+$generationSelectionName = "$candidateRuntimeManifestSha256.0.json"
+$generationSelectionPath = Assert-ExactChildPath $generationSelectionRoot (
+  Join-Path $generationSelectionRoot $generationSelectionName
+) $generationSelectionName "Candidate generation-zero routing record"
 $trustedWsl = Get-TrustedWslExecutable
 $unrelatedDistributionName = "ai-security-scanner-unrelated-$([Guid]::NewGuid().ToString("N"))"
 $unrelatedWslBasePath = Assert-ExactChildPath $workRoot (
@@ -2227,9 +2236,8 @@ try {
   $priorCliVersion = Get-CliVersion $oldCli "Pinned v0.1.7 CLI"
   if ($priorCliVersion -cne $priorVersion) { throw "Pinned installer did not install CLI v0.1.7." }
   $oldRegistry = Get-ExactProductRegistry $priorVersion $installDirectory
-  if ($oldRegistry.InstallTransitionPresent -or
-      -not [String]::IsNullOrEmpty($oldRegistry.InstallTransition)) {
-    throw "v0.1.7 fixture unexpectedly started with a migration receipt."
+  if (-not $oldRegistry.NoVersionedReceipt) {
+    throw "v0.1.7 fixture unexpectedly started with a versioned installer receipt."
   }
 
   $installedOldRuntimeManifests = @(
@@ -2286,11 +2294,6 @@ try {
   Assert-SingleLinkFile (Join-Path $oldIdentityRoot "machine") "v0.1.7 managed SSH private key" (16 * 1024) | Out-Null
   Assert-SingleLinkFile (Join-Path $oldIdentityRoot "machine.pub") "v0.1.7 managed SSH public key" (4 * 1024) | Out-Null
   $oldRegistrationBefore = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
-  $retainedProofName = "$([string]$oldRegistrationBefore.RegistrationId).json"
-  $retainedProofPath = Join-Path $retainedProofRoot $retainedProofName
-  if (Test-Path -LiteralPath $retainedProofPath) {
-    throw "Ghost fixture unexpectedly started with a retained-legacy proof."
-  }
 
   $oldProviderConfigSha256 = Get-LowerSha256 $oldProviderConfigPath (16 * 1024)
   $oldSshPublicKeySha256 = Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)
@@ -2369,18 +2372,18 @@ try {
   ))
   $beforeInstallerSnapshot = Get-PreservedDataSnapshot $dataDirectory
 
-  Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate bounded ghost NSIS migration" -ExpectedExecutableProof $candidateInstaller | Out-Null
+  Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate version-neutral NSIS installation" -ExpectedExecutableProof $candidateInstaller -AllowRestartRequired | Out-Null
   $candidateDesktop = Find-OneInstalledFile $installDirectory "ai-security-scanner.exe"
   $candidateCli = Find-OneInstalledFile $installDirectory "ai-security-scanner-cli.exe"
   $candidateUninstaller = Find-OneInstalledFile $installDirectory "uninstall.exe"
   $activeCli = $candidateCli
   $activeUninstaller = $candidateUninstaller
   $candidateCliVersion = Get-CliVersion $candidateCli "Candidate CLI"
-  if ($candidateCliVersion -cne $CurrentVersion) { throw "Ghost migration did not install candidate CLI $CurrentVersion." }
+  if ($candidateCliVersion -cne $CurrentVersion) { throw "Candidate installer did not install CLI $CurrentVersion." }
   $candidateRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
-  if (-not $candidateRegistry.InstallTransitionPresent -or
-      $candidateRegistry.InstallTransition -cne "recovered-ghost-v0.1.7") {
-    throw "Candidate installer did not emit the bounded ghost migration receipt."
+  $noVersionedReceiptAfterInstall = [bool]$candidateRegistry.NoVersionedReceipt
+  if (-not $noVersionedReceiptAfterInstall) {
+    throw "Candidate installer wrote a versioned receipt instead of installing normally."
   }
   $existingExportIdentityAfterUpgrade = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
     "Existing local export identity after ghost upgrade"
@@ -2398,7 +2401,7 @@ try {
       "after_candidate_install"
     ) "Unrelated WSL checkpoint after_candidate_install"
   ))
-  Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate same-version silent reinstall before ghost recovery" -ExpectedExecutableProof $candidateInstaller | Out-Null
+  Invoke-ExactProcess $candidateInstallerPath @("/S") 180000 "Candidate same-version silent reinstall" -ExpectedExecutableProof $candidateInstaller -AllowRestartRequired | Out-Null
   $candidateDesktop = Find-OneInstalledFile $installDirectory "ai-security-scanner.exe"
   $candidateCli = Find-OneInstalledFile $installDirectory "ai-security-scanner-cli.exe"
   $candidateUninstaller = Find-OneInstalledFile $installDirectory "uninstall.exe"
@@ -2408,9 +2411,9 @@ try {
     throw "Same-version silent reinstall changed the ghost candidate CLI version."
   }
   $candidateRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
-  if (-not $candidateRegistry.InstallTransitionPresent -or
-      $candidateRegistry.InstallTransition -cne "recovered-ghost-v0.1.7") {
-    throw "Same-version silent reinstall erased the bounded ghost migration receipt."
+  $noVersionedReceiptAfterReinstall = [bool]$candidateRegistry.NoVersionedReceipt
+  if (-not $noVersionedReceiptAfterReinstall) {
+    throw "Same-version silent reinstall introduced a versioned installer receipt."
   }
   $existingExportIdentityAfterReinstall = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
     "Existing local export identity after ghost same-version reinstall"
@@ -2418,7 +2421,6 @@ try {
   Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterReinstall (
     "Ghost same-version reinstall existing local export identity"
   )
-  $installerTransitionReceipt = [string]$candidateRegistry.InstallTransition
   $legacySentinelCheckpoints.Add((
     Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
       "after_same_version_reinstall"
@@ -2441,17 +2443,17 @@ try {
   if ($beforeInstallerSnapshot.digest -cne $afterInstallerSnapshot.digest -or
       $beforeInstallerSnapshot.fileCount -ne $afterInstallerSnapshot.fileCount -or
       $beforeInstallerSnapshot.totalBytes -ne $afterInstallerSnapshot.totalBytes) {
-    throw "Candidate installer changed private case data during ghost migration."
+    throw "Candidate installer changed private case data during version-neutral installation."
   }
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
 
-  if (Test-Path -LiteralPath $retainedProofPath) {
-    throw "Candidate wrote the retained-legacy proof before runtime initialization began."
+  if (Test-Path -LiteralPath $generationSelectionPath) {
+    throw "Candidate wrote the runtime routing record before runtime initialization began."
   }
   $preStartRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
-  if (-not $preStartRegistry.InstallTransitionPresent -or
-      $preStartRegistry.InstallTransition -cne $installerTransitionReceipt) {
-    throw "Candidate lost the exact transition receipt before the retained proof could be committed."
+  $noVersionedReceiptBeforeRuntimeStart = [bool]$preStartRegistry.NoVersionedReceipt
+  if (-not $noVersionedReceiptBeforeRuntimeStart) {
+    throw "Candidate required a versioned installer receipt before runtime initialization."
   }
   $legacySentinelCheckpoints.Add((
     Assert-WslSentinelLeaseCheckpoint $trustedWsl $oldSentinelLease (
@@ -2513,90 +2515,50 @@ try {
     throw "Candidate changed the retained legacy provider proof files."
   }
 
-  $retainedProofPath = Assert-ExactChildPath $retainedProofRoot (
-    Join-Path $retainedProofRoot $retainedProofName
-  ) $retainedProofName "Retained legacy-workspace proof"
-  $retainedProofItem = Assert-OwnerOnlyFullControlFile $retainedProofPath (
-    "Retained legacy-workspace proof"
+  Assert-RealDirectory $generationSelectionRoot "Candidate generation routing directory" | Out-Null
+  $generationSelectionFiles = @(
+    Get-ChildItem -LiteralPath $generationSelectionRoot -File -Force |
+      Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 }
+  )
+  if ($generationSelectionFiles.Count -ne 1 -or
+      $generationSelectionFiles[0].Name -cne $generationSelectionName) {
+    throw "Candidate did not create exactly its append-only generation-zero routing record."
+  }
+  Assert-OwnerOnlyFullControlFile $generationSelectionPath (
+    "Candidate generation-zero routing record"
+  ) (64 * 1024) | Out-Null
+  $generationSelectionFileProof = Get-NoFollowFileSha256Proof $generationSelectionPath (
+    "Candidate generation-zero routing record"
   ) (64 * 1024)
-  $retainedProofSha256 = Get-LowerSha256 $retainedProofPath (64 * 1024)
-  $retainedProof = Read-BoundedJsonFile $retainedProofPath (
-    "Retained legacy-workspace proof"
+  $generationSelection = Read-BoundedJsonFile $generationSelectionPath (
+    "Candidate generation-zero routing record"
   ) (64 * 1024)
-  Assert-ExactJsonProperties $retainedProof @(
+  Assert-ExactJsonProperties $generationSelection @(
     "schema_version",
     "authorizes_cleanup",
-    "transition_evidence_source",
-    "install_transition_receipt",
-    "previous_manifest_sha256",
-    "current_manifest_sha256",
+    "manifest_sha256",
     "machine_image_sha256",
-    "legacy_machine_name",
-    "legacy_distribution_name",
-    "current_machine_name",
-    "current_distribution_name",
-    "legacy_registration_id",
-    "legacy_registration_base_path",
-    "legacy_provider_home",
-    "legacy_provider_namespace",
-    "legacy_vhd_path",
-    "legacy_vhd_size_bytes",
-    "legacy_vhd_volume_serial_number",
-    "legacy_vhd_file_index",
-    "legacy_vhd_number_of_links",
-    "legacy_vhd_attributes",
-    "legacy_provider_config_sha256",
-    "legacy_ssh_public_key_sha256",
-    "current_registration_id",
-    "current_registration_base_path",
-    "current_provider_home"
-  ) "Retained legacy-workspace proof"
-  if ($retainedProof.schema_version -cne "ai-security-scanner.managed-wsl-legacy-workspace-retained/v1" -or
-      $retainedProof.authorizes_cleanup -ne $false -or
-      $retainedProof.transition_evidence_source -cne "nsis_install_transition" -or
-      [string]$retainedProof.install_transition_receipt -cne $installerTransitionReceipt -or
-      [string]$retainedProof.previous_manifest_sha256 -cne $priorRuntimeManifestSha256 -or
-      [string]$retainedProof.current_manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
-      [string]$retainedProof.machine_image_sha256 -cne $candidateMachineImageSha256 -or
-      [string]$retainedProof.legacy_machine_name -cne $oldMachineName -or
-      [string]$retainedProof.legacy_distribution_name -cne $oldDistributionName -or
-      [string]$retainedProof.current_machine_name -cne $candidateMachineName -or
-      [string]$retainedProof.current_distribution_name -cne $candidateDistributionName -or
-      [string]$retainedProof.legacy_registration_id -cne [string]$oldRegistrationBefore.RegistrationId -or
-      [string]$retainedProof.current_registration_id -cne [string]$currentRegistration.RegistrationId -or
-      [string]$retainedProof.legacy_provider_namespace -cne $priorProviderNamespace -or
-      [uint64]$retainedProof.legacy_vhd_size_bytes -ne [uint64]$oldVhdAfter.sizeBytes -or
-      [uint32]$retainedProof.legacy_vhd_volume_serial_number -ne [uint32]$oldVhdAfter.volumeSerialNumber -or
-      [uint64]$retainedProof.legacy_vhd_file_index -ne [uint64]$oldVhdAfter.fileIndex -or
-      [uint32]$retainedProof.legacy_vhd_number_of_links -ne [uint32]$oldVhdAfter.numberOfLinks -or
-      [uint32]$retainedProof.legacy_vhd_attributes -ne [uint32]$oldVhdAfter.attributes -or
-      [string]$retainedProof.legacy_provider_config_sha256 -cne $oldProviderConfigSha256 -or
-      [string]$retainedProof.legacy_ssh_public_key_sha256 -cne $oldSshPublicKeySha256) {
-    throw "Retained proof does not bind the exact non-destructive assm1-to-assm2 observation."
+    "default_machine_name",
+    "selected_machine_name",
+    "generation_index",
+    "preserved_collision_names"
+  ) "Candidate generation-zero routing record"
+  if ($generationSelection.schema_version -cne
+        "ai-security-scanner.managed-wsl-generation-selection/v1" -or
+      $generationSelection.authorizes_cleanup -ne $false -or
+      [string]$generationSelection.manifest_sha256 -cne $candidateRuntimeManifestSha256 -or
+      [string]$generationSelection.machine_image_sha256 -cne $candidateMachineImageSha256 -or
+      [string]$generationSelection.default_machine_name -cne $candidateMachineName -or
+      [string]$generationSelection.selected_machine_name -cne $candidateMachineName -or
+      [uint32]$generationSelection.generation_index -ne 0 -or
+      @($generationSelection.preserved_collision_names).Count -ne 0) {
+    throw "Candidate generation-zero routing record does not match the current assm2 runtime."
   }
-  Assert-SameWindowsPath ([string]$retainedProof.legacy_registration_base_path) $oldWslBasePath (
-    "Retained proof legacy registration"
-  )
-  Assert-SameWindowsPath ([string]$retainedProof.legacy_provider_home) $oldProviderHome (
-    "Retained proof legacy provider"
-  )
-  Assert-SameWindowsPath ([string]$retainedProof.legacy_vhd_path) $oldVhdPath (
-    "Retained proof legacy VHD"
-  )
-  Assert-SameWindowsPath ([string]$retainedProof.current_registration_base_path) (
-    $candidateWslBasePath
-  ) "Retained proof current registration"
-  Assert-SameWindowsPath ([string]$retainedProof.current_provider_home) $candidateProviderHome (
-    "Retained proof current provider"
-  )
 
-  # The proof has already been opened, parsed, identity-bound, and ACL-checked.
-  # Only now confirm that the one-shot registry receipt is absent. The static
-  # source contract additionally requires durable write+sync before consumption.
   $postSideBySideRegistry = Get-ExactProductRegistry $CurrentVersion $installDirectory
-  if ($postSideBySideRegistry.InstallTransitionPresent -or
-      -not [String]::IsNullOrEmpty($postSideBySideRegistry.InstallTransition)) {
-    throw "Candidate did not consume the transition after durably recording legacy retention."
+  $noVersionedReceiptAfterRuntimeStart = [bool]$postSideBySideRegistry.NoVersionedReceipt
+  if (-not $noVersionedReceiptAfterRuntimeStart) {
+    throw "Candidate runtime start depended on a versioned installer receipt."
   }
 
   $quarantineRegistrations = @(Get-WslRegistrations | Where-Object {
@@ -2636,13 +2598,12 @@ try {
   Invoke-CliJson $candidateCli @(
     "--json", "--data-dir", $dataDirectory, "runtime", "managed", "uninstall", "--force", "--purge-image-cache"
   ) 900000 "Current assm2 managed runtime cleanup uninstall" | Out-Null
-  $postPurgeRetainedProof = Assert-OwnerOnlyFullControlFile $retainedProofPath (
-    "Retained proof after current-runtime purge"
+  $generationSelectionAfterPurge = Get-NoFollowFileSha256Proof $generationSelectionPath (
+    "Generation-zero routing record after current-runtime purge"
   ) (64 * 1024)
-  if ($postPurgeRetainedProof.Length -ne $retainedProofItem.Length -or
-      (Get-LowerSha256 $retainedProofPath (64 * 1024)) -cne $retainedProofSha256) {
-    throw "Current-runtime purge changed or removed the retained legacy proof."
-  }
+  Assert-SameFileProof $generationSelectionFileProof $generationSelectionAfterPurge (
+    "Current-runtime purge generation-zero routing record"
+  )
   $currentAfterPurge = @(Get-WslRegistrations | Where-Object {
     [String]::Equals($_.Name, $candidateDistributionName, [StringComparison]::Ordinal)
   })
@@ -2691,6 +2652,9 @@ try {
   ) 90000 "Exact unrelated WSL termination before app-only uninstall proof" | Out-Null
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
   Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
+  $oldVhdBeforeUninstall = Get-NoFollowFileSha256Proof $oldVhdPath (
+    "Legacy WSL VHD immediately before app-only uninstall"
+  ) $maximumCompleteSnapshotBytes
   $unrelatedVhdBeforeUninstall = Get-NoFollowFileSha256Proof $unrelatedVhdPath (
     "Unrelated WSL VHD immediately before app-only uninstall"
   ) $maximumCompleteSnapshotBytes
@@ -2712,14 +2676,15 @@ try {
   Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterUninstall (
     "App-only ghost NSIS uninstall existing local export identity"
   )
-  $postUninstallRetainedProof = Assert-OwnerOnlyFullControlFile $retainedProofPath (
-    "Retained proof until explicit private-data cleanup"
+  $generationSelectionAfterUninstall = Get-NoFollowFileSha256Proof $generationSelectionPath (
+    "Generation-zero routing record after app-only uninstall"
   ) (64 * 1024)
+  Assert-SameFileProof $generationSelectionFileProof $generationSelectionAfterUninstall (
+    "App-only uninstall generation-zero routing record"
+  )
   $oldProviderConfigAfterUninstallSha256 = Get-LowerSha256 $oldProviderConfigPath (16 * 1024)
   $oldSshPublicKeyAfterUninstallSha256 = Get-LowerSha256 $oldSshPublicKeyPath (4 * 1024)
-  if ($postUninstallRetainedProof.Length -ne $retainedProofItem.Length -or
-      (Get-LowerSha256 $retainedProofPath (64 * 1024)) -cne $retainedProofSha256 -or
-      -not (Test-Path -LiteralPath $oldProviderHome -PathType Container) -or
+  if (-not (Test-Path -LiteralPath $oldProviderHome -PathType Container) -or
       $oldProviderConfigAfterUninstallSha256 -cne $oldProviderConfigSha256 -or
       $oldSshPublicKeyAfterUninstallSha256 -cne $oldSshPublicKeySha256 -or
       -not (Test-Path -LiteralPath $sentinelPath -PathType Leaf)) {
@@ -2733,6 +2698,12 @@ try {
       throw "App-only NSIS uninstall changed legacy VHD identity field $identityField."
     }
   }
+  $oldVhdFileAfterUninstall = Get-NoFollowFileSha256Proof $oldVhdPath (
+    "Legacy WSL VHD after app-only uninstall"
+  ) $maximumCompleteSnapshotBytes
+  Assert-SameFileProof $oldVhdBeforeUninstall $oldVhdFileAfterUninstall (
+    "App-only NSIS uninstall legacy WSL VHD"
+  )
   $oldRegistrationAfterUninstall = Get-ExactWslRegistration $oldDistributionName $oldWslBasePath
   $unrelatedRegistrationAfterUninstall = Get-ExactWslRegistration (
     $unrelatedDistributionName
@@ -2764,9 +2735,9 @@ try {
     }
   }
 
-  # Explicit fixture teardown. Production never receives cleanup
-  # authority from the retained proof; only these fixed test namespaces are
-  # unregistered after every preservation assertion has passed.
+  # Explicit fixture teardown. The generation-selection journal never grants
+  # cleanup authority; only these fixed test namespaces are unregistered after
+  # every preservation assertion has passed.
   Stop-WslSentinelLease $trustedWsl $oldSentinelLease "Legacy assm1 WSL fixture teardown"
   Stop-WslSentinelLease $trustedWsl $unrelatedSentinelLease "Unrelated WSL fixture teardown"
   Unregister-ProvenExactWsl $trustedWsl $oldDistributionName $oldWslBasePath
@@ -2780,8 +2751,8 @@ try {
   $cleanupComplete = $true
 
   $observations = [ordered]@{
-    schemaVersion = 7
-    scenario = "automated_registered_wsl_n_minus_one_ghost_data_preservation_fixture"
+    schemaVersion = 8
+    scenario = "automated_registered_wsl_n_minus_one_ghost_isolated_generation_fixture"
     platform = "windows-x86_64"
     runner = "windows-2025"
     fixtureScope = [ordered]@{
@@ -2833,18 +2804,18 @@ try {
       unrelatedDistributionName = $unrelatedDistributionName
       unrelatedRegistrationId = [string]$unrelatedRegistrationBefore.RegistrationId
     }
-    installerMigration = [ordered]@{
+    candidateInstallation = [ordered]@{
       candidateInstallerCompleted = $true
-      transitionReceipt = $installerTransitionReceipt
       candidateCliVersion = $candidateCliVersion
       registryVersionUpdated = $true
       registryIdentityExact = $true
+      versionNeutralInstallCompleted = $true
       candidateDesktopRestored = $true
       candidateUninstallerRestored = $true
       candidateRuntimeResourceMatchesRelease = $true
       exactPrivateDataSnapshotPreserved = $true
       sameVersionSilentReinstallCompleted = $true
-      transitionReceiptSurvivedSameVersionReinstall = $true
+      sameVersionReinstallRemainedVersionNeutral = $true
     }
     runtimeSideBySide = [ordered]@{
       startSucceeded = $true
@@ -2870,55 +2841,39 @@ try {
       unrelatedRegistrationIdAfter = [string]$unrelatedRegistrationAfter.RegistrationId
       unrelatedRegistrationBasePathExact = $true
       noQuarantineDistributionCreated = $true
-      retainedProof = [ordered]@{
-        pathBoundToLegacyRegistrationId = $true
-        proofPresent = $true
-        proofProtected = $true
-        proofBytes = [int64]$retainedProofItem.Length
-        proofSha256 = $retainedProofSha256
-        schemaVersion = [string]$retainedProof.schema_version
-        authorizesCleanup = [bool]$retainedProof.authorizes_cleanup
-        transitionEvidenceSource = [string]$retainedProof.transition_evidence_source
-        installTransitionReceipt = [string]$retainedProof.install_transition_receipt
-        previousManifestSha256 = [string]$retainedProof.previous_manifest_sha256
-        currentManifestSha256 = [string]$retainedProof.current_manifest_sha256
-        machineImageSha256 = [string]$retainedProof.machine_image_sha256
-        legacyMachineName = [string]$retainedProof.legacy_machine_name
-        legacyDistributionName = [string]$retainedProof.legacy_distribution_name
-        currentMachineName = [string]$retainedProof.current_machine_name
-        currentDistributionName = [string]$retainedProof.current_distribution_name
-        legacyRegistrationId = [string]$retainedProof.legacy_registration_id
-        currentRegistrationId = [string]$retainedProof.current_registration_id
-        legacyProviderNamespace = [string]$retainedProof.legacy_provider_namespace
-        legacyVhdSizeBytes = [uint64]$retainedProof.legacy_vhd_size_bytes
-        legacyVhdVolumeSerialNumber = [uint32]$retainedProof.legacy_vhd_volume_serial_number
-        legacyVhdFileIndex = ([uint64]$retainedProof.legacy_vhd_file_index).ToString(
-          [Globalization.CultureInfo]::InvariantCulture
-        )
-        legacyVhdNumberOfLinks = [uint32]$retainedProof.legacy_vhd_number_of_links
-        legacyVhdAttributes = [uint32]$retainedProof.legacy_vhd_attributes
-        legacyProviderConfigSha256 = [string]$retainedProof.legacy_provider_config_sha256
-        legacySshPublicKeySha256 = [string]$retainedProof.legacy_ssh_public_key_sha256
-        proofRetainedAfterCurrentRuntimePurge = $true
-        proofRetainedUntilExplicitPrivateDataCleanup = $true
+      generationSelection = [ordered]@{
+        pathBoundToCandidateManifestGenerationZero = $true
+        recordPresent = $true
+        recordProtected = $true
+        recordBytes = [int64]$generationSelectionFileProof.Length
+        recordSha256 = [string]$generationSelectionFileProof.Sha256
+        schemaVersion = [string]$generationSelection.schema_version
+        authorizesCleanup = [bool]$generationSelection.authorizes_cleanup
+        manifestSha256 = [string]$generationSelection.manifest_sha256
+        machineImageSha256 = [string]$generationSelection.machine_image_sha256
+        defaultMachineName = [string]$generationSelection.default_machine_name
+        selectedMachineName = [string]$generationSelection.selected_machine_name
+        generationIndex = [uint32]$generationSelection.generation_index
+        preservedCollisionNames = @($generationSelection.preserved_collision_names)
+        recordPreservedAfterCurrentRuntimePurge = $true
+        recordPreservedThroughAppOnlyUninstall = $true
       }
-      receiptConsumption = [ordered]@{
-        proofAbsentWhileRegistryReceiptPresent = $true
-        proofValidatedBeforeRegistryAbsenceCheck = $true
-        registryValueAbsentAfterDurableProof = $true
+      noVersionedReceipt = [ordered]@{
+        beforeCandidateInstall = [bool]$oldRegistry.NoVersionedReceipt
+        afterCandidateInstall = $noVersionedReceiptAfterInstall
+        afterSameVersionReinstall = $noVersionedReceiptAfterReinstall
+        beforeRuntimeStart = $noVersionedReceiptBeforeRuntimeStart
+        afterRuntimeStart = $noVersionedReceiptAfterRuntimeStart
       }
       legacyWorkspaceAfterAppOnlyUninstall = [ordered]@{
-        legacyRegistrationId = [string]$oldRegistrationAfterUninstall.RegistrationId
-        unrelatedRegistrationId = [string]$unrelatedRegistrationAfterUninstall.RegistrationId
-        legacyVhdSizeBytes = [uint64]$oldVhdAfterUninstall.sizeBytes
-        legacyVhdVolumeSerialNumber = [uint32]$oldVhdAfterUninstall.volumeSerialNumber
-        legacyVhdFileIndex = ([uint64]$oldVhdAfterUninstall.fileIndex).ToString(
-          [Globalization.CultureInfo]::InvariantCulture
-        )
-        legacyVhdNumberOfLinks = [uint32]$oldVhdAfterUninstall.numberOfLinks
-        legacyVhdAttributes = [uint32]$oldVhdAfterUninstall.attributes
-        legacyProviderConfigSha256 = $oldProviderConfigAfterUninstallSha256
-        legacySshPublicKeySha256 = $oldSshPublicKeyAfterUninstallSha256
+        registrationIdBefore = [string]$oldRegistrationBefore.RegistrationId
+        registrationIdAfter = [string]$oldRegistrationAfterUninstall.RegistrationId
+        providerConfigSha256Before = $oldProviderConfigSha256
+        providerConfigSha256After = $oldProviderConfigAfterUninstallSha256
+        sshPublicKeySha256Before = $oldSshPublicKeySha256
+        sshPublicKeySha256After = $oldSshPublicKeyAfterUninstallSha256
+        vhdBeforeAppOnlyUninstall = Convert-VhdFileProofObservation $oldVhdBeforeUninstall
+        vhdAfterAppOnlyUninstall = Convert-VhdFileProofObservation $oldVhdFileAfterUninstall
       }
       unrelatedWorkspaceAfterAppOnlyUninstall = [ordered]@{
         registrationIdBefore = [string]$unrelatedRegistrationBefore.RegistrationId
@@ -2970,7 +2925,8 @@ try {
       currentDistributionAbsent = $true
       legacyDistributionRetainedThroughRuntimePurge = $true
       unrelatedDistributionRetainedThroughRuntimePurge = $true
-      retainedProofPreservedThroughRuntimePurge = $true
+      generationSelectionPreservedThroughRuntimePurge = $true
+      generationSelectionPreservedThroughAppOnlyUninstall = $true
       legacyDataPreservedThroughNsisUninstall = $true
       uninstallerInvoked = $true
       productRegistryRemovedByUninstaller = $true
