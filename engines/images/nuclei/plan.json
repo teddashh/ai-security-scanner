@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/projectdiscovery/nuclei",
     "revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
@@ -15,23 +15,10 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
-    "tag": "3.11.1-4",
-    "digest": "sha256:abebeb175f18d05ea7c49fc763c3ec96026fc5c3299d37aab3dcb986a95a1f96"
+    "tag": "3.11.1-5",
+    "digest": null
   },
-  "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902415",
-    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "platform_digests": {
-      "linux/amd64": "sha256:d9dee3a7c3c28ab2e96aa0e327b635d8c857d4154fe4d384f7d8e4daf3474549",
-      "linux/arm64": "sha256:b30acd2dfb053886c84dab2a06dc7d884ce0a0878e53307908ca934032c34b02"
-    },
-    "anonymous_pull_verified": true,
-    "evidence_artifact": "nuclei-image-evidence-33196902415-1"
-  },
+  "publication": null,
   "build_recipe": {
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
     "source_archive": {
@@ -72,13 +59,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/nuclei/Dockerfile",
-    "sha256": "sha256:6cc6a2db9d4e8e9e0e2a884e0ec2011a54906e7f1996a1688c3742fbcb7a383a"
+    "sha256": "sha256:95c1e60ee8b745ee3b4b6c39ca7bc8df4d26bc953311c3bf604669fb362c0e5b"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate each FrozenExternalScope grant, its exact template allowlist, and each read-only HTTP template before invoking one bounded scan per exact grant port.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:5279c20fefc1afcfad8ca7a61269596757432931446c8b6cc5b0a5602667470a"
+    "launcher_sha256": "sha256:60614818c3e0a8ecfd9e89d77af3b8b320a7445e4ba4c6129f840ffc5a4eb387"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -121,5 +108,7 @@
     "rationale": "MIT upstream code/templates and the Apache-2.0 project launcher permit redistribution with notices.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [
+    "The bounded work-unit launcher revision has not yet been published and independently verified as immutable image tag 3.11.1-5."
+  ]
 }

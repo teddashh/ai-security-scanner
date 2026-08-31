@@ -23,6 +23,14 @@ This is the release-reviewed update procedure referenced by every engine compati
 8. Set the entry-specific `knowledge_date` from the verified knowledge closure and set `support_until` according to the maintained window. Copy both values into the corresponding packaging plan; never bulk-date an older closure merely because a new application release was built.
 9. Run catalog validation, adapter/integration fixtures, and this engine's publication self-tests. Attach the image, feed, SBOM, source, smoke, and attestation evidence to the engine release record. Platform installer qualification and product publication are separate lanes and run only when the affected product/channel requires them.
 
+A launcher, Dockerfile, embedded policy, or other byte-affecting input change always receives a new
+immutable image revision. While that revision is awaiting its real workflow run, the catalog keeps
+that engine independently non-runnable, the plan records `publication_in_progress`, and its image
+digest, publication record, artifact source association, and evidence claims remain null. Never
+reuse an older version tag or copy its digest/provenance forward. After the new candidate is signed,
+promoted, anonymously readable, and independently verified, adopt only the normalized workflow
+output for that exact engine and source commit; sibling engines keep independent outcomes.
+
 An engine-image publication revision identifies the exact tree that built those immutable image
 bytes. An application adapter revision identifies the exact normalizer source. They advance
 independently when adapter hardening does not change an engine image, ruleset, feed, or wrapper.

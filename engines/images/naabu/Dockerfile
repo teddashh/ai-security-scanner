@@ -45,7 +45,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Naabu engine" \
       org.opencontainers.image.description="Grant-local, SOCKS-enforced TCP connect discovery for ai-security-scanner" \
       org.opencontainers.image.source="https://github.com/projectdiscovery/naabu" \
       org.opencontainers.image.revision="5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8" \
-      org.opencontainers.image.version="2.6.1-4" \
+      org.opencontainers.image.version="2.6.1-5" \
       org.opencontainers.image.licenses="Apache-2.0 AND MIT" \
       io.ai-security-scanner.source-archive-sha256="0f2dd95b86692513d0c9a077f8332b33d52e6aba2e5955257aa0b2c74aae1e8b"
 

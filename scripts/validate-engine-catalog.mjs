@@ -19,9 +19,9 @@ const managedCloudIds = new Set([
   "steampipe",
 ]);
 const managedExternalContracts = new Map([
-  ["naabu", { tag: "2.6.1-4" }],
-  ["httpx", { tag: "1.10.0-4" }],
-  ["nuclei", { tag: "3.11.1-4" }],
+  ["naabu", { tag: "2.6.1-5" }],
+  ["httpx", { tag: "1.10.0-5" }],
+  ["nuclei", { tag: "3.11.1-5" }],
 ]);
 const managedExternalIds = new Set(managedExternalContracts.keys());
 const naabuLauncherJournalVersion = 2;
@@ -371,7 +371,9 @@ function validateManagedImageEvidence(catalogEntries) {
       ? parseJson(resolve(root, planPath))
       : null;
     const repository = engine?.image?.repository ??
-      (isPendingM365Publication(plan, engine) ? plan.final_artifact.repository : undefined);
+      (isPendingM365Publication(plan, engine) || isPendingManagedExternalPublication(plan, engine)
+        ? plan.final_artifact.repository
+        : undefined);
     if (typeof repository !== "string" || !repository.startsWith(managedImageRepositoryPrefix)) continue;
     catalogManagedIds.push(engine.id);
     if (upstreamImageOnlyIds.has(engine.id)) {
@@ -1781,21 +1783,41 @@ function validateManagedSourceImage(plan, planRelative, engine) {
   }
 }
 
+function isPendingManagedExternalPublication(plan, engine) {
+  const contract = managedExternalContracts.get(engine.id);
+  const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
+  return Boolean(contract) && plan?.publish_state === "publication_in_progress" &&
+    plan.publication === null && engine.distribution_mode === "pull_pinned_image" && engine.image === null &&
+    engine.default_enabled === false && engine.status === "experimental" &&
+    engine.compatibility?.runnable === false && engine.compatibility?.artifact_state === "managed_build_plan" &&
+    Array.isArray(engine.compatibility?.blocked_by) && engine.compatibility.blocked_by.length > 0 &&
+    Array.isArray(plan.blockers) && plan.blockers.length > 0 &&
+    plan.final_artifact?.repository === expectedRepository && plan.final_artifact?.tag === contract.tag &&
+    plan.final_artifact?.digest === null && engine.provenance?.engine?.artifact_source_revision === null &&
+    engine.provenance?.engine?.source_association === "source_build_required";
+}
+
 function validateManagedExternalImage(plan, planRelative, engine) {
   const contract = managedExternalContracts.get(engine.id);
   const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
-  if (!contract ||
-      engine.image?.repository !== expectedRepository ||
-      engine.image?.tag !== contract.tag ||
-      plan.final_artifact?.repository !== expectedRepository ||
-      plan.final_artifact?.tag !== contract.tag ||
-      plan.final_artifact?.digest !== engine.image?.digest) {
-    errors.push(`${planRelative}: managed external image must match the fixed ${engine.id} repository, tag, and digest contract`);
+  if (!contract) {
+    errors.push(`${planRelative}: managed external engine has no reviewed artifact contract`);
+    return;
   }
-  if (plan.publish_state !== "published_managed_artifact") {
-    errors.push(`${planRelative}: managed external image must be a published managed artifact`);
+  if (plan.publish_state === "published_managed_artifact") {
+    if (engine.image?.repository !== expectedRepository || engine.image?.tag !== contract.tag ||
+        plan.final_artifact?.repository !== expectedRepository || plan.final_artifact?.tag !== contract.tag ||
+        plan.final_artifact?.digest !== engine.image?.digest) {
+      errors.push(`${planRelative}: managed external image must match the fixed ${engine.id} repository, tag, and digest contract`);
+    }
+    validatePublishedManagedEvidence(plan, planRelative, engine);
+  } else if (plan.publish_state === "publication_in_progress") {
+    if (!isPendingManagedExternalPublication(plan, engine)) {
+      errors.push(`${planRelative}: unpublished managed external build must remain isolated with null artifact/publication claims and an explicit per-engine blocker`);
+    }
+  } else {
+    errors.push(`${planRelative}: managed external image must be published or explicitly awaiting its own publication`);
   }
-  validatePublishedManagedEvidence(plan, planRelative, engine);
 
   const dockerfilePath = resolve(root, `engines/images/${engine.id}/Dockerfile`);
   if (plan.dockerfile?.emitted !== true || plan.dockerfile?.path !== `engines/images/${engine.id}/Dockerfile` || !existsSync(dockerfilePath)) {
@@ -2213,8 +2235,8 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   if (engine.distribution_mode === "pull_pinned_image" || engine.distribution_mode === "bundled_image") {
     if (engine.image !== null) {
       validateImage(engine.image, `${label}.image`);
-    } else if (!isPendingM365Publication(plan, engine)) {
-      errors.push(`${label}.image: only an exactly isolated ScubaGear or Maester publication-in-progress operation may omit its immutable image`);
+    } else if (!isPendingM365Publication(plan, engine) && !isPendingManagedExternalPublication(plan, engine)) {
+      errors.push(`${label}.image: only an exactly isolated reviewed publication-in-progress operation may omit its immutable image`);
     }
   } else if (engine.image !== null) {
     errors.push(`${label}: non-image distribution must not expose an executable image reference`);
@@ -2257,7 +2279,8 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   if (engine.image) {
     validateImage(plan.final_artifact, `${planRelative}.final_artifact`);
     if (!deepEqual(plan.final_artifact, { repository: engine.image.repository, tag: engine.image.tag, digest: engine.image.digest })) errors.push(`${planRelative}: final artifact does not match catalog image`);
-  } else if (managedCloudIds.has(engine.id) || isPendingM365Publication(plan, engine)) {
+  } else if (managedCloudIds.has(engine.id) || isPendingM365Publication(plan, engine) ||
+      isPendingManagedExternalPublication(plan, engine)) {
     const pending = plan.final_artifact;
     if (!pending || typeof pending.repository !== "string" || typeof pending.tag !== "string" || pending.digest !== null || plan.publish_state !== "publication_in_progress") {
       errors.push(`${planRelative}: managed image publication in progress must retain its exact repository/tag and null digest`);

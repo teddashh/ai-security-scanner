@@ -150,6 +150,59 @@ repository, GitHub-hosted signer workflow, source commit, `main` ref, run attemp
 transparency-log timestamp. A successful invocation writes one normalized JSON object to stdout;
 failure writes no partial result.
 
+### Staged bounded-launcher external revision
+
+The current publication inputs reserve new immutable tags—Naabu `2.6.1-5`, httpx `1.10.0-5`, and
+Nuclei `3.11.1-5`—because their shared launcher bytes changed after the `-4` publication. These tags
+are build coordinates, not publication claims. Until the real main-branch workflow completes, each
+catalog image is null, each plan publication/digest is null, and only that engine is non-runnable.
+
+After `.github/workflows/engine-images-external.yml` completes on the exact main-branch source
+commit, download and verify each matrix artifact independently in a fresh directory:
+
+```sh
+engine=naabu # repeat separately for httpx and nuclei
+run_id=REPLACE_WITH_WORKFLOW_RUN_ID
+attempt=REPLACE_WITH_RUN_ATTEMPT
+source_revision=REPLACE_WITH_EXACT_MAIN_COMMIT
+evidence_dir="$(mktemp -d)"
+
+gh run download "${run_id}" \
+  --name "${engine}-image-evidence-${run_id}-${attempt}" \
+  --dir "${evidence_dir}"
+
+node scripts/release/verify-publication-artifact.mjs \
+  --engine "${engine}" \
+  --artifact-dir "${evidence_dir}" \
+  --source-revision "${source_revision}" \
+  --run-id "${run_id}" \
+  --attempt "${attempt}"
+```
+
+Adoption is a separate checked-in change. Put the verifier's exact `indexDigest` in
+`final_artifact.digest`, then create this plan record without renaming or inferring any value:
+
+```json
+{
+  "workflow_run": "<workflowRun>",
+  "source_revision": "<sourceRevision>",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "platform_digests": {
+    "linux/amd64": "<platformDigests[linux/amd64]>",
+    "linux/arm64": "<platformDigests[linux/arm64]>"
+  },
+  "anonymous_pull_verified": true,
+  "evidence_artifact": "<engine>-image-evidence-<runId>-<runAttempt>"
+}
+```
+
+Then set the matching catalog image repository/tag/digest, restore the upstream artifact source
+revision and `attested_match`, clear only that engine's blockers, and make only that engine
+integrated/runnable. Change its plan to `published_managed_artifact`, clear its blockers, and run
+`npm run validate:engines` plus `npm run test:release-evidence`. Update the current runnable count
+and pending packaging wording in `docs/engine-catalog.md` in the same adoption change. Never infer a
+missing value from a sibling matrix job, a tag name, or an earlier `-4` record.
+
 The signed attestations cryptographically bind the image, source, provenance, and SBOMs. The
 managed-smoke receipt and artifact inventory are supplied by the exact GitHub Actions artifact,
 then protected by both checksum layers. Therefore use a fresh directory populated by the exact

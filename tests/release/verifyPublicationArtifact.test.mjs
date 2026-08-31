@@ -19,9 +19,9 @@ const platformDigests = {
   "linux/arm64": `sha256:${"33".repeat(32)}`,
 };
 const specs = {
-  naabu: { tag: "2.6.1-4", group: "external" },
-  httpx: { tag: "1.10.0-4", group: "external" },
-  nuclei: { tag: "3.11.1-4", group: "external" },
+  naabu: { tag: "2.6.1-5", group: "external" },
+  httpx: { tag: "1.10.0-5", group: "external" },
+  nuclei: { tag: "3.11.1-5", group: "external" },
   semgrep: { tag: "1.174.0-3", group: "local", smokeFiles: ["semgrep.json"] },
   trufflehog: { tag: "3.97.0-3", group: "local", smokeFiles: ["trufflehog.jsonl"] },
   trivy: { tag: "0.74.0-3", group: "local", smokeFiles: ["trivy-oci.json", "trivy-library.json"] },

@@ -825,7 +825,7 @@ mod tests {
     #[test]
     fn naabu_launcher_journal_v2_accepts_only_the_exact_reviewed_command() {
         let registry = EngineRegistry::load_builtin().expect("valid catalog");
-        let mut manifest = registry.get("naabu").unwrap().clone();
+        let manifest = registry.get("naabu").unwrap().clone();
 
         assert!(
             manifest.execution_timeout_seconds()
@@ -834,20 +834,23 @@ mod tests {
             "the outer host timeout must leave the fixed host margin after the largest valid scanner unit"
         );
 
-        validate_release_contract(&manifest).expect("legacy Naabu remains admissible");
-
-        manifest
-            .execution
-            .as_mut()
-            .expect("execution contract")
-            .launcher_journal_version = Some(NAABU_LAUNCHER_JOURNAL_VERSION);
-        manifest.command = NAABU_LAUNCHER_JOURNAL_COMMAND
-            .iter()
-            .map(|token| (*token).to_owned())
-            .collect();
-
         validate_release_contract(&manifest)
-            .expect("the exact reviewed Naabu launcher-journal command is admissible");
+            .expect("the built-in exact reviewed Naabu launcher-journal command is admissible");
+        assert_eq!(
+            manifest
+                .execution
+                .as_ref()
+                .expect("execution contract")
+                .launcher_journal_version,
+            Some(NAABU_LAUNCHER_JOURNAL_VERSION)
+        );
+        assert!(
+            manifest
+                .command
+                .iter()
+                .map(String::as_str)
+                .eq(NAABU_LAUNCHER_JOURNAL_COMMAND.iter().copied())
+        );
 
         let mut missing_plan = manifest.clone();
         missing_plan
@@ -886,7 +889,13 @@ mod tests {
     #[test]
     fn launcher_journal_flags_and_versions_cannot_escape_the_current_naabu_contract() {
         let registry = EngineRegistry::load_builtin().expect("valid catalog");
-        let legacy = registry.get("naabu").unwrap().clone();
+        let mut legacy = registry.get("naabu").unwrap().clone();
+        legacy
+            .execution
+            .as_mut()
+            .expect("execution contract")
+            .launcher_journal_version = None;
+        legacy.command.truncate(6);
 
         for injected in [
             vec!["--journal-version", "2"],

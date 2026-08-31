@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/projectdiscovery/naabu",
     "revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
@@ -15,23 +15,10 @@
   },
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
-    "tag": "2.6.1-4",
-    "digest": "sha256:037b5ea961d6d61e9780db2f799886071b22856dfdb068a544a30cf8102216b4"
+    "tag": "2.6.1-5",
+    "digest": null
   },
-  "publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33196902415",
-    "source_revision": "2641850304aeade6ab8ee3b23eda80a7f66411d0",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "platform_digests": {
-      "linux/amd64": "sha256:e8e6884d03a75ca3e50bf2291711c2042abcc032fab60a2ad0b319797a27fb7f",
-      "linux/arm64": "sha256:4739ccd0f0c83c6e8c6c61f40e4ea396f00f15a8e0e36bd63f951367d1b35d9d"
-    },
-    "anonymous_pull_verified": true,
-    "evidence_artifact": "naabu-image-evidence-33196902415-1"
-  },
+  "publication": null,
   "build_recipe": {
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
     "source_archive": {
@@ -63,13 +50,13 @@
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/naabu/Dockerfile",
-    "sha256": "sha256:6f24058d7321620128935990c01f03cb012ff8251452d6cbb5ce299b2ac90fb8"
+    "sha256": "sha256:53e50344580c81773a9145f7fcf272d41e10f9d8cef12c1df175397027a7b1aa"
   },
   "wrapper": {
     "required": true,
     "strategy": "Validate each FrozenExternalScope grant and invoke one bounded TCP connect scan per grant without accepting arbitrary scanner arguments.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint",
-    "launcher_sha256": "sha256:5279c20fefc1afcfad8ca7a61269596757432931446c8b6cc5b0a5602667470a"
+    "launcher_sha256": "sha256:60614818c3e0a8ecfd9e89d77af3b8b320a7445e4ba4c6129f840ffc5a4eb387"
   },
   "managed_runtime": {
     "non_root_user": "65532:65532",
@@ -87,7 +74,11 @@
     "--scope",
     "/run/ai-security-scanner/scope.json",
     "--output",
-    "/output"
+    "/output",
+    "--journal-version",
+    "2",
+    "--journal-plan",
+    "/run/ai-security-scanner/execution-journal-v2.json"
   ],
   "output": {
     "primary_format": "jsonl",
@@ -100,5 +91,7 @@
     "rationale": "MIT upstream code and the Apache-2.0 project launcher permit redistribution with notices.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [
+    "The bounded work-unit launcher revision has not yet been published and independently verified as immutable image tag 2.6.1-5."
+  ]
 }
