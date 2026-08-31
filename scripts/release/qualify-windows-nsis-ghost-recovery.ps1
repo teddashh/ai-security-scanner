@@ -448,6 +448,8 @@ function Get-NoFollowEmptyFileProof([string]$Path, [string]$Label) {
       Sha256 = $emptyFileSha256
       Volume = [uint32]$before.volume
       FileIndex = [uint64]$before.index
+      NumberOfLinks = [uint32]$before.links
+      Attributes = [uint32]$before.attributes
     }
   } finally { $stream.Dispose() }
 }

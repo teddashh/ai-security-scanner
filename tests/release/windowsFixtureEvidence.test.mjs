@@ -109,6 +109,20 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
       /independently proving application removal/u,
     );
     if (isGhostFixture) {
+      for (const proofField of [
+        "      NumberOfLinks = [uint32]$before.links\n",
+        "      Attributes = [uint32]$before.attributes\n",
+      ]) {
+        assert.throws(
+          () =>
+            validateSynchronousNsisQualificationFixture(
+              source.replace(proofField, ""),
+              label,
+              { allowsRetainedState: true },
+            ),
+          /complete empty-file identity/u,
+        );
+      }
       assert.throws(
         () =>
           validateSynchronousNsisQualificationFixture(

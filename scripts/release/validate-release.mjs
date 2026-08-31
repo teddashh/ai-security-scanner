@@ -727,8 +727,15 @@ export function validateSynchronousNsisQualificationFixture(
       `${label} must accept retained-state status only while independently proving application removal and exact report identity`,
     );
     if (source.includes("Get-ProductRegistryEntries")) {
+      const emptyProofStart = source.indexOf("function Get-NoFollowEmptyFileProof(");
+      const emptyProofEnd = source.indexOf("\nfunction ", emptyProofStart + 1);
+      const emptyProofSource = source.slice(emptyProofStart, emptyProofEnd);
       assert(
-        source.includes("function Get-QuiescedVhdSha256Proof(") &&
+        emptyProofStart >= 0 &&
+          emptyProofEnd > emptyProofStart &&
+          emptyProofSource.includes("NumberOfLinks = [uint32]$before.links") &&
+          emptyProofSource.includes("Attributes = [uint32]$before.attributes") &&
+          source.includes("function Get-QuiescedVhdSha256Proof(") &&
           source.includes("[DateTime]::UtcNow.AddSeconds(60)") &&
           source.includes("$win32Exception = $_.Exception") &&
           source.includes("$win32Exception = $win32Exception.InnerException") &&
@@ -760,7 +767,7 @@ export function validateSynchronousNsisQualificationFixture(
           source.includes("Assert-SameFileProof $oldVhdBeforeUninstall $oldVhdFileAfterUninstall") &&
           source.includes("Assert-SameFileProof $unrelatedVhdBeforeUninstall $unrelatedVhdAfterUninstall") &&
           source.includes("Assert-SameFileProof $processLeaseBeforeUninstall $processLeaseAfterUninstall"),
-        `${label} must quiesce only its two stopped fixtures, then wait a bounded time only for WSL VHD sharing and lock violations before exact no-follow hashing`,
+        `${label} must retain complete empty-file identity, quiesce only its two stopped fixtures, then wait a bounded time only for WSL VHD sharing and lock violations before exact no-follow hashing`,
       );
     } else {
       assert(
