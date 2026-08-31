@@ -422,7 +422,7 @@ where
                         summary.reconciled = summary.reconciled.saturating_add(1);
                         summary.details.push(bounded_text(
                             &format!(
-                                "{} / {}: exact ownership proof was unavailable; no runtime resource was changed or deleted",
+                                "{} / {}: exact ownership proof was unavailable. No runtime resource was changed or deleted.",
                                 obligation.run_id, obligation.engine_run.id
                             ),
                             2_000,
@@ -7776,6 +7776,9 @@ mod tests {
             ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
                 .unwrap();
         checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+        // A launcher digest is meaningful only alongside the immutable scope
+        // document that the modeled attempt already handed to the runtime.
+        checkpoint.scope_sha256 = Some("b".repeat(64));
         checkpoint.launcher_plan_sha256 = Some(prepared.request.launcher_plan_sha256.clone());
         checkpoint.cleanup_completed = true;
         checkpoint.last_error = None;
@@ -7925,10 +7928,16 @@ mod tests {
                 },
             )
             .expect("persist legacy Naabu run");
-        let execution = plan.executable.first().expect("Naabu execution");
+        let mut execution = plan.executable.into_iter().next().expect("Naabu execution");
+        execution
+            .manifest
+            .execution
+            .as_mut()
+            .expect("Naabu execution contract")
+            .launcher_journal_version = None;
 
         assert!(
-            prepare_naabu_launcher_attempt(&state, execution, Utc::now())
+            prepare_naabu_launcher_attempt(&state, &execution, Utc::now())
                 .expect("legacy preparation check")
                 .is_none()
         );
@@ -9762,16 +9771,20 @@ mod tests {
             .find(|engine_run| engine_run.id == execution.engine_run_id)
             .unwrap();
         assert_eq!(engine_run.status, EngineRunStatus::PartiallyCompleted);
-        assert_eq!(engine_run.phase, "cleanup_pending");
+        assert_eq!(engine_run.phase, "cleanup_reconciled");
         assert_eq!(engine_run.progress_percent, 95);
         assert_eq!(engine_run.cleanup_removed, Some(false));
-        assert_eq!(
-            engine_run.cleanup_detail.as_deref(),
-            Some("exact container cleanup is still required")
+        assert!(
+            engine_run
+                .cleanup_detail
+                .as_deref()
+                .unwrap()
+                .contains("ownership-proven container was already absent")
         );
         let message = engine_run.error_message.as_deref().unwrap();
         assert!(message.contains("container image does not match the persisted pinned image"));
         assert!(message.contains("background scan worker stopped"));
+        assert!(message.contains("Exact product-owned runtime cleanup is complete"));
         assert_ne!(
             message,
             "background scan worker stopped before a durable terminal report"
@@ -9779,12 +9792,18 @@ mod tests {
         let retained =
             ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
                 .unwrap();
-        assert_eq!(retained.stage, ExecutionStage::CleanupPending);
+        assert_eq!(retained.stage, ExecutionStage::Failed);
         assert_eq!(
             retained.container_name.as_deref(),
             Some(container_name.as_str())
         );
-        assert!(!retained.cleanup_completed);
+        assert_eq!(retained.scope_sha256, Some("a".repeat(64)));
+        assert_eq!(retained.runtime_provider, Some(RuntimeProvider::Podman));
+        assert_eq!(
+            retained.runtime_command_provenance,
+            Some(RuntimeCommandProvenance::Compatibility)
+        );
+        assert!(retained.cleanup_completed);
         assert!(run.completed_at.is_some());
     }
 

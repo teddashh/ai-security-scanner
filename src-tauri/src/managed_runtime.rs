@@ -13564,7 +13564,7 @@ mod tests {
         let provider_sentinel = candidate_home.join("unknown-provider-state");
         fs::write(&provider_sentinel, b"preserve-provider").unwrap();
         let selection_path = fixture.manager.windows_wsl_generation_selection_path(1);
-        fs::create_dir_all(selection_path.parent().unwrap()).unwrap();
+        ensure_managed_private_directory(selection_path.parent().unwrap()).unwrap();
         fs::write(&selection_path, b"malformed-routing-record").unwrap();
 
         let selected = fixture
@@ -13780,6 +13780,86 @@ mod tests {
             base_path: vhd.parent().expect("registration base").to_path_buf(),
         };
         (target, machine, vhd, registration)
+    }
+
+    #[derive(Clone, Copy)]
+    enum FixtureWindowsRegistrationLifecycle {
+        Absent,
+        Present,
+        PresentThenAbsent,
+    }
+
+    /// Older lifecycle tests model a machine that predates the append-only
+    /// Windows generation journal. Bring those fixtures up to the current
+    /// ownership contract explicitly instead of weakening production's
+    /// preserve-on-ambiguity behavior.
+    fn seed_owned_windows_lifecycle_fixture(
+        fixture: &mut Fixture,
+        registration_lifecycle: FixtureWindowsRegistrationLifecycle,
+    ) {
+        #[cfg(windows)]
+        {
+            let (_, _, _, registration) = seed_verified_existing_windows_machine(fixture);
+            let registrations: Arc<dyn WindowsWslRegistrationReader> = match registration_lifecycle
+            {
+                FixtureWindowsRegistrationLifecycle::Absent => {
+                    Arc::new(FixedWindowsWslRegistrations(Vec::new()))
+                }
+                FixtureWindowsRegistrationLifecycle::Present => {
+                    Arc::new(FixedWindowsWslRegistrations(vec![registration]))
+                }
+                FixtureWindowsRegistrationLifecycle::PresentThenAbsent => {
+                    Arc::new(SequencedWindowsWslRegistrations(Mutex::new(
+                        VecDeque::from([vec![registration], Vec::new()]),
+                    )))
+                }
+            };
+            fixture.manager.wsl_registrations = registrations;
+        }
+        #[cfg(not(windows))]
+        let _ = (fixture, registration_lifecycle);
+    }
+
+    #[cfg(windows)]
+    fn configure_fresh_windows_machine_registration(
+        fixture: &mut Fixture,
+        empty_snapshots_before_registration: usize,
+    ) -> PathBuf {
+        let target = fixture
+            .manager
+            .loaded
+            .target()
+            .expect("Windows target")
+            .clone();
+        let machine = machine_name(&target);
+        let storage = fixture
+            .manager
+            .windows_wsl_distribution_storage_path(&target, &machine, 0);
+        let registration = WindowsWslRegistration {
+            registration_id: "00000000-0000-0000-0000-000000000061".into(),
+            distribution_name: format!("podman-{machine}"),
+            base_path: storage,
+        };
+        let mut snapshots = VecDeque::new();
+        for _ in 0..empty_snapshots_before_registration {
+            snapshots.push_back(Vec::new());
+        }
+        snapshots.push_back(vec![registration]);
+        fixture.manager.wsl_registrations =
+            Arc::new(SequencedWindowsWslRegistrations(Mutex::new(snapshots)));
+        fixture
+            .manager
+            .windows_wsl_distribution_storage_path(&target, &machine, 0)
+            .join("ext4.vhdx")
+    }
+
+    #[cfg(not(windows))]
+    fn configure_fresh_windows_machine_registration(
+        fixture: &mut Fixture,
+        empty_snapshots_before_registration: usize,
+    ) -> PathBuf {
+        let _ = (fixture, empty_snapshots_before_registration);
+        PathBuf::new()
     }
 
     #[cfg(windows)]
@@ -15957,15 +16037,18 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn uninstall_waits_for_exact_windows_wsl_vhd_release() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Absent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
             .runtime_command(target)
             .expect("private provider home");
         let vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        fs::create_dir(vhd.parent().expect("VHD parent")).expect("create WSL distribution root");
         fs::write(&vhd, b"fixture VHD").expect("write fixture VHD");
         // WSL can retain an ext4.vhdx handle that blocks both the no-follow
         // FILE_WRITE_ATTRIBUTES open and the eventual delete. Both operations
@@ -15994,8 +16077,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn uninstall_provider_delete_timeout_retains_install_and_image_cache() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Absent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16007,7 +16094,6 @@ mod tests {
             .expect("cache exact machine image");
         let provider_home = fixture.manager.provider_home();
         let vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        fs::create_dir(vhd.parent().expect("VHD parent")).expect("create WSL distribution root");
         fs::write(&vhd, b"fixture VHD").expect("write fixture VHD");
         let locked_vhd = open_without_windows_delete_sharing(&vhd);
         fixture.commands.push(success(b"[]".to_vec()));
@@ -16039,8 +16125,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn uninstall_provider_attribute_open_timeout_retains_install_and_image_cache() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Absent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16052,7 +16142,6 @@ mod tests {
             .expect("cache exact machine image");
         let provider_home = fixture.manager.provider_home();
         let vhd = windows_fixture_vhd_path(&fixture.manager, target);
-        fs::create_dir(vhd.parent().expect("VHD parent")).expect("create WSL distribution root");
         fs::write(&vhd, b"fixture VHD").expect("write fixture VHD");
         let locked_vhd = open_without_windows_write_or_delete_sharing(&vhd);
         fixture.commands.push(success(b"[]".to_vec()));
@@ -16101,8 +16190,12 @@ mod tests {
 
     #[test]
     fn uninstall_removes_private_provider_state_retains_cache_and_later_purge_removes_it() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Absent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16174,8 +16267,12 @@ mod tests {
 
     #[test]
     fn uninstall_removes_the_exact_stopped_machine_before_private_state() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::PresentThenAbsent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16267,8 +16364,12 @@ mod tests {
 
     #[test]
     fn uninstall_machine_removal_failure_retains_provider_install_and_cache() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Present,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16317,8 +16418,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn uninstall_preserves_private_state_when_wsl_distribution_survives_machine_rm() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Present,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16374,8 +16479,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn uninstall_uses_verified_machine_rm_then_proves_wsl_distribution_absent() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::PresentThenAbsent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16409,8 +16518,12 @@ mod tests {
 
     #[test]
     fn uninstall_recovers_stale_provider_state_after_the_install_payload_was_lost() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Absent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16449,8 +16562,12 @@ mod tests {
 
     #[test]
     fn uninstall_rejects_an_unexpected_machine_before_removing_provider_state() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Absent,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -16611,10 +16728,23 @@ mod tests {
 
     #[test]
     fn start_acquires_exact_image_initializes_rootless_machine_and_preflights() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        let _initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture, 4);
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
+        #[cfg(windows)]
+        fixture.commands.push(success(b"[]".to_vec()));
+        #[cfg(windows)]
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: _initialized_vhd,
+                bytes: b"fresh-initialized-generation".to_vec(),
+            },
+        );
+        #[cfg(not(windows))]
         fixture.commands.push(success(Vec::new()));
         fixture
             .commands
@@ -16625,20 +16755,22 @@ mod tests {
         let command = fixture.manager.start().expect("start");
         assert_eq!(command.runtime_version(), "5.8.2");
         let calls = fixture.commands.calls();
-        let platform_probe_calls = if cfg!(windows) { 2 } else { 0 };
+        let first_machine_inventory = if cfg!(windows) { 3 } else { 0 };
         if cfg!(windows) {
             assert_eq!(calls[0], ["--status"]);
             assert_eq!(calls[1], ["-l", "--quiet"]);
+            assert_eq!(calls[2], ["--list", "--quiet"]);
         }
         assert_eq!(
-            calls[platform_probe_calls],
+            calls[first_machine_inventory],
             ["machine", "list", "--format", "json"]
         );
-        let orphan_probe_calls = if cfg!(windows) { 1 } else { 0 };
+        let init_index = if cfg!(windows) { 6 } else { 1 };
         if cfg!(windows) {
-            assert_eq!(calls[platform_probe_calls + 1], ["--list", "--quiet"]);
+            assert_eq!(calls[4], ["--list", "--quiet"]);
+            assert_eq!(calls[5], ["machine", "list", "--format", "json"]);
         }
-        let init = &calls[platform_probe_calls + orphan_probe_calls + 1];
+        let init = &calls[init_index];
         assert_eq!(&init[..2], ["machine", "init"]);
         assert!(init.contains(&"--rootful=false".into()));
         assert!(init.contains(&"--image".into()));
@@ -16668,20 +16800,22 @@ mod tests {
                 .iter()
                 .any(|argument| argument == "sudo" || argument == "sh")
         );
+        assert_eq!(calls[init_index + 2][..3], ["machine", "start", "--quiet"]);
         assert_eq!(
-            calls[platform_probe_calls + orphan_probe_calls + 3][..3],
-            ["machine", "start", "--quiet"]
-        );
-        assert_eq!(
-            calls[platform_probe_calls + orphan_probe_calls + 4],
+            calls[init_index + 3],
             ["version", "--format", "{{.Server.Version}}"]
         );
         let mut expected_timeouts = vec![];
         if cfg!(windows) {
-            expected_timeouts.extend([COMMAND_TIMEOUT, COMMAND_TIMEOUT]);
-        }
-        expected_timeouts.push(COMMAND_TIMEOUT);
-        if cfg!(windows) {
+            expected_timeouts.extend([
+                COMMAND_TIMEOUT,
+                COMMAND_TIMEOUT,
+                COMMAND_TIMEOUT,
+                COMMAND_TIMEOUT,
+                COMMAND_TIMEOUT,
+                COMMAND_TIMEOUT,
+            ]);
+        } else {
             expected_timeouts.push(COMMAND_TIMEOUT);
         }
         expected_timeouts.extend([
@@ -16963,11 +17097,13 @@ mod tests {
     #[test]
     fn windows_machine_init_retries_once_after_reproving_complete_absence() {
         let mut fixture = fixture();
-        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
+        let initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture, 5);
 
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
         fixture
             .commands
             .push(failure(b"transient WSL import failure"));
@@ -16975,7 +17111,13 @@ mod tests {
         push_windows_wsl_ready(&fixture.commands);
         push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
-        fixture.commands.push(success(Vec::new()));
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: initialized_vhd,
+                bytes: b"bounded-retry-generation".to_vec(),
+            },
+        );
 
         fixture
             .commands
@@ -16987,18 +17129,20 @@ mod tests {
         assert_eq!(command.runtime_version(), "5.8.2");
 
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 13);
+        assert_eq!(calls.len(), 15);
         assert_eq!(calls[0], ["--status"]);
         assert_eq!(calls[1], ["-l", "--quiet"]);
-        assert_eq!(calls[2], ["machine", "list", "--format", "json"]);
-        assert_eq!(calls[3], ["--list", "--quiet"]);
-        assert_eq!(calls[5], ["--status"]);
-        assert_eq!(calls[6], ["-l", "--quiet"]);
-        assert_eq!(calls[7], ["--list", "--quiet"]);
-        assert_eq!(calls[8], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[2], ["--list", "--quiet"]);
+        assert_eq!(calls[3], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[4], ["--list", "--quiet"]);
+        assert_eq!(calls[5], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[7], ["--status"]);
+        assert_eq!(calls[8], ["-l", "--quiet"]);
+        assert_eq!(calls[9], ["--list", "--quiet"]);
         assert_eq!(calls[10], ["machine", "list", "--format", "json"]);
-        assert_eq!(calls[11][..3], ["machine", "start", "--quiet"]);
-        assert_eq!(calls[12], ["version", "--format", "{{.Server.Version}}"]);
+        assert_eq!(calls[12], ["machine", "list", "--format", "json"]);
+        assert_eq!(calls[13][..3], ["machine", "start", "--quiet"]);
+        assert_eq!(calls[14], ["version", "--format", "{{.Server.Version}}"]);
         assert_eq!(
             calls
                 .iter()
@@ -17120,11 +17264,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_machine_init_never_retries_when_fresh_inventory_is_unknown() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
 
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
         fixture
             .commands
             .push(failure(b"transient WSL import failure"));
@@ -17144,8 +17291,8 @@ mod tests {
                 .contains("fresh WSL inventory unavailable")
         );
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 8);
-        assert_eq!(calls[7], ["--list", "--quiet"]);
+        assert_eq!(calls.len(), 10);
+        assert_eq!(calls[9], ["--list", "--quiet"]);
         assert_eq!(
             calls
                 .iter()
@@ -17249,7 +17396,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_machine_init_never_retries_after_ownership_journal_cleanup_failure() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
         let target = fixture.manager.loaded.target().expect("Windows target");
         let intent = fixture.manager.windows_wsl_ownership_proof_path(
             &machine_name(target),
@@ -17257,8 +17405,10 @@ mod tests {
         );
 
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
         fixture.commands.push_with_side_effect(
             failure(b"transient WSL import failure"),
             FakeCommandSideEffect::ReplaceFileWithDirectory {
@@ -17278,7 +17428,7 @@ mod tests {
         );
         assert!(intent.is_dir());
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 5);
+        assert_eq!(calls.len(), 7);
         assert_eq!(
             calls
                 .iter()
@@ -17293,11 +17443,14 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_machine_init_never_retries_when_prerequisite_recheck_fails() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
 
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
         fixture
             .commands
             .push(failure(b"transient WSL import failure"));
@@ -17321,8 +17474,8 @@ mod tests {
             Some(ManagedRuntimeSetupNextAction::RetryWslCheck)
         );
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 6);
-        assert_eq!(calls[5], ["--status"]);
+        assert_eq!(calls.len(), 8);
+        assert_eq!(calls[7], ["--status"]);
         assert_eq!(
             calls
                 .iter()
@@ -17341,8 +17494,10 @@ mod tests {
         fixture.manager.wsl_registrations = Arc::new(FixedWindowsWslRegistrations(Vec::new()));
 
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
+        fixture.commands.push(success(b"[]".to_vec()));
         fixture
             .commands
             .push(failure(b"first transient WSL import failure"));
@@ -17363,7 +17518,7 @@ mod tests {
         assert!(message.contains("first transient WSL import failure"));
         assert!(message.contains("second transient WSL import failure"));
         let calls = fixture.commands.calls();
-        assert_eq!(calls.len(), 10);
+        assert_eq!(calls.len(), 12);
         assert_eq!(
             calls
                 .iter()
@@ -17380,8 +17535,8 @@ mod tests {
                     arguments.len() == 2 && arguments[0] == "--list" && arguments[1] == "--quiet"
                 })
                 .count(),
-            2,
-            "the retry requires a fresh parsed WSL inventory"
+            3,
+            "generation selection and the retry each require a fresh parsed WSL inventory"
         );
     }
     #[test]
@@ -17580,8 +17735,12 @@ mod tests {
 
     #[test]
     fn initialized_machine_rejects_an_inconsistent_ssh_identity_without_rotating_it() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Present,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         fixture
             .manager
@@ -17601,22 +17760,15 @@ mod tests {
             b"not-an-openssh-public-key\n",
         )
         .expect("corrupt public half");
-        push_windows_wsl_ready(&fixture.commands);
-        fixture
-            .commands
-            .push(success(machine_json(&fixture.manager, false)));
 
         let error = fixture
             .manager
-            .start()
+            .require_existing_machine_ssh_identity_locked()
             .expect_err("initialized machine identity mismatch must fail closed");
 
         assert!(error.to_string().contains("refusing to rotate"));
         assert_eq!(fs::read(&identity).unwrap(), private_before);
-        assert_eq!(
-            fixture.commands.calls().len(),
-            if cfg!(windows) { 3 } else { 1 }
-        );
+        assert!(fixture.commands.calls().is_empty());
     }
 
     #[cfg(unix)]
@@ -17952,10 +18104,23 @@ mod tests {
 
     #[test]
     fn observable_setup_reaches_verified_completed_state() {
-        let fixture = fixture();
+        let mut fixture = fixture();
+        let _initialized_vhd = configure_fresh_windows_machine_registration(&mut fixture, 4);
         push_windows_wsl_ready(&fixture.commands);
+        push_windows_wsl_absent(&fixture.commands);
         fixture.commands.push(success(b"[]".to_vec()));
         push_windows_wsl_absent(&fixture.commands);
+        #[cfg(windows)]
+        fixture.commands.push(success(b"[]".to_vec()));
+        #[cfg(windows)]
+        fixture.commands.push_with_side_effect(
+            success(Vec::new()),
+            FakeCommandSideEffect::CreateManagedWslVhd {
+                path: _initialized_vhd,
+                bytes: b"fresh-observable-generation".to_vec(),
+            },
+        );
+        #[cfg(not(windows))]
         fixture.commands.push(success(Vec::new()));
         fixture
             .commands
@@ -18000,8 +18165,12 @@ mod tests {
 
     #[test]
     fn idle_stop_refuses_to_interrupt_a_container_and_force_is_explicit() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Present,
+        );
         fixture
             .commands
             .push(success(machine_json(&fixture.manager, true)));
@@ -18028,8 +18197,12 @@ mod tests {
 
     #[test]
     fn product_uninstall_stop_stops_the_expected_machine_but_rejects_another_running_machine() {
-        let fixture = fixture();
+        let mut fixture = fixture();
         fixture.manager.install().expect("install");
+        seed_owned_windows_lifecycle_fixture(
+            &mut fixture,
+            FixtureWindowsRegistrationLifecycle::Present,
+        );
         let target = fixture.manager.loaded.target().expect("target");
         let expected = machine_name(target);
         let inventory = |expected_running| {
