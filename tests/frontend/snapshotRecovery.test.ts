@@ -231,6 +231,103 @@ test("queued localhost first value does not wait for an unrelated manifest read"
   assert.equal(manifestReads, 0);
 });
 
+test("guided internal Start submits the exact private target and full preset once", async () => {
+  const invocations: { command: string; args: unknown }[] = [];
+  setTestWindow({
+    __TAURI_INTERNALS__: {
+      invoke: async (command: string, args: unknown) => {
+        invocations.push({ command, args });
+        throw new Error("test-only stop after capturing guided internal Start");
+      },
+    },
+  });
+  const ports = [
+    80, 443, 22, 445, 3389, 8080, 8443, 21, 25, 53, 110, 139, 143, 465, 587, 993, 995,
+    3306, 5432, 6379, 9100,
+  ];
+  const confirmation = "I confirm this scan may connect to the selected internal network";
+
+  const result = await scannerService.startScan({
+    caseId: "internal-case",
+    authorization: {
+      assetIds: ["internal-asset"],
+      modes: ["low_impact_external"],
+      confirmation,
+      externalScope: {
+        target: "192.168.50.0/24",
+        ports,
+        protocol: "tcp",
+        activity: "low_impact_external",
+        ratePolicy: {
+          requestsPerSecond: 25,
+          concurrency: 10,
+          timeoutSeconds: 3,
+        },
+        templatePolicy: {
+          revision: "not_applicable",
+          allowedTemplateIds: [],
+          allowHeadless: false,
+          allowOutOfBand: false,
+          allowFuzzing: false,
+          allowFileUpload: false,
+          allowDenialOfService: false,
+          allowCredentialAttacks: false,
+        },
+        assertedAuthority: confirmation,
+        allowSensitiveNetworks: true,
+      },
+    },
+  });
+
+  assert.equal(result.mode, "native");
+  assert.equal(result.data.accepted, false);
+  assert.equal(invocations.length, 1);
+  const submitted = invocations[0] as {
+    command: string;
+    args: { decisions: Array<Record<string, unknown>> };
+  };
+  assert.ok(
+    ["Local user", "本機使用者"].includes(String(submitted.args.decisions[0]?.confirmed_by)),
+  );
+  assert.deepEqual(invocations[0], {
+    command: COMMANDS.startScan,
+    args: {
+      caseId: "internal-case",
+      decisions: [{
+        asset_id: "internal-asset",
+        permissions: ["low_impact_external_connection"],
+        confirmed_by: submitted.args.decisions[0]?.confirmed_by,
+        authorization_reference: confirmation,
+        notes: confirmation,
+        external_scope: {
+          target: "192.168.50.0/24",
+          ports,
+          protocol: "tcp",
+          activity: "low_impact_external",
+          rate_policy: {
+            requests_per_second: 25,
+            concurrency: 10,
+            timeout_seconds: 3,
+          },
+          template_policy: {
+            revision: "not_applicable",
+            allowed_template_ids: [],
+            allow_headless: false,
+            allow_out_of_band: false,
+            allow_fuzzing: false,
+            allow_file_upload: false,
+            allow_denial_of_service: false,
+            allow_credential_attacks: false,
+          },
+          asserted_authority: confirmation,
+          allow_sensitive_networks: true,
+        },
+      }],
+      engineIds: [],
+    },
+  });
+});
+
 test("scan lifecycle mutation acknowledgements never read optional manifests", async () => {
   const mutations = [
     {

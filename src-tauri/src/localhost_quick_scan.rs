@@ -1008,20 +1008,24 @@ fn exact_prepared_task_mut<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::case_service::CaseService;
+    use crate::beginner_report::{
+        BeginnerReportSummary, ReportLifecycle, build_beginner_master_report,
+    };
+    use crate::case_service::{CaseExportFormat, CaseService};
     use crate::coverage::compute_coverage_ledger;
     use crate::domain::CoverageStatus;
+    use crate::export::{ExportOptions, RedactionProfile};
     use crate::job_manager::{
         DurableCancellationOutcome, DurableCancellationWrite, JobManager, JobStatus,
     };
     use crate::local_tcp_probe::LOCAL_TCP_CONNECT_TIMEOUT;
     use crate::storage::SaveCaseFault;
-    use std::io;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
+    use std::{fs, io};
 
     fn storage() -> (tempfile::TempDir, Storage) {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -1249,6 +1253,100 @@ mod tests {
             EngineRunStatus::Completed
         );
         assert_eq!(connector_calls.lock().expect("calls").len(), 1);
+    }
+
+    #[test]
+    fn first_value_journey_reopens_and_exports_the_same_durable_localhost_result() {
+        let (directory, storage) = storage();
+        let database_path = directory.path().join("casework.db");
+        let storage = Arc::new(storage);
+        let prepared = prepare_localhost_quick_scan(&storage, &[], 9_001)
+            .expect("prepare exact localhost work")
+            .prepared;
+        let connector_calls = Arc::new(Mutex::new(Vec::new()));
+        let connector: Arc<dyn LocalTcpConnector> = Arc::new(PersistedBeforeContactConnector {
+            storage: Arc::clone(&storage),
+            prepared: prepared.clone(),
+            result: Err(io::ErrorKind::ConnectionRefused),
+            calls: Arc::clone(&connector_calls),
+        });
+
+        let completed = run_managed_test_job(Arc::clone(&storage), prepared.clone(), connector);
+        assert_eq!(connector_calls.lock().expect("calls").len(), 1);
+        assert!(completed.scan_runs[0].completed_at.is_some());
+        assert_eq!(
+            completed.scan_runs[0].engine_runs[0].status,
+            EngineRunStatus::Completed,
+        );
+        assert_eq!(
+            completed.scan_runs[0].engine_runs[0]
+                .localhost_tcp_observation
+                .as_ref()
+                .map(|observation| &observation.outcome),
+            Some(&LocalhostTcpOutcome::Closed),
+        );
+
+        drop(storage);
+        let reopened_storage = Storage::open(&database_path).expect("reopen durable case database");
+        let reopened = reopened_storage
+            .get_case(&prepared.case_id)
+            .expect("reopen the same saved project");
+        let report = build_beginner_master_report(&reopened, &prepared.scan_run_id)
+            .expect("build beginner report from reopened data");
+        assert_eq!(report.state.summary, BeginnerReportSummary::Complete);
+        assert_eq!(report.state.lifecycle, ReportLifecycle::Final);
+        assert!(report.coverage_gaps.is_empty());
+        assert!(report.actual.checks.iter().any(|check| {
+            check.tested_dimensions.iter().any(|dimension| {
+                dimension.value == "127.0.0.1:9001" && dimension.observation.contains("refused")
+            })
+        }));
+
+        let engines = crate::registry::EngineRegistry::load_builtin().expect("engine registry");
+        let adapters = crate::adapters::builtin_adapter_registry().expect("adapter registry");
+        let service = CaseService::new(
+            &reopened_storage,
+            &engines,
+            &adapters,
+            directory.path().join("artifacts"),
+            directory.path().join("signing.key"),
+        );
+        let destination = directory.path().join("first-value-report.html");
+        let exported = service
+            .export_case(
+                &prepared.case_id,
+                &prepared.scan_run_id,
+                CaseExportFormat::Html,
+                &destination,
+                ExportOptions {
+                    redaction: RedactionProfile::None,
+                    include_raw_artifacts: false,
+                },
+            )
+            .expect("export reopened beginner report");
+        assert!(
+            service
+                .verify_stored_export(&prepared.case_id, &exported.id)
+                .expect("verify stored export")
+                .valid
+        );
+        let html = fs::read_to_string(destination).expect("read exported HTML");
+        for expected in [
+            "Complete",
+            "Final for this run",
+            "127.0.0.1:9001",
+            "What was actually tested",
+            "What was not tested",
+            "What to do next",
+            "do not establish certification",
+            "Content-Security-Policy",
+        ] {
+            assert!(
+                html.contains(expected),
+                "missing readable report text: {expected}"
+            );
+        }
+        assert!(!html.contains("<script"));
     }
 
     #[test]

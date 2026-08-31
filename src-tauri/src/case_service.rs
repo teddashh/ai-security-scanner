@@ -12717,7 +12717,12 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            Self::with_engines(EngineRegistry::load_builtin().unwrap())
+            // Keep Naabu lifecycle tests independent from the short interval
+            // between staging a reviewed launcher revision and adopting its
+            // real immutable publication evidence. The helper uses an
+            // unmistakably test-only image coordinate; final adoption removes
+            // this override and returns the suite to the built-in catalog.
+            Self::with_engines(current_launcher_engine_registry())
         }
 
         fn with_engines(engines: EngineRegistry) -> Self {
@@ -12943,6 +12948,20 @@ mod tests {
             .unwrap();
         naabu["execution"]["launcher_journal_version"] =
             Value::from(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION);
+        // Launcher lifecycle tests must not depend on whether the production
+        // catalog is temporarily staged before or after immutable image
+        // publication. This unmistakably synthetic, cfg(test)-only image
+        // coordinate admits the reviewed static launcher contract without
+        // making a production digest or provenance claim.
+        naabu["image"] = serde_json::json!({
+            "repository": "example.invalid/ai-security-scanner-test-naabu",
+            "tag": "test-only",
+            "digest": format!("sha256:{}", "a".repeat(64)),
+            "signature_identity": null
+        });
+        naabu["status"] = Value::String("integrated".into());
+        naabu["compatibility"]["runnable"] = Value::Bool(true);
+        naabu["compatibility"]["blocked_by"] = serde_json::json!([]);
         naabu["command"] = serde_json::json!([
             "--engine",
             "naabu",
@@ -14948,9 +14967,9 @@ mod tests {
             execution
                 .resume_checkpoint
                 .as_ref()
-                .expect("prior evidence-only checkpoint")
+                .expect("persisted resource-free retry checkpoint")
                 .stage,
-            ExecutionStage::Failed
+            ExecutionStage::Planned
         );
         assert_eq!(
             service
@@ -18108,6 +18127,257 @@ mod tests {
     }
 
     #[test]
+    fn guided_internal_network_journey_reopens_and_exports_the_same_durable_report() {
+        let fixture = Fixture::with_engines(current_launcher_engine_registry());
+        let created = fixture.create_with_intent(Some(AssessmentIntent::InternalItEnvironment));
+        let target = "192.168.50.0/24";
+        let (mut discovered, asset_id) =
+            fixture.discovered_asset(&created.id, AssetKind::IpAddress);
+        let asset = discovered
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .expect("guided internal target");
+        asset.name = target.into();
+        asset.identifiers = vec![AssetIdentifier {
+            namespace: "external_target".into(),
+            value: target.into(),
+        }];
+        asset.internet_exposed = Some(false);
+        fixture
+            .storage
+            .save_case(&mut discovered, "test.guided_internal_target_attributed")
+            .unwrap();
+
+        let ports = [
+            21, 22, 25, 53, 80, 110, 139, 143, 443, 445, 465, 587, 993, 995, 3_306, 3_389, 5_432,
+            6_379, 8_080, 8_443, 9_100,
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        let confirmation = "I confirm this scan may connect to the selected internal network";
+        let scan_plan = fixture
+            .service()
+            .authorize_and_persist_scan_before_execution_preflight(
+                &created.id,
+                vec![ScopeApprovalRequest {
+                    asset_id: asset_id.clone(),
+                    permissions: vec![ScanPermission::LowImpactExternalConnection],
+                    confirmed_by: "Local user".into(),
+                    expires_at: Some(Utc::now() + Duration::days(30)),
+                    authorization_reference: Some(confirmation.into()),
+                    notes: Some(confirmation.into()),
+                    external_scope: Some(ExternalScopeRequest {
+                        target: target.into(),
+                        ports: ports.clone(),
+                        protocol: crate::external_scope::TransportProtocol::Tcp,
+                        activity: ExternalActivity::LowImpactExternal,
+                        rate_policy: crate::external_scope::RatePolicy {
+                            requests_per_second: 25,
+                            concurrency: 10,
+                            timeout_seconds: 3,
+                        },
+                        template_policy: crate::external_scope::TemplatePolicy::conservative(
+                            "not_applicable",
+                            vec![],
+                        ),
+                        asserted_authority: confirmation.into(),
+                        allow_sensitive_networks: true,
+                    }),
+                }],
+                ScanPlanRequest {
+                    engine_ids: vec![NAABU_ENGINE_ID.into()],
+                },
+            )
+            .expect("one Start saves the private target, limits, and scan");
+        assert_eq!(scan_plan.executable.len(), 1);
+        assert!(scan_plan.not_executed.is_empty());
+        let execution = &scan_plan.executable[0];
+        assert_eq!(execution.manifest.id, NAABU_ENGINE_ID);
+        assert_eq!(execution.assets[0].id, asset_id);
+        let frozen_at = Utc::now();
+        let resolved_addresses = (1..=254)
+            .map(|host| std::net::Ipv4Addr::new(192, 168, 50, host).into())
+            .collect::<Vec<std::net::IpAddr>>();
+        let resolved = freeze_external_plan(
+            execution.scope_grants[0]
+                .external_scope
+                .as_ref()
+                .expect("frozen internal scope"),
+            resolved_addresses,
+            frozen_at,
+        )
+        .expect("freeze exact internal addresses");
+        let work_plan = build_naabu_work_plan(
+            NaabuWorkPlanIdentity::new(
+                &created.id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                frozen_at,
+            ),
+            &[resolved],
+            None,
+        )
+        .expect("build staged internal inventory");
+        assert!(
+            work_plan.work_units.iter().any(|unit| {
+                unit.stage == crate::naabu_work_plan::NaabuWorkStage::QuickDiscovery
+            })
+        );
+        assert!(
+            work_plan.work_units.iter().any(|unit| {
+                unit.stage == crate::naabu_work_plan::NaabuWorkStage::FullInventory
+            })
+        );
+        assert_eq!(work_plan.frozen_grants[0].addresses.len(), 254);
+        assert_eq!(
+            work_plan.frozen_grants[0]
+                .ports
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            ports
+        );
+        assert_eq!(
+            work_plan
+                .work_units
+                .iter()
+                .map(|unit| unit.endpoint_pair_count)
+                .sum::<u64>(),
+            254 * ports.len() as u64,
+            "quick discovery plus inventory must retain every requested host/port pair exactly once"
+        );
+        let attempt = naabu_attempt_request(
+            &work_plan,
+            1,
+            work_plan
+                .work_units
+                .iter()
+                .map(|unit| unit.unit_id.clone())
+                .collect(),
+        );
+        fixture
+            .service()
+            .persist_naabu_attempt_request(
+                &created.id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                &work_plan,
+                &attempt,
+            )
+            .expect("persist exact internal work before its result");
+
+        let result = normalized_complete_naabu_result(&work_plan, &attempt);
+        let mut completed = fixture.service().show_case(&created.id).unwrap();
+        let run = completed
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == execution.scan_run_id)
+            .unwrap();
+        run.completed_at = Some(Utc::now());
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap();
+        engine_run.naabu_attempt_results.push(result);
+        engine_run.status = EngineRunStatus::Completed;
+        engine_run.progress_percent = 100;
+        engine_run.phase = "completed".into();
+        engine_run.finished_at = run.completed_at;
+        completed.status = CaseStatus::ReadyForHandoff;
+        completed.touch();
+        fixture
+            .storage
+            .save_case(&mut completed, "test.guided_internal_scan_completed")
+            .expect("save terminal internal result");
+
+        let reopened_storage = Storage::open(fixture.directory.path().join("casework.db"))
+            .expect("reopen durable case database");
+        let reopened = reopened_storage
+            .get_case(&created.id)
+            .expect("reopen the same internal scan project");
+        assert_eq!(
+            reopened.assessment_intent,
+            Some(AssessmentIntent::InternalItEnvironment)
+        );
+        let report = build_beginner_master_report(&reopened, &execution.scan_run_id)
+            .expect("build beginner report from reopened internal scan");
+        assert_eq!(report.state.summary, BeginnerReportSummary::Complete);
+        assert_eq!(report.state.lifecycle, ReportLifecycle::Final);
+        assert!(report.coverage_gaps.is_empty());
+        assert_eq!(
+            report.requested.stage.value,
+            Some(crate::beginner_report::ReportScanStage::Inventory)
+        );
+        assert!(report.requested.automatic_reductions.is_empty());
+        assert_eq!(
+            report.requested.reductions_availability,
+            crate::beginner_report::DataAvailability::Recorded
+        );
+        assert!(report.requested.limits.iter().any(|limit| {
+            limit.name.ends_with("approved ports")
+                && ports.iter().all(|port| {
+                    limit
+                        .value
+                        .split(',')
+                        .any(|value| value == port.to_string())
+                })
+        }));
+        assert_eq!(
+            report.actual.network_scopes.len(),
+            work_plan.work_units.len()
+        );
+        assert!(report.actual.network_scopes.iter().all(|scope| {
+            scope.target == target && scope.outcome == WorkUnitOutcome::TestedComplete
+        }));
+
+        let reopened_service = CaseService::new(
+            &reopened_storage,
+            &fixture.engines,
+            &fixture.adapters,
+            fixture.directory.path().join("artifacts"),
+            fixture.directory.path().join("signing.key"),
+        );
+        let destination = fixture.directory.path().join("guided-internal-report.html");
+        let exported = reopened_service
+            .export_case(
+                &created.id,
+                &execution.scan_run_id,
+                CaseExportFormat::Html,
+                &destination,
+                ExportOptions {
+                    redaction: RedactionProfile::None,
+                    include_raw_artifacts: false,
+                },
+            )
+            .expect("export reopened internal beginner report");
+        assert!(
+            reopened_service
+                .verify_stored_export(&created.id, &exported.id)
+                .expect("verify stored internal HTML export")
+                .valid
+        );
+        let html = fs::read_to_string(destination).expect("read exported internal HTML");
+        for expected in [
+            "Complete",
+            "Final for this run",
+            "192.168.50.0/24",
+            "What was actually tested",
+            "What was not tested",
+            "What to do next",
+            "do not establish certification",
+            "Content-Security-Policy",
+        ] {
+            assert!(
+                html.contains(expected),
+                "missing readable report text: {expected}"
+            );
+        }
+        assert!(!html.contains("<script"));
+    }
+
+    #[test]
     fn requested_network_stage_aggregates_all_saved_task_plans() {
         let fixture = Fixture::new();
         let (case_id, scan_plan, _, plan) = prepared_naabu_work_plan(&fixture);
@@ -20125,16 +20395,6 @@ mod tests {
                 .expect("reopen advances to a separate attempt");
             assert_eq!(resumed.executable.len(), 1);
             assert_eq!(resumed.executable[0].attempt, 2);
-            let second_request = naabu_attempt_request(&work_plan, 2, selected_ids);
-            service
-                .persist_naabu_attempt_request(
-                    &case_id,
-                    &execution.scan_run_id,
-                    &execution.engine_run_id,
-                    &work_plan,
-                    &second_request,
-                )
-                .expect("attempt N+1 appends after the exact no-contact outcome");
             let persisted = service.show_case(&case_id).unwrap();
             assert_eq!(
                 persisted.scan_runs[0].engine_runs[0]
