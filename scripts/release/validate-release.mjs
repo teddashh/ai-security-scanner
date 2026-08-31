@@ -656,7 +656,13 @@ export function validateSynchronousNsisQualificationFixture(
     '$copyName = "bounded-nsis-uninstaller-copy.exe"',
     'Copy-Item -LiteralPath $SourceUninstaller -Destination $copyPath',
     '[string]$copyProof.Sha256 -cne [string]$sourceBefore.Sha256',
-    '"/S", "_?=$InstallDirectory"',
+    '[string]$RawFinalNsisUninstallDirectory = ""',
+    '$Arguments.Count -ne 1 -or $Arguments[0] -cne "/S"',
+    '$rawNsisDirectory = [IO.Path]::GetFullPath($RawFinalNsisUninstallDirectory)',
+    '[IO.Path]::IsPathFullyQualified($rawNsisDirectory)',
+    "$rawNsisDirectory -cmatch '[\"\\r\\n]'",
+    '$startInfo.Arguments = "/S _?=$rawNsisDirectory"',
+    '-RawFinalNsisUninstallDirectory $InstallDirectory',
     'Remove-Item -LiteralPath $copyPath -Force',
     'throw "$Label execution copy remains after bounded cleanup."',
   ]) {
@@ -664,15 +670,17 @@ export function validateSynchronousNsisQualificationFixture(
   }
   assert(
     source.split("Invoke-BoundedCopiedNsisUninstaller").length === 4 &&
-      source.split("_?=$InstallDirectory").length === 2 &&
+      source.split('$startInfo.Arguments = "/S _?=$rawNsisDirectory"').length === 2 &&
       source.split("bounded-nsis-uninstaller-copy.exe").length === 2,
-    `${label} must define one copied-uninstaller helper and use it in exactly the happy and failure paths`,
+    `${label} must define one copied-uninstaller helper with one raw NSIS tail and use it in exactly the happy and failure paths`,
   );
   for (const forbidden of [
     'Invoke-ExactProcess $candidateUninstaller @("/S", "_?=',
     'Invoke-ExactProcess $activeUninstaller @("/S", "_?=',
     'Start-Process -FilePath $uninstallerPath -ArgumentList "/S"',
     'Invoke-BoundedCleanupProcess $uninstallerPath @("/S")',
+    '"_?=$InstallDirectory"',
+    '$startInfo.ArgumentList.Add("_?=$rawNsisDirectory")',
   ]) {
     assert(
       !source.includes(forbidden),

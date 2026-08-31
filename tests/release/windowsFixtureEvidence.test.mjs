@@ -78,6 +78,18 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
       () =>
         validateSynchronousNsisQualificationFixture(
           source.replace(
+            '$startInfo.Arguments = "/S _?=$rawNsisDirectory"',
+            '$startInfo.ArgumentList.Add("_?=$rawNsisDirectory")',
+          ),
+          label,
+          { allowsRetainedState: true },
+        ),
+      /missing copied-uninstaller invariant|raw NSIS tail|invokes an installed NSIS/u,
+    );
+    assert.throws(
+      () =>
+        validateSynchronousNsisQualificationFixture(
+          source.replace(
             /^    throw "Candidate NSIS(?: cleanup)? uninstall retained the exact application installation directory\."\n/mu,
             "",
           ),

@@ -385,7 +385,8 @@ function Invoke-ExactProcess(
   [bool]$CaptureOutput = $false,
   [object]$ExpectedExecutableProof = $null,
   [switch]$AllowRestartRequired,
-  [switch]$AllowRetainedState
+  [switch]$AllowRetainedState,
+  [string]$RawFinalNsisUninstallDirectory = ""
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 900000) {
     throw "$Label timeout is outside its fixed bound."
@@ -396,8 +397,26 @@ function Invoke-ExactProcess(
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $CaptureOutput
   $startInfo.RedirectStandardError = $CaptureOutput
-  foreach ($argument in $Arguments) {
-    $startInfo.ArgumentList.Add($argument)
+  if ([String]::IsNullOrEmpty($RawFinalNsisUninstallDirectory)) {
+    foreach ($argument in $Arguments) {
+      $startInfo.ArgumentList.Add($argument)
+    }
+  } else {
+    if ($Arguments.Count -ne 1 -or $Arguments[0] -cne "/S") {
+      throw "$Label raw NSIS invocation accepts only the silent switch before its final directory."
+    }
+    $rawNsisDirectory = [IO.Path]::GetFullPath($RawFinalNsisUninstallDirectory)
+    if (-not [IO.Path]::IsPathFullyQualified($rawNsisDirectory) -or
+        -not [String]::Equals(
+          $rawNsisDirectory,
+          $RawFinalNsisUninstallDirectory,
+          [StringComparison]::OrdinalIgnoreCase
+        ) -or $rawNsisDirectory -cmatch '["\r\n]') {
+      throw "$Label raw NSIS uninstall directory is not one exact quote-free full path."
+    }
+    # NSIS requires _?= to be the final raw, unquoted command-line tail even
+    # when the directory contains spaces. ArgumentList would add quotes.
+    $startInfo.Arguments = "/S _?=$rawNsisDirectory"
   }
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $startInfo
@@ -519,9 +538,7 @@ function Invoke-BoundedCopiedNsisUninstaller(
       throw "$Label execution copy differs from its verified source."
     }
 
-    $result = Invoke-ExactProcess $copyPath @(
-      "/S", "_?=$InstallDirectory"
-    ) 180000 $Label -ExpectedExecutableProof $copyProof -AllowRetainedState:$AllowRetainedState
+    $result = Invoke-ExactProcess $copyPath @("/S") 180000 $Label -ExpectedExecutableProof $copyProof -AllowRetainedState:$AllowRetainedState -RawFinalNsisUninstallDirectory $InstallDirectory
   } finally {
     if (Test-ExactChildEntryExists $WorkRoot $copyName) {
       $copyAfter = Get-NoFollowFileSha256Proof $copyPath "$Label execution copy cleanup" (512 * 1024 * 1024)

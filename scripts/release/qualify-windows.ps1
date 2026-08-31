@@ -416,7 +416,8 @@ function Invoke-BoundedCleanupProcess(
   [string[]]$Arguments,
   [int]$TimeoutMilliseconds,
   [string]$Label,
-  [Collections.Generic.Dictionary[string,string]]$Environment = $null
+  [Collections.Generic.Dictionary[string,string]]$Environment = $null,
+  [string]$RawFinalNsisUninstallDirectory = ""
 ) {
   if ($TimeoutMilliseconds -lt 1000 -or $TimeoutMilliseconds -gt 600000) {
     throw "$Label cleanup deadline is outside its fixed bound."
@@ -427,8 +428,26 @@ function Invoke-BoundedCleanupProcess(
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $true
   $startInfo.RedirectStandardError = $true
-  foreach ($argument in $Arguments) {
-    $startInfo.ArgumentList.Add($argument)
+  if ([String]::IsNullOrEmpty($RawFinalNsisUninstallDirectory)) {
+    foreach ($argument in $Arguments) {
+      $startInfo.ArgumentList.Add($argument)
+    }
+  } else {
+    if ($Arguments.Count -ne 1 -or $Arguments[0] -cne "/S") {
+      throw "$Label raw NSIS invocation accepts only the silent switch before its final directory."
+    }
+    $rawNsisDirectory = [IO.Path]::GetFullPath($RawFinalNsisUninstallDirectory)
+    if (-not [IO.Path]::IsPathFullyQualified($rawNsisDirectory) -or
+        -not [String]::Equals(
+          $rawNsisDirectory,
+          $RawFinalNsisUninstallDirectory,
+          [StringComparison]::OrdinalIgnoreCase
+        ) -or $rawNsisDirectory -cmatch '["\r\n]') {
+      throw "$Label raw NSIS uninstall directory is not one exact quote-free full path."
+    }
+    # NSIS requires _?= to be the final raw, unquoted command-line tail even
+    # when the directory contains spaces. ArgumentList would add quotes.
+    $startInfo.Arguments = "/S _?=$rawNsisDirectory"
   }
   if ($null -ne $Environment) {
     $startInfo.Environment.Clear()
@@ -559,9 +578,7 @@ function Invoke-BoundedCopiedNsisUninstaller(
       throw "$Label execution copy differs from its verified source."
     }
 
-    Invoke-BoundedCleanupProcess $copyPath @(
-      "/S", "_?=$InstallDirectory"
-    ) 180000 $Label
+    Invoke-BoundedCleanupProcess $copyPath @("/S") 180000 $Label -RawFinalNsisUninstallDirectory $InstallDirectory
   } finally {
     if (Test-ExactEntryExists $copyPath) {
       $copyAfter = Get-QualificationFileProof $copyPath "$Label execution copy cleanup"
