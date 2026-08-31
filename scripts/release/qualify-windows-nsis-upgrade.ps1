@@ -18,6 +18,7 @@ $priorMachineImageSha256 = "e2b6cbcadd8b41b708fecb58a246a20d737dee0ef26872a3f75b
 $maximumPriorDownloadBytes = 64 * 1024 * 1024
 $maximumDataSnapshotBytes = 512 * 1024 * 1024
 $maximumDataSnapshotFiles = 4096
+$processLeaseRelativePath = ".exclusive-process.lock"
 $existingExportIdentityFixtureSha256 = "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
 $emptyFileSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -662,7 +663,7 @@ function Get-OneCurrentUserUninstallEntry([string]$ExpectedVersion, [string]$Ins
   return $entry
 }
 
-function Get-PrivateDataSnapshot([string]$Root) {
+function Get-PrivateDataSnapshot([string]$Root, [switch]$ExcludeProcessLease) {
   Assert-RealDirectory $Root "Private application data root" | Out-Null
   $rootPath = [IO.Path]::GetFullPath($Root)
   $items = @(Get-ChildItem -LiteralPath $rootPath -Force -Recurse)
@@ -679,6 +680,12 @@ function Get-PrivateDataSnapshot([string]$Root) {
     if (-not $fullPath.StartsWith($rootPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
       throw "Private application data entry escaped its exact root."
     }
+    $relative = [IO.Path]::GetRelativePath($rootPath, $fullPath).Replace('\', '/')
+    if ($ExcludeProcessLease -and -not $item.PSIsContainer -and
+        $relative -ceq $processLeaseRelativePath) {
+      Get-NoFollowEmptyFileProof $fullPath "Root process lease" | Out-Null
+      continue
+    }
     if (-not $item.PSIsContainer) {
       if ($files.Count -eq $maximumDataSnapshotFiles) {
         throw "Private application data exceeded its file-count bound."
@@ -692,7 +699,6 @@ function Get-PrivateDataSnapshot([string]$Root) {
       if ($totalBytes -gt $maximumDataSnapshotBytes) {
         throw "Private application data exceeded its byte bound."
       }
-      $relative = [IO.Path]::GetRelativePath($rootPath, $fullPath).Replace('\', '/')
       $files.Add([ordered]@{
         path = $relative
         bytes = [int64]$fileProof.Length
@@ -788,6 +794,7 @@ $localApplicationData = [IO.Path]::GetFullPath(
 )
 Assert-RealDirectory $localApplicationData "OS-resolved LocalApplicationData" | Out-Null
 $dataDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "dev.teddashh.ai-security-scanner") "dev.teddashh.ai-security-scanner" "Default application data directory"
+$processLeasePath = Join-Path $dataDirectory $processLeaseRelativePath
 $registrySentinelPath = "HKCU:\Software\dev.teddashh.ai-security-scanner\release-qualification\nsis-upgrade"
 $priorInstallerPath = Assert-ExactChildPath $workRoot (Join-Path $workRoot $priorInstallerName) $priorInstallerName "Pinned prior installer"
 $beginnerReportPath = Assert-ExactChildPath $workRoot (
@@ -989,7 +996,16 @@ try {
     "Readable report export existing local export identity"
   )
 
-  $appOnlyUninstallSnapshotBefore = Get-PrivateDataSnapshot $dataDirectory
+  $appOnlyUninstallSnapshotBefore = Get-PrivateDataSnapshot $dataDirectory -ExcludeProcessLease
+  if (Test-Path -LiteralPath $processLeasePath) {
+    throw "N-1 fixture no longer exercises creation of the current root process lease."
+  }
+  $sentinelBeforeUninstall = Get-NoFollowFileSha256Proof $sentinelPath (
+    "Data-preservation sentinel before app-only uninstall"
+  ) (64 * 1024)
+  $providerSentinelBeforeUninstall = Get-NoFollowFileSha256Proof $providerSentinel (
+    "Managed-runtime sentinel before app-only uninstall"
+  ) (64 * 1024)
 
   # `_?=` makes NSIS synchronous but also disables its own temporary self-copy.
   # Run a byte-verified copy outside $INSTDIR so the original uninstaller can be
@@ -1000,8 +1016,8 @@ try {
   ) $workRoot (
     "Candidate NSIS uninstall"
   ) -AllowRetainedState
-  if ([int]$uninstallResult.exitCode -notin @(0, 10)) {
-    throw "Candidate NSIS uninstall returned an unreviewed status."
+  if ([int]$uninstallResult.exitCode -ne 10) {
+    throw "Candidate NSIS uninstall did not report its expected preserved legacy runtime state."
   }
   if (Test-Path -LiteralPath $installDirectory) {
     throw "Candidate NSIS uninstall retained the exact application installation directory."
@@ -1014,17 +1030,38 @@ try {
   if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {
     throw "Candidate NSIS uninstall left its current-user product registration behind."
   }
-  $appOnlyUninstallSnapshotAfter = Get-PrivateDataSnapshot $dataDirectory
+  $appOnlyUninstallSnapshotAfter = Get-PrivateDataSnapshot $dataDirectory -ExcludeProcessLease
+  $processLeaseAfterUninstall = Get-NoFollowEmptyFileProof $processLeasePath (
+    "Root process lease created by app-only uninstall"
+  )
   if ($appOnlyUninstallSnapshotAfter.digest -cne $appOnlyUninstallSnapshotBefore.digest -or
       $appOnlyUninstallSnapshotAfter.fileCount -ne $appOnlyUninstallSnapshotBefore.fileCount -or
       $appOnlyUninstallSnapshotAfter.totalBytes -ne $appOnlyUninstallSnapshotBefore.totalBytes) {
-    throw "App-only NSIS uninstall changed private application data before explicit fixture teardown."
+    throw "App-only NSIS uninstall changed non-lease product data before explicit fixture teardown."
   }
+  $sentinelAfterUninstall = Get-NoFollowFileSha256Proof $sentinelPath (
+    "Data-preservation sentinel after app-only uninstall"
+  ) (64 * 1024)
+  Assert-SameFileProof $sentinelBeforeUninstall $sentinelAfterUninstall (
+    "App-only uninstall data-preservation sentinel"
+  )
+  $providerSentinelAfterUninstall = Get-NoFollowFileSha256Proof $providerSentinel (
+    "Managed-runtime sentinel after app-only uninstall"
+  ) (64 * 1024)
+  Assert-SameFileProof $providerSentinelBeforeUninstall $providerSentinelAfterUninstall (
+    "App-only uninstall managed-runtime sentinel"
+  )
   $existingExportIdentityAfterUninstall = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
     "Existing local export identity after app-only NSIS uninstall"
   ) (64 * 1024)
   Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterUninstall (
     "App-only NSIS uninstall existing local export identity"
+  )
+  $beginnerReportAfterUninstall = Get-NoFollowFileSha256Proof $beginnerReportPath (
+    "Readable beginner report after app-only NSIS uninstall"
+  ) (16 * 1024 * 1024)
+  Assert-SameFileProof $beginnerReportProof $beginnerReportAfterUninstall (
+    "App-only NSIS uninstall readable beginner report"
   )
   $happyPathUninstalled = $true
   $activeUninstaller = $null
@@ -1110,7 +1147,9 @@ try {
         afterBytes = [int64]$appOnlyUninstallSnapshotAfter.totalBytes
         beforeDigest = [string]$appOnlyUninstallSnapshotBefore.digest
         afterDigest = [string]$appOnlyUninstallSnapshotAfter.digest
-        completePrivateDataPreserved = $true
+        processLeaseAbsentBefore = $true
+        processLeaseAfter = Convert-FileProofObservation $processLeaseAfterUninstall
+        allNonLeaseProductDataPreserved = $true
       }
     }
     managedRuntimeFilesystemSentinel = [ordered]@{

@@ -262,16 +262,23 @@ function validateObservations(observations, currentVersion, currentInstaller) {
 
   const uninstall = data.appOnlyUninstallSnapshot;
   exactKeys(uninstall, [
-    "beforeFileCount", "afterFileCount", "beforeBytes", "afterBytes", "beforeDigest", "afterDigest", "completePrivateDataPreserved",
-  ], "app-only uninstall private-data snapshot");
-  bounded(uninstall.beforeFileCount, 1, 4096, "pre-uninstall file count");
-  bounded(uninstall.afterFileCount, 1, 4096, "post-uninstall file count");
-  bounded(uninstall.beforeBytes, 1, 512 * 1024 * 1024, "pre-uninstall private-data bytes");
-  bounded(uninstall.afterBytes, 1, 512 * 1024 * 1024, "post-uninstall private-data bytes");
-  sha256(uninstall.beforeDigest, "pre-uninstall private-data digest");
-  sha256(uninstall.afterDigest, "post-uninstall private-data digest");
-  yes(uninstall.completePrivateDataPreserved, "complete app-only uninstall private-data preservation");
-  assert(uninstall.beforeFileCount === uninstall.afterFileCount && uninstall.beforeBytes === uninstall.afterBytes && uninstall.beforeDigest === uninstall.afterDigest, "app-only uninstall changed private data");
+    "beforeFileCount", "afterFileCount", "beforeBytes", "afterBytes", "beforeDigest", "afterDigest",
+    "processLeaseAbsentBefore", "processLeaseAfter", "allNonLeaseProductDataPreserved",
+  ], "app-only uninstall non-lease product-data snapshot");
+  bounded(uninstall.beforeFileCount, 1, 4096, "pre-uninstall non-lease file count");
+  bounded(uninstall.afterFileCount, 1, 4096, "post-uninstall non-lease file count");
+  bounded(uninstall.beforeBytes, 1, 512 * 1024 * 1024, "pre-uninstall non-lease product-data bytes");
+  bounded(uninstall.afterBytes, 1, 512 * 1024 * 1024, "post-uninstall non-lease product-data bytes");
+  sha256(uninstall.beforeDigest, "pre-uninstall non-lease product-data digest");
+  sha256(uninstall.afterDigest, "post-uninstall non-lease product-data digest");
+  yes(uninstall.processLeaseAbsentBefore, "pre-uninstall root process-lease absence");
+  exactKeys(uninstall.processLeaseAfter, ["length", "sha256", "volume", "fileIndex"], "post-uninstall root process lease");
+  assert(uninstall.processLeaseAfter.length === 0, "post-uninstall root process lease is not empty");
+  assert(uninstall.processLeaseAfter.sha256 === "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "post-uninstall root process lease has unexpected bytes");
+  bounded(uninstall.processLeaseAfter.volume, 0, 0xffff_ffff, "post-uninstall root process lease volume");
+  positiveDecimal(uninstall.processLeaseAfter.fileIndex, "post-uninstall root process lease file index");
+  yes(uninstall.allNonLeaseProductDataPreserved, "app-only uninstall non-lease product-data preservation");
+  assert(uninstall.beforeFileCount === uninstall.afterFileCount && uninstall.beforeBytes === uninstall.afterBytes && uninstall.beforeDigest === uninstall.afterDigest, "app-only uninstall changed non-lease product data");
 
   const runtime = observations.managedRuntimeFilesystemSentinel;
   exactKeys(runtime, [

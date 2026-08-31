@@ -640,6 +640,33 @@ function Get-NoFollowFileSha256Proof(
   }
 }
 
+function Get-QuiescedVhdSha256Proof(
+  [string]$Path,
+  [string]$Label,
+  [uint64]$MaximumBytes
+) {
+  $deadline = [DateTime]::UtcNow.AddSeconds(60)
+  do {
+    try {
+      return Get-NoFollowFileSha256Proof $Path $Label $MaximumBytes
+    } catch [ComponentModel.Win32Exception] {
+      $win32Exception = $_.Exception
+      while ($null -ne $win32Exception -and
+             $win32Exception -isnot [ComponentModel.Win32Exception]) {
+        $win32Exception = $win32Exception.InnerException
+      }
+      if ($null -eq $win32Exception -or
+          [int]$win32Exception.NativeErrorCode -notin @(32, 33)) {
+        throw
+      }
+      if ([DateTime]::UtcNow -ge $deadline) {
+        throw "$Label remained locked after its bounded WSL quiescence wait."
+      }
+      Start-Sleep -Milliseconds 500
+    }
+  } while ($true)
+}
+
 function Assert-SameFileProof([object]$Expected, [object]$Actual, [string]$Label) {
   if ($Expected.Length -ne $Actual.Length -or
       $Expected.Sha256 -cne $Actual.Sha256 -or
@@ -1453,29 +1480,30 @@ function Get-PreservedDataSnapshot([string]$Root) {
   return [ordered]@{ fileCount = $ordered.Count; totalBytes = $totalBytes; digest = $digest }
 }
 
-function Get-CompletePrivateDataSnapshot([string]$Root) {
-  Assert-RealDirectory $Root "Complete private application data root" | Out-Null
+function Get-NonLeasePrivateDataSnapshot([string]$Root) {
+  Assert-RealDirectory $Root "Non-lease private application data root" | Out-Null
   $rootPath = [IO.Path]::GetFullPath($Root)
   $files = [Collections.Generic.List[object]]::new()
   [int64]$totalBytes = 0
   $items = @(Get-ChildItem -LiteralPath $rootPath -Force -Recurse)
   if ($items.Count -gt $maximumSnapshotFiles * 4) {
-    throw "Complete private data tree exceeded its entry bound."
+    throw "Non-lease private data tree exceeded its entry bound."
   }
   foreach ($item in $items) {
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-      throw "Complete private data contains a reparse-point entry."
+      throw "Non-lease private data contains a reparse-point entry."
     }
     if ($item.PSIsContainer) { continue }
     if ($files.Count -eq $maximumSnapshotFiles) {
-      throw "Complete private data exceeded its file-count bound."
+      throw "Non-lease private data exceeded its file-count bound."
     }
     $relative = [IO.Path]::GetRelativePath($rootPath, $item.FullName).Replace('\', '/')
+    if ($relative -ceq $processLeaseRelativePath) {
+      Assert-ExactEmptyProcessLeaseFile $item.FullName "Root process lease"
+      continue
+    }
     if ([int64]$item.Length -eq 0) {
-      if ($relative -ceq $processLeaseRelativePath) {
-        Assert-ExactEmptyProcessLeaseFile $item.FullName "Complete snapshot root process lease"
-      }
-      $emptyProof = Get-NoFollowEmptyFileProof $item.FullName "Complete private data empty file"
+      $emptyProof = Get-NoFollowEmptyFileProof $item.FullName "Non-lease private data empty file"
       $fileRecord = [ordered]@{
         path = $relative
         bytes = [int64]$emptyProof.Length
@@ -1483,7 +1511,7 @@ function Get-CompletePrivateDataSnapshot([string]$Root) {
       }
     } else {
       $fileProof = Get-NoFollowFileSha256Proof $item.FullName (
-        "Complete private data file"
+        "Non-lease private data file"
       ) $maximumCompleteSnapshotBytes
       $fileRecord = [ordered]@{
         path = $relative
@@ -1493,7 +1521,7 @@ function Get-CompletePrivateDataSnapshot([string]$Root) {
     }
     $totalBytes += [int64]$fileRecord.bytes
     if ($totalBytes -gt $maximumCompleteSnapshotBytes) {
-      throw "Complete private data exceeded its byte bound."
+      throw "Non-lease private data exceeded its byte bound."
     }
     $files.Add($fileRecord)
   }
@@ -2234,6 +2262,7 @@ $localApplicationData = [IO.Path]::GetFullPath([Environment]::GetFolderPath([Env
 Assert-RealDirectory $localApplicationData "OS-resolved LocalApplicationData" | Out-Null
 $installDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "ai-security-scanner") "ai-security-scanner" "Default NSIS install directory"
 $dataDirectory = Assert-ExactChildPath $localApplicationData (Join-Path $localApplicationData "dev.teddashh.ai-security-scanner") "dev.teddashh.ai-security-scanner" "Default private data directory"
+$processLeasePath = Join-Path $dataDirectory $processLeaseRelativePath
 $priorInstallerPath = Assert-ExactChildPath $workRoot (Join-Path $workRoot $priorInstallerName) $priorInstallerName "Pinned prior installer"
 $managedRuntimeRoot = Join-Path $dataDirectory "managed-runtime"
 $oldProviderHome = Join-Path $managedRuntimeRoot "provider-home\$priorProviderNamespace"
@@ -2749,20 +2778,23 @@ try {
   ) 90000 "Exact unrelated WSL termination before app-only uninstall proof" | Out-Null
   Get-ExactWslRegistration $oldDistributionName $oldWslBasePath | Out-Null
   Get-ExactWslRegistration $unrelatedDistributionName $unrelatedWslBasePath | Out-Null
-  $oldVhdBeforeUninstall = Get-NoFollowFileSha256Proof $oldVhdPath (
+  $oldVhdBeforeUninstall = Get-QuiescedVhdSha256Proof $oldVhdPath (
     "Legacy WSL VHD immediately before app-only uninstall"
   ) $maximumCompleteSnapshotBytes
-  $unrelatedVhdBeforeUninstall = Get-NoFollowFileSha256Proof $unrelatedVhdPath (
+  $unrelatedVhdBeforeUninstall = Get-QuiescedVhdSha256Proof $unrelatedVhdPath (
     "Unrelated WSL VHD immediately before app-only uninstall"
   ) $maximumCompleteSnapshotBytes
-  $appOnlyUninstallSnapshotBefore = Get-CompletePrivateDataSnapshot $dataDirectory
+  $appOnlyUninstallSnapshotBefore = Get-NonLeasePrivateDataSnapshot $dataDirectory
+  $processLeaseBeforeUninstall = Get-NoFollowEmptyFileProof $processLeasePath (
+    "Root process lease before app-only uninstall"
+  )
   $uninstallResult = Invoke-BoundedCopiedNsisUninstaller $candidateUninstaller (
     $installDirectory
   ) $workRoot (
     "Candidate NSIS cleanup uninstall"
   ) -AllowRetainedState
-  if ([int]$uninstallResult.exitCode -notin @(0, 10)) {
-    throw "Candidate NSIS cleanup uninstall returned an unreviewed status."
+  if ([int]$uninstallResult.exitCode -ne 10) {
+    throw "Candidate NSIS cleanup uninstall did not report its expected preserved ambiguous runtime state."
   }
   if (Test-Path -LiteralPath $installDirectory) {
     throw "Candidate NSIS cleanup uninstall retained the exact application installation directory."
@@ -2776,17 +2808,29 @@ try {
   if (@(Get-ProductRegistryEntries).Count -ne 0) {
     throw "Candidate NSIS uninstaller left the product registry entry."
   }
-  $appOnlyUninstallSnapshotAfter = Get-CompletePrivateDataSnapshot $dataDirectory
+  $appOnlyUninstallSnapshotAfter = Get-NonLeasePrivateDataSnapshot $dataDirectory
+  $processLeaseAfterUninstall = Get-NoFollowEmptyFileProof $processLeasePath (
+    "Root process lease after app-only uninstall"
+  )
+  Assert-SameFileProof $processLeaseBeforeUninstall $processLeaseAfterUninstall (
+    "App-only uninstall root process lease"
+  )
   if ($appOnlyUninstallSnapshotAfter.digest -cne $appOnlyUninstallSnapshotBefore.digest -or
       $appOnlyUninstallSnapshotAfter.fileCount -ne $appOnlyUninstallSnapshotBefore.fileCount -or
       $appOnlyUninstallSnapshotAfter.totalBytes -ne $appOnlyUninstallSnapshotBefore.totalBytes) {
-    throw "App-only NSIS uninstall changed complete private application data before explicit teardown."
+    throw "App-only NSIS uninstall changed non-lease product data before explicit teardown."
   }
   $existingExportIdentityAfterUninstall = Get-NoFollowFileSha256Proof $existingExportIdentityPath (
     "Existing local export identity after app-only ghost NSIS uninstall"
   ) (64 * 1024)
   Assert-SameFileProof $existingExportIdentityInitial $existingExportIdentityAfterUninstall (
     "App-only ghost NSIS uninstall existing local export identity"
+  )
+  $beginnerReportAfterUninstall = Get-NoFollowFileSha256Proof $beginnerReportPath (
+    "Readable beginner report after app-only ghost NSIS uninstall"
+  ) (16 * 1024 * 1024)
+  Assert-SameFileProof $beginnerReportProof $beginnerReportAfterUninstall (
+    "App-only ghost NSIS uninstall readable beginner report"
   )
   $generationSelectionAfterUninstall = Get-NoFollowFileSha256Proof $generationSelectionPath (
     "Generation-zero routing record after app-only uninstall"
@@ -2810,7 +2854,7 @@ try {
       throw "App-only NSIS uninstall changed legacy VHD identity field $identityField."
     }
   }
-  $oldVhdFileAfterUninstall = Get-NoFollowFileSha256Proof $oldVhdPath (
+  $oldVhdFileAfterUninstall = Get-QuiescedVhdSha256Proof $oldVhdPath (
     "Legacy WSL VHD after app-only uninstall"
   ) $maximumCompleteSnapshotBytes
   Assert-SameFileProof $oldVhdBeforeUninstall $oldVhdFileAfterUninstall (
@@ -2826,7 +2870,7 @@ try {
       [string]$unrelatedRegistrationBefore.RegistrationId) {
     throw "App-only NSIS uninstall rebound a legacy or unrelated WSL registration."
   }
-  $unrelatedVhdAfterUninstall = Get-NoFollowFileSha256Proof $unrelatedVhdPath (
+  $unrelatedVhdAfterUninstall = Get-QuiescedVhdSha256Proof $unrelatedVhdPath (
     "Unrelated WSL VHD after app-only uninstall"
   ) $maximumCompleteSnapshotBytes
   Assert-SameFileProof $unrelatedVhdBeforeUninstall $unrelatedVhdAfterUninstall (
@@ -3029,7 +3073,9 @@ try {
         afterBytes = [int64]$appOnlyUninstallSnapshotAfter.totalBytes
         beforeDigest = [string]$appOnlyUninstallSnapshotBefore.digest
         afterDigest = [string]$appOnlyUninstallSnapshotAfter.digest
-        completePrivateDataPreserved = $true
+        processLeaseBefore = Convert-FileProofObservation $processLeaseBeforeUninstall
+        processLeaseAfter = Convert-FileProofObservation $processLeaseAfterUninstall
+        allNonLeaseProductDataPreserved = $true
       }
     }
     cleanup = [ordered]@{

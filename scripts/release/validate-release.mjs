@@ -692,7 +692,7 @@ export function validateSynchronousNsisQualificationFixture(
       source.includes("[switch]$AllowRetainedState") &&
       source.includes("$process.ExitCode -ne 10") &&
         source.split("-AllowRetainedState").length === 4 &&
-        source.includes("$uninstallResult.exitCode -notin @(0, 10)") &&
+        source.includes("$uninstallResult.exitCode -ne 10") &&
         source.includes("retained the exact application installation directory") &&
         source.includes("retained a product application binary") &&
         source.includes(
@@ -703,10 +703,18 @@ export function validateSynchronousNsisQualificationFixture(
         /if \(@\(Get-(?:CurrentUserUninstallEntries|ProductRegistryEntries)\)\.Count -ne 0\) \{\r?\n\s+throw "Candidate NSIS (?:uninstall left its current-user product registration behind|uninstaller left the product registry entry)\."\r?\n\s+\}/u.test(
           source,
         ) &&
-        source.includes("$appOnlyUninstallSnapshotBefore") &&
-        /\$appOnlyUninstallSnapshotAfter = Get-(?:Complete)?PrivateDataSnapshot \$dataDirectory/u.test(
+        /\$appOnlyUninstallSnapshotBefore = (?:Get-PrivateDataSnapshot \$dataDirectory -ExcludeProcessLease|Get-NonLeasePrivateDataSnapshot \$dataDirectory)/u.test(
           source,
         ) &&
+        /\$appOnlyUninstallSnapshotAfter = (?:Get-PrivateDataSnapshot \$dataDirectory -ExcludeProcessLease|Get-NonLeasePrivateDataSnapshot \$dataDirectory)/u.test(
+          source,
+        ) &&
+        source.includes("Get-NoFollowEmptyFileProof $processLeasePath") &&
+        source.includes("allNonLeaseProductDataPreserved = $true") &&
+        !source.includes("completePrivateDataPreserved") &&
+        !source.includes("ExcludeManagedRuntimeState") &&
+        source.includes("$beginnerReportAfterUninstall = Get-NoFollowFileSha256Proof") &&
+        source.includes("Assert-SameFileProof $beginnerReportProof $beginnerReportAfterUninstall") &&
         source.includes(
           "$appOnlyUninstallSnapshotAfter.digest -cne $appOnlyUninstallSnapshotBefore.digest",
         ) &&
@@ -718,6 +726,27 @@ export function validateSynchronousNsisQualificationFixture(
         ),
       `${label} must accept retained-state status only while independently proving application removal and exact report identity`,
     );
+    if (source.includes("Get-ProductRegistryEntries")) {
+      assert(
+        source.includes("function Get-QuiescedVhdSha256Proof(") &&
+          source.includes("[DateTime]::UtcNow.AddSeconds(60)") &&
+          source.includes("$win32Exception = $_.Exception") &&
+          source.includes("$win32Exception = $win32Exception.InnerException") &&
+          source.includes("[int]$win32Exception.NativeErrorCode -notin @(32, 33)") &&
+          !source.includes("$_.Exception.NativeErrorCode") &&
+          source.includes("Start-Sleep -Milliseconds 500") &&
+          source.split("Get-QuiescedVhdSha256Proof $oldVhdPath").length === 3 &&
+          source.split("Get-QuiescedVhdSha256Proof $unrelatedVhdPath").length === 3 &&
+          source.includes("Assert-SameFileProof $processLeaseBeforeUninstall $processLeaseAfterUninstall"),
+        `${label} must wait a bounded time only for WSL VHD sharing and lock violations before exact no-follow hashing`,
+      );
+    } else {
+      assert(
+        source.includes("processLeaseAbsentBefore = $true") &&
+          source.includes("$processLeaseAfterUninstall = Get-NoFollowEmptyFileProof"),
+        `${label} must prove that the current product added only its exact empty root process lease`,
+      );
+    }
   } else {
     assert(
       !source.includes("AllowRetainedState"),

@@ -55,9 +55,10 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
     const registryRemovalProof = source.includes("Get-CurrentUserUninstallEntries")
       ? '  if (@(Get-CurrentUserUninstallEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstall left its current-user product registration behind."\n  }\n'
       : '  if (@(Get-ProductRegistryEntries).Count -ne 0) {\n    throw "Candidate NSIS uninstaller left the product registry entry."\n  }\n';
-    const afterSnapshotAssignment = source.includes("Get-CompletePrivateDataSnapshot")
-      ? "  $appOnlyUninstallSnapshotAfter = Get-CompletePrivateDataSnapshot $dataDirectory\n"
-      : "  $appOnlyUninstallSnapshotAfter = Get-PrivateDataSnapshot $dataDirectory\n";
+    const isGhostFixture = source.includes("Get-ProductRegistryEntries");
+    const afterSnapshotAssignment = isGhostFixture
+      ? "  $appOnlyUninstallSnapshotAfter = Get-NonLeasePrivateDataSnapshot $dataDirectory\n"
+      : "  $appOnlyUninstallSnapshotAfter = Get-PrivateDataSnapshot $dataDirectory -ExcludeProcessLease\n";
     assert.notEqual(source.indexOf(registryRemovalProof), -1);
     assert.notEqual(source.indexOf(afterSnapshotAssignment), -1);
     assert.doesNotThrow(() =>
@@ -98,6 +99,38 @@ test("Windows preservation fixtures run verified NSIS copies and prove retained-
         ),
       /independently proving application removal/u,
     );
+    assert.throws(
+      () =>
+        validateSynchronousNsisQualificationFixture(
+          source.replace("$uninstallResult.exitCode -ne 10", "$uninstallResult.exitCode -notin @(0, 10)"),
+          label,
+          { allowsRetainedState: true },
+        ),
+      /independently proving application removal/u,
+    );
+    if (isGhostFixture) {
+      assert.throws(
+        () =>
+          validateSynchronousNsisQualificationFixture(
+            source.replace("      Start-Sleep -Milliseconds 500\n", ""),
+            label,
+            { allowsRetainedState: true },
+          ),
+        /bounded time only for WSL VHD/u,
+      );
+      assert.throws(
+        () =>
+          validateSynchronousNsisQualificationFixture(
+            source.replace(
+              "[int]$win32Exception.NativeErrorCode -notin @(32, 33)",
+              "$_.Exception.NativeErrorCode -notin @(32, 33)",
+            ),
+            label,
+            { allowsRetainedState: true },
+          ),
+        /bounded time only for WSL VHD/u,
+      );
+    }
     assert.throws(
       () =>
         validateSynchronousNsisQualificationFixture(
