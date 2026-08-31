@@ -54,6 +54,7 @@
     "shortDescription": "Local-first security assessment casework",
     "longDescription": "Discover assets, coordinate open-source security scanners, preserve evidence, hand off a case, and verify remediation without claiming a compliance audit.",
     "windows": {
+      "allowDowngrades": false,
       "nsis": {
         "template": "windows/nsis/installer.nsi",
         "installMode": "currentUser",

@@ -4,9 +4,8 @@ use crate::domain::{
     ScanPermission,
 };
 use crate::error::{AppError, AppResult};
-use crate::naabu_work_plan::{
-    MAX_NAABU_LAUNCHER_PLAN_BYTES, NAABU_ENGINE_ID, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
-};
+use crate::execution_coverage::LAUNCHER_V2_JOURNAL_SCHEMA_VERSION;
+use crate::naabu_work_plan::{MAX_NAABU_LAUNCHER_PLAN_BYTES, NAABU_ENGINE_ID};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -62,7 +61,7 @@ const CONTAINER_ATTEMPT_LABEL_KEY: &str = "ai.security-scanner.attempt";
 const CONTAINER_SCOPE_LABEL_KEY: &str = "ai.security-scanner.scope-sha256";
 const CONTAINER_NAABU_LAUNCHER_PLAN_LABEL_KEY: &str =
     "ai.security-scanner.naabu-launcher-plan-sha256";
-const NAABU_LAUNCHER_V2_COMMAND: [&str; 10] = [
+const NAABU_LAUNCHER_COMMAND: [&str; 10] = [
     "--engine",
     "naabu",
     "--scope",
@@ -1391,7 +1390,7 @@ pub struct OwnedContainerCleanupRequest {
     pub engine_id: String,
     pub attempt: u32,
     pub scope_sha256: String,
-    /// Exact digest of the private launcher-v2 work plan. Legacy executions
+    /// Exact digest of the private versioned launcher work plan. Legacy executions
     /// have no such document or ownership label and therefore retain `None`.
     pub launcher_plan_sha256: Option<String>,
     pub image: PinnedImage,
@@ -3405,10 +3404,11 @@ fn validate_naabu_launcher_manifest_contract(
         })
     });
     match version {
-        Some(version) if version == NAABU_LAUNCHER_PLAN_SCHEMA_VERSION => {
+        Some(version) if version == LAUNCHER_V2_JOURNAL_SCHEMA_VERSION => {
             if manifest.id != NAABU_ENGINE_ID {
                 return Err(AppError::EngineRegistry(
-                    "launcher journal v2 is supported only by the reviewed Naabu contract".into(),
+                    "launcher journal version 2 is supported only by the reviewed Naabu contract"
+                        .into(),
                 ));
             }
             if manifest
@@ -3416,15 +3416,16 @@ fn validate_naabu_launcher_manifest_contract(
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>()
-                != NAABU_LAUNCHER_V2_COMMAND
+                != NAABU_LAUNCHER_COMMAND
             {
                 return Err(AppError::EngineRegistry(
-                    "Naabu launcher journal v2 requires the exact reviewed static command".into(),
+                    "Naabu launcher journal version 2 requires the exact reviewed static command"
+                        .into(),
                 ));
             }
             if !has_launcher_plan {
                 return Err(AppError::InvalidRequest(
-                    "Naabu launcher journal v2 requires its private execution plan".into(),
+                    "Naabu launcher journal version 2 requires its private execution plan".into(),
                 ));
             }
         }
@@ -4469,7 +4470,7 @@ esac
 
     fn enable_naabu_launcher_v2(manifest: &mut EngineManifest) {
         manifest.id = NAABU_ENGINE_ID.into();
-        manifest.command = NAABU_LAUNCHER_V2_COMMAND
+        manifest.command = NAABU_LAUNCHER_COMMAND
             .iter()
             .map(|part| (*part).to_owned())
             .collect();
@@ -4477,7 +4478,7 @@ esac
             resources: EngineExecutionResources {
                 timeout_seconds: 14_400,
             },
-            launcher_journal_version: Some(NAABU_LAUNCHER_PLAN_SCHEMA_VERSION),
+            launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
         });
     }
 
@@ -5413,7 +5414,7 @@ esac\n",
             .expect("image argument");
         assert_eq!(
             plan.runtime_args[image_index + 1..],
-            NAABU_LAUNCHER_V2_COMMAND.map(str::to_owned)
+            NAABU_LAUNCHER_COMMAND.map(str::to_owned)
         );
         validate_run_plan_integrity(&plan).expect("immutable launcher plan");
     }

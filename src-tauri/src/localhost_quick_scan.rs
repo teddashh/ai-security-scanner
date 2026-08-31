@@ -159,6 +159,7 @@ pub fn prepare_localhost_quick_scan(
         started_at: None,
         finished_at: None,
         resume_token: None,
+        last_execution_report_sha256: None,
         engine_version: None,
         image_digest: None,
         rule_version: None,

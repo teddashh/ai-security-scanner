@@ -720,8 +720,18 @@ pub struct LocalhostTcpObservation {
     pub observed_at: DateTime<Utc>,
 }
 
-pub const NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION: u32 = 1;
-pub const MAX_NAABU_ATTEMPT_REQUESTS: usize = 512;
+/// Historical request records bind the legacy full-corpus launcher schema 2.
+/// Current request records bind the compact launcher schema 3. Both remain
+/// readable so saved evidence can be verified and an otherwise compatible
+/// historical attempt can be regenerated without changing its digest. This
+/// does not promise cross-release execution when the exact engine or runtime
+/// identity is unavailable.
+pub const LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION: u32 = 1;
+pub const NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION: u32 = 2;
+/// A work plan contains at most 512 units and automatic execution gives each
+/// unit at most two attempts. Keeping the full 1,024-entry worst case prevents
+/// the history bound from starving later units when only one fits per batch.
+pub const MAX_NAABU_ATTEMPT_REQUESTS: usize = 1_024;
 pub const NAABU_ATTEMPT_RESULT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_NAABU_ATTEMPT_RESULTS: usize = MAX_NAABU_ATTEMPT_REQUESTS;
 /// Keeps a corrupt or adversarial case from multiplying the per-attempt
@@ -774,6 +784,12 @@ pub struct EngineRun {
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub resume_token: Option<String>,
+    /// SHA-256 commitment to the complete most-recent scanner report applied
+    /// to this task. It makes exact replay byte-for-byte complete instead of
+    /// inferring equality from a subset of projected fields. Missing values
+    /// identify legacy tasks and never authorize an idempotent replay.
+    #[serde(default)]
+    pub last_execution_report_sha256: Option<String>,
     pub engine_version: Option<String>,
     pub image_digest: Option<String>,
     pub rule_version: Option<String>,

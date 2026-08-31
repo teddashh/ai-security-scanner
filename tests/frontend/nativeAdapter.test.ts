@@ -169,6 +169,118 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
   assert.equal(report.nextSteps[0]?.taskId, "task-1");
 });
 
+test("beginner report adapter preserves exact tested and untested network scope slices", () => {
+  const report = adaptBeginnerMasterReport({
+    schema_version: "1.0.0",
+    case_id: "case-network",
+    run_id: "run-network",
+    project_title: "Exact network coverage",
+    state: {
+      summary: "partial",
+      lifecycle: "final",
+      last_durable_update: "2026-08-30T13:00:00Z",
+      explanation: "One port was tested and one was not tested.",
+    },
+    requested: {
+      targets: [{
+        asset_id: "asset-network",
+        label: "192.168.50.10",
+        asset_kind: "ip_address",
+        label_availability: "recorded",
+        asset_kind_availability: "recorded",
+      }],
+      stage: {
+        value: "inventory",
+        availability: "recorded",
+        explanation: "Frozen network plan.",
+      },
+      limits: [],
+      requested_check_ids: ["naabu"],
+      request_outcome_code: null,
+      automatic_reductions: [],
+      reductions_availability: "recorded",
+      unavailable_dimensions: [],
+    },
+    actual: {
+      observed_from: "2026-08-30T12:59:00Z",
+      observed_until: "2026-08-30T13:00:00Z",
+      checks: [],
+      network_scopes: [{
+        task_id: "task-naabu",
+        check_id: "naabu",
+        work_unit_id: "wu_tested_443",
+        target_asset_id: "asset-network",
+        target: "192.168.50.10",
+        address_ranges: ["192.168.50.10"],
+        port_ranges: ["443"],
+        transport: "tcp",
+        stage: "quick_discovery",
+        outcome: "tested_complete",
+        observed_at: "2026-08-30T12:59:30Z",
+      }, {
+        task_id: "task-naabu",
+        check_id: "naabu",
+        work_unit_id: "wu_not_tested_8443",
+        target_asset_id: "asset-network",
+        target: "192.168.50.10",
+        address_ranges: ["192.168.50.10"],
+        port_ranges: ["8443"],
+        transport: "tcp",
+        stage: "inventory",
+        outcome: "not_tested",
+        observed_at: null,
+      }],
+      unavailable_dimensions: [],
+    },
+    coverage_gaps: [],
+    coverage_counts: {
+      tested_complete: 1,
+      tested_partial: 0,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      not_tested: 1,
+      excluded: 0,
+      truncated: 0,
+      unavailable: 0,
+    },
+    findings: [],
+    next_steps: [],
+    technical_details: { collapsed_by_default: true, tasks: [] },
+    framework_notice: {
+      non_certification: "Not certification.",
+      aidefend_mapping_status: "Independent mapping.",
+    },
+    data_quality_warnings: [],
+  });
+
+  assert.deepEqual(report.actual.networkScopes, [{
+    taskId: "task-naabu",
+    checkId: "naabu",
+    workUnitId: "wu_tested_443",
+    targetAssetId: "asset-network",
+    target: "192.168.50.10",
+    addressRanges: ["192.168.50.10"],
+    portRanges: ["443"],
+    transport: "tcp",
+    stage: "quick_discovery",
+    outcome: "tested_complete",
+    observedAt: "2026-08-30T12:59:30Z",
+  }, {
+    taskId: "task-naabu",
+    checkId: "naabu",
+    workUnitId: "wu_not_tested_8443",
+    targetAssetId: "asset-network",
+    target: "192.168.50.10",
+    addressRanges: ["192.168.50.10"],
+    portRanges: ["8443"],
+    transport: "tcp",
+    stage: "inventory",
+    outcome: "not_tested",
+    observedAt: undefined,
+  }]);
+});
+
 test("local network candidate adapter accepts one canonical private range", () => {
   assert.deepEqual(adaptLocalNetworkCandidateInventory({
     status: "ready",
@@ -886,6 +998,7 @@ const adaptGatewayFailure = (
   phase = "failed",
   warnings = errorCode === "resume_release_incompatible" ? [message] : [],
   cleanupDetail?: string,
+  status = "failed",
 ) => {
   const checkpoint = JSON.stringify({
     case_id: "case-1",
@@ -930,7 +1043,7 @@ const adaptGatewayFailure = (
         id: "engine-run-1",
         engine_id: "naabu",
         asset_ids: ["private-asset-id"],
-        status: "failed",
+        status,
         progress_percent: 0,
         phase,
         started_at: "2026-08-26T12:02:00Z",
@@ -964,6 +1077,27 @@ test("native gateway failures preserve frozen authorization but restart before r
   assert.equal(failed?.failureKind, "gateway_preparation_failed");
   assert.equal(failed?.recoveryAction, "restart_check");
   assert.equal(failed?.resumable, true);
+});
+
+test("terminal partial-result outcomes do not reopen an exhausted or cancelled scan", () => {
+  for (const [errorCode, status, phase] of [
+    ["coverage_incomplete_after_bounded_retries", "partially_completed", "results_partial"],
+    ["cancelled_after_partial_results", "cancelled", "cancelled_after_partial_results"],
+  ] as const) {
+    const terminal = adaptGatewayFailure(
+      "Saved partial results remain available.",
+      errorCode,
+      "failed",
+      phase,
+      [],
+      undefined,
+      status,
+    ).runs[0]?.engineRuns[0];
+
+    assert.equal(terminal?.errorCode, errorCode);
+    assert.equal(terminal?.recoveryAction, "none");
+    assert.equal(terminal?.resumable, false);
+  }
 });
 
 test("built-in localhost work exposes its exact task and observation without catalog provenance", () => {

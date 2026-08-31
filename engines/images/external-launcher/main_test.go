@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -633,7 +634,7 @@ const launcherV2RustGoldenJournal = `{"record_type":"header","schema_version":2,
 
 func launcherV2TestPlan(attempt uint32, units ...launcherV2PlannedUnit) *launcherV2Plan {
 	return &launcherV2Plan{
-		SchemaVersion:      launcherV2SchemaVersion,
+		SchemaVersion:      launcherPlanCurrentVersion,
 		EngineID:           "naabu",
 		EngineRunID:        "run-opaque-1",
 		ExecutionAttempt:   attempt,
@@ -802,6 +803,192 @@ func TestLauncherV2SameGrantQuickAndFullUseExactSidecarSlicesInOrder(t *testing.
 	}
 }
 
+func TestLauncherV3RequiresCompactAttemptPortsToEqualTheScope(t *testing.T) {
+	now := time.Now().UTC()
+	document := fixtureDocument("naabu", now)
+	document.Assets = document.Assets[:1]
+	document.Assets[0].Grants[0].ExternalScope.Ports = []uint16{8443}
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := launcherV2TestPlan(1,
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
+	)
+	plan.FrozenGrants = []launcherV2FrozenGrant{{
+		ScopeGrantID: "grant-a",
+		Addresses:    []string{"192.0.2.10"},
+		Ports:        []uint16{8443},
+	}}
+
+	materialized, err := materializeLauncherV2Plan(plan, "naabu", units)
+	if err != nil {
+		t.Fatalf("compact authorized attempt corpus was rejected: %v", err)
+	}
+	if len(materialized) != 1 || !reflect.DeepEqual(materialized[0].Grant.Ports, []uint16{8443}) {
+		t.Fatalf("compact attempt ports were not preserved exactly: %#v", materialized)
+	}
+}
+
+func TestLauncherAcceptsLegacyFullCorpusPlanUnderStableJournalV2Command(t *testing.T) {
+	now := time.Now().UTC()
+	units := launcherV2TestUnits(t, now)
+	plan := launcherV2TestPlan(1,
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
+	)
+	plan.SchemaVersion = launcherPlanLegacyVersion
+	if _, err := materializeLauncherV2Plan(plan, "naabu", units); err != nil {
+		t.Fatalf("legacy full-corpus schema-2 plan was rejected: %v", err)
+	}
+	if _, err := validateLauncherV2Options(launcherJournalSchemaVersion, journalPlanMountPath, "naabu"); err != nil {
+		t.Fatalf("stable journal-v2 command rejected an exact legacy plan path: %v", err)
+	}
+}
+
+func TestLauncherV3RejectsMoreThan128RequestedUnitsAndAggregateAbove10000Pairs(t *testing.T) {
+	now := time.Now().UTC()
+	base := launcherV2TestPlan(1,
+		launcherV2TestPlannedUnit(0, launcherV2UnitA, launcherV2ScopeA),
+	)
+	tooMany := cloneLauncherV2TestPlan(t, base)
+	tooMany.RequestedWorkUnits = make([]launcherV2PlannedUnit, maxLauncherCurrentUnits+1)
+	for index := range tooMany.RequestedWorkUnits {
+		tooMany.RequestedWorkUnits[index] = launcherV2TestPlannedUnit(
+			0,
+			fmt.Sprintf("wu_%032x", index+1),
+			fmt.Sprintf("%064x", index+1),
+		)
+	}
+	if _, err := materializeLauncherV2Plan(tooMany, "naabu", launcherV2TestUnits(t, now)); err == nil {
+		t.Fatal("launcher accepted 129 requested work units")
+	}
+
+	document := fixtureDocument("naabu", now)
+	document.Assets = document.Assets[:1]
+	grant := document.Assets[0].Grants[0].ExternalScope
+	grant.RatePolicy = ratePolicy{RequestsPerSecond: 10, Concurrency: 10, TimeoutSeconds: 1}
+	grant.Ports = make([]uint16, 102)
+	for index := range grant.Ports {
+		grant.Ports[index] = uint16(index + 1)
+	}
+	document.Assets[0].Grants[0].ResolvedAddresses = make([]string, 100)
+	for index := range document.Assets[0].Grants[0].ResolvedAddresses {
+		document.Assets[0].Grants[0].ResolvedAddresses[index] = fmt.Sprintf("192.0.2.%d", index+1)
+	}
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline, err := launcherV2ConservativeDeadlineSeconds(grant.RatePolicy, 5_100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate := &launcherV2Plan{
+		SchemaVersion:    launcherPlanCurrentVersion,
+		EngineID:         "naabu",
+		EngineRunID:      "run-opaque-aggregate",
+		ExecutionAttempt: 1,
+		FrozenGrants: []launcherV2FrozenGrant{{
+			ScopeGrantID: "grant-a",
+			Addresses:    append([]string(nil), document.Assets[0].Grants[0].ResolvedAddresses...),
+			Ports:        append([]uint16(nil), grant.Ports...),
+		}},
+		RequestedWorkUnits: []launcherV2PlannedUnit{
+			{
+				UnitID: launcherV2UnitA, ScopeSHA256: launcherV2ScopeA,
+				GrantIndex: 0, AddressStart: 0, AddressLen: 100, PortStart: 0, PortLen: 51,
+				EndpointPairCount: 5_100, ConservativeDeadlineSeconds: deadline,
+			},
+			{
+				UnitID: launcherV2UnitB, ScopeSHA256: launcherV2ScopeB,
+				GrantIndex: 0, AddressStart: 0, AddressLen: 100, PortStart: 51, PortLen: 51,
+				EndpointPairCount: 5_100, ConservativeDeadlineSeconds: deadline,
+			},
+		},
+	}
+	if _, err := materializeLauncherV2Plan(aggregate, "naabu", units); err == nil {
+		t.Fatal("launcher-v3 accepted more than 10,000 aggregate endpoint pairs")
+	}
+	aggregate.SchemaVersion = launcherPlanLegacyVersion
+	if materialized, err := materializeLauncherV2Plan(aggregate, "naabu", units); err != nil || len(materialized) != 2 {
+		t.Fatalf("legacy launcher rejected historically valid per-unit-bounded work: units=%d err=%v", len(materialized), err)
+	}
+}
+
+func TestLegacyLauncherAndJournalRetainTheHistorical512UnitBound(t *testing.T) {
+	now := time.Now().UTC()
+	document := fixtureDocument("naabu", now)
+	document.Assets = document.Assets[:1]
+	document.Assets[0].Grants[0].ExternalScope.Ports = make([]uint16, maxLauncherCurrentUnits+1)
+	for index := range document.Assets[0].Grants[0].ExternalScope.Ports {
+		document.Assets[0].Grants[0].ExternalScope.Ports[index] = uint16(index + 1)
+	}
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline, err := launcherV2ConservativeDeadlineSeconds(
+		document.Assets[0].Grants[0].ExternalScope.RatePolicy,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &launcherV2Plan{
+		SchemaVersion:    launcherPlanLegacyVersion,
+		EngineID:         "naabu",
+		EngineRunID:      "run-opaque-legacy-many",
+		ExecutionAttempt: 1,
+		FrozenGrants: []launcherV2FrozenGrant{{
+			ScopeGrantID: "grant-a",
+			Addresses:    []string{"192.0.2.10"},
+			Ports:        append([]uint16(nil), document.Assets[0].Grants[0].ExternalScope.Ports...),
+		}},
+		RequestedWorkUnits: make([]launcherV2PlannedUnit, maxLauncherCurrentUnits+1),
+	}
+	for index := range plan.RequestedWorkUnits {
+		plan.RequestedWorkUnits[index] = launcherV2PlannedUnit{
+			UnitID: fmt.Sprintf("wu_%032x", index+1), ScopeSHA256: fmt.Sprintf("%064x", index+1),
+			GrantIndex: 0, AddressStart: 0, AddressLen: 1, PortStart: uint32(index), PortLen: 1,
+			EndpointPairCount: 1, ConservativeDeadlineSeconds: deadline,
+		}
+	}
+
+	materialized, err := materializeLauncherV2Plan(plan, "naabu", units)
+	if err != nil || len(materialized) != maxLauncherCurrentUnits+1 {
+		t.Fatalf("legacy launcher rejected 129 disjoint historical units: units=%d err=%v", len(materialized), err)
+	}
+	journalRoot := t.TempDir()
+	journal, err := createLauncherV2Journal(journalRoot, plan, &launcherV2ByteBudget{})
+	if err != nil {
+		t.Fatalf("legacy journal rejected 129 requested units: %v", err)
+	}
+	for _, unit := range plan.RequestedWorkUnits {
+		if err := journal.appendAttempt(launcherV2AttemptFinished{
+			RecordType: "attempt_finished", UnitID: unit.UnitID, ScopeSHA256: unit.ScopeSHA256,
+			Attempt: plan.ExecutionAttempt, Outcome: "failed",
+		}); err != nil {
+			t.Fatalf("legacy journal rejected a plan-bounded terminal record: %v", err)
+		}
+	}
+	if err := journal.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if records := launcherV2Records(t, journalRoot); len(records) != 1+len(plan.RequestedWorkUnits) {
+		t.Fatalf("legacy journal record bound drifted: got %d want %d", len(records), 1+len(plan.RequestedWorkUnits))
+	}
+
+	tooMany := cloneLauncherV2TestPlan(t, plan)
+	tooMany.RequestedWorkUnits = make([]launcherV2PlannedUnit, maxLauncherLegacyUnits+1)
+	if _, err := materializeLauncherV2Plan(tooMany, "naabu", units); err == nil {
+		t.Fatal("legacy launcher accepted more than 512 requested units")
+	}
+	if journal, err := createLauncherV2Journal(t.TempDir(), tooMany, &launcherV2ByteBudget{}); err == nil {
+		_ = journal.file.Close()
+		t.Fatal("legacy journal accepted more than 512 requested units")
+	}
+}
+
 func TestLauncherV2RejectsAlteredCorpusSliceDeadlineOverlapAndDuplicates(t *testing.T) {
 	units := launcherV2TestUnits(t, time.Now().UTC())
 	valid := launcherV2TestPlan(1,
@@ -879,6 +1066,65 @@ func TestLauncherV2RejectsAlteredCorpusSliceDeadlineOverlapAndDuplicates(t *test
 	}
 }
 
+func TestLauncherAllowsCrossGrantPartialOverlapAsExactEndpointUnion(t *testing.T) {
+	now := time.Now().UTC()
+	document := fixtureDocument("naabu", now)
+	document.Assets[0].Grants[0].ExternalScope.Ports = []uint16{80, 443}
+	document.Assets[1].Grants[0].ExternalScope.Ports = []uint16{443, 8443}
+	document.Assets[1].Grants[0].ResolvedAddresses = []string{"192.0.2.10"}
+	units, err := validateAndPlan(document, "naabu", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline, err := launcherV2ConservativeDeadlineSeconds(
+		document.Assets[0].Grants[0].ExternalScope.RatePolicy,
+		2,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &launcherV2Plan{
+		SchemaVersion:    launcherPlanCurrentVersion,
+		EngineID:         "naabu",
+		EngineRunID:      "cross-grant-partial-overlap",
+		ExecutionAttempt: 1,
+		FrozenGrants: []launcherV2FrozenGrant{
+			{ScopeGrantID: "grant-a", Addresses: []string{"192.0.2.10"}, Ports: []uint16{80, 443}},
+			{ScopeGrantID: "grant-b", Addresses: []string{"192.0.2.10"}, Ports: []uint16{443, 8443}},
+		},
+		RequestedWorkUnits: []launcherV2PlannedUnit{
+			{
+				UnitID: "wu_33333333333333333333333333333333", ScopeSHA256: strings.Repeat("3", 64),
+				GrantIndex: 0, AddressStart: 0, AddressLen: 1, PortStart: 0, PortLen: 2,
+				EndpointPairCount: 2, ConservativeDeadlineSeconds: deadline,
+			},
+			{
+				UnitID: "wu_44444444444444444444444444444444", ScopeSHA256: strings.Repeat("4", 64),
+				GrantIndex: 1, AddressStart: 0, AddressLen: 1, PortStart: 0, PortLen: 2,
+				EndpointPairCount: 2, ConservativeDeadlineSeconds: deadline,
+			},
+		},
+	}
+	materialized, err := materializeLauncherV2Plan(plan, "naabu", units)
+	if err != nil {
+		t.Fatalf("cross-grant partial overlap was rejected: %v", err)
+	}
+	union := make(map[string]struct{})
+	for _, unit := range materialized {
+		for _, address := range unit.ResolvedAddresses {
+			for _, port := range unit.Grant.Ports {
+				union[address+":"+strconv.Itoa(int(port))] = struct{}{}
+			}
+		}
+	}
+	want := map[string]struct{}{
+		"192.0.2.10:80": {}, "192.0.2.10:443": {}, "192.0.2.10:8443": {},
+	}
+	if !reflect.DeepEqual(union, want) {
+		t.Fatalf("cross-grant overlap widened or narrowed the exact endpoint union: got %#v want %#v", union, want)
+	}
+}
+
 func TestLauncherV2PlanDecoderRejectsUnknownFieldsAndOversizeInput(t *testing.T) {
 	units := launcherV2TestUnits(t, time.Now().UTC())
 	plan := launcherV2TestPlan(1,
@@ -888,7 +1134,7 @@ func TestLauncherV2PlanDecoderRejectsUnknownFieldsAndOversizeInput(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unknown := bytes.Replace(value, []byte(`{"schema_version":2,`), []byte(`{"schema_version":2,"unexpected":true,`), 1)
+	unknown := bytes.Replace(value, []byte(`{"schema_version":3,`), []byte(`{"schema_version":3,"unexpected":true,`), 1)
 	if bytes.Equal(unknown, value) {
 		t.Fatal("test could not inject an unknown launcher-v2 field")
 	}
@@ -910,8 +1156,14 @@ func TestLauncherV2PlanDecoderRejectsUnknownFieldsAndOversizeInput(t *testing.T)
 }
 
 func TestLauncherV2ReadsTheSharedRustWireFixture(t *testing.T) {
-	units := launcherV2TestUnits(t, time.Now().UTC())
-	path := filepath.Join("testdata", "naabu-launcher-plan-v2.json")
+	document := fixtureDocument("naabu", time.Now().UTC())
+	document.Assets = document.Assets[:1]
+	document.Assets[0].Grants[0].ExternalScope.Ports = []uint16{443}
+	units, err := validateAndPlan(document, "naabu", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join("testdata", "naabu-launcher-plan-v3.json")
 	plan, err := loadLauncherV2Plan(path, "naabu", units)
 	if err != nil {
 		t.Fatalf("shared Rust launcher-v2 fixture was rejected: %v", err)
@@ -927,6 +1179,34 @@ func TestLauncherV2ReadsTheSharedRustWireFixture(t *testing.T) {
 		!reflect.DeepEqual(materialized[0].ResolvedAddresses, []string{"192.0.2.10"}) ||
 		!reflect.DeepEqual(materialized[0].Grant.Ports, []uint16{443}) {
 		t.Fatalf("shared fixture did not preserve the exact first rectangle: %#v", materialized)
+	}
+}
+
+func TestLauncherReadsFrozenLegacyV2FixtureWithoutChangingItsBytes(t *testing.T) {
+	path := filepath.Join("testdata", "naabu-launcher-plan-v2.json")
+	fixture, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(fixture)), "855eedf40c787b2d31a75b5bb9a33665afca087dd768028980eddd1baeb2f844"; got != want {
+		t.Fatalf("legacy launcher fixture digest drifted: got %s want %s", got, want)
+	}
+	units := launcherV2TestUnits(t, time.Now().UTC())
+	plan, err := loadLauncherV2Plan(path, "naabu", units)
+	if err != nil {
+		t.Fatalf("frozen legacy launcher fixture was rejected: %v", err)
+	}
+	materialized, err := materializeLauncherV2Plan(plan, "naabu", units)
+	if err != nil {
+		t.Fatalf("frozen legacy launcher fixture could not be materialized: %v", err)
+	}
+	if plan.SchemaVersion != launcherPlanLegacyVersion || len(plan.FrozenGrants) != 2 {
+		t.Fatalf("legacy fixture identity drifted: %#v", plan)
+	}
+	if len(materialized) != 1 ||
+		!reflect.DeepEqual(materialized[0].ResolvedAddresses, []string{"192.0.2.10"}) ||
+		!reflect.DeepEqual(materialized[0].Grant.Ports, []uint16{443}) {
+		t.Fatalf("legacy fixture did not preserve its exact selected rectangle: %#v", materialized)
 	}
 }
 
@@ -957,7 +1237,10 @@ func TestLauncherV2KeepsCompletedSiblingWhenLaterUnitFails(t *testing.T) {
 	}
 	err := runNaabuLauncherV2(outputRoot, temporaryRoot, plan, units, "172.30.0.1:1080", nil, now, runner)
 	if err == nil {
-		t.Fatal("partial launcher-v2 invocation returned success")
+		t.Fatal("partial launcher-v2 invocation lost its diagnostic outcome")
+	}
+	if !launcherOutcomeIsProcessSuccess(err) {
+		t.Fatalf("a closed partial journal must remain available to the host: %v", err)
 	}
 	if !strings.Contains(err.Error(), "unit-000001 scanner: fixture failure") {
 		t.Fatalf("bounded technical diagnostics lost the actionable scanner error: %v", err)
@@ -1028,7 +1311,9 @@ func TestLauncherV2PreservesValidObservationsFromFailedScannerAsTestedPartial(t 
 	}
 	outputRoot := t.TempDir()
 	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), plan, units, "172.30.0.1:1080", nil, now, runner); err == nil {
-		t.Fatal("tested-partial invocation did not retain its non-success process result")
+		t.Fatal("tested-partial invocation lost its diagnostic outcome")
+	} else if !launcherOutcomeIsProcessSuccess(err) {
+		t.Fatalf("tested-partial evidence must reach host normalization: %v", err)
 	}
 	records := launcherV2Records(t, outputRoot)
 	if records[1]["outcome"] != "tested_partial" || records[1]["incomplete_reason"] != "timed_out" || records[1]["final_artifact"] == nil {
@@ -1049,7 +1334,9 @@ func TestLauncherV2DoesNotClaimEmptyInterruptedRunAsTestedPartial(t *testing.T) 
 	}
 	outputRoot := t.TempDir()
 	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), plan, launcherV2TestUnits(t, now), "172.30.0.1:1080", nil, now, runner); err == nil {
-		t.Fatal("empty interrupted invocation returned success")
+		t.Fatal("empty interrupted invocation lost its diagnostic outcome")
+	} else if !launcherOutcomeIsProcessSuccess(err) {
+		t.Fatalf("an exact timed-out outcome must reach host continuation: %v", err)
 	}
 	record := launcherV2Records(t, outputRoot)[1]
 	if record["outcome"] != "timed_out" || record["final_artifact"] != nil || record["incomplete_reason"] != nil {
@@ -1073,7 +1360,9 @@ func TestLauncherV2QuarantinesExactRawOutputWhenNormalizationFails(t *testing.T)
 	}
 	outputRoot := t.TempDir()
 	if err := runNaabuLauncherV2(outputRoot, t.TempDir(), plan, units, "172.30.0.1:1080", nil, now, runner); err == nil {
-		t.Fatal("malformed evidence did not fail its work unit")
+		t.Fatal("malformed evidence did not retain its diagnostic outcome")
+	} else if !launcherOutcomeIsProcessSuccess(err) {
+		t.Fatalf("a journaled failed unit must still reach host continuation: %v", err)
 	}
 	records := launcherV2Records(t, outputRoot)
 	if records[1]["outcome"] != "failed" || records[1]["final_artifact"] != nil {
@@ -1082,6 +1371,12 @@ func TestLauncherV2QuarantinesExactRawOutputWhenNormalizationFails(t *testing.T)
 	quarantine := filepath.Join(outputRoot, launcherV2Directory, "quarantine", "unit-000000", "attempt-1.raw.jsonl")
 	if got := mustReadFile(t, quarantine); !bytes.Equal(got, raw) {
 		t.Fatalf("raw quarantine changed scanner bytes: %q", got)
+	}
+}
+
+func TestLauncherFatalErrorsStillUseTheFailureExitContract(t *testing.T) {
+	if launcherOutcomeIsProcessSuccess(errors.New("fatal launcher failure")) {
+		t.Fatal("ordinary launcher errors must retain the nonzero process contract")
 	}
 }
 
@@ -1237,11 +1532,17 @@ func TestLauncherV2IsExplicitlyOptInAndLegacyArgumentsRemainDisabled(t *testing.
 	if err != nil || options != nil {
 		t.Fatalf("legacy launcher unexpectedly enabled v2: %#v %v", options, err)
 	}
-	if _, err := validateLauncherV2Options(launcherV2SchemaVersion, journalPlanMountPath, "httpx"); err == nil {
+	if _, err := validateLauncherV2Options(launcherPlanCurrentVersion, journalPlanMountPath, "naabu"); err == nil {
+		t.Fatal("plan schema version was incorrectly accepted as the journal opt-in")
+	}
+	if _, err := validateLauncherV2Options(launcherJournalSchemaVersion, journalPlanMountPath, "httpx"); err == nil {
 		t.Fatal("launcher-v2 was enabled for an unimplemented engine")
 	}
-	if _, err := validateLauncherV2Options(launcherV2SchemaVersion, "/tmp/untrusted.json", "naabu"); err == nil {
+	if _, err := validateLauncherV2Options(launcherJournalSchemaVersion, "/tmp/untrusted.json", "naabu"); err == nil {
 		t.Fatal("launcher-v2 accepted an arbitrary host path")
+	}
+	if options, err := validateLauncherV2Options(launcherJournalSchemaVersion, journalPlanMountPath, "naabu"); err != nil || options == nil {
+		t.Fatalf("current launcher opt-in was rejected: %#v %v", options, err)
 	}
 }
 

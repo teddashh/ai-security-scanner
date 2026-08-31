@@ -1114,7 +1114,7 @@
         "disk_mb": 256,
         "cpu_millis": 1000,
         "pids": 256,
-        "timeout_seconds": 14400
+        "timeout_seconds": 14461
       },
       "network": {
         "required": true,

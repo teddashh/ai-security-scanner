@@ -12,7 +12,8 @@
 //! empty file, or a process exit code as proof that a work unit was tested.
 
 use crate::domain::{
-    MAX_NAABU_ATTEMPT_REQUESTS, MAX_NAABU_ATTEMPT_RESULT_WORK_UNITS, MAX_NAABU_ATTEMPT_RESULTS,
+    LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, MAX_NAABU_ATTEMPT_REQUESTS,
+    MAX_NAABU_ATTEMPT_RESULT_WORK_UNITS, MAX_NAABU_ATTEMPT_RESULTS,
     NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest,
     NaabuAttemptResult,
 };
@@ -720,7 +721,10 @@ fn validate_cumulative_request(
     request: &NaabuAttemptRequest,
 ) -> Result<(), NaabuCumulativeCoverageError> {
     let attempt = request.execution_attempt;
-    if request.schema_version != NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION {
+    if !matches!(
+        request.schema_version,
+        LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION | NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION
+    ) {
         return Err(invalid_cumulative_request(
             attempt,
             "attempt-request schema version is not supported",
@@ -775,7 +779,13 @@ fn validate_cumulative_request(
         .into_iter()
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    let launcher = plan.launcher_plan_v2(attempt, Some(&selected))?;
+    let launcher = match request.schema_version {
+        LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION => {
+            plan.legacy_launcher_plan_v2(attempt, Some(&selected))?
+        }
+        NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION => plan.launcher_plan_v3(attempt, Some(&selected))?,
+        _ => unreachable!("request schema was validated above"),
+    };
     let bytes = serde_json::to_vec(&launcher).map_err(|_| {
         invalid_cumulative_request(attempt, "launcher plan could not be encoded canonically")
     })?;
@@ -1413,9 +1423,11 @@ mod tests {
         TemplatePolicy, TransportProtocol,
     };
     use crate::naabu_work_plan::{
+        MAX_NAABU_ENDPOINT_PAIRS_PER_ATTEMPT, MAX_NAABU_ENDPOINT_PAIRS_PER_UNIT,
         NaabuAttemptSelection, NaabuWorkPlanIdentity, build_naabu_work_plan, select_naabu_attempt,
     };
     use chrono::{Duration, TimeZone, Utc};
+    use ipnet::IpNet;
     use serde_json::json;
 
     const SCOPE_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1610,7 +1622,7 @@ mod tests {
             .collect::<Vec<_>>();
         let selected = requested_unit_ids.iter().cloned().collect::<BTreeSet<_>>();
         let launcher = plan
-            .launcher_plan_v2(execution_attempt, Some(&selected))
+            .launcher_plan_v3(execution_attempt, Some(&selected))
             .expect("fixture launcher plan");
         NaabuAttemptRequest {
             schema_version: NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
@@ -1731,6 +1743,78 @@ mod tests {
             },
             normalization_complete,
         }
+    }
+
+    #[test]
+    fn cumulative_validation_accepts_a_historically_valid_legacy_aggregate() {
+        let frozen_at = Utc
+            .with_ymd_and_hms(2026, 8, 30, 12, 0, 0)
+            .single()
+            .expect("fixture time");
+        let network = "192.168.65.0/24".parse::<IpNet>().expect("fixture network");
+        let resolved = ResolvedExternalPlan {
+            grant_id: "grant-legacy".into(),
+            case_id: "case-a".into(),
+            asset_id: "asset-a".into(),
+            target: CanonicalTarget::Network(network),
+            resolution: ResolutionSnapshot {
+                hostname: None,
+                addresses: network.hosts().collect(),
+                resolved_at: frozen_at,
+            },
+            ports: (1..=40).collect(),
+            protocol: TransportProtocol::Tcp,
+            activity: ExternalActivity::LowImpactExternal,
+            rate_policy: RatePolicy {
+                requests_per_second: 25,
+                concurrency: 10,
+                timeout_seconds: 3,
+            },
+            template_policy: TemplatePolicy::conservative("not_applicable", Vec::new()),
+            frozen_at,
+            expires_at: frozen_at + Duration::hours(24),
+            allow_sensitive_networks: true,
+        };
+        let plan = build_naabu_work_plan(
+            NaabuWorkPlanIdentity::new("case-a", "run-a", "engine-run-a", frozen_at),
+            &[resolved],
+            None,
+        )
+        .expect("legacy aggregate plan");
+        let aggregate_pairs = plan
+            .work_units
+            .iter()
+            .map(|unit| unit.endpoint_pair_count)
+            .sum::<u64>();
+        assert!(aggregate_pairs > MAX_NAABU_ENDPOINT_PAIRS_PER_ATTEMPT);
+        assert!(
+            plan.work_units
+                .iter()
+                .all(|unit| { unit.endpoint_pair_count <= MAX_NAABU_ENDPOINT_PAIRS_PER_UNIT })
+        );
+
+        let requested_unit_ids = plan
+            .work_units
+            .iter()
+            .map(|unit| unit.unit_id.clone())
+            .collect::<Vec<_>>();
+        let selected = requested_unit_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let launcher = plan
+            .legacy_launcher_plan_v2(1, Some(&selected))
+            .expect("historically valid launcher plan");
+        let request = NaabuAttemptRequest {
+            schema_version: LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+            execution_attempt: 1,
+            requested_unit_ids,
+            launcher_plan_sha256: hex::encode(Sha256::digest(
+                serde_json::to_vec(&launcher).expect("legacy launcher JSON"),
+            )),
+        };
+
+        let cumulative = reduce_naabu_attempt_coverage(&plan, &[request], &[])
+            .expect("legacy request remains valid after schema-3 batching was introduced");
+        assert_eq!(cumulative.summary.not_tested, plan.work_units.len());
+        assert_eq!(cumulative.retryable_unit_ids.len(), plan.work_units.len());
     }
 
     #[test]

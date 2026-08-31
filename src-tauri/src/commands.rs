@@ -8,10 +8,11 @@ use crate::bootstrap::{BootstrapPlan, BootstrapRequest, create_bootstrap_plan};
 use crate::case_service::{
     ArtifactDeletionResult, CaseDeletionResult, CaseExportFormat, DurableExecutionReport,
     ExactRuntimeCleanupSuccess, ExportPreview, FindingGroupRequest, FindingUngroupRequest,
-    FindingWorkflowRequest, LiveProviderDiscoveryOutcome, PersistedPreDispatchTaskOutcome,
-    PersistedPreDispatchTransition, PersistedScanPreflightFailureReason, PlannedEngineExecution,
-    ScanPlan, ScanPlanRequest, ScanReadiness, ScanReadinessBlocker, ScanReadinessNextStep,
-    ScanReadinessState, ScopeApprovalRequest, SourceMutation,
+    FindingWorkflowRequest, LiveProviderDiscoveryOutcome, NaabuLauncherV2CoverageApplyOutcome,
+    NoWorkerNaabuCancellation, PersistedPreDispatchTaskOutcome, PersistedPreDispatchTransition,
+    PersistedScanPreflightFailureReason, PlannedEngineExecution, ScanPlan, ScanPlanRequest,
+    ScanReadiness, ScanReadinessBlocker, ScanReadinessNextStep, ScanReadinessState,
+    ScopeApprovalRequest, SourceMutation,
 };
 use crate::connectors::{
     SNAPSHOT_ARTIFACT_METADATA_KEY, SnapshotArtifactReference, SnapshotConnectorRegistry,
@@ -21,6 +22,9 @@ use crate::demo::build_demo_case;
 use crate::discovery::run_connector;
 use crate::domain::*;
 use crate::error::{AppError, AppResult};
+use crate::execution_coverage::{
+    LAUNCHER_V2_JOURNAL_SCHEMA_VERSION, reduce_naabu_attempt_coverage,
+};
 use crate::export::verify_case_bundle;
 use crate::export::{ExportOptions, RedactionProfile};
 use crate::external_scope::{ExternalScopeGrant, ResolvedExternalPlan, resolve_external_plan};
@@ -39,6 +43,11 @@ use crate::managed_network::{
     resolve_provider_service_plan, validate_provider_service_request_static,
 };
 use crate::managed_runtime::ManagedRuntimeSetupStatus;
+use crate::naabu_work_plan::{
+    NAABU_ENGINE_ID, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION, NaabuAttemptSelection,
+    NaabuLauncherPlanDocument, NaabuWorkPlanIdentity, NaabuWorkPlanV1, build_naabu_work_plan,
+    select_naabu_attempt,
+};
 use crate::source_authorization::discovery::{
     LiveProviderFailure, LiveProviderFailureKind, capture_provider_inventory,
 };
@@ -65,8 +74,9 @@ use crate::{
         ScannerCredentialSet, cleanup_orphaned_credentials,
     },
     job_manager::{
-        DurableCancellationOutcome, EngineJobStatus, JobActivationOutcome, JobCompletion,
-        JobContext, JobKey, JobManagerError, JobSnapshot, TerminalReconciliationOutcome,
+        DurableCancellationOutcome, EngineJobControl, EngineJobStatus, JobActivationOutcome,
+        JobCompletion, JobContext, JobKey, JobManagerError, JobSnapshot,
+        TerminalReconciliationOutcome,
     },
     orchestrator::{
         EngineExecutionRequest, ExecutionCheckpoint, ExecutionReport, ExecutionStage, Orchestrator,
@@ -75,7 +85,8 @@ use crate::{
 };
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
@@ -354,8 +365,38 @@ where
                         orphan_credentials_removed,
                     },
                 ) {
-                    Ok(_) => {
+                    Ok(recovered) => {
                         summary.reconciled = summary.reconciled.saturating_add(1);
+                        let captured_attempt = recovered
+                            .scan_runs
+                            .iter()
+                            .find(|run| run.id == obligation.run_id)
+                            .and_then(|run| {
+                                run.engine_runs.iter().find(|engine_run| {
+                                    engine_run.id == obligation.engine_run.id
+                                        && engine_run.phase == "captured_awaiting_adapter"
+                                })
+                            })
+                            .and_then(|engine_run| engine_run.resume_token.as_deref())
+                            .and_then(|token| ExecutionCheckpoint::from_resume_token(token).ok())
+                            .map(|checkpoint| checkpoint.attempt);
+                        if let Some(attempt) = captured_attempt
+                            && let Err(error) =
+                                state.case_service().resume_naabu_launcher_v2_adaptation(
+                                    &obligation.case_id,
+                                    &obligation.run_id,
+                                    &obligation.engine_run.id,
+                                    attempt,
+                                )
+                        {
+                            summary.details.push(bounded_text(
+                                &format!(
+                                    "{} / {}: captured evidence and cleanup were recovered, but result organization remains partial: {error}",
+                                    obligation.run_id, obligation.engine_run.id
+                                ),
+                                2_000,
+                            ));
+                        }
                     }
                     Err(error) => {
                         summary.pending = summary.pending.saturating_add(1);
@@ -3297,13 +3338,324 @@ fn durable_run_needs_background_cleanup(run: &ScanRun) -> bool {
     })
 }
 
+/// Identifies the exact durable handoff where one Naabu batch has already
+/// been normalized but the worker disappeared before it could either plan the
+/// next batch or observe Cancel. `PartiallyCompleted` is ordinarily terminal,
+/// so this narrow state must be recognized before the generic final-outcome
+/// shortcut or Cancel would silently leave unfinished work unchanged.
+fn unfinished_clean_naabu_between_batch_cancel_target(
+    run: &ScanRun,
+) -> AppResult<Option<(Id, u32)>> {
+    let mut target = None;
+    for engine_run in &run.engine_runs {
+        if engine_run.engine_id != NAABU_ENGINE_ID
+            || engine_run.status != EngineRunStatus::PartiallyCompleted
+            || engine_run.phase != "captured_awaiting_adapter"
+            || engine_run.error_code.is_some()
+            || engine_run.error_message.is_some()
+        {
+            continue;
+        }
+        let (Some(request), Some(result)) = (
+            engine_run.naabu_attempt_requests.last(),
+            engine_run.naabu_attempt_results.last(),
+        ) else {
+            continue;
+        };
+        if request.execution_attempt != result.execution_attempt || !result.normalization_complete {
+            continue;
+        }
+        let plan = engine_run.naabu_work_plan.as_ref().ok_or_else(|| {
+            AppError::Conflict(
+                "normalized Naabu work is missing its immutable work plan before cancellation"
+                    .into(),
+            )
+        })?;
+        let cumulative = reduce_naabu_attempt_coverage(
+            plan,
+            &engine_run.naabu_attempt_requests,
+            &engine_run.naabu_attempt_results,
+        )
+        .map_err(|error| {
+            AppError::Conflict(format!(
+                "saved Naabu result history is invalid before cancellation: {error}"
+            ))
+        })?;
+        if cumulative.fully_complete {
+            continue;
+        }
+        if target.is_some() {
+            return Err(AppError::Conflict(
+                "scan run contains more than one unfinished Naabu between-batch handoff".into(),
+            ));
+        }
+        target = Some((engine_run.id.clone(), request.execution_attempt));
+    }
+    Ok(target)
+}
+
+/// Returns only tasks whose exact saved checkpoint proves that no scanner,
+/// target connection, container, managed network, or captured evidence is
+/// active. The CaseService transition revalidates the same identities before
+/// committing all selected siblings together.
+fn locally_cancellable_resource_free_engine_ids(run: &ScanRun) -> Vec<Id> {
+    run.engine_runs
+        .iter()
+        .filter(|engine_run| {
+            matches!(
+                engine_run.status,
+                EngineRunStatus::Queued | EngineRunStatus::Preparing | EngineRunStatus::Paused
+            ) && matches!(
+                engine_run.phase.as_str(),
+                "queued"
+                    | "queued_for_resume"
+                    | "queued_for_next_phase"
+                    | "preflight_preparing"
+                    | "dispatch_activated"
+            ) && engine_run.finished_at.is_none()
+        })
+        .filter_map(|engine_run| {
+            let checkpoint = engine_run
+                .resume_token
+                .as_deref()
+                .and_then(|token| ExecutionCheckpoint::from_resume_token(token).ok())?;
+            (checkpoint.case_id == run.case_id
+                && checkpoint.scan_run_id == run.id
+                && checkpoint.engine_run_id == engine_run.id
+                && checkpoint.engine_id == engine_run.engine_id
+                && checkpoint.attempt > 0
+                && checkpoint.stage == ExecutionStage::Planned
+                && checkpoint.container_name.is_none()
+                && checkpoint.scope_sha256.is_none()
+                && checkpoint.launcher_plan_sha256.is_none()
+                && checkpoint.artifact_ids.is_empty()
+                && checkpoint.cleanup_completed
+                && checkpoint.last_error.is_none()
+                && checkpoint.runtime_command_provenance.is_none()
+                && checkpoint.runtime_provider.is_none()
+                && checkpoint.managed_network.is_none())
+            .then(|| engine_run.id.clone())
+        })
+        .collect()
+}
+
 enum NoWorkerCancelAdmission {
     LiveAppeared,
     TerminalAppeared(JobSnapshot),
     ManagedLocalhost(AssessmentCase),
     CleanupPending(AssessmentCase),
+    DurableUnchanged(AssessmentCase),
     DurableFinal(AssessmentCase),
     Cancelled(AssessmentCase),
+}
+
+struct NoWorkerCancelResolution {
+    admission: NoWorkerCancelAdmission,
+    needs_cleanup: bool,
+}
+
+fn apply_no_worker_durable_cancel(
+    service: &crate::case_service::CaseService<'_>,
+    case_id: &str,
+    run_id: &str,
+    durable: AssessmentCase,
+) -> AppResult<NoWorkerCancelAdmission> {
+    let run = durable
+        .scan_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
+    let between_batch = unfinished_clean_naabu_between_batch_cancel_target(run)?;
+    let resource_free_ids = locally_cancellable_resource_free_engine_ids(run);
+    let needs_cleanup = durable_run_needs_background_cleanup(run);
+    if !resource_free_ids.is_empty() || between_batch.is_some() {
+        let naabu =
+            between_batch.map(
+                |(engine_run_id, completed_attempt)| NoWorkerNaabuCancellation {
+                    engine_run_id,
+                    completed_attempt,
+                },
+            );
+        let current = service.cancel_no_worker_scan_work(
+            case_id,
+            run_id,
+            &resource_free_ids,
+            naabu.as_ref(),
+        )?;
+        return Ok(NoWorkerCancelAdmission::Cancelled(current));
+    }
+
+    let current_run = durable
+        .scan_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
+    if durable_run_has_final_outcome(current_run) {
+        return Ok(NoWorkerCancelAdmission::DurableFinal(durable));
+    }
+    if needs_cleanup {
+        return Ok(NoWorkerCancelAdmission::CleanupPending(durable));
+    }
+
+    // A malformed, ambiguous, runtime-bearing, or evidence-bearing checkpoint
+    // is not safe to relabel locally. Preserve it for reconciliation and keep
+    // the UI in progress instead of inventing a finished cancellation.
+    Ok(NoWorkerCancelAdmission::DurableUnchanged(durable))
+}
+
+fn coordinate_no_worker_cancel(
+    state: &AppState,
+    key: &JobKey,
+) -> AppResult<NoWorkerCancelResolution> {
+    state.jobs.coordinate_admission(|| {
+        match state.jobs.snapshot(key) {
+            Some(snapshot) if snapshot.is_terminal() => {
+                return Ok(NoWorkerCancelResolution {
+                    admission: NoWorkerCancelAdmission::TerminalAppeared(snapshot),
+                    needs_cleanup: false,
+                });
+            }
+            Some(_) => {
+                return Ok(NoWorkerCancelResolution {
+                    admission: NoWorkerCancelAdmission::LiveAppeared,
+                    needs_cleanup: false,
+                });
+            }
+            None => {}
+        }
+
+        let service = state.case_service();
+        let durable = service.show_case(&key.case_id)?;
+        let run = durable
+            .scan_runs
+            .iter()
+            .find(|run| run.id == key.scan_run_id)
+            .ok_or_else(|| {
+                AppError::InvalidRequest(format!("scan run not found: {}", key.scan_run_id))
+            })?;
+        let admission = if run_is_exact_localhost_quick_scan(run) {
+            if durable_run_has_final_outcome(run) {
+                NoWorkerCancelAdmission::DurableFinal(durable)
+            } else {
+                let prepared =
+                    prepared_localhost_quick_scan_for_job(&durable, key)?.ok_or_else(|| {
+                        AppError::Internal("localhost task identity disappeared".into())
+                    })?;
+                NoWorkerCancelAdmission::ManagedLocalhost(record_localhost_cancelled(
+                    &state.storage,
+                    state.engines.manifests(),
+                    &prepared,
+                    true,
+                )?)
+            }
+        } else {
+            apply_no_worker_durable_cancel(&service, &key.case_id, &key.scan_run_id, durable)?
+        };
+        let needs_cleanup = match &admission {
+            NoWorkerCancelAdmission::ManagedLocalhost(case)
+            | NoWorkerCancelAdmission::CleanupPending(case)
+            | NoWorkerCancelAdmission::DurableUnchanged(case)
+            | NoWorkerCancelAdmission::DurableFinal(case)
+            | NoWorkerCancelAdmission::Cancelled(case) => case
+                .scan_runs
+                .iter()
+                .find(|run| run.id == key.scan_run_id)
+                .is_some_and(durable_run_needs_background_cleanup),
+            NoWorkerCancelAdmission::LiveAppeared
+            | NoWorkerCancelAdmission::TerminalAppeared(_) => false,
+        };
+        Ok(NoWorkerCancelResolution {
+            admission,
+            needs_cleanup,
+        })
+    })
+}
+
+fn emit_cancel_resolution(
+    app: &AppHandle,
+    case: &AssessmentCase,
+    run_id: &str,
+    needs_cleanup: bool,
+) -> AppResult<()> {
+    let terminal = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .is_some_and(durable_run_has_final_outcome)
+        && !needs_cleanup;
+    emit(
+        app,
+        if terminal {
+            RUN_FINISHED_EVENT
+        } else {
+            RUN_PROGRESS_EVENT
+        },
+        case,
+    )
+}
+
+fn finish_no_worker_cancel_resolution(
+    app: &AppHandle,
+    state: &AppState,
+    key: &JobKey,
+    resolution: NoWorkerCancelResolution,
+    signal_live_if_appeared: bool,
+) -> AppResult<AssessmentCase> {
+    let needs_cleanup = resolution.needs_cleanup;
+    if needs_cleanup {
+        schedule_exact_runtime_cleanup_reconciliation(
+            app,
+            key.case_id.clone(),
+            key.scan_run_id.clone(),
+        );
+    }
+    match resolution.admission {
+        NoWorkerCancelAdmission::TerminalAppeared(snapshot) => {
+            match state.jobs.reconcile_terminal_snapshot(&snapshot, || {
+                persist_terminal_job_state_reconciliation(state, key, &snapshot)
+            })? {
+                TerminalReconciliationOutcome::Reconciled(_)
+                | TerminalReconciliationOutcome::NotCurrent => {
+                    let next = coordinate_no_worker_cancel(state, key)?;
+                    finish_no_worker_cancel_resolution(app, state, key, next, false)
+                }
+                TerminalReconciliationOutcome::InProgress => {
+                    let case = state.case_service().show_case(&key.case_id)?;
+                    let _ = emit(app, RUN_PROGRESS_EVENT, &case);
+                    Ok(case)
+                }
+            }
+        }
+        NoWorkerCancelAdmission::LiveAppeared if signal_live_if_appeared => {
+            signal_live_cancel_or_preserve_terminal(app, state, key)
+        }
+        NoWorkerCancelAdmission::LiveAppeared => {
+            // A same-key generation appeared only after the prior live worker
+            // vanished. Publish one bounded cancellation signal; if it also
+            // crosses terminal now, the retained snapshot remains available
+            // to the ordinary background reconciler.
+            match state.jobs.cancel(key) {
+                Ok(_) | Err(JobManagerError::CancellationPending(_)) => {}
+                Err(JobManagerError::LiveJobNotFound(_)) => {}
+                Err(error) => {
+                    return Err(AppError::Runtime(format!(
+                        "replacement scan cancellation could not be signalled: {error}"
+                    )));
+                }
+            }
+            let case = state.case_service().show_case(&key.case_id)?;
+            let _ = emit(app, RUN_PROGRESS_EVENT, &case);
+            Ok(case)
+        }
+        NoWorkerCancelAdmission::ManagedLocalhost(case)
+        | NoWorkerCancelAdmission::CleanupPending(case)
+        | NoWorkerCancelAdmission::DurableUnchanged(case)
+        | NoWorkerCancelAdmission::DurableFinal(case)
+        | NoWorkerCancelAdmission::Cancelled(case) => {
+            let _ = emit_cancel_resolution(app, &case, &key.scan_run_id, needs_cleanup);
+            Ok(case)
+        }
+    }
 }
 
 fn signal_live_cancel_or_preserve_terminal(
@@ -3319,15 +3671,11 @@ fn signal_live_cancel_or_preserve_terminal(
         Ok(_) | Err(JobManagerError::CancellationPending(_)) => {}
         Err(JobManagerError::LiveJobNotFound(_)) => {
             // The worker crossed its terminal boundary after the caller's
-            // live snapshot. Never let a late Cancel overwrite that report or
-            // checkpoint. Reconcile the retained exact generation when it is
-            // still visible; otherwise its callback has already saved and
-            // acknowledged it.
-            if let Some(snapshot) = state.jobs.snapshot(key)
-                && snapshot.is_terminal()
-            {
-                schedule_exact_terminal_reconciliation(app, key.clone(), snapshot);
-            }
+            // live snapshot. Re-enter the exact admission boundary: a clean
+            // normalized between-batch handoff is durable user-cancellable
+            // work, while all other terminal truth remains authoritative.
+            let resolution = coordinate_no_worker_cancel(state, key)?;
+            return finish_no_worker_cancel_resolution(app, state, key, resolution, false);
         }
         Err(error) => {
             return Err(AppError::Runtime(format!(
@@ -3539,92 +3887,29 @@ pub fn cancel_scan(
         .map_err(|error| AppError::InvalidRequest(error.to_string()))?;
     match state.jobs.snapshot(&key) {
         Some(snapshot) if snapshot.is_terminal() => {
-            // The worker has already produced the authoritative outcome. Its
-            // exact retained generation must be persisted before any user
-            // transition; scheduling that work also keeps cleanup off this
-            // latency-sensitive command path.
-            schedule_exact_terminal_reconciliation(&app, key, snapshot);
-            let case = service.show_case(&case_id)?;
-            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
-            return Ok(case);
+            // Claim and persist authoritative worker truth first, without
+            // cleanup or events. Only after that exact generation is either
+            // acknowledged or already reconciled may this same Cancel close
+            // work that is still durably unfinished.
+            match state.jobs.reconcile_terminal_snapshot(&snapshot, || {
+                persist_terminal_job_state_reconciliation(&state, &key, &snapshot)
+            })? {
+                TerminalReconciliationOutcome::Reconciled(_)
+                | TerminalReconciliationOutcome::NotCurrent => {}
+                TerminalReconciliationOutcome::InProgress => {
+                    let case = service.show_case(&case_id)?;
+                    let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
+                    return Ok(case);
+                }
+            }
         }
         Some(_) => {
             return signal_live_cancel_or_preserve_terminal(&app, &state, &key);
         }
         None => {}
     }
-
-    // A concurrent Resume/Start uses this same short admission boundary. The
-    // exact second snapshot prevents a local durable Cancel from racing a
-    // newly registered worker after the optimistic no-worker observation.
-    let admission = state.jobs.coordinate_admission(|| {
-        match state.jobs.snapshot(&key) {
-            Some(snapshot) if snapshot.is_terminal() => {
-                return Ok(NoWorkerCancelAdmission::TerminalAppeared(snapshot));
-            }
-            Some(_) => return Ok(NoWorkerCancelAdmission::LiveAppeared),
-            None => {}
-        }
-
-        let durable = service.show_case(&case_id)?;
-        let run = durable
-            .scan_runs
-            .iter()
-            .find(|run| run.id == run_id)
-            .ok_or_else(|| AppError::InvalidRequest(format!("scan run not found: {run_id}")))?;
-        if run_is_exact_localhost_quick_scan(run) {
-            if durable_run_has_final_outcome(run) {
-                return Ok(NoWorkerCancelAdmission::DurableFinal(durable));
-            }
-            let prepared = prepared_localhost_quick_scan_for_job(&durable, &key)?
-                .ok_or_else(|| AppError::Internal("localhost task identity disappeared".into()))?;
-            let cancelled = record_localhost_cancelled(
-                &state.storage,
-                state.engines.manifests(),
-                &prepared,
-                true,
-            )?;
-            return Ok(NoWorkerCancelAdmission::ManagedLocalhost(cancelled));
-        }
-        if durable_run_needs_background_cleanup(run) {
-            return Ok(NoWorkerCancelAdmission::CleanupPending(durable));
-        }
-        if durable_run_has_final_outcome(run) {
-            return Ok(NoWorkerCancelAdmission::DurableFinal(durable));
-        }
-
-        // A durable queued/paused run with no in-process worker and no exact
-        // cleanup obligation can be closed locally. This transition does not
-        // contact a target or mutate runtime resources.
-        service
-            .cancel_scan(&case_id, &run_id)
-            .map(NoWorkerCancelAdmission::Cancelled)
-    })?;
-
-    match admission {
-        NoWorkerCancelAdmission::LiveAppeared => {
-            signal_live_cancel_or_preserve_terminal(&app, &state, &key)
-        }
-        NoWorkerCancelAdmission::TerminalAppeared(snapshot) => {
-            schedule_exact_terminal_reconciliation(&app, key, snapshot);
-            let case = service.show_case(&case_id)?;
-            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
-            Ok(case)
-        }
-        NoWorkerCancelAdmission::ManagedLocalhost(case) => {
-            let _ = emit(&app, RUN_FINISHED_EVENT, &case);
-            Ok(case)
-        }
-        NoWorkerCancelAdmission::CleanupPending(case) => {
-            schedule_exact_runtime_cleanup_reconciliation(&app, case_id, run_id);
-            let _ = emit(&app, RUN_PROGRESS_EVENT, &case);
-            Ok(case)
-        }
-        NoWorkerCancelAdmission::DurableFinal(case) | NoWorkerCancelAdmission::Cancelled(case) => {
-            let _ = emit(&app, RUN_FINISHED_EVENT, &case);
-            Ok(case)
-        }
-    }
+    let resolution = coordinate_no_worker_cancel(&state, &key)?;
+    finish_no_worker_cancel_resolution(&app, &state, &key, resolution, true)
 }
 
 #[tauri::command]
@@ -4113,6 +4398,266 @@ fn emit_inactive_scan_terminal(app: &AppHandle, case: &AssessmentCase) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableWorkerTaskOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+fn finish_worker_task_from_durable_case(
+    control: &EngineJobControl,
+    execution: &PlannedEngineExecution,
+    applied: &AssessmentCase,
+    captured_stage: Option<&ExecutionStage>,
+) -> DurableWorkerTaskOutcome {
+    let durable_outcome = applied
+        .scan_runs
+        .iter()
+        .find(|run| run.id == execution.scan_run_id)
+        .and_then(|run| {
+            run.engine_runs
+                .iter()
+                .find(|engine_run| engine_run.id == execution.engine_run_id)
+        })
+        .map(|engine_run| (engine_run.status.clone(), engine_run.phase.clone()));
+    match durable_outcome.as_ref() {
+        Some((EngineRunStatus::Completed, _)) => {
+            if control.mark_completed().is_ok() {
+                DurableWorkerTaskOutcome::Completed
+            } else {
+                DurableWorkerTaskOutcome::Failed
+            }
+        }
+        Some((EngineRunStatus::PartiallyCompleted, phase)) if phase != "cleanup_pending" => {
+            if control.mark_completed().is_ok() {
+                DurableWorkerTaskOutcome::Completed
+            } else {
+                DurableWorkerTaskOutcome::Failed
+            }
+        }
+        Some((EngineRunStatus::Cancelled, _)) => {
+            let _ = control.mark_cancelled();
+            DurableWorkerTaskOutcome::Cancelled
+        }
+        _ => {
+            tracing::warn!(
+                case_id = %execution.case_id,
+                scan_run_id = %execution.scan_run_id,
+                engine_run_id = %execution.engine_run_id,
+                captured_stage = ?captured_stage,
+                durable_outcome = ?durable_outcome,
+                "scanner worker ended without a durable completed or cancelled task"
+            );
+            let _ = control.mark_failed();
+            DurableWorkerTaskOutcome::Failed
+        }
+    }
+}
+
+fn is_naabu_launcher_v2_adapter_resume(execution: &PlannedEngineExecution) -> bool {
+    manifest_uses_naabu_launcher_v2(&execution.manifest)
+        && captured_resume_is_runtime_independent(execution)
+        && execution
+            .resume_checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| {
+                checkpoint.engine_id == NAABU_ENGINE_ID
+                    && checkpoint.launcher_plan_sha256.is_some()
+                    && matches!(
+                        checkpoint.stage,
+                        ExecutionStage::CapturedAwaitingAdapter | ExecutionStage::AdaptingArtifacts
+                    )
+            })
+}
+
+fn continued_naabu_launcher_v2_execution(
+    current: &PlannedEngineExecution,
+    case: &AssessmentCase,
+) -> AppResult<PlannedEngineExecution> {
+    if !manifest_uses_naabu_launcher_v2(&current.manifest) {
+        return Err(AppError::InvalidRequest(
+            "only launcher-v2 Naabu work can continue inside one scan job".into(),
+        ));
+    }
+    let run = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == current.scan_run_id && run.case_id == current.case_id)
+        .ok_or_else(|| AppError::Conflict("continued scan run is no longer current".into()))?;
+    let engine_run = run
+        .engine_runs
+        .iter()
+        .find(|engine_run| engine_run.id == current.engine_run_id)
+        .ok_or_else(|| AppError::Conflict("continued scanner task is no longer current".into()))?;
+    if engine_run.engine_id != NAABU_ENGINE_ID
+        || engine_run.status != EngineRunStatus::Queued
+        || engine_run.phase != "queued_for_next_phase"
+        || engine_run.error_code.is_some()
+        || engine_run.error_message.is_some()
+    {
+        return Err(AppError::NotAuthorized(
+            "continued scanner task is not in the exact saved next-phase state".into(),
+        ));
+    }
+    let checkpoint = engine_run
+        .resume_token
+        .as_deref()
+        .map(ExecutionCheckpoint::from_resume_token)
+        .transpose()?
+        .ok_or_else(|| {
+            AppError::Conflict("continued scanner task has no saved checkpoint".into())
+        })?;
+    let expected_attempt = current
+        .attempt
+        .checked_add(1)
+        .ok_or_else(|| AppError::Conflict("scanner attempt sequence overflowed".into()))?;
+    let resource_free = checkpoint.container_name.is_none()
+        && checkpoint.scope_sha256.is_none()
+        && checkpoint.launcher_plan_sha256.is_none()
+        && checkpoint.artifact_ids.is_empty()
+        && checkpoint.cleanup_completed
+        && checkpoint.runtime_command_provenance.is_none()
+        && checkpoint.runtime_provider.is_none()
+        && checkpoint.managed_network.is_none();
+    if checkpoint.case_id != current.case_id
+        || checkpoint.scan_run_id != current.scan_run_id
+        || checkpoint.engine_run_id != current.engine_run_id
+        || checkpoint.engine_id != NAABU_ENGINE_ID
+        || checkpoint.attempt != expected_attempt
+        || checkpoint.stage != ExecutionStage::Planned
+        || checkpoint.last_error.is_some()
+        || !resource_free
+        || !engine_run
+            .naabu_attempt_requests
+            .iter()
+            .any(|request| request.execution_attempt == expected_attempt)
+    {
+        return Err(AppError::NotAuthorized(
+            "continued scanner task does not match its exact resource-free saved request".into(),
+        ));
+    }
+
+    let mut next = current.clone();
+    next.attempt = expected_attempt;
+    next.resume_checkpoint = Some(checkpoint);
+    next.naabu_work_plan = engine_run.naabu_work_plan.clone();
+    Ok(next)
+}
+
+#[derive(Debug)]
+enum NaabuPostBatchSettlement {
+    NotApplicable,
+    Cancelled(AssessmentCase),
+    ContinuationPlanned(AssessmentCase),
+    TerminalPartial(AssessmentCase),
+    WorkComplete,
+}
+
+fn clean_normalized_naabu_batch_awaits_continuation(
+    case: &AssessmentCase,
+    execution: &PlannedEngineExecution,
+) -> bool {
+    case.scan_runs
+        .iter()
+        .find(|run| run.id == execution.scan_run_id && run.case_id == execution.case_id)
+        .and_then(|run| {
+            run.engine_runs
+                .iter()
+                .find(|engine_run| engine_run.id == execution.engine_run_id)
+        })
+        .is_some_and(|engine_run| {
+            engine_run.engine_id == NAABU_ENGINE_ID
+                && engine_run.status == EngineRunStatus::PartiallyCompleted
+                && engine_run.phase == "captured_awaiting_adapter"
+                && engine_run.error_code.is_none()
+                && engine_run.error_message.is_none()
+                && engine_run
+                    .naabu_attempt_requests
+                    .last()
+                    .is_some_and(|request| request.execution_attempt == execution.attempt)
+                && engine_run
+                    .naabu_attempt_results
+                    .last()
+                    .is_some_and(|result| {
+                        result.execution_attempt == execution.attempt
+                            && result.normalization_complete
+                    })
+        })
+}
+
+/// Makes the between-batch decision beneath the same per-job coordinator used
+/// by Cancel. If cancellation was already published, its durable lifecycle
+/// transition is saved instead of planning another attempt. If it arrives
+/// afterward, the newly saved resource-free attempt is cancelled by the next
+/// worker iteration before target contact.
+fn settle_clean_naabu_launcher_v2_batch(
+    state: &AppState,
+    context: &JobContext,
+    execution: &PlannedEngineExecution,
+    durable: &AssessmentCase,
+) -> AppResult<NaabuPostBatchSettlement> {
+    if !manifest_uses_naabu_launcher_v2(&execution.manifest)
+        || !clean_normalized_naabu_batch_awaits_continuation(durable, execution)
+    {
+        return Ok(NaabuPostBatchSettlement::NotApplicable);
+    }
+
+    context.coordinate_durable_write(|| {
+        if context.is_cancelled() {
+            state
+                .case_service()
+                .cancel_naabu_launcher_v2_remaining_work(
+                    &execution.case_id,
+                    &execution.scan_run_id,
+                    &execution.engine_run_id,
+                    execution.attempt,
+                )
+                .map(NaabuPostBatchSettlement::Cancelled)
+        } else {
+            let next = state
+                .case_service()
+                .plan_next_naabu_launcher_v2_attempt(
+                    &execution.case_id,
+                    &execution.scan_run_id,
+                    &execution.engine_run_id,
+                    execution.attempt,
+                )?;
+            let Some(case) = next else {
+                return Ok(NaabuPostBatchSettlement::WorkComplete);
+            };
+            let engine_run = case
+                .scan_runs
+                .iter()
+                .find(|run| {
+                    run.id == execution.scan_run_id && run.case_id == execution.case_id
+                })
+                .and_then(|run| {
+                    run.engine_runs
+                        .iter()
+                        .find(|engine_run| engine_run.id == execution.engine_run_id)
+                })
+                .ok_or_else(|| {
+                    AppError::Conflict(
+                        "Naabu continuation result lost its exact durable engine run".into(),
+                    )
+                })?;
+            match (&engine_run.status, engine_run.phase.as_str()) {
+                (EngineRunStatus::Queued, "queued_for_next_phase") => {
+                    Ok(NaabuPostBatchSettlement::ContinuationPlanned(case))
+                }
+                (EngineRunStatus::PartiallyCompleted, "results_partial") => {
+                    Ok(NaabuPostBatchSettlement::TerminalPartial(case))
+                }
+                _ => Err(AppError::Conflict(
+                    "Naabu continuation produced neither a queued batch nor a terminal partial result"
+                        .into(),
+                )),
+            }
+        }
+    })
+}
+
 fn run_scan_worker(
     app: AppHandle,
     plan: ScanPlan,
@@ -4120,11 +4665,11 @@ fn run_scan_worker(
     context: JobContext,
 ) -> JobCompletion {
     let state = app.state::<AppState>();
-    let artifacts = ArtifactStore::open(state.artifact_root());
     let mut failed = false;
     let mut cancelled = false;
 
-    for execution in plan.executable.clone() {
+    let mut pending_executions = VecDeque::from(plan.executable.clone());
+    while let Some(execution) = pending_executions.pop_front() {
         let Ok(control) = context.engine(&execution.engine_run_id) else {
             failed = true;
             continue;
@@ -4142,6 +4687,92 @@ fn run_scan_worker(
             });
             let _ = control.mark_cancelled();
             cancelled = true;
+            continue;
+        }
+        if is_naabu_launcher_v2_adapter_resume(&execution) {
+            if control.mark_running().is_err() {
+                failed = true;
+                continue;
+            }
+            match context.coordinate_durable_write(|| {
+                state.case_service().resume_naabu_launcher_v2_adaptation(
+                    &execution.case_id,
+                    &execution.scan_run_id,
+                    &execution.engine_run_id,
+                    execution.attempt,
+                )
+            }) {
+                Ok(applied) => {
+                    let _ = emit(&app, RUN_PROGRESS_EVENT, &applied);
+                    let mut durable = applied;
+                    match settle_clean_naabu_launcher_v2_batch(
+                        &state, &context, &execution, &durable,
+                    ) {
+                        Ok(NaabuPostBatchSettlement::Cancelled(cancelled_case)) => {
+                            let _ = emit(&app, RUN_PROGRESS_EVENT, &cancelled_case);
+                            durable = cancelled_case;
+                        }
+                        Ok(NaabuPostBatchSettlement::TerminalPartial(partial_case)) => {
+                            let _ = emit(&app, RUN_PROGRESS_EVENT, &partial_case);
+                            durable = partial_case;
+                        }
+                        Ok(NaabuPostBatchSettlement::ContinuationPlanned(next_case)) => {
+                            match continued_naabu_launcher_v2_execution(&execution, &next_case) {
+                                Ok(next_execution) => {
+                                    let _ = emit(&app, RUN_PROGRESS_EVENT, &next_case);
+                                    pending_executions.push_back(next_execution);
+                                    continue;
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        case_id = %execution.case_id,
+                                        scan_run_id = %execution.scan_run_id,
+                                        engine_run_id = %execution.engine_run_id,
+                                        error = %error,
+                                        "saved next scanner phase could not be reconstructed after result-only resume"
+                                    );
+                                    durable = next_case;
+                                }
+                            }
+                        }
+                        Ok(
+                            NaabuPostBatchSettlement::NotApplicable
+                            | NaabuPostBatchSettlement::WorkComplete,
+                        ) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                case_id = %execution.case_id,
+                                scan_run_id = %execution.scan_run_id,
+                                engine_run_id = %execution.engine_run_id,
+                                execution_attempt = execution.attempt,
+                                error = %error,
+                                "result-only resume stayed partial; saved results remain available"
+                            );
+                            if let Ok(current) = state.case_service().show_case(&execution.case_id)
+                            {
+                                durable = current;
+                            }
+                        }
+                    }
+                    match finish_worker_task_from_durable_case(&control, &execution, &durable, None)
+                    {
+                        DurableWorkerTaskOutcome::Completed => {}
+                        DurableWorkerTaskOutcome::Cancelled => cancelled = true,
+                        DurableWorkerTaskOutcome::Failed => failed = true,
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        case_id = %execution.case_id,
+                        scan_run_id = %execution.scan_run_id,
+                        engine_run_id = %execution.engine_run_id,
+                        error = %error,
+                        "host-only launcher-v2 result resume could not be reconciled"
+                    );
+                    let _ = control.mark_failed();
+                    failed = true;
+                }
+            }
             continue;
         }
         let mut reserved_provider = if execution_requires_provider_capability(&execution) {
@@ -4214,6 +4845,7 @@ fn run_scan_worker(
             continue;
         }
 
+        let artifacts = ArtifactStore::open(state.artifact_root());
         let outcome = match &artifacts {
             Ok(artifacts) if captured_resume_is_runtime_independent(&execution) => {
                 resume_captured_execution(&state, artifacts, &execution)
@@ -4241,26 +4873,74 @@ fn run_scan_worker(
             Ok(report) => {
                 let stage = report.checkpoint.stage.clone();
                 match context.coordinate_durable_write(|| {
-                    state
-                        .case_service()
-                        .apply_execution_report(&execution.case_id, &report)
+                    apply_worker_execution_report(&state, &execution, &report)
                 }) {
                     Ok(applied) => {
-                        let _ = emit(&app, RUN_PROGRESS_EVENT, &applied.case);
-                        match stage {
-                            ExecutionStage::Completed => {
-                                if control.mark_completed().is_err() {
-                                    failed = true;
+                        let _ = emit(&app, RUN_PROGRESS_EVENT, &applied);
+                        let mut durable = applied;
+                        match settle_clean_naabu_launcher_v2_batch(
+                            &state, &context, &execution, &durable,
+                        ) {
+                            Ok(NaabuPostBatchSettlement::Cancelled(cancelled_case)) => {
+                                let _ = emit(&app, RUN_PROGRESS_EVENT, &cancelled_case);
+                                durable = cancelled_case;
+                            }
+                            Ok(NaabuPostBatchSettlement::TerminalPartial(partial_case)) => {
+                                let _ = emit(&app, RUN_PROGRESS_EVENT, &partial_case);
+                                durable = partial_case;
+                            }
+                            Ok(NaabuPostBatchSettlement::ContinuationPlanned(next_case)) => {
+                                match continued_naabu_launcher_v2_execution(&execution, &next_case)
+                                {
+                                    Ok(next_execution) => {
+                                        let _ = emit(&app, RUN_PROGRESS_EVENT, &next_case);
+                                        // Give every independent check its first
+                                        // useful pass before deeper inventory
+                                        // batches continue.
+                                        pending_executions.push_back(next_execution);
+                                        continue;
+                                    }
+                                    Err(error) => {
+                                        tracing::error!(
+                                            case_id = %execution.case_id,
+                                            scan_run_id = %execution.scan_run_id,
+                                            engine_run_id = %execution.engine_run_id,
+                                            error = %error,
+                                            "saved next scanner phase could not be reconstructed"
+                                        );
+                                        durable = next_case;
+                                    }
                                 }
                             }
-                            ExecutionStage::Cancelled => {
-                                let _ = control.mark_cancelled();
-                                cancelled = true;
+                            Ok(
+                                NaabuPostBatchSettlement::NotApplicable
+                                | NaabuPostBatchSettlement::WorkComplete,
+                            ) => {}
+                            Err(error) => {
+                                tracing::warn!(
+                                    case_id = %execution.case_id,
+                                    scan_run_id = %execution.scan_run_id,
+                                    engine_run_id = %execution.engine_run_id,
+                                    execution_attempt = execution.attempt,
+                                    error = %error,
+                                    "scanner phase continuation stopped; saved results remain available"
+                                );
+                                if let Ok(current) =
+                                    state.case_service().show_case(&execution.case_id)
+                                {
+                                    durable = current;
+                                }
                             }
-                            _ => {
-                                let _ = control.mark_failed();
-                                failed = true;
-                            }
+                        }
+                        match finish_worker_task_from_durable_case(
+                            &control,
+                            &execution,
+                            &durable,
+                            Some(&stage),
+                        ) {
+                            DurableWorkerTaskOutcome::Completed => {}
+                            DurableWorkerTaskOutcome::Cancelled => cancelled = true,
+                            DurableWorkerTaskOutcome::Failed => failed = true,
                         }
                     }
                     Err(_) => {
@@ -4304,6 +4984,270 @@ fn run_scan_worker(
     } else {
         JobCompletion::Completed
     }
+}
+
+#[derive(Debug)]
+struct PreparedNaabuLauncherAttempt {
+    work_plan: NaabuWorkPlanV1,
+    request: NaabuAttemptRequest,
+    launcher_plan: NaabuLauncherPlanDocument,
+    gateway_plans: Vec<ResolvedExternalPlan>,
+}
+
+fn manifest_uses_naabu_launcher_v2(manifest: &EngineManifest) -> bool {
+    manifest.id == NAABU_ENGINE_ID
+        && manifest
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.launcher_journal_version)
+            == Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION)
+}
+
+fn apply_worker_execution_report(
+    state: &AppState,
+    execution: &PlannedEngineExecution,
+    report: &DurableExecutionReport,
+) -> AppResult<AssessmentCase> {
+    if !manifest_uses_naabu_launcher_v2(&execution.manifest)
+        || report.checkpoint.launcher_plan_sha256.is_none()
+    {
+        return state
+            .case_service()
+            .apply_execution_report(&execution.case_id, report)
+            .map(|applied| applied.case);
+    }
+
+    let applied = state
+        .case_service()
+        .apply_naabu_launcher_v2_execution_report(&execution.case_id, report)?;
+    let attempt_with_result = match applied.coverage {
+        NaabuLauncherV2CoverageApplyOutcome::Persisted {
+            execution_attempt, ..
+        } => Some(execution_attempt),
+        NaabuLauncherV2CoverageApplyOutcome::ExactReplay {
+            execution_attempt,
+            result_present: true,
+        } => Some(execution_attempt),
+        NaabuLauncherV2CoverageApplyOutcome::EvidencePreserved { .. }
+        | NaabuLauncherV2CoverageApplyOutcome::ExactReplay {
+            result_present: false,
+            ..
+        } => None,
+    };
+    let Some(execution_attempt) = attempt_with_result else {
+        return Ok(applied.case);
+    };
+
+    // Adapter availability is task-local. The atomic report/result is already
+    // durable, so a normalization problem must leave that useful partial
+    // evidence reportable instead of rolling the whole scan back.
+    let service = state.case_service();
+    match service.adapt_and_persist_naabu_attempt(
+        &execution.case_id,
+        &execution.scan_run_id,
+        &execution.engine_run_id,
+        execution_attempt,
+    ) {
+        Ok(_) => service.finish_naabu_launcher_v2_normalization(
+            &execution.case_id,
+            &execution.scan_run_id,
+            &execution.engine_run_id,
+            false,
+        ),
+        Err(error) => {
+            tracing::warn!(
+                case_id = %execution.case_id,
+                scan_run_id = %execution.scan_run_id,
+                engine_run_id = %execution.engine_run_id,
+                execution_attempt,
+                error = %error,
+                "launcher-v2 evidence was saved but trusted normalization remains incomplete"
+            );
+            service.finish_naabu_launcher_v2_normalization(
+                &execution.case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                true,
+            )
+        }
+    }
+}
+
+/// Builds or replays one exact launcher-v2 attempt without contacting a
+/// runtime or target. New work resolves DNS once; resumed work reconstructs
+/// the gateway input from the immutable saved plan and never consults DNS.
+fn prepare_naabu_launcher_attempt(
+    state: &AppState,
+    execution: &PlannedEngineExecution,
+    now: chrono::DateTime<Utc>,
+) -> AppResult<Option<PreparedNaabuLauncherAttempt>> {
+    if !manifest_uses_naabu_launcher_v2(&execution.manifest) {
+        return Ok(None);
+    }
+
+    let case = state.case_service().show_case(&execution.case_id)?;
+    let run = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == execution.scan_run_id)
+        .ok_or_else(|| AppError::InvalidRequest("Naabu scan run not found".into()))?;
+    let engine_run = run
+        .engine_runs
+        .iter()
+        .find(|engine_run| engine_run.id == execution.engine_run_id)
+        .ok_or_else(|| AppError::InvalidRequest("Naabu engine run not found".into()))?;
+    if engine_run.engine_id != NAABU_ENGINE_ID
+        || engine_run.scan_run_id != execution.scan_run_id
+        || run.case_id != execution.case_id
+    {
+        return Err(AppError::NotAuthorized(
+            "launcher-v2 preparation does not belong to the exact Naabu execution".into(),
+        ));
+    }
+
+    let work_plan = if let Some(saved) = engine_run.naabu_work_plan.as_ref() {
+        if execution
+            .naabu_work_plan
+            .as_ref()
+            .is_some_and(|planned| planned != saved)
+        {
+            return Err(AppError::Conflict(
+                "the scheduled Naabu plan differs from the latest durable plan".into(),
+            ));
+        }
+        saved.validate().map_err(|error| {
+            AppError::Conflict(format!("saved Naabu work plan is invalid: {error}"))
+        })?;
+        saved.clone()
+    } else {
+        if execution.naabu_work_plan.is_some() {
+            return Err(AppError::Conflict(
+                "the scheduled Naabu plan is absent from durable case state".into(),
+            ));
+        }
+        let resolved = direct_external_grants(execution, now)?
+            .into_iter()
+            .map(|grant| resolve_external_plan(grant, now))
+            .collect::<AppResult<Vec<_>>>()?;
+        let identity = NaabuWorkPlanIdentity::new(
+            execution.case_id.clone(),
+            execution.scan_run_id.clone(),
+            execution.engine_run_id.clone(),
+            now,
+        );
+        let plan = build_naabu_work_plan(identity, &resolved, None).map_err(|error| {
+            AppError::InvalidRequest(format!("Naabu work could not be divided safely: {error}"))
+        })?;
+        plan
+    };
+
+    let existing_request = engine_run
+        .naabu_attempt_requests
+        .iter()
+        .find(|request| request.execution_attempt == execution.attempt);
+    let (request, launcher_plan) = if let Some(existing) = existing_request {
+        let selected = existing
+            .requested_unit_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if selected.len() != existing.requested_unit_ids.len() {
+            return Err(AppError::Conflict(
+                "saved Naabu launcher request contains duplicate work units".into(),
+            ));
+        }
+        let launcher = match existing.schema_version {
+            LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION => {
+                work_plan.legacy_launcher_plan_v2(execution.attempt, Some(&selected))
+            }
+            NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION => {
+                work_plan.launcher_plan_v3(execution.attempt, Some(&selected))
+            }
+            _ => {
+                return Err(AppError::Conflict(
+                    "saved Naabu launcher request schema is unsupported".into(),
+                ));
+            }
+        }
+        .map_err(|error| {
+            AppError::Conflict(format!("saved Naabu launcher request is invalid: {error}"))
+        })?;
+        let digest = hex::encode(Sha256::digest(serde_json::to_vec(&launcher)?));
+        if digest != existing.launcher_plan_sha256 {
+            return Err(AppError::Conflict(
+                "saved Naabu launcher request digest does not match its immutable work units"
+                    .into(),
+            ));
+        }
+        if existing.schema_version == LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION {
+            return Err(AppError::NotAvailable(
+                "The older Naabu request was preserved and verified, but it cannot be sent through the current bounded network path. Resume the scan so the app can create a current request when no-contact history proves that is safe, or start a new scan."
+                    .into(),
+            ));
+        }
+        (existing.clone(), launcher)
+    } else {
+        let cumulative = reduce_naabu_attempt_coverage(
+            &work_plan,
+            &engine_run.naabu_attempt_requests,
+            &engine_run.naabu_attempt_results,
+        )
+        .map_err(|error| {
+            AppError::Conflict(format!("saved Naabu attempt history is invalid: {error}"))
+        })?;
+        let selected = match select_naabu_attempt(
+            &work_plan,
+            &cumulative.tested_complete_unit_ids,
+            execution.manifest.execution_timeout_seconds(),
+        )
+        .map_err(|error| {
+            AppError::InvalidRequest(format!("Naabu work does not fit this attempt: {error}"))
+        })? {
+            NaabuAttemptSelection::AllTestedComplete => {
+                return Err(AppError::Conflict(
+                    "all frozen Naabu work is already complete; no target contact is required"
+                        .into(),
+                ));
+            }
+            NaabuAttemptSelection::Selected {
+                selected_unit_ids, ..
+            } => selected_unit_ids,
+        };
+        let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
+        let launcher = work_plan
+            .launcher_plan_v3(execution.attempt, Some(&selected_set))
+            .map_err(|error| {
+                AppError::InvalidRequest(format!("Naabu launcher plan is invalid: {error}"))
+            })?;
+        let request = NaabuAttemptRequest {
+            schema_version: NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+            execution_attempt: execution.attempt,
+            requested_unit_ids: selected,
+            launcher_plan_sha256: hex::encode(Sha256::digest(serde_json::to_vec(&launcher)?)),
+        };
+        (request, launcher)
+    };
+
+    let gateway_plans = work_plan
+        .resolved_plans_for_work_units(&request.requested_unit_ids)
+        .map_err(|error| {
+            if engine_run.naabu_work_plan.is_some() {
+                AppError::Conflict(format!(
+                    "saved Naabu attempt gateway projection is invalid: {error}"
+                ))
+            } else {
+                AppError::InvalidRequest(format!(
+                    "Naabu attempt gateway projection is invalid: {error}"
+                ))
+            }
+        })?;
+
+    Ok(Some(PreparedNaabuLauncherAttempt {
+        work_plan,
+        request,
+        launcher_plan,
+        gateway_plans,
+    }))
 }
 
 fn execute_planned_engine(
@@ -4400,6 +5344,33 @@ fn execute_planned_engine(
         None
     };
     let resolved_workspace = resolve_execution_workspace(state, execution)?;
+    if cancellation.is_cancelled() {
+        return Ok(terminal_report(
+            execution,
+            ExecutionStage::Cancelled,
+            "scan cancellation was requested before launcher planning",
+        ));
+    }
+    let prepared_naabu = prepare_naabu_launcher_attempt(state, execution, Utc::now())?;
+    if let Some(prepared) = prepared_naabu.as_ref() {
+        let persisted = job_context.coordinate_durable_write(|| {
+            state.case_service().persist_naabu_attempt_request(
+                &execution.case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                &prepared.work_plan,
+                &prepared.request,
+            )
+        })?;
+        let _ = emit(app, RUN_PROGRESS_EVENT, &persisted);
+        if cancellation.is_cancelled() {
+            return Ok(terminal_report(
+                execution,
+                ExecutionStage::Cancelled,
+                "scan cancellation was requested after the exact work request was saved and before any target contact",
+            ));
+        }
+    }
     let limits = ResourceLimits {
         memory_mb: execution.manifest.estimated_memory_mb.clamp(128, 262_144),
         // `/output` is a bounded host artifact mount, while engines such as
@@ -4409,8 +5380,15 @@ fn execute_planned_engine(
         tmpfs_mb: execution.manifest.estimated_disk_mb.clamp(16, 4_096),
         ..ResourceLimits::default()
     };
-    let mut network_lease =
-        provision_execution_network(state, runtime, execution, provider_context.as_ref())?;
+    let mut network_lease = provision_execution_network(
+        state,
+        runtime,
+        execution,
+        provider_context.as_ref(),
+        prepared_naabu
+            .as_ref()
+            .map(|prepared| prepared.gateway_plans.as_slice()),
+    )?;
     let network_identity = network_lease
         .as_ref()
         .map(ManagedNetworkLease::durable_identity)
@@ -4435,6 +5413,9 @@ fn execute_planned_engine(
                 reconciled_cleanup.as_ref(),
                 &runtime_provenance,
                 runtime_provider,
+                prepared_naabu
+                    .as_ref()
+                    .map(|prepared| prepared.request.launcher_plan_sha256.as_str()),
             ));
         }
     };
@@ -4453,8 +5434,12 @@ fn execute_planned_engine(
         assets: &execution.assets,
         scope_grants: &execution.scope_grants,
         frozen_destinations,
-        naabu_launcher_plan: None,
-        expected_naabu_launcher_plan_sha256: None,
+        naabu_launcher_plan: prepared_naabu
+            .as_ref()
+            .map(|prepared| &prepared.launcher_plan),
+        expected_naabu_launcher_plan_sha256: prepared_naabu
+            .as_ref()
+            .map(|prepared| prepared.request.launcher_plan_sha256.as_str()),
         workspace: resolved_workspace
             .as_ref()
             .map(|workspace| workspace.tree_path.as_path()),
@@ -4489,6 +5474,9 @@ fn execute_planned_engine(
                     reconciled_cleanup.as_ref(),
                     &runtime_provenance,
                     runtime_provider,
+                    prepared_naabu
+                        .as_ref()
+                        .map(|prepared| prepared.request.launcher_plan_sha256.as_str()),
                 ));
             }
         };
@@ -4561,6 +5549,12 @@ fn resume_captured_execution(
     artifacts: &ArtifactStore,
     execution: &PlannedEngineExecution,
 ) -> AppResult<DurableExecutionReport> {
+    if manifest_uses_naabu_launcher_v2(&execution.manifest) {
+        return Err(AppError::Internal(
+            "launcher-v2 captured results must use the dedicated host-only adaptation resume path"
+                .into(),
+        ));
+    }
     let checkpoint = execution.resume_checkpoint.as_ref().ok_or_else(|| {
         AppError::InvalidRequest("captured-artifact resume has no durable checkpoint".into())
     })?;
@@ -4977,6 +5971,24 @@ where
     let now = Utc::now();
     let mut inspected_workspaces = BTreeSet::<(String, String, String)>::new();
     for execution in &plan.executable {
+        if is_naabu_launcher_v2_adapter_resume(execution) {
+            state
+                .case_service()
+                .inspect_naabu_launcher_v2_adaptation_resume(
+                    &execution.case_id,
+                    &execution.scan_run_id,
+                    &execution.engine_run_id,
+                    execution.attempt,
+                )
+                .map_err(|error| {
+                    trace_execution_preflight_failure(
+                        execution,
+                        DesktopExecutionBlocker::CapturedEvidenceUnavailable,
+                        &error,
+                    )
+                })?;
+            continue;
+        }
         if let Some(checkpoint) = execution
             .resume_checkpoint
             .as_ref()
@@ -5032,6 +6044,7 @@ fn provision_execution_network(
     runtime: &ProcessContainerRuntime,
     execution: &PlannedEngineExecution,
     provider_context: Option<&ProviderExecutionContext>,
+    frozen_direct_plans: Option<&[ResolvedExternalPlan]>,
 ) -> AppResult<Option<ManagedNetworkLease>> {
     let direct_external = execution
         .manifest
@@ -5065,6 +6078,14 @@ fn provision_execution_network(
         registry.root(),
     )?;
     if direct_external {
+        if let Some(plans) = frozen_direct_plans {
+            if plans.is_empty() {
+                return Err(AppError::InvalidRequest(
+                    "frozen direct-network execution has no target plan".into(),
+                ));
+            }
+            return controller.provision(&owner, plans, now).map(Some);
+        }
         let plans = direct_external_grants(execution, now)?
             .into_iter()
             .map(|grant| resolve_external_plan(grant, now))
@@ -5722,18 +6743,19 @@ fn checkpoint_for(
     stage: ExecutionStage,
     last_error: Option<String>,
 ) -> ExecutionCheckpoint {
+    let same_attempt_checkpoint = execution
+        .resume_checkpoint
+        .as_ref()
+        .filter(|checkpoint| checkpoint.attempt == execution.attempt);
     let runtime_command_provenance = execution
         .resume_checkpoint
         .as_ref()
+        .filter(|checkpoint| checkpoint.attempt == execution.attempt)
         .and_then(|checkpoint| checkpoint.runtime_command_provenance.clone());
-    let runtime_provider = execution
-        .resume_checkpoint
-        .as_ref()
-        .and_then(|checkpoint| checkpoint.runtime_provider);
-    let managed_network = execution
-        .resume_checkpoint
-        .as_ref()
-        .and_then(|checkpoint| checkpoint.managed_network.clone());
+    let runtime_provider =
+        same_attempt_checkpoint.and_then(|checkpoint| checkpoint.runtime_provider);
+    let managed_network =
+        same_attempt_checkpoint.and_then(|checkpoint| checkpoint.managed_network.clone());
     ExecutionCheckpoint {
         case_id: execution.case_id.clone(),
         scan_run_id: execution.scan_run_id.clone(),
@@ -5829,8 +6851,10 @@ fn terminal_after_prestart_error(
     reconciled_cleanup: Option<&ManagedNetworkCleanupOutcome>,
     runtime_provenance: &RuntimeCommandProvenance,
     runtime_provider: RuntimeProvider,
+    launcher_plan_sha256: Option<&str>,
 ) -> DurableExecutionReport {
     let mut durable = terminal_report(execution, ExecutionStage::Failed, &bounded_error(error));
+    durable.checkpoint.launcher_plan_sha256 = launcher_plan_sha256.map(str::to_owned);
     durable.checkpoint.runtime_command_provenance = Some(runtime_provenance.clone());
     durable.checkpoint.runtime_provider = Some(runtime_provider);
     durable.checkpoint.managed_network = network_identity.cloned();
@@ -5936,18 +6960,55 @@ fn reconcile_terminal_job(
             return Ok(TerminalJobReconciliation::NotCurrent);
         }
     };
-    if let Err(error) = emit(app, RUN_FINISHED_EVENT, &case) {
+    let run = case.scan_runs.iter().find(|run| run.id == key.scan_run_id);
+    let fully_terminal = run.is_some_and(durable_run_has_final_outcome)
+        && !run.is_some_and(durable_run_needs_background_cleanup);
+    let event = if fully_terminal {
+        RUN_FINISHED_EVENT
+    } else {
+        RUN_PROGRESS_EVENT
+    };
+    if let Err(error) = emit(app, event, &case) {
         tracing::warn!(
             error = %error,
             case_id = %key.case_id,
             scan_run_id = %key.scan_run_id,
-            "terminal scan was persisted but its finished event was not emitted"
+            fully_terminal,
+            "terminal worker truth was persisted but its truthful lifecycle event was not emitted"
         );
     }
     Ok(TerminalJobReconciliation::Reconciled)
 }
 
 fn persist_terminal_job_reconciliation(
+    state: &AppState,
+    key: &JobKey,
+    snapshot: &JobSnapshot,
+) -> AppResult<AssessmentCase> {
+    persist_terminal_job_state_reconciliation(state, key, snapshot)?;
+    let cleanup = reconcile_pending_scan_cleanup(
+        state,
+        Some((key.case_id.as_str(), key.scan_run_id.as_str())),
+    )?;
+    if cleanup.reconciled > 0 || cleanup.pending > 0 {
+        tracing::info!(
+            reconciled = cleanup.reconciled,
+            pending = cleanup.pending,
+            case_id = %key.case_id,
+            scan_run_id = %key.scan_run_id,
+            "ordinary terminal runtime cleanup was reconciled after the scan worker stopped"
+        );
+    }
+    let service = state.case_service();
+    service.finalize_verification_if_terminal(&key.case_id, &key.scan_run_id)?;
+    service.show_case(&key.case_id)
+}
+
+/// Persists only the exact terminal-generation lifecycle projection. It does
+/// not emit, execute cleanup, touch a runtime, or contact a target, so Cancel
+/// can synchronously honor authoritative worker truth before deciding which
+/// still-unfinished resource-free work the user may close.
+fn persist_terminal_job_state_reconciliation(
     state: &AppState,
     key: &JobKey,
     snapshot: &JobSnapshot,
@@ -6076,20 +7137,6 @@ fn persist_terminal_job_reconciliation(
         };
         service.apply_execution_report(&key.case_id, &report)?;
     }
-    let cleanup = reconcile_pending_scan_cleanup(
-        state,
-        Some((key.case_id.as_str(), key.scan_run_id.as_str())),
-    )?;
-    if cleanup.reconciled > 0 || cleanup.pending > 0 {
-        tracing::info!(
-            reconciled = cleanup.reconciled,
-            pending = cleanup.pending,
-            case_id = %key.case_id,
-            scan_run_id = %key.scan_run_id,
-            "ordinary terminal runtime cleanup was reconciled after the scan worker stopped"
-        );
-    }
-    service.finalize_verification_if_terminal(&key.case_id, &key.scan_run_id)?;
     service.show_case(&key.case_id)
 }
 
@@ -6560,6 +7607,329 @@ mod tests {
 
         assert!(error.to_string().contains("egress_gateway_unavailable"));
         assert_eq!(service.show_case(&case_id).unwrap().scan_runs.len(), 1);
+    }
+
+    #[test]
+    fn reviewed_launcher_v2_preparation_freezes_and_replays_one_exact_attempt() {
+        let (_directory, state, case_id) = ready_internal_network_state();
+        let service = state.case_service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec![NAABU_ENGINE_ID.into()],
+                },
+            )
+            .expect("persist Naabu run");
+        let mut execution = plan.executable.into_iter().next().expect("Naabu execution");
+        execution.manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: 3_600,
+            },
+            launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
+        });
+
+        let first = prepare_naabu_launcher_attempt(&state, &execution, Utc::now())
+            .expect("prepare launcher attempt")
+            .expect("v2 preparation");
+        assert_eq!(first.request.execution_attempt, 1);
+        assert!(!first.request.requested_unit_ids.is_empty());
+        assert_eq!(
+            first.request.launcher_plan_sha256,
+            hex::encode(Sha256::digest(
+                serde_json::to_vec(&first.launcher_plan).unwrap()
+            ))
+        );
+        assert_eq!(
+            first
+                .work_plan
+                .resolved_plans_for_work_units(&first.request.requested_unit_ids)
+                .unwrap(),
+            first.gateway_plans
+        );
+
+        service
+            .persist_naabu_attempt_request(
+                &execution.case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                &first.work_plan,
+                &first.request,
+            )
+            .expect("persist exact launcher request");
+
+        // Once durable, preparation is reconstructed from the saved plan and
+        // request. It does not need the mutable grant snapshot or a new DNS
+        // lookup to reproduce the exact sidecar and gateway inputs.
+        execution.naabu_work_plan = Some(first.work_plan.clone());
+        execution.scope_grants.clear();
+        let replay = prepare_naabu_launcher_attempt(&state, &execution, Utc::now())
+            .expect("replay launcher attempt")
+            .expect("v2 replay");
+        assert_eq!(replay.request, first.request);
+        assert_eq!(replay.launcher_plan, first.launcher_plan);
+        assert_eq!(replay.gateway_plans, first.gateway_plans);
+
+        let saved = service.show_case(&case_id).expect("saved case");
+        let saved_engine = &saved.scan_runs[0].engine_runs[0];
+        assert_eq!(
+            saved_engine.naabu_work_plan.as_ref(),
+            Some(&first.work_plan)
+        );
+        assert_eq!(saved_engine.naabu_attempt_requests, vec![first.request]);
+    }
+
+    #[test]
+    fn no_worker_cancel_closes_normalized_naabu_work_before_terminal_shortcut() {
+        let (_directory, state, case_id) = ready_internal_network_state();
+        let service = state.case_service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec![NAABU_ENGINE_ID.into()],
+                },
+            )
+            .expect("persist Naabu run");
+        let mut execution = plan.executable.into_iter().next().expect("Naabu execution");
+        execution.manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: 3_600,
+            },
+            launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
+        });
+        let prepared = prepare_naabu_launcher_attempt(&state, &execution, Utc::now())
+            .expect("prepare launcher attempt")
+            .expect("current launcher preparation");
+        service
+            .persist_naabu_attempt_request(
+                &execution.case_id,
+                &execution.scan_run_id,
+                &execution.engine_run_id,
+                &prepared.work_plan,
+                &prepared.request,
+            )
+            .expect("persist exact attempt request");
+
+        // Model the exact process-free handoff left after the latest batch was
+        // normalized but before a continuation worker could be registered.
+        // A not-tested unit keeps the plan honestly unfinished without needing
+        // any fabricated evidence or target contact in this command test.
+        let work_units = prepared
+            .request
+            .requested_unit_ids
+            .iter()
+            .map(|unit_id| {
+                let unit = prepared
+                    .work_plan
+                    .work_units
+                    .iter()
+                    .find(|unit| &unit.unit_id == unit_id)
+                    .unwrap();
+                crate::execution_coverage::WorkUnitCoverage {
+                    unit_id: unit.unit_id.clone(),
+                    scope_sha256: unit.scope_sha256.clone(),
+                    outcome: crate::execution_coverage::WorkUnitOutcome::NotTested,
+                    attempts: vec![],
+                }
+            })
+            .collect::<Vec<_>>();
+        let requested = work_units.len();
+        let normalized_result = NaabuAttemptResult {
+            schema_version: NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
+            execution_attempt: prepared.request.execution_attempt,
+            journal_raw_artifact_id: "saved-naabu-journal-attempt-1".into(),
+            coverage: crate::execution_coverage::ValidatedExecutionCoverage {
+                schema_version: crate::execution_coverage::LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
+                engine_run_id: execution.engine_run_id.clone(),
+                execution_attempt: prepared.request.execution_attempt,
+                recovered_trailing_record: false,
+                validated_artifact_bindings: vec![],
+                unreferenced_final_artifacts: vec![],
+                work_units,
+                summary: crate::execution_coverage::ExecutionCoverageSummary {
+                    requested,
+                    tested_complete: 0,
+                    tested_partial: 0,
+                    failed: 0,
+                    timed_out: 0,
+                    cancelled: 0,
+                    not_tested: requested,
+                    partial: true,
+                    has_usable_results: false,
+                },
+            },
+            normalization_complete: true,
+        };
+
+        let mut stored = service.show_case(&case_id).unwrap();
+        let run = stored
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == execution.scan_run_id)
+            .unwrap();
+        let engine_run = run
+            .engine_runs
+            .iter_mut()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap();
+        let mut checkpoint =
+            ExecutionCheckpoint::from_resume_token(engine_run.resume_token.as_deref().unwrap())
+                .unwrap();
+        checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+        checkpoint.launcher_plan_sha256 = Some(prepared.request.launcher_plan_sha256.clone());
+        checkpoint.cleanup_completed = true;
+        checkpoint.last_error = None;
+        engine_run.status = EngineRunStatus::PartiallyCompleted;
+        engine_run.phase = "captured_awaiting_adapter".into();
+        engine_run.progress_percent = 41;
+        engine_run.finished_at = Some(Utc::now());
+        engine_run.exit_code = Some(0);
+        engine_run.error_code = None;
+        engine_run.error_message = None;
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+        engine_run.naabu_attempt_results = vec![normalized_result.clone()];
+        run.completed_at = Some(Utc::now());
+        stored.status = CaseStatus::NeedsAttention;
+        state
+            .storage
+            .save_case(&mut stored, "test.no_worker_naabu_between_batch")
+            .unwrap();
+
+        let before = service.show_case(&case_id).unwrap();
+        let before_run = before
+            .scan_runs
+            .iter()
+            .find(|run| run.id == execution.scan_run_id)
+            .unwrap();
+        assert!(durable_run_has_final_outcome(before_run));
+        assert_eq!(
+            unfinished_clean_naabu_between_batch_cancel_target(before_run).unwrap(),
+            Some((
+                execution.engine_run_id.clone(),
+                prepared.request.execution_attempt
+            ))
+        );
+        let before_engine = before_run
+            .engine_runs
+            .iter()
+            .find(|engine_run| engine_run.id == execution.engine_run_id)
+            .unwrap()
+            .clone();
+
+        let NoWorkerCancelAdmission::Cancelled(cancelled) =
+            apply_no_worker_durable_cancel(&service, &case_id, &execution.scan_run_id, before)
+                .expect("command decision uses one durable no-worker transition")
+        else {
+            panic!("normalized unfinished Naabu work must be durably cancelled")
+        };
+        let cancelled_engine = cancelled
+            .scan_runs
+            .iter()
+            .find(|run| run.id == execution.scan_run_id)
+            .and_then(|run| {
+                run.engine_runs
+                    .iter()
+                    .find(|engine_run| engine_run.id == execution.engine_run_id)
+            })
+            .unwrap();
+        assert_eq!(cancelled_engine.status, EngineRunStatus::Cancelled);
+        assert_eq!(cancelled_engine.phase, "cancelled_after_partial_results");
+        assert_eq!(cancelled_engine.progress_percent, 41);
+        assert_eq!(
+            cancelled_engine.naabu_attempt_requests,
+            before_engine.naabu_attempt_requests
+        );
+        assert_eq!(
+            cancelled_engine.naabu_attempt_results,
+            vec![normalized_result]
+        );
+        assert_eq!(cancelled_engine.resume_token, before_engine.resume_token);
+    }
+
+    #[test]
+    fn saved_next_phase_reconstructs_one_exact_resource_free_worker_attempt() {
+        let (_directory, state, case_id) = ready_internal_network_state();
+        let service = state.case_service();
+        let plan = service
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec![NAABU_ENGINE_ID.into()],
+                },
+            )
+            .expect("persist Naabu run");
+        let mut execution = plan.executable.into_iter().next().expect("Naabu execution");
+        execution.manifest.execution = Some(EngineExecutionContract {
+            resources: EngineExecutionResources {
+                timeout_seconds: 3_600,
+            },
+            launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
+        });
+        execution.attempt = 1;
+
+        let mut case = service.show_case(&case_id).unwrap();
+        let engine_run = &mut case.scan_runs[0].engine_runs[0];
+        engine_run.status = EngineRunStatus::Queued;
+        engine_run.phase = "queued_for_next_phase".into();
+        engine_run.error_code = None;
+        engine_run.error_message = None;
+        engine_run.naabu_attempt_requests.push(NaabuAttemptRequest {
+            schema_version: crate::execution_coverage::NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+            execution_attempt: 2,
+            requested_unit_ids: vec!["unit-2".into()],
+            launcher_plan_sha256: "a".repeat(64),
+        });
+        let checkpoint = ExecutionCheckpoint {
+            case_id: case.id.clone(),
+            scan_run_id: execution.scan_run_id.clone(),
+            engine_run_id: execution.engine_run_id.clone(),
+            engine_id: NAABU_ENGINE_ID.into(),
+            attempt: 2,
+            stage: ExecutionStage::Planned,
+            container_name: None,
+            scope_sha256: None,
+            launcher_plan_sha256: None,
+            artifact_ids: vec![],
+            cleanup_completed: true,
+            last_error: None,
+            runtime_command_provenance: None,
+            runtime_provider: None,
+            managed_network: None,
+        };
+        engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+
+        let continued = continued_naabu_launcher_v2_execution(&execution, &case)
+            .expect("exact saved next phase");
+        assert_eq!(continued.attempt, 2);
+        assert_eq!(continued.resume_checkpoint, Some(checkpoint));
+    }
+
+    #[test]
+    fn legacy_naabu_manifest_does_not_activate_launcher_v2_planning() {
+        let (_directory, state, case_id) = ready_internal_network_state();
+        let plan = state
+            .case_service()
+            .persist_scan_before_execution_preflight(
+                &case_id,
+                ScanPlanRequest {
+                    engine_ids: vec![NAABU_ENGINE_ID.into()],
+                },
+            )
+            .expect("persist legacy Naabu run");
+        let execution = plan.executable.first().expect("Naabu execution");
+
+        assert!(
+            prepare_naabu_launcher_attempt(&state, execution, Utc::now())
+                .expect("legacy preparation check")
+                .is_none()
+        );
+        let saved = state.case_service().show_case(&case_id).unwrap();
+        assert!(
+            saved.scan_runs[0].engine_runs[0]
+                .naabu_attempt_requests
+                .is_empty()
+        );
     }
 
     fn verified_aws_authorization_for_account(

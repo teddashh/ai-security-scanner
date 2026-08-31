@@ -1535,6 +1535,7 @@ mod tests {
                 started_at: Some(time),
                 finished_at: Some(time),
                 resume_token: None,
+                last_execution_report_sha256: None,
                 engine_version: Some("1".into()),
                 image_digest: None,
                 rule_version: None,

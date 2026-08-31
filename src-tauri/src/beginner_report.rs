@@ -10,12 +10,15 @@ use crate::domain::{
     EngineRunStatus, EngineTaskKind, Finding, FindingObservation, Id, LocalhostTcpObservation,
     LocalhostTcpOutcome, ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun, Severity,
 };
-use crate::execution_coverage::{CumulativeNaabuCoverage, reduce_naabu_attempt_coverage};
+use crate::execution_coverage::{
+    CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
+};
 use crate::naabu_work_plan::{NAABU_ENGINE_ID, NaabuWorkStage};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::net::IpAddr;
 
 pub const BEGINNER_MASTER_REPORT_SCHEMA_VERSION: &str = "1.0.0";
 
@@ -139,7 +142,27 @@ pub struct ActualCoverage {
     pub observed_from: Option<DateTime<Utc>>,
     pub observed_until: Option<DateTime<Utc>>,
     pub checks: Vec<ActualCheck>,
+    /// Exact, run-frozen network rectangles and their validated outcome. This
+    /// keeps a beginner report honest about which addresses and ports were or
+    /// were not tested instead of reducing scope truth to only "N of total".
+    #[serde(default)]
+    pub network_scopes: Vec<NetworkScopeCoverage>,
     pub unavailable_dimensions: Vec<UnavailableDimension>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkScopeCoverage {
+    pub task_id: Id,
+    pub check_id: String,
+    pub work_unit_id: String,
+    pub target_asset_id: Id,
+    pub target: String,
+    pub address_ranges: Vec<String>,
+    pub port_ranges: Vec<String>,
+    pub transport: String,
+    pub stage: ReportScanStage,
+    pub outcome: WorkUnitOutcome,
+    pub observed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -837,6 +860,7 @@ struct ActualCoverageProjection {
 
 fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
     let mut checks = Vec::new();
+    let mut network_scopes = Vec::new();
     let mut gaps = Vec::new();
     let mut unavailable_dimensions = Vec::new();
     let mut observed_times = Vec::new();
@@ -904,6 +928,7 @@ fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
                         status = naabu_coverage_status(task, &coverage);
                         append_naabu_tested_dimensions(task, &coverage, &mut tested_dimensions);
                         append_naabu_coverage_gaps(task, &coverage, &mut gaps);
+                        network_scopes.extend(project_naabu_network_scopes(task, &coverage));
                         useful_result = coverage.summary.has_usable_results;
                         exact_complete =
                             task.status == EngineRunStatus::Completed && coverage.fully_complete;
@@ -992,6 +1017,11 @@ fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
     }
 
     checks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+    network_scopes.sort_by(|left, right| {
+        left.task_id
+            .cmp(&right.task_id)
+            .then_with(|| left.work_unit_id.cmp(&right.work_unit_id))
+    });
     unavailable_dimensions.sort_by(|left, right| left.dimension.cmp(&right.dimension));
     unavailable_dimensions.dedup();
     observed_times.sort();
@@ -1002,6 +1032,7 @@ fn project_actual_coverage(run: &ScanRun) -> ActualCoverageProjection {
             observed_from,
             observed_until,
             checks,
+            network_scopes,
             unavailable_dimensions,
         },
         gaps,
@@ -1079,6 +1110,118 @@ fn append_naabu_tested_dimensions(
                 .into(),
             observed_at: task.finished_at,
         });
+    }
+}
+
+fn project_naabu_network_scopes(
+    task: &EngineRun,
+    coverage: &CumulativeNaabuCoverage,
+) -> Vec<NetworkScopeCoverage> {
+    let Some(plan) = task.naabu_work_plan.as_ref() else {
+        return Vec::new();
+    };
+    coverage
+        .work_units
+        .iter()
+        .filter_map(|covered| {
+            let unit = plan
+                .work_units
+                .iter()
+                .find(|unit| unit.unit_id == covered.unit_id)?;
+            let grant = plan
+                .frozen_grants
+                .get(usize::try_from(unit.grant_index).ok()?)?;
+            let address_start = usize::try_from(unit.address_start).ok()?;
+            let address_end = address_start.checked_add(usize::try_from(unit.address_len).ok()?)?;
+            let port_start = usize::try_from(unit.port_start).ok()?;
+            let port_end = port_start.checked_add(usize::try_from(unit.port_len).ok()?)?;
+            let addresses = grant.addresses.get(address_start..address_end)?;
+            let ports = grant.ports.get(port_start..port_end)?;
+            Some(NetworkScopeCoverage {
+                task_id: task.id.clone(),
+                check_id: check_id(task),
+                work_unit_id: unit.unit_id.clone(),
+                target_asset_id: grant.asset_id.clone(),
+                target: grant.target.canonical_text(),
+                address_ranges: compact_ip_ranges(addresses),
+                port_ranges: compact_port_ranges(ports),
+                transport: "tcp".into(),
+                stage: match unit.stage {
+                    NaabuWorkStage::QuickDiscovery => ReportScanStage::QuickDiscovery,
+                    NaabuWorkStage::FullInventory => ReportScanStage::Inventory,
+                },
+                outcome: covered.outcome,
+                observed_at: covered.outcome_execution_attempt.and(task.finished_at),
+            })
+        })
+        .collect()
+}
+
+fn compact_ip_ranges(addresses: &[IpAddr]) -> Vec<String> {
+    let Some(first) = addresses.first().copied() else {
+        return Vec::new();
+    };
+    let mut ranges = Vec::new();
+    let mut start = first;
+    let mut previous = first;
+    for address in addresses.iter().copied().skip(1) {
+        if ip_addresses_are_adjacent(previous, address) {
+            previous = address;
+            continue;
+        }
+        ranges.push(format_ip_range(start, previous));
+        start = address;
+        previous = address;
+    }
+    ranges.push(format_ip_range(start, previous));
+    ranges
+}
+
+fn ip_addresses_are_adjacent(left: IpAddr, right: IpAddr) -> bool {
+    match (left, right) {
+        (IpAddr::V4(left), IpAddr::V4(right)) => {
+            u32::from(left).checked_add(1) == Some(u32::from(right))
+        }
+        (IpAddr::V6(left), IpAddr::V6(right)) => {
+            u128::from(left).checked_add(1) == Some(u128::from(right))
+        }
+        _ => false,
+    }
+}
+
+fn format_ip_range(start: IpAddr, end: IpAddr) -> String {
+    if start == end {
+        start.to_string()
+    } else {
+        format!("{start}-{end}")
+    }
+}
+
+fn compact_port_ranges(ports: &[u16]) -> Vec<String> {
+    let Some(first) = ports.first().copied() else {
+        return Vec::new();
+    };
+    let mut ranges = Vec::new();
+    let mut start = first;
+    let mut previous = first;
+    for port in ports.iter().copied().skip(1) {
+        if previous.checked_add(1) == Some(port) {
+            previous = port;
+            continue;
+        }
+        ranges.push(format_port_range(start, previous));
+        start = port;
+        previous = port;
+    }
+    ranges.push(format_port_range(start, previous));
+    ranges
+}
+
+fn format_port_range(start: u16, end: u16) -> String {
+    if start == end {
+        start.to_string()
+    } else {
+        format!("{start}-{end}")
     }
 }
 
@@ -2006,11 +2149,22 @@ mod tests {
         Asset, AssetIdentifier, BUILT_IN_LOCALHOST_TCP_ASSET_IDENTIFIER_NAMESPACE,
         BUILT_IN_LOCALHOST_TCP_AUTHORIZATION_REFERENCE, BUILT_IN_LOCALHOST_TCP_ENGINE_ID,
         CaseStatus, ControlReference, CoverageEntry, CoverageStatus, DataClass, EngineRun,
-        Evidence, EvidenceKind, FindingStatus, OrganizationProfile, RawArtifact, ScopeGrant,
-        SourceKind, new_id,
+        Evidence, EvidenceKind, FindingStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+        NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest, NaabuAttemptResult,
+        OrganizationProfile, RawArtifact, ScopeGrant, SourceKind, new_id,
     };
-    use chrono::TimeZone;
-    use std::collections::BTreeMap;
+    use crate::execution_coverage::{
+        ExecutionCoverageSummary, FinalArtifactIdentity, LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
+        ValidatedArtifactBinding, ValidatedExecutionCoverage, WorkUnitAttempt, WorkUnitCoverage,
+    };
+    use crate::external_scope::{
+        CanonicalTarget, ExternalActivity, RatePolicy, ResolutionSnapshot, ResolvedExternalPlan,
+        TemplatePolicy, TransportProtocol,
+    };
+    use crate::naabu_work_plan::{NaabuWorkPlanIdentity, build_naabu_work_plan};
+    use chrono::{Duration, TimeZone};
+    use sha2::{Digest, Sha256};
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn unknown_severity_sorts_after_known_low_but_before_informational() {
@@ -2106,6 +2260,7 @@ mod tests {
                 started_at: Some(instant(15)),
                 finished_at: terminal.then(|| instant(16)),
                 resume_token: None,
+                last_execution_report_sha256: None,
                 engine_version: None,
                 image_digest: None,
                 rule_version: None,
@@ -2154,6 +2309,7 @@ mod tests {
             started_at: Some(instant(12)),
             finished_at: Some(instant(14)),
             resume_token: None,
+            last_execution_report_sha256: None,
             engine_version: Some("1.0.0".into()),
             image_digest: Some("sha256:test".into()),
             rule_version: Some("rules-1".into()),
@@ -2350,6 +2506,166 @@ mod tests {
         );
         let report = build_beginner_master_report(&case, "run-1").unwrap();
 
+        assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
+        assert_eq!(report.coverage_counts.tested_partial, 1);
+        assert_eq!(report.coverage_counts.not_tested, 1);
+    }
+
+    #[test]
+    fn network_master_report_names_the_exact_tested_and_untested_ports() {
+        let frozen_at = instant(10);
+        let address = "192.168.50.10".parse().expect("fixture address");
+        let resolved = ResolvedExternalPlan {
+            grant_id: "grant-1".into(),
+            case_id: "case-1".into(),
+            asset_id: "asset-1".into(),
+            target: CanonicalTarget::Address(address),
+            resolution: ResolutionSnapshot {
+                hostname: None,
+                addresses: BTreeSet::from([address]),
+                resolved_at: frozen_at,
+            },
+            ports: BTreeSet::from([80, 443]),
+            protocol: TransportProtocol::Tcp,
+            activity: ExternalActivity::LowImpactExternal,
+            rate_policy: RatePolicy {
+                requests_per_second: 25,
+                concurrency: 10,
+                timeout_seconds: 3,
+            },
+            template_policy: TemplatePolicy::conservative("not_applicable", Vec::new()),
+            frozen_at,
+            expires_at: frozen_at + Duration::hours(1),
+            allow_sensitive_networks: true,
+        };
+        let plan = build_naabu_work_plan(
+            NaabuWorkPlanIdentity::new("case-1", "run-1", "task-network", frozen_at),
+            &[resolved],
+            None,
+        )
+        .expect("exact two-port plan");
+        assert_eq!(
+            plan.work_units.len(),
+            2,
+            "fixture requires one unit per port"
+        );
+
+        let requested_unit_ids = plan
+            .work_units
+            .iter()
+            .map(|unit| unit.unit_id.clone())
+            .collect::<Vec<_>>();
+        let selected = requested_unit_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let launcher = plan
+            .launcher_plan_v3(1, Some(&selected))
+            .expect("current compact launcher plan");
+        let request = NaabuAttemptRequest {
+            schema_version: NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+            execution_attempt: 1,
+            requested_unit_ids,
+            launcher_plan_sha256: hex::encode(Sha256::digest(
+                serde_json::to_vec(&launcher).expect("launcher JSON"),
+            )),
+        };
+
+        let mut tested_complete = 0;
+        let mut not_tested = 0;
+        let mut work_units = Vec::new();
+        let mut bindings = Vec::new();
+        for unit in &plan.work_units {
+            let grant = &plan.frozen_grants[usize::try_from(unit.grant_index).unwrap()];
+            let port = grant.ports[usize::try_from(unit.port_start).unwrap()];
+            let (outcome, final_artifact) = if port == 80 {
+                tested_complete += 1;
+                let identity = FinalArtifactIdentity {
+                    engine_run_id: plan.identity.engine_run_id.clone(),
+                    unit_id: unit.unit_id.clone(),
+                    scope_sha256: unit.scope_sha256.clone(),
+                    attempt: 1,
+                    relative_path: format!("attempt-1/{}.jsonl", unit.unit_id),
+                    sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        .into(),
+                    byte_length: 0,
+                };
+                bindings.push(ValidatedArtifactBinding {
+                    raw_artifact_id: "raw-port-80".into(),
+                    identity: identity.clone(),
+                });
+                (WorkUnitOutcome::TestedComplete, Some(identity))
+            } else {
+                not_tested += 1;
+                (WorkUnitOutcome::NotTested, None)
+            };
+            work_units.push(WorkUnitCoverage {
+                unit_id: unit.unit_id.clone(),
+                scope_sha256: unit.scope_sha256.clone(),
+                outcome,
+                attempts: vec![WorkUnitAttempt {
+                    attempt: 1,
+                    outcome,
+                    incomplete_reason: None,
+                    final_artifact,
+                }],
+            });
+        }
+        assert_eq!((tested_complete, not_tested), (1, 1));
+        let result = NaabuAttemptResult {
+            schema_version: NAABU_ATTEMPT_RESULT_SCHEMA_VERSION,
+            execution_attempt: 1,
+            journal_raw_artifact_id: "raw-journal-1".into(),
+            coverage: ValidatedExecutionCoverage {
+                schema_version: LAUNCHER_V2_JOURNAL_SCHEMA_VERSION,
+                engine_run_id: plan.identity.engine_run_id.clone(),
+                execution_attempt: 1,
+                recovered_trailing_record: false,
+                validated_artifact_bindings: bindings,
+                unreferenced_final_artifacts: Vec::new(),
+                work_units,
+                summary: ExecutionCoverageSummary {
+                    requested: 2,
+                    tested_complete: 1,
+                    tested_partial: 0,
+                    failed: 0,
+                    timed_out: 0,
+                    cancelled: 0,
+                    not_tested: 1,
+                    partial: true,
+                    has_usable_results: true,
+                },
+            },
+            normalization_complete: true,
+        };
+
+        let mut task = catalog_task("network", EngineRunStatus::PartiallyCompleted);
+        task.id = "task-network".into();
+        task.engine_id = NAABU_ENGINE_ID.into();
+        task.progress_percent = 50;
+        task.error_message = None;
+        task.naabu_work_plan = Some(plan);
+        task.naabu_attempt_requests = vec![request];
+        task.naabu_attempt_results = vec![result];
+        let mut case = case_with_catalog_tasks(vec![task], true);
+        case.assets[0].kind = AssetKind::IpAddress;
+        case.assets[0].name = address.to_string();
+
+        let report = build_beginner_master_report(&case, "run-1").expect("beginner report");
+        let port_80 = report
+            .actual
+            .network_scopes
+            .iter()
+            .find(|scope| scope.port_ranges == ["80"])
+            .expect("port 80 scope");
+        let port_443 = report
+            .actual
+            .network_scopes
+            .iter()
+            .find(|scope| scope.port_ranges == ["443"])
+            .expect("port 443 scope");
+        assert_eq!(port_80.address_ranges, [address.to_string()]);
+        assert_eq!(port_80.target, address.to_string());
+        assert_eq!(port_80.outcome, WorkUnitOutcome::TestedComplete);
+        assert_eq!(port_443.address_ranges, [address.to_string()]);
+        assert_eq!(port_443.outcome, WorkUnitOutcome::NotTested);
         assert_eq!(report.state.summary, BeginnerReportSummary::Partial);
         assert_eq!(report.coverage_counts.tested_partial, 1);
         assert_eq!(report.coverage_counts.not_tested, 1);

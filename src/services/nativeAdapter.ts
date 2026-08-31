@@ -299,6 +299,19 @@ export interface NativeBeginnerMasterReport {
         observed_at: string | null;
       }>;
     }>;
+    network_scopes?: Array<{
+      task_id: string;
+      check_id: string;
+      work_unit_id: string;
+      target_asset_id: string;
+      target: string;
+      address_ranges: string[];
+      port_ranges: string[];
+      transport: string;
+      stage: "quick_discovery" | "inventory" | "deep";
+      outcome: "tested_complete" | "tested_partial" | "failed" | "timed_out" | "cancelled" | "not_tested";
+      observed_at: string | null;
+    }>;
     unavailable_dimensions: Array<{ dimension: string; explanation: string }>;
   };
   coverage_gaps: Array<{
@@ -1265,7 +1278,13 @@ const engineRecoveryAction = (
   checkpoint: EngineCheckpoint | undefined,
   errorCode: string | null | undefined,
 ): EngineRecoveryAction => {
-  if (["resume_release_incompatible", "resume_work_plan_invalid", "runtime_cleanup_identity_unavailable"].includes(errorCode ?? "")) {
+  if ([
+    "resume_release_incompatible",
+    "resume_work_plan_invalid",
+    "runtime_cleanup_identity_unavailable",
+    "coverage_incomplete_after_bounded_retries",
+    "cancelled_after_partial_results",
+  ].includes(errorCode ?? "")) {
     return "none";
   }
   if (!hasResumeToken || !checkpoint || !["paused", "failed", "partial", "cancelled"].includes(status)) {
@@ -1989,6 +2008,19 @@ export const adaptBeginnerMasterReport = (
         observation: dimension.observation,
         observedAt: dimension.observed_at ?? undefined,
       })),
+    })),
+    networkScopes: (report.actual.network_scopes ?? []).map((scope) => ({
+      taskId: scope.task_id,
+      checkId: scope.check_id,
+      workUnitId: scope.work_unit_id,
+      targetAssetId: scope.target_asset_id,
+      target: scope.target,
+      addressRanges: [...scope.address_ranges],
+      portRanges: [...scope.port_ranges],
+      transport: scope.transport,
+      stage: scope.stage,
+      outcome: scope.outcome,
+      observedAt: scope.observed_at ?? undefined,
     })),
     unavailableDimensions: report.actual.unavailable_dimensions.map((dimension) => ({ ...dimension })),
   },

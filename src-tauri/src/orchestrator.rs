@@ -9,14 +9,18 @@ use crate::domain::{
     Asset, AssetIdentifier, EngineManifest, Finding, RawArtifact, ScanPermission, ScopeGrant,
 };
 use crate::error::{AppError, AppResult};
+use crate::execution_coverage::LAUNCHER_V2_JOURNAL_SCHEMA_VERSION;
 use crate::managed_network::{GatewayDestination, ManagedNetworkIdentity};
 use crate::naabu_work_plan::{
-    MAX_NAABU_LAUNCHER_PLAN_BYTES, NAABU_ENGINE_ID, NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
-    NaabuLauncherPlanV2,
+    LEGACY_NAABU_LAUNCHER_PLAN_SCHEMA_VERSION, MAX_NAABU_ENDPOINT_PAIRS_PER_ATTEMPT,
+    MAX_NAABU_ENDPOINT_PAIRS_PER_UNIT, MAX_NAABU_FROZEN_ADDRESSES, MAX_NAABU_LAUNCHER_PLAN_BYTES,
+    MAX_NAABU_WORK_UNITS, MAX_NAABU_WORK_UNITS_PER_ATTEMPT, NAABU_ENGINE_ID,
+    NAABU_LAUNCHER_PLAN_SCHEMA_VERSION, NaabuLauncherPlanDocument,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
@@ -56,7 +60,7 @@ pub struct ExecutionCheckpoint {
     pub stage: ExecutionStage,
     pub container_name: Option<String>,
     pub scope_sha256: Option<String>,
-    /// Exact digest of the private launcher-v2 work plan mounted into this
+    /// Exact digest of the private versioned launcher work plan mounted into this
     /// container. Legacy executions omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launcher_plan_sha256: Option<String>,
@@ -264,11 +268,10 @@ pub struct EngineExecutionRequest<'a> {
     /// addresses in its scope document; every other engine keeps its existing
     /// strict scope schema.
     pub frozen_destinations: Option<&'a [GatewayDestination]>,
-    /// Private, exact launcher-v2 work-unit document. Production planning does
-    /// not populate this yet: only a future immutable Naabu manifest that
-    /// explicitly opts into launcher journal v2 may supply it.
-    pub naabu_launcher_plan: Option<&'a NaabuLauncherPlanV2>,
-    /// Durable digest chosen by host planning for the exact serialized v2
+    /// Private, exact launcher work-unit document. New execution uses compact
+    /// plan schema 3 while journal output remains schema 2.
+    pub naabu_launcher_plan: Option<&'a NaabuLauncherPlanDocument>,
+    /// Durable digest chosen by host planning for the exact serialized
     /// sidecar. The orchestrator verifies the file it wrote before it builds
     /// or invokes any runtime plan.
     pub expected_naabu_launcher_plan_sha256: Option<&'a str>,
@@ -293,7 +296,7 @@ fn validate_naabu_launcher_request(request: &EngineExecutionRequest<'_>) -> AppR
         .as_ref()
         .and_then(|execution| execution.launcher_journal_version);
     match declared_version {
-        Some(version) if version != NAABU_LAUNCHER_PLAN_SCHEMA_VERSION => {
+        Some(version) if version != LAUNCHER_V2_JOURNAL_SCHEMA_VERSION => {
             return Err(AppError::EngineRegistry(format!(
                 "engine {} declares unsupported launcher journal version {version}",
                 request.manifest.id
@@ -304,7 +307,7 @@ fn validate_naabu_launcher_request(request: &EngineExecutionRequest<'_>) -> AppR
                 || request.expected_naabu_launcher_plan_sha256.is_none() =>
         {
             return Err(AppError::InvalidRequest(
-                "Naabu launcher journal v2 requires its private execution plan and exact digest"
+                "the current Naabu launcher requires its private execution plan and exact digest"
                     .into(),
             ));
         }
@@ -331,11 +334,15 @@ fn validate_naabu_launcher_request(request: &EngineExecutionRequest<'_>) -> AppR
         ));
     }
     if request.manifest.id != NAABU_ENGINE_ID
-        || plan.schema_version != NAABU_LAUNCHER_PLAN_SCHEMA_VERSION
+        || !matches!(
+            plan.schema_version,
+            LEGACY_NAABU_LAUNCHER_PLAN_SCHEMA_VERSION | NAABU_LAUNCHER_PLAN_SCHEMA_VERSION
+        )
         || plan.engine_id != NAABU_ENGINE_ID
     {
         return Err(AppError::InvalidRequest(
-            "launcher journal v2 is valid only for the reviewed Naabu contract".into(),
+            "the current launcher accepts only reviewed Naabu plan schema 3 or exact legacy schema 2"
+                .into(),
         ));
     }
     if plan.engine_run_id != request.engine_run_id || plan.execution_attempt != request.attempt {
@@ -407,11 +414,14 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 request.manifest.id
             )));
         }
-        let validated_scope = validate_execution_scope(
+        validate_naabu_launcher_request(request)?;
+        let validated_scope = validate_execution_scope_for_request(
             request.manifest,
             request.assets,
             request.scope_grants,
             request.network_policy,
+            request.frozen_destinations,
+            request.naabu_launcher_plan,
         )?;
         let image = PinnedImage::from_manifest(request.manifest)?;
         if request.attempt == 0 {
@@ -419,7 +429,6 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 "execution attempt must start at one".into(),
             ));
         }
-        validate_naabu_launcher_request(request)?;
         if request
             .manifest
             .required_permissions
@@ -438,10 +447,11 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             engine_run_id: request.engine_run_id.into(),
         };
         let directories = self.artifacts.prepare_run(&context, request.attempt)?;
-        let scope_document = ScopeDocument::new(
+        let scope_document = ScopeDocument::new_for_request(
             request.manifest,
             &validated_scope,
             request.frozen_destinations,
+            request.naabu_launcher_plan,
         )?;
         let scope_file =
             self.artifacts
@@ -505,7 +515,10 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             scope_sha256: Some(plan.scope_sha256().to_owned()),
             launcher_plan_sha256: plan.launcher_plan_sha256().map(str::to_owned),
             artifact_ids: Vec::new(),
-            cleanup_completed: false,
+            // Planning, runtime preflight, and image pull cannot create the
+            // attempt container. Keep the cleanup obligation closed until
+            // immediately before the runtime call that can create it.
+            cleanup_completed: true,
             last_error: None,
             runtime_command_provenance: None,
             runtime_provider: None,
@@ -581,6 +594,10 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
         let capture = self.artifacts.prepare_capture(&directories)?;
 
         report.checkpoint.stage = ExecutionStage::Running;
+        // Persist the exact cleanup identity before the first call that may
+        // create a container. A crash after this observer can therefore run
+        // bounded cleanup; an earlier crash has no container obligation.
+        report.checkpoint.cleanup_completed = false;
         observer(&report)?;
         let mut created_container = None;
         let mut creation_may_be_untracked = false;
@@ -679,6 +696,44 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 report.checkpoint.last_error = Some(combined);
                 return Ok(report);
             }
+        }
+
+        // A launcher-v2 process exit is not the coverage authority. Journal
+        // append/sync/close can fail after one or more earlier terminal
+        // records and finals were already durably published. Once capture
+        // and cleanup both finish, hand every such invocation to the host
+        // validator: it accepts only the longest complete, newline-terminated
+        // journal prefix and exact matching finals. Missing records remain
+        // not-tested, while an absent or invalid journal stays evidence-only.
+        // Other engines retain the ordinary nonzero-exit failure path below.
+        let launcher_v2_capture_complete = request
+            .manifest
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.launcher_journal_version)
+            == Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION)
+            && report.checkpoint.stage != ExecutionStage::Failed
+            && report.checkpoint.cleanup_completed;
+        if launcher_v2_capture_complete {
+            if cancellation.is_cancelled()
+                || runtime_result.as_ref().is_err()
+                || runtime_result
+                    .as_ref()
+                    .is_ok_and(|outcome| outcome.cancelled || outcome.exit_code != Some(0))
+            {
+                report.warnings.push(
+                    "This scan batch stopped after saving output. The app will keep only journal-verified results; unfinished work remains not tested."
+                        .into(),
+                );
+            }
+            report.checkpoint.stage = ExecutionStage::CapturedAwaitingAdapter;
+            report.checkpoint.last_error = None;
+            // Persistable hand-off before caller-owned managed-network
+            // cleanup closes the final crash window. The observer receives
+            // the exact captured artifact membership; it must not infer
+            // coverage until cleanup is durably complete.
+            observer(&report)?;
+            return Ok(report);
         }
 
         let outcome = match runtime_result {
@@ -860,11 +915,23 @@ struct ValidatedAssetScope<'a> {
     grants: Vec<&'a ScopeGrant>,
 }
 
+#[cfg(test)]
 fn validate_execution_scope<'a>(
     manifest: &EngineManifest,
     assets: &'a [Asset],
     grants: &'a [ScopeGrant],
     network_policy: &NetworkPolicy,
+) -> AppResult<Vec<ValidatedAssetScope<'a>>> {
+    validate_execution_scope_for_request(manifest, assets, grants, network_policy, None, None)
+}
+
+fn validate_execution_scope_for_request<'a>(
+    manifest: &EngineManifest,
+    assets: &'a [Asset],
+    grants: &'a [ScopeGrant],
+    network_policy: &NetworkPolicy,
+    frozen_destinations: Option<&[GatewayDestination]>,
+    naabu_launcher_plan: Option<&NaabuLauncherPlanDocument>,
 ) -> AppResult<Vec<ValidatedAssetScope<'a>>> {
     if assets.is_empty() {
         return Err(AppError::NotAuthorized(format!(
@@ -973,9 +1040,12 @@ fn validate_execution_scope<'a>(
                     }
                     _ => continue,
                 };
-                if external.activity != expected_activity
-                    || !external_destination_is_frozen(external, &allowed_targets)
-                {
+                let gateway_represents_scope = if naabu_launcher_plan.is_some() {
+                    true
+                } else {
+                    external_destination_is_frozen(external, &allowed_targets)
+                };
+                if external.activity != expected_activity || !gateway_represents_scope {
                     return Err(AppError::NotAuthorized(format!(
                         "structured external policy {} is not represented by the frozen managed gateway",
                         external.id
@@ -1004,6 +1074,18 @@ fn validate_execution_scope<'a>(
             identifiers,
             grants: matched,
         });
+    }
+    if let Some(plan) = naabu_launcher_plan {
+        validate_naabu_launcher_gateway_binding(
+            plan,
+            &validated,
+            frozen_destinations.ok_or_else(|| {
+                AppError::NotAuthorized(
+                    "Naabu launcher-v2 execution has no exact attempt gateway snapshot".into(),
+                )
+            })?,
+            network_policy,
+        )?;
     }
     Ok(validated)
 }
@@ -1040,6 +1122,270 @@ fn external_destination_is_frozen(
     }
 }
 
+/// Binds one versioned launcher attempt corpus to the original grants while
+/// requiring the live managed gateway to expose exactly the rectangles chosen
+/// for this one attempt. The current compact form has tighter aggregate bounds;
+/// the legacy form retains its historical per-unit bounds only so frozen wire
+/// evidence can be reconstructed and validated. Production network constructors
+/// reject the legacy schema before provisioning.
+fn validate_naabu_launcher_gateway_binding(
+    plan: &NaabuLauncherPlanDocument,
+    scope: &[ValidatedAssetScope<'_>],
+    frozen_destinations: &[GatewayDestination],
+    network_policy: &NetworkPolicy,
+) -> AppResult<()> {
+    let max_requested_work_units = match plan.schema_version {
+        LEGACY_NAABU_LAUNCHER_PLAN_SCHEMA_VERSION => MAX_NAABU_WORK_UNITS,
+        NAABU_LAUNCHER_PLAN_SCHEMA_VERSION => MAX_NAABU_WORK_UNITS_PER_ATTEMPT,
+        _ => {
+            return Err(AppError::InvalidRequest(
+                "Naabu launcher gateway binding uses an unsupported plan schema".into(),
+            ));
+        }
+    };
+    if plan.frozen_grants.is_empty()
+        || plan.requested_work_units.is_empty()
+        || plan.requested_work_units.len() > max_requested_work_units
+    {
+        return Err(AppError::InvalidRequest(
+            "Naabu launcher requires a bounded non-empty attempt".into(),
+        ));
+    }
+
+    let mut external_by_grant = BTreeMap::new();
+    for entry in scope {
+        for grant in &entry.grants {
+            let external = grant.external_scope.as_ref().ok_or_else(|| {
+                AppError::NotAuthorized(format!(
+                    "Naabu launcher grant {} has no structured external scope",
+                    grant.id
+                ))
+            })?;
+            if external_by_grant
+                .insert(grant.id.as_str(), external)
+                .is_some()
+            {
+                return Err(AppError::NotAuthorized(
+                    "Naabu launcher scope contains a duplicate grant identity".into(),
+                ));
+            }
+        }
+    }
+    let mut seen_frozen_grants = BTreeSet::new();
+    let mut external_by_index = Vec::with_capacity(plan.frozen_grants.len());
+    for frozen in &plan.frozen_grants {
+        if frozen.scope_grant_id.is_empty()
+            || frozen.scope_grant_id.len() > 256
+            || !seen_frozen_grants.insert(frozen.scope_grant_id.as_str())
+            || frozen.addresses.is_empty()
+            || frozen.addresses.len() > MAX_NAABU_FROZEN_ADDRESSES
+            || frozen.addresses.windows(2).any(|pair| pair[0] >= pair[1])
+            || frozen.ports.is_empty()
+            || frozen.ports.contains(&0)
+            || frozen.ports.iter().copied().collect::<BTreeSet<_>>().len() != frozen.ports.len()
+        {
+            return Err(AppError::InvalidRequest(
+                "Naabu launcher frozen grant corpus is not canonical and bounded".into(),
+            ));
+        }
+        let external = external_by_grant
+            .get(frozen.scope_grant_id.as_str())
+            .copied()
+            .ok_or_else(|| {
+                AppError::NotAuthorized(format!(
+                    "Naabu launcher frozen grant {} is outside the validated scope",
+                    frozen.scope_grant_id
+                ))
+            })?;
+        if frozen
+            .ports
+            .iter()
+            .any(|port| !external.ports.contains(port))
+            || frozen
+                .addresses
+                .iter()
+                .any(|address| !external_target_contains_address(&external.target, *address))
+        {
+            return Err(AppError::NotAuthorized(format!(
+                "Naabu launcher frozen grant {} changed its authorized address or port corpus",
+                frozen.scope_grant_id
+            )));
+        }
+        external_by_index.push(external);
+    }
+
+    let mut seen_units = BTreeSet::new();
+    let mut seen_scope_hashes = BTreeSet::new();
+    let mut referenced_grant_indices = BTreeSet::new();
+    let mut rectangles_by_grant = BTreeMap::<usize, Vec<(usize, usize, usize, usize)>>::new();
+    let mut endpoint_pairs = 0_u64;
+    let mut expected_destinations = Vec::with_capacity(plan.requested_work_units.len());
+    for unit in &plan.requested_work_units {
+        if unit.unit_id.is_empty()
+            || !seen_units.insert(unit.unit_id.as_str())
+            || unit.scope_sha256.len() != 64
+            || !unit
+                .scope_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            || !seen_scope_hashes.insert(unit.scope_sha256.as_str())
+            || unit.address_len == 0
+            || unit.port_len == 0
+        {
+            return Err(AppError::InvalidRequest(
+                "Naabu launcher work-unit identity or rectangle is invalid".into(),
+            ));
+        }
+        let grant_index = usize::try_from(unit.grant_index)
+            .map_err(|_| AppError::InvalidRequest("Naabu grant index overflowed".into()))?;
+        let frozen = plan.frozen_grants.get(grant_index).ok_or_else(|| {
+            AppError::InvalidRequest("Naabu work unit refers to a missing frozen grant".into())
+        })?;
+        referenced_grant_indices.insert(grant_index);
+        let external = external_by_index[grant_index];
+        let address_start = usize::try_from(unit.address_start)
+            .map_err(|_| AppError::InvalidRequest("Naabu address offset overflowed".into()))?;
+        let address_len = usize::try_from(unit.address_len)
+            .map_err(|_| AppError::InvalidRequest("Naabu address length overflowed".into()))?;
+        let port_start = usize::try_from(unit.port_start)
+            .map_err(|_| AppError::InvalidRequest("Naabu port offset overflowed".into()))?;
+        let port_len = usize::try_from(unit.port_len)
+            .map_err(|_| AppError::InvalidRequest("Naabu port length overflowed".into()))?;
+        let address_end = address_start
+            .checked_add(address_len)
+            .ok_or_else(|| AppError::InvalidRequest("Naabu address range overflowed".into()))?;
+        let port_end = port_start
+            .checked_add(port_len)
+            .ok_or_else(|| AppError::InvalidRequest("Naabu port range overflowed".into()))?;
+        let addresses = frozen
+            .addresses
+            .get(address_start..address_end)
+            .ok_or_else(|| {
+                AppError::InvalidRequest("Naabu work unit exceeds its frozen address corpus".into())
+            })?;
+        let ports = frozen.ports.get(port_start..port_end).ok_or_else(|| {
+            AppError::InvalidRequest("Naabu work unit exceeds its frozen port corpus".into())
+        })?;
+        let pair_count = u64::try_from(addresses.len())
+            .ok()
+            .and_then(|addresses| {
+                u64::try_from(ports.len())
+                    .ok()
+                    .and_then(|ports| addresses.checked_mul(ports))
+            })
+            .ok_or_else(|| AppError::InvalidRequest("Naabu endpoint count overflowed".into()))?;
+        if pair_count > MAX_NAABU_ENDPOINT_PAIRS_PER_UNIT || pair_count != unit.endpoint_pair_count
+        {
+            return Err(AppError::InvalidRequest(
+                "Naabu work-unit endpoint count is outside its per-unit bound or does not match its exact rectangle"
+                    .into(),
+            ));
+        }
+        let prior_rectangles = rectangles_by_grant.entry(grant_index).or_default();
+        if prior_rectangles.iter().any(
+            |(prior_address_start, prior_address_end, prior_port_start, prior_port_end)| {
+                address_start < *prior_address_end
+                    && *prior_address_start < address_end
+                    && port_start < *prior_port_end
+                    && *prior_port_start < port_end
+            },
+        ) {
+            return Err(AppError::InvalidRequest(
+                "Naabu launcher work units overlap within one frozen grant".into(),
+            ));
+        }
+        prior_rectangles.push((address_start, address_end, port_start, port_end));
+        endpoint_pairs = endpoint_pairs
+            .checked_add(pair_count)
+            .ok_or_else(|| AppError::InvalidRequest("Naabu attempt size overflowed".into()))?;
+        expected_destinations.push(GatewayDestination {
+            hostname: match &external.target {
+                crate::external_scope::CanonicalTarget::Hostname(hostname) => {
+                    Some(hostname.clone())
+                }
+                crate::external_scope::CanonicalTarget::Address(_)
+                | crate::external_scope::CanonicalTarget::Network(_) => None,
+            },
+            addresses: addresses.iter().copied().collect(),
+            ports: ports.iter().copied().collect(),
+            allow_sensitive_networks: external.allow_sensitive_networks,
+        });
+    }
+    if plan.schema_version == NAABU_LAUNCHER_PLAN_SCHEMA_VERSION
+        && (referenced_grant_indices.len() != plan.frozen_grants.len()
+            || !(0..plan.frozen_grants.len())
+                .all(|index| referenced_grant_indices.contains(&index)))
+    {
+        return Err(AppError::InvalidRequest(
+            "Naabu compact frozen grants must all be referenced by this exact attempt".into(),
+        ));
+    }
+    if plan.schema_version == NAABU_LAUNCHER_PLAN_SCHEMA_VERSION
+        && endpoint_pairs > MAX_NAABU_ENDPOINT_PAIRS_PER_ATTEMPT
+    {
+        return Err(AppError::InvalidRequest(format!(
+            "Naabu launcher attempt exceeds {MAX_NAABU_ENDPOINT_PAIRS_PER_ATTEMPT} exact endpoints"
+        )));
+    }
+
+    expected_destinations.sort();
+    // Distinct grants may authorize the same exact endpoint rectangle. The
+    // managed gateway canonicalizes those equal destinations, so bind against
+    // that same canonical set after validating each grant and each unit above.
+    expected_destinations.dedup();
+    let mut actual_destinations = frozen_destinations.to_vec();
+    let actual_count = actual_destinations.len();
+    actual_destinations.sort();
+    actual_destinations.dedup();
+    if actual_destinations.len() != actual_count || actual_destinations != expected_destinations {
+        return Err(AppError::NotAuthorized(
+            "Naabu attempt gateway is not exactly equal to its selected work-unit rectangles"
+                .into(),
+        ));
+    }
+    let expected_labels = gateway_destination_labels(&expected_destinations);
+    let actual_labels = network_policy
+        .allowed_destinations()
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if actual_labels.len() != network_policy.allowed_destinations().len()
+        || actual_labels != expected_labels
+    {
+        return Err(AppError::NotAuthorized(
+            "Naabu managed network policy is not exact for this launcher attempt".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn external_target_contains_address(
+    target: &crate::external_scope::CanonicalTarget,
+    address: IpAddr,
+) -> bool {
+    match target {
+        crate::external_scope::CanonicalTarget::Hostname(_) => true,
+        crate::external_scope::CanonicalTarget::Address(expected) => *expected == address,
+        crate::external_scope::CanonicalTarget::Network(network) => network.contains(&address),
+    }
+}
+
+fn gateway_destination_labels(destinations: &[GatewayDestination]) -> BTreeSet<String> {
+    let mut labels = BTreeSet::new();
+    for destination in destinations {
+        for port in &destination.ports {
+            if let Some(hostname) = destination.hostname.as_deref() {
+                labels.insert(format!("{hostname}:{port}"));
+            } else {
+                for address in &destination.addresses {
+                    labels.insert(std::net::SocketAddr::new(*address, *port).to_string());
+                }
+            }
+        }
+    }
+    labels
+}
+
 #[derive(Debug, Serialize)]
 struct ScopeDocument<'a> {
     schema_version: &'static str,
@@ -1067,28 +1413,45 @@ struct ScopeGrantDocument<'a> {
     confirmed_at: String,
     expires_at: Option<String>,
     authorization_reference: Option<&'a str>,
-    external_scope: Option<&'a crate::external_scope::ExternalScopeGrant>,
+    external_scope: Option<Cow<'a, crate::external_scope::ExternalScopeGrant>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     resolved_addresses: Option<Vec<String>>,
 }
 
 impl<'a> ScopeDocument<'a> {
+    #[cfg(test)]
     fn new(
         manifest: &'a EngineManifest,
         scope: &'a [ValidatedAssetScope<'a>],
         frozen_destinations: Option<&[GatewayDestination]>,
     ) -> AppResult<Self> {
+        Self::new_for_request(manifest, scope, frozen_destinations, None)
+    }
+
+    fn new_for_request(
+        manifest: &'a EngineManifest,
+        scope: &'a [ValidatedAssetScope<'a>],
+        frozen_destinations: Option<&[GatewayDestination]>,
+        naabu_launcher_plan: Option<&NaabuLauncherPlanDocument>,
+    ) -> AppResult<Self> {
         let external_launcher = uses_external_launcher(&manifest.id);
         let destinations = if external_launcher {
-            Some(frozen_destinations.ok_or_else(|| {
+            frozen_destinations.ok_or_else(|| {
                 AppError::NotAuthorized(format!(
                     "engine {} has no frozen address snapshot for its external launcher",
                     manifest.id
                 ))
-            })?)
+            })?;
+            Some(frozen_destinations.expect("external launcher destination was required"))
         } else {
             None
         };
+        let launcher_grant_ids = naabu_launcher_plan.map(|plan| {
+            plan.frozen_grants
+                .iter()
+                .map(|grant| grant.scope_grant_id.as_str())
+                .collect::<BTreeSet<_>>()
+        });
         // The control file is exact-only and may already exist after a crash.
         // Anchor its required timestamp to durable authorization input rather
         // than wall-clock serialization time so replaying the same attempt is
@@ -1097,6 +1460,11 @@ impl<'a> ScopeDocument<'a> {
         let generated_at = scope
             .iter()
             .flat_map(|entry| entry.grants.iter())
+            .filter(|grant| {
+                launcher_grant_ids
+                    .as_ref()
+                    .is_none_or(|selected| selected.contains(grant.id.as_str()))
+            })
             .map(|grant| grant.confirmed_at)
             .max()
             .ok_or_else(|| {
@@ -1105,38 +1473,67 @@ impl<'a> ScopeDocument<'a> {
                 )
             })?
             .to_rfc3339();
-        let assets = scope
-            .iter()
-            .map(|entry| {
-                let grants = entry
-                    .grants
-                    .iter()
-                    .map(|grant| {
-                        let resolved_addresses = match destinations {
-                            Some(destinations) => {
-                                let external = grant.external_scope.as_ref().ok_or_else(|| {
-                                    AppError::NotAuthorized(format!(
-                                        "external launcher grant {} has no structured target policy",
-                                        grant.id
-                                    ))
-                                })?;
-                                Some(frozen_addresses_for_grant(external, destinations)?)
-                            }
-                            None => None,
-                        };
-                        Ok(ScopeGrantDocument {
-                            id: &grant.id,
-                            permission: &grant.permission,
-                            confirmed_by: &grant.confirmed_by,
-                            confirmed_at: grant.confirmed_at.to_rfc3339(),
-                            expires_at: grant.expires_at.map(|value| value.to_rfc3339()),
-                            authorization_reference: grant.authorization_reference.as_deref(),
-                            external_scope: grant.external_scope.as_ref(),
-                            resolved_addresses,
-                        })
-                    })
-                    .collect::<AppResult<Vec<_>>>()?;
-                Ok(ScopeAssetDocument {
+        let mut assets = Vec::new();
+        for entry in scope {
+            let mut grants = Vec::new();
+            for grant in &entry.grants {
+                if launcher_grant_ids
+                    .as_ref()
+                    .is_some_and(|selected| !selected.contains(grant.id.as_str()))
+                {
+                    continue;
+                }
+                let resolved_addresses = match (destinations, naabu_launcher_plan) {
+                    (Some(_), Some(plan)) => {
+                        let external = grant.external_scope.as_ref().ok_or_else(|| {
+                            AppError::NotAuthorized(format!(
+                                "external launcher grant {} has no structured target policy",
+                                grant.id
+                            ))
+                        })?;
+                        Some(frozen_addresses_for_launcher_grant(external, plan)?)
+                    }
+                    (Some(destinations), None) => {
+                        let external = grant.external_scope.as_ref().ok_or_else(|| {
+                            AppError::NotAuthorized(format!(
+                                "external launcher grant {} has no structured target policy",
+                                grant.id
+                            ))
+                        })?;
+                        Some(frozen_addresses_for_grant(external, destinations)?)
+                    }
+                    (None, None) => None,
+                    (None, Some(_)) => {
+                        return Err(AppError::NotAuthorized(
+                            "Naabu launcher plan requires a managed gateway snapshot".into(),
+                        ));
+                    }
+                };
+                let external_scope = match (grant.external_scope.as_ref(), naabu_launcher_plan) {
+                    (Some(external), Some(plan))
+                        if plan.schema_version == NAABU_LAUNCHER_PLAN_SCHEMA_VERSION =>
+                    {
+                        let frozen = unique_launcher_grant(plan, &grant.id)?;
+                        let mut projected = external.clone();
+                        projected.ports = frozen.ports.iter().copied().collect();
+                        Some(Cow::Owned(projected))
+                    }
+                    (Some(external), _) => Some(Cow::Borrowed(external)),
+                    (None, _) => None,
+                };
+                grants.push(ScopeGrantDocument {
+                    id: &grant.id,
+                    permission: &grant.permission,
+                    confirmed_by: &grant.confirmed_by,
+                    confirmed_at: grant.confirmed_at.to_rfc3339(),
+                    expires_at: grant.expires_at.map(|value| value.to_rfc3339()),
+                    authorization_reference: grant.authorization_reference.as_deref(),
+                    external_scope,
+                    resolved_addresses,
+                });
+            }
+            if !grants.is_empty() {
+                assets.push(ScopeAssetDocument {
                     id: &entry.asset.id,
                     name: &entry.asset.name,
                     kind: &entry.asset.kind,
@@ -1144,9 +1541,14 @@ impl<'a> ScopeDocument<'a> {
                     region: entry.asset.region.as_deref(),
                     identifiers: entry.identifiers.clone(),
                     grants,
-                })
-            })
-            .collect::<AppResult<Vec<_>>>()?;
+                });
+            }
+        }
+        if assets.is_empty() {
+            return Err(AppError::NotAuthorized(
+                "Naabu compact launcher scope contains no selected asset grant".into(),
+            ));
+        }
         Ok(Self {
             schema_version: if external_launcher { "2" } else { "1" },
             engine_id: &manifest.id,
@@ -1158,6 +1560,48 @@ impl<'a> ScopeDocument<'a> {
 
 fn uses_external_launcher(engine_id: &str) -> bool {
     matches!(engine_id, "naabu" | "httpx" | "nuclei")
+}
+
+fn frozen_addresses_for_launcher_grant(
+    grant: &crate::external_scope::ExternalScopeGrant,
+    plan: &NaabuLauncherPlanDocument,
+) -> AppResult<Vec<String>> {
+    let frozen = unique_launcher_grant(plan, &grant.id)?;
+    if frozen.addresses.is_empty()
+        || frozen.addresses.len() > MAX_NAABU_FROZEN_ADDRESSES
+        || frozen
+            .addresses
+            .iter()
+            .any(|address| !external_target_contains_address(&grant.target, *address))
+        || frozen.ports.iter().any(|port| !grant.ports.contains(port))
+    {
+        return Err(AppError::NotAuthorized(format!(
+            "external grant {} does not contain the launcher frozen corpus",
+            grant.id
+        )));
+    }
+    Ok(frozen.addresses.iter().map(ToString::to_string).collect())
+}
+
+fn unique_launcher_grant<'a>(
+    plan: &'a NaabuLauncherPlanDocument,
+    grant_id: &str,
+) -> AppResult<&'a crate::naabu_work_plan::NaabuLauncherFrozenGrant> {
+    let mut matches = plan
+        .frozen_grants
+        .iter()
+        .filter(|frozen| frozen.scope_grant_id == grant_id);
+    let frozen = matches.next().ok_or_else(|| {
+        AppError::NotAuthorized(format!(
+            "external grant {grant_id} is absent from the launcher frozen corpus"
+        ))
+    })?;
+    if matches.next().is_some() {
+        return Err(AppError::NotAuthorized(format!(
+            "external grant {grant_id} appears more than once in the launcher frozen corpus"
+        )));
+    }
+    Ok(frozen)
 }
 
 fn frozen_addresses_for_grant(
@@ -1291,6 +1735,24 @@ mod tests {
         }
     }
 
+    struct NaabuLauncherMustNotRunGenericAdapter;
+
+    impl EngineAdapter for NaabuLauncherMustNotRunGenericAdapter {
+        fn engine_id(&self) -> &str {
+            NAABU_ENGINE_ID
+        }
+
+        fn adapter_version(&self) -> &str {
+            "adapter-1"
+        }
+
+        fn normalize(&self, _input: &AdapterInput<'_>) -> AppResult<AdapterOutput> {
+            panic!(
+                "launcher-v2 journal, quarantine, and unvalidated finals must not reach the generic adapter"
+            )
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ObservedLauncherPlan {
         path: PathBuf,
@@ -1347,7 +1809,9 @@ mod tests {
             *created_container = None;
             *creation_may_be_untracked = false;
             let path = plan.launcher_plan_file().ok_or_else(|| {
-                AppError::Internal("launcher-v2 plan was not mounted into the run plan".into())
+                AppError::Internal(
+                    "versioned launcher plan was not mounted into the run plan".into(),
+                )
             })?;
             *self.observed.lock().expect("observed plan lock") = Some(ObservedLauncherPlan {
                 path: path.to_path_buf(),
@@ -1436,7 +1900,7 @@ mod tests {
         }
     }
 
-    fn naabu_launcher_v2_manifest() -> EngineManifest {
+    fn current_naabu_launcher_manifest() -> EngineManifest {
         let mut manifest = manifest(true);
         manifest.id = NAABU_ENGINE_ID.into();
         manifest.display_name = "Naabu".into();
@@ -1459,13 +1923,13 @@ mod tests {
             resources: EngineExecutionResources {
                 timeout_seconds: 3_600,
             },
-            launcher_journal_version: Some(NAABU_LAUNCHER_PLAN_SCHEMA_VERSION),
+            launcher_journal_version: Some(LAUNCHER_V2_JOURNAL_SCHEMA_VERSION),
         });
         manifest
     }
 
-    fn naabu_launcher_plan(engine_run_id: &str, attempt: u32) -> NaabuLauncherPlanV2 {
-        NaabuLauncherPlanV2 {
+    fn naabu_launcher_plan(engine_run_id: &str, attempt: u32) -> NaabuLauncherPlanDocument {
+        NaabuLauncherPlanDocument {
             schema_version: NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
             engine_id: NAABU_ENGINE_ID.into(),
             engine_run_id: engine_run_id.into(),
@@ -1489,9 +1953,524 @@ mod tests {
         }
     }
 
-    fn naabu_launcher_plan_sha256(plan: &NaabuLauncherPlanV2) -> String {
+    fn naabu_launcher_plan_sha256(plan: &NaabuLauncherPlanDocument) -> String {
         let encoded = serde_json::to_vec(plan).expect("launcher plan JSON");
         hex::encode(Sha256::digest(encoded))
+    }
+
+    #[test]
+    fn compatible_launcher_accepts_legacy_v2_corpus_with_an_exact_attempt_gateway() {
+        let manifest = current_naabu_launcher_manifest();
+        let assets = vec![asset("one", true), asset("two", true)];
+        let mut grants = vec![
+            grant("one", ScanPermission::LowImpactExternalConnection, true),
+            grant("two", ScanPermission::LowImpactExternalConnection, true),
+        ];
+        grants[0]
+            .external_scope
+            .as_mut()
+            .expect("first scope")
+            .ports = [80, 443].into_iter().collect();
+        grants[1]
+            .external_scope
+            .as_mut()
+            .expect("second scope")
+            .ports = [22, 443].into_iter().collect();
+
+        let plan = NaabuLauncherPlanDocument {
+            schema_version: LEGACY_NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+            engine_id: NAABU_ENGINE_ID.into(),
+            engine_run_id: "legacy-engine-run".into(),
+            execution_attempt: 2,
+            frozen_grants: vec![
+                NaabuLauncherFrozenGrant {
+                    scope_grant_id: "grant-one".into(),
+                    addresses: vec!["192.0.2.11".parse().expect("first address")],
+                    ports: vec![80, 443],
+                },
+                NaabuLauncherFrozenGrant {
+                    scope_grant_id: "grant-two".into(),
+                    addresses: vec!["198.51.100.22".parse().expect("second address")],
+                    ports: vec![22, 443],
+                },
+            ],
+            requested_work_units: vec![NaabuLauncherWorkUnit {
+                unit_id: "wu_abcdefabcdefabcdefabcdefabcdefab".into(),
+                scope_sha256: "c".repeat(64),
+                grant_index: 0,
+                address_start: 0,
+                address_len: 1,
+                port_start: 1,
+                port_len: 1,
+                endpoint_pair_count: 1,
+                conservative_deadline_seconds: 36,
+            }],
+        };
+        let plan_digest = naabu_launcher_plan_sha256(&plan);
+        let frozen_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: ["192.0.2.11".parse().expect("gateway address")]
+                .into_iter()
+                .collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-legacy-replay",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "scan-run-1",
+            engine_run_id: "legacy-engine-run",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: Some(&frozen_destinations),
+            naabu_launcher_plan: Some(&plan),
+            expected_naabu_launcher_plan_sha256: Some(&plan_digest),
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 2,
+        };
+
+        validate_naabu_launcher_request(&request)
+            .expect("current launcher must accept an exact legacy plan");
+        let validated = validate_execution_scope_for_request(
+            &manifest,
+            &assets,
+            &grants,
+            &policy,
+            Some(&frozen_destinations),
+            Some(&plan),
+        )
+        .expect("legacy corpus with an exact selected gateway");
+        let document = ScopeDocument::new_for_request(
+            &manifest,
+            &validated,
+            Some(&frozen_destinations),
+            Some(&plan),
+        )
+        .expect("legacy full-corpus scope document");
+        let json = serde_json::to_value(document).expect("scope JSON");
+
+        assert_eq!(json["assets"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            json["assets"][0]["grants"][0]["external_scope"]["ports"],
+            serde_json::json!([80, 443])
+        );
+        assert_eq!(
+            json["assets"][1]["grants"][0]["external_scope"]["ports"],
+            serde_json::json!([22, 443])
+        );
+        assert_eq!(policy.allowed_destinations(), ["one.example:443"]);
+    }
+
+    #[test]
+    fn exact_gateway_binding_canonicalizes_duplicate_rectangles_across_grants_only() {
+        let manifest = current_naabu_launcher_manifest();
+        let mut second_asset = asset("two", true);
+        second_asset.identifiers[0].value = "one.example".into();
+        let assets = vec![asset("one", true), second_asset];
+        let first = grant("one", ScanPermission::LowImpactExternalConnection, true);
+        let mut second = grant("two", ScanPermission::LowImpactExternalConnection, true);
+        let second_external = second.external_scope.as_mut().expect("second scope");
+        second_external.target = CanonicalTarget::Hostname("one.example".into());
+        let grants = vec![first, second];
+        let address = "192.0.2.10".parse().expect("shared address");
+        let plan = NaabuLauncherPlanDocument {
+            schema_version: NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+            engine_id: NAABU_ENGINE_ID.into(),
+            engine_run_id: "overlap-engine-run".into(),
+            execution_attempt: 1,
+            frozen_grants: vec![
+                NaabuLauncherFrozenGrant {
+                    scope_grant_id: "grant-one".into(),
+                    addresses: vec![address],
+                    ports: vec![443],
+                },
+                NaabuLauncherFrozenGrant {
+                    scope_grant_id: "grant-two".into(),
+                    addresses: vec![address],
+                    ports: vec![443],
+                },
+            ],
+            requested_work_units: vec![
+                NaabuLauncherWorkUnit {
+                    unit_id: "wu_11111111111111111111111111111111".into(),
+                    scope_sha256: "1".repeat(64),
+                    grant_index: 0,
+                    address_start: 0,
+                    address_len: 1,
+                    port_start: 0,
+                    port_len: 1,
+                    endpoint_pair_count: 1,
+                    conservative_deadline_seconds: 36,
+                },
+                NaabuLauncherWorkUnit {
+                    unit_id: "wu_22222222222222222222222222222222".into(),
+                    scope_sha256: "2".repeat(64),
+                    grant_index: 1,
+                    address_start: 0,
+                    address_len: 1,
+                    port_start: 0,
+                    port_len: 1,
+                    endpoint_pair_count: 1,
+                    conservative_deadline_seconds: 36,
+                },
+            ],
+        };
+        let frozen_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: [address].into_iter().collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-cross-grant-overlap",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+
+        validate_execution_scope_for_request(
+            &manifest,
+            &assets,
+            &grants,
+            &policy,
+            Some(&frozen_destinations),
+            Some(&plan),
+        )
+        .expect("equal rectangles from distinct grants canonicalize to one gateway destination");
+
+        let mut invalid_same_grant = plan.clone();
+        invalid_same_grant.frozen_grants.truncate(1);
+        invalid_same_grant.requested_work_units[1].grant_index = 0;
+        let error = validate_execution_scope_for_request(
+            &manifest,
+            &assets,
+            &grants,
+            &policy,
+            Some(&frozen_destinations),
+            Some(&invalid_same_grant),
+        )
+        .expect_err("duplicate rectangles within one grant remain invalid");
+        assert!(
+            error
+                .to_string()
+                .contains("overlap within one frozen grant")
+        );
+    }
+
+    #[test]
+    fn cross_grant_partial_overlap_is_the_exact_union_without_scope_expansion() {
+        let manifest = current_naabu_launcher_manifest();
+        let mut second_asset = asset("two", true);
+        second_asset.identifiers[0].value = "one.example".into();
+        let assets = vec![asset("one", true), second_asset];
+        let mut first = grant("one", ScanPermission::LowImpactExternalConnection, true);
+        first.external_scope.as_mut().expect("first scope").ports = [80, 443].into_iter().collect();
+        let mut second = grant("two", ScanPermission::LowImpactExternalConnection, true);
+        let second_external = second.external_scope.as_mut().expect("second scope");
+        second_external.target = CanonicalTarget::Hostname("one.example".into());
+        second_external.ports = [443, 8443].into_iter().collect();
+        let grants = vec![first, second];
+        let address = "192.0.2.10".parse().expect("shared address");
+        let plan = NaabuLauncherPlanDocument {
+            schema_version: NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+            engine_id: NAABU_ENGINE_ID.into(),
+            engine_run_id: "partial-overlap-engine-run".into(),
+            execution_attempt: 1,
+            frozen_grants: vec![
+                NaabuLauncherFrozenGrant {
+                    scope_grant_id: "grant-one".into(),
+                    addresses: vec![address],
+                    ports: vec![80, 443],
+                },
+                NaabuLauncherFrozenGrant {
+                    scope_grant_id: "grant-two".into(),
+                    addresses: vec![address],
+                    ports: vec![443, 8443],
+                },
+            ],
+            requested_work_units: vec![
+                NaabuLauncherWorkUnit {
+                    unit_id: "wu_33333333333333333333333333333333".into(),
+                    scope_sha256: "3".repeat(64),
+                    grant_index: 0,
+                    address_start: 0,
+                    address_len: 1,
+                    port_start: 0,
+                    port_len: 2,
+                    endpoint_pair_count: 2,
+                    conservative_deadline_seconds: 36,
+                },
+                NaabuLauncherWorkUnit {
+                    unit_id: "wu_44444444444444444444444444444444".into(),
+                    scope_sha256: "4".repeat(64),
+                    grant_index: 1,
+                    address_start: 0,
+                    address_len: 1,
+                    port_start: 0,
+                    port_len: 2,
+                    endpoint_pair_count: 2,
+                    conservative_deadline_seconds: 36,
+                },
+            ],
+        };
+        let frozen_destinations = vec![
+            GatewayDestination {
+                hostname: Some("one.example".into()),
+                addresses: [address].into_iter().collect(),
+                ports: [80, 443].into_iter().collect(),
+                allow_sensitive_networks: false,
+            },
+            GatewayDestination {
+                hostname: Some("one.example".into()),
+                addresses: [address].into_iter().collect(),
+                ports: [443, 8443].into_iter().collect(),
+                allow_sensitive_networks: false,
+            },
+        ];
+        let exact_labels = gateway_destination_labels(&frozen_destinations);
+        assert_eq!(
+            exact_labels,
+            [
+                "one.example:80".to_string(),
+                "one.example:443".to_string(),
+                "one.example:8443".to_string(),
+            ]
+            .into_iter()
+            .collect()
+        );
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-cross-grant-partial-overlap",
+            exact_labels.iter().cloned().collect(),
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+
+        validate_execution_scope_for_request(
+            &manifest,
+            &assets,
+            &grants,
+            &policy,
+            Some(&frozen_destinations),
+            Some(&plan),
+        )
+        .expect("partial overlap across grants is one exact endpoint union");
+
+        let wider = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-cross-grant-partial-overlap-wider",
+            vec![
+                "one.example:22".to_string(),
+                "one.example:80".to_string(),
+                "one.example:443".to_string(),
+                "one.example:8443".to_string(),
+            ],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("syntactically valid wider policy");
+        validate_execution_scope_for_request(
+            &manifest,
+            &assets,
+            &grants,
+            &wider,
+            Some(&frozen_destinations),
+            Some(&plan),
+        )
+        .expect_err("a port outside the exact cross-grant union must remain rejected");
+    }
+
+    #[test]
+    fn legacy_gateway_binding_retains_its_historical_per_unit_bound() {
+        let manifest = current_naabu_launcher_manifest();
+        let assets = vec![asset("one", true)];
+        let mut grants = vec![grant(
+            "one",
+            ScanPermission::LowImpactExternalConnection,
+            true,
+        )];
+        grants[0]
+            .external_scope
+            .as_mut()
+            .expect("external scope")
+            .ports = (1..=100).collect();
+        let addresses = (1_u8..=120)
+            .map(|last| IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, last)))
+            .collect::<Vec<_>>();
+        let ports = (1..=100).collect::<Vec<_>>();
+        let mut plan = NaabuLauncherPlanDocument {
+            schema_version: LEGACY_NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+            engine_id: NAABU_ENGINE_ID.into(),
+            engine_run_id: "legacy-large-engine-run".into(),
+            execution_attempt: 1,
+            frozen_grants: vec![NaabuLauncherFrozenGrant {
+                scope_grant_id: "grant-one".into(),
+                addresses: addresses.clone(),
+                ports,
+            }],
+            requested_work_units: vec![
+                NaabuLauncherWorkUnit {
+                    unit_id: "wu_33333333333333333333333333333333".into(),
+                    scope_sha256: "3".repeat(64),
+                    grant_index: 0,
+                    address_start: 0,
+                    address_len: 120,
+                    port_start: 0,
+                    port_len: 50,
+                    endpoint_pair_count: 6_000,
+                    conservative_deadline_seconds: 300,
+                },
+                NaabuLauncherWorkUnit {
+                    unit_id: "wu_44444444444444444444444444444444".into(),
+                    scope_sha256: "4".repeat(64),
+                    grant_index: 0,
+                    address_start: 0,
+                    address_len: 120,
+                    port_start: 50,
+                    port_len: 50,
+                    endpoint_pair_count: 6_000,
+                    conservative_deadline_seconds: 300,
+                },
+            ],
+        };
+        let address_set = addresses.into_iter().collect::<BTreeSet<_>>();
+        let frozen_destinations = vec![
+            GatewayDestination {
+                hostname: Some("one.example".into()),
+                addresses: address_set.clone(),
+                ports: (1..=50).collect(),
+                allow_sensitive_networks: false,
+            },
+            GatewayDestination {
+                hostname: Some("one.example".into()),
+                addresses: address_set,
+                ports: (51..=100).collect(),
+                allow_sensitive_networks: false,
+            },
+        ];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-legacy-large",
+            (1..=100)
+                .map(|port| format!("one.example:{port}"))
+                .collect(),
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+
+        validate_execution_scope_for_request(
+            &manifest,
+            &assets,
+            &grants,
+            &policy,
+            Some(&frozen_destinations),
+            Some(&plan),
+        )
+        .expect("legacy schema keeps 10,000 endpoints per unit, not per attempt");
+
+        plan.schema_version = NAABU_LAUNCHER_PLAN_SCHEMA_VERSION;
+        let error = validate_execution_scope_for_request(
+            &manifest,
+            &assets,
+            &grants,
+            &policy,
+            Some(&frozen_destinations),
+            Some(&plan),
+        )
+        .expect_err("current schema retains its aggregate endpoint bound");
+        assert!(error.to_string().contains("10000 exact endpoints"));
+    }
+
+    #[test]
+    fn launcher_v3_projects_eleven_max_port_grants_below_the_scope_limit() {
+        let manifest = current_naabu_launcher_manifest();
+        let mut assets = Vec::new();
+        let mut grants = Vec::new();
+        for index in 0..11 {
+            let id = format!("wide-{index:02}");
+            assets.push(asset(&id, true));
+            let mut value = grant(&id, ScanPermission::LowImpactExternalConnection, true);
+            value.external_scope.as_mut().expect("external scope").ports = (1..=u16::MAX).collect();
+            grants.push(value);
+        }
+        let validated = assets
+            .iter()
+            .zip(&grants)
+            .map(|(asset, grant)| ValidatedAssetScope {
+                asset,
+                identifiers: vec![&asset.identifiers[0]],
+                grants: vec![grant],
+            })
+            .collect::<Vec<_>>();
+        let plan = NaabuLauncherPlanDocument {
+            schema_version: NAABU_LAUNCHER_PLAN_SCHEMA_VERSION,
+            engine_id: NAABU_ENGINE_ID.into(),
+            engine_run_id: "run-eleven-wide-grants".into(),
+            execution_attempt: 1,
+            frozen_grants: grants
+                .iter()
+                .enumerate()
+                .map(|(index, grant)| NaabuLauncherFrozenGrant {
+                    scope_grant_id: grant.id.clone(),
+                    addresses: vec![format!("192.0.2.{}", index + 1).parse().unwrap()],
+                    ports: vec![443],
+                })
+                .collect(),
+            requested_work_units: (0..11)
+                .map(|index| NaabuLauncherWorkUnit {
+                    unit_id: format!("wu_{:032x}", index + 1),
+                    scope_sha256: format!("{:064x}", index + 1),
+                    grant_index: index,
+                    address_start: 0,
+                    address_len: 1,
+                    port_start: 0,
+                    port_len: 1,
+                    endpoint_pair_count: 1,
+                    conservative_deadline_seconds: 36,
+                })
+                .collect(),
+        };
+        let document =
+            ScopeDocument::new_for_request(&manifest, &validated, Some(&[]), Some(&plan))
+                .expect("compact scope document");
+        let scope_json = serde_json::to_vec(&document).expect("scope JSON");
+        let plan_json = serde_json::to_vec(&plan).expect("plan JSON");
+
+        assert!(scope_json.len() < 4 * 1024 * 1024);
+        assert!(plan_json.len() < 4 * 1024 * 1024);
+        let scope: serde_json::Value = serde_json::from_slice(&scope_json).unwrap();
+        for asset in scope["assets"].as_array().unwrap() {
+            assert_eq!(
+                asset["grants"][0]["external_scope"]["ports"],
+                serde_json::json!([443])
+            );
+        }
+
+        let mut legacy_plan = plan.clone();
+        legacy_plan.schema_version =
+            crate::naabu_work_plan::LEGACY_NAABU_LAUNCHER_PLAN_SCHEMA_VERSION;
+        let legacy_document =
+            ScopeDocument::new_for_request(&manifest, &validated, Some(&[]), Some(&legacy_plan))
+                .expect("legacy full scope document");
+        let legacy_scope_json = serde_json::to_vec(&legacy_document).expect("legacy scope JSON");
+        assert!(
+            legacy_scope_json.len() > 4 * 1024 * 1024,
+            "fixture must demonstrate why the v3 scope projection is required"
+        );
     }
 
     fn asset(id: &str, active_external: bool) -> Asset {
@@ -1825,13 +2804,229 @@ mod tests {
     }
 
     #[test]
-    fn naabu_launcher_v2_sidecar_reaches_the_exact_read_only_run_plan_mount() {
+    fn current_naabu_launcher_sidecar_reaches_the_exact_read_only_run_plan_mount() {
         let temp = tempfile::tempdir().expect("temp directory");
         let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
         let runtime = LauncherPlanCaptureRuntime::default();
         let adapters = AdapterRegistry::default();
         let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
-        let manifest = naabu_launcher_v2_manifest();
+        let manifest = current_naabu_launcher_manifest();
+        let assets = vec![asset("one", true), asset("two", true)];
+        let mut grants = vec![
+            grant("one", ScanPermission::LowImpactExternalConnection, true),
+            grant("two", ScanPermission::LowImpactExternalConnection, true),
+        ];
+        grants[0].external_scope.as_mut().unwrap().ports = [80, 443].into_iter().collect();
+        let frozen_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: ["192.0.2.11".parse().expect("test address")]
+                .into_iter()
+                .collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("managed policy");
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let mut launcher_plan = naabu_launcher_plan("engine-run-1", 1);
+        launcher_plan.frozen_grants[0].addresses =
+            vec!["192.0.2.11".parse().expect("test address")];
+        launcher_plan.frozen_grants[0].ports = vec![443];
+        let expected_launcher_digest = naabu_launcher_plan_sha256(&launcher_plan);
+        let wider_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: [
+                "192.0.2.10".parse().expect("test address"),
+                "192.0.2.11".parse().expect("test address"),
+            ]
+            .into_iter()
+            .collect(),
+            ports: [80, 443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        assert!(
+            validate_execution_scope_for_request(
+                &manifest,
+                &assets,
+                &grants,
+                &policy,
+                Some(&wider_destinations),
+                Some(&launcher_plan),
+            )
+            .is_err(),
+            "a gateway wider than the selected launcher rectangle must be rejected"
+        );
+        let wider_policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-wide",
+            vec!["one.example:80".into(), "one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .expect("wider policy fixture");
+        assert!(
+            validate_execution_scope_for_request(
+                &manifest,
+                &assets,
+                &grants,
+                &wider_policy,
+                Some(&frozen_destinations),
+                Some(&launcher_plan),
+            )
+            .is_err(),
+            "container network labels wider than the selected launcher rectangle must be rejected"
+        );
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: Some(&frozen_destinations),
+            naabu_launcher_plan: Some(&launcher_plan),
+            expected_naabu_launcher_plan_sha256: Some(&expected_launcher_digest),
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let mut observed_checkpoint_digests = Vec::new();
+        let report = orchestrator
+            .execute_with_observer(&request, &CancellationToken::default(), |checkpoint| {
+                observed_checkpoint_digests
+                    .push(checkpoint.checkpoint.launcher_plan_sha256.clone());
+                Ok(())
+            })
+            .expect("captured launcher plan report");
+        assert_eq!(
+            report.checkpoint.stage,
+            ExecutionStage::CapturedAwaitingAdapter
+        );
+        assert_eq!(
+            report.checkpoint.container_name.as_deref(),
+            Some(
+                planned_container_name(NAABU_ENGINE_ID, "engine-run-1", 1)
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            report.checkpoint.launcher_plan_sha256.as_deref(),
+            Some(expected_launcher_digest.as_str())
+        );
+        assert!(report.checkpoint.resume_token().is_ok());
+        assert!(!observed_checkpoint_digests.is_empty());
+        assert!(
+            observed_checkpoint_digests
+                .iter()
+                .all(|digest| { digest.as_deref() == Some(expected_launcher_digest.as_str()) })
+        );
+        assert!(report.checkpoint.last_error.is_none());
+        assert!(report.warnings.iter().any(|warning| {
+            warning.contains("journal-verified results")
+                && warning.contains("unfinished work remains not tested")
+        }));
+
+        let observed = runtime
+            .observed()
+            .expect("run plan reached runtime boundary");
+        let expected_path = std::fs::canonicalize(
+            temp.path()
+                .join("artifacts/case-1/run-1/engine-run-1/attempt-1/control")
+                .join(NAABU_LAUNCHER_PLAN_CONTROL_FILE),
+        )
+        .expect("canonical launcher plan");
+        assert_eq!(observed.path, expected_path);
+        assert!(
+            std::fs::metadata(&observed.path)
+                .expect("launcher plan metadata")
+                .permissions()
+                .readonly()
+        );
+        assert_eq!(
+            serde_json::from_slice::<NaabuLauncherPlanDocument>(&observed.bytes)
+                .expect("typed launcher plan"),
+            launcher_plan
+        );
+        let expected_mount = format!(
+            "type=bind,src={},dst=/run/ai-security-scanner/execution-journal-v2.json,readonly",
+            observed.path.display()
+        );
+        assert_eq!(
+            observed
+                .runtime_args
+                .windows(2)
+                .filter_map(|arguments| {
+                    (arguments[0] == "--mount"
+                        && arguments[1]
+                            .contains("/run/ai-security-scanner/execution-journal-v2.json"))
+                    .then_some(arguments[1].as_str())
+                })
+                .collect::<Vec<_>>(),
+            [expected_mount.as_str()]
+        );
+        let scope_path = temp
+            .path()
+            .join("artifacts/case-1/run-1/engine-run-1/attempt-1/control/scope.json");
+        let scope_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(scope_path).expect("launcher scope document"))
+                .expect("launcher scope JSON");
+        assert_eq!(
+            scope_json["assets"][0]["grants"][0]["resolved_addresses"],
+            serde_json::json!(["192.0.2.11"])
+        );
+        assert_eq!(
+            scope_json["assets"][0]["grants"][0]["external_scope"]["ports"],
+            serde_json::json!([443]),
+            "scope schema 2 must carry the same compact port set as launcher plan schema 3"
+        );
+        assert_eq!(
+            scope_json["assets"].as_array().map(Vec::len),
+            Some(1),
+            "unselected grants and assets must stay out of the compact attempt scope"
+        );
+    }
+
+    #[test]
+    fn successful_naabu_launcher_v2_capture_waits_for_host_verified_normalization() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(0),
+            stdout: b"launcher stdout".to_vec(),
+            stderr: Vec::new(),
+            output_files: BTreeMap::from([
+                (
+                    "launcher-v2/journal.jsonl".into(),
+                    b"unparsed host-verification fixture\n".to_vec(),
+                ),
+                (
+                    "launcher-v2/quarantine/unit-000000/attempt-1.raw.jsonl".into(),
+                    b"untrusted quarantine fixture".to_vec(),
+                ),
+                (
+                    "launcher-v2/units/unit-000000/attempt-1.jsonl".into(),
+                    b"candidate final fixture".to_vec(),
+                ),
+            ]),
+        });
+        let mut adapters = AdapterRegistry::default();
+        adapters
+            .register(Arc::new(NaabuLauncherMustNotRunGenericAdapter))
+            .expect("register launcher tripwire adapter");
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = current_naabu_launcher_manifest();
         let assets = vec![asset("one", true)];
         let grants = vec![grant(
             "one",
@@ -1876,79 +3071,129 @@ mod tests {
             attempt: 1,
         };
 
-        let mut observed_checkpoint_digests = Vec::new();
+        let mut captured_handoffs = Vec::new();
         let report = orchestrator
             .execute_with_observer(&request, &CancellationToken::default(), |checkpoint| {
-                observed_checkpoint_digests
-                    .push(checkpoint.checkpoint.launcher_plan_sha256.clone());
+                if checkpoint.checkpoint.stage == ExecutionStage::CapturedAwaitingAdapter {
+                    captured_handoffs.push((
+                        checkpoint.checkpoint.artifact_ids.clone(),
+                        checkpoint.raw_artifacts.len(),
+                    ));
+                }
                 Ok(())
             })
-            .expect("captured launcher plan report");
-        assert_eq!(report.checkpoint.stage, ExecutionStage::Failed);
-        assert_eq!(
-            report.checkpoint.container_name.as_deref(),
-            Some(
-                planned_container_name(NAABU_ENGINE_ID, "engine-run-1", 1)
-                    .unwrap()
-                    .as_str()
-            )
-        );
-        assert_eq!(
-            report.checkpoint.launcher_plan_sha256.as_deref(),
-            Some(expected_launcher_digest.as_str())
-        );
-        assert!(report.checkpoint.resume_token().is_ok());
-        assert!(!observed_checkpoint_digests.is_empty());
-        assert!(
-            observed_checkpoint_digests
-                .iter()
-                .all(|digest| { digest.as_deref() == Some(expected_launcher_digest.as_str()) })
-        );
-        assert!(
-            report
-                .checkpoint
-                .last_error
-                .as_deref()
-                .is_some_and(|message| message.contains("stopped after observing"))
-        );
+            .expect("launcher capture report");
 
-        let observed = runtime
-            .observed()
-            .expect("run plan reached runtime boundary");
-        let expected_path = std::fs::canonicalize(
-            temp.path()
-                .join("artifacts/case-1/run-1/engine-run-1/attempt-1/control")
-                .join(NAABU_LAUNCHER_PLAN_CONTROL_FILE),
+        assert_eq!(
+            report.checkpoint.stage,
+            ExecutionStage::CapturedAwaitingAdapter
+        );
+        assert_eq!(report.exit_code, Some(0));
+        assert!(report.findings.is_empty());
+        assert!(report.checkpoint.last_error.is_none());
+        assert_eq!(report.raw_artifacts.len(), 5);
+        assert!(report.raw_artifacts.iter().any(|artifact| {
+            artifact
+                .relative_path
+                .ends_with("/output/launcher-v2/journal.jsonl")
+        }));
+        assert_eq!(captured_handoffs.len(), 1);
+        assert_eq!(captured_handoffs[0].0, report.checkpoint.artifact_ids);
+        assert_eq!(captured_handoffs[0].1, report.raw_artifacts.len());
+    }
+
+    #[test]
+    fn nonzero_naabu_launcher_capture_still_reaches_the_verified_journal_handoff() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let store = ArtifactStore::open(temp.path().join("artifacts")).expect("store");
+        let runtime = FakeContainerRuntime::default();
+        runtime.set_behavior(FakeRunBehavior {
+            exit_code: Some(126),
+            output_files: BTreeMap::from([
+                (
+                    "launcher-v2/journal.jsonl".into(),
+                    b"durable complete prefix\n{\"truncated\"".to_vec(),
+                ),
+                (
+                    "launcher-v2/units/unit-000000/attempt-1.jsonl".into(),
+                    b"candidate final fixture".to_vec(),
+                ),
+            ]),
+            ..FakeRunBehavior::default()
+        });
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest = current_naabu_launcher_manifest();
+        let assets = vec![asset("one", true)];
+        let grants = vec![grant(
+            "one",
+            ScanPermission::LowImpactExternalConnection,
+            true,
+        )];
+        let frozen_destinations = vec![GatewayDestination {
+            hostname: Some("one.example".into()),
+            addresses: ["192.0.2.10".parse().expect("test address")]
+                .into_iter()
+                .collect(),
+            ports: [443].into_iter().collect(),
+            allow_sensitive_networks: false,
+        }];
+        let policy = NetworkPolicy::managed(
+            "ass-egress",
+            "policy-1",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
         )
-        .expect("canonical launcher plan");
-        assert_eq!(observed.path, expected_path);
+        .expect("managed policy");
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let launcher_plan = naabu_launcher_plan("engine-run-1", 1);
+        let expected_launcher_digest = naabu_launcher_plan_sha256(&launcher_plan);
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "engine-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: Some(&frozen_destinations),
+            naabu_launcher_plan: Some(&launcher_plan),
+            expected_naabu_launcher_plan_sha256: Some(&expected_launcher_digest),
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .expect("captured launcher report");
+
+        assert_eq!(
+            report.checkpoint.stage,
+            ExecutionStage::CapturedAwaitingAdapter
+        );
+        assert_eq!(report.exit_code, Some(126));
+        assert!(report.checkpoint.cleanup_completed);
+        assert!(report.checkpoint.last_error.is_none());
+        assert!(report.findings.is_empty());
+        assert!(report.warnings.iter().any(|warning| {
+            warning.contains("journal-verified results")
+                && warning.contains("unfinished work remains not tested")
+        }));
+        assert!(report.raw_artifacts.iter().any(|artifact| {
+            artifact
+                .relative_path
+                .ends_with("/output/launcher-v2/journal.jsonl")
+        }));
         assert!(
-            std::fs::metadata(&observed.path)
-                .expect("launcher plan metadata")
-                .permissions()
-                .readonly()
-        );
-        assert_eq!(
-            serde_json::from_slice::<NaabuLauncherPlanV2>(&observed.bytes)
-                .expect("typed launcher plan"),
-            launcher_plan
-        );
-        let expected_mount = format!(
-            "type=bind,src={},dst=/run/ai-security-scanner/execution-journal-v2.json,readonly",
-            observed.path.display()
-        );
-        assert_eq!(
-            observed
-                .runtime_args
-                .windows(2)
-                .filter_map(|arguments| {
-                    (arguments[0] == "--mount"
-                        && arguments[1]
-                            .contains("/run/ai-security-scanner/execution-journal-v2.json"))
-                    .then_some(arguments[1].as_str())
-                })
-                .collect::<Vec<_>>(),
-            [expected_mount.as_str()]
+            runtime
+                .calls()
+                .iter()
+                .any(|call| matches!(call, RuntimeCall::Cleanup(_)))
         );
     }
 
@@ -1959,7 +3204,7 @@ mod tests {
         let runtime = FakeContainerRuntime::default();
         let adapters = AdapterRegistry::default();
         let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
-        let manifest = naabu_launcher_v2_manifest();
+        let manifest = current_naabu_launcher_manifest();
         let assets = vec![asset("one", true)];
         let grants = vec![grant(
             "one",
@@ -2025,7 +3270,7 @@ mod tests {
         let runtime = FakeContainerRuntime::default();
         let adapters = AdapterRegistry::default();
         let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
-        let manifest = naabu_launcher_v2_manifest();
+        let manifest = current_naabu_launcher_manifest();
         let assets = vec![asset("one", true)];
         let grants = vec![grant(
             "one",
@@ -2554,6 +3799,14 @@ mod tests {
                 &ExecutionStage::Running,
                 &ExecutionStage::AdaptingArtifacts,
             ]
+        );
+        assert_eq!(
+            observed
+                .iter()
+                .map(|(_, _, cleanup_completed)| *cleanup_completed)
+                .collect::<Vec<_>>(),
+            vec![true, true, true, false, true],
+            "only the Running checkpoint opens a container cleanup obligation"
         );
         assert!(observed.last().is_some_and(|(_, count, cleaned)| {
             *count == report.raw_artifacts.len() && *cleaned

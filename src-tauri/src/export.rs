@@ -1210,6 +1210,11 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
             redact_known_literals(&mut dimension.observation, &replacements);
         }
     }
+    for (index, scope) in report.actual.network_scopes.iter_mut().enumerate() {
+        scope.target = format!("[redacted network target {}]", index + 1);
+        scope.address_ranges = vec![format!("[redacted address set {}]", index + 1)];
+        scope.port_ranges = vec![format!("[redacted port set {}]", index + 1)];
+    }
     for unavailable in &mut report.actual.unavailable_dimensions {
         redact_known_literals(&mut unavailable.dimension, &replacements);
         redact_known_literals(&mut unavailable.explanation, &replacements);
@@ -2319,7 +2324,7 @@ mod tests {
         ExternalActivity, ExternalScopeGrant, RatePolicy, ResolutionSnapshot, ResolvedExternalPlan,
         TemplatePolicy, TransportProtocol,
     };
-    use crate::naabu_work_plan::{NaabuWorkPlanIdentity, build_naabu_work_plan};
+    use crate::naabu_work_plan::{NAABU_ENGINE_ID, NaabuWorkPlanIdentity, build_naabu_work_plan};
     use chrono::TimeZone;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
@@ -2385,6 +2390,7 @@ mod tests {
                 started_at: Some(time),
                 finished_at: Some(time),
                 resume_token: None,
+                last_execution_report_sha256: None,
                 engine_version: Some("1.2.3".into()),
                 image_digest: Some("sha256:abc".into()),
                 rule_version: Some("2026.08".into()),
@@ -3099,6 +3105,7 @@ mod tests {
         case.scan_runs[0].engine_runs[0].error_message = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].cleanup_detail = Some(SENTINEL.into());
         case.scan_runs[0].engine_runs[0].warnings = vec![SENTINEL.into()];
+        case.scan_runs[0].engine_runs[0].engine_id = NAABU_ENGINE_ID.into();
         let private_naabu_plan = build_naabu_work_plan(
             NaabuWorkPlanIdentity::new("case-1", "run-1", "engine-run-1", time),
             &[ResolvedExternalPlan {
@@ -3139,7 +3146,7 @@ mod tests {
             .collect::<Vec<_>>();
         let requested_units = requested_unit_ids.iter().cloned().collect();
         let private_launcher = private_naabu_plan
-            .launcher_plan_v2(1, Some(&requested_units))
+            .launcher_plan_v3(1, Some(&requested_units))
             .unwrap();
         case.scan_runs[0].engine_runs[0].naabu_attempt_requests = vec![NaabuAttemptRequest {
             schema_version: NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
@@ -3220,7 +3227,7 @@ mod tests {
                 run_id: "run-1".into(),
                 engine_run_id: Some("engine-run-1".into()),
                 kind: EvidenceKind::Observation,
-                engine_id: "engine-1".into(),
+                engine_id: NAABU_ENGINE_ID.into(),
                 source_rule: None,
                 result_pointer_sha256: None,
                 observed_at: time,
@@ -3245,7 +3252,7 @@ mod tests {
             finding_id: "finding-1".into(),
             fingerprint: "fingerprint-1".into(),
             asset_ids: vec!["asset-1".into()],
-            engine_ids: vec!["engine-1".into()],
+            engine_ids: vec![NAABU_ENGINE_ID.into()],
             severity: Severity::High,
             confidence: Confidence::High,
             evidence_hashes: vec![case.raw_artifacts[0].sha256.clone()],
@@ -3269,7 +3276,7 @@ mod tests {
                 evidence_changed: true,
                 reasons: vec![FindingDiffReason {
                     code: FindingDiffReasonCode::EvidenceChanged,
-                    engine_id: Some("engine-1".into()),
+                    engine_id: Some(NAABU_ENGINE_ID.into()),
                     asset_id: Some("asset-1".into()),
                     detail: SENTINEL.into(),
                 }],
@@ -3277,7 +3284,7 @@ mod tests {
             complete: false,
             completeness_issues: vec![FindingDiffReason {
                 code: FindingDiffReasonCode::CoordinateNotCompleted,
-                engine_id: Some("engine-1".into()),
+                engine_id: Some(NAABU_ENGINE_ID.into()),
                 asset_id: Some("asset-1".into()),
                 detail: SENTINEL.into(),
             }],
@@ -3346,6 +3353,16 @@ mod tests {
         );
         let standard_report =
             beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+        assert_eq!(
+            standard_report.actual.network_scopes.len(),
+            private_attempt_unit_count,
+            "the redaction fixture must exercise exact network-scope reporting"
+        );
+        assert!(standard_report.actual.network_scopes.iter().all(|scope| {
+            scope.target.starts_with("[redacted network target ")
+                && scope.address_ranges[0].starts_with("[redacted address set ")
+                && scope.port_ranges[0].starts_with("[redacted port set ")
+        }));
         assert_ne!(
             standard_report.state.summary,
             crate::beginner_report::BeginnerReportSummary::Complete

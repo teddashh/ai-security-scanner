@@ -768,10 +768,25 @@ export interface BeginnerActualCheck {
   }>;
 }
 
+export interface BeginnerNetworkScopeCoverage {
+  taskId: string;
+  checkId: string;
+  workUnitId: string;
+  targetAssetId: string;
+  target: string;
+  addressRanges: string[];
+  portRanges: string[];
+  transport: string;
+  stage: "quick_discovery" | "inventory" | "deep";
+  outcome: "tested_complete" | "tested_partial" | "failed" | "timed_out" | "cancelled" | "not_tested";
+  observedAt?: string;
+}
+
 export interface BeginnerActualCoverage {
   observedFrom?: string;
   observedUntil?: string;
   checks: BeginnerActualCheck[];
+  networkScopes: BeginnerNetworkScopeCoverage[];
   unavailableDimensions: BeginnerUnavailableDimension[];
 }
 

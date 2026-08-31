@@ -87,6 +87,14 @@ const nextStepCopy = {
     en: "Review the results already saved, then continue this scan to finish the check.",
     zhTW: "先查看已保存的結果，再繼續掃描以完成這項檢查。",
   },
+  boundedRetriesComplete: {
+    en: "Review the saved results and what was not tested. If you want to try the unfinished items again, start a new scan.",
+    zhTW: "查看已保存的結果與未測試項目；如果想再次嘗試未完成項目，請開始新的掃描。",
+  },
+  cancelledWithResults: {
+    en: "Review the results saved before you stopped the scan. Start a new scan whenever you want to check the remaining items.",
+    zhTW: "查看停止掃描前已保存的結果；想檢查剩餘項目時，再開始新的掃描。",
+  },
   interrupted: {
     en: "Continue the original scan to pick up where the app stopped.",
     zhTW: "繼續原本的掃描，就能從程式停止的位置接著執行。",
@@ -234,6 +242,12 @@ export const engineNextStepFor = (engine: EngineRun): BilingualText => {
   if (engine.errorCode === "resume_work_plan_invalid") return nextStepCopy.savedPlanUnavailable;
   if (engine.errorCode === "runtime_cleanup_identity_unavailable") {
     return nextStepCopy.cleanupIdentityUnavailable;
+  }
+  if (engine.errorCode === "coverage_incomplete_after_bounded_retries") {
+    return nextStepCopy.boundedRetriesComplete;
+  }
+  if (engine.errorCode === "cancelled_after_partial_results") {
+    return nextStepCopy.cancelledWithResults;
   }
   if (engine.status === "partial") return nextStepCopy.partial;
   if (targetSetupErrorCodes.has(engine.errorCode ?? "")) return nextStepCopy.targetSetup;

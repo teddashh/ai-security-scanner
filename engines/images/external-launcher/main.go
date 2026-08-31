@@ -51,10 +51,14 @@ const (
 	naabuEngineCeiling           = 4 * time.Hour
 	httpEngineCeiling            = 2 * time.Hour
 	maxNucleiRequestsPerTemplate = 20
-	launcherV2SchemaVersion      = 2
-	maxLauncherV2Units           = 512
+	launcherPlanLegacyVersion    = 2
+	launcherPlanCurrentVersion   = 3
+	launcherJournalSchemaVersion = 2
+	maxLauncherLegacyUnits       = 512
+	maxLauncherCurrentUnits      = 128
 	maxLauncherV2FrozenGrants    = 128
-	maxLauncherV2EndpointPairs   = 10_000
+	maxLauncherEndpointPairsUnit = 10_000
+	maxLauncherCurrentPairs      = 10_000
 	maxLauncherV2JournalBytes    = 4 * 1024 * 1024
 	maxLauncherV2RecordBytes     = 1024 * 1024
 	maxLauncherV2OpaqueIDBytes   = 128
@@ -261,6 +265,40 @@ type launcherV2RunResult struct {
 	Err     error
 }
 
+// launcherV2IncompleteRun means the launcher completed its own contract and
+// closed a truthful journal, but one or more scanner work units did not finish
+// completely. The process must still exit zero so the host can validate and
+// persist completed or partial evidence, then continue the remaining work.
+// Fatal launcher, journal, or plan failures use ordinary errors and exit 126.
+type launcherV2IncompleteRun struct {
+	incompleteUnits    int
+	quarantineFailures int
+	diagnostics        string
+}
+
+func (outcome *launcherV2IncompleteRun) Error() string {
+	if outcome == nil {
+		return "launcher-v2 finished with incomplete work"
+	}
+	message := fmt.Sprintf(
+		"launcher-v2 finished with %d incomplete work unit(s) and %d raw-evidence quarantine failure(s)",
+		outcome.incompleteUnits,
+		outcome.quarantineFailures,
+	)
+	if outcome.diagnostics != "" {
+		message += "; bounded technical diagnostics: " + outcome.diagnostics
+	}
+	return message
+}
+
+func launcherOutcomeIsProcessSuccess(err error) bool {
+	if err == nil {
+		return true
+	}
+	var incomplete *launcherV2IncompleteRun
+	return errors.As(err, &incomplete)
+}
+
 var errScannerTimedOut = errors.New("scanner exceeded the frozen total timeout")
 
 type boundedBuffer struct {
@@ -286,7 +324,9 @@ func (buffer *boundedBuffer) Write(value []byte) (int, error) {
 func main() {
 	if err := run(os.Args[1:], time.Now().UTC()); err != nil {
 		fmt.Fprintf(os.Stderr, "external engine launcher: %v\n", err)
-		os.Exit(126)
+		if !launcherOutcomeIsProcessSuccess(err) {
+			os.Exit(126)
+		}
 	}
 }
 
@@ -439,8 +479,8 @@ func validateLauncherV2Options(version int, planPath, engineID string) (*launche
 	if version == 0 && planPath == "" {
 		return nil, nil
 	}
-	if version != launcherV2SchemaVersion || planPath != journalPlanMountPath {
-		return nil, errors.New("launcher-v2 requires its exact versioned host-frozen plan mount")
+	if version != launcherJournalSchemaVersion || planPath != journalPlanMountPath {
+		return nil, errors.New("the current launcher requires its exact journal-v2 host-frozen plan mount")
 	}
 	if engineID != "naabu" {
 		return nil, errors.New("launcher-v2 execution evidence is currently available only for Naabu")
@@ -476,7 +516,9 @@ type launcherV2Rectangle struct {
 // work-unit order; Go compares sets for authorization, then slices in exactly
 // the sidecar order instead of trying to reproduce Rust's ordering rules.
 func materializeLauncherV2Plan(plan *launcherV2Plan, expectedEngine string, units []scanUnit) ([]scanUnit, error) {
-	if plan == nil || plan.SchemaVersion != launcherV2SchemaVersion || plan.EngineID != expectedEngine || expectedEngine != "naabu" {
+	if plan == nil ||
+		(plan.SchemaVersion != launcherPlanLegacyVersion && plan.SchemaVersion != launcherPlanCurrentVersion) ||
+		plan.EngineID != expectedEngine || expectedEngine != "naabu" {
 		return nil, errors.New("launcher-v2 host-frozen plan version or engine is invalid")
 	}
 	if !launcherV2OpaqueID(plan.EngineRunID) {
@@ -488,7 +530,8 @@ func materializeLauncherV2Plan(plan *launcherV2Plan, expectedEngine string, unit
 	if len(units) < 1 || len(plan.FrozenGrants) < 1 || len(plan.FrozenGrants) > maxLauncherV2FrozenGrants {
 		return nil, errors.New("launcher-v2 requires a bounded non-empty frozen-grant corpus")
 	}
-	if len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxLauncherV2Units {
+	maxRequestedUnits, ok := launcherPlanMaxRequestedUnits(plan.SchemaVersion)
+	if !ok || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxRequestedUnits {
 		return nil, errors.New("launcher-v2 requires a bounded non-empty requested work-unit subset")
 	}
 
@@ -526,7 +569,8 @@ func materializeLauncherV2Plan(plan *launcherV2Plan, expectedEngine string, unit
 		if err := validateLauncherV2Ports(frozen.Ports); err != nil {
 			return nil, fmt.Errorf("launcher-v2 frozen grant %d port corpus is invalid: %w", index, err)
 		}
-		if !sameLauncherV2StringSet(frozen.Addresses, validated.ResolvedAddresses) || !sameLauncherV2PortSet(frozen.Ports, validated.Grant.Ports) {
+		if !sameLauncherV2StringSet(frozen.Addresses, validated.ResolvedAddresses) ||
+			!sameLauncherV2PortSet(frozen.Ports, validated.Grant.Ports) {
 			return nil, errors.New("launcher-v2 frozen grant corpus changed the validated Naabu scope")
 		}
 		validated.ResolvedAddresses = append([]string(nil), frozen.Addresses...)
@@ -538,6 +582,7 @@ func materializeLauncherV2Plan(plan *launcherV2Plan, expectedEngine string, unit
 	rectangles := make([]launcherV2Rectangle, 0, len(plan.RequestedWorkUnits))
 	seenUnitIDs := make(map[string]struct{}, len(plan.RequestedWorkUnits))
 	seenScopeHashes := make(map[string]struct{}, len(plan.RequestedWorkUnits))
+	var aggregateEndpointPairs uint64
 	for ordinal, requested := range plan.RequestedWorkUnits {
 		if !launcherV2WorkUnitID(requested.UnitID) || !launcherV2SHA256(requested.ScopeSHA256) {
 			return nil, errors.New("launcher-v2 requested work-unit identity is invalid")
@@ -566,8 +611,14 @@ func materializeLauncherV2Plan(plan *launcherV2Plan, expectedEngine string, unit
 			return nil, fmt.Errorf("launcher-v2 requested work unit %d has an empty or out-of-bounds corpus slice", ordinal)
 		}
 		endpointPairs := addressLen * portLen
-		if endpointPairs == 0 || endpointPairs > maxLauncherV2EndpointPairs || requested.EndpointPairCount != endpointPairs {
+		if endpointPairs == 0 || endpointPairs > maxLauncherEndpointPairsUnit || requested.EndpointPairCount != endpointPairs {
 			return nil, fmt.Errorf("launcher-v2 requested work unit %d has an invalid endpoint-pair count", ordinal)
+		}
+		if plan.SchemaVersion == launcherPlanCurrentVersion && aggregateEndpointPairs > maxLauncherCurrentPairs-endpointPairs {
+			return nil, errors.New("launcher-v2 requested work units exceed the aggregate endpoint-pair limit")
+		}
+		if plan.SchemaVersion == launcherPlanCurrentVersion {
+			aggregateEndpointPairs += endpointPairs
 		}
 		expectedDeadlineSeconds, err := launcherV2ConservativeDeadlineSeconds(frozen.Grant.RatePolicy, endpointPairs)
 		if err != nil || requested.ConservativeDeadlineSeconds != expectedDeadlineSeconds {
@@ -596,6 +647,17 @@ func materializeLauncherV2Plan(plan *launcherV2Plan, expectedEngine string, unit
 	return materialized, nil
 }
 
+func launcherPlanMaxRequestedUnits(schemaVersion int) (int, bool) {
+	switch schemaVersion {
+	case launcherPlanLegacyVersion:
+		return maxLauncherLegacyUnits, true
+	case launcherPlanCurrentVersion:
+		return maxLauncherCurrentUnits, true
+	default:
+		return 0, false
+	}
+}
+
 func validateLauncherV2Ports(ports []uint16) error {
 	if len(ports) == 0 || len(ports) > 65535 {
 		return errors.New("port corpus must be bounded and non-empty")
@@ -615,7 +677,7 @@ func validateLauncherV2Ports(ports []uint16) error {
 
 func launcherV2ConservativeDeadlineSeconds(policy ratePolicy, endpointPairs uint64) (uint64, error) {
 	effectiveRate := uint64(naabuEffectiveProxyRate(policy))
-	if effectiveRate == 0 || endpointPairs == 0 || endpointPairs > maxLauncherV2EndpointPairs {
+	if effectiveRate == 0 || endpointPairs == 0 || endpointPairs > maxLauncherEndpointPairsUnit {
 		return 0, errors.New("launcher-v2 deadline inputs are invalid")
 	}
 	waves := (endpointPairs + effectiveRate - 1) / effectiveRate
@@ -666,8 +728,9 @@ func launcherV2RectanglesOverlap(left, right launcherV2Rectangle) bool {
 
 // runNaabuLauncherV2 is deliberately separate from the legacy aggregate
 // writer. The host owns the ordered unit identities and scope digests in the
-// sidecar plan. The launcher proves the frozen corpora are set-equal to the
-// validated scope and executes each exact rectangular slice in sidecar order,
+// sidecar plan. The launcher proves the plan's frozen corpora are set-equal to
+// the host-projected scope and executes each exact rectangular slice in
+// sidecar order,
 // while keeping target names and addresses out of journal IDs.
 func runNaabuLauncherV2(
 	outputRoot string,
@@ -795,26 +858,21 @@ func runNaabuLauncherV2(
 	}
 	journalOpen = false
 	if incompleteUnits > 0 {
-		diagnosticSummary := diagnostics.summary()
-		if diagnosticSummary != "" {
-			return fmt.Errorf(
-				"launcher-v2 finished with %d incomplete work unit(s) and %d raw-evidence quarantine failure(s); bounded technical diagnostics: %s",
-				incompleteUnits,
-				quarantineFailures,
-				diagnosticSummary,
-			)
+		return &launcherV2IncompleteRun{
+			incompleteUnits:    incompleteUnits,
+			quarantineFailures: quarantineFailures,
+			diagnostics:        diagnostics.summary(),
 		}
-		return fmt.Errorf(
-			"launcher-v2 finished with %d incomplete work unit(s) and %d raw-evidence quarantine failure(s)",
-			incompleteUnits,
-			quarantineFailures,
-		)
 	}
 	return nil
 }
 
 func createLauncherV2Journal(outputRoot string, plan *launcherV2Plan, budget *launcherV2ByteBudget) (*launcherV2Journal, error) {
-	if plan == nil || !launcherV2OpaqueID(plan.EngineRunID) || plan.ExecutionAttempt == 0 || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxLauncherV2Units {
+	if plan == nil {
+		return nil, errors.New("launcher-v2 journal identity plan is invalid")
+	}
+	maxRequestedUnits, schemaSupported := launcherPlanMaxRequestedUnits(plan.SchemaVersion)
+	if !schemaSupported || !launcherV2OpaqueID(plan.EngineRunID) || plan.ExecutionAttempt == 0 || len(plan.RequestedWorkUnits) < 1 || len(plan.RequestedWorkUnits) > maxRequestedUnits {
 		return nil, errors.New("launcher-v2 journal identity plan is invalid")
 	}
 	seenUnits := make(map[string]struct{}, len(plan.RequestedWorkUnits))
@@ -860,7 +918,7 @@ func createLauncherV2Journal(outputRoot string, plan *launcherV2Plan, budget *la
 	}
 	if err := journal.appendRecord(launcherV2Header{
 		RecordType:         "header",
-		SchemaVersion:      launcherV2SchemaVersion,
+		SchemaVersion:      launcherJournalSchemaVersion,
 		EngineRunID:        plan.EngineRunID,
 		ExecutionAttempt:   plan.ExecutionAttempt,
 		RequestedWorkUnits: headerUnits,
@@ -918,7 +976,7 @@ func (journal *launcherV2Journal) appendRecord(record any) error {
 		return errors.New("launcher-v2 journal record exceeds its bound")
 	}
 	encoded = append(encoded, '\n')
-	if journal.written+int64(len(encoded)) > maxLauncherV2JournalBytes || journal.recordsWritten >= 1+maxLauncherV2Units {
+	if journal.written+int64(len(encoded)) > maxLauncherV2JournalBytes || journal.recordsWritten >= 1+len(journal.requested) {
 		return errors.New("launcher-v2 journal exceeds its aggregate bound")
 	}
 	if journal.budget == nil || !journal.budget.reserveJournal(int64(len(encoded))) {

@@ -429,6 +429,7 @@ fn engine_run(run_id: &str, asset_id: &str, status: EngineRunStatus) -> EngineRu
         started_at: Some(timestamp("2026-01-04T00:00:00Z")),
         finished_at: Some(timestamp("2026-01-04T00:01:00Z")),
         resume_token: None,
+        last_execution_report_sha256: None,
         engine_version: Some("1".into()),
         image_digest: None,
         rule_version: None,

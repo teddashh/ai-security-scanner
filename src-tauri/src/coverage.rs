@@ -736,6 +736,7 @@ mod tests {
             started_at: Some(observed_at),
             finished_at: Some(observed_at),
             resume_token: None,
+            last_execution_report_sha256: None,
             engine_version: None,
             image_digest: None,
             rule_version: None,

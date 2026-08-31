@@ -177,6 +177,31 @@ test("post-start failures preserve results and cleanup guidance", () => {
   assert.doesNotMatch(cleanup.en, /scan-tool setup/u);
 });
 
+test("bounded retry exhaustion and cancellation never promise an impossible resume", () => {
+  const exhausted = engineNextStepFor(engine({
+    status: "partial",
+    phase: "results_partial",
+    errorCode: "coverage_incomplete_after_bounded_retries",
+    resumable: false,
+  }));
+  assert.match(exhausted.en, /saved results.*not tested/u);
+  assert.match(exhausted.en, /start a new scan/u);
+  assert.match(exhausted.zhTW, /已保存的結果與未測試項目/u);
+  assert.doesNotMatch(`${exhausted.en}${exhausted.zhTW}`, /continue this scan|繼續掃描/iu);
+
+  const cancelled = engineNextStepFor(engine({
+    status: "cancelled",
+    phase: "cancelled_after_partial_results",
+    errorCode: "cancelled_after_partial_results",
+    rawArtifactCount: 1,
+    resumable: false,
+  }));
+  assert.match(cancelled.en, /results saved before you stopped/u);
+  assert.match(cancelled.en, /remaining items/u);
+  assert.match(cancelled.zhTW, /停止掃描前已保存的結果/u);
+  assert.doesNotMatch(`${cancelled.en}${cancelled.zhTW}`, /continue this scan|繼續掃描/iu);
+});
+
 test("a gateway preparation failure says automatic rebuild and retry, never resume saved progress", () => {
   const failed = engine({
     status: "failed",

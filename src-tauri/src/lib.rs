@@ -373,18 +373,32 @@ mod desktop_nonblocking_source_invariants {
         let terminal_branch = cancel
             .find("Some(snapshot) if snapshot.is_terminal()")
             .expect("retained terminal branch");
+        let terminal_claim = cancel
+            .find("state.jobs.reconcile_terminal_snapshot(&snapshot")
+            .expect("exact retained terminal claim");
+        let terminal_projection = cancel
+            .find("persist_terminal_job_state_reconciliation(&state, &key, &snapshot)")
+            .expect("runtime-free terminal truth projection");
         let live_cancel = cancel
             .find("signal_live_cancel_or_preserve_terminal(&app, &state, &key)")
             .expect("live-worker cancel helper");
-        let local_cancel = cancel
-            .find(".cancel_scan(&case_id, &run_id)")
-            .expect("no-worker durable cancellation");
-        assert!(terminal_branch < live_cancel && live_cancel < local_cancel);
+        let coordinated_cancel = cancel
+            .find("coordinate_no_worker_cancel(&state, &key)")
+            .expect("no-worker admission decision");
         assert!(
-            cancel[terminal_branch..live_cancel]
-                .contains("schedule_exact_terminal_reconciliation(&app, key, snapshot);")
+            terminal_branch < terminal_claim
+                && terminal_claim < terminal_projection
+                && terminal_projection < live_cancel
+                && live_cancel < coordinated_cancel
         );
-        assert!(cancel[terminal_branch..live_cancel].contains("return Ok(case);"));
+        assert!(
+            cancel[terminal_projection..live_cancel]
+                .contains("TerminalReconciliationOutcome::InProgress")
+        );
+        assert!(
+            !cancel[terminal_branch..live_cancel]
+                .contains("schedule_exact_terminal_reconciliation")
+        );
 
         let live_helper_start = source
             .find("fn signal_live_cancel_or_preserve_terminal(")
@@ -398,31 +412,79 @@ mod desktop_nonblocking_source_invariants {
         let terminal_edge = live_helper
             .find("Err(JobManagerError::LiveJobNotFound(_))")
             .expect("terminal-edge race branch");
+        assert!(live_helper[terminal_edge..].contains("coordinate_no_worker_cancel(state, key)"));
         assert!(
             live_helper[terminal_edge..]
-                .contains("schedule_exact_terminal_reconciliation(app, key.clone(), snapshot);")
+                .contains("finish_no_worker_cancel_resolution(app, state, key, resolution, false)")
         );
         assert!(!live_helper.contains("case_service().cancel_scan"));
 
-        let background_cleanup = cancel
-            .find("schedule_exact_runtime_cleanup_reconciliation(&app, case_id, run_id);")
-            .expect("detached exact cleanup scheduling");
-        assert!(cancel[background_cleanup..].contains("Ok(case)"));
         assert!(!cancel.contains("reconcile_interrupted_scan_resources(&state"));
         assert!(!cancel.contains("spawn_blocking"));
 
-        let admission = cancel
-            .find("state.jobs.coordinate_admission")
-            .expect("no-worker admission boundary");
-        let second_snapshot = cancel[admission..]
-            .find("state.jobs.snapshot(&key)")
-            .map(|offset| admission + offset)
-            .expect("exact snapshot under admission");
-        assert!(admission < second_snapshot && second_snapshot < local_cancel);
+        let apply_start = source
+            .find("fn apply_no_worker_durable_cancel(")
+            .expect("pure no-worker durable decision");
+        let apply_end = source[apply_start..]
+            .find("\nfn coordinate_no_worker_cancel(")
+            .map(|offset| apply_start + offset)
+            .expect("durable decision end");
+        let apply = &source[apply_start..apply_end];
+        let normalized = apply
+            .find("unfinished_clean_naabu_between_batch_cancel_target(run)")
+            .expect("normalized Naabu handoff detection");
+        let siblings = apply
+            .find("locally_cancellable_resource_free_engine_ids(run)")
+            .expect("resource-free sibling detection");
+        let atomic = apply
+            .find("service.cancel_no_worker_scan_work(")
+            .expect("single atomic service transition");
+        let generic_final = apply
+            .find("durable_run_has_final_outcome(current_run)")
+            .expect("generic terminal shortcut");
+        assert!(normalized < atomic && siblings < atomic && atomic < generic_final);
+        assert!(apply.contains("NoWorkerCancelAdmission::DurableUnchanged(durable)"));
+        assert!(!apply.contains("service.cancel_scan("));
+
+        let finish_start = source
+            .find("fn finish_no_worker_cancel_resolution(")
+            .expect("no-worker resolution finisher");
+        let finish_end = source[finish_start..]
+            .find("\nfn signal_live_cancel_or_preserve_terminal(")
+            .map(|offset| finish_start + offset)
+            .expect("no-worker resolution finisher end");
+        let finish = &source[finish_start..finish_end];
         assert!(
-            cancel[second_snapshot..local_cancel]
-                .contains("run_is_exact_localhost_quick_scan(run)")
+            finish.contains("persist_terminal_job_state_reconciliation(state, key, &snapshot)")
         );
+        assert!(finish.contains("schedule_exact_runtime_cleanup_reconciliation("));
+        assert!(
+            finish.contains("emit_cancel_resolution(app, &case, &key.scan_run_id, needs_cleanup)")
+        );
+
+        let emit_resolution_start = source
+            .find("fn emit_cancel_resolution(")
+            .expect("truthful cancel event helper");
+        let emit_resolution_end = source[emit_resolution_start..]
+            .find("\nfn finish_no_worker_cancel_resolution(")
+            .map(|offset| emit_resolution_start + offset)
+            .expect("truthful cancel event helper end");
+        let emit_resolution = &source[emit_resolution_start..emit_resolution_end];
+        assert!(emit_resolution.contains("durable_run_has_final_outcome"));
+        assert!(emit_resolution.contains("&& !needs_cleanup"));
+
+        let ordinary_reconcile_start = source
+            .find("fn reconcile_terminal_job(")
+            .expect("ordinary retained-terminal reconciler");
+        let ordinary_reconcile_end = source[ordinary_reconcile_start..]
+            .find("\nfn persist_terminal_job_reconciliation(")
+            .map(|offset| ordinary_reconcile_start + offset)
+            .expect("ordinary retained-terminal reconciler end");
+        let ordinary_reconcile = &source[ordinary_reconcile_start..ordinary_reconcile_end];
+        assert!(ordinary_reconcile.contains("durable_run_has_final_outcome"));
+        assert!(ordinary_reconcile.contains("durable_run_needs_background_cleanup"));
+        assert!(ordinary_reconcile.contains("RUN_PROGRESS_EVENT"));
+        assert!(ordinary_reconcile.contains("RUN_FINISHED_EVENT"));
 
         assert!(live_helper.contains("cancel_with_durable_transition"));
         assert!(live_helper.contains("record_localhost_cancel_transition"));

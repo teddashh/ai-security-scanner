@@ -329,6 +329,11 @@ const copy = {
   currentFallback: { en: "Display name comes from the current project", zhTW: "顯示名稱來自目前專案資料" },
   unavailableProvenance: { en: "Historical detail unavailable", zhTW: "無法取得歷史細節" },
   coverageDetail: { en: "Coverage detail", zhTW: "涵蓋範圍細節" },
+  exactNetworkScope: { en: "Exact addresses and ports", zhTW: "實際位址與連接埠" },
+  networkScopeCount: { en: "{count} network scope groups", zhTW: "{count} 組網路範圍" },
+  networkAddresses: { en: "Addresses", zhTW: "位址" },
+  networkPorts: { en: "Ports", zhTW: "連接埠" },
+  networkResult: { en: "Result", zhTW: "結果" },
   requestedScope: { en: "Requested scope", zhTW: "要求的範圍" },
   localConnectionCheck: { en: "Local connection check", zhTW: "本機連線檢查" },
   testedStatusComplete: { en: "Completed", zhTW: "完成" },
@@ -580,6 +585,12 @@ function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
     || check.status === "tested_partial"
     || check.testedDimensions.length > 0,
   );
+  const testedNetworkScopes = report.actual.networkScopes.filter((scope) =>
+    scope.outcome === "tested_complete" || scope.outcome === "tested_partial",
+  );
+  const untestedNetworkScopes = report.actual.networkScopes.filter((scope) =>
+    scope.outcome !== "tested_complete" && scope.outcome !== "tested_partial",
+  );
   const targetLabelById = new Map(
     report.requested.targets.map((target) => [target.assetId, target.label ?? target.assetId]),
   );
@@ -716,6 +727,23 @@ function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
               ))}
             </ul>
           ) : <p>{text(copy.noTestedDimension)}</p>}
+          {testedNetworkScopes.length > 0 && (
+            <details open={testedNetworkScopes.length <= 8}>
+              <summary>{text(copy.networkScopeCount, { count: formatNumber(testedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
+              <ul className="detail-list">
+                {testedNetworkScopes.map((scope) => (
+                  <li key={`${scope.taskId}-${scope.workUnitId}`}>
+                    <strong>{targetLabelById.get(scope.targetAssetId) ?? scope.target}</strong>
+                    <span>{scope.target}</span>
+                    <span>{text(copy.networkAddresses)}: {scope.addressRanges.join(locale === "en" ? ", " : "、")}</span>
+                    <span>{text(copy.networkPorts)}: {scope.transport.toUpperCase()} {scope.portRanges.join(locale === "en" ? ", " : "、")}</span>
+                    <span>{text(copy.stage)}: {text(reportStageCopy(scope.stage))}</span>
+                    <span>{text(copy.networkResult)}: {text(testedStatusCopy(scope.outcome))}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </article>
 
         <article className="coverage-card">
@@ -736,6 +764,23 @@ function BeginnerReportOverview({ report }: { report: BeginnerMasterReport }) {
               })}
             </ul>
           ) : <p>{text(copy.noGap)}</p>}
+          {untestedNetworkScopes.length > 0 && (
+            <details open={untestedNetworkScopes.length <= 8}>
+              <summary>{text(copy.networkScopeCount, { count: formatNumber(untestedNetworkScopes.length) })} · {text(copy.exactNetworkScope)}</summary>
+              <ul className="detail-list">
+                {untestedNetworkScopes.map((scope) => (
+                  <li key={`${scope.taskId}-${scope.workUnitId}`}>
+                    <strong>{targetLabelById.get(scope.targetAssetId) ?? scope.target}</strong>
+                    <span>{scope.target}</span>
+                    <span>{text(copy.networkAddresses)}: {scope.addressRanges.join(locale === "en" ? ", " : "、")}</span>
+                    <span>{text(copy.networkPorts)}: {scope.transport.toUpperCase()} {scope.portRanges.join(locale === "en" ? ", " : "、")}</span>
+                    <span>{text(copy.stage)}: {text(reportStageCopy(scope.stage))}</span>
+                    <span>{text(copy.networkResult)}: {text(testedStatusCopy(scope.outcome))}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </article>
       </div>
 

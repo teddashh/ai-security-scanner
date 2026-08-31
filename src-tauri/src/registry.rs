@@ -827,6 +827,13 @@ mod tests {
         let registry = EngineRegistry::load_builtin().expect("valid catalog");
         let mut manifest = registry.get("naabu").unwrap().clone();
 
+        assert!(
+            manifest.execution_timeout_seconds()
+                > crate::naabu_work_plan::HARD_WORK_UNIT_WINDOW_SECONDS
+                    + crate::naabu_work_plan::NAABU_HOST_ATTEMPT_MARGIN_SECONDS,
+            "the outer host timeout must leave the fixed host margin after the largest valid scanner unit"
+        );
+
         validate_release_contract(&manifest).expect("legacy Naabu remains admissible");
 
         manifest
@@ -877,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_journal_flags_and_versions_cannot_escape_the_naabu_v2_contract() {
+    fn launcher_journal_flags_and_versions_cannot_escape_the_current_naabu_contract() {
         let registry = EngineRegistry::load_builtin().expect("valid catalog");
         let legacy = registry.get("naabu").unwrap().clone();
 
@@ -946,7 +953,12 @@ mod tests {
         let pacing_floor_seconds = usable_ipv4_hosts_in_23 * approved_ports / requests_per_second;
 
         assert_eq!(pacing_floor_seconds, 8_670);
-        assert_eq!(timeout, 4 * 60 * 60);
+        assert_eq!(
+            timeout,
+            crate::naabu_work_plan::HARD_WORK_UNIT_WINDOW_SECONDS
+                + crate::naabu_work_plan::NAABU_HOST_ATTEMPT_MARGIN_SECONDS
+                + 1
+        );
         assert!(timeout > pacing_floor_seconds);
         assert!(timeout <= MAX_ENGINE_EXECUTION_TIMEOUT_SECONDS);
     }
